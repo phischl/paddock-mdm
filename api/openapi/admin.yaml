@@ -8871,7 +8871,7 @@ components:
       enum: [pending, delivered, succeeded, failed, expired, cancelled]
     DeviceCommandType:
       type: string
-      enum: [rotate_admin_password, delete_self_lock, install_now, uninstall, encrypt_disk, encrypt_disk_abort]
+      enum: [rotate_admin_password, delete_self_lock, install_now, uninstall, encrypt_disk, encrypt_disk_abort, collect_status]
     DeviceCommand:
       type: object
       required: [id, device_id, type, status, issued_at, expires_at]

@@ -226,6 +226,46 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "429": { $ref: "#/components/responses/RateLimited" }
+  /v1/diagnostics:
+    post:
+      operationId: postDiagnostics
+      summary: Announce a sealed diagnostics bundle (ADR 0048 decision 3, plan M12 decision 2)
+      description: |
+        Answers a delivered collect_status command. The device collects Paddock's own diagnostics (the closed list of
+        ADR 0048 decision 2), seals the archive — AES-256-GCM with a random key and the command ID as additional data,
+        the key RSA-OAEP-wrapped to the escrow-wrap key of its bundle — and announces sha256 and size of the sealed
+        object with nonce and wrapped_dek. The answer carries upload_url, a presigned PUT of the object key the server
+        chose (org/<org>/devices/<device>/diagnostics/<command_id>.bin in the escrow bucket, valid 10 minutes, bound to
+        the announced size); the device uploads the object there and then posts the command result
+        {uploaded: true, files, bytes, truncated_entries, notified_sessions}. The worker marks the bundle stored once
+        size and SHA-256 match. A command ID that is not a collect_status command held for this device is not found;
+        each command is announced once (409 already_uploaded).
+      parameters:
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentSHA256"
+        - $ref: "#/components/parameters/Seq"
+        - $ref: "#/components/parameters/Signature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DiagnosticsRequest" }
+      responses:
+        "202":
+          description: Accepted; upload the sealed bundle to upload_url.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticsResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Problem" }
   /v1/events:
     post:
       operationId: postEvents
@@ -323,7 +363,8 @@ components:
         code:
           type: string
           enum: [invalid_request, invalid_signature, clock_skew, replay, invalid_token, identity_revoked,
-                 unknown_event_type, not_found, rate_limited, backpressure, payload_too_large, conflict, internal]
+                 unknown_event_type, not_found, rate_limited, backpressure, payload_too_large, conflict, already_uploaded,
+                 internal]
         detail: { type: string }
         instance: { type: string }
         server_time: { type: string, format: date-time, description: Set on 401 responses. }
@@ -516,6 +557,21 @@ components:
         sha256: { type: string, description: "luks_header only (required): hex SHA-256 of the sealed object." }
         size: { type: integer, format: int64, description: "luks_header only (required): bytes of the sealed object, at most 32 MiB." }
         volume: { type: string, format: uuid, description: "luks_header only (optional): lowercase LUKS UUID of the volume (PDK-009); without it the header is the root volume's." }
+    DiagnosticsRequest:
+      type: object
+      required: [command_id, sha256, size, nonce, wrapped_dek]
+      properties:
+        command_id: { type: string, format: uuid, description: "The delivered collect_status command; the bundle's ID." }
+        sha256: { type: string, description: "Hex SHA-256 (64 lowercase digits) of the sealed object." }
+        size: { type: integer, format: int64, minimum: 1, maximum: 33554432, description: "Bytes of the sealed object, at most 32 MiB (413 beyond)." }
+        nonce: { type: string, description: "Standard base64 of the 12-byte AES-GCM nonce." }
+        wrapped_dek: { type: string, description: "Standard base64 RSA-OAEP-SHA256 ciphertext of the 32-byte data key, at most 4096 bytes." }
+    DiagnosticsResponse:
+      type: object
+      required: [diagnostics_id, upload_url]
+      properties:
+        diagnostics_id: { type: string, format: uuid, description: "Equals command_id." }
+        upload_url: { type: string, description: "Presigned PUT URL of the sealed bundle, valid 10 minutes, bound to the announced size." }
     CommandResult:
       type: object
       required: [status]

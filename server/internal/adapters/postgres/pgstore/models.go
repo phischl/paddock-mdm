@@ -378,6 +378,31 @@ type DeviceCommand struct {
 	Result         json.RawMessage
 }
 
+type DeviceDiagnostic struct {
+	ID               uuid.UUID
+	OrganizationID   uuid.UUID
+	DeviceID         uuid.UUID
+	RequestedBy      string
+	RequestedAt      time.Time
+	Reason           string
+	State            string
+	ObjectKey        *string
+	Size             *int64
+	Sha256           *string
+	Nonce            []byte
+	WrappedDek       []byte
+	Files            *int32
+	TruncatedEntries []string
+	NotifiedSessions *int32
+	UploadedAt       *time.Time
+	StoredAt         *time.Time
+	ExpiresAt        *time.Time
+	FailedReason     *string
+	DownloadCount    int32
+	LastDownloadedAt *time.Time
+	PurgedAt         *time.Time
+}
+
 type DeviceDiskConversion struct {
 	ID                 uuid.UUID
 	OrganizationID     uuid.UUID

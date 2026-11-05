@@ -49,6 +49,7 @@ var securityExplicit = []audit.Code{
 	"vulnerability.critical_summary",
 	"notification.pseudonym_resolved",
 	"audit.export_requested", "audit.export_downloaded",
+	"device.diagnostics_requested", "device.diagnostics_downloaded", "device.diagnostics_purged",
 }
 
 // SecurityCodes returns the preset of filter mode security, sorted: every registered code of the wildcard groups of

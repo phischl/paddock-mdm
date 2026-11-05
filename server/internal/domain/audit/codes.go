@@ -134,6 +134,12 @@ const (
 	CodeDiskRecoveryKeyRevealed    Code = "disk.recovery_key_revealed"
 	CodeDiskHeaderDownloaded       Code = "disk.header_downloaded"
 
+	// Diagnostics bundle (ADR 0048, plan M12 §6.4).
+	CodeDeviceDiagnosticsRequested  Code = "device.diagnostics_requested"
+	CodeDeviceDiagnosticsCollected  Code = "device.diagnostics_collected"
+	CodeDeviceDiagnosticsDownloaded Code = "device.diagnostics_downloaded"
+	CodeDeviceDiagnosticsPurged     Code = "device.diagnostics_purged"
+
 	CodeDeviceRevocationTrustPinnedTOFU Code = "device.revocation_trust_pinned_tofu"
 	CodeRevocationRequested             Code = "revocation.requested"
 	CodeRevocationApproved              Code = "revocation.approved"
@@ -859,7 +865,7 @@ var registry = map[Code]Definition{
 	},
 	CodeRetentionPurged: {
 		Code: CodeRetentionPurged, Emitted: true,
-		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), device_command (finished commands no disk conversion or uninstall still references), device_alert (cleared alerts), device_event_gap (filled event gaps) or action (finished actions), each recorded in the organization only when rows were deleted (action also once per round in the platform pseudo-organization), with index_days the audit index retention their cutoff follows, audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
+		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), device_command (finished commands no disk conversion or uninstall still references), device_alert (cleared alerts), device_event_gap (filled event gaps), device_diagnostics (with cutoff the round's time: stored diagnostics bundles whose 7-day retention ended, their objects deleted and their key material cleared, counted in deleted; with index_days: the rows of ended bundles) or action (finished actions), each recorded in the organization only when rows were deleted (action also once per round in the platform pseudo-organization), with index_days the audit index retention their cutoff follows, audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
 		Params:      []string{"store", "deleted", "cutoff", "index_days", "partition", "export_id"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
@@ -1013,6 +1019,32 @@ var registry = map[Code]Definition{
 		Description: "An organization administrator downloaded an escrowed LUKS header of a device after a step-up.",
 		Params:      []string{"hostname", "volume", "generation"},
 		Note:        "volume is the LUKS UUID of the header's volume; absent for a root volume header escrowed before PDK-009 whose UUID the device has not reported yet.",
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceDiagnosticsRequested: {
+		Code: CodeDeviceDiagnosticsRequested, Emitted: true,
+		Description: "An administrator or operator asked a device for a diagnostics bundle of Paddock's own logs and configuration (ADR 0048).",
+		Params:      []string{"request_id", "reason", "command_id", "hostname"},
+		Outcomes:    adminOutcomes,
+		Note:        "reason is the administrator's text the device shows to the user; failure with invalid_state when the device is not active or a collection is pending.",
+	},
+	CodeDeviceDiagnosticsCollected: {
+		Code: CodeDeviceDiagnosticsCollected, Emitted: true,
+		Description: "A device uploaded a diagnostics bundle and the worker verified its size and SHA-256 (actor: the device).",
+		Params:      []string{"request_id", "files", "bytes", "sha256", "truncated_entries", "notified_sessions", "reason"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Only the hash of the sealed bundle is recorded, never its content. bytes is the size of the sealed object. failure when the bundle failed: reason is the device's refusal (invalid_params, upload_refused, upload_failed, collect_failed, too_large) or the worker's finding (size_mismatch, sha256_mismatch, missing).",
+	},
+	CodeDeviceDiagnosticsDownloaded: {
+		Code: CodeDeviceDiagnosticsDownloaded, Emitted: true,
+		Description: "An administrator or operator downloaded a device's diagnostics bundle after a step-up.",
+		Params:      []string{"request_id", "sha256", "bytes", "files", "hostname"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceDiagnosticsPurged: {
+		Code: CodeDeviceDiagnosticsPurged, Emitted: true,
+		Description: "An organization administrator deleted a device's diagnostics bundle before its retention ended.",
+		Params:      []string{"request_id", "hostname"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceRevocationTrustPinnedTOFU: {

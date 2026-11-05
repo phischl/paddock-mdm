@@ -5867,7 +5867,7 @@ export interface components {
         /** @enum {string} */
         DeviceCommandStatus: "pending" | "delivered" | "succeeded" | "failed" | "expired" | "cancelled";
         /** @enum {string} */
-        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now" | "uninstall" | "encrypt_disk" | "encrypt_disk_abort";
+        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now" | "uninstall" | "encrypt_disk" | "encrypt_disk_abort" | "collect_status";
         DeviceCommand: {
             /** Format: uuid */
             id: string;

@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "3a227f900637f340b47175d5bf786cbd4cdcde889b7aca7cb72c7dd753eb94ea"
+const Version = "e2eddff4d44d63924a75682e8c4807803aeef9571e72d881de7f8b854911e623"
 
 var tools = []Tool{
 	{
@@ -2580,7 +2580,7 @@ var tools = []Tool{
 		AuditCode:   "",
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor. The commands issued to the device (plan M4a decision 1).\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: issued_at, expires_at, type, status), q (search over: type).",
-		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-issued_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"issued_at\",\"-issued_at\",\"expires_at\",\"-expires_at\",\"type\",\"-type\",\"status\",\"-status\"],\"type\":\"string\"},\"status\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"pending\",\"delivered\",\"succeeded\",\"failed\",\"expired\",\"cancelled\"],\"type\":\"string\"},\"type\":\"array\"},\"type\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"rotate_admin_password\",\"delete_self_lock\",\"install_now\",\"uninstall\",\"encrypt_disk\",\"encrypt_disk_abort\"],\"type\":\"string\"},\"type\":\"array\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-issued_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"issued_at\",\"-issued_at\",\"expires_at\",\"-expires_at\",\"type\",\"-type\",\"status\",\"-status\"],\"type\":\"string\"},\"status\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"pending\",\"delivered\",\"succeeded\",\"failed\",\"expired\",\"cancelled\"],\"type\":\"string\"},\"type\":\"array\"},\"type\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"rotate_admin_password\",\"delete_self_lock\",\"install_now\",\"uninstall\",\"encrypt_disk\",\"encrypt_disk_abort\",\"collect_status\"],\"type\":\"string\"},\"type\":\"array\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listDeviceConfigStatus",

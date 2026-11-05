@@ -148,6 +148,7 @@ func sampleCommands(key ed25519.PrivateKey, keyID string) ([]CommandFixture, err
 		command.TypeUninstall:        `{"mode":"leave"}`,
 		command.TypeEncryptDisk:      `{"conversion_id":"0190f000-0000-7000-8000-00000000c0c0"}`,
 		command.TypeEncryptDiskAbort: `{"conversion_id":"0190f000-0000-7000-8000-00000000c0c0"}`,
+		command.TypeCollectStatus:    `{"reason":"fixture","request_id":"0190f000-0000-7000-8000-0000000000c1"}`,
 	}
 	var out []CommandFixture
 	for i, typ := range command.Types() {
