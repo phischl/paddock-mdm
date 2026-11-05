@@ -736,6 +736,26 @@ A1/A2 are read with these changes):
 6. **Migration label**: `00104_access_review_grants.sql` (the plan's `00103` follows landing order; the grants are
    a read-only `tenant_api_read` policy on `organization_role_member` and `organization_role_snapshot`).
 
+## Amendment 2026-11-04 — Wazuh content (PDK-753)
+
+Decisions of 2026-11-04, taken after the PDK-753 reviews (item 1 is an architect decision, items 2 to 4 record the implementation of decisions 22 and 21 and the test location):
+
+1. **AC 3 and the relay.** Wazuh's `<remote>` syslog listener has neither TLS nor octet counting, and the notifier
+   is TLS-only. AC 3 becomes "Wazuh receives the push through the documented relay": rsyslog (`imtcp` with the `gtls`
+   driver, octet-counted framing) terminates TLS and forwards each message as one line to the loopback `<remote>`
+   listener. `docs/operations/siem.md` carries the complete configuration with certificate paths the operator replaces,
+   the matching `<remote>` block and a verification step.
+2. **Dynamic fields (decision 22).** The decoders extract the message body with Wazuh's `JSON_Decoder`
+   (`offset="after_parent"`), so every key is a field under its dotted name: `event.params.<name>` carries the
+   dynamic parameters (the push nests the event, hence `event.` and not `params.`), `organization` comes from `PROCID`.
+3. **`paddock.missing`.** The marker message of a gap in the push is decoded too and raises rule 100904 (level 7,
+   group `paddock_integrity`): the event is lost to the SIEM but still in the WORM log.
+4. **Tests in `server/internal/siemcontent`.** The decoder and rule tests (golden frames, rule levels, the
+   registry-coupling check, reachability of the frequency rules, Sigma checks) live in `server/internal/siemcontent`
+   instead of `go test ./integrations/...` (ticket AC 1, plan §3.6): the tests need the audit code registry of the
+   server module, and a separate module under `integrations/` would add a module and a YAML dependency. No new
+   module and no new dependency.
+
 ## Amendment 2026-11-05 — diagnostics collector (PDK-748)
 
 Decisions taken by the architect lead on 2026-11-05 after Review 1 of PDK-748 (§3.2 items 8–12 and §6.5 are read with

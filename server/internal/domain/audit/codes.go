@@ -295,6 +295,10 @@ const (
 	CodeDeviceSoftwareRemoved     Code = "device.software_removed"
 	CodeDeviceSoftwareApplyFailed Code = "device.software_apply_failed"
 
+	// The backup key (plan M15 §6.4).
+	CodePlatformBackupKeyGenerated Code = "platform.backup_key_generated"
+	CodePlatformBackupKeyConfirmed Code = "platform.backup_key_confirmed"
+	CodePlatformBackupKeyDiscarded Code = "platform.backup_key_discarded"
 	// Backup targets, schedule and runs (plan M15 §6.4).
 	CodePlatformBackupTargetCreated   Code = "platform.backup_target_created"
 	CodePlatformBackupTargetUpdated   Code = "platform.backup_target_updated"
@@ -1780,6 +1784,27 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "reason is fingerprint_mismatch, would_remove_dependents, protected_package_affected, no_candidate, source_unreachable, conflicting_source, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
+	},
+	CodePlatformBackupKeyGenerated: {
+		Code: CodePlatformBackupKeyGenerated, Emitted: true,
+		Description: "A platform administrator generated a new backup key after a step-up, or the api imported the host's key file of an older installation (legacy); the key is shown once and waits for its confirmation. The key text is never recorded.",
+		Params:      []string{"key_id", "fingerprint", "rotation", "legacy"},
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the backup key (type backup_key). rotation is true when a confirmed key existed. A legacy import is recorded with the system actor paddock-api. Failure with invalid_state while another key waits for its confirmation. Platform pseudo-organization.",
+	},
+	CodePlatformBackupKeyConfirmed: {
+		Code: CodePlatformBackupKeyConfirmed, Emitted: true,
+		Description: "A platform administrator confirmed a backup key after a step-up by typing back its characters at six positions the server chose; the key becomes active and a previously active key is retired.",
+		Params:      []string{"key_id", "fingerprint", "rotated_from", "attempts"},
+		Outcomes:    adminOutcomes,
+		Note:        "rotated_from is the retired key's ID or null. attempts counts the failed confirmations. Failure with backup_key_mismatch for wrong characters (the third discards the key), invalid_request for an answer that is not six characters, invalid_state for a key that is not unconfirmed, not_found. The typed characters are never recorded. Platform pseudo-organization.",
+	},
+	CodePlatformBackupKeyDiscarded: {
+		Code: CodePlatformBackupKeyDiscarded, Emitted: true,
+		Description: "A platform administrator discarded a backup key that was not confirmed, after a step-up.",
+		Params:      []string{"key_id", "attempts"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_state for a key that is not unconfirmed, not_found. A key discarded by the third failed confirmation is recorded as that platform.backup_key_confirmed failure, not as this event. Platform pseudo-organization.",
 	},
 	CodePlatformBackupTargetCreated: {
 		Code: CodePlatformBackupTargetCreated, Emitted: true,

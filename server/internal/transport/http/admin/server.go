@@ -125,6 +125,8 @@ type Deps struct {
 	// TrustedProxies may name the client through X-Paddock-Client-IP (plan M7a decision 5).
 	TrustedProxies []netip.Prefix
 
+	// BackupKeys is the platform backup key (plan M15 decision 7).
+	BackupKeys *app.BackupKeys
 	// BackupTargets, BackupSchedule and BackupRuns are the platform backup (plan M15 decisions 10–14).
 	BackupTargets  *app.BackupTargets
 	BackupSchedule *app.BackupSchedule
@@ -144,6 +146,9 @@ var privileged = map[string]struct {
 	"POST /api/platform/v1/sessions/end-all":                               {app.ScopePlatform, app.SpecSessionsEndAll},
 	"POST /api/platform/v1/openbao/auto-unseal/enable":                     {app.ScopePlatform, app.SpecAutoUnsealEnable},
 	"POST /api/platform/v1/openbao/auto-unseal/disable":                    {app.ScopePlatform, app.SpecAutoUnsealDisable},
+	"POST /api/platform/v1/backup/key":                                     {app.ScopePlatform, app.SpecBackupKeyGenerate},
+	"POST /api/platform/v1/backup/key/{id}/confirm":                        {app.ScopePlatform, app.SpecBackupKeyConfirm},
+	"POST /api/platform/v1/backup/key/{id}/discard":                        {app.ScopePlatform, app.SpecBackupKeyDiscard},
 	"POST /api/v1/enrollment-tokens":                                       {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
 	"PUT /api/v1/devices/{id}/groups":                                      {app.ScopeOrg, app.SpecDeviceSetGroups},
 	"PUT /api/v1/devices/{id}/owners":                                      {app.ScopeOrg, app.SpecDeviceSetOwners},
@@ -309,6 +314,7 @@ func NewHandler(d Deps) http.Handler {
 		accessReview:   d.AccessReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,
+		backupKeys:   d.BackupKeys,
 		upgradeCheck: d.UpgradeCheck,
 		mcpSettings:  d.MCPSettings,
 		mcpAccess:    d.MCPAccess,

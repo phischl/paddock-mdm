@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "1137e23aa8f5e86b9c532822f410f385b9a8517b162c9cc75baa138c35cfa580"
+const Version = "966c0b4da826953f4989e1f2aab0c2a870734366e393e88b186cdbc76741fc02"
 
 var tools = []Tool{
 	{
@@ -241,6 +241,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator. Ends a running or halted rollout: every device receives the staged change at its next check-in. It works also after rollouts were switched off in the settings: an open rollout keeps its rules until it is completed or its change set reverted. 409 invalid_state when the rollout already completed or was reverted; 404 not_found for an unknown rollout or one of another organization.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "confirmBackupKey",
+		Method:      "POST",
+		Path:        "/api/platform/v1/backup/key/{id}/confirm",
+		Pattern:     "POST /api/platform/v1/backup/key/{id}/confirm",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "platform.backup_key_confirmed",
+		Summary:     "",
+		Description: "Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Confirms a key with the characters of its text at the six positions of the generating response (or of pending.positions in GET /api/platform/v1/backup/key), in that order. The key becomes active; a previously active key is retired. 400 invalid_request when the answer is not six characters; 409 backup_key_mismatch for wrong characters, with attempts_left=<n> in the detail; the third mismatch discards the key; 409 invalid_state for a key that is not unconfirmed; 404 not_found. Every attempt is audited; the answer never is.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"answer\":{\"description\":\"The characters of the key at the six positions, in order.\",\"maxLength\":64,\"type\":\"string\"}},\"required\":[\"answer\"],\"type\":\"object\"},\"id\":{\"description\":\"The key ID (bk-\\u003cYYYYMMDD\\u003e-\\u003c8 hex\\u003e or legacy).\",\"maxLength\":32,\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "confirmManagedFileSensitive",
@@ -981,6 +999,24 @@ var tools = []Tool{
 		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
 	},
 	{
+		Name:        "discardBackupKey",
+		Method:      "POST",
+		Path:        "/api/platform/v1/backup/key/{id}/discard",
+		Pattern:     "POST /api/platform/v1/backup/key/{id}/discard",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "platform.backup_key_discarded",
+		Summary:     "",
+		Description: "Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Discards a key that is not confirmed, e.g. one whose text was not stored safely. 409 invalid_state for a key that is not unconfirmed; 404 not_found. Every attempt is audited.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"description\":\"The key ID (bk-\\u003cYYYYMMDD\\u003e-\\u003c8 hex\\u003e or legacy).\",\"maxLength\":32,\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
 		Name:        "downloadAuditExport",
 		Method:      "GET",
 		Path:        "/api/v1/audit/exports/{id}/download",
@@ -1197,6 +1233,24 @@ var tools = []Tool{
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"enrollment_config\":{\"description\":\"The document a device needs to enroll; it pins the bundle-signing keys as trust anchor and the revocation-signing keys as trust anchor of paddock-revoke. Configurations created before revocation existed have no revocation_keys.\",\"properties\":{\"bundle_keys\":{\"items\":{\"properties\":{\"key_id\":{\"description\":\"e.g. \\\"bundle-signing:v1\\\"\",\"type\":\"string\"},\"public_key\":{\"description\":\"Base64 Ed25519 public key.\",\"type\":\"string\"}},\"required\":[\"key_id\",\"public_key\"],\"type\":\"object\"},\"type\":\"array\"},\"organization_id\":{\"format\":\"uuid\",\"type\":\"string\"},\"revocation_keys\":{\"description\":\"The revocation-signing public keys, e.g. key_id \\\"revocation-signing:v1\\\".\",\"items\":{\"properties\":{\"key_id\":{\"description\":\"e.g. \\\"bundle-signing:v1\\\"\",\"type\":\"string\"},\"public_key\":{\"description\":\"Base64 Ed25519 public key.\",\"type\":\"string\"}},\"required\":[\"key_id\",\"public_key\"],\"type\":\"object\"},\"type\":\"array\"},\"server_url\":{\"type\":\"string\"},\"token\":{\"type\":\"string\"}},\"required\":[\"server_url\",\"organization_id\",\"token\",\"bundle_keys\"],\"type\":\"object\"},\"hostname\":{\"description\":\"Host name label: lowercase letters, digits and hyphens.\",\"maxLength\":63,\"type\":\"string\"},\"keyboard_layout\":{\"description\":\"XKB layout, for example us or de.\",\"maxLength\":8,\"type\":\"string\"},\"locale\":{\"description\":\"For example en_US.UTF-8.\",\"maxLength\":32,\"type\":\"string\"},\"release\":{\"description\":\"Ubuntu release of the installation medium.\",\"enum\":[\"24.04\",\"26.04\"],\"type\":\"string\"},\"timezone\":{\"description\":\"IANA time zone, for example Europe/Berlin.\",\"maxLength\":64,\"type\":\"string\"}},\"required\":[\"enrollment_config\",\"release\",\"hostname\",\"locale\",\"keyboard_layout\",\"timezone\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
+		Name:        "generateBackupKey",
+		Method:      "POST",
+		Path:        "/api/platform/v1/backup/key",
+		Pattern:     "POST /api/platform/v1/backup/key",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "platform.backup_key_generated",
+		Summary:     "",
+		Description: "Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required; API tokens never have one). Generates a new backup key (32 random bytes, standard base64) and returns its text exactly once, with six 1-based positions whose characters confirm it (POST /api/platform/v1/backup/key/{id}/confirm). The response is not cached; the key is never shown again. No backup runs until a key is confirmed; a key generated while one is active replaces it on confirmation. 409 invalid_state while another key waits for its confirmation. Every attempt is audited; the key text never is.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
 		Name:        "getAccessReview",
 		Method:      "GET",
 		Path:        "/api/v1/access-review",
@@ -1320,6 +1374,24 @@ var tools = []Tool{
 		AuditCode:   "",
 		Summary:     "",
 		Description: "Roles: platform_admin. The automatic-unseal setting (ADR 0035): the acknowledged decision, the unsealer's report and OpenBao's seal status. Sessions only: platform tokens do not exist.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "getBackupKey",
+		Method:      "GET",
+		Path:        "/api/platform/v1/backup/key",
+		Pattern:     "GET /api/platform/v1/backup/key",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: platform_admin. The backup key state (plan M15 decision 7): the active key, the key waiting for its confirmation and the retired keys. Never the key text, its ciphertext or the challenge hash; the challenge positions only for the key waiting for its confirmation (amendment 2026-11-04).\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
 	},
 	{

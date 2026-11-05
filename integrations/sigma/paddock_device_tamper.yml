@@ -1,0 +1,20 @@
+title: Paddock device tamper event
+id: a4671651-758d-4ce7-ba8e-af160fd2d5d3
+status: experimental
+description: A managed device reported a change to a protected area (sudoers, LUKS keyslots, local administrators, agent services).
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100910
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code|startswith: 'device.tamper_'
+  condition: selection
+falsepositives:
+  - A change that Paddock applied itself and the agent re-verified; correlate with a config.applied event.
+level: critical

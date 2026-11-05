@@ -3912,6 +3912,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/backup/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The backup key state (plan M15 decision 7): the active key, the key waiting for its
+         *     confirmation and the retired keys. Never the key text, its ciphertext or the challenge hash; the challenge
+         *     positions only for the key waiting for its confirmation (amendment 2026-11-04).
+         */
+        get: operations["getBackupKey"];
+        put?: never;
+        /**
+         * @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required; API tokens never have
+         *     one). Generates a new backup key (32 random bytes, standard base64) and returns its text exactly once, with
+         *     six 1-based positions whose characters confirm it (POST /api/platform/v1/backup/key/{id}/confirm). The
+         *     response is not cached; the key is never shown again. No backup runs until a key is confirmed; a key
+         *     generated while one is active replaces it on confirmation. 409 invalid_state while another key waits for its
+         *     confirmation. Every attempt is audited; the key text never is.
+         */
+        post: operations["generateBackupKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/key/{id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key ID (bk-<YYYYMMDD>-<8 hex> or legacy). */
+                id: components["parameters"]["BackupKeyId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Confirms a key with
+         *     the characters of its text at the six positions of the generating response (or of pending.positions in GET
+         *     /api/platform/v1/backup/key), in that order. The key becomes
+         *     active; a previously active key is retired. 400 invalid_request when the answer is not six characters; 409
+         *     backup_key_mismatch for wrong characters, with attempts_left=<n> in the detail; the third mismatch discards
+         *     the key; 409 invalid_state for a key that is not unconfirmed; 404 not_found. Every attempt is audited; the
+         *     answer never is.
+         */
+        post: operations["confirmBackupKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/key/{id}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key ID (bk-<YYYYMMDD>-<8 hex> or legacy). */
+                id: components["parameters"]["BackupKeyId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Discards a key that
+         *     is not confirmed, e.g. one whose text was not stored safely. 409 invalid_state for a key that is not
+         *     unconfirmed; 404 not_found. Every attempt is audited.
+         */
+        post: operations["discardBackupKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/settings/mcp": {
         parameters: {
             query?: never;
@@ -6953,7 +7034,7 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
-        /** @description A backup key without its text, ciphertext or challenge. */
+        /** @description A backup key without its text, ciphertext or challenge hash. */
         BackupKey: {
             key_id: string;
             /** @description The first 16 hexadecimal characters of the key's SHA-256. */
@@ -6970,11 +7051,32 @@ export interface components {
             retired_at: string | null;
             attempts: number;
             legacy: boolean;
+            /**
+             * @description The six 1-based challenge positions in ascending order while the key is unconfirmed (also for the
+             *     imported key legacy, whose administrator never saw a generating response); null in every other state.
+             *     Indices only, never characters of the key.
+             */
+            positions: number[] | null;
         };
         BackupKeyStatus: {
             active: components["schemas"]["BackupKey"] | null;
             pending: components["schemas"]["BackupKey"] | null;
             retired: components["schemas"]["BackupKey"][];
+        };
+        /** @description The only response that holds a backup key's text. */
+        BackupKeyGenerated: {
+            key_id: string;
+            /** @description The key: 32 bytes in standard base64 (44 characters). */
+            key: string;
+            fingerprint: string;
+            /** @description Six distinct 1-based positions of key in ascending order; their characters confirm the key. */
+            positions: number[];
+            /** @description The file name the portal offers the key text under. */
+            download_name: string;
+        };
+        BackupKeyConfirm: {
+            /** @description The characters of the key at the six positions, in order. */
+            answer: string;
         };
         BackupRepo: {
             /** @description The pgBackRest repository path of the active key; null without one. */
@@ -8270,6 +8372,8 @@ export interface components {
         RolloutReason: string;
         Csrf: "1";
         Id: string;
+        /** @description The key ID (bk-<YYYYMMDD>-<8 hex> or legacy). */
+        BackupKeyId: string;
         /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
         Page: number;
         PageSize: 10 | 25 | 50 | 100;
@@ -15362,6 +15466,117 @@ export interface operations {
             };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    getBackupKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The key state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupKeyStatus"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    generateBackupKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new key, shown once. */
+            201: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupKeyGenerated"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    confirmBackupKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                /** @description The key ID (bk-<YYYYMMDD>-<8 hex> or legacy). */
+                id: components["parameters"]["BackupKeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupKeyConfirm"];
+            };
+        };
+        responses: {
+            /** @description The confirmed key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupKey"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    discardBackupKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                /** @description The key ID (bk-<YYYYMMDD>-<8 hex> or legacy). */
+                id: components["parameters"]["BackupKeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The discarded key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupKey"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     getPlatformMcpSettings: {

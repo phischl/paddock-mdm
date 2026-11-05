@@ -181,6 +181,9 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	if _, ok := c.Services["paddock-api"]; ok {
 		results = append(results, checkAllowlistBypass(c))
 	}
+	if usesAny(c, []string{legacyBackupKeyVar}) {
+		results = append(results, checkLegacyBackupKey(c))
+	}
 	if usesAny(c, []string{"PADDOCK_RETENTION_INTERVAL"}) {
 		results = append(results, checkRetentionInterval(c))
 	}
@@ -1075,6 +1078,22 @@ func checkAllowlistBypass(c Config) Result {
 		f = append(f, "paddock-api: PADDOCK_IP_ALLOWLIST_BYPASS is true (break-glass; remove it once access is restored)")
 	}
 	return result("ip allow list bypass is off", f)
+}
+
+// legacyBackupKeyVar names the host key file the api imports once as backup key legacy (plan M15 decision 9).
+const legacyBackupKeyVar = "PADDOCK_BACKUP_LEGACY_KEY_FILE"
+
+// checkLegacyBackupKey warns while the legacy key file is configured: once the imported key is confirmed the file is
+// only a second copy of key material on the host. Whether a key is confirmed is database state this offline check
+// cannot see; the api logs a warning on start while the variable is set and a confirmed key exists.
+func checkLegacyBackupKey(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		if env(c.Services[name], legacyBackupKeyVar) != "" {
+			f = append(f, name+": "+legacyBackupKeyVar+" is set; remove it and the key file once the imported key is confirmed in the portal")
+		}
+	}
+	return Result{Item: "backup: legacy key import", OK: true, Warn: true, Detail: strings.Join(f, "\n")}
 }
 
 // checkRetentionInterval fails on a retention round shorter than the production minimum or longer than the maximum,

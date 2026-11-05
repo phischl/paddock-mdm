@@ -81,6 +81,7 @@ shipped=(
   prometheus/scrape/auto-unseal.yml
   scripts/lib.sh scripts/gen-prod-secrets.sh scripts/openbao-configure.sh scripts/rustfs-bundles-bootstrap.sh
   scripts/rustfs-audit-bootstrap.sh scripts/fleet-bootstrap.sh scripts/wait-healthy.sh scripts/postgres-unsealer-role.sh
+  scripts/upgrade-check.sh
 )
 for f in "$src"/authentik/blueprints/*.yaml; do shipped+=("authentik/blueprints/$(basename "$f")"); done
 
@@ -111,6 +112,22 @@ grep -q '^# Build and tooling images$' "$src/versions.env" || fail "deploy/compo
   printf 'PADDOCK_PGBACKREST_IMAGE=%s\n' "$(image pgbackrest)"
 } >"$dir/versions.env"
 chmod 0644 "$dir/versions.env"
+
+# RELEASES and RELEASE-NOTES: what ./paddock upgrade-check needs and an offline host cannot look up (ADR 0047 decision 3).
+# RELEASES lists the release sections of CHANGELOG.md, oldest first, and a stable bundle's own version; a bundle of
+# another channel is no release, so its version stays out and the check says so. RELEASE-NOTES holds the Schema,
+# Upgrade and Agents lines of this version's section.
+changelog="$here/../../CHANGELOG.md"
+if [[ -f "$changelog" ]]; then
+  sed -n 's/^## \[\([^]]*\)\] - [0-9-]*$/\1/p' "$changelog" | tac >"$dir/RELEASES"
+  awk -v h="## [$version] - " 'index($0, h) == 1 { on = 1; next } /^## / { on = 0 } on && /^(Schema|Upgrade|Agents): /' \
+    "$changelog" >"$dir/RELEASE-NOTES"
+else
+  : >"$dir/RELEASES"
+  : >"$dir/RELEASE-NOTES"
+fi
+if [[ "$channel" == stable ]] && ! grep -qxF "$version" "$dir/RELEASES"; then echo "$version" >>"$dir/RELEASES"; fi
+chmod 0644 "$dir/RELEASES" "$dir/RELEASE-NOTES"
 
 printf 'version=%s\nchannel=%s\ncommit=%s\nbuilt=%s\n' "$version" "$channel" "$commit" "$built" >"$dir/VERSION"
 chmod 0644 "$dir/VERSION"
