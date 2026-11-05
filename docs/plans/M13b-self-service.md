@@ -367,8 +367,8 @@ Chains: (798 → 799 → 800 → 801 → 802) ‖ (798 → 803 → 804); 805 aft
   socket (list, install flow, refusal rendering, notice dialog once).
 - **Integration:** migration `00108` on the alpha.9 schema with existing assignments; RLS unchanged;
   `RecordStatus` with scope/username PK; isolation fixtures for the new endpoints.
-- **Acceptance (`software_selfservice_test.go`, devicesim gains a `selfservice` client? no — the socket is on the
-  device; acceptance proves the server side):** SS1 an `available` assignment to a user group renders the audience
+- **Acceptance (`software_selfservice_test.go`; the socket lives on the device, so the acceptance suite proves the
+  server side only — devicesim needs no self-service client):** SS1 an `available` assignment to a user group renders the audience
   of the owners only (bundle fetched by devicesim); SS2 a device without owners gets no user-targeted package;
   SS3 a `software.self_service` event is recorded with its params and the status row carries scope and user;
   SS4 a Flatpak source change needs step-up (403 for tokens); SS5 `GET /users/{id}/software` lists direct and
