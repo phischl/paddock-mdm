@@ -9,6 +9,230 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Entries of merged changes that are not released yet are in `changelog.d/`.
 
+## [0.1.0-alpha.8] - 2026-11-04
+
+An installation of 0.1.0-alpha.7 upgrades in place (`docs/operations/upgrade.md`, "From 0.1.0-alpha.8"): only
+Paddock's own images change; no third-party image, Compose file, `.env` setting, database role or OpenBao change.
+The control plane applies ten new migrations, the audit host has none. Upgrade the server first, then roll out this
+release's agent. Installations of 0.1.0-alpha.6 or earlier still have no upgrade path and are installed fresh
+(0.1.0-alpha.7 below).
+
+Safe configuration changes (ADR 0033, plan M11): the server keeps what every device applied per resource and per
+configuration version, every configuration write leaves a change set that can be reverted after a confirmation of
+its inverse plan, and with rollouts enabled under Settings, Rollouts a change of managed files, units, package holds
+or update settings reaches the devices in waves that advance on their own and halt at the failure threshold
+(`docs/operations/configuration-rollouts.md`). An existing laptop is adopted after `paddockd preflight` and starts
+report-only until an administrator enables enforcement (`docs/operations/enroll-existing.md`). Software catalog
+(plan M13a): organization administrators register third-party APT sources with their verified signing key (step-up,
+never through API tokens or the assistant), operators describe applications per distribution, release and
+architecture and assign them as required, pinned, held, uninstalled or forbidden, and devices enforce the
+assignments and report their state per application (`docs/operations/software.md`). On the device, the agent writes
+`/etc/apt/sources.list.d/paddock-<slug>.sources`, `/etc/apt/keyrings/paddock-<slug>.gpg` and
+`/etc/apt/preferences.d/51paddock-software` as a protected area; Paddock's own packages and the Himmelblau sign-in
+stack can never be managed through the catalog. The agent also reports its os-release, so the device record follows
+a distribution upgrade. The agent changes in this release; the supervisor and `paddock-revoke` do not.
+`paddock-revoke` stays unsigned, and revocation (Lock, Destroy, dead man's switch) stays disabled behind
+`PADDOCK_REVOCATION_ENABLED`.
+
+Schema: migrations 00090–00099 (control-plane database; new tables, columns and grants only, 00097 fills its new
+device columns from the existing device data); audit schema unchanged.
+
+### Added
+
+- Apply status of devices (plan M11, PDK-151): the server keeps what each device reports, per resource (applied, failed,
+  pending in report-only, drift corrected) and per configuration version. New endpoints
+  `GET /api/v1/devices/{id}/config-status`, `GET /api/v1/devices/{id}/bundles` and the fleet view
+  `GET /api/v1/config-status`; the device detail carries the counts as `config_status`. The `device.bundle_applied`
+  audit event records the apply mode.
+- The portal shows what each device applied of its configuration: a device's *Apply status* tab lists every
+  resource with its status (applied, failed, pending in a report-only apply, drift corrected), the message of a
+  failure and the history of its configuration versions, and the new *Configuration status* page counts per
+  resource on how many devices it failed, so an administrator sees why a laptop lacks the new configuration (PDK-152).
+- Enrolling an existing device: `paddockd preflight [--json] [--config FILE]` checks an installed laptop read-only
+  before adoption (OS, systemd, root, sudo, TPM, disk, sssd, Himmelblau, foreign sudoers files, privileged groups,
+  server, clock), and the runbook `docs/operations/enroll-existing.md` describes the supported path.
+- Every change to the configuration now leaves a change set, whether it comes from the portal, the API or
+  `paddockctl apply`: single files, units, package holds, permission profiles, assignments, device groups and every
+  settings page. A change set keeps what each change replaced or removed (the full file content included) for 90 days,
+  so a later release can undo it; deleting a device group lists every definition that went with it. The change-set
+  list and detail show whether the before-state is still stored, and the list can be filtered by rollout.
+- A change set can be reverted: the change-set list and detail have a **Revert** action that shows the inverse plan
+  in a confirmation dialog before anything changes, and `POST /api/v1/change-sets/{id}/revert` does the same through
+  the API (`dry_run`, then `expected_plan`). The revert restores what the change set replaced or removed, deletes what
+  it created and keeps everything created since; it is recorded as a change set of its own that links to the original
+  and audited as `config.reverted`. Every rule of the original write applies again (organization administrators for
+  settings and device group deletions, a step-up for full profiles). A change set that was already reverted, or whose
+  previous state is no longer stored, cannot be reverted. The MCP tool `revertChangeSet` is marked destructive.
+- Rollout settings (plan M11, PDK-156): an organization administrator configures staged configuration rollouts under
+  Settings, Rollouts (`GET` and `PUT /api/v1/settings/rollout`, also an MCP tool): on or off (off by default), the waves
+  (default 1, 10, 50, 100 percent), the minimum duration of a wave (default 60 minutes, at least 15), the failure
+  threshold (default 2 percent and at least 3 devices) and an optional canary device group whose devices always go
+  first. A change is audited as `settings.rollout_changed` with every field; deleting the canary group clears it. The
+  settings only take effect for rollouts started after they were saved. Schema: migration `00092`.
+- Staged configuration rollouts (plan M11, PDK-157): with rollouts enabled under Settings, Rollouts, a change of managed
+  files, managed units, package holds or the update settings no longer reaches every device at once. It starts a
+  rollout: the canary device group and the devices of the first wave receive it, every other device keeps the previous
+  state of the changed items until a later wave reaches it; changes of other items still reach every device at once.
+  While a rollout is open, a change of an item it stages is refused with 409 `rollout_conflict` and a further change
+  of a section it stages with 409 `rollout_running`; reverting the rollout's change set ends the rollout. An urgent
+  change skips the rollout with `urgent=true` and a reason (2 to 500 characters), needs a fresh step-up and is audited
+  with the reason. The apply result, the change set and a device's bundle history name the rollout, and a device's
+  effective configuration shows whether it is inside the current wave. Schema: migration `00093`.
+  While a rollout is open, renaming or deleting a device group that scopes one of its staged items, or its canary
+  group, is refused with 409 `rollout_conflict`; the files, units and holds of a deleted or renamed group change on
+  every device at once and never start a rollout.
+- Configuration rollouts advance and stop on their own (plan M11, PDK-158): every minute the worker checks each running
+  rollout. When the devices in the waves reached so far that failed a staged item reach the failure threshold, the
+  rollout is halted and audited as `config_rollout.halted` (a preset event of the security notifications); otherwise
+  it moves to the next wave once the minimum wave duration has passed and completes after the last wave. Failures of
+  items the rollout does not stage, and plan errors of a report-only device, never count; a device that never reports
+  never counts either. Administrators and operators can halt a
+  rollout with a reason, resume it, move it to its next wave at once or complete it so that every device receives the
+  change (`POST /api/v1/config-rollouts/{id}/halt|resume|advance|complete`, also as MCP tools; halt, advance and
+  complete are marked destructive); these actions work also after rollouts were switched off, and a resume starts the
+  wave's minimum duration again. `GET /api/v1/config-rollouts` lists
+  the rollouts with their counts of eligible, applied, failed and pending devices, `GET /api/v1/config-rollouts/{id}`
+  shows one with its change set and staged resources, and `GET /api/v1/config-rollouts/{id}/devices` shows per device
+  whether it is inside the wave, whether its newest bundle carries the change and the report the counts read; the
+  counts are exactly what the worker evaluates. The worker exports
+  the gauge `paddock_config_rollouts{status}`.
+- Configuration rollouts in the portal (plan M11, PDK-159): the new *Configuration rollouts* page lists the staged
+  rollouts with their status, wave and counts, and a rollout's page shows the waves with the current one and the canary
+  group, the planned changes and the devices with their newest report, and halts (with a reason), resumes, advances,
+  completes or reverts the rollout, each after a confirmation. Change sets show how they reached the devices
+  (immediate, staged, urgent) and link to their rollout, and the bundle history of a device links to the rollout of a
+  version.
+- While staged rollouts are enabled, every form that writes a rollout-able section (managed files and units, package
+  holds, update settings), their delete confirmations and the revert dialog offer *Apply immediately to every device
+  (urgent)* with a required reason; the portal asks for the step-up the server requires and repeats the change.
+  `paddockctl apply` prints `Rollout: staged (rollout <id>)` or `Rollout: urgent` after the change set; the urgent
+  opt-out stays portal-only, because an API token never satisfies the step-up.
+- Adopted devices start in report-only mode (plan M11, PDK-160): a device records how it was enrolled (`autoinstall`,
+  `adopted`, or `unknown` for agents that send no method; any other value is refused with 400 `invalid_request`).
+  An adopted device receives report-only bundles: its agent reports what it would change and changes nothing, so
+  enrolling an existing laptop never cuts its user off. The method is the device's own claim and only selects the
+  mode; it never grants more trust. The device header shows the chips *Adopted*/*Autoinstall* and *Report-only*, the
+  *Apply status* tab shows the report-only notice and lists plan errors as their own state, the attention list and the
+  findings show the new kind `report_only`, and the device list (`GET /api/v1/devices`, `paddockctl devices list`)
+  filters by `enrollment_method` and `config_mode`. *Enable enforcement* on the device overview
+  (`POST /api/v1/devices/{id}/enforce`, administrators and operators) is confirmed with the typed hostname, audited as
+  `device.enforcement_enabled`, and makes the next bundle apply every managed resource; it is not offered to the
+  assistant (MCP). Report-only devices are never part of a configuration rollout's waves and never count toward its
+  failure threshold, and their plan errors never count as failed in the configuration status. Devices enrolled before
+  this release are `unknown` and stay enforced.
+- The agent applies a report-only bundle without changing managed configuration resources: it plans every resource
+  and reports what it would change (`pending` with the planned changes, at most 50 lines per resource; plan errors as
+  `failed` resources, not as apply errors), skips drift correction and the managed local administrator until
+  enforcement is enabled (`rotate_admin_password` fails with reason `report_only`), and keeps checking in as usual.
+  Agent and supervisor updates, disk encryption, revocation and the dead man's switch keep running.
+- The agent reports the enrollment method: `autoinstall` on a device installed with the Paddock autoinstall,
+  `adopted` otherwise; servers of earlier releases ignore the field. `paddockd enroll` and the agent's own enrollment
+  never send two requests at the same time.
+- Two operator guides: `docs/operations/configuration-rollouts.md` walks through a staged configuration change from the
+  settings to the revert (waves, counts, halt, resume, advance, complete, the urgent opt-out and its audit trail, what is
+  never staged, the audit codes), and `docs/operations/enroll-existing.md` now covers the report-only phase, enabling
+  enforcement and the minimum agent release. The architecture document, the privacy document and the paddockctl page
+  describe the same behaviour.
+- The overview has a Configuration card: the open configuration rollout with its wave, failed devices and status, the
+  number of failed resources and devices (plan errors of report-only devices are not failures), and the devices still
+  in report-only mode, each linking to the matching page.
+- Organization administrators can register third-party APT package sources (vendor or own repositories) with the
+  admin API: `/api/v1/software-sources`. Each source carries its own OpenPGP signing key; the administrator types the
+  key's fingerprint from the vendor's publication and Paddock refuses the source when it differs
+  (`422 fingerprint_mismatch`). Sources use https only, keys must be RSA of at least 2048 bits (2048 to 3071 bits are
+  marked `weak_key`) or Ed25519, Ed448 or NIST P-256/384/521. Adding, changing and removing a source is
+  root-equivalent: it needs a fresh step-up, API tokens and AI assistant sessions cannot do it, and every change is
+  audited with the key fingerprint (`software_source.created|updated|deleted`). Devices do not use the sources yet.
+- Organization administrators and operators can describe the applications of their fleet in a software catalog with
+  the admin API: `/api/v1/software-catalog` (name, description, category, optional package source, the package name per
+  distribution, release and architecture, and a PNG icon) and assign them with an intent to the organization or a
+  device group: `/api/v1/software-assignments` (required, pinned or latest; uninstall; hold a version; forbid). Entries
+  and assignments are audited (`software_catalog_entry.*`, `software_assignment.*`); deleting an entry removes its
+  assignments, and a package source that an entry uses cannot be removed (`409 in_use`). Devices do not enforce the
+  assignments yet.
+  Packages that Paddock itself needs cannot be managed through the catalog: the agent, supervisor, revocation tool,
+  fleetd and the Himmelblau packages cannot be named in an entry (`400 invalid_request`); `sudo`, `cryptsetup`,
+  `tpm2-tools`, `libpam-modules` and `dracut` cannot be forbidden or uninstalled, and `initramfs-tools` cannot be
+  required or held, because installing it removes `dracut`.
+- Device bundles (schema v2) now carry the device's desired software state as an optional `software` section: the
+  packages its software assignments resolve to for the device's distribution, release and architecture, each with its
+  intent, and the package sources (with their signing key) that required packages come from. Pinned and held catalog
+  packages are merged with the package holds into the device's update settings, the smallest version winning. When a
+  package is forbidden or to be uninstalled on a device, that wins over a package hold of the same package: the hold
+  is left out of that device's bundle and the package is marked `superseded_hold`. A package source whose stored data
+  no longer passes the current rules is left out of every bundle together with the required packages from it. A
+  catalog entry or assignment that no longer passes them, or a software result that would touch a package Paddock
+  depends on, keeps every device it applies to on its previous bundle (`device.bundle_render_failed` names the entry);
+  the rest of the organization is compiled as usual. Older agents ignore the section; agents do not enforce it yet.
+- Package source URIs containing U+FFFD are now refused (`400 invalid_request`); the upload and the bundle use one URI
+  rule.
+- Changing a catalog entry's packages is refused (`400 invalid_request`) when one of its existing assignments could
+  not be created for the new packages, e.g. an entry with a forbid assignment cannot be changed to a package Paddock
+  depends on.
+- Administrators can see which devices have an application installed and in which state. A device's check-in now
+  carries the state of its catalog applications (installed, held, absent, pending, failed; at most 200 items), and the
+  admin API lists it on the application, `GET /api/v1/software-catalog/{id}/devices`, and on the device,
+  `GET /api/v1/devices/{id}/managed-software`. An application assigned to a device that has no package for its
+  operating system and architecture shows as `not_applicable`, one that has not been reported yet as `unknown`.
+  The check-in accepts up to 96 KiB (was 64 KiB) so that a full software report never makes it fail.
+- Devices now enforce their software catalog assignments: the agent adds the assigned APT sources with their signing keys
+  (refusing a key whose fingerprint does not match), installs required applications, reinstalls one a user removed,
+  removes and blocks uninstalled or forbidden ones, and reports every change and failure in the audit trail and in the
+  device's software status. Removals wait while the server is unreachable, an installation that would remove other
+  packages is refused, and an uninstall removes the software sources while the installed applications stay.
+- Catalog entries and assignments refuse package names that apt would read as a pattern selecting one of Paddock's
+  protected packages (for example `himmelblau.` or `sud.`), and devices never hand apt a package name it does not know
+  exactly. When the last software assignment of a device goes away, the device removes the sources, keys and blocks
+  Paddock wrote for it and leaves everything else in place.
+- Package holds, install-now requests and the removal of Paddock pass a package name to apt only when apt knows exactly
+  that name; anything else is reported as failed and never reaches apt.
+- Package sources, software catalog and managed software in the portal (plan M13a): administrators add trusted
+  package sources (https only, signing key and its fingerprint, with a security key and a typed name to remove one),
+  operators describe applications in the new software catalog and assign them to device groups as required, pinned,
+  held, uninstalled or forbidden, and everyone with read access sees per application and per device whether it is
+  installed, held, pending or failed. A device's new *Managed software* tab lists what the catalog manages there,
+  including applications that do not apply and those not reported yet.
+- Software catalog operations guide (plan M13a): `docs/operations/software.md` explains how to add a package source
+  with its verified vendor fingerprint, how catalog entries name packages per distribution, release and architecture,
+  what each intent does on the device, every state and reason a device reports, troubleshooting and the uninstall
+  rule. The residual risks RR-77 to RR-83 are in the ISMS register, and the system gate `TestSoftwareGates` proves the
+  enforcement on the test VMs.
+- Operating system changes (PDK-695): the agent reports the `ID` and `VERSION_ID` of its os-release with every
+  check-in, and the device record follows a distribution upgrade (for example Ubuntu 24.04 to 26.04). Each change is
+  recorded once as the audit event `device.os_release_changed` (old and new ID and VERSION_ID), and the device is
+  recompiled so that release-specific configuration resolves against the release it runs now. The compiler's reconcile loop also
+  recompiles a device that reports an architecture for the first time or a different one. Agents of earlier releases send no
+  os-release and keep the value from enrollment.
+- The software API now reports more for the portal's software pages: each software source shows how many catalog
+  entries use it, and the device list of an application shows each device's name and its device groups next to the
+  hostname. The list can still be narrowed to one device group.
+
+### Changed
+
+- The `bundle.applied` device event now carries the apply mode and one outcome per resource (applied or
+  failed with its message), next to the existing error list.
+- Installing managed software can no longer remove packages the agent's pre-check did not show (PDK-712), and an
+  installation that would install, upgrade or remove one of Paddock's own packages or the Himmelblau sign-in stack is
+  refused before anything changes, reported with the reason `protected_package_affected`. Upgrading a package Paddock
+  depends on, such as sudo, stays allowed; removing it stays refused.
+- Retention schedule (ADR 0032 amendment 2026-11-04): the stores of the safe configuration changes and the software
+  catalog now have rows in `docs/compliance/retention.md` with their retention, the job that deletes them and the
+  audit event that proves it. The software status of retired devices and the change-set and rollout history are
+  recorded as not purged yet, with follow-up tickets.
+
+### Fixed
+
+- `paddockd preflight` no longer reports the operating system as unreadable on Ubuntu, where `/etc/os-release` is a
+  link to `/usr/lib/os-release`; the check reads the linked file.
+- A managed software source that repeats a repository the device already has with another signing key no longer breaks
+  the device's package manager (PDK-710): the agent checks the whole APT configuration after writing a source, removes
+  only its own source file and keyring again when they conflict, and reports the source as failed with the reason
+  `conflicting_source` and the repository's address. The device's own entry is never changed. A failing package lookup
+  is now reported as an APT failure instead of an unknown package name.
+- Packages installed for two architectures (for example with Steam or Wine on a device with i386 enabled) are now
+  reported as installed: a forbidden one is removed for every architecture instead of being reported absent, and a
+  required one is no longer reinstalled and reported failed on every pass.
+
 ## [0.1.0-alpha.7] - 2026-11-02
 
 **Breaking: there is no upgrade path from 0.1.0-alpha.6 or earlier.** PostgreSQL moves to 18 (new data directory

@@ -16,7 +16,10 @@ removing Paddock from a device; it detects tampering and keeps a tamper-evident 
 every night, exported as signed evidence packages that verify offline). Security events reach signed webhooks, e-mail
 and a SIEM feed, and findings record how each one was handled. Retention and privacy settings per organization keep
 personal data only as long as the retention schedule says. Signed agent releases are imported from GitHub with one
-button and rolled out in waves. Administrators can let an AI assistant work with Paddock through the MCP, within
+button and rolled out in waves. Configuration changes are safe to make: each device reports what it applied, every
+change can be reverted, changes can reach the fleet in waves that halt on failures, and existing laptops are adopted
+in a report-only phase first. A software catalog installs, pins, holds, removes or forbids applications from trusted
+APT sources with verified signing keys. Administrators can let an AI assistant work with Paddock through the MCP, within
 policies they set. Devices only ever talk to the
 server on their own initiative, and keep working when it is unreachable. Users keep the administrator rights their
 organization grants them; Paddock makes those rights explicit, reviewable and audited. The portal speaks English
@@ -52,13 +55,13 @@ identity can switch between the platform administrator role and its organization
 </p>
 
 > [!WARNING]
-> **Alpha.** Paddock 0.1.0-alpha.7 is the current pre-release (milestones M0–M8a, the M8s hardening, the lab fixes
+> **Alpha.** Paddock 0.1.0-alpha.8 is the current pre-release (milestones M0–M8a, the M8s hardening, the lab fixes
 > M8x and M8f, the device lifecycle M8d, the device name M8h, the optional automatic unseal M8u, the in-place
 > encryption of installed devices M8e, the evidence integrity M8b, the notifications and findings M9, evidence
-> exports, privacy and retention M10 and AI assistants through the MCP M14), meant for
-> evaluation, not for production fleets. There are no upgrade guarantees between alpha releases; 0.1.0-alpha.7 moves
-> to PostgreSQL 18, Valkey 9 and RabbitMQ 4.4 and has no upgrade path from earlier releases: install it fresh
-> (`docs/operations/upgrade.md`). Revocation (Lock,
+> exports, privacy and retention M10, safe configuration changes M11, the software catalog M13a and AI assistants
+> through the MCP M14), meant for evaluation, not for production fleets. There are no upgrade guarantees between alpha
+> releases; 0.1.0-alpha.8 upgrades in place from 0.1.0-alpha.7, while 0.1.0-alpha.6 and earlier have no upgrade path
+> and are installed fresh (`docs/operations/upgrade.md`). Revocation (Lock,
 > Destroy, dead man's switch) stays disabled behind `PADDOCK_REVOCATION_ENABLED` until its code has passed the
 > second-person review and an installation has passed its hardware acceptance (`docs/operations/revocation-acceptance.md`).
 
@@ -71,6 +74,7 @@ identity can switch between the platform administrator role and its organization
 | [Lab installation](docs/operations/lab-install.md) | one host behind your own TLS proxy; not for production |
 | [Configuration rollouts](docs/operations/configuration-rollouts.md) | operators: roll a configuration change out in waves, halt it, revert a change set, the urgent opt-out |
 | [Enroll an existing device](docs/operations/enroll-existing.md) | operators: adopt an installed Ubuntu laptop: `paddockd preflight`, packages, enrollment |
+| [Software catalog](docs/operations/software.md) | operators: trusted APT sources with verified keys, catalog entries, intents per device group, device states |
 | [Operations runbooks](docs/operations/) | day-to-day operation: agent releases, disk recovery, revocation, restore, capacity |
 | [Compliance pack](docs/compliance/) | auditors: [ISO 27001 mapping](docs/compliance/iso27001-mapping.md), [residual risks](docs/compliance/residual-risks.md), [audit codes](docs/compliance/audit-codes.md), [privacy](docs/compliance/privacy.md), [third-party licenses](docs/compliance/third-party.md) |
 | [CHANGELOG](CHANGELOG.md) | what changed per release |

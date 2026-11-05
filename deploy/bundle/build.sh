@@ -119,7 +119,11 @@ chmod 0644 "$dir/versions.env"
 # Upgrade and Agents lines of this version's section.
 changelog="$here/../../CHANGELOG.md"
 if [[ -f "$changelog" ]]; then
-  sed -n 's/^## \[\([^]]*\)\] - [0-9-]*$/\1/p' "$changelog" | tac >"$dir/RELEASES"
+  # A bundle built from a tree whose changelog already has newer sections (a rebuild of an older release) must not
+  # list releases newer than itself, or the upgrade check would treat them as installed history. awk reads to the end
+  # because an early exit would kill tac with SIGPIPE under pipefail.
+  sed -n 's/^## \[\([^]]*\)\] - [0-9-]*$/\1/p' "$changelog" | tac |
+    awk -v v="$version" 'done { next } { print } $0 == v { done = 1 }' >"$dir/RELEASES"
   awk -v h="## [$version] - " 'index($0, h) == 1 { on = 1; next } /^## / { on = 0 } on && /^(Schema|Upgrade|Agents): /' \
     "$changelog" >"$dir/RELEASE-NOTES"
 else
