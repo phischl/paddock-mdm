@@ -23,3 +23,22 @@ describe('router', () => {
     expect(router.currentRoute.value.name).toBe('audit')
   })
 })
+
+describe('diagnostics pages (ADR 0048 decision 4)', () => {
+  it('open for administrators and operators and send auditors to the audit log', async () => {
+    const { router } = await import('../router')
+    for (const r of ['org_admin', 'org_operator']) {
+      role = r
+      await router.push('/diagnostics')
+      expect(router.currentRoute.value.name).toBe('diagnostics')
+      await router.push('/devices/d1/diagnostics')
+      expect(router.currentRoute.value.name).toBe('device-diagnostics')
+      await router.push('/settings/dms')
+    }
+    role = 'org_auditor'
+    await router.push('/diagnostics')
+    expect(router.currentRoute.value.name).toBe('audit')
+    await router.push('/devices/d1/diagnostics')
+    expect(router.currentRoute.value.name).toBe('audit')
+  })
+})

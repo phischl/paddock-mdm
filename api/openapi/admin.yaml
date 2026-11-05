@@ -4810,6 +4810,155 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/diagnostics:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: requestDeviceDiagnostics
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator (ADR 0048 decision 4). Asks an active device for a diagnostics bundle: Paddock's
+        own logs and configuration of the closed content list, sealed to escrow-wrap. The device tells its user before
+        it collects. reason (2 to 500 characters) is shown to the user and recorded. 409 invalid_state when the device
+        is not active or a collection of it is pending.
+      x-paddock-audit: device.diagnostics_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DiagnosticsRequest" }
+      responses:
+        "202":
+          description: The bundle in state requested; its ID is the collect_status command's.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Diagnostics" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    get:
+      operationId: listDeviceDiagnostics
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. The diagnostics bundles of the device (ADR 0048 decision 4); org_auditor: 403."
+      x-paddock-list:
+        sort: [requested_at, state]
+        default_sort: -requested_at
+        search: []
+        filters: [state]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceDiagnosticsSort"
+        - $ref: "#/components/parameters/DiagnosticsStateFilter"
+      responses:
+        "200":
+          description: One page of bundles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticsPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/diagnostics:
+    get:
+      operationId: listDiagnostics
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. Every diagnostics bundle of the organization (ADR 0048 decision 4); org_auditor: 403."
+      x-paddock-list:
+        sort: [requested_at, hostname, state]
+        default_sort: -requested_at
+        search: [hostname, requested_by]
+        filters: [state]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DiagnosticsSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/DiagnosticsStateFilter"
+      responses:
+        "200":
+          description: One page of bundles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticsPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/diagnostics/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getDiagnostics
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. One diagnostics bundle; org_auditor: 403."
+      responses:
+        "200":
+          description: The bundle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Diagnostics" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/diagnostics/{id}/download:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: downloadDiagnostics
+      x-paddock-step-up: true
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, with a step-up within the last 300 s (403 step_up_required); every download
+        needs its own step-up, because the archive may name the device's users. The escrow-reader unwraps the bundle's
+        key for purpose diagnostics; the response is the decrypted archive
+        (paddock-diagnostics-<hostname>-<id>.tar.gz). Before anything is decrypted the whole sealed object is read and
+        its size and SHA-256 are checked against the bundle: an object that does not match (replaced after it was
+        stored) or is missing is refused with 409 invalid_state, nothing is served and the download is recorded as a
+        failure. 409 invalid_state as well unless the bundle is stored. HEAD is refused with 405 (Allow: GET).
+      x-paddock-audit: device.diagnostics_downloaded
+      responses:
+        "200":
+          description: The diagnostics archive.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/diagnostics/{id}/purge:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: purgeDiagnostics
+      tags: [devices]
+      description: |
+        Roles: org_admin. Deletes the stored bundle's object (every version) and its key material at once (ADR 0048
+        decision 5); the metadata (who, when, hash, downloads) stays. 409 invalid_state unless the bundle is stored.
+      x-paddock-audit: device.diagnostics_purged
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The purged bundle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Diagnostics" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/effective-sudo:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -7189,6 +7338,31 @@ components:
         type: string
         enum: [issued_at, -issued_at, expires_at, -expires_at, type, -type, status, -status]
         default: -issued_at
+    DeviceDiagnosticsSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [requested_at, -requested_at, state, -state]
+        default: -requested_at
+    DiagnosticsSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [requested_at, -requested_at, hostname, -hostname, state, -state]
+        default: -requested_at
+    DiagnosticsStateFilter:
+      name: state
+      in: query
+      description: Repeatable.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { $ref: "#/components/schemas/DiagnosticsState" }
     RevocationRequestSort:
       name: sort
       in: query
@@ -10849,6 +11023,47 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/RevocationRequest" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    DiagnosticsState:
+      type: string
+      enum: [requested, uploaded, stored, failed, expired, purged]
+    DiagnosticsRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 2, maxLength: 500, description: "Why the bundle is needed; shown to the device's user and recorded." }
+    Diagnostics:
+      type: object
+      required: [id, device_id, hostname, requested_by, requested_at, reason, state, truncated_entries, download_count]
+      properties:
+        id: { type: string, format: uuid, description: "Equals the collect_status command's ID." }
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        requested_by: { type: string }
+        requested_at: { type: string, format: date-time }
+        reason: { type: string }
+        state: { $ref: "#/components/schemas/DiagnosticsState" }
+        size: { type: integer, format: int64, description: Bytes of the sealed object. }
+        sha256: { type: string, description: Hex SHA-256 of the sealed object. }
+        files: { type: integer }
+        truncated_entries: { type: array, items: { type: string } }
+        notified_sessions: { type: integer, description: The graphical sessions on the device that were told. }
+        stored_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: When the object is deleted. }
+        failed_reason: { type: string }
+        download_count: { type: integer }
+        last_downloaded_at: { type: string, format: date-time }
+    DiagnosticsPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Diagnostics" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }

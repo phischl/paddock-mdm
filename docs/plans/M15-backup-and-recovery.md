@@ -866,3 +866,172 @@ are indices, not key material.
 - **PDK-730 AC 3** now reads: `GET /backup/key` never contains the key text or the challenge hash; it contains the
   challenge positions only while a key waits for its confirmation (`pending.positions`), and `null` for every
   other key (the test asserts on the raw JSON).
+
+## Amendment 2026-11-05 — the mirror follows the local expire rules on the target's own copy (replaces decision 16 c/e)
+
+Decision (architect lead, `decisions-alpha9.md` item 24, after PDK-732 reviews 4 and 5): decision 16 c/e let the
+mirror delete on a target whatever the local set no longer held, with one exemption ("a newer completed full in the
+same path"). After a lost repository volume that pgBackRest initialises again, that rule deleted every older full,
+all WAL and in-keep snapshots on every target. From now on **a target loses only what the local expire would have
+removed from the target's own copy**; the local set is the reference for "newer", never the reason to delete. This
+amendment is the complete specification of `backuprole.mirrorSet` and of the local expire it mirrors. Where it
+contradicts decisions 16 c, 16 e, 17 or §9, it wins. PDK-732 is implemented against it in one round (item 24).
+
+### A1 Vocabulary
+
+- **L** = the local set (`repoIndex` of `backup-repo`), **T** = one target's copy (`Target.List`, sizes;
+  `Target.Newest`, modification times). **P** = a repository path `pgbackrest/<key_id>`, **S** = a stanza.
+- **Completed full** = a label directory `P/backup/S/<label>F/` that holds `backup.manifest`; nothing else counts
+  (PDK-732 review 2).
+- **Info files** = `backup.info`, `backup.info.copy`, `archive.info`, `archive.info.copy` of `(P, S)`.
+- **WAL segment** = a file of `P/archive/S/<dbver-id>/<tli+log>/` whose name matches `walSegment`.
+- **Kind file** = a file of `openbao/`, `fleet/` or `escrow/`; its **age** is the timestamp in its name
+  (`fileTime`), identical on L and T; `mtime` is never used for kind files.
+- **Retention inputs** of a round: `retention_full` and `full_interval` (schedule), `openbao_keep_days`,
+  `fleet_keep_days`, the active key's path **A**, the retired key IDs with their `retired_at`, the key IDs the
+  database knows (active, retired, discarded, legacy).
+- **Held** = an object T holds, L lacks, and the rules below do not allow to delete this round. Held objects are
+  counted per target (`held` in `backupset.RunTarget`, gauge `paddock_backup_target_held_files{target}`); a held
+  object is never an error.
+- **Shrunk** = a state in which writing pgBackRest files to T could make T's copy unrestorable; the whole target run
+  stops before any write (`set_shrunk`, target unreachable, `PaddockBackupTargetUnreachable`), as item 19 decided.
+
+### A2 Local expire (what the role and pgBackRest remove from L; the reference for every target deletion)
+
+| Store | Removed from L when | By |
+| --- | --- | --- |
+| Completed full of `(A, S)` and its data files | `A/backup/S/` holds at least `retention_full` completed fulls with a newer label | pgBackRest (`repo1-retention-full`) |
+| WAL segments of `(A, S)` | older than the archive start of the oldest retained full | pgBackRest (archive retention = full retention) |
+| Retired path `P'` as a whole | `P'` is a retired key's path, `A` holds a completed full of every stanza, and `max(newest file of P' on L, retired_at)` is older than `retention_full × full_interval` | the role (`expire`) |
+| `openbao/<ts>.snap.enc`, `fleet/<ts>.sql.gz.enc` | age older than the kind's keep days, and the file is not the newest of its kind on L | the role (`expire`) |
+| `escrow/<key>` | **new rule:** the escrow bucket listing of this round succeeded and does not contain `<key>` | the role (`expire`, after `mirrorEscrow`; a failed listing removes nothing) |
+| `manifest.json` | never (rewritten) | the role |
+
+The role MUST additionally detect local WAL integrity: for every `(A, S)` it computes whether L's archive is
+contiguous from its lowest to its highest segment (the same timeline/log/segment walk `run.sh restore` uses) and
+whether the last whole-stanza `pgbackrest verify` is newer than L's newest completed full (`run.sh` writes
+`$STATE/verify-ok` = epoch after `full_backup` ran `pgbackrest verify` **without** `--set`, i.e. the whole stanza,
+and reported `status: ok`; the role reads it from `/pgbackrest-state/<stanza>`). `wal_ok(A, S)` = contiguous and
+verified. (Supersedes decision 17's `verify --set=<label>`: the whole-stanza verify after every full replaces it.)
+
+### A3 Mirror state table (one target, one round; the order is binding)
+
+```
+step 0  read T/manifest.json (if any): parse error or another installation_id → foreign_set: stop, write nothing
+step 1  list T (paths and sizes); for retired paths also T.Newest
+step 2  GUARD (no write before it passed):
+        G1 for every (P, S) and every completed full F on T that L lacks:
+             allowed(F) := L holds ≥ retention_full completed fulls of (P, S) with label > F
+             not allowed(F) → SHRUNK (stop)
+        G2 for every (P, S) where T holds an info file and L holds neither the file nor its .copy → SHRUNK (stop)
+        G3 for every path P on T that L lacks entirely:
+             P == A                                   → SHRUNK (stop)   (the active repository was lost)
+             P retired, A complete for every stanza,
+               max(T.Newest(P), retired_at) older than retention_full × full_interval → DELETE-PATH(P) later
+             P retired, otherwise                     → HOLD(P)
+             P unknown to the database                → HOLD(P), result class unknown_path (target run fails
+                                                         after the put phase; nothing deleted on T this round)
+        G4 kind files, escrow, WAL: never shrink; they are decided in step 6
+step 3  PUT, in this order, only files of L (skip a label directory until L holds its backup.manifest):
+        (1) WAL segments  (2) full directories: data files, backup.manifest.copy, backup.manifest last
+        (3) openbao/, fleet/, escrow/  (4) info files of every (P, S) (re-put when L's changed since pushed)
+        a file T holds with the same size is skipped (info files: unless changed locally); any put error → stop:
+        no manifest, no delete, class of the error; the next round continues where it stopped (idempotent)
+step 4  VERIFY: list T again; every file put this round has the put size, else stop (error class size_mismatch)
+step 5  MANIFEST: put manifest.json when T's differs (SHA-256 compare after the write); skipped when the local
+        manifest of this round could not be written (engine writeManifest error) → the round ends here, no deletes
+step 6  DELETE, only objects listed in step 1 and still present in step 4, never below a HOLD path:
+        D1 completed full F of (P, S) on T, L lacks it:       delete iff allowed(F)  (G1 proved it)
+        D2 WAL segment w of (P, S) on T, L lacks it:          delete iff L holds ≥ retention_full completed fulls
+                                                               of (P, S) AND w < the lowest segment L holds for
+                                                               (P, S) AND wal_ok(P, S); else HOLD(w)
+        D3 info file on T, L lacks it (its .copy exists on L): never deleted (pgBackRest rewrites the pair)
+        D4 openbao/ or fleet/ file f on T, L lacks it:         delete iff age(f) older than the kind's keep days
+                                                               AND f is not the newest of its kind on T (on the
+                                                               step-1 listing, before this round's puts)
+                                                               AND L holds at least one file of that kind;
+                                                               else HOLD(f)
+        D5 escrow/<key> on T, L lacks it:                      delete iff this round's bucket listing succeeded
+                                                               and lacks <key>; else HOLD
+        D6 retired path marked DELETE-PATH in G3:              delete every file below it, then its directories
+        D7 any path outside pgbackrest/, openbao/, fleet/, escrow/, manifest.json: never touched
+        a delete error → stop (class io); deletes already done are final (they were allowed)
+```
+
+Invariants (tests assert them): (I1) no write of any kind before the guard passed; (I2) no delete before step 5
+completed; (I3) the manifest never drives a deletion; (I4) every deleted object satisfied its D-rule against L at the
+time of the delete; (I5) a HOLD never fails the target and never blocks puts; (I6) a SHRUNK target receives nothing
+and loses nothing; (I7) the mirror never reads an object's content from T except `manifest.json`.
+
+### A4 Loss cases and the expected target state
+
+| # | Local state after the loss | pgBackRest behaviour (`run.sh`) | Mirror outcome on T (next rounds) | Operator path |
+| --- | --- | --- | --- | --- |
+| L1 | **Repository volume lost, state volume kept** (`$STATE/stanza` present, repo empty; openbao/, fleet/, escrow/ gone too) | `ensure_stanza` returns early; `backup` fails (no stanza in the repository), `last-error` set, retried every `RETRY_S` | G1 fails for every full T holds → **SHRUNK**: T unchanged (fulls, WAL, info, snapshots, dumps, escrow, old manifest); `set_shrunk`, alert after 30 min | `./paddock restore --only backup-repo --from <target>` (A5) rebuilds L from T; then normal rounds |
+| L2 | **State volume lost, repository kept** (`stanza`, `repo-path`, `last-full`, `verify-ok` gone) | `switch_repo_path` sees no `repo-path`: rewrites it, `stanza-create` on the existing repository (idempotent for the same cluster), full at once | L is complete: no guard trips; the new full is put; when `A/backup/S/` now exceeds `retention_full`, pgBackRest expires the oldest locally and D1 deletes it on T (it is allowed); WAL below the oldest retained full follows D2 once `verify-ok` is written again | none |
+| L3 | **Both volumes lost** | stanza created in an empty repository, full at once; snapshot/dump when due | Before and after that full: T holds fulls L lacks with fewer than `retention_full` newer → **SHRUNK**, T unchanged (incl. in-keep snapshots and dumps, escrow). Stays shrunk until L is rebuilt | as L1: `restore --only backup-repo`; the repo restore replaces L wholesale (the lone new full is discarded with it) and resets the state markers; the next `serve` round takes a full |
+| L4 | **WAL-only loss** (`A/archive/S/` empty or with a gap; fulls and info kept) | fulls continue; `verify` reports the gap, `verify-ok` is not advanced | D2: L holds no lower segment / `wal_ok` false → every WAL segment L lacks is **HELD**; new fulls and new WAL are put; T keeps its complete archive; `held > 0` in the run record and the gauge | fix the archive (restore `--only backup-repo` from T, or accept and let fulls roll); the hold ends when D2's conditions hold again |
+| L5 | **`openbao/` or `fleet/` partly lost** (some files gone, at least one left or a new one taken) | n/a | D4 applied to T's copy: files older than the keep days and not T's newest are deleted (they would have expired locally too); younger ones are **HELD**; the newest is never deleted; new local files are put | none; held files leave T by age |
+| L6 | **`openbao/` or `fleet/` wholly lost** (L holds none of the kind) | n/a | D4's third condition fails → every file of the kind on T is **HELD**, nothing of the kind deleted; the rest of the mirror runs; `held > 0` | the next due run (≤ `openbao_interval_hours` / `fleet_interval_hours`) refills L; or `backup now --kind openbao` |
+| L7 | **`escrow/` lost or the escrow listing fails** | n/a | D5: listing failed or key still in the bucket → **HELD**; after a successful `mirrorEscrow` L holds the objects again and T is unchanged; an object the bucket really dropped is deleted on T only after a successful listing | none |
+| L8 | **Key rotation** (`A` = new path, old path `P'` retired) | `switch_repo_path`: stanza in `A`, full at once; `P'` untouched | `A`'s WAL, info and the first full are put as they appear (G3 does not fire: L holds `P'`); the target manifest's empty `LastFull` is irrelevant (listing-based). `P'` on T follows A2's retired rule: HOLD until `A` is complete and `max(T.Newest(P'), retired_at)` is older than `retention_full × full_interval`, then DELETE-PATH |  none |
+| L9 | **Rotation, then L1/L3** (L lacks `P'` entirely, `A` fresh) | as L3 for `A` | G3: `P'` retired but `A` not complete → **HOLD(P')**; `A` on T: G1 → SHRUNK while T holds `A` fulls L lacks (L3), else puts continue. In every case `P'` stays byte for byte until A2's rule holds on T's own copy | as L1/L3 |
+| L10 | **Retired path expired locally, T missed the last files** (outage before the rotation) | n/a | G3 with `max(T.Newest, retired_at)`: T never loses `P'` earlier than L would have (review 5 minor 4) | none |
+| L11 | **A path on T unknown to the database** (a discarded key never has a path; a foreign-key path can only come from a damaged target) | n/a | HOLD(P), class `unknown_path`: puts run, no delete anywhere on T this round, the target run fails so an operator sees it | empty the path on the share or bucket by hand, or restore |
+| L12 | **T lost files** (share restored from an older snapshot, object store pruned) | n/a | the put phase re-copies every file L holds and T lacks; nothing is deleted (D-rules only remove what L lacks) | none |
+
+### A5 Repository restore from a target (new component `backup-repo`; PDK-734 scope, documented in restore.md)
+
+`./paddock restore --only backup-repo --from <target name | path | target file>`: stops `pgbackrest*` and
+`paddock-backup`, empties the `backup-repo` volume, copies T's whole set into it (through the one-off backup
+container, `paddock-server backup restore-repo`), writes `$STATE/stanza`, `$STATE/repo-path` (= the manifest's
+path) and removes `$STATE/last-full` and `$STATE/verify-ok` of both stanzas, starts the three services; the next
+`serve` round runs `stanza-create` (idempotent), a full and a whole-stanza verify. Databases, OpenBao and Fleet are
+not touched; no restore plan is needed (the command records `platform.restore_completed` with `components:
+[backup-repo]`). It refuses while a restore plan is `running`.
+
+### A6 Test matrix (`server/internal/backuprole`, one regression test per case; a fake target with sizes and
+modification times, a fake clock, the key list from a fake store)
+
+| Case | Test | Setup | Assertions (every op recorded in order) |
+| --- | --- | --- | --- |
+| L1 | `TestMirrorRepoLostStateKept` | L empty except `manifest.json` with `LastFull` ""; T: 2 fulls, WAL, info, 3 snapshots, 2 dumps, escrow | `errSetShrunk`; ops empty; T listing unchanged |
+| L2 | `TestMirrorStateLostRepoKept` | L: `retention_full` = 2, fulls F1<F2<F3 (pgBackRest expired F1 locally: L holds F2, F3 and WAL ≥ F2's start); T: F1, F2, WAL from before F1 | ops: puts of F3 and new WAL; delete of F1's files; delete of WAL segments < L's lowest (only with `verify-ok` newer than F3 — a second subtest without it: those WAL are held, F1 still deleted) |
+| L3 | `TestMirrorBothLostFreshFull` | L: one new full F9 in `A`, 1 snapshot; T: F1, F2, WAL, info, 3 snapshots | `errSetShrunk`; ops empty (not even F9 or the snapshot) |
+| L4 | `TestMirrorWalOnlyLossHolds` | L: fulls F2, F3, no WAL (subtest b: a gap); T: full WAL | ops: no delete below `archive/`; new files put; `held` = number of T's WAL segments |
+| L5 | `TestMirrorKindPartialLossFollowsKeep` | keep 30 d; L: snapshot S4 (new) only; T: S1 (40 d), S2 (31 d), S3 (10 d) | ops: put S4; delete S1; S2 and S3 held (S3 inside the keep days; S2 is the newest of its kind on the step-1 listing, D4's "newest" is evaluated before the put); subtest "second round" (T now holds S2, S3, S4): S2 deleted, S3 held |
+| L6 | `TestMirrorKindWhollyLostHolds` | L: no `openbao/`; T: S1 (40 d), S2 | ops: no delete under `openbao/`; `held` = 2; no error |
+| L7 | `TestMirrorEscrowFollowsBucket` | L: no `escrow/x`; T: `escrow/x`; subtests: listing failed / bucket has x / bucket lacks x | held / held / deleted |
+| L8 | `TestMirrorRotationPutsNewPathHoldsOld` | retired P1 (retired_at = now − 1 d), A = P2 with info + WAL, no full yet; T: P1 complete | ops: puts of P2 files only; no delete under P1; `held` counts P1's files; subtest "A complete, T.Newest(P1) older than keep": P1 deleted whole |
+| L9 | `TestMirrorRotationThenLossKeepsOldPath` | as L8 but L lacks P1 entirely; subtest a: A has no full → ops empty except puts, P1 held; subtest b: T also holds P2 fulls L lacks → `errSetShrunk`, ops empty | P1 byte for byte identical before and after |
+| L10 | `TestMirrorRetiredPathAgeFromRetiredAt` | T.Newest(P1) = now − 20 d, retired_at = now − 2 d, keep 14 d | P1 held (age base is retired_at); subtest retired_at = now − 15 d: deleted |
+| L11 | `TestMirrorUnknownPathHeld` | T holds `pgbackrest/bk-20000101-deadbeef/…` unknown to the store | puts run; no delete; error class `unknown_path` |
+| L12 | `TestMirrorRefillsTarget` | T lacks half of L's files | every missing file put, nothing deleted |
+| order | `TestMirrorOrderGuardPutVerifyManifestDelete` | fake target records ops | first op after `Read manifest`/`List` is a put; `Put manifest.json` after every other put; every `Delete` after the second `List`; with a failing put: no manifest, no delete |
+| partial | `TestMirrorPartialErrorStopsBeforeDelete` | a put fails midway | ops end at the failing put; T manifest unchanged; next round (fake fixed) completes the puts, then deletes |
+| invariants | `TestMirrorInvariants` (property-style, 200 random L/T pairs) | random sets with the rules of A1 | I1–I7 hold; every deleted object satisfies its D-rule |
+| engine | `TestRoundRepoLostLeavesEveryTargetIntact` (engine level, two targets) | L1 then L3 through `Engine.Round` with the real `run.sh` markers faked | both targets unchanged; `set_shrunk` in `backup_run.targets`; gauge 0 |
+
+Existing tests that the amendment makes obsolete and that are replaced (not weakened: their assertions move into
+the cases above): `TestMirrorKeepsTargetWhenSetShrunk` → L1/L3, `TestMirrorKeepsRetiredKeyAfterRotationAndLoss` →
+L8/L9, `TestMirrorGuardIgnoresEmptyLastFull` → L8, `TestMirrorGuardPartialInfoLoss` → G2 case in
+`TestMirrorInvariants` plus a named subtest, `TestMirrorGuardWithoutTargetManifest` → L1 subtest without
+`manifest.json`, `TestMirrorKeepsEscrowWhenLocalEscrowLost` → L7.
+
+### A7 Consequences for other decisions and tickets
+
+- Decision 16 c: the escrow expire rule (A2) is added; the OpenBao/Fleet and retired-path rules are unchanged.
+- Decision 16 e: replaced by A3.
+- Decision 17: `full_backup` runs the whole-stanza `verify` and writes `$STATE/verify-ok`; `run.sh` keeps `--set`
+  only as the fast path when the whole verify exceeds 15 minutes (then `verify-ok` is **not** written and WAL on
+  targets stays held — the operator sees the hold and can run `./paddock compose run --rm --no-deps pgbackrest
+  verify`).
+- `Target.Newest` stays (retired paths); `backupset.RunTarget` gains `Held int`; the metric
+  `paddock_backup_target_held_files{target}`; alert `PaddockBackupTargetHolding` (`> 0 for 7d`, warning) in
+  PDK-732's scope.
+- PDK-734 gains the component `backup-repo` (A5); PDK-739 documents A4 as the operator table in `restore.md`
+  (this amendment's PR already adds the section).
+- Review 4 minors 4–7 are in PDK-732's implementation round: skip the delete phase when the local manifest could not
+  be written (step 5), size check before the manifest (step 4), no put of a label directory without
+  `backup.manifest` (step 3), and a hard cap on a trickling target (cancel the mirror context at
+  `started + budget + size/min_rate` with `min_rate` = 1 MiB/s).

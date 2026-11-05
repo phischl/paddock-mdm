@@ -35,6 +35,8 @@ var lists = map[string]struct {
 	"listDevices":            {deviceList, "postgres/queries/device.sql", "ListDevices", `device\.id`},
 	"listDeviceGroupDevices": {deviceList, "postgres/queries/device.sql", "ListDevices", `device\.id`},
 	"listDeviceCommands":     {deviceCommandList, "postgres/queries/command.sql", "ListDeviceCommands", "id"},
+	"listDeviceDiagnostics":  {deviceDiagnosticsList, "postgres/queries/diagnostics.sql", "ListDeviceDiagnostics", `dd\.id`},
+	"listDiagnostics":        {diagnosticsList, "postgres/queries/diagnostics.sql", "ListAllDeviceDiagnostics", `dd\.id`},
 	"listManagedFiles":       {managedFileList, "postgres/queries/managed_config.sql", "ListManagedFiles", "id"},
 	"listManagedUnits":       {managedUnitList, "postgres/queries/managed_config.sql", "ListManagedUnits", "id"},
 	"listAttention":          {attentionList, "postgres/queries/attention.sql", "ListAttention", "id"},
@@ -94,6 +96,8 @@ var sortColumns = map[string]map[string]string{
 		"name": "e.name", "category": "e.category", "created_at": "e.created_at", "updated_at": "e.updated_at",
 	},
 	"listSoftwareAssignments": {"created_at": "a.created_at", "updated_at": "a.updated_at", "intent": "a.intent"},
+	"listDeviceDiagnostics":   {"requested_at": "dd.requested_at", "state": "dd.state"},
+	"listDiagnostics":         {"requested_at": "dd.requested_at", "hostname": "d.hostname", "state": "dd.state"},
 	"listFindings": {
 		"last_seen_at": "f.last_seen_at", "opened_at": "f.opened_at", "status": "f.status", "hostname": "d.hostname",
 		"code": "f.code",

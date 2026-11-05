@@ -135,7 +135,11 @@ func validateDiagnostics(req protocol.DiagnosticsRequest) (ingest.DiagnosticsAnn
 	if req.Size < 1 {
 		return ingest.DiagnosticsAnnounced{}, errInvalidRequest.with("size must be 1 to 33554432 bytes")
 	}
-	m := ingest.DiagnosticsAnnounced{DiagnosticsID: id, SHA256: req.SHA256, Size: req.Size}
+	// An agent before PDK-749 omits key_version (ADR 0013); a reported one must be a version.
+	if req.KeyVersion < 0 || req.KeyVersion > 1<<31-1 {
+		return ingest.DiagnosticsAnnounced{}, errInvalidRequest.with("key_version must be positive")
+	}
+	m := ingest.DiagnosticsAnnounced{DiagnosticsID: id, SHA256: req.SHA256, Size: req.Size, KeyVersion: req.KeyVersion}
 	if m.Nonce, err = decoded(req.Nonce, escrow.HeaderNonceSize, escrow.HeaderNonceSize); err != nil {
 		return ingest.DiagnosticsAnnounced{}, errInvalidRequest.with("nonce must be standard base64 of 12 bytes")
 	}

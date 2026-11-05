@@ -168,7 +168,7 @@ func (a *Agent) collectStatus(ctx context.Context, job diagnosticsJob) (string, 
 // it returns.
 func (a *Agent) collectAndUpload(ctx context.Context, job diagnosticsJob) (command.CollectStatusResult, error) {
 	id := job.commandID
-	pub, err := diagnosticsKey(job.keys)
+	pub, keyVersion, err := diagnosticsKey(job.keys)
 	if err != nil {
 		return command.CollectStatusResult{}, refuse(command.CollectStatusCollectFailed, err)
 	}
@@ -202,7 +202,7 @@ func (a *Agent) collectAndUpload(ctx context.Context, job diagnosticsJob) (comma
 	sum := sha256.Sum256(sealed)
 	answer, err := a.d.Client.Diagnostics(ctx, job.deviceID, job.seq, protocol.DiagnosticsRequest{CommandID: id,
 		SHA256: hex.EncodeToString(sum[:]), Size: int64(len(sealed)), Nonce: base64.StdEncoding.EncodeToString(nonce),
-		WrappedDEK: wrapped})
+		WrappedDEK: wrapped, KeyVersion: keyVersion})
 	var apiErr *client.APIError
 	switch {
 	case errors.As(err, &apiErr) && apiErr.Status >= 400 && apiErr.Status < 500 && apiErr.Status != http.StatusTooManyRequests:
@@ -277,13 +277,18 @@ func resetDir(dir string) error {
 	return nil
 }
 
-// diagnosticsKey is the escrow-wrap key of the applied bundle. POST /v1/diagnostics carries no key version: the
-// server unwraps with the latest one (PDK-779).
-func diagnosticsKey(keys *bundle.Keys) (*rsa.PublicKey, error) {
+// diagnosticsKey is the escrow-wrap key of the applied bundle and its version, which POST /v1/diagnostics reports so
+// that the escrow-reader unwraps with the version the device used (PDK-779).
+func diagnosticsKey(keys *bundle.Keys) (*rsa.PublicKey, int, error) {
 	if keys == nil || keys.EscrowWrap == nil {
-		return nil, errors.New("the applied bundle has no escrow key")
+		return nil, 0, errors.New("the applied bundle has no escrow key")
 	}
-	return escrow.ParsePublicKey(keys.EscrowWrap.PublicKeyPEM)
+	pub, err := escrow.ParsePublicKey(keys.EscrowWrap.PublicKeyPEM)
+	if err != nil {
+		return nil, 0, err
+	}
+	version, err := escrow.KeyVersion(keys.EscrowWrap.KeyID)
+	return pub, version, err
 }
 
 // collectResult is the result object of collect_status.

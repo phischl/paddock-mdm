@@ -41,10 +41,11 @@ func (p *proofs) Use(_ context.Context, jti string, _ time.Time) (int64, error) 
 	return p.uses[jti], nil
 }
 
-// plainKeys "decrypts" into "plain-" plus the ciphertext.
-type plainKeys struct{}
+// plainKeys "decrypts" into "plain-" plus the ciphertext and records the escrow-wrap version of every decryption.
+type plainKeys struct{ versions *[]int }
 
-func (plainKeys) Decrypt(_ context.Context, _ int, ciphertext string) ([]byte, error) {
+func (k plainKeys) Decrypt(_ context.Context, version int, ciphertext string) ([]byte, error) {
+	*k.versions = append(*k.versions, version)
 	raw, err := base64.StdEncoding.DecodeString(ciphertext)
 	return append([]byte("plain-"), raw...), err
 }
@@ -53,6 +54,7 @@ type world struct {
 	t       *testing.T
 	super   *pgx.Conn
 	proofs  *proofs
+	used    []int // the escrow-wrap versions of the decryptions
 	srv     *httptest.Server
 	client  *escrowreader.Client
 	orgs    [2]uuid.UUID
@@ -76,7 +78,7 @@ func newWorld(t *testing.T) *world {
 	}
 	t.Cleanup(pool.Close)
 	w := &world{t: t, super: super, proofs: &proofs{subjects: map[string]string{}, uses: map[string]int64{}}}
-	w.srv = httptest.NewServer(escrowreader.NewService(secret, pool, w.proofs, w.proofs, plainKeys{}).Handler())
+	w.srv = httptest.NewServer(escrowreader.NewService(secret, pool, w.proofs, w.proofs, plainKeys{&w.used}).Handler())
 	t.Cleanup(w.srv.Close)
 	w.client = escrowreader.NewClient(w.srv.URL, secret)
 	for i := range 2 {
@@ -87,7 +89,7 @@ func newWorld(t *testing.T) *world {
 		w.passwords[i] = w.escrow(i, "admin_password", "ct", nil)
 		w.recovery[i] = w.escrow(i, "luks_recovery_key", "ct", nil)
 		w.headers[i] = w.escrow(i, "luks_header", "", []byte("dek"))
-		for _, role := range []string{"org_admin", "org_operator"} {
+		for _, role := range []string{"org_admin", "org_operator", "org_auditor"} {
 			sub := role + "-" + w.orgs[i].String()
 			w.exec(`INSERT INTO admin_account (id, organization_id, authentik_sub, username, display_name, role)
 				VALUES ($1, $2, $3, $3, $3, $4)`, uuid.New(), w.orgs[i], sub, role)
@@ -97,6 +99,10 @@ func newWorld(t *testing.T) *world {
 		sub := "disabled-" + w.orgs[i].String()
 		w.exec(`INSERT INTO admin_account (id, organization_id, authentik_sub, username, display_name, role, disabled_at)
 			VALUES ($1, $2, $3, $3, $3, 'org_admin', now())`, uuid.New(), w.orgs[i], sub)
+		w.proofs.subjects["token-"+sub] = sub
+		// A platform administrator holds no organization role; its account lives outside admin_account (ADR 0045).
+		sub = "platform_admin-" + w.orgs[i].String()
+		w.exec(`INSERT INTO platform_admin (id, authentik_sub, username, display_name) VALUES ($1, $2, $2, $2)`, uuid.New(), sub)
 		w.proofs.subjects["token-"+sub] = sub
 	}
 	return w
@@ -154,6 +160,8 @@ func TestDecrypt(t *testing.T) {
 	refused := map[string]func(r *app.EscrowDecryptRequest){
 		"forged or stale token":           func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = "forged" },
 		"operator":                        func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(0, "org_operator") },
+		"auditor":                         func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(0, "org_auditor") },
+		"platform administrator":          func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(0, "platform_admin") },
 		"disabled administrator":          func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(0, "disabled") },
 		"administrator of another org":    func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(1, "org_admin") },
 		"foreign organization in request": func(r *app.EscrowDecryptRequest) { r.OrganizationID = w.orgs[1] },
@@ -174,6 +182,19 @@ func TestDecrypt(t *testing.T) {
 		}
 	}
 
+	// Each row of the role table can drift on its own (decision 21(b) of alpha.9), so every escrow purpose refuses
+	// every role but org_admin with its own escrow.
+	for purpose, id := range map[string]uuid.UUID{app.PurposeLocalAdminReveal: w.passwords[0],
+		app.PurposeDiskRecoveryKey: w.recovery[0], app.PurposeDiskHeader: w.headers[0]} {
+		for _, role := range []string{"org_operator", "org_auditor", "platform_admin"} {
+			req := ok
+			req.Purpose, req.EscrowIDs, req.StepUpIDToken = purpose, []uuid.UUID{id}, w.token(0, role)
+			if plain, err := w.decrypt(req); !errors.Is(err, app.ErrEscrowRefused) || plain != nil {
+				t.Errorf("%s for %s: %v, %d plaintexts", role, purpose, err, len(plain))
+			}
+		}
+	}
+
 	// Two uses so far; the token allows MaxUses.
 	for range stepupproof.MaxUses - 2 {
 		if _, err := w.decrypt(ok); err != nil {
@@ -182,6 +203,68 @@ func TestDecrypt(t *testing.T) {
 	}
 	if _, err := w.decrypt(ok); !errors.Is(err, app.ErrEscrowRefused) || !strings.Contains(err.Error(), "stepup_exhausted") {
 		t.Fatalf("use beyond MaxUses: %v", err)
+	}
+}
+
+// diagnostics inserts a diagnostics bundle of organization i in state with the wrapped key "dek-<n>" and key version.
+func (w *world) diagnostics(i int, state string, keyVersion *int) uuid.UUID {
+	w.t.Helper()
+	id := uuid.New()
+	w.exec(`INSERT INTO device_diagnostics (id, organization_id, device_id, requested_by, reason, state, wrapped_dek, key_version)
+		VALUES ($1, $2, $3, 'op', 'VPN fails', $4, $5, $6)`, id, w.orgs[i], w.devices[i], state, []byte("dek-"+id.String()[:4]), keyVersion)
+	return id
+}
+
+// TestDecryptDiagnostics: purpose diagnostics unwraps the data key of a stored bundle of the device with the key
+// version the device reported (version 1 when it reported none), for an administrator or an operator of the
+// organization; it refuses an auditor and a platform administrator (decision 21(b) of alpha.9), bundles that are not
+// stored, of another device or organization, escrows of any kind, and it never lets an operator use the escrow purposes.
+func TestDecryptDiagnostics(t *testing.T) {
+	w := newWorld(t)
+	three := 3
+	stored, legacy := w.diagnostics(0, "stored", &three), w.diagnostics(0, "stored", nil)
+	requested, purged, foreign := w.diagnostics(0, "requested", &three), w.diagnostics(0, "purged", nil), w.diagnostics(1, "stored", &three)
+	ok := app.EscrowDecryptRequest{OrganizationID: w.orgs[0], DeviceID: w.devices[0], EscrowIDs: []uuid.UUID{stored},
+		StepUpIDToken: w.token(0, "org_operator"), Purpose: app.PurposeDiagnostics}
+	for _, tt := range []struct {
+		id      uuid.UUID
+		token   string
+		version int
+	}{{stored, w.token(0, "org_operator"), 3}, {legacy, w.token(0, "org_admin"), 1}} {
+		req := ok
+		req.EscrowIDs, req.StepUpIDToken = []uuid.UUID{tt.id}, tt.token
+		w.used = nil
+		plain, err := w.decrypt(req)
+		if err != nil || string(plain[tt.id]) != "plain-dek-"+tt.id.String()[:4] || len(w.used) != 1 || w.used[0] != tt.version {
+			t.Fatalf("bundle %s: %q, %v, versions %v", tt.id, plain, err, w.used)
+		}
+	}
+
+	refused := map[string]func(r *app.EscrowDecryptRequest){
+		"forged token":                func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = "forged" },
+		"auditor":                     func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(0, "org_auditor") },
+		"platform administrator":      func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(0, "platform_admin") },
+		"auditor of another org":      func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(1, "org_auditor") },
+		"disabled administrator":      func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(0, "disabled") },
+		"operator of another org":     func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(1, "org_operator") },
+		"bundle not stored":           func(r *app.EscrowDecryptRequest) { r.EscrowIDs = []uuid.UUID{requested} },
+		"bundle purged":               func(r *app.EscrowDecryptRequest) { r.EscrowIDs = []uuid.UUID{purged} },
+		"bundle of another org":       func(r *app.EscrowDecryptRequest) { r.EscrowIDs = []uuid.UUID{foreign} },
+		"foreign org with its bundle": func(r *app.EscrowDecryptRequest) { r.OrganizationID, r.EscrowIDs = w.orgs[1], []uuid.UUID{foreign} },
+		"device of another org":       func(r *app.EscrowDecryptRequest) { r.DeviceID = w.devices[1] },
+		"an escrow as a bundle":       func(r *app.EscrowDecryptRequest) { r.EscrowIDs = []uuid.UUID{w.headers[0]} },
+		"a bundle as a header":        func(r *app.EscrowDecryptRequest) { r.Purpose = app.PurposeDiskHeader },
+		"operator asks for the header": func(r *app.EscrowDecryptRequest) {
+			r.Purpose, r.EscrowIDs = app.PurposeDiskHeader, []uuid.UUID{w.headers[0]}
+		},
+	}
+	for name, change := range refused {
+		req := ok
+		change(&req)
+		w.used = nil
+		if plain, err := w.decrypt(req); !errors.Is(err, app.ErrEscrowRefused) || plain != nil || len(w.used) != 0 {
+			t.Errorf("%s: %v, %d plaintexts, %d decryptions", name, err, len(plain), len(w.used))
+		}
 	}
 }
 

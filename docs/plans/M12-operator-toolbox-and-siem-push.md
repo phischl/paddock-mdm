@@ -847,3 +847,24 @@ these changes; the `bundle.dsse` correction is ADR 0048 amendment 2026-11-05):
 
    The condition of the sign-off — every item a kind collects is already on the approved list — was checked
    against the code on 2026-11-05 and holds; nothing was removed.
+
+## Amendment 2026-11-05 — diagnostics download (PDK-749)
+
+Decisions taken by the architect lead on 2026-11-05 for PDK-749 and PDK-779 (recorded in ADR 0048 amendment
+2026-11-05 — diagnostics download):
+
+1. **Absent `key_version` means version 1.** A bundle uploaded without a key version is unwrapped with version 1 of
+   `escrow-wrap`.
+2. **Escrow-reader role table per purpose.** Purpose `diagnostics`: `org_admin` and `org_operator`, always with
+   step-up; never `org_auditor`, never a platform role. The escrow purposes (`local_admin_reveal`,
+   `disk_recovery_key`, `disk_header`) keep `org_admin` alone. Each refused role has a test.
+3. **Scope of `paddock-escrow-api`.** List (`s3:prefix` condition), read and delete for diagnostics only below
+   `org/*/devices/*/diagnostics/`. The read below `org/*/devices/*/luks-header/` is not a new grant: it is the
+   pre-existing scope of the header recovery (plan M4b decision 14), unchanged by PDK-749 except that it is narrowed
+   from the whole bucket to the header prefix. The former bucket-wide read policy `paddock-escrow-read` is detached
+   and removed by `./paddock bootstrap buckets`, failing closed on every rc error other than "policy not found" and
+   completing an interrupted removal on a rerun. Gate: `TestEscrowAPICredentialScope` (stack).
+4. **Download races.** The download locks the bundle row (`FOR UPDATE`) so that a purge or expiry waits and a
+   download of an ended bundle answers 409.
+5. **Purge and late uploads.** A purge sets `expires_at` to the end of the upload window; the retention round deletes
+   the object of a purged bundle once more then, so a PUT with a presigned URL issued before the purge leaves nothing.
