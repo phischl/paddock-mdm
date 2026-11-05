@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
@@ -60,8 +61,8 @@ type Entry struct {
 	MaxBytes int64
 	// Redact removes secrets and personal data from the content before it is archived; nil keeps it.
 	Redact func([]byte) []byte
-	// Exits are the non-zero exit codes of a KindExec command whose output is still the entry's content (systemctl
-	// status of a stopped or unknown unit, df of a missing mount point).
+	// Exits are the non-zero exit codes of a KindExec command whose output is still the entry's content (df of a
+	// missing mount point, dpkg -l of a package that is not installed).
 	Exits []int
 }
 
@@ -80,9 +81,10 @@ func Entries() []Entry {
 		{Name: "paddock/bundle-redacted.json", Kind: KindFile, Source: l.Bundle(), MaxBytes: maxState, Redact: redactBundle},
 		{Name: "paddock/trust.json", Kind: KindFile, Source: l.Trust(), MaxBytes: maxConfig},
 		{Name: "paddock/agent.yml", Kind: KindFile, Source: l.AgentConfig(), MaxBytes: maxConfig, Redact: redactURLCredentials},
-		{Name: "systemd/status.txt", Kind: KindExec, MaxBytes: maxConfig, Exits: []int{3, 4},
-			Source: "systemctl status --no-pager --full --lines=20 paddock-supervisor.service paddock-supervisor-upgrade.service " +
-				"paddock-encrypt-resume.service paddock-uninstall.service himmelblaud.service himmelblaud-tasks.service orbit.service"},
+		{Name: "systemd/status.txt", Kind: KindExec, MaxBytes: maxConfig, Redact: keepUnitState,
+			Source: "systemctl show --property=" + strings.Join(UnitStateProperties, ",") + " paddock-supervisor.service " +
+				"paddock-supervisor-upgrade.service paddock-encrypt-resume.service paddock-uninstall.service himmelblaud.service " +
+				"himmelblaud-tasks.service orbit.service"},
 		{Name: "systemd/failed-units.txt", Kind: KindExec, Source: "systemctl list-units --failed --no-pager --plain", MaxBytes: maxFact},
 		{Name: "etc/sudoers", Kind: KindFile, Source: "/etc/sudoers", MaxBytes: maxConfig},
 		{Name: "etc/sudoers.d", Kind: KindGlob, Source: "/etc/sudoers.d/*", MaxBytes: maxConfig},
@@ -116,6 +118,27 @@ func Entries() []Entry {
 		{Name: "journal/himmelblaud.log", Kind: KindJournal, Source: "himmelblaud.service", MaxBytes: MaxJournal},
 		{Name: "journal/himmelblaud-tasks.log", Kind: KindJournal, Source: "himmelblaud-tasks.service", MaxBytes: MaxJournal},
 	}
+}
+
+// UnitStateProperties are the only unit properties systemd/status.txt holds (decision of 2026-11-05 on PDK-791):
+// state and timestamps, never the unit's processes (their command lines, the CGroup tree) or journal lines, which
+// the privacy document's "Never: process lists, other units' journals" excludes.
+var UnitStateProperties = []string{
+	"ActiveState", "SubState", "Result", "ExecMainStatus", "StateChangeTimestamp", "ActiveEnterTimestamp",
+	"ActiveExitTimestamp", "InactiveEnterTimestamp", "ExecMainStartTimestamp", "ExecMainExitTimestamp",
+}
+
+// keepUnitState keeps the blank lines that separate the units and the lines <property>=<value> of
+// UnitStateProperties; every other line is dropped, so that no output but these properties reaches the archive.
+func keepUnitState(data []byte) []byte {
+	var out bytes.Buffer
+	for line := range strings.Lines(string(data)) {
+		key, _, ok := strings.Cut(line, "=")
+		if strings.TrimRight(line, "\n") == "" || ok && slices.Contains(UnitStateProperties, key) {
+			out.WriteString(line)
+		}
+	}
+	return out.Bytes()
 }
 
 // Redacted replaces a secret.
