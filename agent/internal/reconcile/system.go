@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -398,6 +399,61 @@ func (o OS) ReadDir(path string) ([]string, error) {
 		names[i] = e.Name()
 	}
 	return names, nil
+}
+
+// OutputTimeout bounds every Output call; MaxOutput bounds what it keeps of a tool's stdout.
+const (
+	OutputTimeout = 30 * time.Second
+	MaxOutput     = 16 << 20
+)
+
+// ErrOutputLimit means a tool printed more than MaxOutput bytes; Output returns the first MaxOutput.
+var ErrOutputLimit = errors.New("the output exceeds its limit")
+
+// ExitError is the non-zero exit of a tool run by Output.
+type ExitError struct {
+	Name string
+	Code int
+}
+
+func (e *ExitError) Error() string { return fmt.Sprintf("%s: exit %d", e.Name, e.Code) }
+
+// Output implements System.
+func (o OS) Output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if o.testRoot() {
+		return nil, errTestRoot
+	}
+	ctx, cancel := context.WithTimeout(ctx, OutputTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // the fixed tools of the callers' closed lists
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NOTIFY_SOCKET=") })
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	out, rerr := io.ReadAll(io.LimitReader(stdout, MaxOutput+1))
+	if len(out) > MaxOutput {
+		// The rest is not wanted: stopping the tool keeps a 7-day journal from running into the timeout.
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return out[:MaxOutput], ErrOutputLimit
+	}
+	werr := cmd.Wait()
+	var exit *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
+		return out, fmt.Errorf("%s: %w", name, ctx.Err())
+	case errors.As(werr, &exit):
+		return out, &ExitError{Name: name, Code: exit.ExitCode()}
+	case werr != nil:
+		return out, werr
+	case rerr != nil:
+		return out, rerr
+	}
+	return out, nil
 }
 
 // command runs a tool and returns its stdout and exit code; err is set only if it could not run.

@@ -81,6 +81,7 @@ func newWorld(t *testing.T) *world {
 		"/etc/apt/apt.conf.d/52paddock-unattended": "u", "/etc/systemd/system/paddock-updates.timer": "t",
 		"/var/lib/paddock/state/held-packages": "curl\nvim\n", "/var/lib/paddock/state/managed.json": string(managedJSON),
 		"/var/lib/paddock/quarantine/paddock-q-1": "quarantined\n", "/var/lib/paddock/identity/sign.key": "key",
+		"/var/lib/paddock/diagnostics/0190f000-0000-7000-8000-0000000000c1.tar.gz": "bundle",
 		"/etc/motd": managed, "/etc/changed.conf": "changed by hand", "/etc/sudoers.d/denied": managed,
 		"/etc/himmelblau/himmelblau.conf": "c", "/var/cache/himmelblau/cache": "c", "/var/lib/himmelblau/db": "d",
 		"/opt/paddock/agent/A/paddockd": "bin", "/opt/orbit/secret.txt": "s",
@@ -458,5 +459,17 @@ func TestUnholdOnlyExactNames(t *testing.T) {
 	}
 	if !strings.HasPrefix(s.Steps[StepUpdates], "failed:") || !strings.Contains(s.Steps[StepUpdates], "paddock-agen++t") {
 		t.Fatalf("step %q", s.Steps[StepUpdates])
+	}
+}
+
+// TestPackagesRemovesDiagnostics (plan M12 decision 12): the packages step of both modes removes a diagnostics bundle
+// left by an interrupted collection, before Paddock's directories go at the end.
+func TestPackagesRemovesDiagnostics(t *testing.T) {
+	w := newWorld(t)
+	if got := w.helper().packages(context.Background()); got != stepDone {
+		t.Fatalf("step %q", got)
+	}
+	if w.exists("/var/lib/paddock/diagnostics") || !w.exists("/var/lib/paddock/state/managed.json") {
+		t.Fatal("the diagnostics directory is left, or the state went with it")
 	}
 }
