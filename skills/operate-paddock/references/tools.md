@@ -158,6 +158,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getAgentRelease` | read | no | The release with its artifacts and rollout, including device counts. |
 | `getAgentReleaseSource` | read | no | The configured agent release source (ADR 0043 decision 6); repository and url are null while the source is switched off. |
 | `getAutoUnseal` | read | no | The automatic-unseal setting (ADR 0035): the acknowledged decision, the unsealer's report and OpenBao's seal status. |
+| `getBackupKey` | read | no | The backup key state (plan M15 decision 7): the active key, the key waiting for its confirmation and the retired keys. |
 | `getBackupOverview` | read | no | The backup overview (plan M15 decision 13): the key state, the schedule, every target with its mirror state per kind, the local repository and the newest run per kind. |
 | `getBackupSchedule` | read | no | The backup schedule and retention; without a stored schedule the defaults (full backup every 24 h, OpenBao every 6 h, Fleet every 24 h, escrow every hour, 14 full backups, 30 days of snapshots and dumps) with updated_by and updated_at null. |
 | `getBackupTarget` | read | no | One target with its last test and its mirror state per kind; 404 not_found for a missing or deleted one. |
@@ -282,6 +283,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `approveRevocationRequest` | revocation | POST /api/v1/revocation-requests/{id}/approve |
 | `cancelDeviceEncryption` | devices | Cancels the open in-place encryption before the device restarts (plan M8e decision 8): while the encrypt_disk command has not reached the device (pending, failed or expired) it is withdrawn and the conversion is cancelled at once; once the device received it, or while the conversion is prepared, the device is sent the signed command encrypt_disk_abort and the conversion keeps its phase until the device reports the abort (cancelled) or refuses it (abort_refused_reason). |
 | `cancelRevocationRequest` | revocation | POST /api/v1/revocation-requests/{id}/cancel |
+| `confirmBackupKey` | platform | Confirms a key with the characters of its text at the six positions of the generating response (or of pending.positions in GET /api/platform/v1/backup/key), in that order. |
 | `confirmManagedFileSensitive` | managed-config | Confirms a managed file on a sensitive path that existed before the path tiers; needs a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). |
 | `confirmPermissionProfileRootGrant` | privileges | Confirms an effectively Full profile that existed before the step-up rule covered it; needs a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). |
 | `createApiToken` | api-tokens | The role may not be above the creator's: org_admin creates any organization role, org_operator creates org_operator and org_auditor (403 forbidden). |
@@ -299,12 +301,14 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `destroyDevice` | revocation | POST /api/v1/devices/{id}/destroy |
 | `disableAutoUnseal` | platform | Disables the setting: the unsealer stops unsealing at once; the shares stay on the host until the operator runs ./paddock auto-unseal disable. |
 | `disableBackupTarget` | platform | Disables an enabled target: the backup role no longer writes to it. |
+| `discardBackupKey` | platform | Discards a key that is not confirmed, e.g. |
 | `downloadDeviceHeader` | devices | Returns a stored LUKS header backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup luksHeaderRestore; confirm_hostname must equal the device's hostname. |
 | `enableAutoUnseal` | platform | Records the typed acknowledgement of the current disclaimer and enables the setting; the unsealer on the host acts only while it is enabled. |
 | `enableBackupTarget` | platform | Enables a disabled target; 409 invalid_state when it is enabled. |
 | `enableMcpWrite` | mcp | Enables MCP write access for the caller's own account (ADR 0044 amendment 2026-10-25): their MCP sessions may change data where the scope's MCP policy allows it. |
 | `encryptDevice` | devices | Issues the signed command encrypt_disk (lifetime 7 days, ADR 0039, plan M8e decision 7): the device escrows a recovery key, prepares itself and encrypts its root volume in place after its next restart; disk_conversion follows the phases. |
 | `endAllSessions` | platform | Ends every portal session and every identity-provider browser session of every portal user (platform administrators and organization role members); device logins and API tokens are not affected. |
+| `generateBackupKey` | platform | Generates a new backup key (32 random bytes, standard base64) and returns its text exactly once, with six 1-based positions whose characters confirm it (POST /api/platform/v1/backup/key/{id}/confirm). |
 | `importAgentRelease` | platform | Imports the version from the configured release source (ADR 0043): the version must be newer than the newest published release, every file is verified with the release public key before anything is stored, and the release is published without a rollout; paddock-revoke is never imported. |
 | `lockDevice` | revocation | POST /api/v1/devices/{id}/lock |
 | `putBackupSchedule` | platform | Replaces the schedule; every field is required and checked against its range (400 invalid_request naming the field). |

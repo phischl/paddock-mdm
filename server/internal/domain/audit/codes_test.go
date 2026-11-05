@@ -241,3 +241,31 @@ func TestM15BackupCodes(t *testing.T) {
 		}
 	}
 }
+
+// TestM15BackupKeyCodes: the backup key codes of plan M15 §6.4 are registered with their params, none of which can
+// carry the key text or the typed characters.
+func TestM15BackupKeyCodes(t *testing.T) {
+	all := []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
+	for _, tc := range []struct {
+		code   Code
+		params []string
+	}{
+		{CodePlatformBackupKeyGenerated, []string{"key_id", "fingerprint", "rotation", "legacy"}},
+		{CodePlatformBackupKeyConfirmed, []string{"key_id", "fingerprint", "rotated_from", "attempts"}},
+		{CodePlatformBackupKeyDiscarded, []string{"key_id", "attempts"}},
+	} {
+		d, ok := Lookup(tc.code)
+		if !ok || !tc.code.Registered() || d.Description == "" {
+			t.Errorf("%s is not registered as emitted with a description", tc.code)
+			continue
+		}
+		if !slices.Equal(d.Params, tc.params) || !slices.Equal(d.Outcomes, all) {
+			t.Errorf("%s: params %v outcomes %v, want %v %v", tc.code, d.Params, d.Outcomes, tc.params, all)
+		}
+		for _, p := range d.Params {
+			if p == "key" || p == "text" || p == "answer" || p == "positions" {
+				t.Errorf("%s: param %s could carry key material", tc.code, p)
+			}
+		}
+	}
+}

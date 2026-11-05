@@ -18,7 +18,7 @@ SELECT key_id FROM backup_key WHERE state = 'confirmed'
 `
 
 // Key reads of the overview and of a run request (the key use cases are plan M15 decision 7). Never the ciphertext or
-// the challenge.
+// the challenge hash; the challenge positions only while the key waits for its confirmation (amendment 2026-11-04).
 func (q *Queries) ActiveBackupKeyID(ctx context.Context) (string, error) {
 	row := q.db.QueryRow(ctx, activeBackupKeyID)
 	var key_id string
@@ -373,22 +373,24 @@ func (q *Queries) LatestBackupRuns(ctx context.Context) ([]BackupRun, error) {
 }
 
 const listBackupKeyStates = `-- name: ListBackupKeyStates :many
-SELECT key_id, fingerprint, state, created_at, created_by, confirmed_at, confirmed_by, retired_at, attempts, legacy
+SELECT key_id, fingerprint, state, created_at, created_by, confirmed_at, confirmed_by, retired_at, attempts, legacy,
+       (CASE WHEN state = 'unconfirmed' THEN challenge_positions END)::int[] AS pending_positions
 FROM backup_key WHERE state IN ('confirmed', 'unconfirmed', 'retired')
 ORDER BY created_at DESC, key_id
 `
 
 type ListBackupKeyStatesRow struct {
-	KeyID       string
-	Fingerprint string
-	State       string
-	CreatedAt   time.Time
-	CreatedBy   string
-	ConfirmedAt *time.Time
-	ConfirmedBy *string
-	RetiredAt   *time.Time
-	Attempts    int32
-	Legacy      bool
+	KeyID            string
+	Fingerprint      string
+	State            string
+	CreatedAt        time.Time
+	CreatedBy        string
+	ConfirmedAt      *time.Time
+	ConfirmedBy      *string
+	RetiredAt        *time.Time
+	Attempts         int32
+	Legacy           bool
+	PendingPositions []int32
 }
 
 func (q *Queries) ListBackupKeyStates(ctx context.Context) ([]ListBackupKeyStatesRow, error) {
@@ -411,6 +413,7 @@ func (q *Queries) ListBackupKeyStates(ctx context.Context) ([]ListBackupKeyState
 			&i.RetiredAt,
 			&i.Attempts,
 			&i.Legacy,
+			&i.PendingPositions,
 		); err != nil {
 			return nil, err
 		}
