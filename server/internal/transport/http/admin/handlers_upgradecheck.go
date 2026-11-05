@@ -8,7 +8,13 @@ import (
 )
 
 func (h *handlers) GetUpgradeCheck(ctx context.Context, req adminapi.GetUpgradeCheckRequestObject) (adminapi.GetUpgradeCheckResponseObject, error) {
-	r, err := h.upgradeCheck.Report(ctx, req.Params.TargetVersion)
+	// Optional in the contract so that the generated binder does not answer 400 before Report's platform check; an
+	// empty version is no known release and ends in 400 after it.
+	target := ""
+	if req.Params.TargetVersion != nil {
+		target = *req.Params.TargetVersion
+	}
+	r, err := h.upgradeCheck.Report(ctx, target)
 	if err != nil {
 		return nil, err
 	}

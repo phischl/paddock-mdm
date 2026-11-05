@@ -5752,13 +5752,12 @@ paths:
         of this release), agents (active devices whose agent is a release older than the target's support window:
         FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending
         (running agent rollout, halted configuration rollouts: WARN) and sessions. Changes nothing and is not
-        audited. 400 invalid_request when target_version is no release this server knows.
+        audited. 400 invalid_request when target_version is missing or no release this server knows.
       parameters:
         - name: target_version
           in: query
-          required: true
+          description: The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9). Required in effect, but checked after the role, so that other roles get 403 and not 400.
           schema: { type: string, maxLength: 64 }
-          description: The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9).
       responses:
         "200":
           description: The report.
@@ -6899,12 +6898,13 @@ paths:
       x-paddock-list:
         sort: [started_at, kind, outcome]
         default_sort: -started_at
-        search: []
+        search: [kind, label]
         filters: [kind, outcome, target_id]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
         - $ref: "#/components/parameters/BackupRunSort"
+        - $ref: "#/components/parameters/Search"
         - name: kind
           in: query
           description: Repeatable.
