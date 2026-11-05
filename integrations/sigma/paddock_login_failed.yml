@@ -1,0 +1,25 @@
+title: Paddock failed sign-in
+id: 61d3d351-e1d6-4f33-8023-0bf9266e3b72
+status: experimental
+description: A sign-in to the portal, an MCP session or a local administrator account failed or was denied.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100920
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code:
+      - 'admin.login'
+      - 'local_admin.login'
+    outcome:
+      - 'failure'
+      - 'denied'
+  condition: selection
+falsepositives:
+  - A mistyped password.
+level: medium

@@ -1,0 +1,20 @@
+title: Paddock refused API token used
+id: 76c056ee-dabe-47b4-91f0-b8f93854350e
+status: experimental
+description: A request authenticated with a revoked, expired or orphaned API token was refused.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100940
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code: 'api_token.use_denied'
+  condition: selection
+falsepositives:
+  - A collector that was not stopped after its token was revoked.
+level: medium

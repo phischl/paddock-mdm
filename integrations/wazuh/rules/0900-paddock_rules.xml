@@ -1,0 +1,156 @@
+<!--
+  Paddock audit rules for Wazuh (plan M12 decision 22). Rule ids 100900 to 100999.
+
+  100900 takes the syslog push (decoder paddock), 100901 the pull lines (Wazuh's built-in json decoder); every
+  classifying rule is a child of both, so a pushed and a pulled event fire the same rule. The rules key on the decoded
+  full code event.code, never on the syslog MSGID, which is an alias for nine codes.
+
+  Wazuh checks the children of a rule in file order and the first match wins, so the specific rules (including the
+  refused API token, 100940, whose only outcome is denied) come before the denied rule 100960, which in turn comes
+  before the generic identity, platform and configuration rules, so a denied action is never below level 7. Levels:
+  tamper and revocation 12, reveals and root grants 10, denied 7, login and configuration 5.
+
+  The query "which day's event count differs from the checkpoint" is not a rule (Wazuh cannot count a day); it is in
+  docs/operations/siem.md.
+-->
+<group name="paddock,">
+  <rule id="100900" level="3">
+    <decoded_as>paddock</decoded_as>
+    <field name="event.schema" type="pcre2">^paddock\.audit\.v1$</field>
+    <description>Paddock audit event $(event.code) ($(event.outcome))</description>
+  </rule>
+
+  <rule id="100901" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="event.schema" type="pcre2">^paddock\.audit\.v1$</field>
+    <field name="commit_seq" type="pcre2">^\d+$</field>
+    <description>Paddock audit event $(event.code) ($(event.outcome))</description>
+  </rule>
+
+  <rule id="100902" level="0">
+    <decoded_as>paddock-ctl</decoded_as>
+    <description>Paddock $(kind) message from $(organization)</description>
+  </rule>
+
+  <rule id="100903" level="3">
+    <if_sid>100902</if_sid>
+    <field name="kind" type="pcre2">^checkpoint$</field>
+    <group>paddock_integrity,</group>
+    <description>Paddock checkpoint of $(day) from $(organization): $(event_count) events</description>
+  </rule>
+</group>
+
+<group name="paddock,paddock_integrity,">
+  <rule id="100904" level="7">
+    <decoded_as>paddock</decoded_as>
+    <field name="missing" type="pcre2">^true$</field>
+    <description>Paddock: replayed event $(event_id) (forward_seq $(forward_seq)) of $(organization) is no longer in the audit index</description>
+  </rule>
+</group>
+
+<group name="paddock,paddock_tamper,">
+  <rule id="100910" level="12">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^device\.tamper_</field>
+    <description>Paddock: tamper event $(event.code) on a managed device</description>
+  </rule>
+</group>
+
+<group name="paddock,paddock_privilege,">
+  <rule id="100911" level="12">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^(?:revocation\.|device\.revocation_)</field>
+    <description>Paddock: data revocation event $(event.code)</description>
+  </rule>
+
+  <rule id="100912" level="10">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^(?:disk\.recovery_key_revealed|disk\.header_downloaded|local_admin\.revealed)$</field>
+    <description>Paddock: secret revealed ($(event.code)) by $(event.actor.display)</description>
+  </rule>
+
+  <rule id="100913" level="10">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^permission_profile\.root_grant_confirmed$</field>
+    <description>Paddock: root grant confirmed in a permission profile by $(event.actor.display)</description>
+  </rule>
+</group>
+
+<group name="paddock,paddock_integrity,">
+  <rule id="100914" level="12">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^audit\.chain_verification_failed$</field>
+    <description>Paddock: the audit hash chain failed verification</description>
+  </rule>
+
+  <rule id="100915" level="10">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^device\.(?:clone_suspected|event_gap|event_seq_reset|header_object_rejected|header_escrow_refused)$</field>
+    <description>Paddock: device integrity event $(event.code)</description>
+  </rule>
+</group>
+
+<group name="paddock,paddock_identity,">
+  <rule id="100920" level="7">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^(?:admin|local_admin)\.login$</field>
+    <field name="event.outcome" type="pcre2">^(?:failure|denied)$</field>
+    <description>Paddock: failed sign-in ($(event.code)) of $(event.actor.display)</description>
+  </rule>
+
+  <rule id="100921" level="10" frequency="5" timeframe="300">
+    <if_matched_sid>100920</if_matched_sid>
+    <same_field>event.actor.display</same_field>
+    <description>Paddock: repeated failed sign-ins of $(event.actor.display)</description>
+  </rule>
+</group>
+
+<group name="paddock,">
+  <rule id="100940" level="7">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^api_token\.use_denied$</field>
+    <description>Paddock: a refused API token was used ($(event.actor.display))</description>
+  </rule>
+
+  <rule id="100941" level="10" frequency="5" timeframe="300">
+    <if_matched_sid>100940</if_matched_sid>
+    <same_field>event.actor.display</same_field>
+    <description>Paddock: repeated use of refused API token $(event.actor.display)</description>
+  </rule>
+
+  <rule id="100960" level="7">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.outcome" type="pcre2">^denied$</field>
+    <description>Paddock: denied action $(event.code) by $(event.actor.display)</description>
+  </rule>
+</group>
+
+<group name="paddock,paddock_identity,">
+  <rule id="100922" level="5">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^(?:admin\.|local_admin\.login|user\.|user_group\.|device\.login_|device\.logins_)</field>
+    <description>Paddock: identity event $(event.code)</description>
+  </rule>
+</group>
+
+<group name="paddock,paddock_platform,">
+  <rule id="100930" level="7">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^platform\.(?:ip_allowlist_denied|ip_allowlist_disabled|auto_unseal_disabled)$</field>
+    <description>Paddock: platform protection reduced or refused ($(event.code))</description>
+  </rule>
+
+  <rule id="100931" level="5">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^platform\.</field>
+    <description>Paddock: platform event $(event.code)</description>
+  </rule>
+</group>
+
+<group name="paddock,">
+  <rule id="100950" level="5">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^(?:config\.|settings\.|managed_file\.|managed_unit\.|permission_profile\.|profile_assignment\.|enrollment_token\.|api_token\.|organization\.|device_group\.|software_|package_hold\.|notification\.destination_)</field>
+    <description>Paddock: configuration event $(event.code)</description>
+  </rule>
+</group>

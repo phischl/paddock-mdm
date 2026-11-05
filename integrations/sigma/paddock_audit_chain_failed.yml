@@ -1,0 +1,20 @@
+title: Paddock audit chain failed verification
+id: 140c1c2b-9c8f-40ce-b354-3a4d85a8f226
+status: experimental
+description: The audit writer found problems in the audit hash chain.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100914
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code: 'audit.chain_verification_failed'
+  condition: selection
+falsepositives:
+  - None; a failed verification always needs a look at the evidence.
+level: critical
