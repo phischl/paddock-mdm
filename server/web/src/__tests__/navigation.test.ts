@@ -98,7 +98,7 @@ describe('navigation drawer', () => {
     expect(groupLabels(w)).toEqual(['Overview', 'Devices', 'Configuration', 'Security', 'Inventory', 'Organization'])
     expect(linkLabels(w)).toEqual([
       'Overview', 'Attention', 'Findings',
-      'Devices', 'Device groups', 'Enrollment tokens',
+      'Devices', 'Device groups', 'Diagnostics', 'Enrollment tokens',
       'Permission profiles', 'Managed files', 'Managed units', 'Operator roots', 'Package sources', 'Software catalog', 'Package holds', 'Change sets', 'Configuration rollouts', 'Configuration status',
       'Security review', 'Revocations', "Dead man's switch", 'Watched units', 'Login & privileges',
       'Software', 'Vulnerabilities',
@@ -159,6 +159,7 @@ describe('navigation drawer', () => {
   it('hides entries by role exactly as the app bar did', async () => {
     const operator = await mountApp({ ...admin, role: 'org_operator' })
     expect(linkLabels(operator.w)).toContain('Enrollment tokens')
+    expect(linkLabels(operator.w)).toContain('Diagnostics')
     expect(linkLabels(operator.w)).not.toContain('Revocations')
     expect(linkLabels(operator.w)).not.toContain('Audit log')
     expect(linkLabels(operator.w)).not.toContain('Evidence integrity')
@@ -169,6 +170,7 @@ describe('navigation drawer', () => {
     expect(groupLabels(auditor.w)).toEqual(['Overview', 'Devices', 'Configuration', 'Security', 'Inventory', 'Organization'])
     expect(linkLabels(auditor.w)).not.toContain('Enrollment tokens')
     expect(linkLabels(auditor.w)).not.toContain('Revocations')
+    expect(linkLabels(auditor.w)).not.toContain('Diagnostics')
     expect(linkLabels(auditor.w)).toContain('Audit log')
     expect(linkLabels(auditor.w)).toContain('Evidence integrity')
     expect(linkLabels(auditor.w)).toContain('Evidence exports')
@@ -199,10 +201,10 @@ describe('navigation drawer', () => {
   it('is one Tab stop with a roving tabindex: Up/Down move, Home/End jump', async () => {
     const { w } = await mountApp(admin, '/managed-files')
     const links = drawer(w).findAll('a.pd-nav-item')
-    expect(links.length).toBe(34)
+    expect(links.length).toBe(35)
     const stops = links.filter((a) => a.attributes('tabindex') === '0')
     expect(stops.map((a) => a.attributes('href'))).toEqual(['/managed-files'])
-    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(33)
+    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(34)
 
     ;(stops[0].element as HTMLElement).focus()
     await stops[0].trigger('keydown', { key: 'ArrowDown' })

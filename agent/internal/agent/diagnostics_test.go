@@ -45,7 +45,7 @@ func diagnosticsAgent(t *testing.T) (*Agent, *testgw.Gateway, *fakesys.System, *
 	}
 	der, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
 	keys := testgw.CommandKeys()
-	keys.EscrowWrap = &bundle.EncryptionKey{KeyID: "escrow-wrap:v1", PublicKeyPEM: string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))}
+	keys.EscrowWrap = &bundle.EncryptionKey{KeyID: "escrow-wrap:v3", PublicKeyPEM: string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))}
 	a.current = &bundle.Bundle{SchemaVersion: 2, Keys: keys}
 	sys.Files["/etc/default/locale"] = &fakesys.File{Data: []byte("LANG=de_DE.UTF-8\n"), Mode: 0o644}
 	sys.Files["/etc/sudoers"] = &fakesys.File{Data: []byte("Defaults env_reset\n"), Mode: 0o440}
@@ -117,7 +117,7 @@ func TestCollectStatusUploads(t *testing.T) {
 	}
 	req, sealed := g.Diagnostics[0], g.Uploads[diagID]
 	sum := sha256.Sum256(sealed)
-	if req.CommandID != diagID || req.Size != int64(len(sealed)) || req.SHA256 != hex.EncodeToString(sum[:]) {
+	if req.CommandID != diagID || req.Size != int64(len(sealed)) || req.SHA256 != hex.EncodeToString(sum[:]) || req.KeyVersion != 3 {
 		t.Fatalf("announcement %+v for %d bytes", req, len(sealed))
 	}
 	wrapped, _ := base64.StdEncoding.DecodeString(req.WrappedDEK)
@@ -165,6 +165,10 @@ func TestCollectStatusRefusals(t *testing.T) {
 		"no escrow key": {cmd: collectCommand(diagID, diagID, "VPN fails"), reason: "collect_failed",
 			prepare: func(a *Agent, _ *testgw.Gateway) {
 				a.current = &bundle.Bundle{SchemaVersion: 2, Keys: testgw.CommandKeys()}
+			}},
+		"escrow key without version": {cmd: collectCommand(diagID, diagID, "VPN fails"), reason: "collect_failed",
+			prepare: func(a *Agent, _ *testgw.Gateway) {
+				a.current.Keys.EscrowWrap.KeyID = "escrow-wrap"
 			}},
 	} {
 		t.Run(name, func(t *testing.T) {

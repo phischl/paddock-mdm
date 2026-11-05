@@ -108,6 +108,7 @@
   },
   "nav": {
     "deviceGroups": "Device groups",
+    "diagnostics": "Diagnostics",
     "audit": "Audit log",
     "auditIntegrity": "Evidence integrity",
     "auditExports": "Evidence exports",
@@ -1248,6 +1249,7 @@
       "access": "Login & sudo",
       "configuration": "Configuration",
       "applyStatus": "Apply status",
+      "diagnostics": "Diagnostics",
       "commands": "Commands",
       "audit": "Audit",
       "managedSoftware": "Managed software"
@@ -1384,6 +1386,49 @@
         "enforce": "Enforced",
         "report_only": "Report-only"
       }
+    }
+  },
+  "diagnostics": {
+    "title": "Diagnostics bundles",
+    "summary": "Paddock's own logs and configuration from this device, collected on request. A bundle is kept for 7 days; every download needs a fresh identity confirmation and is recorded in the audit log.",
+    "fleetSummary": "Every diagnostics bundle of the organization. Request a bundle on the Diagnostics tab of a device. A bundle is kept for 7 days; every download needs a fresh identity confirmation and is recorded in the audit log.",
+    "hostname": "Device",
+    "requestedAt": "Requested",
+    "requestedBy": "Requested by",
+    "reason": "Reason",
+    "state": "State",
+    "size": "Size",
+    "downloads": "Downloads",
+    "expiresAt": "Deleted on",
+    "failedReason": "Failed: {reason}",
+    "download": "Download",
+    "downloadLabel": "Download the diagnostics bundle of {hostname}",
+    "states": {
+      "requested": "Requested",
+      "uploaded": "Uploaded",
+      "stored": "Stored",
+      "failed": "Failed",
+      "expired": "Expired",
+      "purged": "Purged"
+    },
+    "empty": {
+      "title": "No diagnostics bundles",
+      "description": "A bundle is collected only when an administrator or operator requests it for a device."
+    },
+    "request": {
+      "open": "Request diagnostics",
+      "title": "Request diagnostics",
+      "explanation": "Paddock will collect its own logs and configuration from this device — nothing else. The user is told on the device. Give a reason; it is shown to the user and recorded.",
+      "contentList": "What a bundle contains",
+      "reasonInvalid": "Give a reason of 2 to {max} characters.",
+      "submit": "Request",
+      "done": "The device collects the bundle at its next check-in."
+    },
+    "purge": {
+      "label": "Purge",
+      "title": "Purge diagnostics bundle",
+      "confirm": "Delete the diagnostics bundle of {hostname} now? The archive and its key are deleted and cannot be restored; who requested and downloaded it stays recorded.",
+      "ariaLabel": "Purge the diagnostics bundle of {hostname}"
     }
   },
   "tokens": {

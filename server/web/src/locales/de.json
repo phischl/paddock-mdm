@@ -108,6 +108,7 @@
   },
   "nav": {
     "deviceGroups": "Gerätegruppen",
+    "diagnostics": "Diagnose",
     "audit": "Audit-Protokoll",
     "auditIntegrity": "Nachweisintegrität",
     "auditExports": "Nachweis-Exporte",
@@ -1248,6 +1249,7 @@
       "access": "Anmeldung & sudo",
       "configuration": "Konfiguration",
       "applyStatus": "Anwendungsstatus",
+      "diagnostics": "Diagnose",
       "commands": "Befehle",
       "audit": "Audit",
       "managedSoftware": "Verwaltete Software"
@@ -1384,6 +1386,49 @@
         "enforce": "Durchgesetzt",
         "report_only": "Berichtsmodus"
       }
+    }
+  },
+  "diagnostics": {
+    "title": "Diagnosepakete",
+    "summary": "Paddocks eigene Protokolle und Konfiguration dieses Geräts, auf Anforderung gesammelt. Ein Paket wird 7 Tage aufbewahrt; jeder Download erfordert eine neue Identitätsbestätigung und wird im Audit-Log festgehalten.",
+    "fleetSummary": "Alle Diagnosepakete der Organisation. Ein Paket fordern Sie im Reiter Diagnose eines Geräts an. Ein Paket wird 7 Tage aufbewahrt; jeder Download erfordert eine neue Identitätsbestätigung und wird im Audit-Log festgehalten.",
+    "hostname": "Gerät",
+    "requestedAt": "Angefordert",
+    "requestedBy": "Angefordert von",
+    "reason": "Grund",
+    "state": "Status",
+    "size": "Größe",
+    "downloads": "Downloads",
+    "expiresAt": "Gelöscht am",
+    "failedReason": "Fehlgeschlagen: {reason}",
+    "download": "Herunterladen",
+    "downloadLabel": "Diagnosepaket von {hostname} herunterladen",
+    "states": {
+      "requested": "Angefordert",
+      "uploaded": "Hochgeladen",
+      "stored": "Gespeichert",
+      "failed": "Fehlgeschlagen",
+      "expired": "Abgelaufen",
+      "purged": "Gelöscht"
+    },
+    "empty": {
+      "title": "Keine Diagnosepakete",
+      "description": "Ein Paket wird nur gesammelt, wenn ein Administrator oder Operator es für ein Gerät anfordert."
+    },
+    "request": {
+      "open": "Diagnose anfordern",
+      "title": "Diagnose anfordern",
+      "explanation": "Paddock sammelt seine eigenen Protokolle und seine Konfiguration von diesem Gerät – sonst nichts. Der Benutzer wird auf dem Gerät informiert. Geben Sie einen Grund an; er wird dem Benutzer angezeigt und festgehalten.",
+      "contentList": "Was ein Paket enthält",
+      "reasonInvalid": "Geben Sie einen Grund mit 2 bis {max} Zeichen an.",
+      "submit": "Anfordern",
+      "done": "Das Gerät sammelt das Paket bei seiner nächsten Meldung."
+    },
+    "purge": {
+      "label": "Löschen",
+      "title": "Diagnosepaket löschen",
+      "confirm": "Das Diagnosepaket von {hostname} jetzt löschen? Archiv und Schlüssel werden gelöscht und lassen sich nicht wiederherstellen; wer es angefordert und heruntergeladen hat, bleibt festgehalten.",
+      "ariaLabel": "Diagnosepaket von {hostname} löschen"
     }
   },
   "tokens": {

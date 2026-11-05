@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,11 +38,27 @@ type Decrypter interface {
 	Decrypt(ctx context.Context, version int, ciphertext string) ([]byte, error)
 }
 
-// purposeKinds is the escrow kind each purpose may decrypt.
-var purposeKinds = map[string]string{
-	app.PurposeLocalAdminReveal: escrow.KindAdminPassword,
-	app.PurposeDiskRecoveryKey:  escrow.KindLUKSRecoveryKey,
-	app.PurposeDiskHeader:       escrow.KindLUKSHeader,
+// purpose is what a decryption purpose may decrypt and who may ask for it.
+type purpose struct {
+	// kind is the escrow kind the purpose decrypts; empty for diagnostics, whose IDs are bundle IDs.
+	kind string
+	// roles may hold the step-up token's subject: the escrows are organization administrators' alone; a diagnostics
+	// bundle is downloaded by operators as well (ADR 0048 decision 4).
+	roles []principal.Role
+}
+
+// purposes is the policy table of the escrow-reader.
+var purposes = map[string]purpose{
+	app.PurposeLocalAdminReveal: {kind: escrow.KindAdminPassword, roles: []principal.Role{principal.RoleOrgAdmin}},
+	app.PurposeDiskRecoveryKey:  {kind: escrow.KindLUKSRecoveryKey, roles: []principal.Role{principal.RoleOrgAdmin}},
+	app.PurposeDiskHeader:       {kind: escrow.KindLUKSHeader, roles: []principal.Role{principal.RoleOrgAdmin}},
+	app.PurposeDiagnostics:      {roles: []principal.Role{principal.RoleOrgAdmin, principal.RoleOrgOperator}},
+}
+
+// wrapped is one ciphertext to decrypt with a version of escrow-wrap.
+type wrapped struct {
+	version    int
+	ciphertext []byte
 }
 
 // Service is the escrow-reader's HTTP service.
@@ -70,8 +87,8 @@ type errRefused struct{ code, reason string }
 
 func (e errRefused) Error() string { return e.code + ": " + e.reason }
 
-// decrypt checks, in this order, the bearer secret, the request, the step-up token, that its subject is an
-// administrator of the organization, that every escrow belongs to the device, the organization and the purpose, and
+// decrypt checks, in this order, the bearer secret, the request, the step-up token, that its subject holds a role of
+// the purpose in the organization, that every escrow belongs to the device, the organization and the purpose, and
 // the token's use count; then it decrypts. It never logs a token or a plaintext.
 func (s *Service) decrypt(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -85,7 +102,7 @@ func (s *Service) decrypt(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil || req.OrganizationID == uuid.Nil || req.DeviceID == uuid.Nil ||
-		len(req.EscrowIDs) == 0 || len(req.EscrowIDs) > maxEscrows || req.StepUpIDToken == "" || purposeKinds[req.Purpose] == "" {
+		len(req.EscrowIDs) == 0 || len(req.EscrowIDs) > maxEscrows || req.StepUpIDToken == "" || purposes[req.Purpose].roles == nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -122,15 +139,16 @@ func (s *Service) open(ctx context.Context, req decryptRequest) (map[uuid.UUID][
 	if err != nil {
 		return nil, err
 	}
-	var rows []pgstore.EscrowSecret
+	pol := purposes[req.Purpose]
+	var keys map[uuid.UUID]wrapped
 	// The organization comes from the request; every row is checked against it and the device below.
 	ctx = principal.With(ctx, principal.Principal{Kind: principal.KindSystem, OrganizationID: req.OrganizationID})
 	err = s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		admin, err := q.GetAdminAccountBySubject(ctx, claims.Subject)
 		// A disabled account lost its role in the identity provider (plan M8s decision 21).
-		if db.IsNoRows(err) || err == nil && (admin.OrganizationID != req.OrganizationID || admin.Role != string(principal.RoleOrgAdmin) ||
-			admin.DisabledAt != nil) {
-			return errRefused{refusedAdmin, "the step-up subject is no administrator of the organization"}
+		if db.IsNoRows(err) || err == nil && (admin.OrganizationID != req.OrganizationID ||
+			!slices.Contains(pol.roles, principal.Role(admin.Role)) || admin.DisabledAt != nil) {
+			return errRefused{refusedAdmin, "the step-up subject holds no role of the purpose in the organization"}
 		}
 		if err != nil {
 			return err
@@ -140,13 +158,22 @@ func (s *Service) open(ctx context.Context, req decryptRequest) (map[uuid.UUID][
 		} else if err != nil {
 			return err
 		}
-		rows, err = q.GetEscrowSecrets(ctx, req.EscrowIDs)
+		if pol.kind == "" {
+			rows, err := q.GetDiagnosticsKeys(ctx, req.EscrowIDs)
+			if err != nil {
+				return err
+			}
+			keys, err = checkDiagnostics(rows, req)
+			return err
+		}
+		rows, err := q.GetEscrowSecrets(ctx, req.EscrowIDs)
+		if err != nil {
+			return err
+		}
+		keys, err = checkRows(rows, req)
 		return err
 	})
 	if err != nil {
-		return nil, err
-	}
-	if err := checkRows(rows, req); err != nil {
 		return nil, err
 	}
 	n, err := s.uses.Use(ctx, claims.JTI, claims.Expiry)
@@ -156,39 +183,70 @@ func (s *Service) open(ctx context.Context, req decryptRequest) (map[uuid.UUID][
 	if n > stepupproof.MaxUses {
 		return nil, errRefused{refusedExhausted, fmt.Sprintf("the step-up token was used %d times", n)}
 	}
-	plain := make(map[uuid.UUID][]byte, len(rows))
-	for _, row := range rows {
-		ct := row.Ciphertext
-		if row.Kind == escrow.KindLUKSHeader {
-			ct = row.WrappedDek // the header's key; the api opens the sealed object with it
-		}
-		b, err := s.decrypter.Decrypt(ctx, int(row.KeyVersion), base64.StdEncoding.EncodeToString(ct))
+	plain := make(map[uuid.UUID][]byte, len(keys))
+	for id, k := range keys {
+		b, err := s.decrypter.Decrypt(ctx, k.version, base64.StdEncoding.EncodeToString(k.ciphertext))
 		if err != nil {
 			for _, p := range plain {
 				clear(p)
 			}
-			return nil, fmt.Errorf("decrypt escrow %s: %w", row.ID, err)
+			return nil, fmt.Errorf("decrypt escrow %s: %w", id, err)
 		}
-		plain[row.ID] = b
+		plain[id] = b
 	}
 	return plain, nil
 }
 
-// checkRows requires exactly the requested escrows, each of the device, the organization and the purpose's kind.
-func checkRows(rows []pgstore.EscrowSecret, req decryptRequest) error {
+// requestedIDs is the set of the requested IDs.
+func requestedIDs(req decryptRequest) map[uuid.UUID]bool {
 	requested := map[uuid.UUID]bool{}
 	for _, id := range req.EscrowIDs {
 		requested[id] = true
 	}
-	if len(rows) != len(requested) {
-		return errRefused{refusedEscrow, fmt.Sprintf("%d of %d escrows found in the organization", len(rows), len(requested))}
+	return requested
+}
+
+// checkRows requires exactly the requested escrows, each of the device, the organization and the purpose's kind, and
+// returns what to decrypt: the secret, or a header's key (the api opens the sealed object with it).
+func checkRows(rows []pgstore.EscrowSecret, req decryptRequest) (map[uuid.UUID]wrapped, error) {
+	kind := purposes[req.Purpose].kind
+	if requested := requestedIDs(req); len(rows) != len(requested) {
+		return nil, errRefused{refusedEscrow, fmt.Sprintf("%d of %d escrows found in the organization", len(rows), len(requested))}
 	}
+	out := make(map[uuid.UUID]wrapped, len(rows))
 	for _, row := range rows {
-		if row.DeviceID != req.DeviceID || row.OrganizationID != req.OrganizationID || row.Kind != purposeKinds[req.Purpose] {
-			return errRefused{refusedEscrow, fmt.Sprintf("escrow %s is not of the device or not of kind %s", row.ID, purposeKinds[req.Purpose])}
+		if row.DeviceID != req.DeviceID || row.OrganizationID != req.OrganizationID || row.Kind != kind {
+			return nil, errRefused{refusedEscrow, fmt.Sprintf("escrow %s is not of the device or not of kind %s", row.ID, kind)}
 		}
+		ct := row.Ciphertext
+		if row.Kind == escrow.KindLUKSHeader {
+			ct = row.WrappedDek
+		}
+		out[row.ID] = wrapped{version: int(row.KeyVersion), ciphertext: ct}
 	}
-	return nil
+	return out, nil
+}
+
+// checkDiagnostics requires exactly the requested diagnostics bundles, each of the device and the organization and
+// stored with its key, and returns their data keys. A bundle whose agent did not report the key version (before
+// PDK-749) is unwrapped with version 1, the version of escrow-wrap until its first rotation.
+func checkDiagnostics(rows []pgstore.GetDiagnosticsKeysRow, req decryptRequest) (map[uuid.UUID]wrapped, error) {
+	if requested := requestedIDs(req); len(rows) != len(requested) {
+		return nil, errRefused{refusedEscrow, fmt.Sprintf("%d of %d bundles found in the organization", len(rows), len(requested))}
+	}
+	out := make(map[uuid.UUID]wrapped, len(rows))
+	for _, row := range rows {
+		if row.DeviceID != req.DeviceID || row.OrganizationID != req.OrganizationID || row.State != app.DiagnosticsStored ||
+			len(row.WrappedDek) == 0 {
+			return nil, errRefused{refusedEscrow, fmt.Sprintf("bundle %s is not of the device or not stored", row.ID)}
+		}
+		version := 1
+		if row.KeyVersion != nil {
+			version = int(*row.KeyVersion)
+		}
+		out[row.ID] = wrapped{version: version, ciphertext: row.WrappedDek}
+	}
+	return out, nil
 }
 
 // write answers v as JSON with the MAC of the body.

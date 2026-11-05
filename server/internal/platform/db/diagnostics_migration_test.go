@@ -148,9 +148,54 @@ func TestDeviceDiagnosticsIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	// The escrow-reader reads the key columns of its organization's bundles for purpose diagnostics (migration 00106),
+	// nothing else of the table, and writes nothing.
+	t.Run("paddock_escrow_reader", func(t *testing.T) {
+		conn := connect(env.EscrowReader)
+		keys := "SELECT id, organization_id, device_id, state, wrapped_dek, key_version FROM device_diagnostics WHERE id IN ($1, $2)"
+		if err := inOrg(conn, nil, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, keys, bundleA, bundleB)
+			return err
+		}); err == nil {
+			t.Error("SELECT without paddock.org_id succeeded; RLS does not fail closed")
+		}
+		if err := inOrg(conn, &orgA, func(tx pgx.Tx) error {
+			rows, err := tx.Query(ctx, keys, bundleA, bundleB)
+			if err != nil {
+				return err
+			}
+			var ids []uuid.UUID
+			for rows.Next() {
+				var id, org, dev uuid.UUID
+				var state string
+				var dek []byte
+				var version *int32
+				if err := rows.Scan(&id, &org, &dev, &state, &dek, &version); err != nil {
+					return err
+				}
+				ids = append(ids, id)
+			}
+			if rows.Err() == nil && (len(ids) != 1 || ids[0] != bundleA) {
+				t.Errorf("escrow-reader in A sees %v", ids)
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for _, stmt := range []string{"SELECT reason FROM device_diagnostics", "SELECT requested_by FROM device_diagnostics",
+			"SELECT sha256 FROM device_diagnostics", "UPDATE device_diagnostics SET key_version = 2",
+			"DELETE FROM device_diagnostics"} {
+			err := inOrg(conn, &orgA, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, stmt)
+				return err
+			})
+			wantDenied(t, "paddock_escrow_reader "+stmt, err)
+		}
+	})
+	// paddock_escrow_reader holds the column grant of migration 00106 (its own subtest above).
 	t.Run("no other role reaches the table", func(t *testing.T) {
 		for name, dsn := range map[string]string{"paddock_compiler": env.Compiler, "paddock_relay": env.Relay,
-			"paddock_notifier": env.Notifier, "paddock_escrow_reader": env.EscrowReader, "paddock_revocation": env.Revocation,
+			"paddock_notifier": env.Notifier, "paddock_revocation": env.Revocation,
 			"paddock_backup": env.Backup, "paddock_platform": env.Platform} {
 			_, err := connect(dsn).Exec(ctx, "SELECT * FROM device_diagnostics")
 			wantDenied(t, name+" SELECT device_diagnostics", err)

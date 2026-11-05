@@ -107,3 +107,8 @@ WHERE e.device_id = @device_id::uuid AND e.kind = 'luks_header' AND e.status <> 
 -- The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00035).
 UPDATE escrow_secret SET volume = @volume::uuid
 WHERE device_id = @device_id AND kind = 'luks_header' AND volume IS NULL;
+
+-- name: GetDiagnosticsKeys :many
+-- The escrow-reader's view of diagnostics bundles (purpose diagnostics, PDK-749): only what unwrapping a bundle's key
+-- needs (the column grant of migration 00106).
+SELECT id, organization_id, device_id, state, wrapped_dek, key_version FROM device_diagnostics WHERE id = ANY(@ids::uuid[]);

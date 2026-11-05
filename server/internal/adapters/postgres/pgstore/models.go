@@ -401,6 +401,7 @@ type DeviceDiagnostic struct {
 	DownloadCount    int32
 	LastDownloadedAt *time.Time
 	PurgedAt         *time.Time
+	KeyVersion       *int32
 }
 
 type DeviceDiskConversion struct {
