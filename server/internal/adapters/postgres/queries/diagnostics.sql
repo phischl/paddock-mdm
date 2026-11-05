@@ -107,9 +107,11 @@ SELECT sqlc.embed(dd), d.hostname FROM device_diagnostics dd JOIN device d ON d.
 FOR UPDATE OF dd;
 
 -- name: ListDeviceDiagnostics :many
--- The bundles of one device (plan M12 decision 13).
+-- The bundles of one device (plan M12 decision 13); q searches the requester and the reason.
 SELECT sqlc.embed(dd), d.hostname FROM device_diagnostics dd JOIN device d ON d.id = dd.device_id
 WHERE dd.device_id = @device_id
+  AND (sqlc.narg(q_pattern)::text IS NULL OR dd.requested_by ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+    OR dd.reason ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
   AND (sqlc.narg(states)::text[] IS NULL OR dd.state = ANY(sqlc.narg(states)::text[]))
 ORDER BY
   CASE WHEN @sort::text = 'requested_at' THEN dd.requested_at END ASC,
@@ -123,6 +125,8 @@ LIMIT @max_rows OFFSET @skip_rows;
 SELECT count(*) FROM (
   SELECT 1 FROM device_diagnostics
   WHERE device_id = @device_id
+    AND (sqlc.narg(q_pattern)::text IS NULL OR requested_by ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+      OR reason ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
     AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))
   LIMIT @count_limit
 ) c;

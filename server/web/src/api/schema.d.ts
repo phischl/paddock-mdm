@@ -14270,6 +14270,8 @@ export interface operations {
                 page_size?: components["parameters"]["PageSize"];
                 /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
                 sort?: components["parameters"]["DeviceDiagnosticsSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
                 /** @description Repeatable. */
                 state?: components["parameters"]["DiagnosticsStateFilter"];
             };

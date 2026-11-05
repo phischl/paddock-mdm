@@ -30,7 +30,8 @@ func TestEscrowAPICredentialScope(t *testing.T) {
 		"list objects of the org":    {"list-objects-v2", "--bucket", "paddock-escrow", "--prefix", "org/"},
 	}
 	for name, args := range denied {
-		if out, err := escrowAPICall(t, args...); err == nil || !strings.Contains(out, "AccessDenied") {
+		// stack.Docker puts the container's stderr, where the aws CLI prints the error, into err, not into the output.
+		if out, err := escrowAPICall(t, args...); err == nil || !strings.Contains(out+err.Error(), "AccessDenied") {
 			t.Errorf("%s: err %v, output %s; want AccessDenied", name, err, out)
 		}
 	}
