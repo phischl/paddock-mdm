@@ -118,6 +118,11 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   `paddock-*` source or keyring is removed, each with `device.tamper_protected_file_changed`. When the last software
   assignment of a device goes away, and when Paddock is removed from it, the agent deletes them again; installed
   applications stay.
+- From 0.1.0-alpha.9: Fleet moves to v4.94.0, a minor release that migrates Fleet's database: take the Fleet dump of
+  step 3 first, because a rollback restores it. That dump is a manual step until PDK-743. Fleet's own HTTP metric is renamed from `http.server.duration` to
+  `http.server.request.duration` (seconds); Paddock neither scrapes nor alerts on it, so only your own Fleet
+  dashboards need the new name. The new hourly cleanups concern Windows and Apple MDM commands and removed host
+  certificates, which a Linux-only installation does not hold.
 - From 0.1.0-alpha.9: OpenBao moves to 2.7.2. `./paddock up` recreates OpenBao and it starts **sealed**: have three
   custodians ready as step 4 describes. Devices install Himmelblau 4.0.8 with their current agent at the next login
   drift pass. That release does not contain the upstream fix for the Hello PIN loss
