@@ -25,6 +25,9 @@ type fakeDelivery struct {
 	delivered   bool
 	lastError   string
 	requestedBy string
+	from, to    int64
+	day         time.Time
+	eventCount  int
 }
 
 // fakeStore keeps the notifier's tables in memory with the semantics of the queries in notifier.sql.
@@ -111,6 +114,7 @@ func (f *fakeStore) StartAtLatest(_ context.Context, sc Scope, dest uuid.UUID, l
 	}
 	f.setCursor(r, max(r.State.Cursor, latest))
 	r.State.StartAtLatest, r.State.Pending, r.State.PendingFrom, r.State.NextAttemptAt = false, uuid.Nil, 0, nil
+	r.State.ReplayFrom = 0
 	if d := f.deliveries[dropped]; d != nil && !d.delivered {
 		d.lastError = "skipped"
 	}
@@ -156,7 +160,63 @@ func (f *fakeStore) Pending(_ context.Context, _ Scope, delivery uuid.UUID) (Pen
 	if !ok {
 		return PendingBatch{}, errors.New("no rows")
 	}
-	return PendingBatch{ID: delivery, Attempts: d.attempts, Refs: d.refs}, nil
+	return d.stored(delivery), nil
+}
+
+func (d *fakeDelivery) stored(id uuid.UUID) PendingBatch {
+	return PendingBatch{ID: id, Kind: d.kind, Attempts: d.attempts, Refs: d.refs, From: d.from, To: d.to, Day: d.day,
+		EventCount: d.eventCount}
+}
+
+func (f *fakeStore) CreateCheckpoint(_ context.Context, sc Scope, dest uuid.UUID, c NewCheckpoint) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.row(sc, dest)
+	if c.ForwardSeq != r.State.ForwardSeq+1 {
+		return fmt.Errorf("forward_seq gap: %d after %d", c.ForwardSeq, r.State.ForwardSeq)
+	}
+	if r.State.ReplayFrom > 0 {
+		f.stale++
+		return errStale
+	}
+	f.deliveries[c.ID] = &fakeDelivery{dest: dest, kind: outbound.KindCheckpoint, from: c.ForwardSeq, to: c.ForwardSeq,
+		day: c.Day, eventCount: c.EventCount}
+	r.State.ForwardSeq, r.State.Pending, r.State.PendingFrom = c.ForwardSeq, c.ID, c.ForwardSeq
+	return nil
+}
+
+func (f *fakeStore) ReplayDeliveries(_ context.Context, _ Scope, dest uuid.UUID, from int64, limit int) ([]PendingBatch, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []PendingBatch
+	for id, d := range f.deliveries {
+		if d.dest == dest && d.delivered && d.to >= from &&
+			(d.kind == outbound.KindEvents || d.kind == outbound.KindCheckpoint) {
+			out = append(out, d.stored(id))
+		}
+	}
+	slices.SortFunc(out, func(a, b PendingBatch) int { return int(a.From - b.From) })
+	return out[:min(len(out), limit)], nil
+}
+
+func (f *fakeStore) Replayed(_ context.Context, sc Scope, a ReplayAdvance) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.row(sc, a.Destination)
+	if r.State.Pending != uuid.Nil || r.State.ReplayFrom != a.From || (a.Resume != nil && r.State.Status != StatusStalled) {
+		f.stale++
+		return false, nil
+	}
+	r.State.ReplayFrom = a.Next
+	r.State.ConsecutiveFailures, r.State.FirstFailureAt, r.State.NextAttemptAt = 0, nil, a.NextAttemptAt
+	if a.Record != nil {
+		f.records = append(f.records, *a.Record)
+	}
+	if a.Resume != nil {
+		r.State.Status, r.State.StalledSince = StatusActive, nil
+		f.records = append(f.records, *a.Resume)
+	}
+	return true, nil
 }
 
 func (f *fakeStore) CreateBatch(_ context.Context, sc Scope, dest uuid.UUID, b NewBatch) error {
@@ -166,7 +226,12 @@ func (f *fakeStore) CreateBatch(_ context.Context, sc Scope, dest uuid.UUID, b N
 	if b.Refs[0].ForwardSeq != r.State.ForwardSeq+1 {
 		return fmt.Errorf("forward_seq gap: %d after %d", b.Refs[0].ForwardSeq, r.State.ForwardSeq)
 	}
-	f.deliveries[b.ID] = &fakeDelivery{dest: dest, kind: outbound.KindEvents, refs: b.Refs}
+	if r.State.ReplayFrom > 0 {
+		f.stale++
+		return errStale
+	}
+	f.deliveries[b.ID] = &fakeDelivery{dest: dest, kind: outbound.KindEvents, refs: b.Refs, from: b.Refs[0].ForwardSeq,
+		to: b.Refs[len(b.Refs)-1].ForwardSeq}
 	r.State.ForwardSeq, r.State.Pending, r.State.PendingFrom = b.Refs[len(b.Refs)-1].ForwardSeq, b.ID, b.Refs[0].ForwardSeq
 	return nil
 }
@@ -197,10 +262,14 @@ func (f *fakeStore) Succeeded(_ context.Context, sc Scope, s Success) (bool, err
 	d.attempts++
 	d.delivered, d.lastError = true, ""
 	at := s.At
-	if s.Cursor != nil {
+	switch {
+	case s.CheckpointDay != nil:
+		day := *s.CheckpointDay
+		r.State.Pending, r.State.PendingFrom, r.State.LastSuccessAt, r.State.LastCheckpointDay = uuid.Nil, 0, &at, &day
+	case s.Cursor != nil:
 		f.setCursor(r, *s.Cursor)
 		r.State.Pending, r.State.PendingFrom, r.State.LastSuccessAt = uuid.Nil, 0, &at
-	} else {
+	default:
 		r.State.LastHeartbeatAt = &at
 	}
 	r.State.ConsecutiveFailures, r.State.FirstFailureAt, r.State.NextAttemptAt = 0, nil, s.NextAttemptAt
@@ -276,16 +345,65 @@ func (f *fakeStore) recordsOf(code audit.Code) []Record {
 	return out
 }
 
-// fakeIndex is the audit index of every scope.
+// fakeIndex is the audit index of every scope with its sealed manifests.
 type fakeIndex struct {
-	events map[uuid.UUID][]IndexedEvent
-	clock  func() time.Time
+	events    map[uuid.UUID][]IndexedEvent
+	manifests map[uuid.UUID][]Manifest
+	clock     func() time.Time
+}
+
+// seal adds the manifest of day to the scope.
+func (x *fakeIndex) seal(org uuid.UUID, day time.Time) Manifest {
+	if x.manifests == nil {
+		x.manifests = map[uuid.UUID][]Manifest{}
+	}
+	m := Manifest{Day: utcDay(day), SHA256: []byte{0xab, 0xcd, byte(day.Day())}, Signature: "vault:v1:sig-" + day.Format(time.DateOnly),
+		KeyVersion: 1}
+	x.manifests[org] = append(x.manifests[org], m)
+	return m
+}
+
+// purge removes the events from the index, as the index retention does.
+func (x *fakeIndex) purge(org uuid.UUID, ids ...uuid.UUID) {
+	x.events[org] = slices.DeleteFunc(x.events[org], func(ev IndexedEvent) bool { return slices.Contains(ids, ev.Event.EventID) })
+}
+
+func (x *fakeIndex) EventAt(_ context.Context, sc Scope, seq int64) (IndexedEvent, bool, error) {
+	for _, ev := range x.events[sc.Org] {
+		if ev.CommitSeq == seq {
+			return ev, true, nil
+		}
+	}
+	return IndexedEvent{}, false, nil
+}
+
+func (x *fakeIndex) CountRecordedOn(_ context.Context, sc Scope, day time.Time) (int, error) {
+	n := 0
+	for _, ev := range x.events[sc.Org] {
+		if utcDay(ev.Event.RecordedAt).Equal(utcDay(day)) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (x *fakeIndex) ManifestsAfter(_ context.Context, sc Scope, after time.Time, limit int) ([]Manifest, error) {
+	var out []Manifest
+	for _, m := range x.manifests[sc.Org] {
+		if m.Day.After(utcDay(after)) && len(out) < limit {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 func (x *fakeIndex) append(org uuid.UUID, code audit.Code, n int) []IndexedEvent {
 	var added []IndexedEvent
 	for range n {
-		seq := int64(len(x.events[org]) + 1)
+		seq := int64(1)
+		if n := len(x.events[org]); n > 0 {
+			seq = x.events[org][n-1].CommitSeq + 1
+		}
 		ev := IndexedEvent{CommitSeq: seq, Event: audit.Event{
 			Schema: audit.Schema, EventID: uuid.Must(uuid.NewV7()), OrganizationID: org, Code: code,
 			Outcome: audit.OutcomeSuccess, RecordedAt: x.clock(), Actor: audit.Actor{Type: audit.ActorSystem},
@@ -298,7 +416,11 @@ func (x *fakeIndex) append(org uuid.UUID, code audit.Code, n int) []IndexedEvent
 }
 
 func (x *fakeIndex) Latest(_ context.Context, sc Scope) (int64, error) {
-	return int64(len(x.events[sc.Org])), nil
+	var latest int64
+	for _, ev := range x.events[sc.Org] {
+		latest = max(latest, ev.CommitSeq)
+	}
+	return latest, nil
 }
 
 func (x *fakeIndex) After(_ context.Context, sc Scope, after int64, limit int) ([]IndexedEvent, error) {

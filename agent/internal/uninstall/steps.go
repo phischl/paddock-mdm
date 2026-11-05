@@ -279,7 +279,8 @@ func (h *Helper) packages(ctx context.Context) string {
 		errs = append(errs, err.Error())
 	}
 	for _, p := range []string{"/opt/orbit", reconcile.FleetdEnv, "/etc/systemd/system/orbit.service.d", "/opt/paddock",
-		"/var/lib/paddock/packages", "/var/lib/paddock/staging", "/var/lib/paddock/rollback", quarantine} {
+		"/var/lib/paddock/packages", "/var/lib/paddock/staging", "/var/lib/paddock/rollback", "/var/lib/paddock/diagnostics",
+		quarantine} {
 		if err := os.RemoveAll(h.path(p)); err != nil {
 			errs = append(errs, err.Error())
 		}

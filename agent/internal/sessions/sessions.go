@@ -1,6 +1,6 @@
 // Package sessions reads the user sessions of logind through loginctl (plan M3b decisions 10 and 11) and tells
-// directory users from local accounts. It reads session IDs, user names, UIDs, session classes and start times only,
-// never process, command or session content.
+// directory users from local accounts. It reads session IDs, user names, UIDs, session classes, types, states and
+// start times only, never process, command or session content.
 package sessions
 
 import (
@@ -25,6 +25,8 @@ type Session struct {
 	Class string // user, user-early, …, greeter, lock-screen, manager, background
 	// Type is the session type: wayland, x11, tty, mir or unspecified (plan M8e decision 28).
 	Type string
+	// State is the session state: active (in the foreground of its seat), online or closing.
+	State string
 	// Started is the start of the session as logind reports it (Timestamp); zero when it could not be read.
 	Started time.Time
 }
@@ -52,7 +54,7 @@ func List(ctx context.Context, loginctl Loginctl) ([]Session, error) {
 		return nil, nil
 	}
 	args := append([]string{"show-session"}, ids...)
-	out, exit, err = loginctl(ctx, append(args, "-p", "Id", "-p", "Name", "-p", "User", "-p", "Class", "-p", "Type", "-p", "Timestamp")...)
+	out, exit, err = loginctl(ctx, append(args, "-p", "Id", "-p", "Name", "-p", "User", "-p", "Class", "-p", "Type", "-p", "State", "-p", "Timestamp")...)
 	if err == nil && exit != 0 {
 		err = fmt.Errorf("loginctl show-session: exit %d", exit) // a session ended in between: the next pass retries
 	}
@@ -90,6 +92,8 @@ func parseShow(out string) []Session {
 			cur.Class = v
 		case "Type":
 			cur.Type = v
+		case "State":
+			cur.State = v
 		case "Timestamp":
 			cur.Started = parseTimestamp(v)
 		}

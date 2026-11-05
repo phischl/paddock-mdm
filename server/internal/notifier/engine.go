@@ -298,7 +298,8 @@ type destRound struct {
 }
 
 // serveDestination runs plan M9 decision 21 for one destination: the cursor skip, (a) a requested test, (b) the
-// pending batch, (c) new batches, (d) a heartbeat.
+// pending batch, a requested replay (plan M12 decision 21) and new batches, the due checkpoints (plan M12 decision
+// 20), (d) a heartbeat.
 func (e *Engine) serveDestination(ctx context.Context, r *scopeRound, row Row) error {
 	t, ok := e.transports[row.Destination.Type]
 	dr := &destRound{scopeRound: r, d: row.Destination, st: row.State, transport: t}
@@ -330,6 +331,9 @@ func (e *Engine) serveDestination(ctx context.Context, r *scopeRound, row Row) e
 		if dr.st.Pending == uuid.Nil {
 			e.setOldest(dr.d.ID, time.Time{})
 		}
+		err = e.serveCheckpoints(ctx, dr)
+	}
+	if err == nil {
 		err = e.serveHeartbeat(ctx, dr)
 	}
 	if errors.Is(err, errStale) {
@@ -389,7 +393,8 @@ func (e *Engine) firstUndelivered(dr *destRound) int64 {
 }
 
 // startAtLatest resolves a skip request before anything is delivered: the cursor moves to the scope's newest commit
-// sequence, and a pending batch, whose events lie at or below it, is dropped without counting as a failure.
+// sequence, and a pending batch, whose events lie at or below it, is dropped without counting as a failure. A running
+// replay ends without re-sending the rest (plan M12 decision 21).
 func (e *Engine) startAtLatest(ctx context.Context, dr *destRound) (bool, error) {
 	latest, err := e.index.Latest(ctx, dr.sc)
 	if err != nil {
@@ -400,6 +405,7 @@ func (e *Engine) startAtLatest(ctx context.Context, dr *destRound) (bool, error)
 		return false, err
 	}
 	dr.st.Cursor, dr.st.StartAtLatest, dr.st.Pending, dr.st.PendingFrom, dr.st.NextAttemptAt = cursor, false, uuid.Nil, 0, nil
+	dr.st.ReplayFrom = 0
 	return true, nil
 }
 
@@ -451,31 +457,56 @@ func (e *Engine) serveTest(ctx context.Context, dr *destRound) error {
 	})
 }
 
-// batch is a batch being delivered; advanceTo is where the cursor goes when it succeeds.
+// batch is a batch being delivered; advanceTo is where the cursor goes when it succeeds. A checkpoint has no refs but
+// its number seq, day and eventCount.
 type batch struct {
-	id        uuid.UUID
-	attempts  int
-	refs      []EventRef
-	events    []IndexedEvent
-	advanceTo int64
+	id         uuid.UUID
+	attempts   int
+	refs       []EventRef
+	events     []IndexedEvent
+	advanceTo  int64
+	checkpoint bool
+	seq        int64
+	day        time.Time
+	eventCount int
 }
 
-func (b batch) from() int64 { return b.refs[0].ForwardSeq }
-func (b batch) to() int64   { return b.refs[len(b.refs)-1].ForwardSeq }
+func (b batch) from() int64 {
+	if b.checkpoint {
+		return b.seq
+	}
+	return b.refs[0].ForwardSeq
+}
 
-// serveEvents retries the pending batch, then cuts and delivers new ones, at most MaxDeliveriesPerRound, and stops at
-// the first failure: deliveries of one destination are strictly sequential.
+func (b batch) to() int64 {
+	if b.checkpoint {
+		return b.seq
+	}
+	return b.refs[len(b.refs)-1].ForwardSeq
+}
+
+// serveEvents retries the pending batch or checkpoint, re-sends the stored deliveries of a requested replay, then cuts
+// and delivers new batches, at most MaxDeliveriesPerRound, and stops at the first failure: deliveries of one
+// destination are strictly sequential, and a replay ends before new events are numbered.
 func (e *Engine) serveEvents(ctx context.Context, dr *destRound) error {
 	start := e.now()
 	for n, scans := 0, 0; n < MaxDeliveriesPerRound && scans < MaxDeliveriesPerRound &&
 		e.now().Sub(start) < DestinationBudget; {
 		var b batch
-		if dr.st.Pending != uuid.Nil {
+		switch {
+		case dr.st.Pending != uuid.Nil:
 			var err error
 			if b, err = e.pendingBatch(ctx, dr); err != nil {
 				return e.internal(ctx, dr, err, e.firstUndelivered(dr))
 			}
-		} else {
+		case dr.st.ReplayFrom > 0:
+			n++
+			sent, err := e.replayNext(ctx, dr)
+			if err != nil || (!sent && dr.st.ReplayFrom > 0) || dr.st.NextAttemptAt != nil {
+				return err
+			}
+			continue
+		default:
 			scans++
 			cut, found, more, err := e.cut(ctx, dr)
 			if err != nil {
@@ -490,7 +521,11 @@ func (e *Engine) serveEvents(ctx context.Context, dr *destRound) error {
 			b = cut
 		}
 		n++
-		ok, err := e.deliverBatch(ctx, dr, b)
+		deliver := e.deliverBatch
+		if b.checkpoint {
+			deliver = e.deliverCheckpoint
+		}
+		ok, err := deliver(ctx, dr, b)
 		if err != nil || !ok || dr.st.NextAttemptAt != nil {
 			return err
 		}
@@ -504,6 +539,9 @@ func (e *Engine) pendingBatch(ctx context.Context, dr *destRound) (batch, error)
 	p, err := e.store.Pending(ctx, dr.sc, dr.st.Pending)
 	if err != nil {
 		return batch{}, fmt.Errorf("pending batch: %w", err)
+	}
+	if p.Kind == outbound.KindCheckpoint {
+		return batch{id: p.ID, attempts: p.Attempts, checkpoint: true, seq: p.From, day: p.Day, eventCount: p.EventCount}, nil
 	}
 	if len(p.Refs) == 0 {
 		return batch{}, fmt.Errorf("pending batch %s has no events", p.ID)
@@ -629,24 +667,17 @@ func (e *Engine) messageEvent(ctx context.Context, dr *destRound, ev IndexedEven
 // (notification.destination_resumed). pending is the batch the state must still hold (uuid.Nil for a heartbeat).
 func (e *Engine) succeeded(ctx context.Context, dr *destRound, delivery, pending uuid.UUID, cursor *int64, rec *Record,
 	resumedParams map[string]any) error {
+	return e.succeededWith(ctx, dr, Success{Delivery: delivery, Pending: pending, Cursor: cursor, Record: rec}, resumedParams)
+}
+
+// succeededWith is succeeded for a Success with further fields (a checkpoint's day).
+func (e *Engine) succeededWith(ctx context.Context, dr *destRound, s Success, resumedParams map[string]any) error {
 	now := e.now()
-	s := Success{Destination: dr.d.ID, Name: dr.d.Name, Delivery: delivery, Pending: pending, Cursor: cursor, At: now,
-		Record: rec}
-	// An e-mail destination receives at most one message per email_min_interval_s (digest, plan M9 decision 28).
-	if cursor != nil && dr.d.Type == outbound.TypeEmail && dr.d.EmailMinInterval > 0 {
-		next := now.Add(dr.d.EmailMinInterval)
-		s.NextAttemptAt = &next
+	s.Destination, s.Name, s.At = dr.d.ID, dr.d.Name, now
+	if s.Cursor != nil || s.CheckpointDay != nil {
+		s.NextAttemptAt = e.digestNext(dr, now)
 	}
-	if dr.st.Status == StatusStalled {
-		params := map[string]any{"destination": dr.d.Name, "destination_id": dr.d.ID.String(), "stalled_for_s": 0}
-		if dr.st.StalledSince != nil {
-			params["stalled_for_s"] = int64(now.Sub(*dr.st.StalledSince).Seconds())
-		}
-		for k, v := range resumedParams {
-			params[k] = v
-		}
-		s.Resume = &Record{Code: audit.CodeNotificationDestinationResumed, Params: params}
-	}
+	s.Resume = e.resumeRecord(dr, now, resumedParams)
 	applied, err := e.store.Succeeded(ctx, dr.sc, s)
 	if err != nil {
 		return fmt.Errorf("record delivery: %w", err)
@@ -658,6 +689,33 @@ func (e *Engine) succeeded(ctx context.Context, dr *destRound, delivery, pending
 	dr.st.ConsecutiveFailures, dr.st.FirstFailureAt, dr.st.NextAttemptAt = 0, nil, s.NextAttemptAt
 	dr.st.Status, dr.st.StalledSince = StatusActive, nil
 	return nil
+}
+
+// digestNext is the earliest next delivery after a message sent at now: an e-mail destination receives at most one
+// message per email_min_interval_s, replayed deliveries and checkpoints included (digest, plan M9 decision 28); nil
+// for every other destination.
+func (e *Engine) digestNext(dr *destRound, now time.Time) *time.Time {
+	if dr.d.Type != outbound.TypeEmail || dr.d.EmailMinInterval <= 0 {
+		return nil
+	}
+	next := now.Add(dr.d.EmailMinInterval)
+	return &next
+}
+
+// resumeRecord is notification.destination_resumed for the delivery that ends a stall, nil while the destination is
+// not stalled.
+func (e *Engine) resumeRecord(dr *destRound, now time.Time, resumedParams map[string]any) *Record {
+	if dr.st.Status != StatusStalled {
+		return nil
+	}
+	params := map[string]any{"destination": dr.d.Name, "destination_id": dr.d.ID.String(), "stalled_for_s": 0}
+	if dr.st.StalledSince != nil {
+		params["stalled_for_s"] = int64(now.Sub(*dr.st.StalledSince).Seconds())
+	}
+	for k, v := range resumedParams {
+		params[k] = v
+	}
+	return &Record{Code: audit.CodeNotificationDestinationResumed, Params: params}
 }
 
 // Backoff is the wait after the n-th consecutive failure: 5 s doubling, at most 10 minutes (plan M9 decision 22).

@@ -178,19 +178,14 @@ func SealHeader(pub *rsa.PublicKey, header []byte, escrowID string) (SealedHeade
 	}
 	dek := make([]byte, 32)
 	defer clear(dek)
-	nonce := make([]byte, HeaderNonceSize)
 	if _, err := rand.Read(dek); err != nil {
 		return SealedHeader{}, fmt.Errorf("escrow: header key: %w", err)
 	}
-	if _, err := rand.Read(nonce); err != nil {
-		return SealedHeader{}, fmt.Errorf("escrow: header nonce: %w", err)
-	}
-	gcm, err := headerAEAD(dek)
+	object, nonce, err := seal(dek, headerAAD(escrowID), zipped.Bytes())
+	clear(zipped.Bytes())
 	if err != nil {
 		return SealedHeader{}, err
 	}
-	object := gcm.Seal(nil, nonce, zipped.Bytes(), headerAAD(escrowID))
-	clear(zipped.Bytes())
 	wrapped, err := Encrypt(pub, dek)
 	if err != nil {
 		return SealedHeader{}, err
@@ -198,6 +193,58 @@ func SealHeader(pub *rsa.PublicKey, header []byte, escrowID string) (SealedHeade
 	sum := sha256.Sum256(object)
 	return SealedHeader{Object: object, WrappedDEK: wrapped, Nonce: base64.StdEncoding.EncodeToString(nonce),
 		SHA256: hex.EncodeToString(sum[:])}, nil
+}
+
+// MaxObject bounds the plain content of a sealed object (SealObject), so that the sealed object stays within the
+// 32 MiB of an upload.
+const MaxObject = 32<<20 - 1<<10
+
+// ErrObjectTooLarge means the content of SealObject exceeds MaxObject.
+var ErrObjectTooLarge = errors.New("escrow: object is larger than the bound of a sealed object")
+
+// SealObject seals the content of plain with AES-256-GCM under dek (32 bytes; the caller wraps it to escrow-wrap with
+// Encrypt) and the object ID id as additional data, e.g. a diagnostics bundle (ADR 0048 decision 3). It returns the
+// sealed object and its nonce; content larger than MaxObject is refused with ErrObjectTooLarge.
+func SealObject(dek []byte, id string, plain io.Reader) (sealed, nonce []byte, err error) {
+	content, err := io.ReadAll(io.LimitReader(plain, MaxObject+1))
+	if err != nil {
+		return nil, nil, fmt.Errorf("escrow: read object: %w", err)
+	}
+	defer clear(content)
+	if len(content) > MaxObject {
+		return nil, nil, ErrObjectTooLarge
+	}
+	return seal(dek, objectAAD(id), content)
+}
+
+// OpenObject decrypts an object sealed by SealObject with the unwrapped dek; it fails if the object, the nonce or the
+// ID do not match.
+func OpenObject(dek, nonce []byte, id string, sealed []byte) ([]byte, error) {
+	gcm, err := headerAEAD(dek)
+	if err != nil {
+		return nil, err
+	}
+	if len(nonce) != HeaderNonceSize {
+		return nil, errors.New("escrow: object nonce has the wrong size")
+	}
+	plain, err := gcm.Open(nil, nonce, sealed, objectAAD(id))
+	if err != nil {
+		return nil, fmt.Errorf("escrow: object does not decrypt: %w", err)
+	}
+	return plain, nil
+}
+
+// seal encrypts plain with AES-256-GCM under dek and a random nonce.
+func seal(dek, aad, plain []byte) (sealed, nonce []byte, err error) {
+	gcm, err := headerAEAD(dek)
+	if err != nil {
+		return nil, nil, err
+	}
+	nonce = make([]byte, HeaderNonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, nil, fmt.Errorf("escrow: nonce: %w", err)
+	}
+	return gcm.Seal(nil, nonce, plain, aad), nonce, nil
 }
 
 // OpenHeader decrypts and decompresses a sealed header object with the unwrapped DEK; it fails if the object, the
@@ -241,3 +288,7 @@ func headerAEAD(dek []byte) (cipher.AEAD, error) {
 
 // headerAAD binds a sealed header to its escrow ID, so that an object cannot pass for another generation.
 func headerAAD(escrowID string) []byte { return []byte("paddock-luks-header:" + escrowID) }
+
+// objectAAD binds a sealed object to its ID, and apart from a header (another prefix), so that neither can pass for
+// another object.
+func objectAAD(id string) []byte { return []byte("paddock-sealed-object:" + id) }

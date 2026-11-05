@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const countNotificationDestinations = `-- name: CountNotificationDestinations :one
@@ -59,7 +60,8 @@ SELECT d.id, d.organization_id, d.type, d.name, d.enabled, d.filter_mode, d.code
        d.syslog_port, d.syslog_server_name, (d.syslog_ca_pem IS NOT NULL)::boolean AS syslog_ca_pem_set,
        d.checkpoints, d.created_by, d.created_at, d.updated_at,
        s.status, s.cursor_commit_seq, s.forward_seq, s.last_success_at, s.last_attempt_at, s.next_attempt_at,
-       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error
+       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error,
+       s.last_checkpoint_day, s.replay_from
 FROM notification_destination d
 LEFT JOIN notification_destination_state s ON s.destination_id = d.id AND s.organization_id = d.organization_id
 WHERE d.id = $1
@@ -99,6 +101,8 @@ type GetNotificationDestinationRow struct {
 	LastTestAt         *time.Time
 	LastTestOk         *bool
 	LastTestError      *string
+	LastCheckpointDay  pgtype.Date
+	ReplayFrom         *int64
 }
 
 func (q *Queries) GetNotificationDestination(ctx context.Context, id uuid.UUID) (GetNotificationDestinationRow, error) {
@@ -138,6 +142,33 @@ func (q *Queries) GetNotificationDestination(ctx context.Context, id uuid.UUID) 
 		&i.LastTestAt,
 		&i.LastTestOk,
 		&i.LastTestError,
+		&i.LastCheckpointDay,
+		&i.ReplayFrom,
+	)
+	return i, err
+}
+
+const getNotificationDestinationReplayState = `-- name: GetNotificationDestinationReplayState :one
+SELECT forward_seq, pending_delivery_id, replay_from, start_at_latest FROM notification_destination_state
+WHERE destination_id = $1
+`
+
+type GetNotificationDestinationReplayStateRow struct {
+	ForwardSeq        int64
+	PendingDeliveryID uuid.NullUUID
+	ReplayFrom        *int64
+	StartAtLatest     bool
+}
+
+// What a replay request checks before it is set (plan M12 decision 21).
+func (q *Queries) GetNotificationDestinationReplayState(ctx context.Context, destinationID uuid.UUID) (GetNotificationDestinationReplayStateRow, error) {
+	row := q.db.QueryRow(ctx, getNotificationDestinationReplayState, destinationID)
+	var i GetNotificationDestinationReplayStateRow
+	err := row.Scan(
+		&i.ForwardSeq,
+		&i.PendingDeliveryID,
+		&i.ReplayFrom,
+		&i.StartAtLatest,
 	)
 	return i, err
 }
@@ -205,8 +236,8 @@ type InsertNotificationDestinationParams struct {
 
 // Notification destinations (plan M9 decisions 14–18). The same queries serve the organization scope (paddock_api)
 // and the platform scope (paddock_platform, nil organization): row level security selects the rows. The api never
-// writes a state column (migration 00085): it inserts the state row with its key and requests a cursor skip through
-// the SECURITY DEFINER functions.
+// writes a state column except replay_from (migration 00105): it inserts the state row with its key and requests a
+// cursor skip through the SECURITY DEFINER functions.
 func (q *Queries) InsertNotificationDestination(ctx context.Context, arg InsertNotificationDestinationParams) error {
 	_, err := q.db.Exec(ctx, insertNotificationDestination,
 		arg.ID,
@@ -315,7 +346,8 @@ SELECT d.id, d.organization_id, d.type, d.name, d.enabled, d.filter_mode, d.code
        d.syslog_port, d.syslog_server_name, (d.syslog_ca_pem IS NOT NULL)::boolean AS syslog_ca_pem_set,
        d.checkpoints, d.created_by, d.created_at, d.updated_at,
        s.status, s.cursor_commit_seq, s.forward_seq, s.last_success_at, s.last_attempt_at, s.next_attempt_at,
-       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error
+       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error,
+       s.last_checkpoint_day, s.replay_from
 FROM notification_destination d
 LEFT JOIN notification_destination_state s ON s.destination_id = d.id AND s.organization_id = d.organization_id
 WHERE ($1::text IS NULL OR d.name ILIKE $1::text ESCAPE '\')
@@ -375,6 +407,8 @@ type ListNotificationDestinationsRow struct {
 	LastTestAt         *time.Time
 	LastTestOk         *bool
 	LastTestError      *string
+	LastCheckpointDay  pgtype.Date
+	ReplayFrom         *int64
 }
 
 // List queries (ADR 0018): see device_group.sql.
@@ -428,6 +462,8 @@ func (q *Queries) ListNotificationDestinations(ctx context.Context, arg ListNoti
 			&i.LastTestAt,
 			&i.LastTestOk,
 			&i.LastTestError,
+			&i.LastCheckpointDay,
+			&i.ReplayFrom,
 		); err != nil {
 			return nil, err
 		}
@@ -512,6 +548,28 @@ func (q *Queries) PendingNotificationTestExists(ctx context.Context, destination
 	var pending bool
 	err := row.Scan(&pending)
 	return pending, err
+}
+
+const replayNotificationDestination = `-- name: ReplayNotificationDestination :execrows
+UPDATE notification_destination_state SET replay_from = $1::bigint
+WHERE destination_id = $2 AND pending_delivery_id IS NULL AND replay_from IS NULL AND NOT start_at_latest
+  AND $1::bigint >= 1 AND $1::bigint <= forward_seq
+`
+
+type ReplayNotificationDestinationParams struct {
+	FromForwardSeq int64
+	DestinationID  uuid.UUID
+}
+
+// Both scopes; 0 rows when the request does not apply (plan M12 decision 21, migration 00105): the guard closes the
+// race with the notifier, which may have taken a batch or started a replay since the api read the state. A pending skip
+// request refuses it, because resolving the skip would end the replay before it sent anything.
+func (q *Queries) ReplayNotificationDestination(ctx context.Context, arg ReplayNotificationDestinationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replayNotificationDestination, arg.FromForwardSeq, arg.DestinationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const startNotificationDestinationAtLatest = `-- name: StartNotificationDestinationAtLatest :one

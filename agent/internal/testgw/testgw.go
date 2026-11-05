@@ -49,6 +49,13 @@ type Gateway struct {
 	// Escrows are the accepted escrow uploads; EscrowAnswer is the status GET /v1/escrow/{id} answers.
 	Escrows      []escrow.Request
 	EscrowAnswer string
+	// Diagnostics are the accepted POST /v1/diagnostics announcements; DiagnosticsFail is the HTTP status of the next
+	// announcement (0 = 202 with an upload URL below /uploads/). Uploads are the objects PUT there; UploadFail is the
+	// HTTP status of the next PUT (0 = 200).
+	Diagnostics     []protocol.DiagnosticsRequest
+	DiagnosticsFail int
+	Uploads         map[string][]byte
+	UploadFail      int
 
 	keys     map[string]*ecdsa.PublicKey // key ID → key (enrolled keys)
 	Enrolls  []protocol.EnrollRequest
@@ -65,7 +72,7 @@ type Checkin struct {
 
 // New starts a TLS fake gateway.
 func New(t *testing.T) *Gateway {
-	g := &Gateway{t: t, keys: map[string]*ecdsa.PublicKey{}, Files: map[string][]byte{}, Results: map[string]protocol.CommandResult{}, EscrowAnswer: escrow.StatusStored,
+	g := &Gateway{t: t, keys: map[string]*ecdsa.PublicKey{}, Files: map[string][]byte{}, Results: map[string]protocol.CommandResult{}, Uploads: map[string][]byte{}, EscrowAnswer: escrow.StatusStored,
 		EnrollStatus: protocol.EnrollStatus{Status: protocol.EnrollProcessing}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/enroll", g.enroll)
@@ -75,6 +82,9 @@ func New(t *testing.T) *Gateway {
 	mux.HandleFunc("POST /v1/commands/{id}/result", g.result)
 	mux.HandleFunc("POST /v1/escrow", g.escrow)
 	mux.HandleFunc("GET /v1/escrow/{id}", g.escrowStatus)
+	mux.HandleFunc("POST /v1/diagnostics", g.diagnostics)
+	mux.HandleFunc("PUT /uploads/{name}", g.upload)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /files/{name}", func(w http.ResponseWriter, r *http.Request) {
 		g.Mu.Lock()
 		data, ok := g.Files[r.PathValue("name")]
@@ -220,6 +230,40 @@ func (g *Gateway) escrow(w http.ResponseWriter, r *http.Request) {
 	}
 	g.Escrows = append(g.Escrows, req)
 	writeJSON(w, http.StatusAccepted, escrow.Accepted{EscrowID: req.EscrowID})
+}
+
+func (g *Gateway) diagnostics(w http.ResponseWriter, r *http.Request) {
+	body, _, ok := g.verify(w, r, nil)
+	if !ok {
+		return
+	}
+	g.Mu.Lock()
+	defer g.Mu.Unlock()
+	if g.DiagnosticsFail != 0 {
+		problem(w, g.DiagnosticsFail, protocol.CodeNotFound)
+		g.DiagnosticsFail = 0
+		return
+	}
+	var req protocol.DiagnosticsRequest
+	_ = json.Unmarshal(body, &req)
+	g.Diagnostics = append(g.Diagnostics, req)
+	writeJSON(w, http.StatusAccepted, protocol.DiagnosticsResponse{DiagnosticsID: req.CommandID, UploadURL: g.URL + "/uploads/" + req.CommandID})
+}
+
+func (g *Gateway) upload(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	g.Mu.Lock()
+	defer g.Mu.Unlock()
+	if r.ContentLength != int64(len(body)) {
+		http.Error(w, "content length", http.StatusBadRequest)
+		return
+	}
+	if g.UploadFail != 0 {
+		w.WriteHeader(g.UploadFail)
+		g.UploadFail = 0
+		return
+	}
+	g.Uploads[r.PathValue("name")] = body
 }
 
 func (g *Gateway) escrowStatus(w http.ResponseWriter, r *http.Request) {

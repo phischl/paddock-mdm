@@ -316,6 +316,7 @@
     "email_not_configured": "This installation has no e-mail relay, so e-mail destinations cannot be enabled.",
     "unknown_code": "One of the audit codes is not registered.",
     "notification_test_pending": "An earlier test of this destination is still waiting for its result. Try again in a moment.",
+    "notification_replay_pending": "The destination is retrying a batch, or an earlier replay is still running. Wait until it is complete, or disable the destination, then replay.",
     "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment.",
     "rollout_conflict": "A running or halted rollout stages this item. Complete the rollout or revert its change set first.",
     "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent.",
@@ -645,6 +646,9 @@
       "pseudonym_resolved": "{actor} resolved the pseudonym {pseudonym}",
       "delivered": "{count} events delivered to {destination}",
       "destination_stalled": "Deliveries to {destination} are stalled ({last_error})",
+      "replay_requested": "{actor} requested a replay of {name} from sequence number {from_forward_seq}",
+      "replayed": "Batch {forward_from}–{forward_to} replayed to {target}",
+      "checkpoint_sent": "Checkpoint of {day} ({event_count} events) sent to {target}",
       "destination_resumed": "Deliveries to {destination} resumed after {stalled_for_s} s"
     },
     "access_review": {
@@ -2988,6 +2992,17 @@
     "testError": "The test delivery to {name} failed: {error}",
     "testUnknown": "unknown error",
     "testTimeout": "No result for the test to {name} yet. Check the state of the destination in a moment.",
+    "replayLabel": "Replay from…: {name}",
+    "replayAction": "Replay from…",
+    "replay": {
+      "title": "Replay from a sequence number",
+      "message": "Resend every batch from sequence number {from} on. The receiver sees the same numbers again; it must deduplicate.",
+      "number": "Sequence number",
+      "hint": "1 to {last}, the last number sent to {name}.",
+      "invalid": "Enter a whole number from 1 to {last}.",
+      "confirm": "Replay",
+      "requested": "Replay of {name} from sequence number {from} requested. The notifier resends the batches in its next rounds."
+    },
     "cursor": {
       "title": "Enable destination",
       "message": "{name} has been disabled. Where should delivery resume?",

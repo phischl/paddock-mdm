@@ -129,6 +129,10 @@ func (l Layout) UnattendedLog() string {
 	return l.Join("/var/log/unattended-upgrades/unattended-upgrades.log")
 }
 
+// Diagnostics holds the diagnostics bundle while it is collected, sealed and uploaded (plan M12 decision 10; 0700,
+// the bundle 0600); it is empty between collections and not a protected area.
+func (l Layout) Diagnostics() string { return l.Join("/var/lib/paddock/diagnostics") }
+
 // EncryptDir holds the data files of an in-place encryption (plan M8e §6.3; 0700): plan.json, plan.env and, in dev
 // builds, test-hooks. Nothing below it is ever executed (plan M8e decision 29).
 func (l Layout) EncryptDir() string { return l.Join("/var/lib/paddock/encrypt") }

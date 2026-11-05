@@ -85,6 +85,10 @@ type System interface {
 	Rename(oldPath, newPath string) error
 	// ReadDir returns the names of the entries of a directory, sorted.
 	ReadDir(path string) ([]string, error)
+	// Output runs a read-only tool within OutputTimeout and returns its stdout: at most MaxOutput bytes, with
+	// ErrOutputLimit when it printed more (the tool is stopped then); a non-zero exit returns the output with an
+	// *ExitError (the diagnostics bundle, ADR 0048 decision 2).
+	Output(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
 // Events forwards the device events of reconcilers to the agent (plan M3b decision 5); without Emit they are

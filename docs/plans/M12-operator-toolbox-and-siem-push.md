@@ -431,8 +431,8 @@ func NewSyslog(allowPrivate bool, version string) *Syslog   // implements Transp
 | `device.diagnostics_downloaded` | admin | device | `request_id`, `sha256`, `bytes`, `files`, `hostname` | success, failure, denied |
 | `device.diagnostics_purged` | admin / system (retention) | device | `request_id`, `hostname` | success, failure, denied |
 | `notification.replay_requested` | admin / platform admin | notification_destination | `destination`, `destination_id`, `from_forward_seq`, `to_forward_seq` | success, failure, denied |
-| `notification.replayed` | system | notification_destination | `destination_id`, `forward_from`, `forward_to`, `original_delivery_id`, `missing` | success, failure |
-| `notification.checkpoint_sent` | system | notification_destination | `destination_id`, `day`, `event_count`, `forward_seq` | success, failure |
+| `notification.replayed` | system | notification_destination | `destination_id`, `forward_from`, `forward_to`, `original_delivery_id`, `missing` | success |
+| `notification.checkpoint_sent` | system | notification_destination | `destination_id`, `day`, `event_count`, `forward_seq` | success |
 | `access_review.viewed` | admin / auditor | organization | `from`, `to` | success |
 | `access_review.exported` | admin / auditor | organization | `from`, `to`, `format` | success, failure, denied |
 | `platform.access_review_viewed` / `_exported` | platform admin | platform | `from`, `to` (`format`) | success (, failure, denied) |
@@ -755,3 +755,95 @@ Decisions of 2026-11-04, taken after the PDK-753 reviews (item 1 is an architect
    instead of `go test ./integrations/...` (ticket AC 1, plan §3.6): the tests need the audit code registry of the
    server module, and a separate module under `integrations/` would add a module and a YAML dependency. No new
    module and no new dependency.
+
+## Amendment 2026-11-04 — checkpoints and replay (PDK-752)
+
+Architect decisions of 2026-11-04, taken after the PDK-752 review:
+
+1. **Replay request through a column grant, not a definer function (decision 21).** The api roles never wrote a
+   state column so far (migration `00085`); a replay request now sets `replay_from` with a guarded `UPDATE` under a
+   column grant `GRANT UPDATE (replay_from) ON notification_destination_state`. The architect decision names
+   `paddock_api`; as an implementation consequence of the platform twin of the endpoint (this decision), the same
+   grant goes to `paddock_platform`, whose platform policy restricts it to the nil organization. Row level security
+   confines the write: the tenant policy on `paddock.org_id` (without `missing_ok`, so a missing context fails) for
+   the organization scope, the platform policy for the platform scope; a cross-organization update affects 0 rows.
+   The `UPDATE` applies only while no batch is pending, no replay runs and `1 ≤ from_forward_seq ≤ forward_seq`;
+   0 rows answer 409 `invalid_state`. A running replay is never redirected through the endpoint (409 with `a replay
+   of the destination is running; wait until it ends, or disable the destination and enable it with skip`), because
+   the notifier records `notification.replayed` only while `replay_from` still holds the number it replayed from, and
+   the notifier numbers no new batch or checkpoint while `replay_from` is set. Residual, accepted under this
+   decision: code running as `paddock_api` or `paddock_platform` could still rewrite `replay_from` directly between a
+   replayed delivery and its record, and that delivery would then have no `notification.replayed`. A failed re-send
+   is retried and stalls like a batch; enabling a disabled destination with *skip* (decision 16, audited as
+   `notification.destination_updated`) also ends a running replay, so a replay that never succeeds cannot hold back
+   new events, and the numbering continues. A checkpoint delivery stores its `checkpoint_day`, so a retry and a
+   replay send the same day.
+2. **Extended due rule (decision 20).** A sealed day D is also due when the first undelivered event matching the
+   destination's filter is recorded on D + 1 or later (the earliest `recorded_at` of the matching events in the
+   scanned window, so a day-D event committed after a D + 1 event by another audit-writer replica holds the day), or
+   when no event after the cursor matches. This is a superset of the rule in decision 20: with a narrow filter the
+   cursor advances past non-matching events only per full window, and the plan's rule would never send the
+   checkpoint.
+3. **Outcomes success only (§6.4).** `notification.replayed` and `notification.checkpoint_sent` are recorded with
+   outcome `success` only, like `notification.delivered`. A failed attempt is retried with backoff and surfaces as
+   `notification.destination_stalled`; a failure event per retry would flood the trail. The §6.4 table is aligned.
+4. **MSGID `paddock.missing`.** A replayed event that the index retention purged is sent over syslog as one message
+   with `MSGID paddock.missing`, PRI local0.warning and the send time; `MSG` is `{schema, forward_seq, event_id,
+   delivery_id, missing: true}`. Like `paddock.heartbeat`, `paddock.checkpoint` and `paddock.test`, it fits RFC 5424
+   and collides with no audit code and no MSGID alias (tested next to the alias table). The PDK-753 decoders must match it.
+5. **Replay of e-mail destinations.** E-mail destinations are numbered and can be replayed. Replayed deliveries keep
+   the digest interval (`email_min_interval_s`): one e-mail per interval.
+6. **Migration number by landing order.** The checkpoint and replay migration is
+   `00105_notification_checkpoints_replay.sql` (§3.5 and §5 name none).
+
+## Amendment 2026-11-05 — diagnostics collector (PDK-748)
+
+Decisions taken by the architect lead on 2026-11-05 after Review 1 of PDK-748 (§3.2 items 8–12 and §6.5 are read with
+these changes; the `bundle.dsse` correction is ADR 0048 amendment 2026-11-05):
+
+1. **Journal mapping.** `paddockd` runs as the child of `paddock-supervisor.service` and writes to that unit's
+   journal, so `journal/paddockd.log` is `journalctl -u paddock-supervisor.service`; `journal/paddock-supervisor.log`
+   is the supervisor's own transient unit `paddock-supervisor-upgrade.service`; `journal/paddock-encrypt.log` is
+   `paddock-encrypt*` (resume and initial conversion units). The same journal is not collected twice.
+2. **Multi-file manifest entries.** `manifest.json` keeps one entry per `Entries()` element; an entry that yields
+   several files (the `sudoers.d`, `pam.d` and apt globs, `system/luksDump`) carries `files: [{name, bytes, sha256,
+   truncated}]` and no SHA-256 of its own. `system/luksDump` files are named `luksDump-<uuid>.txt` as in §6.5.
+3. **`Collect` signature.** `Collect(ctx, sys, src Sources, w)`: `Sources` carries the health reader, the `/healthz`
+   call, device ID, agent version and time; the layout parameter was unused. `Entry` additionally carries `Exits`
+   (exit codes whose output still counts: `systemctl status` 3/4, `df` 1, `dpkg -l` 1).
+4. **Extra redactions** (privacy-tightening only): `state.json` also drops `shadow`-named fields and is replaced when
+   it is not JSON; URL credentials in `agent.yml`; password options (`password=`, `pass=`, `pwd=`, with the CIFS
+   `,,` escape) in `fstab` and `crypttab`; hardware addresses in `ip -brief link`; `Requested-By:` users in the apt
+   history; `himmelblau.conf` redacts commented-out secrets too. `bundle.dsse` is rendered as
+   `paddock/bundle-redacted.json` (ADR 0048 amendment 2026-11-05).
+5. **os-release** is read from `/usr/lib/os-release`: the collector never follows symlinks, and `/etc/os-release`
+   is one.
+6. **Notice target** `systemd-run --machine=<uid>@.host`: systemd splits the machine argument at the first `@`, which
+   directory user names (`user@domain`) contain.
+7. **Asynchronous collection.** The `collect_status` handler validates and queues the command (at most 4 waiting;
+   a full queue answers `failed` with `collect_failed`) and returns; one worker runs one collection at a time, and
+   the run loop reports its result at the next check-in. Check-ins and the re-verification of the protected areas
+   continue during a collection. A finished result is kept across a shutdown; an aborted or not yet started
+   collection gets no result and its command expires. A plaintext archive left by a killed agent is removed at start.
+8. **Extra collector kinds are mechanics only.** `glob`, `health`, `tpm`, `luks` and `healthz` read sources that
+   are on the approved content list (ADR 0048 decision 2, §6.5) and collect nothing beyond it:
+
+| Kind | Archive entry | Approved list entry (ADR 0048 decision 2) |
+|------|---------------|-------------------------------------------|
+| `file` | `paddock/state.json`, `managed.json`, `probation.json`, `update-result.json`, `updates-result.json`, `supervisor-upgrade-result.json`, `trust.json`, `agent.yml` | the named Paddock state files (`state.json` without identity) |
+| `file` | `paddock/bundle-redacted.json` | `bundle.dsse`, redacted (ADR 0048 amendment 2026-11-05) |
+| `file` | `etc/sudoers`, `etc/nsswitch.conf`, `etc/himmelblau/himmelblau.conf`, `etc/crypttab`, `etc/fstab` | the Paddock-managed configuration files of the same names |
+| `file` | `system/os-release`, `system/apt-history.log` | `os-release`; `/var/log/apt/history.log` (no users) |
+| `glob` | `etc/sudoers.d/*` | `/etc/sudoers.d/*` |
+| `glob` | `etc/pam.d/common-*` | `/etc/pam.d/common-*` |
+| `glob` | `etc/apt/sources.list.d/paddock-*`, `etc/apt/preferences.d/5*paddock*` | the same two globs |
+| `journal` | `journal/*.log` | the journals of the listed units, 7 days, newest first, 8 MiB each (mapping: item 1) |
+| `exec` | `systemd/status.txt`, `systemd/failed-units.txt` | `systemctl status` of the listed units and `orbit`; `systemctl list-units --failed` |
+| `exec` | `system/uname.txt`, `timedatectl.txt`, `df.txt`, `uptime.txt`, `lsblk.txt`, `dpkg.txt`, `ip-link.txt`, `resolvectl.txt` | `uname -a`, `timedatectl show`, `df -h / /boot /boot/efi`, `uptime -p`, `lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT`, `dpkg -l 'paddock*' 'himmelblau*' 'fleet*'`, `ip -brief link` (no addresses), `resolvectl status` |
+| `health` | `paddock/health.json` | the health report of the agent socket (read from the agent's own reporter, the same report) |
+| `tpm` | `system/tpm.txt` | the presence of `/dev/tpm0` and `/dev/tpmrm0` (one `present=true/false` line each, nothing read from the devices) |
+| `luks` | `system/luksDump-<uuid>.txt` | `cryptsetup luksDump` of every LUKS volume the agent manages (the volumes of its health report; shared-UUID and malformed entries skipped) |
+| `healthz` | `system/server-healthz.txt` | the result of one `GET <server_url>/healthz` (status line and at most 4 KiB of body) |
+
+   The condition of the sign-off — every item a kind collects is already on the approved list — was checked
+   against the code on 2026-11-05 and holds; nothing was removed.

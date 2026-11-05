@@ -14,7 +14,7 @@ import { vuetify } from '../plugins/vuetify'
 import { pendingConfirm, settleConfirm } from '../composables/useConfirm'
 import { useSessionStore } from '../stores/session'
 import {
-  backlogOf, emptyInput, fieldOfProblem, lagParts, parseRecipients, pollUntil, stateStatus, validateNotification,
+  backlogOf, emptyInput, fieldOfProblem, lagParts, parseRecipients, pollUntil, replayFrom, stateStatus, validateNotification,
   type NotificationDestination, type NotificationInput,
 } from '../lib/notifications'
 
@@ -27,6 +27,7 @@ function destination(over: Partial<NotificationDestination> = {}): NotificationD
     state: {
       status: 'active', cursor_commit_seq: 90, forward_seq: 90, last_success_at: '2026-10-31T09:00:00Z', last_attempt_at: null,
       next_attempt_at: null, stalled_since: null, last_error: null, lag_seconds: 0, last_test: null,
+      last_checkpoint_day: null, replay_from: null,
     },
     ...over,
   }
@@ -102,6 +103,14 @@ describe('notification rules', () => {
     expect(await pollUntil(async () => (++calls === 3 ? 'ok' : null), () => false, 1, 1000)).toBe('ok')
     expect(await pollUntil(async () => null, () => false, 5, 20)).toBeNull()
     expect(await pollUntil(async () => 'x', () => true, 1, 1000)).toBeNull()
+  })
+})
+
+describe('replay number', () => {
+  it('accepts a whole number from 1 to the last number sent', () => {
+    expect(replayFrom('1', 90)).toBe(1)
+    expect(replayFrom(' 90 ', 90)).toBe(90)
+    for (const bad of ['0', '91', '-1', '1.5', '1e2', '', 'abc', '99999999999999999999']) expect(replayFrom(bad, 90)).toBeNull()
   })
 })
 
@@ -214,6 +223,7 @@ const update = vi.fn()
 const remove = vi.fn()
 const rotate = vi.fn()
 const test = vi.fn()
+const replay = vi.fn()
 const getOne = vi.fn()
 const requestPseudo = vi.fn()
 const lookup = vi.fn()
@@ -235,6 +245,7 @@ vi.mock('../lib/notifications', async (importOriginal) => {
   deleteDestination: (...a: unknown[]) => remove(...a),
   rotateSecret: (...a: unknown[]) => rotate(...a),
   requestTest: (...a: unknown[]) => test(...a),
+  requestReplay: (...a: unknown[]) => replay(...a),
   getDestination: (...a: unknown[]) => getOne(...a),
   pollUntil: (check: () => Promise<unknown>, cancelled: () => boolean) => original.pollUntil(check, cancelled, 1, 1000),
   }
@@ -245,7 +256,7 @@ const assign = vi.fn()
 
 beforeEach(() => {
   sessionStorage.clear()
-  for (const f of [created, update, remove, rotate, test, getOne, requestPseudo, lookup, assign]) f.mockReset()
+  for (const f of [created, update, remove, rotate, test, replay, getOne, requestPseudo, lookup, assign]) f.mockReset()
   pseudonymizing = []
   items = [destination()]
   email = true
@@ -442,6 +453,78 @@ describe('notification pages', () => {
     settleConfirm({ reason: '' })
     await flushPromises()
     expect(w.find('[data-testid="notification-page-problem"]').text()).toContain('earlier test of this destination is still waiting')
+  })
+})
+
+describe('replay', () => {
+  async function typeFrom(v: string): Promise<void> {
+    const el = document.querySelector('[data-testid="replay-from"] input') as HTMLInputElement
+    el.value = v
+    el.dispatchEvent(new Event('input'))
+    await flushPromises()
+  }
+  async function submitReplay(): Promise<void> {
+    ;(document.querySelector('[data-testid="notification-replay-dialog"] form') as HTMLFormElement).dispatchEvent(new Event('submit'))
+    await flushPromises()
+  }
+
+  it('asks for the number with the deduplication notice and requests the replay', async () => {
+    replay.mockResolvedValue(null)
+    await mountPage('org_admin')
+    await click('[aria-label="Replay from…: SIEM"]')
+    const dialog = document.querySelector('[data-testid="notification-replay-dialog"]')
+    expect(dialog?.textContent).toContain('1 to 90, the last number sent to SIEM.')
+    await typeFrom('42')
+    expect(document.querySelector('[data-testid="replay-message"]')?.textContent).toContain(
+      'Resend every batch from sequence number 42 on. The receiver sees the same numbers again; it must deduplicate.')
+    await submitReplay()
+    expect(replay).toHaveBeenCalledWith('organization', 'd1', 42)
+    expect(document.body.textContent).toContain('Replay of SIEM from sequence number 42 requested.')
+  })
+
+  it('refuses a number outside 1 to the last number sent without a request', async () => {
+    await mountPage('org_admin')
+    await click('[aria-label="Replay from…: SIEM"]')
+    await typeFrom('91')
+    await submitReplay()
+    expect(replay).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-testid="notification-replay-dialog"]')?.textContent).toContain('Enter a whole number from 1 to 90.')
+  })
+
+  it('offers no replay before anything was sent, nor to an auditor', async () => {
+    items = [destination({ state: { ...destination().state, forward_seq: 0 } })]
+    const w = await mountPage('org_admin')
+    expect(w.find('[aria-label="Replay from…: SIEM"]').exists()).toBe(false)
+    wrapper?.unmount()
+    items = [destination()]
+    const a = await mountPage('org_auditor')
+    expect(a.text()).not.toContain('Replay from')
+  })
+
+  it('starts the step-up when refused and repeats the replay on return, on the platform page too', async () => {
+    replay.mockResolvedValue({ code: 'step_up_required' })
+    await mountPage('platform_admin', true)
+    await click('[aria-label="Replay from…: SIEM"]')
+    await typeFrom('5')
+    await submitReplay()
+    expect(replay).toHaveBeenCalledWith('platform', 'd1', 5)
+    expect(sessionStorage.getItem('paddock.stepup') ?? '').toContain('"op":"replay"')
+    wrapper?.unmount()
+    replay.mockReset()
+    replay.mockResolvedValue(null)
+    sessionStorage.setItem('paddock.stepup', JSON.stringify({
+      action: 'notification-destination', target: 'organization', at: Date.now(), payload: { op: 'replay', id: 'd1', name: 'SIEM', from: 7 },
+    }))
+    await mountPage('org_admin')
+    expect(replay).toHaveBeenCalledWith('organization', 'd1', 7)
+  })
+
+  it('explains a refusal while a batch is retried', async () => {
+    replay.mockResolvedValue({ code: 'invalid_state' })
+    const w = await mountPage('org_admin')
+    await click('[aria-label="Replay from…: SIEM"]')
+    await submitReplay()
+    expect(w.find('[data-testid="notification-page-problem"]').text()).toContain('or an earlier replay is still running.')
   })
 })
 

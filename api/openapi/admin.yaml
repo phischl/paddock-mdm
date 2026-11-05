@@ -3924,6 +3924,38 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}/replay:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: replayNotificationDestination
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Asks the notifier to send the destination's stored batches and checkpoints again from
+        from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the
+        cursor; the receiver sees the same numbers again and must deduplicate. An event the index retention purged
+        meanwhile is sent as {forward_seq, event_id, missing: true}. Each re-sent delivery is recorded as
+        notification.replayed. 400 invalid_request when from_forward_seq is below 1 or above state.forward_seq; 409
+        invalid_state while a batch is being retried, a replay is still running (state.replay_from is set) or a skip
+        request from enabling with cursor skip awaits the next delivery round. Needs a step-up within the last 5
+        minutes (403 step_up_required).
+      x-paddock-audit: notification.replay_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationReplayRequest" }
+      responses:
+        "202":
+          description: Requested; state.replay_from shows it until the replay is complete.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/v1/notification-destinations/{id}/resolve-pseudonym:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -6753,6 +6785,39 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+
+  /api/platform/v1/notification-destinations/{id}/replay:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: replayPlatformNotificationDestination
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Asks the notifier to send the destination's stored batches and checkpoints again from
+        from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the
+        cursor; the receiver sees the same numbers again and must deduplicate. An event the index retention purged
+        meanwhile is sent as {forward_seq, event_id, missing: true}. Each re-sent delivery is recorded as
+        notification.replayed. 400 invalid_request when from_forward_seq is below 1 or above state.forward_seq; 409
+        invalid_state while a batch is being retried, a replay is still running (state.replay_from is set) or a skip
+        request from enabling with cursor skip awaits the next delivery round. Needs a step-up within the last 5
+        minutes (403 step_up_required).
+      x-paddock-audit: notification.replay_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationReplayRequest" }
+      responses:
+        "202":
+          description: Requested; state.replay_from shows it until the replay is complete.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
 components:
   securitySchemes:
@@ -9746,7 +9811,7 @@ components:
     NotificationDestinationState:
       type: object
       required: [status, cursor_commit_seq, forward_seq, last_success_at, last_attempt_at, next_attempt_at, stalled_since,
-        last_error, lag_seconds, last_test]
+        last_error, lag_seconds, last_test, last_checkpoint_day, replay_from]
       properties:
         status: { type: string, enum: [active, stalled] }
         cursor_commit_seq: { type: integer, format: int64, description: The commit sequence of the last delivered event position. }
@@ -9765,6 +9830,14 @@ components:
             at: { type: string, format: date-time }
             ok: { type: boolean }
             error: { type: string, nullable: true }
+        last_checkpoint_day: { type: string, format: date, nullable: true, description: The last sealed recording day whose checkpoint was delivered (checkpoints on). }
+        replay_from: { type: integer, format: int64, nullable: true, description: The forward sequence number a requested replay continues at; null without a replay. }
+    NotificationReplayRequest:
+      type: object
+      additionalProperties: false
+      required: [from_forward_seq]
+      properties:
+        from_forward_seq: { type: integer, format: int64, minimum: 1, description: The first forward sequence number to send again. }
     NotificationDestinationCreate:
       type: object
       additionalProperties: false
