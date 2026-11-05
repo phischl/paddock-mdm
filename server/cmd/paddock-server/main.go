@@ -46,6 +46,9 @@ commands:
   admin upgrade-check --target-version <x.y.z> [--json]
   backup now [--kind postgres|authentik|openbao|fleet|escrow]... [--label <text>] [--wait]
   backup status
+  backup plan <id>           (prints the restore plan as JSON; exit 1 unless it is approved and unexpired)
+  backup restore-report --outcome running|completed|failed --operator <name> --source set|repo|target
+        --components a,b [--plan <id>] [--at <RFC 3339>] [--component <step> --detail <text>]
   backup decrypt <in> <out|->
   prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
   healthcheck

@@ -531,7 +531,12 @@
       "backup_schedule_changed": "{actor} hat den Sicherungsplan geändert: Vollsicherung alle {full_interval_hours} h, {retention_full} Vollsicherungen aufbewahrt",
       "backup_run_requested": "{actor} hat eine sofortige Sicherung angefordert",
       "backup_completed": "Die Sicherung {kind} ist abgeschlossen und hat {targets_ok} Ziele erreicht",
-      "backup_failed": "Die Sicherung {kind} ist fehlgeschlagen ({error_class})"
+      "backup_failed": "Die Sicherung {kind} ist fehlgeschlagen ({error_class})",
+      "restore_planned": "Wiederherstellungsplan freigegeben ({kind}, aus {source})",
+      "restore_cancelled": "Wiederherstellungsplan abgebrochen",
+      "restore_started": "Wiederherstellung auf dem Host gestartet (aus {source})",
+      "restore_completed": "Wiederherstellung auf dem Host abgeschlossen",
+      "restore_failed": "Wiederherstellung auf dem Host fehlgeschlagen ({detail})"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
