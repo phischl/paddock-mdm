@@ -161,7 +161,9 @@
     "platformNotifications": "Plattform-Benachrichtigungen",
     "configRollouts": "Konfigurations-Rollouts",
     "softwareSources": "Paketquellen",
-    "softwareCatalog": "Softwarekatalog"
+    "softwareCatalog": "Softwarekatalog",
+    "accessReview": "Zugriffsprüfung",
+    "platformAccessReview": "Plattform-Zugriffsprüfung"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -2814,6 +2816,77 @@
     "confirmFile": "Bestätigen, dass {name} auf einem sensiblen Pfad verwaltet bleiben darf? Anschließend bestätigen Sie Ihre Identität.",
     "deniedIntro": "Paddock verwaltet diese Pfade nicht mehr. Agents dieses Releases oder neuer lassen die Dateien auf den Geräten unverändert; ein älterer Agent löscht eine unveränderte Datei, sobald sie nicht mehr verteilt wird. Löschen Sie die Definitionen, die Sie nicht mehr brauchen.",
     "deleteDefinition": "Definition löschen"
+  },
+  "accessReview": {
+    "title": "Zugriffsprüfung",
+    "platformTitle": "Plattform-Zugriffsprüfung",
+    "intro": "Wer in dieser Organisation in einem Zeitraum was durfte: Rollenmitglieder und -änderungen, Administratorkonten, API-Token, Offenlegungen von Geheimnissen, Step-ups, beendete Sitzungen und zerstörende Aktionen. Jede Liste zeigt höchstens die Zeilen des Berichts und nennt ihre Gesamtzahl.",
+    "platformIntro": "Wer die Plattform in einem Zeitraum verwalten durfte: Mitglieder und Änderungen der Plattformrolle, Administratoren, privilegierte Plattformereignisse und angelegte Organisationen.",
+    "generatedAt": "Bericht erstellt",
+    "exportJson": "JSON exportieren",
+    "exportCsv": "CSV exportieren",
+    "stepUp": "Step-ups im Zeitraum: {succeeded, plural, one {# erfolgreiche Aktion} other {# erfolgreiche Aktionen}} von Step-up-Sitzungen, {failed, plural, one {# Ablehnung} other {# Ablehnungen}} wegen fehlendem Step-up.",
+    "tokenDenials": "{count, plural, one {# Anfrage wurde} other {# Anfragen wurden}} wegen eines widerrufenen oder abgelaufenen Tokens oder eines inaktiven Erstellers abgelehnt.",
+    "capNotice": "{shown, number} von {total, number} Zeilen angezeigt. Verkürzen Sie den Zeitraum, um den Rest zu sehen; der Export enthält dieselben Zeilen.",
+    "yes": "Ja",
+    "no": "Nein",
+    "period": {
+      "label": "Zeitraum",
+      "days": "Letzte {days, number} Tage",
+      "from": "Von",
+      "to": "Bis",
+      "apply": "Eigener Zeitraum"
+    },
+    "errors": {
+      "dates": "Geben Sie den ersten und den letzten Tag ein.",
+      "order": "Der letzte Tag darf nicht vor dem ersten liegen.",
+      "tooLong": "Der Zeitraum darf höchstens 400 Tage umfassen."
+    },
+    "forbidden": {
+      "title": "Kein Zugriff auf die Zugriffsprüfung",
+      "description": "Nur Administratoren und Auditoren können die Zugriffsprüfung sehen."
+    },
+    "empty": {
+      "title": "Nichts in diesem Zeitraum",
+      "description": "Keine Zeilen passen zum Zeitraum oder zur Suche."
+    },
+    "sections": {
+      "roles": "Rollenmitglieder",
+      "roleChanges": "Rollenänderungen",
+      "accounts": "Administratorkonten",
+      "tokens": "API-Token",
+      "reveals": "Offenlegungen und Downloads von Geheimnissen",
+      "sessionsRevoked": "Beendete Sitzungen",
+      "destructive": "Zerstörende und sperrende Aktionen",
+      "breakGlass": "Break-Glass-Konten",
+      "administrators": "Plattform-Administratoren",
+      "platformEvents": "Privilegierte Plattformereignisse",
+      "organizationsCreated": "Angelegte Organisationen"
+    },
+    "columns": {
+      "role": "Rolle",
+      "username": "Benutzer",
+      "firstSeen": "Erstmals gesehen",
+      "at": "Zeit",
+      "code": "Aktion",
+      "actor": "Akteur",
+      "displayName": "Name",
+      "lastLogin": "Letzte Anmeldung",
+      "disabled": "Deaktiviert",
+      "name": "Name",
+      "prefix": "Präfix",
+      "createdBy": "Erstellt von",
+      "createdAt": "Erstellt",
+      "expiresAt": "Läuft ab",
+      "lastUsed": "Zuletzt benutzt",
+      "revokedAt": "Widerrufen",
+      "revokedBy": "Widerrufen von",
+      "device": "Gerät",
+      "params": "Details",
+      "reason": "Grund",
+      "target": "Ziel",
+      "slug": "Slug"
+    }
   },
   "mcp": {
     "title": "KI-Assistenten (MCP)",
