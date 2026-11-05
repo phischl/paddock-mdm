@@ -437,6 +437,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Overview:       app.NewOverview(orgPool),
 		SecurityReview: app.NewSecurityReview(orgPool),
 		AccessReview:   app.NewAccessReview(runner, orgPool, reader),
+		Diagnostics:    app.NewDiagnostics(runner, orgPool, nil, 24*time.Hour).WithDownload(escrowAccess, e.disk),
 		MCPSettings:    app.NewMCPSettings(runner, orgPool, platformPool),
 		MCPAccess:      app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
 		Runner:         runner,

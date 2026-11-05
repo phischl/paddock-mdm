@@ -49,6 +49,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
     items: [
       { to: '/devices', label: 'nav.devices', icon: 'laptop', shortcut: 'g d', visible: orgReader },
       { to: '/device-groups', label: 'nav.deviceGroups', icon: 'folder', visible: orgReader },
+      { to: '/diagnostics', label: 'nav.diagnostics', icon: 'file-check', visible: (a) => a.canWrite, testid: 'nav-diagnostics' },
       { to: '/enrollment-tokens', label: 'nav.enrollmentTokens', icon: 'ticket', visible: (a) => a.canWrite },
     ],
   },

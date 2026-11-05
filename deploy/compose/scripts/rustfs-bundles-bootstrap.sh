@@ -2,11 +2,12 @@
 # Bootstrap of the control-plane buckets on the bundled RustFS (plan M7b decision 19): paddock-bundles (plan M2a
 # decision 3) and paddock-agent-artifacts (plan M2b decision 19; public-read below packages/, plan M4b decision 1), both
 # without versioning and without Object Lock, and paddock-escrow (plan M4b decision 13, versioning on, no Object Lock); a
-# user for the compiler with read/write on bundles, a user for the api with read/write on artifacts and read on
-# escrow, a user for the worker with read on escrow and delete on diagnostics bundles (ADR 0048), and a user for the
-# gateway with read-only access to bundles and artifacts and write access to escrowed headers and diagnostics bundles
-# only (the gateway only computes presigned URLs with it), and a user
-# for the revocation-issuer that may list and delete header versions only (plan M4c decision 9). Idempotent.
+# user for the compiler with read/write on bundles, a user for the api with read/write on artifacts and, on escrow, read
+# on headers and diagnostics bundles and list and delete on diagnostics bundles only (ADR 0048), a user for the worker
+# with read on escrow and delete on diagnostics bundles (ADR 0048), a user for the gateway with read-only access to
+# bundles and artifacts and write access to escrowed headers and diagnostics bundles only (the gateway only computes
+# presigned URLs with it), and a user for the revocation-issuer that may list and delete header versions only (plan
+# M4c decision 9). Idempotent.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -107,8 +108,6 @@ echo "packages/ of $ARTIFACTS_BUCKET is public-read"
 
 user COMPILER_ACCESS_KEY paddock-bundles-compiler
 user GATEWAY_ACCESS_KEY paddock-bundles-gateway
-policy paddock-escrow-read "[
-  {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/*\"]}]"
 user ARTIFACTS_ACCESS_KEY paddock-artifacts-api
 # The worker verifies headers and diagnostics bundles and deletes every version of a diagnostics bundle whose retention
 # ended (ADR 0048 decision 5); it deletes nothing else.
@@ -117,7 +116,17 @@ policy paddock-escrow-worker "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},
   {\"Effect\":\"Allow\",\"Action\":[\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]}]"
 user ESCROW_WORKER_ACCESS_KEY paddock-escrow-worker
-user ESCROW_API_ACCESS_KEY paddock-escrow-read
+# The api reads headers for a header recovery (plan M4b decision 14) and diagnostics bundles for their download, lists
+# and deletes every version of a diagnostics bundle an administrator purges (ADR 0048 decision 5, amendment 2026-11-05);
+# it deletes nothing else and lists no other prefix (RustFS evaluates s3:prefix on ListBucket and ListBucketVersions).
+policy paddock-escrow-api "[
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\",\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"],\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"org/*/devices/*/diagnostics/*\"]}}},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]}]"
+user ESCROW_API_ACCESS_KEY paddock-escrow-api
+# Installations bootstrapped before carry the former policy paddock-escrow-read (GetObject on the whole bucket); left
+# attached, it would void the scope above.
+rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY
 # The revocation-issuer deletes every version of the headers of a destroyed device (plan M4c decision 9).
 policy paddock-escrow-destroy "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},

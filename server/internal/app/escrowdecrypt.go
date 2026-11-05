@@ -16,10 +16,13 @@ const (
 	PurposeLocalAdminReveal = "local_admin_reveal"
 	PurposeDiskRecoveryKey  = "disk_recovery_key"
 	PurposeDiskHeader       = "disk_header"
+	// PurposeDiagnostics unwraps the data key of a stored diagnostics bundle (ADR 0048 decision 4); its escrow IDs are
+	// bundle IDs.
+	PurposeDiagnostics = "diagnostics"
 )
 
 // EscrowDecryptRequest asks the escrow-reader for the plaintexts of escrows of one device, proven by the step-up ID
-// token of an organization administrator.
+// token of an organization administrator (or operator, for PurposeDiagnostics).
 type EscrowDecryptRequest struct {
 	OrganizationID uuid.UUID
 	DeviceID       uuid.UUID

@@ -90,15 +90,18 @@ func (q *Queries) AllBackupTargets(ctx context.Context) ([]AllBackupTargetsRow, 
 const countBackupRuns = `-- name: CountBackupRuns :one
 SELECT count(*) FROM (
   SELECT 1 FROM backup_run
-  WHERE ($1::text[] IS NULL OR kind = ANY($1::text[]))
-    AND ($2::text[] IS NULL OR outcome = ANY($2::text[]))
-    AND ($3::text IS NULL
-         OR targets @> jsonb_build_array(jsonb_build_object('target_id', $3::text)))
-  LIMIT $4
+  WHERE ($1::text IS NULL OR kind ILIKE $1::text ESCAPE '\'
+         OR label ILIKE $1::text ESCAPE '\')
+    AND ($2::text[] IS NULL OR kind = ANY($2::text[]))
+    AND ($3::text[] IS NULL OR outcome = ANY($3::text[]))
+    AND ($4::text IS NULL
+         OR targets @> jsonb_build_array(jsonb_build_object('target_id', $4::text)))
+  LIMIT $5
 ) matching
 `
 
 type CountBackupRunsParams struct {
+	QPattern   *string
 	Kinds      []string
 	Outcomes   []string
 	TargetID   *string
@@ -107,6 +110,7 @@ type CountBackupRunsParams struct {
 
 func (q *Queries) CountBackupRuns(ctx context.Context, arg CountBackupRunsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countBackupRuns,
+		arg.QPattern,
 		arg.Kinds,
 		arg.Outcomes,
 		arg.TargetID,
@@ -452,22 +456,25 @@ func (q *Queries) ListBackupKeyStates(ctx context.Context) ([]ListBackupKeyState
 
 const listBackupRuns = `-- name: ListBackupRuns :many
 SELECT id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at FROM backup_run
-WHERE ($1::text[] IS NULL OR kind = ANY($1::text[]))
-  AND ($2::text[] IS NULL OR outcome = ANY($2::text[]))
-  AND ($3::text IS NULL
-       OR targets @> jsonb_build_array(jsonb_build_object('target_id', $3::text)))
+WHERE ($1::text IS NULL OR kind ILIKE $1::text ESCAPE '\'
+       OR label ILIKE $1::text ESCAPE '\')
+  AND ($2::text[] IS NULL OR kind = ANY($2::text[]))
+  AND ($3::text[] IS NULL OR outcome = ANY($3::text[]))
+  AND ($4::text IS NULL
+       OR targets @> jsonb_build_array(jsonb_build_object('target_id', $4::text)))
 ORDER BY
-  CASE WHEN $4::text = 'started_at' THEN started_at END ASC,
-  CASE WHEN $4::text = '-started_at' THEN started_at END DESC,
-  CASE WHEN $4::text = 'kind' THEN kind END ASC,
-  CASE WHEN $4::text = '-kind' THEN kind END DESC,
-  CASE WHEN $4::text = 'outcome' THEN outcome END ASC,
-  CASE WHEN $4::text = '-outcome' THEN outcome END DESC,
+  CASE WHEN $5::text = 'started_at' THEN started_at END ASC,
+  CASE WHEN $5::text = '-started_at' THEN started_at END DESC,
+  CASE WHEN $5::text = 'kind' THEN kind END ASC,
+  CASE WHEN $5::text = '-kind' THEN kind END DESC,
+  CASE WHEN $5::text = 'outcome' THEN outcome END ASC,
+  CASE WHEN $5::text = '-outcome' THEN outcome END DESC,
   id
-LIMIT $6 OFFSET $5
+LIMIT $7 OFFSET $6
 `
 
 type ListBackupRunsParams struct {
+	QPattern *string
 	Kinds    []string
 	Outcomes []string
 	TargetID *string
@@ -479,6 +486,7 @@ type ListBackupRunsParams struct {
 // A requested run has no started_at yet: NULLS FIRST in descending order, so it leads the default sort.
 func (q *Queries) ListBackupRuns(ctx context.Context, arg ListBackupRunsParams) ([]BackupRun, error) {
 	rows, err := q.db.Query(ctx, listBackupRuns,
+		arg.QPattern,
 		arg.Kinds,
 		arg.Outcomes,
 		arg.TargetID,

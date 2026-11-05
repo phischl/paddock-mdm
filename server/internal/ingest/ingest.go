@@ -100,7 +100,9 @@ type DiagnosticsAnnounced struct {
 	Size           int64     `json:"size"`
 	Nonce          []byte    `json:"nonce"`
 	WrappedDEK     []byte    `json:"wrapped_dek"`
-	ReceivedAt     time.Time `json:"received_at"`
+	// KeyVersion is the escrow-wrap version of WrappedDEK; 0 when the agent did not report it (before PDK-749).
+	KeyVersion int       `json:"key_version,omitempty"`
+	ReceivedAt time.Time `json:"received_at"`
 }
 
 // CommandResult is the result of a device command (routing key ingest.command_result.<org>, message_id = CommandID +

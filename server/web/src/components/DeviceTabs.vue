@@ -7,7 +7,8 @@ import { useSessionStore } from '../stores/session'
 
 /**
  * The tabs of a device (plan M7c decision 29): URL-bound, Alt+1…9 through the shell's shortcut event. Software and
- * Vulnerabilities carry their counts, loaded lazily; the Audit tab is for readers of the audit log.
+ * Vulnerabilities carry their counts, loaded lazily; the Audit tab is for readers of the audit log, the Diagnostics tab
+ * for administrators and operators.
  */
 const props = defineProps<{ deviceId: string }>()
 const { t } = useI18n()
@@ -27,6 +28,8 @@ const tabs = computed<Tab[]>(() => [
   { name: 'device-logins', label: 'devices.tabs.logins', testid: 'tab-logins' },
   { name: 'device-configuration', label: 'devices.tabs.configuration', testid: 'tab-configuration' },
   { name: 'device-apply-status', label: 'devices.tabs.applyStatus', testid: 'tab-apply-status' },
+  // The auditor role never sees diagnostics bundles (ADR 0048 decision 4).
+  ...(session.canWrite ? [{ name: 'device-diagnostics', label: 'devices.tabs.diagnostics', testid: 'tab-diagnostics' }] : []),
   { name: 'device-commands', label: 'devices.tabs.commands', testid: 'tab-commands' },
   ...(session.canReadAudit ? [{ name: 'device-audit', label: 'devices.tabs.audit', testid: 'tab-audit' }] : []),
 ])

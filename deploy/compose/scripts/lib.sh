@@ -124,6 +124,44 @@ rc_user_absent() {
   exit 1
 }
 
+# rc_policy_absent <command…>: rc_user_absent for an `rc admin policy info` of one policy. Taking an error for a missing
+# policy would skip a removal that narrows a credential, and the bootstrap would report success.
+rc_policy_absent() {
+  local out status=0
+  out="$("$@" 2>&1 >/dev/null)" || status=$?
+  case "$status" in
+    0) return 1 ;;
+    5) [[ "$out" == *"Policy '"*"' not found"* ]] && return 0 ;;
+  esac
+  printf 'rc admin policy info failed (exit %s): %s\n' "$status" "$out" >&2
+  exit 1
+}
+
+# rc_remove_policy <rc function> <alias> <policy> <access key variable>: detaches the policy from the user, if attached,
+# and removes it; nothing when the policy is absent, so a rerun after a partial removal completes it. RustFS refuses
+# to remove a policy still attached ("policy in use"), and every rc error aborts the script.
+rc_remove_policy() {
+  local rcf="$1" alias="$2" name="$3" key="$4" info
+  if rc_policy_absent "$rcf" "rc admin policy info $alias $name"; then
+    return 0
+  fi
+  info="$("$rcf" "rc admin user info --json -- $alias \"\$$key\"")" || {
+    echo "rc admin user info failed for the holder of $name" >&2
+    exit 1
+  }
+  if [[ "$info" == *"\"$name\""* ]]; then
+    "$rcf" "rc admin policy detach $alias $name --user=\"\$$key\" >/dev/null" || {
+      echo "rc admin policy detach $name failed" >&2
+      exit 1
+    }
+  fi
+  "$rcf" "rc admin policy rm $alias $name >/dev/null" || {
+    echo "rc admin policy rm $name failed" >&2
+    exit 1
+  }
+  echo "removed the former policy $name"
+}
+
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-$(env_value PADDOCK_PROJECT)}"
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-paddock}"
 

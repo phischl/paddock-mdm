@@ -28,7 +28,7 @@ test('platform admin generates and confirms the backup key', async ({ page }) =>
   await expectAccessible(page)
 
   await page.getByTestId('backup-tab-key').click()
-  const generated = page.waitForResponse((r) => r.url().endsWith('/api/platform/v1/backup/key') && r.request().method() === 'POST')
+  const generated = page.waitForResponse((r) => r.url().endsWith('/api/platform/v1/backup/key') && r.request().method() === 'POST' && r.status() === 201)
   await withStepUp(page, async () => {
     await page.getByTestId('backup-key-start').click()
     await page.getByTestId('backup-key-generate').click()

@@ -166,6 +166,9 @@ type DiagnosticsRequest struct {
 	Size       int64  `json:"size"`
 	Nonce      string `json:"nonce"`
 	WrappedDEK string `json:"wrapped_dek"`
+	// KeyVersion is the version of escrow-wrap the data key is wrapped with (PDK-749, additive under ADR 0013): an
+	// agent before it omits the field.
+	KeyVersion int `json:"key_version,omitempty"`
 }
 
 // DiagnosticsResponse answers POST /v1/diagnostics with the presigned PUT of the bundle's object.

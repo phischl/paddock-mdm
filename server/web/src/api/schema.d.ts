@@ -3145,6 +3145,116 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator. The diagnostics bundles of the device (ADR 0048 decision 4); org_auditor: 403. */
+        get: operations["listDeviceDiagnostics"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator (ADR 0048 decision 4). Asks an active device for a diagnostics bundle: Paddock's
+         *     own logs and configuration of the closed content list, sealed to escrow-wrap. The device tells its user before
+         *     it collects. reason (2 to 500 characters) is shown to the user and recorded. 409 invalid_state when the device
+         *     is not active or a collection of it is pending.
+         */
+        post: operations["requestDeviceDiagnostics"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator. Every diagnostics bundle of the organization (ADR 0048 decision 4); org_auditor: 403. */
+        get: operations["listDiagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/diagnostics/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator. One diagnostics bundle; org_auditor: 403. */
+        get: operations["getDiagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/diagnostics/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, with a step-up within the last 300 s (403 step_up_required); every download
+         *     needs its own step-up, because the archive may name the device's users. The escrow-reader unwraps the bundle's
+         *     key for purpose diagnostics; the response is the decrypted archive
+         *     (paddock-diagnostics-<hostname>-<id>.tar.gz). Before anything is decrypted the whole sealed object is read and
+         *     its size and SHA-256 are checked against the bundle: an object that does not match (replaced after it was
+         *     stored) or is missing is refused with 409 invalid_state, nothing is served and the download is recorded as a
+         *     failure. 409 invalid_state as well unless the bundle is stored. HEAD is refused with 405 (Allow: GET).
+         */
+        get: operations["downloadDiagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/diagnostics/{id}/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Deletes the stored bundle's object (every version) and its key material at once (ADR 0048
+         *     decision 5); the metadata (who, when, hash, downloads) stays. 409 invalid_state unless the bundle is stored.
+         */
+        post: operations["purgeDiagnostics"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/effective-sudo": {
         parameters: {
             query?: never;
@@ -3588,7 +3698,7 @@ export interface paths {
          *     of this release), agents (active devices whose agent is a release older than the target's support window:
          *     FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending
          *     (running agent rollout, halted configuration rollouts: WARN) and sessions. Changes nothing and is not
-         *     audited. 400 invalid_request when target_version is no release this server knows.
+         *     audited. 400 invalid_request when target_version is missing or no release this server knows.
          */
         get: operations["getUpgradeCheck"];
         put?: never;
@@ -7702,6 +7812,60 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /** @enum {string} */
+        DiagnosticsState: "requested" | "uploaded" | "stored" | "failed" | "expired" | "purged";
+        DiagnosticsRequest: {
+            /** @description Why the bundle is needed; shown to the device's user and recorded. */
+            reason: string;
+        };
+        Diagnostics: {
+            /**
+             * Format: uuid
+             * @description Equals the collect_status command's ID.
+             */
+            id: string;
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            requested_by: string;
+            /** Format: date-time */
+            requested_at: string;
+            reason: string;
+            state: components["schemas"]["DiagnosticsState"];
+            /**
+             * Format: int64
+             * @description Bytes of the sealed object.
+             */
+            size?: number;
+            /** @description Hex SHA-256 of the sealed object. */
+            sha256?: string;
+            files?: number;
+            truncated_entries: string[];
+            /** @description The graphical sessions on the device that were told. */
+            notified_sessions?: number;
+            /** Format: date-time */
+            stored_at?: string;
+            /**
+             * Format: date-time
+             * @description When the object is deleted.
+             */
+            expires_at?: string;
+            failed_reason?: string;
+            download_count: number;
+            /** Format: date-time */
+            last_downloaded_at?: string;
+        };
+        DiagnosticsPage: {
+            items: components["schemas"]["Diagnostics"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         DeviceCommandPage: {
             items: components["schemas"]["DeviceCommand"][];
             page: number;
@@ -8517,6 +8681,12 @@ export interface components {
         ManagedUnitSort: "unit" | "-unit" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         DeviceCommandSort: "issued_at" | "-issued_at" | "expires_at" | "-expires_at" | "type" | "-type" | "status" | "-status";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        DeviceDiagnosticsSort: "requested_at" | "-requested_at" | "state" | "-state";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        DiagnosticsSort: "requested_at" | "-requested_at" | "hostname" | "-hostname" | "state" | "-state";
+        /** @description Repeatable. */
+        DiagnosticsStateFilter: components["schemas"]["DiagnosticsState"][];
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         RevocationRequestSort: "requested_at" | "-requested_at" | "status" | "-status" | "action" | "-action" | "hostname" | "-hostname";
         /** @description Repeatable. */
@@ -14092,6 +14262,190 @@ export interface operations {
             502: components["responses"]["Problem"];
         };
     };
+    listDeviceDiagnostics: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["DeviceDiagnosticsSort"];
+                /** @description Repeatable. */
+                state?: components["parameters"]["DiagnosticsStateFilter"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of bundles. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosticsPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    requestDeviceDiagnostics: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiagnosticsRequest"];
+            };
+        };
+        responses: {
+            /** @description The bundle in state requested; its ID is the collect_status command's. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Diagnostics"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listDiagnostics: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["DiagnosticsSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                state?: components["parameters"]["DiagnosticsStateFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of bundles. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosticsPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getDiagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bundle. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Diagnostics"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    downloadDiagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The diagnostics archive. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": string;
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    purgeDiagnostics: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The purged bundle. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Diagnostics"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
     getDeviceEffectiveSudo: {
         parameters: {
             query?: never;
@@ -15039,9 +15393,9 @@ export interface operations {
     };
     getUpgradeCheck: {
         parameters: {
-            query: {
-                /** @description The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9). */
-                target_version: string;
+            query?: {
+                /** @description The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9). Required in effect, but checked after the role, so that other roles get 403 and not 400. */
+                target_version?: string;
             };
             header?: never;
             path?: never;
@@ -16319,6 +16673,8 @@ export interface operations {
                 page_size?: components["parameters"]["PageSize"];
                 /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
                 sort?: components["parameters"]["BackupRunSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
                 /** @description Repeatable. */
                 kind?: components["schemas"]["BackupKind"][];
                 /** @description Repeatable. */

@@ -5,6 +5,7 @@
 //	devicesim inventory --hostname <name> --package <name>=<version> ... < enrollment-config.json
 //	devicesim disk --hostname <name> --health <json> < enrollment-config.json
 //	devicesim config-report --hostname <name> --resource <id>=<status>[:<message>] ... < enrollment-config.json
+//	devicesim diagnostics --hostname <name> < enrollment-config.json
 //
 // enroll prints {"enrollment_id", "device_id", "status"} once the enrollment left "processing". local-admin needs an
 // auto-approving token: it enrolls, escrows a first local administrator password like an agent (encrypted to the
@@ -13,7 +14,11 @@
 // M5a), reports the packages and prints {"device_id"}. disk needs an auto-approving token, too: it enrolls, checks in
 // once with the given health (e.g. an unencrypted disk that can be encrypted in place, plan M8e) and prints
 // {"device_id"}. config-report needs an auto-approving token, too: it enrolls, waits for its first bundle and reports
-// bundle.applied with the given resource outcomes (plan M11) and prints {"device_id"}.
+// bundle.applied with the given resource outcomes (plan M11) and prints {"device_id"}. diagnostics needs an
+// auto-approving token, too: it enrolls, prints {"device_id"} at once, checks in until a collect_status command arrives
+// (requested by the test meanwhile), seals a small fixed archive like an agent (ADR 0048 decision 3, with the
+// escrow-wrap version of its bundle), announces and uploads it, reports the result and prints {"archive_sha256"} of the
+// plain archive.
 package main
 
 import (
@@ -44,11 +49,12 @@ func main() {
 	}
 }
 
-const usage = "usage: devicesim enroll|local-admin|inventory|disk|config-report --hostname <name> [--enrollment-method autoinstall|adopted] " +
+const usage = "usage: devicesim enroll|local-admin|inventory|disk|config-report|diagnostics --hostname <name> [--enrollment-method autoinstall|adopted] " +
 	"[--package <name>=<version> ...] [--health <json>] [--resource <id>=<status>[:<message>] ...] < enrollment-config.json"
 
 func run(args []string) error {
-	if len(args) == 0 || (args[0] != "enroll" && args[0] != "local-admin" && args[0] != "inventory" && args[0] != "disk" && args[0] != "config-report") {
+	if len(args) == 0 || (args[0] != "enroll" && args[0] != "local-admin" && args[0] != "inventory" && args[0] != "disk" && args[0] != "config-report" &&
+		args[0] != "diagnostics") {
 		return errors.New(usage)
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
@@ -90,7 +96,11 @@ func run(args []string) error {
 		return err
 	}
 	dev.EnrollmentMethod = *method
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	timeout := 2 * time.Minute
+	if args[0] == "diagnostics" {
+		timeout = 5 * time.Minute // the test requests the collection after the enrollment
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	res, err := dev.Enroll(ctx, *hostname)
 	if err != nil {
@@ -121,6 +131,16 @@ func run(args []string) error {
 			return fmt.Errorf("check in: HTTP %d %s", res.Status, res.Body)
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]string{"device_id": s.DeviceID})
+	}
+	if args[0] == "diagnostics" {
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]string{"device_id": s.DeviceID}); err != nil {
+			return err
+		}
+		sum, err := uploadDiagnostics(ctx, dev)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"archive_sha256": sum})
 	}
 	if args[0] == "config-report" {
 		if err := reportConfig(ctx, dev, resources); err != nil {

@@ -105,6 +105,48 @@ func (q *Queries) FinishEscrowHeader(ctx context.Context, arg FinishEscrowHeader
 	return result.RowsAffected(), nil
 }
 
+const getDiagnosticsKeys = `-- name: GetDiagnosticsKeys :many
+SELECT id, organization_id, device_id, state, wrapped_dek, key_version FROM device_diagnostics WHERE id = ANY($1::uuid[])
+`
+
+type GetDiagnosticsKeysRow struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	State          string
+	WrappedDek     []byte
+	KeyVersion     *int32
+}
+
+// The escrow-reader's view of diagnostics bundles (purpose diagnostics, PDK-749): only what unwrapping a bundle's key
+// needs (the column grant of migration 00106).
+func (q *Queries) GetDiagnosticsKeys(ctx context.Context, ids []uuid.UUID) ([]GetDiagnosticsKeysRow, error) {
+	rows, err := q.db.Query(ctx, getDiagnosticsKeys, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetDiagnosticsKeysRow{}
+	for rows.Next() {
+		var i GetDiagnosticsKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.DeviceID,
+			&i.State,
+			&i.WrappedDek,
+			&i.KeyVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getEscrowSecret = `-- name: GetEscrowSecret :one
 
 SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size, volume FROM escrow_secret WHERE id = $1

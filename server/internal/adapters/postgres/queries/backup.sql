@@ -105,7 +105,9 @@ RETURNING *;
 -- A requested run has no started_at yet: NULLS FIRST in descending order, so it leads the default sort.
 -- name: ListBackupRuns :many
 SELECT * FROM backup_run
-WHERE (sqlc.narg(kinds)::text[] IS NULL OR kind = ANY(sqlc.narg(kinds)::text[]))
+WHERE (sqlc.narg(q_pattern)::text IS NULL OR kind ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+       OR label ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+  AND (sqlc.narg(kinds)::text[] IS NULL OR kind = ANY(sqlc.narg(kinds)::text[]))
   AND (sqlc.narg(outcomes)::text[] IS NULL OR outcome = ANY(sqlc.narg(outcomes)::text[]))
   AND (sqlc.narg(target_id)::text IS NULL
        OR targets @> jsonb_build_array(jsonb_build_object('target_id', sqlc.narg(target_id)::text)))
@@ -122,7 +124,9 @@ LIMIT @max_rows OFFSET @skip_rows;
 -- name: CountBackupRuns :one
 SELECT count(*) FROM (
   SELECT 1 FROM backup_run
-  WHERE (sqlc.narg(kinds)::text[] IS NULL OR kind = ANY(sqlc.narg(kinds)::text[]))
+  WHERE (sqlc.narg(q_pattern)::text IS NULL OR kind ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+         OR label ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+    AND (sqlc.narg(kinds)::text[] IS NULL OR kind = ANY(sqlc.narg(kinds)::text[]))
     AND (sqlc.narg(outcomes)::text[] IS NULL OR outcome = ANY(sqlc.narg(outcomes)::text[]))
     AND (sqlc.narg(target_id)::text IS NULL
          OR targets @> jsonb_build_array(jsonb_build_object('target_id', sqlc.narg(target_id)::text)))

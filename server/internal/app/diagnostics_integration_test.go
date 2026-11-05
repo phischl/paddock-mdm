@@ -34,6 +34,8 @@ type fakeBundles struct {
 	fail    error
 	// afterDelete runs once after the next deletion, outside the lock: a step that races the retention round.
 	afterDelete func()
+	// failAfterDelete fails the next deletion once it has deleted the objects: a bucket that breaks off mid-purge.
+	failAfterDelete error
 }
 
 func (f *fakeBundles) Size(_ context.Context, key string) (int64, bool, error) {
@@ -49,6 +51,13 @@ func (f *fakeBundles) SHA256(_ context.Context, key string) (string, bool, error
 	b, ok := f.objects[key]
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:]), ok, f.fail
+}
+
+func (f *fakeBundles) GetIfExists(_ context.Context, key string) ([]byte, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.objects[key]
+	return slices.Clone(b), ok, f.fail
 }
 
 func (f *fakeBundles) DeleteAllVersions(_ context.Context, prefix string) (int, error) {
@@ -67,9 +76,14 @@ func (f *fakeBundles) DeleteAllVersions(_ context.Context, prefix string) (int, 
 	}
 	after := f.afterDelete
 	f.afterDelete = nil
+	failed := f.failAfterDelete
+	f.failAfterDelete = nil
 	f.mu.Unlock()
 	if after != nil {
 		after()
+	}
+	if failed != nil {
+		return n, failed
 	}
 	return n, nil
 }

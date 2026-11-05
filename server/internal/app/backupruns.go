@@ -187,14 +187,14 @@ func (r *BackupRuns) List(ctx context.Context, query BackupRunQuery) (Listed[Run
 	err := r.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		kinds, outcomes := nilIfEmpty(query.Kinds), nilIfEmpty(query.Outcomes)
 		n, err := q.CountBackupRuns(ctx, pgstore.CountBackupRunsParams{
-			Kinds: kinds, Outcomes: outcomes, TargetID: target, CountLimit: countLimit,
+			QPattern: query.Page.QPattern, Kinds: kinds, Outcomes: outcomes, TargetID: target, CountLimit: countLimit,
 		})
 		if err != nil {
 			return fmt.Errorf("count backup runs: %w", err)
 		}
 		out.Count = int(n)
 		rows, err := q.ListBackupRuns(ctx, pgstore.ListBackupRunsParams{
-			Kinds: kinds, Outcomes: outcomes, TargetID: target, Sort: query.Page.Sort,
+			QPattern: query.Page.QPattern, Kinds: kinds, Outcomes: outcomes, TargetID: target, Sort: query.Page.Sort,
 			SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
 		})
 		if err != nil {

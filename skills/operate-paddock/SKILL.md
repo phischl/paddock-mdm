@@ -182,6 +182,7 @@ Decline, say why in one sentence, and name the portal page:
 | --- | --- | --- |
 | Lock or destroy a device, approve, reject or cancel a revocation request | `lockDevice`, `destroyDevice`, `approveRevocationRequest`, `rejectRevocationRequest`, `cancelRevocationRequest` | *Devices › <device> › Danger zone*; *Revocations* |
 | Reveal a local administrator password or recovery key, download a disk header | `revealDeviceLocalAdmin`, `revealDeviceRecoveryKey`, `downloadDeviceHeader` | *Devices › <device>* |
+| Download a diagnostics bundle | `downloadDiagnostics` | *Devices › <device> › Diagnostics*; *Diagnostics* |
 | Encrypt a device in place or cancel it, uninstall Paddock | `encryptDevice`, `cancelDeviceEncryption`, `uninstallDevice` | *Devices › <device>* |
 | Create an API token, confirm a root grant or a sensitive file, change the operator roots | `createApiToken`, `confirmPermissionProfileRootGrant`, `confirmManagedFileSensitive`, `updateManagedFileSettings` | *API tokens*, *Permission profiles*, *Managed files*, *Operator roots* |
 | IP allow list, automatic unseal, import an agent release, end all sessions | `createIpAllowlistEntry`, `updateIpAllowlistEntry`, `deleteIpAllowlistEntry`, `enableAutoUnseal`, `disableAutoUnseal`, `importAgentRelease`, `endAllSessions` | *Platform › IP allow list*, *OpenBao*, *Agent releases*, *Sessions* |

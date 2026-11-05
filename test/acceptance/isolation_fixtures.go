@@ -421,6 +421,12 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/security-review": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/security-review", nil
 	}},
+	"GET /api/v1/access-review": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/access-review", nil
+	}},
+	"GET /api/v1/access-review/export": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/access-review/export?format=json", nil
+	}},
 	"GET /api/v1/attention/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/attention/devices?page_size=100", nil
 	}},
@@ -495,6 +501,9 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/notification-destinations/{id}/test": itemFixture(func(w *isolationWorld) string {
 		return "/api/v1/notification-destinations/" + w.globexDestination + "/test"
 	}, nil),
+	"POST /api/v1/notification-destinations/{id}/replay": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/replay"
+	}, map[string]any{"from_forward_seq": 1}),
 	"POST /api/v1/notification-destinations/{id}/resolve-pseudonym": itemFixture(func(w *isolationWorld) string {
 		return "/api/v1/notification-destinations/" + w.globexDestination + "/resolve-pseudonym"
 	},
