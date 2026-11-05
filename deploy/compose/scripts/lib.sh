@@ -51,6 +51,18 @@ require_development() {
 # BACKUP is set) or the production set of PADDOCK_HOST (on a control-plane or lab host plus the unsealer when
 # PADDOCK_AUTO_UNSEAL is yes, on a lab host plus the backup file when PADDOCK_LAB_BACKUP is yes), then every path of PADDOCK_COMPOSE_EXTRA (space-separated absolute paths; the CI smoke test's overlay, empty
 # otherwise). Returns 2 when a production host has no valid PADDOCK_HOST.
+# backup_root_mount <root>: the docker run arguments that make the parent of the local backup root (default
+# /srv/paddock-backup) visible at its own path, read-only. prod-check lstats the root itself, so a symlink, a file or an
+# open mode is seen as it is on the host; a mount of the root would follow a symlink. A root that is not a clean
+# absolute path of two elements or more, or whose parent is missing, mounts nothing (prod-check reports the root).
+backup_root_mount() {
+  local root="${1:-/srv/paddock-backup}" parent
+  [[ "$root" == /*/* && "$root" != */ && "$root" != *//* && "$root" != */./* && "$root" != */../* ]] || return 0
+  parent="${root%/*}"
+  [[ "$parent" == /?* && -d "$parent" ]] || return 0
+  printf '%s\n' --mount "type=bind,src=$parent,dst=$parent,readonly"
+}
+
 compose_files() {
   local files f host
   if [[ "$(env_value PADDOCK_ENV)" == development ]]; then

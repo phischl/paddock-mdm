@@ -19,7 +19,7 @@ var backupAuditCases = map[string][]auditCase{
 		func() string { return backupTargets }, func() any { return backupTargetBody() }),
 		auditCase{"validation failure", func(t *testing.T, w *auditWorld) {
 			body := backupTargetBody()
-			body["local"] = map[string]any{"path": "relative"}
+			body["local"] = map[string]any{"path": "/absolute"}
 			res := call(t, steppedUpRoot(t), http.MethodPost, backupTargets, body)
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.backup_target_created", "failure", auditPollTimeout)
@@ -49,7 +49,7 @@ var backupAuditCases = map[string][]auditCase{
 }
 
 func backupTargetBody() map[string]any {
-	return map[string]any{"name": "a3 backup", "type": "local", "enabled": true, "local": map[string]any{"path": "/srv/a3"}}
+	return map[string]any{"name": "a3 backup", "type": "local", "enabled": true, "local": map[string]any{"path": "a3"}}
 }
 
 func backupScheduleBody(fullHours int) map[string]any {

@@ -12,7 +12,7 @@ func TestSettingsCarryNoSecrets(t *testing.T) {
 		target Target
 		want   Settings
 	}{
-		{Target{Type: TypeLocal, Local: Local{Path: "/srv/backup"}}, Settings{Path: "/srv/backup"}},
+		{Target{Type: TypeLocal, Local: Local{Path: "nas/backup"}}, Settings{Path: "nas/backup"}},
 		{Target{Type: TypeSMB, SMB: SMB{Host: "nas", Share: "backup$", Path: "p", Username: "u", Password: "pw-1",
 			Domain: "D", Options: "seal"}},
 			Settings{Host: "nas", Share: "backup$", Path: "p", Username: "u", Domain: "D", Options: "seal"}},

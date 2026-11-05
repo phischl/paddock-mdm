@@ -131,9 +131,9 @@ func TestBackupTargetsCreate(t *testing.T) {
 	ctx := steppedPlatform()
 
 	local, err := w.targets.Create(ctx, app.TargetInput{Name: "local", Type: backupset.TypeLocal, Enabled: true,
-		Local: backupset.Local{Path: "/srv/backup"}})
+		Local: backupset.Local{Path: "nas/backup"}})
 	if err != nil || local.HostState != "pending_host" || local.HostRevision != 1 || local.HasCredentials ||
-		local.Settings.Path != "/srv/backup" {
+		local.Settings.Path != "nas/backup" {
 		t.Fatalf("local: %+v %v", local, err)
 	}
 	nfs, err := w.targets.Create(ctx, app.TargetInput{Name: "nfs", Type: backupset.TypeNFS, Enabled: false,
@@ -168,9 +168,9 @@ func TestBackupTargetsCreate(t *testing.T) {
 		in    app.TargetInput
 		field string
 	}{
-		{app.TargetInput{Name: "", Type: backupset.TypeLocal, Local: backupset.Local{Path: "/x"}}, "name"},
+		{app.TargetInput{Name: "", Type: backupset.TypeLocal, Local: backupset.Local{Path: "x"}}, "name"},
 		{app.TargetInput{Name: "x", Type: "ftp"}, "type"},
-		{app.TargetInput{Name: "x", Type: backupset.TypeLocal, Local: backupset.Local{Path: "relative"}}, "local.path"},
+		{app.TargetInput{Name: "x", Type: backupset.TypeLocal, Local: backupset.Local{Path: "/absolute"}}, "local.path"},
 		{app.TargetInput{Name: "x", Type: backupset.TypeSMB, SMB: backupset.SMB{Host: "nas", Share: "s", Username: "u"}}, "smb.password"},
 		{app.TargetInput{Name: "x", Type: backupset.TypeSMB, SMB: backupset.SMB{Host: "nas", Share: "s", Username: "u",
 			Password: "p", Options: "uid=0"}}, "smb.options"},

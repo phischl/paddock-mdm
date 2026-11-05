@@ -58,6 +58,24 @@ render() {
     sed -E -e "s#$dir#<dir>#g" -e 's#(image: ).*paddock-(server|compiler|pgbackrest)[^ ]*$#\1<image>#'
 }
 
+# backup_root_mount (PDK-760): ./paddock check mounts the parent of the local backup root read-only at its own path, so
+# prod-check lstats the root itself; a root it cannot mount that way mounts nothing.
+mkdir -p "$work/srv/backup"
+mount_of() { (. "$compose_src/scripts/lib.sh" && backup_root_mount "$1" | paste -sd' ' -); }
+if [[ "$(mount_of "$work/srv/backup")" == "--mount type=bind,src=$work/srv,dst=$work/srv,readonly" ]]; then
+  pass "backup_root_mount mounts the parent of the root read-only at its own path"
+else
+  fail "backup_root_mount: $(mount_of "$work/srv/backup")"
+fi
+for root in / /srv "$work/srv/backup/" "$work/srv/../srv/backup" relative/x "$work/nope/backup"; do
+  [[ -z "$(mount_of "$root")" ]] && pass "backup_root_mount mounts nothing for '$root'" || fail "backup_root_mount mounts for '$root': $(mount_of "$root")"
+done
+if grep -q 'backup_root_mount "$(dotenv PADDOCK_BACKUP_LOCAL_ROOT)"' "$here/paddock"; then
+  pass "./paddock check passes the backup root's parent to prod-check"
+else
+  fail "./paddock check does not call backup_root_mount"
+fi
+
 # check_mounts <bundle dir>: every bind-mount source of the configurations of the three hosts exists inside the
 # bundle; prints the missing paths relative to the bundle.
 check_mounts() {

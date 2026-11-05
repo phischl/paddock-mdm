@@ -7030,7 +7030,7 @@ export interface components {
             s3?: components["schemas"]["BackupTargetS3Settings"];
         };
         BackupTargetLocalInput: {
-            /** @description An absolute directory of the host without "..". */
+            /** @description A relative subpath of the host's local backup root (PADDOCK_BACKUP_LOCAL_ROOT, default /srv/paddock-backup) without "..", "." or empty elements (400 invalid_request local.path). The host step refuses a symlink component. */
             path: string;
         };
         BackupTargetLocalSettings: {
