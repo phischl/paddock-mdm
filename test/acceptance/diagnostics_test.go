@@ -46,12 +46,6 @@ func diagnosticsDevice(t *testing.T, p *env.Portal) (*devicesim.Device, *bundle.
 	return d, latestBundle(t, d, time.Minute, func(b *bundle.Bundle) bool { return b.Keys != nil && b.Keys.EscrowWrap != nil })
 }
 
-// requestDiagnostics asks for a diagnostics bundle of the device as p.
-func requestDiagnostics(t *testing.T, p *env.Portal, deviceID, reason string) env.Response {
-	t.Helper()
-	return call(t, p, http.MethodPost, "/api/v1/devices/"+deviceID+"/diagnostics", map[string]string{"reason": reason})
-}
-
 // getDiagnostics reads a bundle as p.
 func getDiagnostics(t *testing.T, p *env.Portal, id string) diagnosticsBundle {
 	t.Helper()
