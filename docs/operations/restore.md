@@ -82,6 +82,32 @@ The overlay `deploy/compose/compose.backup.yaml` (part of the production configu
   one by hand (`docs/operations/openbao.md` section 5).
 - **Fleet**: `fleet-backup` dumps Fleet's MySQL once a day into a volume, `fleet-backup-upload` copies it to the bucket.
 
+### Backup targets: what the mirror copies and what it deletes (plan M15, amendment 2026-11-05)
+
+With plan M15 the backups live in one local repository (`backup-repo`) that the role `paddock-backup` mirrors to
+every enabled target. The mirror follows one rule: **a target loses only what the local retention would have
+removed from the target's own copy**. The local set is the reference for what is newer; it is never the reason to
+delete. In every round and for every target, in this order: it reads the target's `manifest.json` and refuses a
+target of another installation (`foreign_set`, nothing written); it lists the target; it checks that writing would
+not make the target's copy unrestorable (`set_shrunk`, nothing written, nothing deleted, the target counts as
+unreachable and `PaddockBackupTargetUnreachable` fires after 30 minutes); it copies every file the target lacks
+(WAL, then full backups with `backup.manifest` last, then snapshots, dumps and escrow objects, then pgBackRest's
+info files, then `manifest.json`); it verifies the sizes; and only then it deletes, by these rules:
+
+| Object on the target that the local set lacks | Deleted when | Otherwise |
+| --- | --- | --- |
+| A completed full backup | the local stanza holds `retention_full` completed full backups newer than it (pgBackRest's own retention) | the target is `set_shrunk` (nothing written, nothing deleted) |
+| A WAL segment | the local stanza holds `retention_full` newer fulls, the segment lies below the oldest WAL the local archive holds, and the local archive is contiguous and verified | kept ("held") |
+| pgBackRest's info files | never | re-copied when they changed locally |
+| An OpenBao snapshot or a Fleet dump | older than its keep days, not the newest of its kind on the target, and the local set holds at least one file of that kind | kept |
+| An escrowed LUKS header | the escrow bucket no longer holds it (checked in the same round) | kept |
+| The repository of a retired backup key | the active key's repository holds a full backup of every stanza and the target's copy is older than `retention_full` full intervals (counted from the rotation at the earliest) | kept |
+| Anything else (unknown paths, a repository the database does not know) | never | kept; an unknown repository path marks the target run as `unknown_path` |
+
+Held objects are counted per target (`paddock_backup_target_held_files{target}`); a hold is not an error and never
+stops the copying. Nothing is deleted because `manifest.json` no longer names it. The cases of a lost local
+repository are in "Lost local backup repository" below.
+
 Every worker exports `paddock_backup_last_success_timestamp_seconds{kind="postgres|authentik|openbao|fleet"}`, the
 time of the newest object of each kind in the bucket; the alert `PaddockBackupStale` fires when one is older than
 26 hours (`docs/operations/monitoring.md`).
@@ -160,6 +186,22 @@ store is not restored; the audit host keeps running. Commands run in the control
    or let the devices rebuild it within 24 hours.
 7. **Check.** `./paddock check`, all roles ready (`./paddock compose ps`), no firing alerts, a device checks in and receives a new
    bundle version.
+
+## Lost local backup repository (plan M15, amendment 2026-11-05)
+
+The databases are fine, but the `backup-repo` volume or the pgBackRest state volume is gone. What happens and what to do:
+
+| Loss | What the services do | What the targets keep | What you do |
+| --- | --- | --- | --- |
+| `backup-repo` lost, pgBackRest state kept | `pgbackrest` finds its stanza marker but no stanza in the repository: every full fails and is retried; the role takes snapshots and dumps into the empty repository | everything (the mirror is `set_shrunk`: it writes nothing and deletes nothing) | `./paddock restore --only backup-repo --from <target>`: copies the target's set back into the volume, resets the pgBackRest markers; the next round takes a full and verifies the stanza |
+| pgBackRest state lost, `backup-repo` kept | `stanza-create` on the existing repository (idempotent), a full at once | everything; the new full is copied; the oldest full leaves the targets only once `retention_full` newer ones exist | nothing |
+| both lost | a stanza is created in the empty repository and a full taken at once | everything, byte for byte, including snapshots and dumps still inside their keep days and the escrow objects (`set_shrunk` until the repository is rebuilt) | `./paddock restore --only backup-repo --from <target>`; the lone new full is discarded with the empty repository |
+| only the WAL archive lost or with a gap | fulls continue; `pgbackrest verify` reports the gap, so the stanza is not marked verified | every WAL segment ("held"); new fulls and new WAL are copied | `restore --only backup-repo` from a target, or let the fulls roll: the hold ends when the local archive is contiguous and verified again |
+| `openbao/` or `fleet/` partly or wholly lost | the next due snapshot or dump refills the local set | files inside their keep days ("held"); older ones leave by age; the newest copy never leaves | nothing, or `./paddock backup now --kind openbao` |
+| a key was rotated, then the repository was lost | as "both lost" for the new key's path | the old key's repository stays until the new key's repository holds a full of every stanza and the copy is older than the retention | as "both lost" |
+
+`restore --only backup-repo` touches neither database, OpenBao nor Fleet and needs no restore plan; it refuses to run
+while a restore plan is `running`. It records `platform.restore_completed` with `components: [backup-repo]`.
 
 ## Restore drill (quarterly)
 
