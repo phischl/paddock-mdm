@@ -44,7 +44,7 @@ Likelihood and severity are left for [Organization] to assess (for example low, 
 - **Data minimisation in the inventory:** Fleet's queries that read users' home directories, network addresses and
   software usage are switched off; free disk space and uptime stay in Fleet.
 - **Recorded reads, coalesced:** audit searches (`audit.searched`, the first per administrator, hour and set of
-  filters) and views of a device's *Software* and *Vulnerabilities* tabs (`device.inventory_viewed`, once per
+  filters), views of the access review report (`access_review.viewed`, once per actor and day) and views of a device's *Software* and *Vulnerabilities* tabs (`device.inventory_viewed`, once per
   administrator, device and day) and of the device list of a CVE (`vulnerability.devices_viewed`, once per
   administrator, CVE and hour, with the CVE and the number of affected devices, no device names) are recorded when the organization switches them on. Failure events of refused reads
   (an invalid range or paging, a missing device) are not coalesced: each refused attempt records one event; coalescing

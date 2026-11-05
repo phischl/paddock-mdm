@@ -621,16 +621,14 @@ func TestRoleMembershipPlatform(t *testing.T) {
 	expect("akadmin missed twice", events...)
 }
 
-// TestRoleMembershipTablesIsolated: the worker cannot read the platform's role members, the API neither the
-// organizations' nor the platform's.
+// TestRoleMembershipTablesIsolated: the worker cannot read the platform's role members, the API not the platform's
+// (it reads its organization's since the access review, see TestAccessReviewGrants).
 func TestRoleMembershipTablesIsolated(t *testing.T) {
 	w := newRoleWorld(t)
 	ctx := context.Background()
 	for _, c := range []struct{ role, stmt string }{
 		{"paddock_worker", "SELECT 1 FROM platform_role_member"},
 		{"paddock_worker", "SELECT 1 FROM platform_role_snapshot"},
-		{"paddock_api", "SELECT 1 FROM organization_role_member"},
-		{"paddock_api", "SELECT 1 FROM organization_role_snapshot"},
 		{"paddock_api", "SELECT 1 FROM platform_role_member"},
 		{"paddock_platform", "SELECT 1 FROM organization_role_member"},
 	} {
@@ -675,5 +673,84 @@ func TestRoleMembershipTablesIsolated(t *testing.T) {
 	var n int
 	if err := tx.QueryRow(ctx, "SELECT count(*) FROM organization_role_member WHERE organization_id = ANY($1)", []uuid.UUID{org, other}).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("worker sees %d rows (%v), want its own one", n, err)
+	}
+}
+
+// TestAccessReviewGrants (plan M12 decision 24): the API reads the role members and snapshots of its own organization
+// and nothing more: no other organization's rows, no write, and still not the platform's members.
+func TestAccessReviewGrants(t *testing.T) {
+	w := newRoleWorld(t)
+	ctx := context.Background()
+	org, _, _ := w.organization(t, "ar")
+	other, _, _ := w.organization(t, "ar")
+	for _, o := range []uuid.UUID{org, other} {
+		if _, err := w.super.Exec(ctx, `INSERT INTO organization_role_member (organization_id, role, authentik_pk, username, first_seen_at)
+			VALUES ($1, 'org_admin', '1', 'alice', now())`, o); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.super.Exec(ctx, "INSERT INTO organization_role_snapshot (organization_id, role, taken_at) VALUES ($1, 'org_admin', now())", o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inAPI := func(orgID uuid.UUID, stmt string, args ...any) (int64, error) {
+		tx, err := w.super.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE paddock_api"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", orgID.String()); err != nil {
+			t.Fatal(err)
+		}
+		tag, err := tx.Exec(ctx, stmt, args...)
+		return tag.RowsAffected(), err
+	}
+	for _, table := range []string{"organization_role_member", "organization_role_snapshot"} {
+		tx, err := w.super.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE paddock_api"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", org.String()); err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM "+table+" WHERE organization_id = ANY($1)", []uuid.UUID{org, other}).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s: the API sees %d rows (%v), want its own one", table, n, err)
+		}
+		_ = tx.Rollback(ctx)
+	}
+	for _, c := range []struct{ name, stmt string }{
+		{"insert member", "INSERT INTO organization_role_member (organization_id, role, authentik_pk, username, first_seen_at) VALUES ($1, 'org_admin', '2', 'mallory', now())"},
+		{"update member", "UPDATE organization_role_member SET username = 'x' WHERE organization_id = $1"},
+		{"delete member", "DELETE FROM organization_role_member WHERE organization_id = $1"},
+		{"insert snapshot", "INSERT INTO organization_role_snapshot (organization_id, role, taken_at) VALUES ($1, 'org_operator', now())"},
+		{"delete snapshot", "DELETE FROM organization_role_snapshot WHERE organization_id = $1"},
+	} {
+		_, err := inAPI(org, c.stmt, org)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Errorf("%s as paddock_api: %v, want permission denied (42501)", c.name, err)
+		}
+	}
+	if _, err := inAPI(org, "SELECT 1 FROM platform_role_member"); err == nil {
+		t.Error("paddock_api reads platform_role_member")
+	}
+	for _, table := range []string{"organization_role_member", "organization_role_snapshot"} {
+		tx, err := w.super.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE paddock_api"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT count(*) FROM "+table); err == nil {
+			t.Errorf("%s: paddock_api reads without paddock.org_id, want an error (fail closed)", table)
+		}
+		_ = tx.Rollback(ctx)
 	}
 }

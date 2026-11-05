@@ -2,6 +2,7 @@ package audit
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -201,6 +202,69 @@ func TestChangeSetParams(t *testing.T) {
 		for _, p := range []string{"change_set_id", "rollout", "rollout_id", "urgent_reason"} {
 			if n := slices.Index(d.Params, p); n < 0 || slices.Index(d.Params[n+1:], p) >= 0 {
 				t.Errorf("%s: param %s is missing or repeated in %v", code, p, d.Params)
+			}
+		}
+	}
+}
+
+// TestM15BackupCodes: the target, schedule and run codes of plan M15 §6.4 are registered with their params, none of
+// which names a credential.
+func TestM15BackupCodes(t *testing.T) {
+	all := []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
+	target := []string{"target_id", "name", "type", "enabled", "host_revision"}
+	for _, tc := range []struct {
+		code   Code
+		params []string
+	}{
+		{CodePlatformBackupTargetCreated, target},
+		{CodePlatformBackupTargetUpdated, append(slices.Clone(target), "change")},
+		{CodePlatformBackupTargetDeleted, target},
+		{CodePlatformBackupTargetTested, target},
+		{CodePlatformBackupScheduleChanged, []string{"full_interval_hours", "openbao_interval_hours",
+			"fleet_interval_hours", "escrow_interval_hours", "retention_full", "openbao_keep_days", "fleet_keep_days"}},
+		{CodePlatformBackupRunRequested, []string{"kinds", "label"}},
+	} {
+		d, ok := Lookup(tc.code)
+		if !ok || !tc.code.Registered() || d.Description == "" {
+			t.Errorf("%s is not registered as emitted with a description", tc.code)
+			continue
+		}
+		if !slices.Equal(d.Params, tc.params) || !slices.Equal(d.Outcomes, all) {
+			t.Errorf("%s: params %v outcomes %v, want %v %v", tc.code, d.Params, d.Outcomes, tc.params, all)
+		}
+		for _, p := range d.Params {
+			for _, secret := range []string{"password", "secret", "access_key", "credentials"} {
+				if strings.Contains(p, secret) {
+					t.Errorf("%s: param %s names a credential", tc.code, p)
+				}
+			}
+		}
+	}
+}
+
+// TestM15BackupKeyCodes: the backup key codes of plan M15 §6.4 are registered with their params, none of which can
+// carry the key text or the typed characters.
+func TestM15BackupKeyCodes(t *testing.T) {
+	all := []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
+	for _, tc := range []struct {
+		code   Code
+		params []string
+	}{
+		{CodePlatformBackupKeyGenerated, []string{"key_id", "fingerprint", "rotation", "legacy"}},
+		{CodePlatformBackupKeyConfirmed, []string{"key_id", "fingerprint", "rotated_from", "attempts"}},
+		{CodePlatformBackupKeyDiscarded, []string{"key_id", "attempts"}},
+	} {
+		d, ok := Lookup(tc.code)
+		if !ok || !tc.code.Registered() || d.Description == "" {
+			t.Errorf("%s is not registered as emitted with a description", tc.code)
+			continue
+		}
+		if !slices.Equal(d.Params, tc.params) || !slices.Equal(d.Outcomes, all) {
+			t.Errorf("%s: params %v outcomes %v, want %v %v", tc.code, d.Params, d.Outcomes, tc.params, all)
+		}
+		for _, p := range d.Params {
+			if p == "key" || p == "text" || p == "answer" || p == "positions" {
+				t.Errorf("%s: param %s could carry key material", tc.code, p)
 			}
 		}
 	}

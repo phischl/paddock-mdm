@@ -679,6 +679,83 @@ Architect decisions of 2026-11-04, taken after the PDK-751 reviews:
    migration `00103_device_diagnostics.sql` (decision 3, not `00101`) and the access review grants
    `00104_access_review_grants.sql` (decision 24, not `00103`).
 
+## Amendment 2026-11-04 — diagnostics deviations signed off (PDK-747)
+
+Decisions taken by the architect lead on 2026-11-04 after Review 1 of PDK-747; they bind the implementation and
+PDK-749 (download and purge):
+
+1. **`reason` param on `device.diagnostics_collected`** (§6.4 lists `request_id`, `files`, `bytes`, `sha256`,
+   `truncated_entries`, `notified_sessions`; `reason` is added). It is recorded on **failure only**, and its value
+   comes from a closed list: the device's refusal (`invalid_params`, `upload_refused`, `upload_failed`,
+   `collect_failed`, `too_large`), the worker's finding (`size_mismatch`, `sha256_mismatch`, `missing`) or
+   `unknown` when a device sends anything else. A device's free text never reaches the event.
+   `docs/compliance/audit-codes.md` lists the param (generated from the registry).
+2. **Additive column `device_diagnostics.uploaded_at`** (not in the DDL of decision 3). The worker's "rows
+   `uploaded` older than 10 s" and "15 minutes without the object" need their own anchor, because `requested_at` can
+   be up to one hour earlier. Fix Round 1 additionally uses `expires_at` as "when the object goes" for `failed` and
+   `expired` bundles (no further column).
+3. **Gateway semantics of `POST /v1/diagnostics`**: the gateway has no database, so `GetDeviceCommand` and the
+   state `delivered` of §3.1 item 5 are replaced by "the command is a `collect_status` command **held for this
+   device in `cmd:<device_id>`** and not expired". The 404 `not_found` of item 2 now reads: `command_id` is not a
+   `collect_status` command held for the device (other type, other device, unknown, expired, withdrawn or already
+   answered). A command that is cached but not yet delivered gets **202**, not 404; this is not exploitable,
+   because a device only learns command IDs by delivery. The 409 `already_uploaded` rule stays a Valkey claim
+   (`diag:<id>`), not a row-state check. `device.yaml` documents the same wording.
+4. **Finding 5 (reuse of the presigned PUT)**: PDK-749 re-verifies the SHA-256 of the object before serving a
+   download; no `VersionId` column is added.
+5. **Migration label**: `00103_device_diagnostics.sql` (the plan's `00101` follows landing order, decision 10 of
+   the alpha.9 decisions); the labels `00101`–`00103` of this plan are read as the next free numbers in the order
+   the tickets land.
+
+## Amendment 2026-11-04 — access review deviations signed off (PDK-754)
+
+Decisions taken by the architect lead on 2026-11-04 after Review 1 of PDK-754 (decisions 24–26 of §3.7 and gates
+A1/A2 are read with these changes):
+
+1. **Who may read the report.** The organization's access review is read by **role**, the same rule as the audit
+   log (`org_admin`, `org_auditor`; operators get 403 `forbidden`), with **no organization switch**. The maintainer's
+   rule is "the auditor sees the access review under the same rule as the audit log". The platform report is for
+   `platform_admin`.
+2. **`audit_search_recorded` controls recording, not access.** The plan's `read_audit` switch does not exist.
+   While `audit_search_recorded` is on, opening the organization report is recorded as `access_review.viewed`,
+   coalesced to one event per actor and UTC day (the first view of the day, with its effective period). With the
+   switch off nothing is recorded and the report is still readable. A role that may not read it is recorded as
+   `denied` whatever the setting. Exports are always recorded (`access_review.exported`,
+   `platform.access_review_exported`), and so is every view of the platform report
+   (`platform.access_review_viewed`).
+3. **Step-up counting.** `admin.login` events carry no `step_up` param, so the plan's source does not exist. The
+   section counts, per actor, the **successful events of a step-up actor** as succeeded and the **denied events
+   with `step_up_required`** as failed; it exposes aggregate counts only.
+4. **Destructive actions follow the plan list.** The section lists `revocation.approved`,
+   `device.escrow_destroyed`, `device.retired` and `user.locked` (`device.destroy_*` does not exist in the
+   registry). `revocation.requested` was added in the first implementation and **removed again in Fix Round 1**, so
+   the implementation matches decision 25; the widening accepted in principle is not in the code.
+5. **Docs.** `access_review.viewed`, `access_review.exported` and the `platform.access_review_*` codes are in
+   `docs/compliance/audit-codes.md` (generated from the registry) and in the privacy documents
+   (`privacy.md`, and the privacy pack: record of processing, DPIA input, works-council annex).
+6. **Migration label**: `00104_access_review_grants.sql` (the plan's `00103` follows landing order; the grants are
+   a read-only `tenant_api_read` policy on `organization_role_member` and `organization_role_snapshot`).
+
+## Amendment 2026-11-04 — Wazuh content (PDK-753)
+
+Decisions of 2026-11-04, taken after the PDK-753 reviews (item 1 is an architect decision, items 2 to 4 record the implementation of decisions 22 and 21 and the test location):
+
+1. **AC 3 and the relay.** Wazuh's `<remote>` syslog listener has neither TLS nor octet counting, and the notifier
+   is TLS-only. AC 3 becomes "Wazuh receives the push through the documented relay": rsyslog (`imtcp` with the `gtls`
+   driver, octet-counted framing) terminates TLS and forwards each message as one line to the loopback `<remote>`
+   listener. `docs/operations/siem.md` carries the complete configuration with certificate paths the operator replaces,
+   the matching `<remote>` block and a verification step.
+2. **Dynamic fields (decision 22).** The decoders extract the message body with Wazuh's `JSON_Decoder`
+   (`offset="after_parent"`), so every key is a field under its dotted name: `event.params.<name>` carries the
+   dynamic parameters (the push nests the event, hence `event.` and not `params.`), `organization` comes from `PROCID`.
+3. **`paddock.missing`.** The marker message of a gap in the push is decoded too and raises rule 100904 (level 7,
+   group `paddock_integrity`): the event is lost to the SIEM but still in the WORM log.
+4. **Tests in `server/internal/siemcontent`.** The decoder and rule tests (golden frames, rule levels, the
+   registry-coupling check, reachability of the frequency rules, Sigma checks) live in `server/internal/siemcontent`
+   instead of `go test ./integrations/...` (ticket AC 1, plan §3.6): the tests need the audit code registry of the
+   server module, and a separate module under `integrations/` would add a module and a YAML dependency. No new
+   module and no new dependency.
+
 ## Amendment 2026-11-04 — checkpoints and replay (PDK-752)
 
 Architect decisions of 2026-11-04, taken after the PDK-752 review:

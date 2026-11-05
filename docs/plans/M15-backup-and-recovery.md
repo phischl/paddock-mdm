@@ -829,3 +829,40 @@ Decisions taken on 2026-11-04 (architect lead, per the architect's recommendatio
   `lib-restore.sh`, the sqlc query names, and the `BackupTargetForm` field order.
 - Migration number `00100` is the next free number at planning time; if PDK-747's migration lands first, the
   implementer takes the next free number and keeps the order of this plan.
+
+## Amendment 2026-11-04 — backup target input shape and credential binding (PDK-731)
+
+Decision taken by the architect lead on 2026-11-04 after Review 1 of PDK-731; the portal form (PDK-736) builds on it:
+
+1. **Per-type input groups instead of `oneOf`.** §6.2 said `BackupTargetInput` is "oneOf by `type`". The contract
+   is: `BackupTargetInput` = `{name, type, enabled}` plus one object per type, `local`, `smb`, `nfs` and `s3`, with
+   the field groups of §6.1. The object named by `type` is required and the others are ignored. The spec uses no
+   `oneOf` anywhere and the generated Go union types would be awkward. `BackupTarget.settings` mirrors the same
+   grouping and never holds a secret. Secrets are `writeOnly` and never returned.
+2. **Stored credentials cannot be redirected.** The api can only encrypt, so credentials are replaced whole, never
+   merged. An update that changes a **destination-identifying** setting without sending new credentials returns
+   **400** `invalid_request` naming the field and the missing credential:
+   - SMB: `host`, `share`, `domain`, `username`, `options` change → `smb.password` is required
+     (`options` counts because mount.cifs `ip=`, `port=` and `sec=` redirect or weaken the login).
+   - S3: `endpoint`, `bucket`, `region`, `ca_pem` change → `s3.access_key` and `s3.secret_key` are required
+     (together; the region is compared after its default is applied, so spelling out `us-east-1` is no change).
+   - Not counted: SMB `path`, S3 `prefix` (same server), local and NFS (no credentials).
+   With new credentials the change is accepted, and any mount-relevant change raises `host_revision` (§3.4).
+
+## Amendment 2026-11-04 — challenge positions of the pending backup key (PDK-730)
+
+Architect decision of 2026-11-04 (alpha.9 decisions, item 4), found in the review of PDK-730: the challenge
+positions of key `legacy` reached no response, so an imported key could never be confirmed (decision 9). Positions
+are indices, not key material.
+
+- **Decision 7**, the sentence "Reads never return `ciphertext`, `challenge_positions` or `challenge_sha256`" now
+  reads: reads never return the key text, `ciphertext` or `challenge_sha256`; they return `challenge_positions` only
+  for the key in state `unconfirmed` (freshly generated or the imported `legacy` key) and never once it is
+  `confirmed`, `retired` or `discarded`. `Key` gains `positions` (nullable, six 1-based positions in ascending
+  order, set only while the key waits for its confirmation). The answer is never stored or returned; there is no
+  legacy skip: key `legacy` is confirmed with the characters of the host file at these positions.
+- **§6.2**: `BackupKey` gains the required, nullable `positions` (array of six integers); the required list ends
+  `…, attempts, legacy, positions]`. No migration: `backup_key.challenge_positions` (§6.6) already holds them.
+- **PDK-730 AC 3** now reads: `GET /backup/key` never contains the key text or the challenge hash; it contains the
+  challenge positions only while a key waits for its confirmation (`pending.positions`), and `null` for every
+  other key (the test asserts on the raw JSON).

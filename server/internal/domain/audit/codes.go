@@ -134,6 +134,12 @@ const (
 	CodeDiskRecoveryKeyRevealed    Code = "disk.recovery_key_revealed"
 	CodeDiskHeaderDownloaded       Code = "disk.header_downloaded"
 
+	// Diagnostics bundle (ADR 0048, plan M12 §6.4).
+	CodeDeviceDiagnosticsRequested  Code = "device.diagnostics_requested"
+	CodeDeviceDiagnosticsCollected  Code = "device.diagnostics_collected"
+	CodeDeviceDiagnosticsDownloaded Code = "device.diagnostics_downloaded"
+	CodeDeviceDiagnosticsPurged     Code = "device.diagnostics_purged"
+
 	CodeDeviceRevocationTrustPinnedTOFU Code = "device.revocation_trust_pinned_tofu"
 	CodeRevocationRequested             Code = "revocation.requested"
 	CodeRevocationApproved              Code = "revocation.approved"
@@ -257,6 +263,13 @@ const (
 
 	CodeVulnerabilityDevicesViewed Code = "vulnerability.devices_viewed"
 
+	// Access review report (plan M12 decision 26): the view is a read recorded once per actor and UTC day, the export
+	// is always recorded.
+	CodeAccessReviewViewed           Code = "access_review.viewed"
+	CodeAccessReviewExported         Code = "access_review.exported"
+	CodePlatformAccessReviewViewed   Code = "platform.access_review_viewed"
+	CodePlatformAccessReviewExported Code = "platform.access_review_exported"
+
 	// Evidence export (ADR 0032 §5, plan M10 §6.4).
 	CodeAuditExportRequested  Code = "audit.export_requested"
 	CodeAuditExportCompleted  Code = "audit.export_completed"
@@ -286,6 +299,18 @@ const (
 	CodeDeviceSoftwareReinstalled Code = "device.software_reinstalled"
 	CodeDeviceSoftwareRemoved     Code = "device.software_removed"
 	CodeDeviceSoftwareApplyFailed Code = "device.software_apply_failed"
+
+	// The backup key (plan M15 §6.4).
+	CodePlatformBackupKeyGenerated Code = "platform.backup_key_generated"
+	CodePlatformBackupKeyConfirmed Code = "platform.backup_key_confirmed"
+	CodePlatformBackupKeyDiscarded Code = "platform.backup_key_discarded"
+	// Backup targets, schedule and runs (plan M15 §6.4).
+	CodePlatformBackupTargetCreated   Code = "platform.backup_target_created"
+	CodePlatformBackupTargetUpdated   Code = "platform.backup_target_updated"
+	CodePlatformBackupTargetDeleted   Code = "platform.backup_target_deleted"
+	CodePlatformBackupTargetTested    Code = "platform.backup_target_tested"
+	CodePlatformBackupScheduleChanged Code = "platform.backup_schedule_changed"
+	CodePlatformBackupRunRequested    Code = "platform.backup_run_requested"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -297,6 +322,9 @@ type Definition struct {
 	Emitted     bool // false for registry entries that are never emitted as events
 	Note        string
 }
+
+// backupTargetParams are the params of the backup target events (plan M15 §6.4): never a credential.
+var backupTargetParams = []string{"target_id", "name", "type", "enabled", "host_revision"}
 
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
@@ -853,7 +881,7 @@ var registry = map[Code]Definition{
 	},
 	CodeRetentionPurged: {
 		Code: CodeRetentionPurged, Emitted: true,
-		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), device_command (finished commands no disk conversion or uninstall still references), device_alert (cleared alerts), device_event_gap (filled event gaps) or action (finished actions), each recorded in the organization only when rows were deleted (action also once per round in the platform pseudo-organization), with index_days the audit index retention their cutoff follows, audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
+		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), device_command (finished commands no disk conversion or uninstall still references), device_alert (cleared alerts), device_event_gap (filled event gaps), device_diagnostics (with cutoff the round's time: stored diagnostics bundles whose 7-day retention ended, their objects deleted and their key material cleared, counted in deleted; with index_days: the rows of ended bundles) or action (finished actions), each recorded in the organization only when rows were deleted (action also once per round in the platform pseudo-organization), with index_days the audit index retention their cutoff follows, audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
 		Params:      []string{"store", "deleted", "cutoff", "index_days", "partition", "export_id"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
@@ -1007,6 +1035,32 @@ var registry = map[Code]Definition{
 		Description: "An organization administrator downloaded an escrowed LUKS header of a device after a step-up.",
 		Params:      []string{"hostname", "volume", "generation"},
 		Note:        "volume is the LUKS UUID of the header's volume; absent for a root volume header escrowed before PDK-009 whose UUID the device has not reported yet.",
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceDiagnosticsRequested: {
+		Code: CodeDeviceDiagnosticsRequested, Emitted: true,
+		Description: "An administrator or operator asked a device for a diagnostics bundle of Paddock's own logs and configuration (ADR 0048).",
+		Params:      []string{"request_id", "reason", "command_id", "hostname"},
+		Outcomes:    adminOutcomes,
+		Note:        "reason is the administrator's text the device shows to the user; failure with invalid_state when the device is not active or a collection is pending.",
+	},
+	CodeDeviceDiagnosticsCollected: {
+		Code: CodeDeviceDiagnosticsCollected, Emitted: true,
+		Description: "A device uploaded a diagnostics bundle and the worker verified its size and SHA-256 (actor: the device).",
+		Params:      []string{"request_id", "files", "bytes", "sha256", "truncated_entries", "notified_sessions", "reason"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Only the hash of the sealed bundle is recorded, never its content. bytes is the size of the sealed object. failure when the bundle failed: reason is the device's refusal (invalid_params, upload_refused, upload_failed, collect_failed, too_large) or the worker's finding (size_mismatch, sha256_mismatch, missing).",
+	},
+	CodeDeviceDiagnosticsDownloaded: {
+		Code: CodeDeviceDiagnosticsDownloaded, Emitted: true,
+		Description: "An administrator or operator downloaded a device's diagnostics bundle after a step-up.",
+		Params:      []string{"request_id", "sha256", "bytes", "files", "hostname"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceDiagnosticsPurged: {
+		Code: CodeDeviceDiagnosticsPurged, Emitted: true,
+		Description: "An organization administrator deleted a device's diagnostics bundle before its retention ended.",
+		Params:      []string{"request_id", "hostname"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceRevocationTrustPinnedTOFU: {
@@ -1583,6 +1637,34 @@ var registry = map[Code]Definition{
 		Outcomes:    adminOutcomes,
 		Note:        "While the setting is on, failure with the reason of a refused view (not_found for a CVE without finding in the organization, invalid_request, page_out_of_range), canceled for a view the client gave up after the setting was read, or internal for a count or window claim that failed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails.",
 	},
+	CodeAccessReviewViewed: {
+		Code: CodeAccessReviewViewed, Emitted: true,
+		Description: "An administrator, auditor or API token opened the access review report of the organization; recorded once per actor and UTC day and only while audit_search_recorded is on. from and to are the effective period of the first view of the day.",
+		Params:      []string{"from", "to", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for operators whatever the setting. While the setting is on, failure with the reason of a refused view (invalid_request for a period that is empty, reversed or longer than 400 days), or internal for a window that could not be claimed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails. Target is the organization.",
+	},
+	CodeAccessReviewExported: {
+		Code: CodeAccessReviewExported, Emitted: true,
+		Description: "An administrator, auditor or API token exported the access review report of the organization as JSON or CSV; every export is recorded, whatever the privacy settings.",
+		Params:      []string{"from", "to", "format"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for operators. failure with invalid_request for an unknown format or a period that is empty, reversed or longer than 400 days. Target is the organization.",
+	},
+	CodePlatformAccessReviewViewed: {
+		Code: CodePlatformAccessReviewViewed, Emitted: true,
+		Description: "A platform administrator opened the platform access review report; every view is recorded, because platform reads are not under an organization's privacy settings.",
+		Params:      []string{"from", "to"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for a principal that is not a platform administrator. failure with invalid_request for a period that is empty, reversed or longer than 400 days. Platform pseudo-organization.",
+	},
+	CodePlatformAccessReviewExported: {
+		Code: CodePlatformAccessReviewExported, Emitted: true,
+		Description: "A platform administrator exported the platform access review report as JSON or CSV.",
+		Params:      []string{"from", "to", "format"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for a principal that is not a platform administrator. failure with invalid_request for an unknown format or a period that is empty, reversed or longer than 400 days. Platform pseudo-organization.",
+	},
 	CodeAuditExportRequested: {
 		Code: CodeAuditExportRequested, Emitted: true,
 		Description: "An organization administrator or auditor requested a signed evidence package for a range of sealed recording days after a step-up; denied with step_up_required without one.",
@@ -1728,6 +1810,70 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "reason is fingerprint_mismatch, would_remove_dependents, protected_package_affected, no_candidate, source_unreachable, conflicting_source, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
+	},
+	CodePlatformBackupKeyGenerated: {
+		Code: CodePlatformBackupKeyGenerated, Emitted: true,
+		Description: "A platform administrator generated a new backup key after a step-up, or the api imported the host's key file of an older installation (legacy); the key is shown once and waits for its confirmation. The key text is never recorded.",
+		Params:      []string{"key_id", "fingerprint", "rotation", "legacy"},
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the backup key (type backup_key). rotation is true when a confirmed key existed. A legacy import is recorded with the system actor paddock-api. Failure with invalid_state while another key waits for its confirmation. Platform pseudo-organization.",
+	},
+	CodePlatformBackupKeyConfirmed: {
+		Code: CodePlatformBackupKeyConfirmed, Emitted: true,
+		Description: "A platform administrator confirmed a backup key after a step-up by typing back its characters at six positions the server chose; the key becomes active and a previously active key is retired.",
+		Params:      []string{"key_id", "fingerprint", "rotated_from", "attempts"},
+		Outcomes:    adminOutcomes,
+		Note:        "rotated_from is the retired key's ID or null. attempts counts the failed confirmations. Failure with backup_key_mismatch for wrong characters (the third discards the key), invalid_request for an answer that is not six characters, invalid_state for a key that is not unconfirmed, not_found. The typed characters are never recorded. Platform pseudo-organization.",
+	},
+	CodePlatformBackupKeyDiscarded: {
+		Code: CodePlatformBackupKeyDiscarded, Emitted: true,
+		Description: "A platform administrator discarded a backup key that was not confirmed, after a step-up.",
+		Params:      []string{"key_id", "attempts"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_state for a key that is not unconfirmed, not_found. A key discarded by the third failed confirmation is recorded as that platform.backup_key_confirmed failure, not as this event. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetCreated: {
+		Code: CodePlatformBackupTargetCreated, Emitted: true,
+		Description: "A platform administrator added a backup target (local directory, SMB or NFS share, S3 bucket) after a step-up; its credentials are stored encrypted and never recorded.",
+		Params:      backupTargetParams,
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the backup target (type backup_target, display the name). A local, SMB or NFS target waits for ./paddock backup-target apply on the host (host_revision 1). Failure with invalid_request naming the field, already_exists for a duplicate name. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetUpdated: {
+		Code: CodePlatformBackupTargetUpdated, Emitted: true,
+		Description: "A platform administrator changed, enabled or disabled a backup target after a step-up.",
+		Params:      append(slices.Clone(backupTargetParams), "change"),
+		Outcomes:    adminOutcomes,
+		Note:        "change is updated, enabled or disabled. A change of a local, SMB or NFS target's settings or credentials raises host_revision and needs the host step again. Failure with invalid_request naming the field, already_exists for a duplicate name, invalid_state when the target already is enabled or disabled, not_found. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetDeleted: {
+		Code: CodePlatformBackupTargetDeleted, Emitted: true,
+		Description: "A platform administrator deleted a backup target after a step-up; a local, SMB or NFS target is removed from the host by the next ./paddock backup-target apply.",
+		Params:      backupTargetParams,
+		Outcomes:    adminOutcomes,
+		Note:        "The backup sets already written to the target are not deleted. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetTested: {
+		Code: CodePlatformBackupTargetTested, Emitted: true,
+		Description: "A platform administrator requested a connection test of a backup target after a step-up; the backup role runs it in its next round and stores the result on the target.",
+		Params:      backupTargetParams,
+		Outcomes:    adminOutcomes,
+		Note:        "Success means requested, not that the test passed: the result is state of the target (last_test_ok, last_test_error), not an audit event. Platform pseudo-organization.",
+	},
+	CodePlatformBackupScheduleChanged: {
+		Code: CodePlatformBackupScheduleChanged, Emitted: true,
+		Description: "A platform administrator changed the backup schedule and retention after a step-up.",
+		Params: []string{"full_interval_hours", "openbao_interval_hours", "fleet_interval_hours", "escrow_interval_hours",
+			"retention_full", "openbao_keep_days", "fleet_keep_days"},
+		Outcomes: adminOutcomes,
+		Note:     "The params are the new values. Target is the setting backup_schedule. Failure with invalid_request naming the field out of range. Platform pseudo-organization.",
+	},
+	CodePlatformBackupRunRequested: {
+		Code: CodePlatformBackupRunRequested, Emitted: true,
+		Description: "A platform administrator requested a backup now after a step-up; the backup role runs the requested kinds in its next round.",
+		Params:      []string{"kinds", "label"},
+		Outcomes:    adminOutcomes,
+		Note:        "kinds lists postgres, authentik, openbao, fleet and escrow, or the requested subset. Failure with invalid_state while no backup key is confirmed, invalid_request for an unknown kind or a label longer than 64 characters. Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

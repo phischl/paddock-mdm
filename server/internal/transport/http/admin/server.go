@@ -76,6 +76,8 @@ type Deps struct {
 	Overview       *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
+	// AccessReview is the access review report (plan M12 decisions 25 and 26).
+	AccessReview *app.AccessReview
 	// ServerVersion is the build version of paddock-server, answered as server_version of GET /api/v1/me (PDK-430).
 	ServerVersion string
 	// IPAllowlist and IPGuard are the IP allow list of the administrative surfaces (plan M7a decisions 12 and 17);
@@ -104,9 +106,11 @@ type Deps struct {
 	EndSessions *app.Sessions
 	// AutoUnseal is the automatic unseal of OpenBao (plan M8u decision 7).
 	AutoUnseal *app.AutoUnseal
-	PublicURL  string
-	Static     *StaticHandler // portal build
-	Now        func() time.Time
+	// UpgradeCheck is the report before an upgrade (plan M16 decision 4).
+	UpgradeCheck *app.UpgradeCheck
+	PublicURL    string
+	Static       *StaticHandler // portal build
+	Now          func() time.Time
 	// StepUpMaxAuthAge replaces the production StepUpMaxAuthAge (development only; zero keeps it).
 	StepUpMaxAuthAge time.Duration
 	// StepUpMFAClass replaces StepUpWebAuthnClass, the authenticator class a step-up must validate (development only;
@@ -120,6 +124,13 @@ type Deps struct {
 	LoginMFAOptional bool
 	// TrustedProxies may name the client through X-Paddock-Client-IP (plan M7a decision 5).
 	TrustedProxies []netip.Prefix
+
+	// BackupKeys is the platform backup key (plan M15 decision 7).
+	BackupKeys *app.BackupKeys
+	// BackupTargets, BackupSchedule and BackupRuns are the platform backup (plan M15 decisions 10–14).
+	BackupTargets  *app.BackupTargets
+	BackupSchedule *app.BackupSchedule
+	BackupRuns     *app.BackupRuns
 }
 
 // privileged maps route patterns of privileged actions to their audit spec, so that requests rejected before
@@ -135,6 +146,9 @@ var privileged = map[string]struct {
 	"POST /api/platform/v1/sessions/end-all":                               {app.ScopePlatform, app.SpecSessionsEndAll},
 	"POST /api/platform/v1/openbao/auto-unseal/enable":                     {app.ScopePlatform, app.SpecAutoUnsealEnable},
 	"POST /api/platform/v1/openbao/auto-unseal/disable":                    {app.ScopePlatform, app.SpecAutoUnsealDisable},
+	"POST /api/platform/v1/backup/key":                                     {app.ScopePlatform, app.SpecBackupKeyGenerate},
+	"POST /api/platform/v1/backup/key/{id}/confirm":                        {app.ScopePlatform, app.SpecBackupKeyConfirm},
+	"POST /api/platform/v1/backup/key/{id}/discard":                        {app.ScopePlatform, app.SpecBackupKeyDiscard},
 	"POST /api/v1/enrollment-tokens":                                       {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
 	"PUT /api/v1/devices/{id}/groups":                                      {app.ScopeOrg, app.SpecDeviceSetGroups},
 	"PUT /api/v1/devices/{id}/owners":                                      {app.ScopeOrg, app.SpecDeviceSetOwners},
@@ -213,6 +227,9 @@ var privileged = map[string]struct {
 	"POST /api/v1/config-rollouts/{id}/complete":                           {app.ScopeOrg, app.SpecConfigRolloutComplete},
 	"POST /api/v1/audit/exports":                                           {app.ScopeOrg, app.SpecAuditExportRequest},
 	"GET /api/v1/audit/exports/{id}/download":                              {app.ScopeOrg, app.SpecAuditExportDownload},
+	"GET /api/v1/access-review/export":                                     {app.ScopeOrg, app.SpecAccessReviewExported},
+	"GET /api/platform/v1/access-review":                                   {app.ScopePlatform, app.SpecPlatformAccessReviewViewed},
+	"GET /api/platform/v1/access-review/export":                            {app.ScopePlatform, app.SpecPlatformAccessReviewExported},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
 	"PATCH /api/v1/package-holds/{id}":                                     {app.ScopeOrg, app.SpecPackageHoldUpdate},
 	"DELETE /api/v1/package-holds/{id}":                                    {app.ScopeOrg, app.SpecPackageHoldDelete},
@@ -252,6 +269,14 @@ var privileged = map[string]struct {
 	"POST /api/v1/software-assignments":                                    {app.ScopeOrg, app.SpecSoftwareAssignmentCreate},
 	"PATCH /api/v1/software-assignments/{id}":                              {app.ScopeOrg, app.SpecSoftwareAssignmentUpdate},
 	"DELETE /api/v1/software-assignments/{id}":                             {app.ScopeOrg, app.SpecSoftwareAssignmentDelete},
+	"PUT /api/platform/v1/backup/schedule":                                 {app.ScopePlatform, app.SpecBackupScheduleChange},
+	"POST /api/platform/v1/backup/targets":                                 {app.ScopePlatform, app.SpecBackupTargetCreate},
+	"PUT /api/platform/v1/backup/targets/{id}":                             {app.ScopePlatform, app.SpecBackupTargetUpdate},
+	"DELETE /api/platform/v1/backup/targets/{id}":                          {app.ScopePlatform, app.SpecBackupTargetDelete},
+	"POST /api/platform/v1/backup/targets/{id}/test":                       {app.ScopePlatform, app.SpecBackupTargetTest},
+	"POST /api/platform/v1/backup/targets/{id}/enable":                     {app.ScopePlatform, app.SpecBackupTargetUpdate},
+	"POST /api/platform/v1/backup/targets/{id}/disable":                    {app.ScopePlatform, app.SpecBackupTargetUpdate},
+	"POST /api/platform/v1/backup/run":                                     {app.ScopePlatform, app.SpecBackupRunRequest},
 }
 
 // ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the
@@ -286,10 +311,13 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus,
+		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns,
 		securityReview: d.SecurityReview,
+		accessReview:   d.AccessReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,
+		backupKeys:   d.BackupKeys,
+		upgradeCheck: d.UpgradeCheck,
 		mcpSettings:  d.MCPSettings,
 		mcpAccess:    d.MCPAccess,
 		imports:      d.ReleaseImports,

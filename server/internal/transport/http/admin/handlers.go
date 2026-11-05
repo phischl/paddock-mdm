@@ -41,6 +41,8 @@ type handlers struct {
 	sessions *app.Sessions
 	// autoUnseal is the automatic unseal of OpenBao (plan M8u decision 7).
 	autoUnseal *app.AutoUnseal
+	// upgradeCheck is the report before an upgrade (plan M16 decision 4).
+	upgradeCheck *app.UpgradeCheck
 
 	users         *app.Users
 	userGroups    *app.UserGroups
@@ -82,6 +84,8 @@ type handlers struct {
 	overview       *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
+	// accessReview is the access review report (plan M12 decisions 25 and 26).
+	accessReview *app.AccessReview
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).
 	mcpSettings *app.MCPSettings
 	mcpAccess   *app.MCPAccessService
@@ -93,6 +97,13 @@ type handlers struct {
 	stepUpWindow time.Duration
 	// serverVersion is server_version of GET and PATCH /api/v1/me.
 	serverVersion string
+
+	// backupKeys is the platform backup key (plan M15 decision 7).
+	backupKeys *app.BackupKeys
+	// backupTargets, backupSchedule and backupRuns are the platform backup (plan M15 decisions 10–14).
+	backupTargets  *app.BackupTargets
+	backupSchedule *app.BackupSchedule
+	backupRuns     *app.BackupRuns
 }
 
 // stepUpTiming is the step-up window of the action runner and the maximum auth age of the step-up callback.

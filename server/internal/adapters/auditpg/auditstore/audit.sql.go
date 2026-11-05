@@ -93,6 +93,34 @@ func (q *Queries) CountAuditEvents(ctx context.Context, arg CountAuditEventsPara
 	return count, err
 }
 
+const countAuditEventsForReview = `-- name: CountAuditEventsForReview :one
+SELECT count(*) FROM audit_event
+WHERE occurred_at >= $1 AND occurred_at < $2
+  AND code = ANY($3::text[]) AND outcome = ANY($4::text[])
+  AND NOT ($5::boolean AND params->>'baseline' = 'true')
+`
+
+type CountAuditEventsForReviewParams struct {
+	FromTime        time.Time
+	ToTime          time.Time
+	Codes           []string
+	Outcomes        []string
+	ExcludeBaseline bool
+}
+
+func (q *Queries) CountAuditEventsForReview(ctx context.Context, arg CountAuditEventsForReviewParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditEventsForReview,
+		arg.FromTime,
+		arg.ToTime,
+		arg.Codes,
+		arg.Outcomes,
+		arg.ExcludeBaseline,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countAuditManifests = `-- name: CountAuditManifests :one
 SELECT count(*) FROM audit_manifest
 `
@@ -215,6 +243,31 @@ func (q *Queries) CountEventsRecordedOn(ctx context.Context, arg CountEventsReco
 	var events int64
 	err := row.Scan(&events)
 	return events, err
+}
+
+const countStepUpEventsForReview = `-- name: CountStepUpEventsForReview :one
+SELECT (count(*) FILTER (WHERE outcome = 'success' AND (actor->>'step_up')::boolean))::bigint AS succeeded,
+       (count(*) FILTER (WHERE outcome = 'denied' AND params->>'error_code' = 'step_up_required'))::bigint AS refused
+FROM audit_event
+WHERE occurred_at >= $1 AND occurred_at < $2
+`
+
+type CountStepUpEventsForReviewParams struct {
+	FromTime time.Time
+	ToTime   time.Time
+}
+
+type CountStepUpEventsForReviewRow struct {
+	Succeeded int64
+	Refused   int64
+}
+
+// Successful actions of a step-up session and the refusals for a missing step-up, in [from, to).
+func (q *Queries) CountStepUpEventsForReview(ctx context.Context, arg CountStepUpEventsForReviewParams) (CountStepUpEventsForReviewRow, error) {
+	row := q.db.QueryRow(ctx, countStepUpEventsForReview, arg.FromTime, arg.ToTime)
+	var i CountStepUpEventsForReviewRow
+	err := row.Scan(&i.Succeeded, &i.Refused)
+	return i, err
 }
 
 const ensureAuditPartition = `-- name: EnsureAuditPartition :exec
@@ -637,6 +690,69 @@ type ListAuditEventsAfterParams struct {
 // Commit-order read of the index (plan M9 decision 4); RLS supplies the organization.
 func (q *Queries) ListAuditEventsAfter(ctx context.Context, arg ListAuditEventsAfterParams) ([]AuditEvent, error) {
 	rows, err := q.db.Query(ctx, listAuditEventsAfter, arg.After, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditEvent{}
+	for rows.Next() {
+		var i AuditEvent
+		if err := rows.Scan(
+			&i.EventID,
+			&i.OrganizationID,
+			&i.OccurredAt,
+			&i.RecordedAt,
+			&i.Code,
+			&i.Outcome,
+			&i.Source,
+			&i.Actor,
+			&i.Target,
+			&i.Params,
+			&i.CorrelationID,
+			&i.ObjectKey,
+			&i.CommitSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEventsForReview = `-- name: ListAuditEventsForReview :many
+
+SELECT event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, object_key, commit_seq FROM audit_event
+WHERE occurred_at >= $1 AND occurred_at < $2
+  AND code = ANY($3::text[]) AND outcome = ANY($4::text[])
+  AND NOT ($5::boolean AND params->>'baseline' = 'true')
+ORDER BY occurred_at, event_id
+LIMIT $6
+`
+
+type ListAuditEventsForReviewParams struct {
+	FromTime        time.Time
+	ToTime          time.Time
+	Codes           []string
+	Outcomes        []string
+	ExcludeBaseline bool
+	MaxRows         int32
+}
+
+// Access review (plan M12 decision 25): the events of the given codes and outcomes in [from, to), oldest first, and
+// their number; the baseline members of a role's first comparison are left out on request. RLS supplies the
+// organization.
+func (q *Queries) ListAuditEventsForReview(ctx context.Context, arg ListAuditEventsForReviewParams) ([]AuditEvent, error) {
+	rows, err := q.db.Query(ctx, listAuditEventsForReview,
+		arg.FromTime,
+		arg.ToTime,
+		arg.Codes,
+		arg.Outcomes,
+		arg.ExcludeBaseline,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}

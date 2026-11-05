@@ -2247,6 +2247,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/access-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_auditor. The access review of the organization: role members, role changes, accounts, API tokens, reveals of secrets, step-ups, ended sessions and destructive actions in the period. One report object, not a collection: every list holds at most 1000
+         *     items and states its total. from and to are RFC 3339; to defaults to now and from to 90 days before to; the
+         *     period spans at most 400 days (400 invalid_request beyond or when from is not before to). Role members are the
+         *     worker's snapshot of the identity provider (at most one 5-minute round old). The view is recorded as access_review.viewed once per actor and UTC day, only while the organization's audit_search_recorded privacy setting is on.
+         */
+        get: operations["getAccessReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/access-review/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_auditor. The access review as a download: format json (the same object as the view) or csv (one file for
+         *     every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a
+         *     leading apostrophe). Content-Disposition names the file paddock-access-review-<organization slug>-<from>-<to>.<json|csv>. Period as for the view.
+         *     Every export is recorded as access_review.exported, whatever the privacy settings.
+         */
+        get: operations["exportAccessReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attention/devices": {
         parameters: {
             query?: never;
@@ -3531,6 +3575,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/upgrade-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The read-only report before an upgrade to target_version (ADR 0047 decision 2, plan
+         *     M16 decision 4), the same as paddock-server admin upgrade-check: migrations (FAIL when the database is ahead
+         *     of this release), agents (active devices whose agent is a release older than the target's support window:
+         *     FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending
+         *     (running agent rollout, halted configuration rollouts: WARN) and sessions. Changes nothing and is not
+         *     audited. 400 invalid_request when target_version is no release this server knows.
+         */
+        get: operations["getUpgradeCheck"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases": {
         parameters: {
             query?: never;
@@ -3764,6 +3832,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/access-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The access review of the platform: platform role members, platform administrators, privileged platform events and the organizations created in the period. One report object, not a collection: every list holds at most 1000
+         *     items and states its total. from and to are RFC 3339; to defaults to now and from to 90 days before to; the
+         *     period spans at most 400 days (400 invalid_request beyond or when from is not before to). Role members are the
+         *     worker's snapshot of the identity provider (at most one 5-minute round old). Every view is recorded as platform.access_review_viewed (platform reads are not under an organization's privacy switch).
+         */
+        get: operations["getPlatformAccessReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/access-review/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The access review as a download: format json (the same object as the view) or csv (one file for
+         *     every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a
+         *     leading apostrophe). Content-Disposition names the file paddock-access-review-platform-<from>-<to>.<json|csv>. Period as for the view.
+         *     Every export is recorded as platform.access_review_exported, whatever the privacy settings.
+         */
+        get: operations["exportPlatformAccessReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/openbao/auto-unseal": {
         parameters: {
             query?: never;
@@ -3822,6 +3934,87 @@ export interface paths {
          *     ./paddock auto-unseal disable. Every attempt is audited.
          */
         post: operations["disableAutoUnseal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The backup key state (plan M15 decision 7): the active key, the key waiting for its
+         *     confirmation and the retired keys. Never the key text, its ciphertext or the challenge hash; the challenge
+         *     positions only for the key waiting for its confirmation (amendment 2026-11-04).
+         */
+        get: operations["getBackupKey"];
+        put?: never;
+        /**
+         * @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required; API tokens never have
+         *     one). Generates a new backup key (32 random bytes, standard base64) and returns its text exactly once, with
+         *     six 1-based positions whose characters confirm it (POST /api/platform/v1/backup/key/{id}/confirm). The
+         *     response is not cached; the key is never shown again. No backup runs until a key is confirmed; a key
+         *     generated while one is active replaces it on confirmation. 409 invalid_state while another key waits for its
+         *     confirmation. Every attempt is audited; the key text never is.
+         */
+        post: operations["generateBackupKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/key/{id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key ID (bk-<YYYYMMDD>-<8 hex> or legacy). */
+                id: components["parameters"]["BackupKeyId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Confirms a key with
+         *     the characters of its text at the six positions of the generating response (or of pending.positions in GET
+         *     /api/platform/v1/backup/key), in that order. The key becomes
+         *     active; a previously active key is retired. 400 invalid_request when the answer is not six characters; 409
+         *     backup_key_mismatch for wrong characters, with attempts_left=<n> in the detail; the third mismatch discards
+         *     the key; 409 invalid_state for a key that is not unconfirmed; 404 not_found. Every attempt is audited; the
+         *     answer never is.
+         */
+        post: operations["confirmBackupKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/key/{id}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key ID (bk-<YYYYMMDD>-<8 hex> or legacy). */
+                id: components["parameters"]["BackupKeyId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Discards a key that
+         *     is not confirmed, e.g. one whose text was not stored safely. 409 invalid_state for a key that is not
+         *     unconfirmed; 404 not_found. Every attempt is audited.
+         */
+        post: operations["discardBackupKey"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3983,6 +4176,226 @@ export interface paths {
          *     minutes (403 step_up_required).
          */
         post: operations["testPlatformNotificationDestination"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The backup overview (plan M15 decision 13): the key state, the schedule, every target
+         *     with its mirror state per kind, the local repository and the newest run per kind. Never a key, a password or an
+         *     access key. The repository sizes and the WAL time are null until the backup role reports them.
+         */
+        get: operations["getBackupOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The backup schedule and retention; without a stored schedule the defaults (full backup
+         *     every 24 h, OpenBao every 6 h, Fleet every 24 h, escrow every hour, 14 full backups, 30 days of snapshots and
+         *     dumps) with updated_by and updated_at null.
+         */
+        get: operations["getBackupSchedule"];
+        /**
+         * @description Roles: platform_admin. Replaces the schedule; every field is required and checked against its range (400
+         *     invalid_request naming the field). The backup role applies it in its next round. Needs a step-up within the
+         *     last 5 minutes (403 step_up_required).
+         */
+        put: operations["putBackupSchedule"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The backup targets: local directories of the host, SMB and NFS shares the host mounts,
+         *     S3-compatible buckets. Never a password, an access key or a secret key; has_credentials says whether some are
+         *     stored. A deleted local, SMB or NFS target is no longer listed while it waits for the host to remove its volume.
+         */
+        get: operations["listBackupTargets"];
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Adds a target. The object named by type (local, smb, nfs or s3) holds its settings and
+         *     is required; the rules of every field are in plan M15 §6.1 (400 invalid_request naming the field). The SMB
+         *     password and the S3 access and secret keys are stored encrypted and never returned. A local, SMB or NFS target
+         *     starts with host_state pending_host and host_revision 1 and is used after ./paddock backup-target apply and
+         *     ./paddock up on the host; an S3 target has host_state n/a. A duplicate name is 409 already_exists. Needs a
+         *     step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["createBackupTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/targets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: platform_admin. One target with its last test and its mirror state per kind; 404 not_found for a missing or deleted one. */
+        get: operations["getBackupTarget"];
+        /**
+         * @description Roles: platform_admin. Replaces the settings; the type cannot change (400 invalid_request). Without smb.password,
+         *     or without both s3.access_key and s3.secret_key, the stored credentials stay, but only for the same destination:
+         *     a change of smb.host, smb.share, smb.domain, smb.username or smb.options needs the password again, a change of
+         *     s3.endpoint, s3.bucket, s3.region or s3.ca_pem needs both keys again, and the S3 keys are replaced together
+         *     (400 invalid_request naming the fields). smb.path and s3.prefix change without credentials. A change of a local,
+         *     SMB or NFS target's settings or credentials raises host_revision and resets host_state to pending_host until the
+         *     host step ran again. Needs a step-up within the last 5 minutes (403 step_up_required).
+         */
+        put: operations["updateBackupTarget"];
+        post?: never;
+        /**
+         * @description Roles: platform_admin. Deletes the target; the backup sets already on it stay. An S3 target is removed at once;
+         *     a local, SMB or NFS target is disabled and removed by the next ./paddock backup-target apply, which unmounts
+         *     its volume (its name stays taken until then). Needs a step-up within the last 5 minutes (403 step_up_required).
+         */
+        delete: operations["deleteBackupTarget"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/targets/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Requests a connection test. The backup role, the only service that can decrypt the
+         *     credentials, runs it in its next round (S3: the bucket, a write and a delete under the prefix; a mounted target:
+         *     a write and a delete in the volume) and stores last_test_at, last_test_ok and last_test_error (an error class:
+         *     dns, dial, tls, auth, forbidden, not_mounted, read_only, io); test_requested_at is set until then. Needs a
+         *     step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["testBackupTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/targets/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Enables a disabled target; 409 invalid_state when it is enabled. Needs a step-up within
+         *     the last 5 minutes (403 step_up_required).
+         */
+        post: operations["enableBackupTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/targets/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Disables an enabled target: the backup role no longer writes to it. 409 invalid_state
+         *     when it is disabled. Needs a step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["disableBackupTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Backs up now: one run in state requested per kind (kinds absent, null or empty: every
+         *     kind), which the backup role runs in its next round. 409 invalid_state while no backup key is confirmed; 400
+         *     invalid_request for an unknown kind or a label of more than 64 characters. Needs a step-up within the last 5
+         *     minutes (403 step_up_required).
+         */
+        post: operations["requestBackupRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The backup runs, one per kind and attempt, with the mirror result per target. Requested
+         *     runs have no started_at yet and come first in the default order.
+         */
+        get: operations["listBackupRuns"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5171,6 +5584,30 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        UpgradeCheck: {
+            /** Format: date-time */
+            generated_at: string;
+            target_version: string;
+            /** @description The releases whose agents target_version supports, oldest first (its own and the two previous). */
+            window: string[];
+            /** @description In this order: migrations, agents, backups, openbao, pending, sessions. */
+            items: components["schemas"]["UpgradeCheckItem"][];
+            /** @description The active devices whose agent is outside the window, at most 100; the agents item counts all. */
+            agents_outside: components["schemas"]["UpgradeCheckAgent"][];
+        };
+        UpgradeCheckItem: {
+            /** @enum {string} */
+            name: "migrations" | "agents" | "backups" | "openbao" | "pending" | "sessions";
+            /** @enum {string} */
+            status: "PASS" | "WARN" | "FAIL" | "INFO";
+            detail: string;
+        };
+        UpgradeCheckAgent: {
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            agent_version: string;
+        };
         DeviceUninstall: {
             /** @enum {string} */
             mode: "leave" | "reset";
@@ -5655,7 +6092,7 @@ export interface components {
         /** @enum {string} */
         DeviceCommandStatus: "pending" | "delivered" | "succeeded" | "failed" | "expired" | "cancelled";
         /** @enum {string} */
-        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now" | "uninstall" | "encrypt_disk" | "encrypt_disk_abort";
+        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now" | "uninstall" | "encrypt_disk" | "encrypt_disk_abort" | "collect_status";
         DeviceCommand: {
             /** Format: uuid */
             id: string;
@@ -6456,6 +6893,291 @@ export interface components {
         NotificationCapabilities: {
             email: boolean;
         };
+        /** @enum {string} */
+        BackupKind: "postgres" | "authentik" | "openbao" | "fleet" | "escrow";
+        /** @enum {string} */
+        BackupTargetType: "local" | "smb" | "nfs" | "s3";
+        /**
+         * @description n/a for S3; pending_host until the host mounted the current revision; mounted; unreachable when a write into the mounted volume fails.
+         * @enum {string}
+         */
+        BackupTargetHostState: "n/a" | "pending_host" | "mounted" | "unreachable";
+        /** @description The object named by type is required; the others are ignored. */
+        BackupTargetInput: {
+            name: string;
+            type: components["schemas"]["BackupTargetType"];
+            enabled: boolean;
+            local?: components["schemas"]["BackupTargetLocalInput"];
+            smb?: components["schemas"]["BackupTargetSmbInput"];
+            nfs?: components["schemas"]["BackupTargetNfsInput"];
+            s3?: components["schemas"]["BackupTargetS3Input"];
+        };
+        /** @description The settings of the target's type; never a credential. */
+        BackupTargetSettings: {
+            local?: components["schemas"]["BackupTargetLocalSettings"];
+            smb?: components["schemas"]["BackupTargetSmbSettings"];
+            nfs?: components["schemas"]["BackupTargetNfsSettings"];
+            s3?: components["schemas"]["BackupTargetS3Settings"];
+        };
+        BackupTargetLocalInput: {
+            /** @description An absolute directory of the host without "..". */
+            path: string;
+        };
+        BackupTargetLocalSettings: {
+            path: string;
+        };
+        BackupTargetSmbInput: {
+            /** @description A DNS name or an IP address. */
+            host: string;
+            share: string;
+            /** @description Relative path below the share; optional. */
+            path?: string;
+            username: string;
+            /** @description Required on creation and when host, share, domain, username or options change; otherwise absent on an update keeps the stored one. Stored encrypted, never returned. */
+            password?: string;
+            domain?: string;
+            /** @description Comma-separated: vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N. */
+            options?: string;
+        };
+        BackupTargetSmbSettings: {
+            host: string;
+            share: string;
+            path: string;
+            username: string;
+            domain: string;
+            options: string;
+        };
+        BackupTargetNfsInput: {
+            host: string;
+            /** @description An absolute export path. */
+            export: string;
+            /** @description Relative path below the export; optional. */
+            path?: string;
+            /** @description Comma-separated: vers=4|4.1|4.2, hard, timeo=N, retrans=N, nconnect=N. */
+            options?: string;
+        };
+        BackupTargetNfsSettings: {
+            host: string;
+            export: string;
+            path: string;
+            options: string;
+        };
+        BackupTargetS3Input: {
+            /** @description An https URL without user information, query or fragment; the host must be a public address. */
+            endpoint: string;
+            bucket: string;
+            /** @description Default us-east-1. */
+            region?: string;
+            /** @description Optional; no leading "/". */
+            prefix?: string;
+            /** @description Required on creation and when endpoint, bucket, region or ca_pem change; otherwise absent together with secret_key on an update keeps the stored keys. Stored encrypted, never returned. */
+            access_key?: string;
+            /** @description Required on creation; replaced together with access_key. Stored encrypted, never returned. */
+            secret_key?: string;
+            /** @description Optional PEM certificates of a private CA. */
+            ca_pem?: string;
+        };
+        BackupTargetS3Settings: {
+            endpoint: string;
+            bucket: string;
+            region: string;
+            prefix: string;
+            ca_pem: string;
+        };
+        BackupTargetKindStatus: {
+            kind: components["schemas"]["BackupKind"];
+            /** Format: date-time */
+            last_success_at: string | null;
+            /** @description An error class. */
+            last_error: string | null;
+            /** Format: int64 */
+            bytes: number;
+        };
+        BackupTarget: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            type: components["schemas"]["BackupTargetType"];
+            enabled: boolean;
+            host_state: components["schemas"]["BackupTargetHostState"];
+            /** @description Raised by every change the host must apply; 1 for S3. */
+            host_revision: number;
+            settings: components["schemas"]["BackupTargetSettings"];
+            /** @description An SMB password or S3 keys are stored (never shown). */
+            has_credentials: boolean;
+            /**
+             * Format: date-time
+             * @description Set while a requested test waits for the backup role.
+             */
+            test_requested_at: string | null;
+            /** Format: date-time */
+            last_test_at: string | null;
+            last_test_ok: boolean | null;
+            /** @description An error class: dns, dial, tls, auth, forbidden, not_mounted, read_only, io. */
+            last_test_error: string | null;
+            status: components["schemas"]["BackupTargetKindStatus"][];
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        BackupTargetPage: {
+            items: components["schemas"]["BackupTarget"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        BackupSchedule: {
+            full_interval_hours: number;
+            openbao_interval_hours: number;
+            fleet_interval_hours: number;
+            escrow_interval_hours: number;
+            retention_full: number;
+            openbao_keep_days: number;
+            fleet_keep_days: number;
+            /** @description null while the defaults apply. */
+            updated_by: string | null;
+            /** Format: date-time */
+            updated_at: string | null;
+        };
+        BackupScheduleUpdate: {
+            /** @description 6–168, default 24. */
+            full_interval_hours: number;
+            /** @description 1–24, default 6. */
+            openbao_interval_hours: number;
+            /** @description 6–168, default 24. */
+            fleet_interval_hours: number;
+            /** @description 1–24, default 1. */
+            escrow_interval_hours: number;
+            /** @description Full backups kept, 2–60, default 14. */
+            retention_full: number;
+            /** @description 7–365, default 30. */
+            openbao_keep_days: number;
+            /** @description 7–365, default 30. */
+            fleet_keep_days: number;
+        };
+        BackupRunRequest: {
+            /** @description Absent, null or empty for every kind. */
+            kinds?: components["schemas"]["BackupKind"][] | null;
+            /** @default  */
+            label: string;
+        };
+        BackupRunTarget: {
+            /** Format: uuid */
+            target_id: string;
+            ok: boolean;
+            error_class: string | null;
+        };
+        BackupRun: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["BackupKind"];
+            label: string;
+            /** @enum {string} */
+            state: "requested" | "running" | "finished";
+            /** @enum {string|null} */
+            outcome: "succeeded" | "failed" | null;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+            /** Format: int64 */
+            bytes: number;
+            error_class: string | null;
+            targets: components["schemas"]["BackupRunTarget"][];
+            /** @description The administrator or operator who requested the run; null for a scheduled run. */
+            requested_by: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        BackupRunPage: {
+            items: components["schemas"]["BackupRun"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @description A backup key without its text, ciphertext or challenge hash. */
+        BackupKey: {
+            key_id: string;
+            /** @description The first 16 hexadecimal characters of the key's SHA-256. */
+            fingerprint: string;
+            /** @enum {string} */
+            state: "unconfirmed" | "confirmed" | "retired" | "discarded";
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            /** Format: date-time */
+            confirmed_at: string | null;
+            confirmed_by: string | null;
+            /** Format: date-time */
+            retired_at: string | null;
+            attempts: number;
+            legacy: boolean;
+            /**
+             * @description The six 1-based challenge positions in ascending order while the key is unconfirmed (also for the
+             *     imported key legacy, whose administrator never saw a generating response); null in every other state.
+             *     Indices only, never characters of the key.
+             */
+            positions: number[] | null;
+        };
+        BackupKeyStatus: {
+            active: components["schemas"]["BackupKey"] | null;
+            pending: components["schemas"]["BackupKey"] | null;
+            retired: components["schemas"]["BackupKey"][];
+        };
+        /** @description The only response that holds a backup key's text. */
+        BackupKeyGenerated: {
+            key_id: string;
+            /** @description The key: 32 bytes in standard base64 (44 characters). */
+            key: string;
+            fingerprint: string;
+            /** @description Six distinct 1-based positions of key in ascending order; their characters confirm the key. */
+            positions: number[];
+            /** @description The file name the portal offers the key text under. */
+            download_name: string;
+        };
+        BackupKeyConfirm: {
+            /** @description The characters of the key at the six positions, in order. */
+            answer: string;
+        };
+        BackupRepo: {
+            /** @description The pgBackRest repository path of the active key; null without one. */
+            path: string | null;
+            /** Format: int64 */
+            bytes_used: number | null;
+            /** Format: int64 */
+            bytes_free: number | null;
+            stanzas: components["schemas"]["BackupStanza"][];
+        };
+        BackupStanza: {
+            name: string;
+            /**
+             * Format: date-time
+             * @description The last successful full backup the runs recorded.
+             */
+            last_full_at: string | null;
+            /** Format: date-time */
+            wal_archived_at: string | null;
+        };
+        BackupOverview: {
+            key: components["schemas"]["BackupKeyStatus"];
+            schedule: components["schemas"]["BackupSchedule"];
+            targets: components["schemas"]["BackupTarget"][];
+            repo: components["schemas"]["BackupRepo"];
+            /** @description The newest run per kind. */
+            last_runs: components["schemas"]["BackupRun"][];
+        };
         NotificationDestinationPage: {
             items: components["schemas"]["NotificationDestination"][];
             page: number;
@@ -6602,6 +7324,185 @@ export interface components {
             current_wave_index: number;
             /** Format: date-time */
             started_at: string;
+        };
+        AccessReviewPeriod: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+        };
+        /** @description The members of one role as of the worker's last snapshot. */
+        AccessReviewRoleMembers: {
+            role: string;
+            /**
+             * Format: date-time
+             * @description When the role's first comparison was taken; null while it had none.
+             */
+            snapshot_taken_at?: string | null;
+            total: number;
+            members: components["schemas"]["AccessReviewRoleMember"][];
+        };
+        AccessReviewRoleMember: {
+            username: string;
+            authentik_pk: string;
+            /** Format: date-time */
+            first_seen_at: string;
+        };
+        AccessReviewRoleChange: {
+            /** Format: date-time */
+            at: string;
+            /** @description admin.role_granted or admin.role_revoked. */
+            code: string;
+            username: string;
+            role: string;
+            actor: string;
+        };
+        AccessReviewAccount: {
+            username: string;
+            display_name: string;
+            role: string;
+            /** Format: date-time */
+            last_login_at: string | null;
+            disabled: boolean;
+        };
+        /** @description An API token that existed at some time in the period; never its secret. */
+        AccessReviewToken: {
+            name: string;
+            role: string;
+            prefix: string;
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            last_used_at: string | null;
+            /** Format: date-time */
+            revoked_at: string | null;
+            revoked_by: string | null;
+        };
+        AccessReviewReveal: {
+            /** Format: date-time */
+            at: string;
+            code: string;
+            actor: string;
+            device_hostname: string;
+            /** @description The identifying parameters of the event (generation, volume); never a secret. */
+            params: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description Successful actions of step-up sessions and refusals for a missing step-up in the period. */
+        AccessReviewStepUp: {
+            succeeded: number;
+            failed: number;
+        };
+        AccessReviewSessionRevocation: {
+            /** Format: date-time */
+            at: string;
+            username: string;
+            reason: string;
+        };
+        AccessReviewDestructiveAction: {
+            /** Format: date-time */
+            at: string;
+            code: string;
+            actor: string;
+            target: string;
+        };
+        /** @description Role changes in the period, baseline members excluded. */
+        AccessReviewRoleChanges: {
+            total: number;
+            items: components["schemas"]["AccessReviewRoleChange"][];
+        };
+        /** @description Administrator accounts of the organization. */
+        AccessReviewAccounts: {
+            total: number;
+            items: components["schemas"]["AccessReviewAccount"][];
+        };
+        /** @description API tokens that existed in the period. */
+        AccessReviewTokens: {
+            total: number;
+            items: components["schemas"]["AccessReviewToken"][];
+        };
+        /** @description Reveals and downloads of secrets in the period. */
+        AccessReviewReveals: {
+            total: number;
+            items: components["schemas"]["AccessReviewReveal"][];
+        };
+        /** @description Sessions the server ended in the period. */
+        AccessReviewSessionRevocations: {
+            total: number;
+            items: components["schemas"]["AccessReviewSessionRevocation"][];
+        };
+        /** @description Destructive and locking actions in the period. */
+        AccessReviewDestructiveActions: {
+            total: number;
+            items: components["schemas"]["AccessReviewDestructiveAction"][];
+        };
+        /** @description The access review of an organization; every list holds at most row_cap items and states its total. */
+        AccessReviewReport: {
+            /** Format: date-time */
+            generated_at: string;
+            period: components["schemas"]["AccessReviewPeriod"];
+            row_cap: number;
+            roles: components["schemas"]["AccessReviewRoleMembers"][];
+            role_changes: components["schemas"]["AccessReviewRoleChanges"];
+            accounts: components["schemas"]["AccessReviewAccounts"];
+            api_tokens: components["schemas"]["AccessReviewTokens"];
+            /** @description Requests refused for a revoked or expired token or an inactive creator in the period. */
+            token_denials: number;
+            reveals: components["schemas"]["AccessReviewReveals"];
+            step_up: components["schemas"]["AccessReviewStepUp"];
+            sessions_revoked: components["schemas"]["AccessReviewSessionRevocations"];
+            break_glass_accounts: string[];
+            destructive: components["schemas"]["AccessReviewDestructiveActions"];
+        };
+        AccessReviewPlatformAdministrator: {
+            username: string;
+            display_name: string;
+            /** Format: date-time */
+            last_login_at: string | null;
+        };
+        AccessReviewPlatformEvent: {
+            /** Format: date-time */
+            at: string;
+            code: string;
+            actor: string;
+            target: string;
+        };
+        AccessReviewCreatedOrganization: {
+            slug: string;
+            name: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description Platform administrators that signed in at least once. */
+        AccessReviewPlatformAdministrators: {
+            total: number;
+            items: components["schemas"]["AccessReviewPlatformAdministrator"][];
+        };
+        /** @description Privileged platform events in the period. */
+        AccessReviewPlatformEvents: {
+            total: number;
+            items: components["schemas"]["AccessReviewPlatformEvent"][];
+        };
+        /** @description Organizations created in the period. */
+        AccessReviewCreatedOrganizations: {
+            total: number;
+            items: components["schemas"]["AccessReviewCreatedOrganization"][];
+        };
+        /** @description The access review of the platform; every list holds at most row_cap items and states its total. */
+        PlatformAccessReviewReport: {
+            /** Format: date-time */
+            generated_at: string;
+            period: components["schemas"]["AccessReviewPeriod"];
+            row_cap: number;
+            roles: components["schemas"]["AccessReviewRoleMembers"][];
+            administrators: components["schemas"]["AccessReviewPlatformAdministrators"];
+            role_changes: components["schemas"]["AccessReviewRoleChanges"];
+            events: components["schemas"]["AccessReviewPlatformEvents"];
+            organizations_created: components["schemas"]["AccessReviewCreatedOrganizations"];
         };
         /** @description The totals of GET /api/v1/security-review. */
         OverviewSecurityReview: {
@@ -7519,6 +8420,15 @@ export interface components {
          *     printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
          */
         McpClient: string;
+        /** @description RFC 3339; the start of the period, default 90 days before to. */
+        AccessReviewFrom: string;
+        /** @description RFC 3339; the end of the period, default now. */
+        AccessReviewTo: string;
+        AccessReviewFormat: "json" | "csv";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        BackupTargetSort: "name" | "-name" | "type" | "-type" | "created_at" | "-created_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        BackupRunSort: "started_at" | "-started_at" | "kind" | "-kind" | "outcome" | "-outcome";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         NotificationDestinationSort: "name" | "-name" | "type" | "-type" | "created_at" | "-created_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -7535,6 +8445,8 @@ export interface components {
         RolloutReason: string;
         Csrf: "1";
         Id: string;
+        /** @description The key ID (bk-<YYYYMMDD>-<8 hex> or legacy). */
+        BackupKeyId: string;
         /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
         Page: number;
         PageSize: 10 | 25 | 50 | 100;
@@ -11902,6 +12814,65 @@ export interface operations {
             403: components["responses"]["Problem"];
         };
     };
+    getAccessReview: {
+        parameters: {
+            query?: {
+                /** @description RFC 3339; the start of the period, default 90 days before to. */
+                from?: components["parameters"]["AccessReviewFrom"];
+                /** @description RFC 3339; the end of the period, default now. */
+                to?: components["parameters"]["AccessReviewTo"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The access review. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessReviewReport"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    exportAccessReview: {
+        parameters: {
+            query: {
+                /** @description RFC 3339; the start of the period, default 90 days before to. */
+                from?: components["parameters"]["AccessReviewFrom"];
+                /** @description RFC 3339; the end of the period, default now. */
+                to?: components["parameters"]["AccessReviewTo"];
+                format: components["parameters"]["AccessReviewFormat"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The exported report. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessReviewReport"];
+                    "text/csv": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
     listAttentionDevices: {
         parameters: {
             query?: {
@@ -14066,6 +15037,32 @@ export interface operations {
             403: components["responses"]["Problem"];
         };
     };
+    getUpgradeCheck: {
+        parameters: {
+            query: {
+                /** @description The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9). */
+                target_version: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeCheck"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
     listAgentReleases: {
         parameters: {
             query?: {
@@ -14440,6 +15437,65 @@ export interface operations {
             503: components["responses"]["Problem"];
         };
     };
+    getPlatformAccessReview: {
+        parameters: {
+            query?: {
+                /** @description RFC 3339; the start of the period, default 90 days before to. */
+                from?: components["parameters"]["AccessReviewFrom"];
+                /** @description RFC 3339; the end of the period, default now. */
+                to?: components["parameters"]["AccessReviewTo"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The access review. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformAccessReviewReport"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    exportPlatformAccessReview: {
+        parameters: {
+            query: {
+                /** @description RFC 3339; the start of the period, default 90 days before to. */
+                from?: components["parameters"]["AccessReviewFrom"];
+                /** @description RFC 3339; the end of the period, default now. */
+                to?: components["parameters"]["AccessReviewTo"];
+                format: components["parameters"]["AccessReviewFormat"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The exported report. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformAccessReviewReport"];
+                    "text/csv": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
     getAutoUnseal: {
         parameters: {
             query?: never;
@@ -14514,6 +15570,117 @@ export interface operations {
             };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    getBackupKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The key state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupKeyStatus"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    generateBackupKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new key, shown once. */
+            201: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupKeyGenerated"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    confirmBackupKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                /** @description The key ID (bk-<YYYYMMDD>-<8 hex> or legacy). */
+                id: components["parameters"]["BackupKeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupKeyConfirm"];
+            };
+        };
+        responses: {
+            /** @description The confirmed key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupKey"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    discardBackupKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                /** @description The key ID (bk-<YYYYMMDD>-<8 hex> or legacy). */
+                id: components["parameters"]["BackupKeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The discarded key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupKey"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     getPlatformMcpSettings: {
@@ -14802,6 +15969,381 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    getBackupOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The overview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupOverview"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getBackupSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupSchedule"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    putBackupSchedule: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupScheduleUpdate"];
+            };
+        };
+        responses: {
+            /** @description The new schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupSchedule"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    listBackupTargets: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["BackupTargetSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                type?: components["schemas"]["BackupTargetType"][];
+                enabled?: boolean;
+                /** @description Repeatable. */
+                host_state?: components["schemas"]["BackupTargetHostState"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of targets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupTargetPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createBackupTarget: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupTargetInput"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupTarget"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getBackupTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The target. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupTarget"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateBackupTarget: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupTargetInput"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupTarget"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    deleteBackupTarget: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    testBackupTarget: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupTarget"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    enableBackupTarget: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Enabled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupTarget"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    disableBackupTarget: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disabled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupTarget"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    requestBackupRun: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupRunRequest"];
+            };
+        };
+        responses: {
+            /** @description The requested runs. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRun"][];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    listBackupRuns: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["BackupRunSort"];
+                /** @description Repeatable. */
+                kind?: components["schemas"]["BackupKind"][];
+                /** @description Repeatable. */
+                outcome?: ("succeeded" | "failed")[];
+                /** @description Runs that mirrored to this target. */
+                target_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of runs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRunPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     replayPlatformNotificationDestination: {

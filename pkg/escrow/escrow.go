@@ -136,6 +136,12 @@ func Encrypt(pub *rsa.PublicKey, secret []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(ct), nil
 }
 
+// DiagnosticsObjectKey is the object of the sealed diagnostics bundle of a collect_status command in the escrow bucket
+// (ADR 0048 decision 3); the server chooses it, the device only uploads to its presigned URL.
+func DiagnosticsObjectKey(org, device, commandID string) string {
+	return fmt.Sprintf("org/%s/devices/%s/diagnostics/%s.bin", org, device, commandID)
+}
+
 // HeaderObjectKey is the object of a header generation of the LUKS volume with UUID volume in the escrow bucket
 // (architecture §12.4, PDK-009 decision 1); the server chooses it, the device only uploads to its presigned URL. An
 // upload without a volume (an agent before PDK-009: the root volume) keeps the key without the volume.

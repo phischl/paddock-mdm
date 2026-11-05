@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -38,6 +39,14 @@ const StoreDeviceAlert = "device_alert"
 
 // StoreDeviceEventGap is the store name of the filled event gaps in retention.purged (ADR 0032 amendment 2026-10-31).
 const StoreDeviceEventGap = "device_event_gap"
+
+// StoreDeviceDiagnostics is the store name of the diagnostics bundles in retention.purged (ADR 0048 decision 5, plan
+// M12 decision 7).
+const StoreDeviceDiagnostics = "device_diagnostics"
+
+// diagnosticsBatch is the bundles one transaction of the diagnostics expiry reads; each object is deleted before its
+// row changes, so a batch is small.
+const diagnosticsBatch = 100
 
 // StoreAction is the store name of the finished actions, the control-plane origin of audit events, in retention.purged
 // (ADR 0032 amendments 2026-10-18 and 2026-10-31, PDK-180).
@@ -149,6 +158,21 @@ type Retention struct {
 	// holdNotice is the unchanged rounds of a kept Fleet host after which the round records its notice
 	// (holdNoticeRounds).
 	holdNotice int32
+	// bundles deletes the objects of expired diagnostics bundles (WithDiagnosticsObjects).
+	bundles DiagnosticsDeleter
+}
+
+// DiagnosticsDeleter deletes every version of the sealed diagnostics bundle below a key in the escrow bucket
+// (objectstore.Store).
+type DiagnosticsDeleter interface {
+	DeleteAllVersions(ctx context.Context, prefix string) (int, error)
+}
+
+// WithDiagnosticsObjects sets the escrow bucket the diagnostics expiry deletes from; without it the pass fails as soon
+// as a bundle expires.
+func (r *Retention) WithDiagnosticsObjects(o DiagnosticsDeleter) *Retention {
+	r.bundles = o
+	return r
 }
 
 // NewRetention creates the use cases; platform also answers the Fleet host check (hostUsers), indexDays is
@@ -306,6 +330,95 @@ func (r *Retention) PurgeEventGaps(ctx context.Context, now time.Time) (int64, e
 		func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error) {
 			return q.DeleteExpiredEventGaps(ctx, cutoff)
 		})
+}
+
+// PurgeDiagnostics ends the context's organization's stored diagnostics bundles whose retention ended at now (system
+// principal, ADR 0048 decision 5): each object is deleted with every version, then the bundle is expired and its
+// object key, nonce and wrapped key are cleared. The objects of failed or expired bundles that were never stored are
+// deleted the same way once their upload window ended. All of it is recorded as one retention.purged (store
+// device_diagnostics, deleted the bundles whose objects went). Afterwards the rows of ended bundles requested before the audit index cutoff are deleted
+// (purgeAfterIndex, a retention.purged of their own). Without expired bundles or rows it records nothing. It returns
+// the number of expired bundles and deleted rows.
+func (r *Retention) PurgeDiagnostics(ctx context.Context, now time.Time) (int64, error) {
+	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
+		return 0, problem.Unauthenticated
+	}
+	expired, err := r.expireDiagnostics(ctx, now)
+	if err != nil {
+		return expired, err
+	}
+	rows, err := r.purgeAfterIndex(ctx, now, StoreDeviceDiagnostics, func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (bool, error) {
+		return q.HasExpiredDeviceDiagnosticsRows(ctx, cutoff)
+	},
+		func(ctx context.Context, q *pgstore.Queries, cutoff time.Time) (int64, error) {
+			return q.DeleteExpiredDeviceDiagnosticsRows(ctx, cutoff)
+		})
+	return expired + rows, err
+}
+
+// expireDiagnostics is the expiry of PurgeDiagnostics; a bundle whose object deletion fails stays due for the next
+// round and fails the pass. The object is deleted by its derived key, not the row's object_key: an upload that failed
+// or arrived after its bundle ended is referenced by no row.
+func (r *Retention) expireDiagnostics(ctx context.Context, now time.Time) (int64, error) {
+	list := func() ([]pgstore.ListExpiredDeviceDiagnosticsRow, error) {
+		var out []pgstore.ListExpiredDeviceDiagnosticsRow
+		err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			var err error
+			out, err = q.ListExpiredDeviceDiagnostics(ctx, pgstore.ListExpiredDeviceDiagnosticsParams{Now: now, MaxRows: diagnosticsBatch})
+			return err
+		})
+		return out, err
+	}
+	first, err := list()
+	if err != nil || len(first) == 0 {
+		return 0, err
+	}
+	if r.bundles == nil {
+		return 0, r.recordPassFailed(ctx, map[string]any{"store": StoreDeviceDiagnostics, "deleted": int64(0)},
+			errors.New("no escrow bucket to delete diagnostics bundles from"))
+	}
+	spec := SpecRetentionPurged
+	spec.Params = map[string]any{"store": StoreDeviceDiagnostics, "cutoff": audit.Timestamp(now).Format(time.RFC3339Nano)}
+	var deleted int64
+	err = r.runner.RunExternal(ctx, ScopeOrg, spec,
+		func(context.Context, *pgstore.Queries, Recorder) error { return nil },
+		func(ctx context.Context) error {
+			start := time.Now()
+			batch := first
+			for {
+				for _, b := range batch {
+					key := escrow.DiagnosticsObjectKey(b.OrganizationID.String(), b.DeviceID.String(), b.ID.String())
+					if _, err := r.bundles.DeleteAllVersions(ctx, key); err != nil {
+						return fmt.Errorf("delete diagnostics bundle %s: %w", b.ID, err)
+					}
+					var n int64
+					if err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+						var err error
+						if b.State == DiagnosticsStored {
+							n, err = q.ExpireStoredDeviceDiagnostics(ctx, b.ID)
+						} else {
+							n, err = q.ClearEndedDeviceDiagnostics(ctx, pgstore.ClearEndedDeviceDiagnosticsParams{ID: b.ID, Now: now})
+						}
+						return err
+					}); err != nil {
+						return fmt.Errorf("expire diagnostics bundle %s: %w", b.ID, err)
+					}
+					deleted += n
+				}
+				if len(batch) < diagnosticsBatch || time.Since(start) >= r.budget {
+					return nil
+				}
+				var err error
+				if batch, err = list(); err != nil {
+					return err
+				}
+			}
+		},
+		func(_ context.Context, _ *pgstore.Queries, rec Recorder, _ error) error {
+			rec.SetParam("deleted", deleted)
+			return nil
+		})
+	return deleted, err
 }
 
 // indexCutoff is the cutoff of the stores kept as long as the audit index shows their events (ADR 0032 amendment
