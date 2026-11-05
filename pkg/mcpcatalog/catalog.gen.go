@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "3d38b06739908d827828962f85e0cd198aeda416040f888829ccb351155856c9"
+const Version = "f9666ad8b1f3f953b350279ccfe8ce3ea1c2bf0a70a4cf6b885c833bff82f0ae"
 
 var tools = []Tool{
 	{
@@ -133,6 +133,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator. Assigns an open, acknowledged or in-progress finding to an administrator or operator of the organization, or removes the assignee (assignee_id null); the finding is in progress afterwards. 404 not_found for any other account (an auditor, a disabled account, another organization's), 409 invalid_state for a closed finding.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"properties\":{\"assignee_id\":{\"description\":\"The account; null removes the assignee.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]}},\"required\":[\"assignee_id\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "cancelBackupRestorePlan",
+		Method:      "POST",
+		Path:        "/api/platform/v1/backup/restore-plans/{id}/cancel",
+		Pattern:     "POST /api/platform/v1/backup/restore-plans/{id}/cancel",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: true,
+		Idempotent:  false,
+		AuditCode:   "platform.restore_cancelled",
+		Summary:     "",
+		Description: "Roles: platform_admin. Cancels an approved plan: it is expired and the host refuses it. 409 invalid_state for a plan that is not approved. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "cancelDeviceEncryption",
@@ -349,6 +367,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_auditor, with a step-up within the last 300 s (403 step_up_required). Requests a signed evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). At most two exports of the organization may be pending or running (409 too_many_exports). The audit writer builds the package on the audit host; it is ready within minutes for small ranges and expires 7 days after it is ready. Recorded as audit.export_requested; every download as audit.export_downloaded.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"properties\":{\"from_day\":{\"format\":\"date\",\"type\":\"string\"},\"purpose\":{\"maxLength\":500,\"minLength\":1,\"type\":\"string\"},\"to_day\":{\"format\":\"date\",\"type\":\"string\"}},\"required\":[\"from_day\",\"to_day\",\"purpose\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "createBackupRestorePlan",
+		Method:      "POST",
+		Path:        "/api/platform/v1/backup/restore-plans",
+		Pattern:     "POST /api/platform/v1/backup/restore-plans",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "platform.restore_planned",
+		Summary:     "",
+		Description: "Roles: platform_admin. Approves a restore plan, which the host executes within 24 hours with ./paddock restore --plan <id> (host_command). confirmation must be the typed word restore (400 invalid_request otherwise); 400 invalid_request also for a point_in_time plan without at, a point in the future, an unknown component or a source_target_id that names no target. 409 invalid_state while another plan is approved or running, or when the source (the local backup repository without source_target_id) has no successful backup of a chosen component at or before at; the detail names the missing kind. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"at\":{\"description\":\"The point in time; required for kind point_in_time, absent or null for kind components (the newest backups).\",\"format\":\"date-time\",\"type\":[\"string\",\"null\"]},\"components\":{\"items\":{\"enum\":[\"postgres\",\"openbao\",\"fleet\",\"escrow\"],\"type\":\"string\"},\"minItems\":1,\"type\":\"array\"},\"confirmation\":{\"description\":\"The typed word restore.\",\"type\":\"string\"},\"kind\":{\"description\":\"point_in_time needs at.\",\"enum\":[\"point_in_time\",\"components\"],\"type\":\"string\"},\"source_target_id\":{\"description\":\"The target to restore from; absent or null for the local backup repository.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]}},\"required\":[\"kind\",\"components\",\"confirmation\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "createBackupTarget",
@@ -1429,6 +1465,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: platform_admin. The backup overview (plan M15 decision 13): the key state, the schedule, every target with its mirror state per kind, the local repository and the newest run per kind. Never a key, a password or an access key. The repository sizes and the WAL time are null until the backup role reports them.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "getBackupRestorePlan",
+		Method:      "GET",
+		Path:        "/api/platform/v1/backup/restore-plans/{id}",
+		Pattern:     "GET /api/platform/v1/backup/restore-plans/{id}",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: platform_admin. One restore plan.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "getBackupSchedule",
@@ -2599,6 +2653,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_auditor. The chain verification runs of the organization (nightly window, random sample day, paddock-server audit verify). q matches the problems of a run.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: started_at, from_day, ok), q (search over: problems).",
 		InputSchema: json.RawMessage("{\"properties\":{\"ok\":{\"description\":\"Only runs that found the chain intact (true) or broken (false).\",\"type\":\"boolean\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-started_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"started_at\",\"-started_at\",\"from_day\",\"-from_day\",\"ok\",\"-ok\"],\"type\":\"string\"},\"trigger\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"nightly\",\"sample\",\"cli\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "listBackupRestorePlans",
+		Method:      "GET",
+		Path:        "/api/platform/v1/backup/restore-plans",
+		Pattern:     "GET /api/platform/v1/backup/restore-plans",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: platform_admin. The restore plans: approved in the portal, executed on the host with host_command, and the restores the host ran without a plan (kind fresh_install). An approved plan reads as expired 24 hours after its approval.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: created_at, state), q (search over: created_by, kind).",
+		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-created_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"created_at\",\"-created_at\",\"state\",\"-state\"],\"type\":\"string\"},\"state\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"approved\",\"running\",\"completed\",\"failed\",\"expired\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listBackupRuns",

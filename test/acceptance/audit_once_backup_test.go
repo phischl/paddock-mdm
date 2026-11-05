@@ -46,6 +46,29 @@ var backupAuditCases = map[string][]auditCase{
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.backup_run_requested", "failure", auditPollTimeout)
 		}}),
+	"POST /api/platform/v1/backup/restore-plans": append(backupRefusals("platform.restore_planned", http.MethodPost,
+		func() string { return restorePlans }, func() any { return restorePlanBody("restore") }),
+		auditCase{"validation failure", func(t *testing.T, w *auditWorld) {
+			res := call(t, steppedUpRoot(t), http.MethodPost, restorePlans, restorePlanBody("Restore"))
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.restore_planned", "failure", auditPollTimeout)
+		}}),
+	"POST /api/platform/v1/backup/restore-plans/{id}/cancel": func() []auditCase {
+		path := func() string { return restorePlans + "/" + uuid.NewString() + "/cancel" }
+		return append(backupRefusals("platform.restore_cancelled", http.MethodPost, path, noBody),
+			auditCase{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, steppedUpRoot(t), http.MethodPost, path(), nil)
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.restore_cancelled", "failure", auditPollTimeout)
+			}})
+	}(),
+}
+
+const restorePlans = "/api/platform/v1/backup/restore-plans"
+
+// restorePlanBody is a restore plan with the typed word confirmation; only a wrong word leaves the plans as they are.
+func restorePlanBody(confirmation string) map[string]any {
+	return map[string]any{"kind": "components", "components": []string{"openbao"}, "confirmation": confirmation}
 }
 
 func backupTargetBody() map[string]any {
