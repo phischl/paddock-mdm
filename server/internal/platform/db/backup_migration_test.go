@@ -13,7 +13,7 @@ import (
 var backupTables = []string{"backup_key", "backup_target", "backup_target_status", "backup_schedule", "backup_run",
 	"backup_restore_plan"}
 
-// TestBackupMigration proves the grants of migration 00100 (plan M15 decision 3, §6.6): the api's organization role and
+// TestBackupMigration proves the grants and policies of migrations 00100 and 00107 (plan M15 decision 3, §6.6): the api's organization role and
 // every other service role reach none of the six backup tables; paddock_platform manages all of them; paddock_backup
 // reads the key, the targets and the schedule, updates only the target's host and test columns, writes run, status
 // and restore-plan state, and records audit actions in the platform pseudo-organization only.
@@ -157,6 +157,93 @@ func TestBackupMigration(t *testing.T) {
 		}
 		if err := insert(nil, uuid.Nil); err == nil {
 			t.Error("an action without organization context was written")
+		}
+	})
+
+	// Migration 00107 (PDK-729 review, minor 3): the backup role inserts outbox rows and never reads them; the
+	// insert itself is covered by the subtest above.
+	t.Run("backup role cannot read the outbox", func(t *testing.T) {
+		tx, err := backup.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", uuid.Nil.String()); err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, "SELECT * FROM outbox")
+		wantDenied(t, "paddock_backup SELECT outbox", err)
+	})
+
+	// Migration 00107 (plan M15, amendment 2026-11-05, note b; decisions-alpha9 item 29): the backup role reads the
+	// Destroy evidence of every organization and nothing else of theirs; no other role gains anything.
+	t.Run("backup role reads only finished successful Destroy evidence", func(t *testing.T) {
+		super := connect(env.Super)
+		org := uuid.New()
+		device := uuid.NewString()
+		evidence := uuid.New()
+		for _, row := range []struct {
+			id                    uuid.UUID
+			code, status, outcome string
+		}{
+			{evidence, "device.escrow_destroyed", "finished", "success"},
+			{uuid.New(), "device.escrow_destroyed", "finished", "failure"},
+			{uuid.New(), "device.escrow_destroyed", "started", ""},
+			{uuid.New(), "device.retired", "finished", "success"},
+			{uuid.New(), "device.header_downloaded", "finished", "success"},
+		} {
+			var outcome, finished any
+			if row.status == "finished" {
+				outcome, finished = row.outcome, "now()"
+			}
+			_, err := super.Exec(ctx, `INSERT INTO action (id, organization_id, code, status, outcome, actor, target, params,
+				correlation_id, started_at, finished_at) VALUES ($1, $2, $3, $4, $5, '{"kind":"system","id":"issuer"}',
+				jsonb_build_object('type', 'device', 'id', $6::text), '{}', $7, now(),
+				CASE WHEN $8::text IS NULL THEN NULL ELSE now() END)`,
+				row.id, org, row.code, row.status, outcome, device, uuid.NewString(), finished)
+			if err != nil {
+				t.Fatalf("seed %s %s: %v", row.code, row.status, err)
+			}
+		}
+		visible := func(c *pgx.Conn, ctxOrg *uuid.UUID) ([]uuid.UUID, error) {
+			tx, err := c.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			if ctxOrg != nil {
+				if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", ctxOrg.String()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rows, err := tx.Query(ctx, "SELECT id FROM action WHERE organization_id = $1 ORDER BY id", org)
+			if err != nil {
+				return nil, err
+			}
+			return pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+		}
+		got, err := visible(backup, &uuid.Nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0] != evidence {
+			t.Errorf("paddock_backup sees %v of the organization's actions, want only the Destroy evidence %v", got, evidence)
+		}
+		if got, err := visible(backup, &org); err != nil || len(got) != 0 {
+			t.Errorf("paddock_backup in the organization's context sees %v (%v), want nothing", got, err)
+		}
+		if _, err := visible(backup, nil); err == nil {
+			t.Error("paddock_backup read actions without an organization context")
+		}
+		if _, err := backup.Exec(ctx, "UPDATE action SET params = '{}' WHERE id = $1", evidence); err == nil {
+			t.Error("paddock_backup updated the Destroy evidence")
+		}
+		for name, dsn := range map[string]string{"paddock_api": env.API, "paddock_worker": env.Worker,
+			"paddock_compiler": env.Compiler, "paddock_notifier": env.Notifier, "paddock_revocation": env.Revocation} {
+			got, err := visible(connect(dsn), &uuid.Nil)
+			if err != nil || len(got) != 0 {
+				t.Errorf("%s in the platform context sees %v (%v) of an organization's actions", name, got, err)
+			}
 		}
 	})
 

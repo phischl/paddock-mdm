@@ -80,7 +80,16 @@ The overlay `deploy/compose/compose.backup.yaml` (part of the production configu
 - **OpenBao**: `paddock-worker` takes a snapshot when the newest one in the bucket is older than 6 hours (AppRole
   `paddock-backup`, read on `sys/storage/raft/snapshot` only), encrypts it and uploads it. After key operations take
   one by hand (`docs/operations/openbao.md` section 5).
-- **Fleet**: `fleet-backup` dumps Fleet's MySQL once a day into a volume, `fleet-backup-upload` copies it to the bucket.
+- **Fleet**: `fleet-backup` dumps Fleet's MySQL into a volume when the backup role asks for it; the role seals the dump
+  with the backup key into the local set and deletes the plaintext. A dump it cannot seal (repository full, no
+  confirmed key) is tried again every 15 minutes and deleted unsealed after 6 hours, so a plaintext dump never lives
+  longer; a request `fleet-backup` does not answer within an hour fails as `timeout`.
+- **Targets**: the backup role never writes or deletes on a target whose `manifest.json` belongs to another
+  installation (error class `foreign_set`), nor on one whose copy the local set could no longer restore, as after a
+  lost repository volume (`set_shrunk`; the target counts as unreachable, so `PaddockBackupTargetUnreachable` fires
+  after 30 minutes). The check reads what the target actually holds, every key's repository and stanza, not only what
+  its `manifest.json` names. What a target loses and when is in the next section. To reuse a target of an old
+  installation, empty its `paddock-backup/` directory or prefix first.
 
 ### Backup targets: what the mirror copies and what it deletes (plan M15, amendment 2026-11-05)
 
@@ -100,9 +109,15 @@ info files, then `manifest.json`); it verifies the sizes; and only then it delet
 | A WAL segment | the local stanza holds `retention_full` newer fulls, the segment lies below the oldest WAL the local archive holds, and the local archive is contiguous and verified | kept ("held") |
 | pgBackRest's info files | never | re-copied when they changed locally |
 | An OpenBao snapshot or a Fleet dump | older than its keep days, not the newest of its kind on the target, and the local set holds at least one file of that kind | kept |
-| An escrowed LUKS header | the escrow bucket no longer holds it (checked in the same round) | kept |
+| An escrowed LUKS header | the escrow bucket no longer holds it (checked in the same round), the database records a successful Destroy of its device (audit `device.escrow_destroyed`) that is not older than the copy (the escrow object's time recorded in the local set's manifest), and `retention_full` full intervals have passed since that Destroy | kept ("held"); absence from the bucket alone never deletes |
 | The repository of a retired backup key | the active key's repository holds a full backup of every stanza and the target's copy is older than `retention_full` full intervals (counted from the rotation at the earliest) | kept |
 | Anything else (unknown paths, a repository the database does not know) | never | kept; an unknown repository path marks the target run as `unknown_path` |
+
+The same escrow rule applies to the local set. A bucket listing that lacks all, or more than 10 %, of the local
+set's headers without a Destroy behind them (a lost RustFS volume whose bucket was re-created empty, a wrong
+`PADDOCK_ESCROW_S3_BUCKET`) is suspicious: the role copies nothing from that bucket, deletes no header anywhere, fails
+the escrow run and raises `PaddockBackupEscrowListingSuspicious`. Fewer such absences are held, logged once when they
+change and counted in `paddock_backup_escrow_unevidenced_missing`; they never leave the set on their own.
 
 Held objects are counted per target (`paddock_backup_target_held_files{target}`); a hold is not an error and never
 stops the copying. Nothing is deleted because `manifest.json` no longer names it. The cases of a lost local
@@ -117,8 +132,8 @@ Commands (in the control plane's bundle directory, `docs/operations/install.md`)
 ```sh
 ./paddock compose run --rm --no-deps pgbackrest backup --start-fast # full backup of paddock now (pgbackrest-authentik: Authentik)
 ./paddock compose run --rm --no-deps pgbackrest info                # pgbackrest info of the stanza
-./paddock compose run --rm --no-deps paddock-worker backup openbao  # OpenBao snapshot now
-./paddock compose run --rm --no-deps fleet-backup once              # Fleet dump now; fleet-backup-upload uploads it within a minute
+./paddock compose run --rm --no-deps paddock-backup backup now --kind openbao --wait  # OpenBao snapshot now
+./paddock compose run --rm --no-deps fleet-backup once              # Fleet dump now; the backup role seals it within a minute
 ```
 
 ## Restoring the control plane
@@ -198,6 +213,7 @@ The databases are fine, but the `backup-repo` volume or the pgBackRest state vol
 | both lost | a stanza is created in the empty repository and a full taken at once | everything, byte for byte, including snapshots and dumps still inside their keep days and the escrow objects (`set_shrunk` until the repository is rebuilt) | `./paddock restore --only backup-repo --from <target>`; the lone new full is discarded with the empty repository |
 | only the WAL archive lost or with a gap | fulls continue; `pgbackrest verify` reports the gap, so the stanza is not marked verified | every WAL segment ("held"); new fulls and new WAL are copied | `restore --only backup-repo` from a target, or let the fulls roll: the hold ends when the local archive is contiguous and verified again |
 | `openbao/` or `fleet/` partly or wholly lost | the next due snapshot or dump refills the local set | files inside their keep days ("held"); older ones leave by age; the newest copy never leaves | nothing, or `./paddock backup now --kind openbao` |
+| the escrow bucket lost or re-created empty, or `PADDOCK_ESCROW_S3_BUCKET` points to another bucket | the escrow listing is suspicious: nothing is copied or deleted, the escrow run fails, `PaddockBackupEscrowListingSuspicious` fires | every escrowed header, locally and on every target | fix the bucket setting, or put the headers back into the bucket (`./paddock restore --only escrow`); the next escrow run is clean again |
 | a key was rotated, then the repository was lost | as "both lost" for the new key's path | the old key's repository stays until the new key's repository holds a full of every stanza and the copy is older than the retention | as "both lost" |
 
 `restore --only backup-repo` touches neither database, OpenBao nor Fleet and needs no restore plan; it refuses to run

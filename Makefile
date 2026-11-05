@@ -30,11 +30,8 @@ LIB_SH    := $(COMPOSE_DIR)/scripts/lib.sh
 lib_files  = $(shell sed -n 's/^$(1)="\(.*\)"$$/\1/p' $(LIB_SH))
 unexport SECRETS_DIR
 
-# BACKUP=1 adds the backups (plan M6a; compose.backup.yaml with the development wiring of compose.backup.dev.yaml).
+# BACKUP=1 adds the backups (plan M15; compose.backup.yaml with the development wiring of compose.backup.dev.yaml).
 BACKUP_FILES := $(if $(BACKUP),$(call lib_files,DEV_BACKUP_FILES),)
-ifneq ($(BACKUP),)
-export PADDOCK_BACKUP_S3_ENDPOINT ?= https://backup-s3-tls:9443
-endif
 
 # CI only (PDK-540): the workflow sets PADDOCK_CI_GOMODCACHE to the runner's module download cache, which the image
 # builds read instead of the module proxy; unset, as locally, the Compose files are unchanged.
@@ -434,8 +431,8 @@ fleet-bootstrap: ## Set up Fleet: admin user, API-only user paddock (token), glo
 	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
 
 .PHONY: dev-seed
-dev-seed: ## Create organizations acme and globex and assign the dev users
-	go run ./test/acceptance/cmd/devseed
+dev-seed: ## Create organizations acme and globex and assign the dev users (BACKUP=1: and the development backup targets)
+	BACKUP=$(BACKUP) go run ./test/acceptance/cmd/devseed
 
 # Guard against hangs; the whole suite took ~85 min on a development machine and ~82 min on a GitHub runner since M8x
 # (measured 2026-10-18) and 101 min on a GitHub runner on 2026-10-21 (PR #118). CI therefore runs it in shards

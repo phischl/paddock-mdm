@@ -2,8 +2,9 @@
 // the organizations acme and globex with their domains acme.test and globex.test through the platform API, assigns
 // the dev users to their Authentik groups, gives them TOTP authenticators with the keys of .secrets/ (step-up, plan
 // M4a decision 8) and sets acme's login settings for the test VMs (break-glass account paddock, sudoers.d allow list
-// README and 90-paddock). It waits until Authentik has applied the Paddock blueprints, the login flow is executable
-// and paddock-worker has set the default brand's flows, and is idempotent.
+// README and 90-paddock); with BACKUP set it also creates the development backup targets. It waits until Authentik
+// has applied the Paddock blueprints, the login flow is executable and paddock-worker has set the default brand's
+// flows, and is idempotent.
 package main
 
 import (
@@ -102,6 +103,11 @@ func run() error {
 	}
 	if err := seedTOTP(ctx); err != nil {
 		return err
+	}
+	if os.Getenv("BACKUP") != "" {
+		if err := seedBackupTargets(ctx, admin); err != nil {
+			return err
+		}
 	}
 	return seedLoginSettings(ctx)
 }

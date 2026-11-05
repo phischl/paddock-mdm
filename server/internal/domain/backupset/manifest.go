@@ -54,7 +54,9 @@ type Stanza struct {
 	WALMax     string    `json:"wal_max,omitempty"`
 }
 
-// File is one file of the set. Escrow objects carry no hash and no time: they are copied unchanged.
+// File is one file of the set. Escrow objects carry no hash: they are copied unchanged. Their time is the escrow
+// object's own time (LastModified at copy time), absent when unknown; the backup role's escrow rule needs it to tell
+// whether a Destroy covers a copy (plan M15, A2 note 2026-11-05 c).
 type File struct {
 	Path   string    `json:"path"`
 	Bytes  int64     `json:"bytes"`

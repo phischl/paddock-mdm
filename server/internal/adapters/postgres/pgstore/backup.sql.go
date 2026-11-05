@@ -163,6 +163,31 @@ func (q *Queries) DeleteBackupTarget(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const getBackupRun = `-- name: GetBackupRun :one
+SELECT id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at FROM backup_run WHERE id = $1
+`
+
+// `paddock-server backup now --wait` follows its runs.
+func (q *Queries) GetBackupRun(ctx context.Context, id uuid.UUID) (BackupRun, error) {
+	row := q.db.QueryRow(ctx, getBackupRun, id)
+	var i BackupRun
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Label,
+		&i.State,
+		&i.Outcome,
+		&i.RequestedBy,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.Bytes,
+		&i.ErrorClass,
+		&i.Targets,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getBackupSchedule = `-- name: GetBackupSchedule :one
 SELECT singleton, full_interval_hours, openbao_interval_hours, fleet_interval_hours, escrow_interval_hours, retention_full, openbao_keep_days, fleet_keep_days, updated_by, updated_at FROM backup_schedule WHERE singleton
 `

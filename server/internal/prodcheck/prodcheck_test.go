@@ -143,15 +143,15 @@ func TestProductionConfigurationPasses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected all PASS:\n%s", out)
 	}
-	if strings.Count(out, "PASS") != 17 {
-		t.Fatalf("expected 17 items:\n%s", out)
+	if strings.Count(out, "PASS") != 18 {
+		t.Fatalf("expected 18 items:\n%s", out)
 	}
 }
 
 func TestDevelopmentVariableFailsNamingIt(t *testing.T) {
 	for _, name := range []string{"PADDOCK_STEPUP_WINDOW", "PADDOCK_STEPUP_MAX_AUTH_AGE", "PADDOCK_STALENESS_UNIT",
 		"PADDOCK_TEST_EXTERNAL_DELAY", "PADDOCK_REAPER_THRESHOLD", "PADDOCK_OSV_SYNC_INTERVAL", "PADDOCK_LOGIN_MFA_OPTIONAL",
-		"PADDOCK_RETENTION_UNIT", "PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE"} {
+		"PADDOCK_RETENTION_UNIT", "PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE", "PADDOCK_BACKUP_FULL_INTERVAL_S"} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
 			f.setEnv("paddock-api", name, "30s")
@@ -636,6 +636,7 @@ var labItems = []string{
 	"lab: roles resolve the public names to the proxy",
 	"role trusted proxies",
 	"ip allow list bypass is off",
+	"backup: no S3 credentials or encryption key on the worker",
 	"audit index retention of the retention round",
 	"release public keys are production keys",
 }

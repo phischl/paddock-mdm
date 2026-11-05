@@ -133,6 +133,10 @@ SELECT count(*) FROM (
   LIMIT @count_limit
 ) matching;
 
+-- `paddock-server backup now --wait` follows its runs.
+-- name: GetBackupRun :one
+SELECT * FROM backup_run WHERE id = @id;
+
 -- name: LatestBackupRuns :many
 SELECT DISTINCT ON (kind) * FROM backup_run
 ORDER BY kind, coalesce(started_at, created_at) DESC, id DESC;

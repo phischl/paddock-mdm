@@ -34,9 +34,12 @@ ESCROW_API_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_api_access_key")"
 ESCROW_API_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_api_secret_key")"
 ESCROW_REVOCATION_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_revocation_access_key")"
 ESCROW_REVOCATION_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_revocation_secret_key")"
+ESCROW_BACKUP_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_backup_access_key")"
+ESCROW_BACKUP_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_backup_secret_key")"
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY COMPILER_ACCESS_KEY COMPILER_SECRET_KEY GATEWAY_ACCESS_KEY GATEWAY_SECRET_KEY \
   ARTIFACTS_ACCESS_KEY ARTIFACTS_SECRET_KEY ESCROW_WORKER_ACCESS_KEY ESCROW_WORKER_SECRET_KEY ESCROW_API_ACCESS_KEY \
-  ESCROW_API_SECRET_KEY ESCROW_REVOCATION_ACCESS_KEY ESCROW_REVOCATION_SECRET_KEY
+  ESCROW_API_SECRET_KEY ESCROW_REVOCATION_ACCESS_KEY ESCROW_REVOCATION_SECRET_KEY ESCROW_BACKUP_ACCESS_KEY \
+  ESCROW_BACKUP_SECRET_KEY
 export_rc_host bundles "$ENDPOINT" AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 
 # Credentials travel as inherited environment variables, never as command-line arguments.
@@ -49,7 +52,7 @@ rc() {
     -e COMPILER_ACCESS_KEY -e COMPILER_SECRET_KEY -e GATEWAY_ACCESS_KEY -e GATEWAY_SECRET_KEY \
     -e ARTIFACTS_ACCESS_KEY -e ARTIFACTS_SECRET_KEY -e ESCROW_WORKER_ACCESS_KEY -e ESCROW_WORKER_SECRET_KEY \
     -e ESCROW_API_ACCESS_KEY -e ESCROW_API_SECRET_KEY -e ESCROW_REVOCATION_ACCESS_KEY -e ESCROW_REVOCATION_SECRET_KEY \
-    --entrypoint sh "$RC_IMAGE" -c "$1"
+    -e ESCROW_BACKUP_ACCESS_KEY -e ESCROW_BACKUP_SECRET_KEY --entrypoint sh "$RC_IMAGE" -c "$1"
 }
 
 for _ in $(seq 1 30); do
@@ -129,4 +132,10 @@ policy paddock-escrow-destroy "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},
   {\"Effect\":\"Allow\",\"Action\":[\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\"]}]"
 user ESCROW_REVOCATION_ACCESS_KEY paddock-escrow-destroy
+# The backup role copies the escrowed LUKS headers into the backup set (plan M15 decision 15): list and read them,
+# nothing else; diagnostics bundles are not part of a backup.
+policy paddock-escrow-backup "[
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\"]}]"
+user ESCROW_BACKUP_ACCESS_KEY paddock-escrow-backup
 echo "bundles, agent artifacts and escrow bucket bootstrap complete"

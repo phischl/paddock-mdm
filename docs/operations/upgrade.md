@@ -120,8 +120,8 @@ This section does not apply to the move to 0.1.0-alpha.7, which is a fresh insta
    ```sh
    ./paddock compose run --rm --no-deps pgbackrest backup --start-fast
    ./paddock compose run --rm --no-deps pgbackrest-authentik backup --start-fast
-   ./paddock compose run --rm --no-deps paddock-worker backup openbao
-   ./paddock compose run --rm --no-deps fleet-backup once   # fleet-backup-upload uploads it within a minute
+   ./paddock compose run --rm --no-deps paddock-backup backup now --kind openbao --wait
+   ./paddock compose run --rm --no-deps fleet-backup once   # the backup role seals it within a minute
    ```
 
 4. Audit host only, when the release notes of a version between A and B name **audit migrations** (`Schema: … audit

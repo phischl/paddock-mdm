@@ -17,6 +17,9 @@ type RunTarget struct {
 	TargetID   string `json:"target_id"`
 	OK         bool   `json:"ok"`
 	ErrorClass string `json:"error_class,omitempty"`
+	// Held counts the objects the target keeps although the local set lacks them, because the local expire would not
+	// have removed them yet (plan M15, amendment 2026-11-05, A1); a hold is never an error.
+	Held int `json:"held,omitempty"`
 }
 
 // ParseRunTargets decodes backup_run.targets.

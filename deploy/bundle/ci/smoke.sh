@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test of an operator bundle (plan M7b decision 25, §6.2): follows the installation guide on one machine with two
 # bundle directories and two Compose projects, paddock-cp and paddock-audit. The running control plane adds the CI
-# overlay compose.ci.yaml (internal TLS instead of ACME, backups to the audit project's RustFS); `./paddock check`
+# overlay compose.ci.yaml (internal TLS instead of ACME); `./paddock check`
 # renders the production files without it.
 #   smoke.sh <tarball> [--agent-artifacts <dir>] [--work <dir>]
 # Exit 0: every step passed; 1: a step failed (named on stderr); 2: usage. Needs docker, docker compose >= 2.24, go
@@ -112,7 +112,6 @@ for host in cp audit; do
   setenv "$env_file" PADDOCK_INTERCONNECT_ADDR "$addr"
   setenv "$env_file" PADDOCK_CONTROLPLANE_ADDR "$addr"
   setenv "$env_file" PADDOCK_AUDIT_ADDR "$addr"
-  setenv "$env_file" PADDOCK_BACKUP_S3_ENDPOINT https://backup-s3-tls:9443
 done
 
 step "3 secrets"
@@ -130,19 +129,12 @@ for key in minisign revoke-minisign; do
     -s "$W/keys/$key.key" </dev/null >/dev/null)
   cp "$W/keys/$key.pub" "$W/cp/.secrets/release-production/$key.pub"
 done
-for role in pgbackrest worker fleet; do
-  printf '%s' "ci$(rand | head -c 16)" >"$W/cp/.secrets/backup_${role}_access_key"
-  printf '%s' "$(rand)" >"$W/cp/.secrets/backup_${role}_secret_key"
-done
 : >"$W/cp/.secrets/caddy-root.crt"
 chmod 666 "$W/cp/.secrets/caddy-root.crt"
 
-step "4 audit host: infrastructure, audit bucket, backup bucket"
+step "4 audit host: infrastructure, audit bucket"
 audit_paddock up --infra
 audit_paddock bootstrap audit-bucket
-cp "$W/cp/.secrets"/backup_* "$W/audit/.secrets/"
-PADDOCK_ENV=development SECRETS_DIR="$W/audit/.secrets" NETWORK=paddock-audit_audit-store \
-  "$repo/deploy/compose/scripts/rustfs-backup-bootstrap.sh"
 
 step "5 control plane: infrastructure, OpenBao, buckets, Fleet"
 cp_paddock up --infra
@@ -221,9 +213,14 @@ expect_status '4[0-9][0-9]' device.paddock.localhost POST /v1/checkin
 # The probes above prove Caddy's bind to 443 with NET_BIND_SERVICE as its only capability. Port 80 is not probed: the
 # CI overlay runs the development Caddyfile, which has no HTTP listener (auto_https disable_redirects).
 "$here/assert-hardening.sh" paddock-cp paddock-audit
-cp_paddock compose run --rm --no-deps -T pgbackrest backup --start-fast
-cp_paddock compose run --rm --no-deps -T pgbackrest info | tee "$W/pgbackrest-info.txt"
-grep -q 'full backup' "$W/pgbackrest-info.txt" || fail "pgbackrest info shows no full backup"
+# A fresh installation has no confirmed backup key (plan M15 decision 16): paddock-backup is healthy (above) and
+# pgBackRest waits for the key instead of backing up.
+waited=false
+for _ in $(seq 1 30); do
+  if cp_paddock compose logs --no-color pgbackrest 2>&1 | grep -q 'waiting for the backup key'; then waited=true; break; fi
+  sleep 2
+done
+$waited || fail "pgbackrest does not wait for the backup key"
 if [[ -n "$agent_artifacts" ]]; then
   mkdir -p "$W/agent/amd64"
   minisign_sign() { (cd "$repo/agent" && GOTOOLCHAIN=auto go run aead.dev/minisign/cmd/minisign -S "$@" </dev/null >/dev/null); }

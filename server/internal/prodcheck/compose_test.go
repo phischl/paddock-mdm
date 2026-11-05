@@ -123,16 +123,37 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 			}
 		})
 	}
-	t.Run("backup secrets reach the production worker", func(t *testing.T) {
+	// Plan M15 decisions 15 and 18: the backup secrets moved from the worker to the backup role.
+	t.Run("backup secrets reach the backup role, not the worker", func(t *testing.T) {
 		cfg := renderConfig(t, prodFiles(t, "controlplane"), "prod.env.example")
-		mounted := map[string]bool{}
-		for _, s := range cfg.Services["paddock-worker"].Secrets {
-			mounted[s.Source] = true
+		mounted := func(service string) map[string]bool {
+			m := map[string]bool{}
+			for _, s := range cfg.Services[service].Secrets {
+				m[s.Source] = true
+			}
+			return m
 		}
-		for _, want := range []string{"backup_worker_access_key", "backup_worker_secret_key", "backup_encryption_key",
-			"approle_backup_role_id", "approle_backup_secret_id", "internal_ca_bundle", "db_paddock_worker_url"} {
-			if !mounted[want] {
-				t.Errorf("paddock-worker does not mount %s", want)
+		backup, worker := mounted("paddock-backup"), mounted("paddock-worker")
+		for _, want := range []string{"db_paddock_backup_url", "db_paddock_platform_url", "approle_backup_role_id",
+			"approle_backup_secret_id", "rustfs_escrow_backup_access_key", "rustfs_escrow_backup_secret_key",
+			"internal_ca_bundle"} {
+			if !backup[want] {
+				t.Errorf("paddock-backup does not mount %s", want)
+			}
+		}
+		for name := range worker {
+			if strings.Contains(name, "backup") {
+				t.Errorf("paddock-worker mounts %s", name)
+			}
+		}
+		for _, name := range []string{"fleet-backup-upload", "backup-s3-tls"} {
+			if _, ok := cfg.Services[name]; ok {
+				t.Errorf("service %s is still configured", name)
+			}
+		}
+		for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{}) {
+			if strings.HasPrefix(r.Item, "backup:") && !r.OK {
+				t.Errorf("%s:\n%s", r.Item, r.Detail)
 			}
 		}
 	})

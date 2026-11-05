@@ -269,3 +269,18 @@ func TestM15BackupKeyCodes(t *testing.T) {
 		}
 	}
 }
+
+// TestBackupRunCodes: the backup role's run events carry the params of plan M15 §6.4 and one outcome each.
+func TestBackupRunCodes(t *testing.T) {
+	params := []string{"run_id", "kind", "label", "bytes", "duration_s", "targets_ok", "targets_failed", "error_class"}
+	for code, outcome := range map[Code]Outcome{CodePlatformBackupCompleted: OutcomeSuccess, CodePlatformBackupFailed: OutcomeFailure} {
+		d, ok := Lookup(code)
+		if !ok || !d.Emitted || d.Description == "" {
+			t.Errorf("%s is not registered as emitted with a description", code)
+			continue
+		}
+		if !slices.Equal(d.Params, params) || !slices.Equal(d.Outcomes, []Outcome{outcome}) {
+			t.Errorf("%s: params %v outcomes %v", code, d.Params, d.Outcomes)
+		}
+	}
+}
