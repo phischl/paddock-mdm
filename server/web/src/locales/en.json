@@ -120,6 +120,7 @@
     "ipAllowlist": "IP allow list",
     "sessions": "Sessions",
     "openbao": "OpenBao",
+    "backup": "Backup",
     "platformMcp": "MCP policy",
     "users": "Users",
     "userGroups": "Groups",
@@ -318,7 +319,10 @@
     "notification_replay_pending": "The destination is retrying a batch, or an earlier replay is still running. Wait until it is complete, or disable the destination, then replay.",
     "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment.",
     "rollout_conflict": "A running or halted rollout stages this item. Complete the rollout or revert its change set first.",
-    "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent."
+    "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent.",
+    "backup_key_mismatch": "The characters do not match the key.",
+    "backup_target_state_unchanged": "The target is already in this state.",
+    "backup_key_discarded_after_mismatches": "The key was discarded after three wrong confirmations. Generate a new key."
   },
   "audit": {
     "vulnerability": {
@@ -1560,6 +1564,204 @@
       "sentence": "I understand and accept the risk"
     }
   },
+  "backup": {
+    "title": "Backup",
+    "summary": "Backups of the control plane's databases, the OpenBao snapshot and the escrow, mirrored to the targets below and protected by one key.",
+    "on": "On",
+    "off": "Off",
+    "tabs": {
+      "overview": "Overview",
+      "targets": "Targets",
+      "key": "Key",
+      "schedule": "Schedule",
+      "history": "History"
+    },
+    "kinds": {
+      "postgres": "Databases",
+      "authentik": "Identity provider",
+      "openbao": "OpenBao",
+      "fleet": "Fleet",
+      "escrow": "Escrow"
+    },
+    "outcomes": {
+      "succeeded": "Succeeded",
+      "failed": "Failed"
+    },
+    "states": {
+      "requested": "Requested",
+      "running": "Running",
+      "finished": "Finished"
+    },
+    "hostStates": {
+      "n/a": "Not applicable",
+      "pending_host": "Waiting for the host",
+      "mounted": "Mounted",
+      "unreachable": "Unreachable"
+    },
+    "tests": {
+      "waiting": "Test requested",
+      "never": "Not tested",
+      "ok": "Test passed",
+      "failed": "Test failed"
+    },
+    "kindStates": {
+      "ok": "Backed up",
+      "failed": "Failed",
+      "never": "Never"
+    },
+    "run": {
+      "title": "Back up now",
+      "confirm": "This starts a backup of every kind. The backup service runs it in its next round.",
+      "now": "Back up now",
+      "requested": "The backup was requested."
+    },
+    "overview": {
+      "grid": "Last successful backup per target",
+      "noTargets": "No target yet. Add one on the Targets tab.",
+      "repo": "Local repository",
+      "repoUnknown": "The backup service has not reported the repository yet.",
+      "repoUsage": "{used} used, {free} free",
+      "lastRuns": "Latest runs"
+    },
+    "targets": {
+      "type": "Type",
+      "types": {
+        "local": "Local directory",
+        "smb": "SMB share",
+        "nfs": "NFS export",
+        "s3": "S3 bucket"
+      },
+      "enabled": "Enabled",
+      "hostState": "Host state",
+      "test": "Test",
+      "nameInvalid": "The name must start with a letter or digit and may use letters, digits, spaces and . _ - (up to 64 characters).",
+      "nameHint": "Letters, digits, spaces and . _ -",
+      "nameTaken": "A target with this name already exists.",
+      "pathInvalid": "Enter an absolute directory without \"..\".",
+      "required": "This field is required.",
+      "passwordAgain": "The destination changed: enter the password again.",
+      "keysAgain": "The destination or the keys changed: enter both keys again.",
+      "exportInvalid": "Enter an absolute export path.",
+      "endpointInvalid": "Enter an https URL.",
+      "localPath": "Directory on the host",
+      "localPathHint": "An absolute directory of the control-plane host.",
+      "host": "Host",
+      "share": "Share",
+      "subPath": "Path below it (optional)",
+      "domain": "Domain (optional)",
+      "username": "User name",
+      "password": "Password",
+      "unchanged": "unchanged",
+      "secretHint": "Stored encrypted, never shown again.",
+      "options": "Mount options (optional)",
+      "smbOptionsHint": "Comma-separated: vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N.",
+      "nfsOptionsHint": "Comma-separated: vers=4|4.1|4.2, hard, timeo=N, retrans=N, nconnect=N.",
+      "export": "Export",
+      "endpoint": "Endpoint",
+      "bucket": "Bucket",
+      "region": "Region (optional)",
+      "regionHint": "Default us-east-1.",
+      "prefix": "Prefix (optional)",
+      "caPem": "CA certificates (optional)",
+      "caPemHint": "PEM certificates of a private CA the endpoint chains to.",
+      "accessKey": "Access key",
+      "secretKey": "Secret key",
+      "saved": "The target was saved.",
+      "deleted": "The target {name} was deleted.",
+      "enabledDone": "The target {name} is enabled.",
+      "disabledDone": "The target {name} is disabled.",
+      "deleteTitle": "Delete this target?",
+      "deleteConfirm": "The backup sets already on {name} stay, but no further backup is written to it.",
+      "disableTitle": "Disable this target?",
+      "disableConfirm": "No further backup is written to {name} until it is enabled again.",
+      "disable": "Disable",
+      "enable": "Enable",
+      "create": "Add target",
+      "createTitle": "Add a backup target",
+      "editTitle": "Edit the backup target",
+      "testLabel": "Test {name}",
+      "disableLabel": "Disable {name}",
+      "enableLabel": "Enable {name}",
+      "editLabel": "Edit {name}",
+      "deleteLabel": "Delete {name}",
+      "hostStep": "Mounting a share needs the host: run {apply} and then {up} on the control plane. The target shows \"Mounted\" when the backup service sees it.",
+      "reenter": "Your identity was confirmed. Enter the credentials again; they are never kept in the browser.",
+      "testWaiting": "Testing {name}. The backup service answers in its next round.",
+      "testOk": "The connection test of {name} passed.",
+      "testError": "The connection test of {name} failed: {error}",
+      "testUnknown": "unknown error",
+      "testTimeout": "The backup service has not answered the test of {name} yet. Check the list later.",
+      "empty": {
+        "title": "No backup target",
+        "description": "Add a local directory, a share or an S3 bucket to keep backups outside the repository."
+      }
+    },
+    "runs": {
+      "kind": "Kind",
+      "outcome": "Outcome",
+      "startedAt": "Started",
+      "size": "Size",
+      "targets": "Targets",
+      "targetsOk": "{ok} of {total} targets",
+      "empty": {
+        "title": "No backup has run yet",
+        "description": "Runs appear here after the first backup."
+      }
+    },
+    "key": {
+      "dialog": {
+        "title1": "Backup key",
+        "title2": "Store the backup key",
+        "title3": "Confirm the backup key"
+      },
+      "explain": "Paddock protects every backup with one key. You will see it exactly once. Store it where a lost server cannot take it with it — a password manager, a printed copy in a safe — and keep it with the OpenBao unseal shares. Without the key no backup can ever be read.",
+      "shownOnce": "This is the only time Paddock shows the key.",
+      "keyText": "Backup key",
+      "fingerprint": "Fingerprint: {fingerprint}",
+      "download": "Download",
+      "fileSentence": "This is the only copy Paddock will ever show. Keep it outside the server.",
+      "confirmText": "Type the characters at the positions shown. This proves the key reached your safe place. After three mistakes the key is discarded and a new one is generated.",
+      "positionsGroup": "Characters of the key",
+      "position": "Position {n}",
+      "attemptsLeft": "{count, plural, =0 {No attempt left.} one {That did not match. # attempt left.} other {That did not match. # attempts left.}}",
+      "generate": "Generate the key",
+      "discardTitle": "Discard the backup key?",
+      "discardConfirm": "The key is destroyed and cannot be shown again. A backup stays impossible until you generate and confirm a new key. If you have not stored it yet, this is the right choice.",
+      "discardAction": "Discard the key",
+      "discard": "I did not store the key — discard it",
+      "stored": "I stored the key",
+      "confirm": "Confirm",
+      "discarded": "The key was discarded. Generate a new one.",
+      "confirmed": "The key is confirmed and active.",
+      "statePending": "A backup key waits for its confirmation. No backup runs before it is confirmed.",
+      "stateActive": "A backup key is active.",
+      "stateNone": "No backup key yet. No backup runs before one is generated and confirmed.",
+      "fingerprintColumn": "Fingerprint",
+      "retiredAt": "Retired",
+      "pendingText": "The key {fingerprint} waits for its confirmation.",
+      "confirmNow": "Confirm the key",
+      "active": "Active key",
+      "activeSince": "Confirmed by {by}",
+      "rotate": "Rotate the key",
+      "create": "Generate a key",
+      "retired": "Retired keys",
+      "noRetired": "No retired key"
+    },
+    "schedule": {
+      "saved": "The schedule was saved.",
+      "range": "{min}–{max}",
+      "invalid": "Enter a whole number from {min} to {max}.",
+      "fields": {
+        "full_interval_hours": "Full backup every (hours)",
+        "openbao_interval_hours": "OpenBao snapshot every (hours)",
+        "fleet_interval_hours": "Fleet dump every (hours)",
+        "escrow_interval_hours": "Escrow mirror every (hours)",
+        "retention_full": "Full backups kept",
+        "openbao_keep_days": "OpenBao snapshots kept (days)",
+        "fleet_keep_days": "Fleet dumps kept (days)"
+      }
+    }
+  },
   "changeSets": {
     "title": "Change sets",
     "summary": "Every configuration applied with paddockctl or PUT /api/v1/config that changed something, with its plan.",
@@ -2690,6 +2892,7 @@
       "organization": "Create the first organization",
       "orgAdmin": "Assign the first organization administrator in the identity provider",
       "release": "Publish an agent release",
+      "backup": "Back up the platform (confirm a key, enable a target)",
       "allowlist": "Restrict the platform to an IP allow list (optional)",
       "breakGlass": "Name the break-glass accounts",
       "users": "Connect an identity source that delivers users",

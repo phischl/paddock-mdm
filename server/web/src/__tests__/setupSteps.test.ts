@@ -57,4 +57,17 @@ describe('loadSetupSteps', () => {
     expect(queries['/api/platform/v1/agent-releases']?.status).toEqual(['published'])
     expect(list.find((x) => x.key === 'allowlist')?.optional).toBe(true)
   })
+
+  it('marks the backup step done only with a confirmed key and an enabled target', async () => {
+    const base = { '/api/platform/v1/organizations': page([]), '/api/platform/v1/agent-releases': page([]), '/api/platform/v1/ip-allowlist': page([]) }
+    const key = { active: { key_id: 'k' }, pending: null, retired: [] }
+    stubApi({ ...base, '/api/platform/v1/backup': { key, targets: [{ enabled: true }] } })
+    expect(stateOf(await loadSetupSteps({ isPlatform: true, canWrite: false }), 'backup')).toBe('done')
+    stubApi({ ...base, '/api/platform/v1/backup': { key, targets: [{ enabled: false }] } })
+    expect(stateOf(await loadSetupSteps({ isPlatform: true, canWrite: false }), 'backup')).toBe('open')
+    stubApi({ ...base, '/api/platform/v1/backup': { key: { active: null, pending: null, retired: [] }, targets: [{ enabled: true }] } })
+    expect(stateOf(await loadSetupSteps({ isPlatform: true, canWrite: false }), 'backup')).toBe('open')
+    stubApi(base)
+    expect(stateOf(await loadSetupSteps({ isPlatform: true, canWrite: false }), 'backup')).toBe('unknown')
+  })
 })
