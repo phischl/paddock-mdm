@@ -41,3 +41,10 @@ SELECT role FROM platform_role_snapshot ORDER BY role;
 
 -- name: InsertPlatformRoleSnapshot :exec
 INSERT INTO platform_role_snapshot (role, taken_at) VALUES (@role, now()) ON CONFLICT DO NOTHING;
+
+-- name: ListOrganizationRoleSnapshotTimes :many
+-- The first comparison of every role of the caller's organization, for the access review (plan M12 decision 25).
+SELECT role, taken_at FROM organization_role_snapshot ORDER BY role;
+
+-- name: ListPlatformRoleSnapshotTimes :many
+SELECT role, taken_at FROM platform_role_snapshot ORDER BY role;

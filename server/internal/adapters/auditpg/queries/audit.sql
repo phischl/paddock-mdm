@@ -272,3 +272,28 @@ WHERE occurred_at >= @month_start::timestamptz AND occurred_at < @month_end::tim
 SELECT * FROM audit_verification_run
 WHERE organization_id = @organization_id AND from_day <= @to_day AND to_day >= @from_day
 ORDER BY started_at DESC LIMIT 100;
+
+-- Access review (plan M12 decision 25): the events of the given codes and outcomes in [from, to), oldest first, and
+-- their number; the baseline members of a role's first comparison are left out on request. RLS supplies the
+-- organization.
+
+-- name: ListAuditEventsForReview :many
+SELECT * FROM audit_event
+WHERE occurred_at >= @from_time AND occurred_at < @to_time
+  AND code = ANY(@codes::text[]) AND outcome = ANY(@outcomes::text[])
+  AND NOT (@exclude_baseline::boolean AND params->>'baseline' = 'true')
+ORDER BY occurred_at, event_id
+LIMIT @max_rows;
+
+-- name: CountAuditEventsForReview :one
+SELECT count(*) FROM audit_event
+WHERE occurred_at >= @from_time AND occurred_at < @to_time
+  AND code = ANY(@codes::text[]) AND outcome = ANY(@outcomes::text[])
+  AND NOT (@exclude_baseline::boolean AND params->>'baseline' = 'true');
+
+-- name: CountStepUpEventsForReview :one
+-- Successful actions of a step-up session and the refusals for a missing step-up, in [from, to).
+SELECT (count(*) FILTER (WHERE outcome = 'success' AND (actor->>'step_up')::boolean))::bigint AS succeeded,
+       (count(*) FILTER (WHERE outcome = 'denied' AND params->>'error_code' = 'step_up_required'))::bigint AS refused
+FROM audit_event
+WHERE occurred_at >= @from_time AND occurred_at < @to_time;

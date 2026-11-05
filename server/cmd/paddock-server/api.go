@@ -232,6 +232,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		AccountList:     app.NewAccountList(orgPool),
 		Overview:        app.NewOverview(orgPool),
 		SecurityReview:  app.NewSecurityReview(orgPool),
+		AccessReview:    app.NewAccessReview(runner, orgPool, auditReader),
 		MCPSettings:     app.NewMCPSettings(runner, orgPool, platformPool),
 		MCPAccess:       app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
 		Inventory:       app.NewInventory(orgPool),
