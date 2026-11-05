@@ -190,6 +190,7 @@ Decline, say why in one sentence, and name the portal page:
 | Add, change or remove an APT package source | `createSoftwareSource`, `updateSoftwareSource`, `deleteSoftwareSource` | *Package sources* |
 | Request a signed evidence package of the audit trail | `createAuditExport` | *Evidence exports* |
 | Change the MCP policy or your own write access | `updateMcpSettings`, `updatePlatformMcpSettings`, `enableMcpWrite` | *Settings › MCP*, *Platform › MCP policy*, account menu *AI assistant (MCP)* |
+| Create, change, enable, disable, test or delete a backup target, change the backup schedule, start a backup run | `createBackupTarget`, `updateBackupTarget`, `enableBackupTarget`, `disableBackupTarget`, `testBackupTarget`, `deleteBackupTarget`, `putBackupSchedule`, `requestBackupRun` | *Platform › Backups* |
 
 The complete, generated list is in [`references/tools.md`](references/tools.md) under *Step-up operations*. A change
 that needs a step-up only in some cases (an effectively Full profile, a file on a sensitive path) answers

@@ -26,7 +26,8 @@ type AppRole struct{ RoleID, SecretID string }
 
 // Start starts OpenBao and creates transit/keys/audit-chain, transit/keys/bundle-signing,
 // transit/keys/command-signing, transit/keys/revocation-signing and transit/keys/time-ticket (ed25519, non-exportable),
-// transit/keys/escrow-wrap, transit/keys/notification-wrap and notification-pseudonym (aes256-gcm96, derived) and secret/paddock/session.
+// transit/keys/escrow-wrap, transit/keys/notification-wrap and notification-pseudonym (aes256-gcm96, derived),
+// transit/keys/backup-wrap (aes256-gcm96, not derived) and secret/paddock/session.
 func Start(t testing.TB) *Bao {
 	t.Helper()
 	ctx := context.Background()
@@ -77,6 +78,10 @@ func Start(t testing.TB) *Bao {
 		})
 		must(t, err)
 	}
+	_, err = b.Root.Logical().Write("transit/keys/backup-wrap", map[string]any{
+		"type": "aes256-gcm96", "exportable": false, "allow_plaintext_backup": false,
+	})
+	must(t, err)
 	_, err = b.Root.Logical().Write("secret/data/paddock/session", map[string]any{
 		"data": map[string]any{"current": "Y3VycmVudC1rZXktMzItYnl0ZXMtbG9uZy0tLS0tLS0=", "previous": "cHJldmlvdXMta2V5LTMyLWJ5dGVzLWxvbmctLS0tLS0="},
 	})
@@ -90,7 +95,10 @@ path "secret/data/paddock/session" { capabilities = ["read"] }
 path "transit/keys/bundle-signing" { capabilities = ["read"] }
 path "transit/keys/revocation-signing" { capabilities = ["read"] }
 path "transit/encrypt/notification-wrap" { capabilities = ["update"] }
-path "transit/datakey/wrapped/notification-pseudonym" { capabilities = ["update"] }`))
+path "transit/datakey/wrapped/notification-pseudonym" { capabilities = ["update"] }
+path "transit/encrypt/backup-wrap" { capabilities = ["update"] }`))
+	must(t, b.Root.Sys().PutPolicy("paddock-backup", `
+path "transit/decrypt/backup-wrap" { capabilities = ["update"] }`))
 	must(t, b.Root.Sys().PutPolicy("paddock-notifier", `
 path "transit/decrypt/notification-wrap" { capabilities = ["update"] }
 path "transit/decrypt/notification-pseudonym" { capabilities = ["update"] }`))
