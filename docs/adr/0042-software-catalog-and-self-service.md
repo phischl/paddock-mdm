@@ -224,3 +224,16 @@ Constraints from the existing architecture:
 - Follow-ups: architecture amendments to §11.3 (reconciler table and apply order), §11.5 (protected-file check
   covers the new paths), §11.6 (item 5), §12.5 (software catalog paragraph), §16 (new tables); the runbook
   `docs/operations/software.md`; M13b (self-service app, Flatpak, user targets) and M13c as outlined in the plan.
+
+## Amendment 2026-11-05 — M13b and M13c (ADR 0049, ADR 0050, plans M13b and M13c)
+Decisions 5 (self-service channel) and 6 (user targets) are delivered by M13b as ADR 0049 specifies: the fifth
+intent `available` with a per-package `audience`, user and user-group targets on `software_assignment`, Flatpak
+sources of kind `flatpak` with system or user scope, and the event `software.self_service`. M13c adds, as decision
+12 left open: the approval workflow for `available` entries (requests through the same channel), waves through
+ADR 0033's rollout engine for `software_assignments` (ADR 0033 amendment of the same date), maintenance windows
+per device group rendered into the bundle, packages stored in Paddock through a per-organization APT repository
+(ADR 0050, source kind `paddock`), the patch compliance report, the declarative sections `software_sources`
+(step-up rule of ADR 0034 decision 3 applies), `software_catalog` and `software_assignments`, and the
+platform-shared catalog with a copy-into-organization flow. Maintainer decision 6 ("no approval workflow for
+now") is thereby lifted for M13c; decision 7 (shared catalog low priority) stands: it is the last ticket of M13c
+and may be dropped from the release.

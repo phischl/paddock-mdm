@@ -250,3 +250,14 @@ complete or revert. Every refusal is decided inside the audited action.
 (architect, 2026-11-01) An open rollout pins the before-state of its change set until it is completed or reverted; the
 retention purge skips it (ADR 0032 amendment 2026-11-01), and should it still be missing, a device outside the wave
 keeps its previous bundle (the compiler records a render failure) instead of receiving the staged change.
+
+## Amendment 2026-11-05 — software assignments become a rollout-able section (M13c, plan M13c decision 3)
+`software_assignments` joins the rollout-able sections (`declarative.RolloutSections()` = `managed_files`,
+`managed_units`, `package_holds`, `settings.updates`, `software_assignments`). A change to an assignment records a
+change set with before items (the full assignment), may be staged by the organization's rollout settings, is
+overlaid for devices outside the wave by the compiler exactly as managed files are, and counts failures through
+`device_software_status` rows in state `failed` whose `catalog_entry_id` is one of the rollout's staged entries
+(the stats function gains that join). `software_catalog` entries and `software_sources` record change sets and
+support revert but are never staged: an entry's package list is referenced by assignments, and a source is a
+trust anchor that changes with a step-up (ADR 0034). Rollout-able sections are therefore five; everything else in
+decision 1 stands.
