@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/outbound"
@@ -80,8 +79,8 @@ type ruleGroup struct {
 func readXML(t *testing.T, path string, out any) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, xml.Unmarshal([]byte("<root>"+string(raw)+"</root>"), out), path)
+	must.NoError(t, err)
+	must.NoError(t, xml.Unmarshal([]byte("<root>"+string(raw)+"</root>"), out), path)
 }
 
 func loadDecoders(t *testing.T) []decoder {
@@ -121,11 +120,11 @@ func loadRules(t *testing.T) []rule {
 
 func compile(t *testing.T, where string, p *pcre) *regexp.Regexp {
 	t.Helper()
-	require.NotNil(t, p, where)
+	must.NotNil(t, p, where)
 	// Go's RE2 is the verifiable subset of PCRE2; an OS_Regex pattern would not be checked by these tests.
-	require.Equal(t, "pcre2", p.Type, where)
+	must.Equal(t, "pcre2", p.Type, where)
 	re, err := regexp.Compile(strings.TrimSpace(p.Text))
-	require.NoError(t, err, where)
+	must.NoError(t, err, where)
 	return re
 }
 
@@ -159,7 +158,7 @@ func flattenJSON(t *testing.T, s string) map[string]string {
 			out[prefix] = strconv.FormatBool(x)
 		default:
 			raw, err := json.Marshal(x)
-			require.NoError(t, err)
+			must.NoError(t, err)
 			out[prefix] = string(raw)
 		}
 	}
@@ -177,7 +176,7 @@ func input(t *testing.T, where, offset, log string, afterParent int) string {
 	case "after_parent":
 		return log[afterParent:]
 	}
-	require.Failf(t, "unsupported offset", "%s: %q", where, offset)
+	must.Failf(t, "unsupported offset", "%s: %q", where, offset)
 	return ""
 }
 
@@ -185,7 +184,7 @@ func input(t *testing.T, where, offset, log string, afterParent int) string {
 func applyChild(t *testing.T, d decoder, log string, afterParent int, out map[string]string) bool {
 	t.Helper()
 	if d.Plugin != nil {
-		require.Equal(t, "JSON_Decoder", strings.TrimSpace(d.Plugin.Text), d.Name)
+		must.Equal(t, "JSON_Decoder", strings.TrimSpace(d.Plugin.Text), d.Name)
 		f := flattenJSON(t, input(t, d.Name, d.Plugin.Offset, log, afterParent))
 		for k, v := range f {
 			out[k] = v
@@ -197,7 +196,7 @@ func applyChild(t *testing.T, d decoder, log string, afterParent int, out map[st
 		return false
 	}
 	names := splitList(d.Order)
-	require.Len(t, m, len(names)+1, "%s: <order> must name every capture group", d.Name)
+	must.Len(t, m, len(names)+1, "%s: <order> must name every capture group", d.Name)
 	for i, n := range names {
 		out[n] = m[i+1]
 	}
@@ -237,22 +236,22 @@ func decodeLog(t *testing.T, decs []decoder, log string) (string, map[string]str
 
 func TestDecodersAreWellFormed(t *testing.T) {
 	decs := loadDecoders(t)
-	require.NotEmpty(t, decs)
+	must.NotEmpty(t, decs)
 	parents := map[string]bool{}
 	for _, d := range decs {
 		if d.Parent == "" {
-			require.False(t, parents[d.Name], "parent decoder names are unique")
+			must.False(t, parents[d.Name], "parent decoder names are unique")
 			parents[d.Name] = true
-			require.Nil(t, d.Regex, d.Name)
+			must.Nil(t, d.Regex, d.Name)
 			compile(t, d.Name+" prematch", d.Prematch)
 			continue
 		}
-		require.True(t, parents[d.Parent], "%s: the parent is defined above the child", d.Name)
-		require.NotEqual(t, d.Regex == nil, d.Plugin == nil, "%s: a child has either a regex or a plugin decoder", d.Name)
+		must.True(t, parents[d.Parent], "%s: the parent is defined above the child", d.Name)
+		must.NotEqual(t, d.Regex == nil, d.Plugin == nil, "%s: a child has either a regex or a plugin decoder", d.Name)
 		if d.Regex != nil {
 			compile(t, d.Name+" regex", d.Regex)
 		} else {
-			require.Equal(t, "after_parent", d.Plugin.Offset, d.Name)
+			must.Equal(t, "after_parent", d.Plugin.Offset, d.Name)
 		}
 	}
 }
@@ -268,9 +267,9 @@ func TestRulesAreWellFormed(t *testing.T) {
 	ids := map[int]rule{}
 	groups := map[string]bool{}
 	for _, r := range rules {
-		require.GreaterOrEqual(t, r.ID, 100900, "rule id range")
-		require.LessOrEqual(t, r.ID, 100999, "rule id range")
-		require.NotContains(t, ids, r.ID, "unique rule id")
+		must.GreaterOrEqual(t, r.ID, 100900, "rule id range")
+		must.LessOrEqual(t, r.ID, 100999, "rule id range")
+		must.NotContains(t, ids, r.ID, "unique rule id")
 		ids[r.ID] = r
 		for _, g := range r.Groups {
 			groups[g] = true
@@ -278,26 +277,26 @@ func TestRulesAreWellFormed(t *testing.T) {
 	}
 	for _, r := range rules {
 		if r.DecodedAs != "" {
-			require.True(t, parents[r.DecodedAs], "rule %d decoded_as names a parent decoder", r.ID)
+			must.True(t, parents[r.DecodedAs], "rule %d decoded_as names a parent decoder", r.ID)
 		} else {
-			require.True(t, r.IfSID != "" || r.IfGroup != "" || r.IfMatchedSID != "", "rule %d has no parent", r.ID)
+			must.True(t, r.IfSID != "" || r.IfGroup != "" || r.IfMatchedSID != "", "rule %d has no parent", r.ID)
 		}
 		for _, list := range []string{r.IfSID, r.IfMatchedSID} {
 			for _, s := range splitList(list) {
 				id, err := strconv.Atoi(s)
-				require.NoError(t, err)
-				require.Contains(t, ids, id, "rule %d references rule %d", r.ID, id)
+				must.NoError(t, err)
+				must.Contains(t, ids, id, "rule %d references rule %d", r.ID, id)
 			}
 		}
 		for _, g := range splitList(r.IfGroup) {
-			require.True(t, groups[g], "rule %d references group %s", r.ID, g)
+			must.True(t, groups[g], "rule %d references group %s", r.ID, g)
 		}
 		for _, f := range r.Fields {
 			compile(t, "rule field "+f.Name, &pcre{Type: f.Type, Text: f.Text})
 		}
 		if r.Frequency > 0 {
-			require.NotEmpty(t, r.IfMatchedSID, "rule %d: frequency rule", r.ID)
-			require.NotEmpty(t, r.SameField, "rule %d: a frequency rule counts per actor", r.ID)
+			must.NotEmpty(t, r.IfMatchedSID, "rule %d: frequency rule", r.ID)
+			must.NotEmpty(t, r.SameField, "rule %d: a frequency rule counts per actor", r.ID)
 		}
 	}
 }
@@ -343,7 +342,7 @@ func feedLine(t *testing.T, code audit.Code, outcome audit.Outcome) string {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
-	require.NoError(t, enc.Encode(map[string]any{"organization": "acme", "commit_seq": ev.CommitSeq, "event": ev.Event}))
+	must.NoError(t, enc.Encode(map[string]any{"organization": "acme", "commit_seq": ev.CommitSeq, "event": ev.Event}))
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
@@ -509,51 +508,51 @@ func TestEveryRegisteredCodeIsClassified(t *testing.T) {
 	for _, code := range emitted() {
 		for _, outcome := range outcomes {
 			dec, f := decodeLog(t, decs, syslogFrame(code, outcome))
-			require.Equal(t, "paddock", dec, "%s %s: the syslog frame is decoded by paddock", code, outcome)
-			require.Equal(t, string(code), f["event.code"], "the decoder reads the full code, not the MSGID")
-			require.Equal(t, string(outcome), f["event.outcome"])
-			require.Equal(t, "acme", f["organization"])
-			require.Equal(t, "41", f["forward_seq"])
-			require.Equal(t, "1207", f["commit_seq"])
-			require.Equal(t, "2026-11-04T09:29:58.123456789Z", f["event.occurred_at"])
-			require.Equal(t, "2026-11-04T09:29:59Z", f["event.recorded_at"])
-			require.Equal(t, "admin", f["event.actor.type"])
-			require.Equal(t, "alice", f["event.actor.display"])
-			require.Equal(t, "laptop-17", f["event.target.display"])
-			require.Equal(t, "laptop-17", f["event.params.name"])
+			must.Equal(t, "paddock", dec, "%s %s: the syslog frame is decoded by paddock", code, outcome)
+			must.Equal(t, string(code), f["event.code"], "the decoder reads the full code, not the MSGID")
+			must.Equal(t, string(outcome), f["event.outcome"])
+			must.Equal(t, "acme", f["organization"])
+			must.Equal(t, "41", f["forward_seq"])
+			must.Equal(t, "1207", f["commit_seq"])
+			must.Equal(t, "2026-11-04T09:29:58.123456789Z", f["event.occurred_at"])
+			must.Equal(t, "2026-11-04T09:29:59Z", f["event.recorded_at"])
+			must.Equal(t, "admin", f["event.actor.type"])
+			must.Equal(t, "alice", f["event.actor.display"])
+			must.Equal(t, "laptop-17", f["event.target.display"])
+			must.Equal(t, "laptop-17", f["event.params.name"])
 			sys := classify(t, rules, dec, f)
 
 			fdec, ff := decodeLog(t, decs, feedLine(t, code, outcome))
-			require.Equal(t, builtinJSON, fdec, "%s %s: a pull line is taken by the built-in json decoder", code, outcome)
-			require.Equal(t, string(code), ff["event.code"])
-			require.Equal(t, "acme", ff["organization"])
-			require.Equal(t, "1207", ff["commit_seq"])
-			require.Equal(t, "laptop-17", ff["event.params.name"])
+			must.Equal(t, builtinJSON, fdec, "%s %s: a pull line is taken by the built-in json decoder", code, outcome)
+			must.Equal(t, string(code), ff["event.code"])
+			must.Equal(t, "acme", ff["organization"])
+			must.Equal(t, "1207", ff["commit_seq"])
+			must.Equal(t, "laptop-17", ff["event.params.name"])
 			feed := classify(t, rules, fdec, ff)
 
 			if sys.ID == 100900 || feed.ID == 100901 {
-				require.Equal(t, 100900, sys.ID, "%s %s: push and pull classify alike", code, outcome)
-				require.Equal(t, 100901, feed.ID, "%s %s: push and pull classify alike", code, outcome)
+				must.Equal(t, 100900, sys.ID, "%s %s: push and pull classify alike", code, outcome)
+				must.Equal(t, 100901, feed.ID, "%s %s: push and pull classify alike", code, outcome)
 			} else {
-				require.Equal(t, sys.ID, feed.ID, "%s %s: push and pull classify alike", code, outcome)
+				must.Equal(t, sys.ID, feed.ID, "%s %s: push and pull classify alike", code, outcome)
 			}
 
 			switch outcome {
 			case audit.OutcomeSuccess:
 				if mustBeHigh.MatchString(string(code)) {
-					require.GreaterOrEqual(t, sys.Level, 10, "%s is security relevant but fires rule %d at level %d", code, sys.ID, sys.Level)
+					must.GreaterOrEqual(t, sys.Level, 10, "%s is security relevant but fires rule %d at level %d", code, sys.ID, sys.Level)
 				}
 				if sys.ID == 100900 {
 					atBase[code] = true
-					require.True(t, informational[code], "%s has no rule; add one or list it as informational", code)
+					must.True(t, informational[code], "%s has no rule; add one or list it as informational", code)
 				}
 			case audit.OutcomeDenied:
-				require.GreaterOrEqual(t, sys.Level, 7, "%s denied fires rule %d at level %d", code, sys.ID, sys.Level)
+				must.GreaterOrEqual(t, sys.Level, 7, "%s denied fires rule %d at level %d", code, sys.ID, sys.Level)
 			}
 		}
 	}
 	for code := range informational {
-		require.True(t, atBase[code], "%s is listed as informational but is not an emitted code at the base rule", code)
+		must.True(t, atBase[code], "%s is listed as informational but is not an emitted code at the base rule", code)
 	}
 }
 
@@ -590,10 +589,10 @@ func TestRuleLevels(t *testing.T) {
 		t.Run(string(c.code)+"/"+string(c.outcome), func(t *testing.T) {
 			dec, f := decodeLog(t, decs, syslogFrame(c.code, c.outcome))
 			r := classify(t, rules, dec, f)
-			require.Equal(t, c.id, r.ID)
-			require.Equal(t, c.level, r.Level, "rule %d", r.ID)
-			require.Contains(t, r.Groups, c.group, "rule %d", r.ID)
-			require.Contains(t, r.Groups, "paddock")
+			must.Equal(t, c.id, r.ID)
+			must.Equal(t, c.level, r.Level, "rule %d", r.ID)
+			must.Contains(t, r.Groups, c.group, "rule %d", r.ID)
+			must.Contains(t, r.Groups, "paddock")
 		})
 	}
 }
@@ -617,10 +616,10 @@ func TestFrequencyRulesAreReachable(t *testing.T) {
 		}
 		n++
 		for _, sid := range splitList(r.IfMatchedSID) {
-			require.True(t, reached[sid], "frequency rule %d counts rule %s, which no event fires", r.ID, sid)
+			must.True(t, reached[sid], "frequency rule %d counts rule %s, which no event fires", r.ID, sid)
 		}
 	}
-	require.Equal(t, 2, n, "the refused API token and the failed sign-in frequency rules")
+	must.Equal(t, 2, n, "the refused API token and the failed sign-in frequency rules")
 }
 
 // TestQuotesInDisplayStrings: an admin-chosen name with a quote is JSON-escaped in the body and must not cost the
@@ -630,27 +629,27 @@ func TestQuotesInDisplayStrings(t *testing.T) {
 	ev.Event.Actor = audit.Actor{Type: audit.ActorDevice, Display: `lt "17"`}
 	ev.Event.Target.Display = `Bob's "laptop" \ 2`
 	dec, f := decodeLog(t, loadDecoders(t), frameOf(ev))
-	require.Equal(t, `lt "17"`, f["event.actor.display"])
-	require.Equal(t, `Bob's "laptop" \ 2`, f["event.target.display"])
+	must.Equal(t, `lt "17"`, f["event.actor.display"])
+	must.Equal(t, `Bob's "laptop" \ 2`, f["event.target.display"])
 	r := classify(t, loadRules(t), dec, f)
-	require.Equal(t, 100910, r.ID)
-	require.Equal(t, 12, r.Level)
+	must.Equal(t, 100910, r.ID)
+	must.Equal(t, 12, r.Level)
 }
 
 func TestMsgIDAliasesDecodeToTheFullCode(t *testing.T) {
 	rules := loadRules(t)
 	decs := loadDecoders(t)
 	aliases := audit.MsgIDAliases()
-	require.NotEmpty(t, aliases)
+	must.NotEmpty(t, aliases)
 	for _, a := range aliases {
 		frame := syslogFrame(a.Code, audit.OutcomeSuccess)
-		require.Contains(t, frame, " paddock acme "+a.MsgID+" - ", "the frame carries the alias as MSGID")
+		must.Contains(t, frame, " paddock acme "+a.MsgID+" - ", "the frame carries the alias as MSGID")
 		dec, f := decodeLog(t, decs, frame)
-		require.Equal(t, "paddock", dec, a.Code)
-		require.Equal(t, string(a.Code), f["event.code"])
-		require.NotEqual(t, a.MsgID, f["event.code"])
+		must.Equal(t, "paddock", dec, a.Code)
+		must.Equal(t, string(a.Code), f["event.code"])
+		must.NotEqual(t, a.MsgID, f["event.code"])
 		if mustBeHigh.MatchString(string(a.Code)) {
-			require.GreaterOrEqual(t, classify(t, rules, dec, f).Level, 10, a.Code)
+			must.GreaterOrEqual(t, classify(t, rules, dec, f).Level, 10, a.Code)
 		}
 	}
 }
@@ -668,10 +667,10 @@ func TestEveryRuleCodePatternMatchesARegisteredCode(t *testing.T) {
 			for _, c := range emitted() {
 				hit = hit || re.MatchString(string(c))
 			}
-			require.True(t, hit, "rule %d: pattern %q matches no registered code", r.ID, f.Text)
+			must.True(t, hit, "rule %d: pattern %q matches no registered code", r.ID, f.Text)
 		}
 	}
-	require.Positive(t, n)
+	must.Positive(t, n)
 }
 
 func TestGoldenFramesDecode(t *testing.T) {
@@ -679,23 +678,23 @@ func TestGoldenFramesDecode(t *testing.T) {
 	decs := loadDecoders(t)
 	for _, name := range []string{"syslog_event_success", "syslog_event_denied", "syslog_event_failure"} {
 		raw, err := os.ReadFile(goldenDir + name + ".golden")
-		require.NoError(t, err)
+		must.NoError(t, err)
 		dec, f := decodeLog(t, decs, string(raw))
-		require.Equal(t, "paddock", dec, name)
-		require.Equal(t, "device.wipe_requested", f["event.code"])
-		require.Equal(t, "41", f["forward_seq"])
-		require.Equal(t, "0193a1b2-0000-7000-8000-0000000000aa", f["event.event_id"])
-		require.Equal(t, "acme", f["organization"])
-		require.Equal(t, "laptop-17", f["event.params.name"])
-		require.NotZero(t, classify(t, rules, dec, f).ID, name)
+		must.Equal(t, "paddock", dec, name)
+		must.Equal(t, "device.wipe_requested", f["event.code"])
+		must.Equal(t, "41", f["forward_seq"])
+		must.Equal(t, "0193a1b2-0000-7000-8000-0000000000aa", f["event.event_id"])
+		must.Equal(t, "acme", f["organization"])
+		must.Equal(t, "laptop-17", f["event.params.name"])
+		must.NotZero(t, classify(t, rules, dec, f).ID, name)
 	}
 	raw, err := os.ReadFile(goldenDir + "syslog_control_test.golden")
-	require.NoError(t, err)
+	must.NoError(t, err)
 	dec, f := decodeLog(t, decs, string(raw))
-	require.Equal(t, "paddock-ctl", dec, "a control message is not an audit event")
-	require.Equal(t, "test", f["kind"])
-	require.Equal(t, "acme", f["organization"])
-	require.Equal(t, 100902, classify(t, rules, dec, f).ID)
+	must.Equal(t, "paddock-ctl", dec, "a control message is not an audit event")
+	must.Equal(t, "test", f["kind"])
+	must.Equal(t, "acme", f["organization"])
+	must.Equal(t, 100902, classify(t, rules, dec, f).ID)
 }
 
 func TestCheckpointDecodes(t *testing.T) {
@@ -704,14 +703,14 @@ func TestCheckpointDecodes(t *testing.T) {
 		SentAt: time.Date(2026, 11, 5, 1, 0, 0, 0, time.UTC), Day: "2026-11-04", EventCount: 812,
 		ManifestSHA256: strings.Repeat("a", 64)}
 	dec, f := decodeLog(t, decs, string(outbound.FormatSyslogControl(m, hostname)))
-	require.Equal(t, "paddock-ctl", dec)
-	require.Equal(t, "checkpoint", f["kind"])
-	require.Equal(t, "acme", f["organization"])
-	require.Equal(t, "2026-11-04", f["day"])
-	require.Equal(t, "812", f["event_count"])
+	must.Equal(t, "paddock-ctl", dec)
+	must.Equal(t, "checkpoint", f["kind"])
+	must.Equal(t, "acme", f["organization"])
+	must.Equal(t, "2026-11-04", f["day"])
+	must.Equal(t, "812", f["event_count"])
 	r := classify(t, loadRules(t), dec, f)
-	require.Equal(t, 100903, r.ID)
-	require.Contains(t, r.Groups, "paddock_integrity")
+	must.Equal(t, 100903, r.ID)
+	must.Contains(t, r.Groups, "paddock_integrity")
 }
 
 // TestMissingEventDecodes: a replayed event the audit index no longer holds arrives as one frame with MSGID
@@ -719,25 +718,25 @@ func TestCheckpointDecodes(t *testing.T) {
 // decision 21); the fixture is that frame.
 func TestMissingEventDecodes(t *testing.T) {
 	raw, err := os.ReadFile("testdata/syslog_missing.golden")
-	require.NoError(t, err)
-	require.Contains(t, string(raw), "<132>1 ")
-	require.Contains(t, string(raw), " paddock acme paddock.missing - ")
+	must.NoError(t, err)
+	must.Contains(t, string(raw), "<132>1 ")
+	must.Contains(t, string(raw), " paddock acme paddock.missing - ")
 	dec, f := decodeLog(t, loadDecoders(t), string(raw))
-	require.Equal(t, "paddock", dec)
-	require.Equal(t, "true", f["missing"])
-	require.Equal(t, "9", f["forward_seq"])
-	require.Equal(t, "0193a1b2-0000-7000-8000-0000000000aa", f["event_id"])
-	require.Equal(t, "acme", f["organization"])
+	must.Equal(t, "paddock", dec)
+	must.Equal(t, "true", f["missing"])
+	must.Equal(t, "9", f["forward_seq"])
+	must.Equal(t, "0193a1b2-0000-7000-8000-0000000000aa", f["event_id"])
+	must.Equal(t, "acme", f["organization"])
 	r := classify(t, loadRules(t), dec, f)
-	require.Equal(t, 100904, r.ID)
-	require.Equal(t, 7, r.Level)
-	require.Contains(t, r.Groups, "paddock_integrity")
+	must.Equal(t, 100904, r.ID)
+	must.Equal(t, 7, r.Level)
+	must.Contains(t, r.Groups, "paddock_integrity")
 }
 
 func TestPullLoopWritesTheDecodedLine(t *testing.T) {
 	doc, err := os.ReadFile(siemDocPath)
-	require.NoError(t, err)
-	require.Contains(t, string(doc), feedJQ, "siem.md's pull loop writes the line feedLine builds")
+	must.NoError(t, err)
+	must.Contains(t, string(doc), feedJQ, "siem.md's pull loop writes the line feedLine builds")
 }
 
 var (
@@ -754,7 +753,7 @@ func TestFramingVariantsClassifyAlike(t *testing.T) {
 		SentAt: time.Date(2026, 11, 5, 1, 0, 0, 0, time.UTC), Day: "2026-11-04", EventCount: 812,
 		ManifestSHA256: strings.Repeat("a", 64)}
 	missing, err := os.ReadFile("testdata/syslog_missing.golden")
-	require.NoError(t, err)
+	must.NoError(t, err)
 	frames := map[string]struct {
 		frame string
 		id    int
@@ -772,8 +771,8 @@ func TestFramingVariantsClassifyAlike(t *testing.T) {
 		} {
 			t.Run(name+"/"+variant, func(t *testing.T) {
 				dec, f := decodeLog(t, decs, frame)
-				require.NotEmpty(t, dec)
-				require.Equal(t, c.id, classify(t, rules, dec, f).ID)
+				must.NotEmpty(t, dec)
+				must.Equal(t, c.id, classify(t, rules, dec, f).ID)
 			})
 		}
 	}

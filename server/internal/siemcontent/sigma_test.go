@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/oasdiff/yaml"
-	"github.com/stretchr/testify/require"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 )
@@ -37,17 +36,17 @@ type sigmaRule struct {
 func loadSigma(t *testing.T) map[string]sigmaRule {
 	t.Helper()
 	files, err := filepath.Glob(sigmaGlob)
-	require.NoError(t, err)
-	require.NotEmpty(t, files, "no Sigma rule found")
+	must.NoError(t, err)
+	must.NotEmpty(t, files, "no Sigma rule found")
 	out := map[string]sigmaRule{}
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
-		require.NoError(t, err)
+		must.NoError(t, err)
 		j, err := yaml.YAMLToJSON(raw)
-		require.NoError(t, err, f)
+		must.NoError(t, err, f)
 		var r sigmaRule
 		// Unknown top-level keys are legal Sigma; only the keys this test reads are decoded.
-		require.NoError(t, json.Unmarshal(j, &r), f)
+		must.NoError(t, json.Unmarshal(j, &r), f)
 		out[filepath.Base(f)] = r
 	}
 	return out
@@ -97,12 +96,12 @@ func asStrings(t *testing.T, v any) []string {
 		var out []string
 		for _, e := range x {
 			s, ok := e.(string)
-			require.True(t, ok, "list entries are strings")
+			must.True(t, ok, "list entries are strings")
 			out = append(out, s)
 		}
 		return out
 	}
-	require.Failf(t, "unsupported value", "%v", v)
+	must.Failf(t, "unsupported value", "%v", v)
 	return nil
 }
 
@@ -113,19 +112,19 @@ func TestSigmaRules(t *testing.T) {
 		byID[strconv.Itoa(r.ID)] = r
 	}
 	fields := eventFields()
-	require.True(t, fields["code"] && fields["actor.type"] && fields["outcome"], "event field walk")
+	must.True(t, fields["code"] && fields["actor.type"] && fields["outcome"], "event field walk")
 	params := registryParams()
 	covered := map[string]string{}
 	seenIDs := map[string]bool{}
 
 	for file, s := range loadSigma(t) {
-		require.NotEmpty(t, s.Title, file)
-		require.Regexp(t, `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, s.ID, file)
-		require.False(t, seenIDs[s.ID], "%s: duplicate id", file)
+		must.NotEmpty(t, s.Title, file)
+		must.Regexp(t, `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, s.ID, file)
+		must.False(t, seenIDs[s.ID], "%s: duplicate id", file)
 		seenIDs[s.ID] = true
-		require.NotEmpty(t, s.Description, file)
-		require.Equal(t, "paddock", s.Logsource.Product, file)
-		require.Equal(t, "audit", s.Logsource.Service, file)
+		must.NotEmpty(t, s.Description, file)
+		must.Equal(t, "paddock", s.Logsource.Product, file)
+		must.Equal(t, "audit", s.Logsource.Service, file)
 
 		var wazuhID string
 		for _, tag := range s.Tags {
@@ -134,29 +133,29 @@ func TestSigmaRules(t *testing.T) {
 			}
 		}
 		r, ok := byID[wazuhID]
-		require.True(t, ok, "%s: tag paddock.wazuh_<id> must name a rule of the Wazuh file", file)
-		require.Zero(t, r.Frequency, "%s: frequency rules have no Sigma twin", file)
-		require.Empty(t, covered[wazuhID], "%s: rule %s already has %s", file, wazuhID, covered[wazuhID])
+		must.True(t, ok, "%s: tag paddock.wazuh_<id> must name a rule of the Wazuh file", file)
+		must.Zero(t, r.Frequency, "%s: frequency rules have no Sigma twin", file)
+		must.Empty(t, covered[wazuhID], "%s: rule %s already has %s", file, wazuhID, covered[wazuhID])
 		covered[wazuhID] = file
-		require.Equal(t, sigmaLevels[r.Level], s.Level, "%s: level of Wazuh rule %s", file, wazuhID)
+		must.Equal(t, sigmaLevels[r.Level], s.Level, "%s: level of Wazuh rule %s", file, wazuhID)
 
 		cond, _ := s.Detection["condition"].(string)
-		require.NotEmpty(t, cond, file)
+		must.NotEmpty(t, cond, file)
 		for name, sel := range s.Detection {
 			if name == "condition" {
 				continue
 			}
-			require.Contains(t, cond, name, "%s: selection %s unused", file, name)
+			must.Contains(t, cond, name, "%s: selection %s unused", file, name)
 			items, ok := sel.(map[string]any)
-			require.True(t, ok, "%s: selection %s is a map of fields", file, name)
+			must.True(t, ok, "%s: selection %s is a map of fields", file, name)
 			for key, val := range items {
 				field, mod, _ := strings.Cut(key, "|")
 				if p, ok := strings.CutPrefix(field, "params."); ok {
-					require.True(t, params[p], "%s: %s is no param of any registered code", file, field)
+					must.True(t, params[p], "%s: %s is no param of any registered code", file, field)
 				} else {
-					require.True(t, fields[field], "%s: %s is no field of paddock.audit.v1", file, field)
+					must.True(t, fields[field], "%s: %s is no field of paddock.audit.v1", file, field)
 				}
-				require.Contains(t, []string{"", "startswith", "contains"}, mod, "%s: modifier %s", file, mod)
+				must.Contains(t, []string{"", "startswith", "contains"}, mod, "%s: modifier %s", file, mod)
 				if field != "code" {
 					continue
 				}
@@ -172,7 +171,7 @@ func TestSigmaRules(t *testing.T) {
 							hit = hit || string(c) == v
 						}
 					}
-					require.True(t, hit, "%s: code value %q matches no registered code", file, v)
+					must.True(t, hit, "%s: code value %q matches no registered code", file, v)
 				}
 			}
 		}
@@ -181,6 +180,6 @@ func TestSigmaRules(t *testing.T) {
 		if r.Frequency > 0 || r.DecodedAs != "" || id == "100903" {
 			continue
 		}
-		require.NotEmpty(t, covered[id], "Wazuh rule %s has no Sigma rule", id)
+		must.NotEmpty(t, covered[id], "Wazuh rule %s has no Sigma rule", id)
 	}
 }
