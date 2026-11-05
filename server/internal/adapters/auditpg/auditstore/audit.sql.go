@@ -226,6 +226,25 @@ func (q *Queries) CountAuditVerificationRunsFiltered(ctx context.Context, arg Co
 	return count, err
 }
 
+const countEventsRecordedOn = `-- name: CountEventsRecordedOn :one
+SELECT count(*)::bigint AS events FROM audit_event
+WHERE recorded_at >= $1::timestamptz AND recorded_at < $2::timestamptz
+`
+
+type CountEventsRecordedOnParams struct {
+	DayStart time.Time
+	DayEnd   time.Time
+}
+
+// The index rows recorded on a day, the event_count of its checkpoint (plan M12 decision 20): day_start is 00:00 UTC of
+// the day, day_end of the next.
+func (q *Queries) CountEventsRecordedOn(ctx context.Context, arg CountEventsRecordedOnParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countEventsRecordedOn, arg.DayStart, arg.DayEnd)
+	var events int64
+	err := row.Scan(&events)
+	return events, err
+}
+
 const countStepUpEventsForReview = `-- name: CountStepUpEventsForReview :one
 SELECT (count(*) FILTER (WHERE outcome = 'success' AND (actor->>'step_up')::boolean))::bigint AS succeeded,
        (count(*) FILTER (WHERE outcome = 'denied' AND params->>'error_code' = 'step_up_required'))::bigint AS refused
@@ -305,6 +324,32 @@ func (q *Queries) GetAuditManifest(ctx context.Context, arg GetAuditManifestPara
 		&i.Signature,
 		&i.KeyVersion,
 		&i.ObjectKey,
+	)
+	return i, err
+}
+
+const getEventByCommitSeq = `-- name: GetEventByCommitSeq :one
+SELECT event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, object_key, commit_seq FROM audit_event WHERE commit_seq = $1 LIMIT 1
+`
+
+// The event at a notification destination's cursor (plan M12 decision 20); RLS supplies the organization.
+func (q *Queries) GetEventByCommitSeq(ctx context.Context, commitSeq int64) (AuditEvent, error) {
+	row := q.db.QueryRow(ctx, getEventByCommitSeq, commitSeq)
+	var i AuditEvent
+	err := row.Scan(
+		&i.EventID,
+		&i.OrganizationID,
+		&i.OccurredAt,
+		&i.RecordedAt,
+		&i.Code,
+		&i.Outcome,
+		&i.Source,
+		&i.Actor,
+		&i.Target,
+		&i.Params,
+		&i.CorrelationID,
+		&i.ObjectKey,
+		&i.CommitSeq,
 	)
 	return i, err
 }
@@ -1130,6 +1175,51 @@ func (q *Queries) ListLatestNightlyFailedOrganizations(ctx context.Context) ([]u
 			return nil, err
 		}
 		items = append(items, organization_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listManifestsAfter = `-- name: ListManifestsAfter :many
+SELECT day, sha256, signature, key_version FROM audit_manifest
+WHERE day > $1::date
+ORDER BY day
+LIMIT $2
+`
+
+type ListManifestsAfterParams struct {
+	AfterDay time.Time
+	MaxRows  int32
+}
+
+type ListManifestsAfterRow struct {
+	Day        time.Time
+	Sha256     []byte
+	Signature  string
+	KeyVersion int32
+}
+
+// The sealed days of the scope after a day, in day order (plan M12 decision 20); RLS supplies the organization.
+func (q *Queries) ListManifestsAfter(ctx context.Context, arg ListManifestsAfterParams) ([]ListManifestsAfterRow, error) {
+	rows, err := q.db.Query(ctx, listManifestsAfter, arg.AfterDay, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListManifestsAfterRow{}
+	for rows.Next() {
+		var i ListManifestsAfterRow
+		if err := rows.Scan(
+			&i.Day,
+			&i.Sha256,
+			&i.Signature,
+			&i.KeyVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

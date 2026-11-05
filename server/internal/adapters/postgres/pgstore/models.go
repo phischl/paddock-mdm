@@ -703,6 +703,7 @@ type NotificationDelivery struct {
 	Attempts       int32
 	LastError      *string
 	RequestedBy    *string
+	CheckpointDay  pgtype.Date
 }
 
 type NotificationDeliveryEvent struct {

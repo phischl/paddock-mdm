@@ -1,7 +1,7 @@
 -- Notification destinations (plan M9 decisions 14–18). The same queries serve the organization scope (paddock_api)
 -- and the platform scope (paddock_platform, nil organization): row level security selects the rows. The api never
--- writes a state column (migration 00085): it inserts the state row with its key and requests a cursor skip through
--- the SECURITY DEFINER functions.
+-- writes a state column except replay_from (migration 00105): it inserts the state row with its key and requests a
+-- cursor skip through the SECURITY DEFINER functions.
 
 -- name: InsertNotificationDestination :exec
 INSERT INTO notification_destination (
@@ -24,7 +24,8 @@ SELECT d.id, d.organization_id, d.type, d.name, d.enabled, d.filter_mode, d.code
        d.syslog_port, d.syslog_server_name, (d.syslog_ca_pem IS NOT NULL)::boolean AS syslog_ca_pem_set,
        d.checkpoints, d.created_by, d.created_at, d.updated_at,
        s.status, s.cursor_commit_seq, s.forward_seq, s.last_success_at, s.last_attempt_at, s.next_attempt_at,
-       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error
+       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error,
+       s.last_checkpoint_day, s.replay_from
 FROM notification_destination d
 LEFT JOIN notification_destination_state s ON s.destination_id = d.id AND s.organization_id = d.organization_id
 WHERE d.id = @id;
@@ -41,7 +42,8 @@ SELECT d.id, d.organization_id, d.type, d.name, d.enabled, d.filter_mode, d.code
        d.syslog_port, d.syslog_server_name, (d.syslog_ca_pem IS NOT NULL)::boolean AS syslog_ca_pem_set,
        d.checkpoints, d.created_by, d.created_at, d.updated_at,
        s.status, s.cursor_commit_seq, s.forward_seq, s.last_success_at, s.last_attempt_at, s.next_attempt_at,
-       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error
+       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error,
+       s.last_checkpoint_day, s.replay_from
 FROM notification_destination d
 LEFT JOIN notification_destination_state s ON s.destination_id = d.id AND s.organization_id = d.organization_id
 WHERE (sqlc.narg(q_pattern)::text IS NULL OR d.name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
@@ -94,6 +96,19 @@ SELECT coalesce(paddock_destination_start_at_latest(@destination_id), false)::bo
 -- name: StartPlatformNotificationDestinationAtLatest :one
 -- Platform scope: false for a destination that is not the platform's.
 SELECT coalesce(paddock_platform_destination_start_at_latest(@destination_id), false)::boolean AS started;
+
+-- name: GetNotificationDestinationReplayState :one
+-- What a replay request checks before it is set (plan M12 decision 21).
+SELECT forward_seq, pending_delivery_id, replay_from, start_at_latest FROM notification_destination_state
+WHERE destination_id = @destination_id;
+
+-- name: ReplayNotificationDestination :execrows
+-- Both scopes; 0 rows when the request does not apply (plan M12 decision 21, migration 00105): the guard closes the
+-- race with the notifier, which may have taken a batch or started a replay since the api read the state. A pending skip
+-- request refuses it, because resolving the skip would end the replay before it sent anything.
+UPDATE notification_destination_state SET replay_from = @from_forward_seq::bigint
+WHERE destination_id = @destination_id AND pending_delivery_id IS NULL AND replay_from IS NULL AND NOT start_at_latest
+  AND @from_forward_seq::bigint >= 1 AND @from_forward_seq::bigint <= forward_seq;
 
 -- name: InsertNotificationTestDelivery :exec
 INSERT INTO notification_delivery (id, destination_id, organization_id, kind, requested_by)

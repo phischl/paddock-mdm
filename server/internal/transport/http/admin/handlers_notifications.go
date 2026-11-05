@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	openapi_types "github.com/oapi-codegen/runtime/types"
+
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/outbound"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -26,8 +28,11 @@ func toNotificationDestination(d app.NotificationDestination) adminapi.Notificat
 			Status: adminapi.NotificationDestinationStateStatus(s.Status), CursorCommitSeq: s.CursorCommitSeq,
 			ForwardSeq: s.ForwardSeq, LastSuccessAt: utcPtr(s.LastSuccessAt), LastAttemptAt: utcPtr(s.LastAttemptAt),
 			NextAttemptAt: utcPtr(s.NextAttemptAt), StalledSince: utcPtr(s.StalledSince), LastError: s.LastError,
-			LagSeconds: s.LagSeconds,
+			LagSeconds: s.LagSeconds, ReplayFrom: s.ReplayFrom,
 		},
+	}
+	if s.LastCheckpointDay != nil {
+		out.State.LastCheckpointDay = &openapi_types.Date{Time: *s.LastCheckpointDay}
 	}
 	if t := s.LastTest; t != nil {
 		out.State.LastTest = &struct {
@@ -174,6 +179,13 @@ func (h *handlers) TestNotificationDestination(ctx context.Context, req adminapi
 	return adminapi.TestNotificationDestination202JSONResponse{DeliveryId: id}, nil
 }
 
+func (h *handlers) ReplayNotificationDestination(ctx context.Context, req adminapi.ReplayNotificationDestinationRequestObject) (adminapi.ReplayNotificationDestinationResponseObject, error) {
+	if err := h.notifications.Replay(ctx, app.ScopeOrg, req.Id, req.Body.FromForwardSeq); err != nil {
+		return nil, err
+	}
+	return adminapi.ReplayNotificationDestination202Response{}, nil
+}
+
 func (h *handlers) ResolveNotificationPseudonym(ctx context.Context, req adminapi.ResolveNotificationPseudonymRequestObject) (adminapi.ResolveNotificationPseudonymResponseObject, error) {
 	id, err := h.notifications.ResolvePseudonym(ctx, req.Id, req.Body.Pseudonym)
 	if err != nil {
@@ -257,4 +269,11 @@ func (h *handlers) TestPlatformNotificationDestination(ctx context.Context, req 
 		return nil, err
 	}
 	return adminapi.TestPlatformNotificationDestination202JSONResponse{DeliveryId: id}, nil
+}
+
+func (h *handlers) ReplayPlatformNotificationDestination(ctx context.Context, req adminapi.ReplayPlatformNotificationDestinationRequestObject) (adminapi.ReplayPlatformNotificationDestinationResponseObject, error) {
+	if err := h.notifications.Replay(ctx, app.ScopePlatform, req.Id, req.Body.FromForwardSeq); err != nil {
+		return nil, err
+	}
+	return adminapi.ReplayPlatformNotificationDestination202Response{}, nil
 }

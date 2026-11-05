@@ -36,7 +36,7 @@ factor first (step-up, valid for 5 minutes).
 | *Include event parameters* | e-mail only: add each event's parameters to the message body. |
 | *Heartbeat interval (seconds)* | webhook and syslog: 0 (off, the default) or 60 to 3600. |
 | *Minimum interval between e-mails (seconds)* | e-mail only: 60 to 3600, default 300. |
-| *Send daily checkpoints* | webhook and syslog: after each sealed day a checkpoint message (plan M12; sent from a later alpha.9 change). Refused for e-mail. |
+| *Send daily checkpoints* | webhook and syslog: after each sealed day a checkpoint message ([Checkpoints and replay](#checkpoints-and-replay)). Refused for e-mail. |
 | *Enabled* | a disabled destination receives nothing. |
 
 A webhook's signing secret is shown **once**, after the create and after *Replace secret*; copy it into the receiver
@@ -160,8 +160,9 @@ A delivery is a `POST` with the JSON body below (`schema: paddock.notification.v
 }
 ```
 
-- `kind` is `events`, `heartbeat` or `test`; a heartbeat and a test carry `"events": []`. A heartbeat has
-  `forward_seq: {"last": N}` and the audit `cursor`. (`checkpoint` is reserved for a later release.)
+- `kind` is `events`, `heartbeat`, `test` or `checkpoint`; a heartbeat and a test carry `"events": []`. A heartbeat has
+  `forward_seq: {"last": N}` and the audit `cursor`. A checkpoint is described in
+  [Checkpoints and replay](#checkpoints-and-replay).
 - `organization` is the organization's slug, `"platform"` for a platform destination.
 - `events` are in audit commit order. `forward_seq` counts the events this destination received, without gaps;
   `commit_seq` is the event's position in the organization's audit commit order (the same number as in the
@@ -307,12 +308,14 @@ with a TLS stream driver detects the framing itself).
 | `HOSTNAME` | the host of `PADDOCK_PUBLIC_ADMIN_URL` |
 | `APP-NAME` | `paddock` |
 | `PROCID` | the organization's slug; `platform` for platform destinations |
-| `MSGID` | the audit code; `paddock.test`, `paddock.heartbeat` or `paddock.checkpoint` for control messages. RFC 5424 limits `MSGID` to 32 characters: the few longer codes are sent under a fixed alias that never changes ([Syslog MSGID aliases](../compliance/audit-codes.md#syslog-msgid-aliases)); `event.code` in the message body is always the full code |
+| `MSGID` | the audit code; `paddock.test`, `paddock.heartbeat` or `paddock.checkpoint` for control messages, `paddock.missing` for a replayed event that is no longer in the audit index. RFC 5424 limits `MSGID` to 32 characters: the few longer codes are sent under a fixed alias that never changes ([Syslog MSGID aliases](../compliance/audit-codes.md#syslog-msgid-aliases)); `event.code` in the message body is always the full code |
 | `STRUCTURED-DATA` | `-` |
 | `MSG` | the UTF-8 byte order mark, then JSON: `schema` (`paddock.audit.v1`), `forward_seq`, `commit_seq`, `delivery_id` and `event` (the audit event, as in the webhook envelope; with *Replace user names with pseudonyms*, pseudonymized) |
 
-*Send test* and heartbeats send one control message whose `MSG` is the webhook envelope (`schema:
-paddock.notification.v1`, `kind: test` or `heartbeat`).
+*Send test*, heartbeats and checkpoints send one control message whose `MSG` is the webhook envelope (`schema:
+paddock.notification.v1`, `kind: test`, `heartbeat` or `checkpoint`). A replayed event that the audit index retention
+removed meanwhile is sent as one message with `PRI` 132, `MSGID` `paddock.missing`, the send time and the `MSG`
+`{"schema":"paddock.audit.v1","forward_seq":…,"event_id":"…","delivery_id":"…","missing":true}`.
 
 ## E-mail
 
@@ -368,6 +371,48 @@ The portal list shows per destination the state (*Active*, *Stalled*, *Disabled*
 there is the time since the first failure of the current series of failed deliveries (0 while deliveries succeed). The
 metric `paddock_notify_lag_seconds` is different: the age of the oldest event the destination has not received yet
 ([monitoring.md](monitoring.md)).
+
+## Checkpoints and replay
+
+**Checkpoints.** A webhook or syslog destination with *Send daily checkpoints* receives one message of `kind:
+checkpoint` for every recording day the audit writer sealed in its scope, after it has received that day's events:
+
+```json
+{
+  "schema": "paddock.notification.v1", "kind": "checkpoint", "delivery_id": "0199…", "destination_id": "0199…",
+  "organization_id": "0199…", "organization": "acme", "sent_at": "2026-11-05T00:20:03Z",
+  "forward_seq": { "from": 1208, "to": 1208 },
+  "day": "2026-11-04", "event_count": 3127,
+  "manifest_sha256": "9f2c…", "signature": "vault:v3:…", "key_version": 3
+}
+```
+
+- `manifest_sha256`, `signature` and `key_version` are the day's WORM manifest exactly as the audit chain sealed it
+  (*Audit › Integrity* lists the same hash); `event_count` is the number of audit events recorded on that day (UTC).
+  A receiver reconciles its copy of the day with these values; the SIEM copy itself is not evidence (RR-111).
+- A checkpoint takes the next `forward_seq` number like an events batch, so the receiver's gap check covers it. It is
+  retried like a batch until it is delivered and recorded once as `notification.checkpoint_sent`.
+- A day is sent once the destination has forwarded every matching event recorded that day. Days sealed before the
+  destination was created are not sent; the days in between follow in day order. *State* shows the last day sent.
+
+**Replay.** *Replay from…* (administrators, with step-up; `POST …/notification-destinations/{id}/replay` with
+`{"from_forward_seq": N}`) sends every stored batch and checkpoint from number N on again, with its original
+`delivery_id` and `forward_seq` numbers, before new events follow. Use it after a receiver lost data, for example an
+outage longer than its buffer. The receiver sees the same numbers again and must deduplicate by `delivery_id`,
+`event_id` or `forward_seq`.
+
+- N is 1 to the last number sent; a batch that contains N is sent whole. The request is refused while the destination
+  is retrying a batch (409): wait until it is delivered, or disable the destination, then replay. It is also refused
+  while an earlier replay is still running (409, *State* shows where it continues): wait until it is complete. Right
+  after the destination was enabled with *Skip them and continue with the newest event* it is refused until the next
+  delivery round has applied the skip (409, at most one poll interval): then request it again.
+- To abandon a replay that does not succeed (the destination stalls on it), disable the destination and enable it
+  with *Skip them and continue with the newest event*: the replay ends, the numbers continue where they were.
+- An e-mail destination keeps its *Minimum interval between e-mails* during a replay: one stored message per interval.
+- An event the audit index retention has removed meanwhile is sent as `{"forward_seq": …, "event_id": "…",
+  "missing": true}` in its place (syslog: `MSGID` `paddock.missing`); the WORM archive still holds it.
+- The request is recorded as `notification.replay_requested`, every re-sent batch as `notification.replayed`. A failed
+  re-send is retried with the same backoff and stall rules as a batch.
 
 ## Privacy options
 

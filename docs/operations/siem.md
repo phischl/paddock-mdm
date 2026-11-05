@@ -108,8 +108,9 @@ reconciled. A syslog destination pushes the same events over TLS as RFC 5424 mes
 longer than 32 characters ([Syslog MSGID aliases](../compliance/audit-codes.md#syslog-msgid-aliases)), and
 `event.code` in the message body is always the full code. Syslog confirms delivery at TCP level only: a receiver that
 acknowledges a batch and then drops part of it unread is not detected by Paddock (RR-113), so check `forward_seq` for
-gaps on the receiver and reconcile with the checkpoint message (sent from a later alpha.9 change), which a receiver can compare with the WORM hash
-chain. The feed's format `paddock.audit.feed.v1` does not change with it.
+gaps on the receiver and reconcile with the daily checkpoint message, which carries the day's event count and the
+WORM manifest hash. After an outage longer than the receiver's buffer, *Replay from…* sends the stored batches again
+with their original numbers ([Checkpoints and replay](notifications.md#checkpoints-and-replay)). The feed's format `paddock.audit.feed.v1` does not change with it.
 
 ## Push over syslog
 
@@ -300,9 +301,8 @@ UTC day and `recorded_at` is always sent in UTC, so the prefix `<day>` selects e
 
 ## Replay
 
-Replaying a destination from a `forward_seq` is added to Paddock in a later alpha.9 change; until
-it ships, [notifications.md](notifications.md) says a destination never replays history, and a SIEM that lost events
-is filled from the pull feed above (the feed keeps `commit_seq`, so a replayed push and a pull can be reconciled) or
-from an [evidence export](audit-bucket.md). Once the replay exists it resends the stored batches under the original
-`forward_seq` and `delivery_id`, so deduplication by `event_id` makes it harmless; an event purged from the audit index
-arrives as `{forward_seq, event_id, missing: true}`.
+*Replay from…* on a destination ([Checkpoints and replay](notifications.md#checkpoints-and-replay)) resends the stored
+batches from a `forward_seq` under their original `forward_seq` and `delivery_id`, so deduplication by `event_id` makes
+it harmless; an event purged from the audit index arrives as `{forward_seq, event_id, missing: true}` (over syslog with
+MSGID `paddock.missing`). Events older than the stored deliveries are filled from the pull feed above (the feed keeps
+`commit_seq`, so a replayed push and a pull can be reconciled) or from an [evidence export](audit-bucket.md).
