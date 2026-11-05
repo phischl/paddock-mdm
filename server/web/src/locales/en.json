@@ -442,6 +442,10 @@
       "revocation_refused": "The device {target} refused a revocation ({reason})",
       "presumed_self_locked": "The device {target} has not reached Paddock for longer than the dead man's switch period and presumably locked itself",
       "install_now_requested": "{actor} asked {target} to install {packages} now",
+      "diagnostics_requested": "{actor} asked {target} for a diagnostics bundle",
+      "diagnostics_collected": "The device {target} uploaded a diagnostics bundle ({files, number} files)",
+      "diagnostics_downloaded": "{actor} downloaded the diagnostics bundle of {hostname}",
+      "diagnostics_purged": "{actor} deleted the diagnostics bundle of {hostname}",
       "updates_run": "The device {target} finished its {kind} updates: {result, select, ok {{upgraded, number} packages upgraded} timeout {timed out} other {failed}}",
       "software_installed": "The device {target} installed {package} {version}",
       "software_reinstalled": "The device {target} found {package} removed locally and installed it again ({version})",
@@ -508,7 +512,13 @@
       "openbao_auto_unsealed": "{failures, plural, =0 {The unsealer unsealed OpenBao automatically ({unseals, number} times since the last report)} other {The unsealer failed to unseal OpenBao ({failures, number} failures, last reason {last_failure_reason})}}",
       "mcp_policy_changed": "{actor} changed the MCP policy of the platform: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}",
       "access_review_viewed": "{actor} opened the platform access review",
-      "access_review_exported": "{actor} exported the platform access review of {from} to {to} as {format}"
+      "access_review_exported": "{actor} exported the platform access review of {from} to {to} as {format}",
+      "backup_target_created": "{actor} added the backup target {name} ({type})",
+      "backup_target_updated": "{change, select, enabled {{actor} enabled the backup target {name}} disabled {{actor} disabled the backup target {name}} other {{actor} changed the backup target {name} (host revision {host_revision})}}",
+      "backup_target_deleted": "{actor} deleted the backup target {name} ({type})",
+      "backup_target_tested": "{actor} requested a connection test of the backup target {name}",
+      "backup_schedule_changed": "{actor} changed the backup schedule: full backup every {full_interval_hours} h, {retention_full} full backups kept",
+      "backup_run_requested": "{actor} requested a backup now"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",

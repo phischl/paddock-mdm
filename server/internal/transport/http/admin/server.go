@@ -106,9 +106,11 @@ type Deps struct {
 	EndSessions *app.Sessions
 	// AutoUnseal is the automatic unseal of OpenBao (plan M8u decision 7).
 	AutoUnseal *app.AutoUnseal
-	PublicURL  string
-	Static     *StaticHandler // portal build
-	Now        func() time.Time
+	// UpgradeCheck is the report before an upgrade (plan M16 decision 4).
+	UpgradeCheck *app.UpgradeCheck
+	PublicURL    string
+	Static       *StaticHandler // portal build
+	Now          func() time.Time
 	// StepUpMaxAuthAge replaces the production StepUpMaxAuthAge (development only; zero keeps it).
 	StepUpMaxAuthAge time.Duration
 	// StepUpMFAClass replaces StepUpWebAuthnClass, the authenticator class a step-up must validate (development only;
@@ -122,6 +124,11 @@ type Deps struct {
 	LoginMFAOptional bool
 	// TrustedProxies may name the client through X-Paddock-Client-IP (plan M7a decision 5).
 	TrustedProxies []netip.Prefix
+
+	// BackupTargets, BackupSchedule and BackupRuns are the platform backup (plan M15 decisions 10–14).
+	BackupTargets  *app.BackupTargets
+	BackupSchedule *app.BackupSchedule
+	BackupRuns     *app.BackupRuns
 }
 
 // privileged maps route patterns of privileged actions to their audit spec, so that requests rejected before
@@ -255,6 +262,14 @@ var privileged = map[string]struct {
 	"POST /api/v1/software-assignments":                                    {app.ScopeOrg, app.SpecSoftwareAssignmentCreate},
 	"PATCH /api/v1/software-assignments/{id}":                              {app.ScopeOrg, app.SpecSoftwareAssignmentUpdate},
 	"DELETE /api/v1/software-assignments/{id}":                             {app.ScopeOrg, app.SpecSoftwareAssignmentDelete},
+	"PUT /api/platform/v1/backup/schedule":                                 {app.ScopePlatform, app.SpecBackupScheduleChange},
+	"POST /api/platform/v1/backup/targets":                                 {app.ScopePlatform, app.SpecBackupTargetCreate},
+	"PUT /api/platform/v1/backup/targets/{id}":                             {app.ScopePlatform, app.SpecBackupTargetUpdate},
+	"DELETE /api/platform/v1/backup/targets/{id}":                          {app.ScopePlatform, app.SpecBackupTargetDelete},
+	"POST /api/platform/v1/backup/targets/{id}/test":                       {app.ScopePlatform, app.SpecBackupTargetTest},
+	"POST /api/platform/v1/backup/targets/{id}/enable":                     {app.ScopePlatform, app.SpecBackupTargetUpdate},
+	"POST /api/platform/v1/backup/targets/{id}/disable":                    {app.ScopePlatform, app.SpecBackupTargetUpdate},
+	"POST /api/platform/v1/backup/run":                                     {app.ScopePlatform, app.SpecBackupRunRequest},
 }
 
 // ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the
@@ -289,11 +304,12 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus,
+		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns,
 		securityReview: d.SecurityReview,
 		accessReview:   d.AccessReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,
+		upgradeCheck: d.UpgradeCheck,
 		mcpSettings:  d.MCPSettings,
 		mcpAccess:    d.MCPAccess,
 		imports:      d.ReleaseImports,

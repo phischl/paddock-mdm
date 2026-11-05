@@ -50,6 +50,7 @@ var securityExplicit = []audit.Code{
 	"notification.pseudonym_resolved",
 	"audit.export_requested", "audit.export_downloaded",
 	"access_review.exported",
+	"device.diagnostics_requested", "device.diagnostics_downloaded", "device.diagnostics_purged",
 }
 
 // SecurityCodes returns the preset of filter mode security, sorted: every registered code of the wildcard groups of

@@ -2,11 +2,13 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/pkg/escrow"
@@ -34,6 +36,14 @@ type Escrow struct {
 	platform *db.PlatformPool
 	pause    time.Duration
 	interval time.Duration
+	// diagnostics handles the announcements of diagnostics bundles that share the queue (WithDiagnostics).
+	diagnostics *Diagnostics
+}
+
+// WithDiagnostics hands the diagnostics announcements on ingest.escrow to d (plan M12 decision 5).
+func (e *Escrow) WithDiagnostics(d *Diagnostics) *Escrow {
+	e.diagnostics = d
+	return e
 }
 
 // NewEscrow creates the consumer and the header round.
@@ -49,6 +59,15 @@ func (e *Escrow) Handle(ctx context.Context, _ *amqp.Channel, deliveries <-chan 
 }
 
 func (e *Escrow) process(ctx context.Context, messageID string, body []byte) outcome {
+	var kind struct {
+		DiagnosticsID *uuid.UUID `json:"diagnostics_id"`
+	}
+	if json.Unmarshal(body, &kind) == nil && kind.DiagnosticsID != nil {
+		if e.diagnostics == nil {
+			return poison
+		}
+		return e.diagnostics.announce(ctx, messageID, body)
+	}
 	var m ingest.Escrow
 	if err := decode(body, &m); err != nil {
 		return poison

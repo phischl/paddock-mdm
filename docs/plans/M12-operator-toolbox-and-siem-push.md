@@ -679,6 +679,34 @@ Architect decisions of 2026-11-04, taken after the PDK-751 reviews:
    migration `00103_device_diagnostics.sql` (decision 3, not `00101`) and the access review grants
    `00104_access_review_grants.sql` (decision 24, not `00103`).
 
+## Amendment 2026-11-04 — diagnostics deviations signed off (PDK-747)
+
+Decisions taken by the architect lead on 2026-11-04 after Review 1 of PDK-747; they bind the implementation and
+PDK-749 (download and purge):
+
+1. **`reason` param on `device.diagnostics_collected`** (§6.4 lists `request_id`, `files`, `bytes`, `sha256`,
+   `truncated_entries`, `notified_sessions`; `reason` is added). It is recorded on **failure only**, and its value
+   comes from a closed list: the device's refusal (`invalid_params`, `upload_refused`, `upload_failed`,
+   `collect_failed`, `too_large`), the worker's finding (`size_mismatch`, `sha256_mismatch`, `missing`) or
+   `unknown` when a device sends anything else. A device's free text never reaches the event.
+   `docs/compliance/audit-codes.md` lists the param (generated from the registry).
+2. **Additive column `device_diagnostics.uploaded_at`** (not in the DDL of decision 3). The worker's "rows
+   `uploaded` older than 10 s" and "15 minutes without the object" need their own anchor, because `requested_at` can
+   be up to one hour earlier. Fix Round 1 additionally uses `expires_at` as "when the object goes" for `failed` and
+   `expired` bundles (no further column).
+3. **Gateway semantics of `POST /v1/diagnostics`**: the gateway has no database, so `GetDeviceCommand` and the
+   state `delivered` of §3.1 item 5 are replaced by "the command is a `collect_status` command **held for this
+   device in `cmd:<device_id>`** and not expired". The 404 `not_found` of item 2 now reads: `command_id` is not a
+   `collect_status` command held for the device (other type, other device, unknown, expired, withdrawn or already
+   answered). A command that is cached but not yet delivered gets **202**, not 404; this is not exploitable,
+   because a device only learns command IDs by delivery. The 409 `already_uploaded` rule stays a Valkey claim
+   (`diag:<id>`), not a row-state check. `device.yaml` documents the same wording.
+4. **Finding 5 (reuse of the presigned PUT)**: PDK-749 re-verifies the SHA-256 of the object before serving a
+   download; no `VersionId` column is added.
+5. **Migration label**: `00103_device_diagnostics.sql` (the plan's `00101` follows landing order, decision 10 of
+   the alpha.9 decisions); the labels `00101`–`00103` of this plan are read as the next free numbers in the order
+   the tickets land.
+
 ## Amendment 2026-11-04 — access review deviations signed off (PDK-754)
 
 Decisions taken by the architect lead on 2026-11-04 after Review 1 of PDK-754 (decisions 24–26 of §3.7 and gates

@@ -134,8 +134,11 @@ func TestLifetime(t *testing.T) {
 			t.Fatalf("%s: %v %v", typ, d, ok)
 		}
 	}
-	if _, ok := Lifetime("collect_status"); ok {
-		t.Fatal("collect_status is not a type of this release")
+	if d, ok := Lifetime(TypeCollectStatus); !ok || d != time.Hour {
+		t.Fatalf("collect_status: %v %v", d, ok)
+	}
+	if _, ok := Lifetime("collect_logs"); ok {
+		t.Fatal("an unregistered type has a lifetime")
 	}
 }
 
