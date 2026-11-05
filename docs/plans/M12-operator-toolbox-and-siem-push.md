@@ -848,6 +848,17 @@ these changes; the `bundle.dsse` correction is ADR 0048 amendment 2026-11-05):
    The condition of the sign-off — every item a kind collects is already on the approved list — was checked
    against the code on 2026-11-05 and holds; nothing was removed.
 
+   **Note 2026-11-05 (PDK-750, PDK-791; architect decision on the unit status).** `systemd/status.txt` is no longer
+   `systemctl status --full --lines=20`, whose output carries the units' CGroup trees with process command lines and
+   20 journal lines per unit (including `orbit`, whose journal is otherwise not collected). The collector runs
+   `systemctl show --property=ActiveState,SubState,Result,ExecMainStatus,StateChangeTimestamp,ActiveEnterTimestamp,
+   ActiveExitTimestamp,InactiveEnterTimestamp,ExecMainStartTimestamp,ExecMainExitTimestamp` of the same seven units
+   and keeps only blank lines and lines of these properties. The archive name stays `systemd/status.txt`; `Exits` no
+   longer lists `systemctl status` 3/4 (item 3), since `systemctl show` answers 0 for stopped and unknown units. The
+   maintainer-signed privacy text stands unchanged; no new sign-off is needed. Tests: no command line or journal line
+   of a `systemctl status --full` output reaches the archive (`TestUnitStatusHoldsNoProcessesOrJournal`), and every
+   collected unit field is on the signed list and named in `privacy.md` (`TestUnitStateFieldsSigned`).
+
 ## Amendment 2026-11-05 — diagnostics download (PDK-749)
 
 Decisions taken by the architect lead on 2026-11-05 for PDK-749 and PDK-779 (recorded in ADR 0048 amendment

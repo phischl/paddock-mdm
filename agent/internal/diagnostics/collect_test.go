@@ -208,9 +208,7 @@ func TestEntriesClosedList(t *testing.T) {
 func TestCollect(t *testing.T) {
 	sys := device()
 	sys.Outputs["uptime -p"] = fakesys.OutputReply{Exit: 1}
-	sys.Outputs["systemctl status --no-pager --full --lines=20 paddock-supervisor.service paddock-supervisor-upgrade.service "+
-		"paddock-encrypt-resume.service paddock-uninstall.service himmelblaud.service himmelblaud-tasks.service orbit.service"] =
-		fakesys.OutputReply{Data: []byte("inactive units\n"), Exit: 3}
+	sys.Outputs[unitStatusCommand()] = fakesys.OutputReply{Data: []byte(unitShow)}
 	var archive bytes.Buffer
 	m, err := Collect(context.Background(), sys, sources(), &archive)
 	if err != nil {
@@ -256,8 +254,8 @@ func TestCollect(t *testing.T) {
 			t.Fatalf("%s: %+v, want an error and no content", name, e)
 		}
 	}
-	if e := byName["systemd/status.txt"]; e.Error != "" || string(files["systemd/status.txt"]) != "inactive units\n" {
-		t.Fatalf("status of stopped units: %+v", e)
+	if e := byName["systemd/status.txt"]; e.Error != "" || string(files["systemd/status.txt"]) != unitShow {
+		t.Fatalf("unit status: %+v\n%s", e, files["systemd/status.txt"])
 	}
 	if fs := byName["etc/sudoers.d"].Files; len(fs) != 2 || fs[0].Name != "etc/sudoers.d/paddock-u-alice" || fs[1].Name != "etc/sudoers.d/vagrant" {
 		t.Fatalf("sudoers.d %+v", fs)
@@ -491,5 +489,98 @@ func TestCollectJournalCap(t *testing.T) {
 	_, files := untar(t, archive.Bytes())
 	if got := files["journal/himmelblaud.log"]; len(got) != MaxJournal || !bytes.Equal(got, big[:MaxJournal]) {
 		t.Fatalf("journal %d bytes", len(got))
+	}
+}
+
+// unitStatusCommand is the command line of systemd/status.txt as the fake system receives it.
+func unitStatusCommand() string {
+	for _, e := range Entries() {
+		if e.Name == "systemd/status.txt" {
+			return e.Source
+		}
+	}
+	panic("no systemd/status.txt entry")
+}
+
+// unitShow is what `systemctl show` answers for two of the units: a running one and one that is not installed.
+const unitShow = `Result=success
+ExecMainStartTimestamp=Thu 2026-11-05 08:12:01 CET
+ExecMainExitTimestamp=
+ExecMainStatus=0
+ActiveState=active
+SubState=running
+StateChangeTimestamp=Thu 2026-11-05 08:12:01 CET
+ActiveEnterTimestamp=Thu 2026-11-05 08:12:01 CET
+ActiveExitTimestamp=
+InactiveEnterTimestamp=
+
+Result=success
+ExecMainStartTimestamp=
+ExecMainExitTimestamp=
+ExecMainStatus=0
+ActiveState=inactive
+SubState=dead
+StateChangeTimestamp=
+ActiveEnterTimestamp=
+ActiveExitTimestamp=
+InactiveEnterTimestamp=
+`
+
+// unitShowUnlisted is what `systemctl show` answers beyond the requested properties (a unit file's command line
+// with its arguments, process ids, the cgroup) plus a key that only resembles a listed one: a redactor that keeps
+// any <key>=<value> line leaks them, so the allow list of keepUnitState is what this proves.
+const unitShowUnlisted = `ExecStart={ path=/opt/orbit/bin/orbit ; argv[]=/opt/orbit/bin/orbit --enroll_secret_path=/opt/orbit/secret.txt ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+MainPID=1234
+ExecMainPID=1234
+ControlGroup=/system.slice/orbit.service
+ActiveStateX=leak
+`
+
+// unitStatusFull is `systemctl status --full` of orbit: the unit's processes with their command lines (the CGroup
+// tree) and its newest journal lines.
+const unitStatusFull = `● orbit.service - Orbit osquery
+     Loaded: loaded (/usr/lib/systemd/system/orbit.service; enabled; preset: enabled)
+     Active: active (running) since Thu 2026-11-05 08:12:01 CET; 2h ago
+   Main PID: 1234 (orbit)
+      Tasks: 31 (limit: 9389)
+     Memory: 120.4M (peak: 180.2M)
+        CPU: 1min 2.345s
+     CGroup: /system.slice/orbit.service
+             ├─1234 /opt/orbit/bin/orbit/linux/stable/orbit
+             └─1301 /opt/orbit/bin/osqueryd/linux/stable/osqueryd --pidfile=/opt/orbit/osquery.pid --enroll_secret_path=/opt/orbit/secret.txt
+Nov 05 10:01:02 ws-alice orbit[1234]: 2026-11-05T09:01:02Z INF enroll user=alice@acme.test
+Nov 05 10:01:03 ws-alice osqueryd[1301]: I1105 query "SELECT * FROM users" by alice
+`
+
+// TestUnitStatusHoldsNoProcessesOrJournal (decision of 2026-11-05 on PDK-791): systemd/status.txt is `systemctl
+// show` of the state properties only, and whatever else the command answers — the CGroup tree with the command
+// lines of `systemctl status --full`, its journal lines — never reaches the archive.
+func TestUnitStatusHoldsNoProcessesOrJournal(t *testing.T) {
+	cmd := strings.Fields(unitStatusCommand())
+	if cmd[0] != "systemctl" || cmd[1] != "show" || cmd[2] != "--property="+strings.Join(UnitStateProperties, ",") {
+		t.Fatalf("systemd/status.txt runs %q, want systemctl show --property=<state properties>", unitStatusCommand())
+	}
+	for _, arg := range cmd[3:] {
+		if strings.HasPrefix(arg, "-") {
+			t.Fatalf("systemd/status.txt passes the option %q", arg)
+		}
+	}
+	sys := device()
+	sys.Outputs[unitStatusCommand()] = fakesys.OutputReply{Data: []byte(unitShow + unitShowUnlisted + "\n" + unitStatusFull)}
+	var archive bytes.Buffer
+	if _, err := Collect(context.Background(), sys, sources(), &archive); err != nil {
+		t.Fatal(err)
+	}
+	_, files := untar(t, archive.Bytes())
+	if got := string(files["systemd/status.txt"]); got != unitShow+"\n" {
+		t.Fatalf("systemd/status.txt holds more than the state properties:\n%s", got)
+	}
+	for name, data := range files {
+		for _, leak := range []string{"CGroup", "osqueryd", "/opt/orbit", "enroll_secret_path", "alice@acme.test", "Main PID", "Nov 05 10:01",
+			"ExecStart", "argv[]", "MainPID", "ControlGroup", "ActiveStateX"} {
+			if bytes.Contains(data, []byte(leak)) {
+				t.Errorf("%s holds %q of systemctl status", name, leak)
+			}
+		}
 	}
 }
