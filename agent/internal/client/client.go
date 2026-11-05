@@ -184,6 +184,38 @@ func (c *Client) Upload(ctx context.Context, rawURL string, body []byte) error {
 	return nil
 }
 
+// Diagnostics announces the sealed diagnostics bundle of a collect_status command and returns the presigned PUT of its
+// object (POST /v1/diagnostics, ADR 0048 decision 3).
+func (c *Client) Diagnostics(ctx context.Context, deviceID string, seq int64, req protocol.DiagnosticsRequest) (protocol.DiagnosticsResponse, error) {
+	var out protocol.DiagnosticsResponse
+	err := c.do(ctx, http.MethodPost, "/v1/diagnostics", deviceID, seq, req, &out)
+	return out, err
+}
+
+// maxHealthz bounds the body of GET /healthz kept for the diagnostics bundle.
+const maxHealthz = 4 << 10
+
+// Healthz returns the status line and the body (at most 4 KiB) of GET <server_url>/healthz; any HTTP status is an
+// answer, only a failed request is an error.
+func (c *Client) Healthz(ctx context.Context) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/healthz", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = res.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxHealthz))
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(res.Status+"\n"), body...), nil
+}
+
 // EscrowStatus returns the storage status of an escrow upload (pending, stored or failed).
 func (c *Client) EscrowStatus(ctx context.Context, deviceID string, seq int64, escrowID string) (string, error) {
 	var out escrow.Status

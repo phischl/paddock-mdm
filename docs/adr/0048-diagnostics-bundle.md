@@ -105,3 +105,25 @@ step-up through the escrow-reader, which alone can unwrap the object key. The co
 - − The content list is closed: extending it is a privacy change with a document amendment and a release note.
 - Follow-ups: the playbook step of architecture §11.3 stays unscheduled; M13b's desktop notification mechanism is
   the same `systemd-run --machine` call and reuses `agent/internal/desktop/notify.go`.
+
+## Amendment 2026-11-05
+
+Decision of the architect lead on 2026-11-05 after Review 1 of PDK-748; it corrects decision 2 and binds PDK-749 and
+PDK-750:
+
+1. **`bundle.dsse` is not public.** Decision 2 lists it as "(signed, public)". It is signed but not public: its
+   payload carries the Fleet enroll secret (`inventory.enroll_secret`) and the content of every managed file
+   (`resources[].spec.content` of `file` resources), which an administrator may fill with anything. The envelope
+   never enters the archive.
+2. **The archive carries `paddock/bundle-redacted.json` instead.** It holds a note, the envelope's payload type and
+   signature metadata (key IDs and signatures), and the decoded payload with every field that is not on the agent's
+   allow-list of known public bundle fields replaced by `<redacted>` — among them the enroll secret and managed-file
+   content. The rendering fails closed: a field the agent does not know (a newer server during a staged rollout), a
+   resource of an unknown type and an object where a scalar is expected are replaced whole; an envelope or payload
+   that does not decode is replaced as a whole. URL credentials in the remaining values are redacted as in
+   `agent.yml`. The note states that this is not the signed envelope and that its signatures do not verify against
+   the rendered payload.
+3. **Classification is enforced.** A unit test fails when `pkg/bundle` gains a field that is neither on the allow-list
+   nor a known secret, and asserts that no secret field and no managed-file content survives the rendering.
+4. **Follow-ups.** PDK-749 (download) and PDK-750 (privacy document) describe the entry as
+   `paddock/bundle-redacted.json`; `docs/compliance/privacy.md` lists it in place of `bundle.dsse`.

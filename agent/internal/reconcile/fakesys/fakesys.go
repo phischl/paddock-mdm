@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 )
 
 // File is a fake file.
@@ -89,6 +91,17 @@ type System struct {
 	// Conflicts are package pairs: installing the key removes the value while it is installed, which a simulation
 	// shows as a Remv line and which an install with --no-remove refuses.
 	Conflicts map[string]string
+	// Outputs answer Output calls by their command line ("uname -a"); an unscripted tool is missing (exit 127).
+	// OutputCalls records the command line of every Output call.
+	Outputs     map[string]OutputReply
+	OutputCalls []string
+}
+
+// OutputReply is a scripted Output answer: Data with Exit (non-zero: a *reconcile.ExitError), or Err.
+type OutputReply struct {
+	Data []byte
+	Exit int
+	Err  error
 }
 
 // AptReply is a scripted apt-get answer; with Apply the call also does what it does unscripted (e.g. after waiting
@@ -110,6 +123,9 @@ type Session struct {
 	Class string
 	// Timestamp is the Timestamp property as loginctl prints it; "" omits it.
 	Timestamp string
+	// Type (wayland, x11, tty) and State (active, online, closing) are printed when set.
+	Type  string
+	State string
 }
 
 // New returns a fake with root/root, nobody and an empty file system.
@@ -568,6 +584,12 @@ func (s *System) Loginctl(_ context.Context, args ...string) (string, int, error
 					if ss.Timestamp != "" {
 						block += "Timestamp=" + ss.Timestamp + "\n"
 					}
+					if ss.Type != "" {
+						block += "Type=" + ss.Type + "\n"
+					}
+					if ss.State != "" {
+						block += "State=" + ss.State + "\n"
+					}
 					blocks = append(blocks, block)
 				}
 			}
@@ -797,4 +819,24 @@ func (s *System) setShadow(name, hash string) {
 	}
 	lines = append(lines, name+":"+hash+":20000:0:99999:7:::")
 	f.Data = []byte(strings.Join(lines, "\n") + "\n")
+}
+
+// Output implements reconcile.System from Outputs.
+func (s *System) Output(_ context.Context, name string, args ...string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	line := strings.Join(append([]string{name}, args...), " ")
+	s.OutputCalls = append(s.OutputCalls, line)
+	r, ok := s.Outputs[line]
+	switch {
+	case !ok:
+		return nil, &reconcile.ExitError{Name: name, Code: 127}
+	case r.Err != nil:
+		return nil, r.Err
+	case len(r.Data) > reconcile.MaxOutput:
+		return r.Data[:reconcile.MaxOutput], reconcile.ErrOutputLimit
+	case r.Exit != 0:
+		return r.Data, &reconcile.ExitError{Name: name, Code: r.Exit}
+	}
+	return r.Data, nil
 }
