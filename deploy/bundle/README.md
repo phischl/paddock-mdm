@@ -33,7 +33,7 @@ docker run --rm @COSIGN_IMAGE@ verify "$(sed -n 's/^PADDOCK_IMAGE=//p' versions.
 
 ## Commands
 
-Every command except `version`, `verify` and `migrate-from` needs `.env` (copied from `.env.example`) with
+Every command except `version`, `verify`, `migrate-from` and `upgrade-check` needs `.env` (copied from `.env.example`) with
 `PADDOCK_ENV=production` and `PADDOCK_HOST=controlplane` or `PADDOCK_HOST=audit`. A single-host lab behind your own
 TLS proxy copies `.env.lab.example` instead and runs with `PADDOCK_HOST=lab` (not for production;
 `docs/operations/lab-install.md`); there every command of both hosts applies, and `check` and `up` begin with a warning
@@ -57,6 +57,7 @@ line.
 | `./paddock bootstrap fleet` | Sets up Fleet and its API token (control plane, lab). |
 | `./paddock agent-release <version> <dir>` | Uploads and publishes the signed agent artifacts of a release (control plane, lab). |
 | `./paddock migrate-from <old dir>` | Copies `.env` and `.secrets/` from the bundle directory of the running version (upgrade). |
+| `./paddock upgrade-check <old dir> [--json]` | Read-only check, run in this (new) directory before `migrate-from`: old bundle intact, adjacent release, release notes, missing `.env` keys, secrets, disk, images, the old stack's server report, unseal path, stack health. PASS/WARN/FAIL table, or `{items, exit}` as JSON; exit 0 without FAIL, 1 with, 2 on usage. Changes nothing. |
 
 Keep local settings in `.env`; never edit the shipped files (`./paddock verify` would report them, and an upgrade
 replaces them). To pull the Paddock images from a mirror, set `PADDOCK_IMAGE`, `PADDOCK_COMPILER_IMAGE` and
