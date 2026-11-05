@@ -36,6 +36,8 @@ Treat these as protected: changes are tamper events and the agent must re-verify
    their systemd units).
 4. Identity configuration: Himmelblau, PAM, NSS (`/etc/himmelblau/`, `/etc/pam.d/`, `/etc/nsswitch.conf`,
    `/etc/security/`).
+5. Paddock-managed APT sources, keyrings and pins (`/etc/apt/sources.list.d/paddock-*.sources`,
+   `/etc/apt/keyrings/paddock-*.gpg`, `/etc/apt/preferences.d/51paddock-software`).
 
 ## Organization isolation
 
