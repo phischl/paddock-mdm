@@ -606,6 +606,13 @@ type Finding struct {
 	UpdatedAt         time.Time
 }
 
+type GooseDbVersion struct {
+	ID        int32
+	VersionID int64
+	IsApplied bool
+	Tstamp    pgtype.Timestamp
+}
+
 type InstalledSoftware struct {
 	DeviceID       uuid.UUID
 	OrganizationID uuid.UUID

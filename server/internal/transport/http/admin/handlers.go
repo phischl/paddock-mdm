@@ -41,6 +41,8 @@ type handlers struct {
 	sessions *app.Sessions
 	// autoUnseal is the automatic unseal of OpenBao (plan M8u decision 7).
 	autoUnseal *app.AutoUnseal
+	// upgradeCheck is the report before an upgrade (plan M16 decision 4).
+	upgradeCheck *app.UpgradeCheck
 
 	users         *app.Users
 	userGroups    *app.UserGroups
