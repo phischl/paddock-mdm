@@ -95,6 +95,29 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   (`docs/operations/uninstall.md`), then publish this release's agent release on the new server
   (`docs/operations/agent-releases.md`) and enrol the devices with its packages, never with an older agent. The
   revocation tool `paddock-revoke` is unchanged and stays unsigned; revocation stays disabled.
+- **From 0.1.0-alpha.8: upgrade in place from 0.1.0-alpha.7** with the steps below; from 0.1.0-alpha.6 or earlier
+  there is still no upgrade path (install 0.1.0-alpha.7 or this release fresh, as above). Only Paddock's own images
+  change: no third-party image, Compose file or Authentik blueprint, no new setting in `.env.example`, no new database
+  role, OpenBao AppRole or file under `.secrets/`. Schema: migrations 00090–00099 on the control plane (new tables,
+  columns and grants; 00097 fills three new device columns from the existing device data, so the upgrade recompiles no
+  device), no audit migration: on the audit host step 4 does not apply. The rollback is the backup restore of step 3.
+- From 0.1.0-alpha.8: what changes for existing data. Devices enrolled before the upgrade get the enrollment method
+  `unknown` and stay enforced; only devices adopted later start report-only. Staged configuration rollouts are off in
+  every organization until an organization administrator enables them under *Settings*, *Rollouts*
+  (`docs/operations/configuration-rollouts.md`). Change sets written before the upgrade have no stored previous state
+  and cannot be reverted; every change after it can, for 90 days. The software catalog is empty, and adding a package
+  source needs a fresh step-up (`docs/operations/software.md`).
+- From 0.1.0-alpha.8 (devices): upgrade the server first, then roll out this release's agent release
+  (`docs/operations/agent-releases.md`). The agent changes (report-only apply, enforcement of software assignments,
+  enrollment method and os-release in the check-in); the supervisor and `paddock-revoke` do not, and revocation stays
+  disabled. Agents of 0.1.0-alpha.7 keep working against the new server, but they ignore software assignments and
+  cannot run report-only: adopt existing laptops and assign software only once the devices run this release's agent
+  (`docs/operations/enroll-existing.md`, *Minimum agent release*). With software assignments, the agent writes
+  `/etc/apt/sources.list.d/paddock-<slug>.sources`, `/etc/apt/keyrings/paddock-<slug>.gpg` and
+  `/etc/apt/preferences.d/51paddock-software`; these files are a protected area: an edited one is restored, a foreign
+  `paddock-*` source or keyring is removed, each with `device.tamper_protected_file_changed`. When the last software
+  assignment of a device goes away, and when Paddock is removed from it, the agent deletes them again; installed
+  applications stay.
 - From 0.1.0-alpha.9: Fleet moves to v4.94.0, a minor release that migrates Fleet's database: take the Fleet dump of
   step 3 first, because a rollback restores it. That dump is a manual step until PDK-743. Fleet's own HTTP metric is renamed from `http.server.duration` to
   `http.server.request.duration` (seconds); Paddock neither scrapes nor alerts on it, so only your own Fleet
@@ -105,10 +128,13 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   drift pass. That release does not contain the upstream fix for the Hello PIN loss
   (himmelblau-idm/himmelblau#1886), so the agent's `cache_timeout` setting and residual risk RR-40 stay unchanged. It
   offers the password change at the console login of an enrolled device whose Entra ID password has expired.
+  The AWS CLI image used by the backup and upload scripts moves to 2.39.3; `./paddock pull` fetches it, and nothing
+  else changes for the operator.
 
 ## Upgrade (each host)
 
-This section does not apply to the move to 0.1.0-alpha.7, which is a fresh installation ("Before you start").
+This section does not apply to the move to 0.1.0-alpha.7, which is a fresh installation ("Before you start"). It
+applies again to the move from 0.1.0-alpha.7 to 0.1.0-alpha.8.
 
 1. Download the bundle of B and its `.sigstore.json` and verify them as `docs/operations/install.md` section 3
    describes. Extract it next to the running bundle directory, for example `/opt/paddock/paddock-deploy-<B>/` beside
