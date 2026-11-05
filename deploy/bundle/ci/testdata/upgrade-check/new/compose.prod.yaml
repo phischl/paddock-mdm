@@ -1,0 +1,3 @@
+services: {}
+secrets:
+  release_public_key: { file: ./.secrets/release-production/minisign.pub }
