@@ -1,0 +1,22 @@
+title: Paddock data revocation event
+id: 61fdc57e-6dff-4920-b452-5386c1a55e5a
+status: experimental
+description: A data revocation was requested, approved, issued, confirmed, refused or pinned.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100911
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code|startswith:
+      - 'revocation.'
+      - 'device.revocation_'
+  condition: selection
+falsepositives:
+  - A planned revocation drill or an approved offboarding.
+level: critical

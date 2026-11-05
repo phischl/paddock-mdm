@@ -1,0 +1,20 @@
+title: Paddock root grant confirmed
+id: 9bd9f3fa-6f8e-4b28-8688-0fa6ce2e9445
+status: experimental
+description: An administrator confirmed a root grant in a permission profile.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100913
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code: 'permission_profile.root_grant_confirmed'
+  condition: selection
+falsepositives:
+  - A reviewed change to a permission profile.
+level: high

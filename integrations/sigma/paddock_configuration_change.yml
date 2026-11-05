@@ -1,0 +1,33 @@
+title: Paddock configuration change
+id: 33685489-2547-4599-8196-be304b4cec11
+status: experimental
+description: A configuration, settings, profile, token, file or software change.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100950
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code|startswith:
+      - 'config.'
+      - 'settings.'
+      - 'managed_file.'
+      - 'managed_unit.'
+      - 'permission_profile.'
+      - 'profile_assignment.'
+      - 'enrollment_token.'
+      - 'api_token.'
+      - 'organization.'
+      - 'device_group.'
+      - 'software_'
+      - 'package_hold.'
+      - 'notification.destination_'
+  condition: selection
+falsepositives:
+  - Routine administration.
+level: low

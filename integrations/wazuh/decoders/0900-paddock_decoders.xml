@@ -1,0 +1,48 @@
+<!--
+  Paddock audit events for Wazuh (plan M12 decision 22).
+
+  Wazuh's JSON_Decoder extracts the message body, so every JSON key becomes a field under its dotted name:
+  event.code, event.outcome, event.actor.type, event.actor.display, event.target.display, event.params.<name>,
+  forward_seq, commit_seq. A display string with a quote and a param added to Paddock later decode without a change
+  here. The rules key on event.code, never on the syslog MSGID: the nine codes longer than 32 characters travel under
+  a fixed MSGID alias, while the body always carries the full code.
+
+  paddock-ctl  heartbeat, test and checkpoint messages (paddock.notification.v1, MSGID paddock.heartbeat|checkpoint|test)
+  paddock      every other RFC 5424 frame of the syslog push: audit events (paddock.audit.v1) and replayed events the
+               audit index no longer holds (MSGID paddock.missing, {forward_seq, event_id, missing: true})
+
+  paddock-ctl comes first because Wazuh takes the first parent whose prematch matches, and the paddock prematch also
+  matches a control message. The prematch ends in front of the JSON (after the BOM, which is three bytes or one
+  character depending on the PCRE2 mode), so JSON_Decoder with offset after_parent starts at the opening brace.
+
+  The pull lines of docs/operations/siem.md ({"organization", "commit_seq", "event"}) need no decoder here: Wazuh's
+  built-in json decoder takes every line that starts with {" before the decoders in etc/decoders are read, and it
+  yields the same field names. The rules recognize them by event.schema and commit_seq.
+-->
+<decoder name="paddock-ctl">
+  <prematch type="pcre2">^(?:\d+ )?(?:&lt;\d+&gt;1 )?\S+ \S+ paddock \S+ paddock\.(?:heartbeat|checkpoint|test) - [^{]{0,3}</prematch>
+</decoder>
+
+<decoder name="paddock-ctl-message">
+  <parent>paddock-ctl</parent>
+  <plugin_decoder offset="after_parent">JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="paddock">
+  <prematch type="pcre2">^(?:\d+ )?(?:&lt;\d+&gt;1 )?\S+ \S+ paddock \S+ \S+ - [^{]{0,3}</prematch>
+</decoder>
+
+<!--
+  Two sibling decoders of one name: Wazuh applies both. The first reads the organization slug from PROCID, because the
+  audit event body carries only organization_id; the second extracts the body.
+-->
+<decoder name="paddock-event">
+  <parent>paddock</parent>
+  <regex type="pcre2">^(?:\d+ )?(?:&lt;\d+&gt;1 )?\S+ \S+ paddock (\S+) </regex>
+  <order>organization</order>
+</decoder>
+
+<decoder name="paddock-event">
+  <parent>paddock</parent>
+  <plugin_decoder offset="after_parent">JSON_Decoder</plugin_decoder>
+</decoder>
