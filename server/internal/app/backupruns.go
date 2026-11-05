@@ -53,7 +53,8 @@ type BackupRunQuery struct {
 	TargetID *uuid.UUID
 }
 
-// Key is a backup key as every read shows it: never the ciphertext or the challenge (plan M15 decision 7).
+// Key is a backup key as every read shows it: never the text, the ciphertext or the challenge hash (plan M15
+// decision 7, amendment 2026-11-04).
 type Key struct {
 	KeyID       string
 	Fingerprint string
@@ -65,6 +66,9 @@ type Key struct {
 	RetiredAt   *time.Time
 	Attempts    int
 	Legacy      bool
+	// Positions are the 1-based challenge positions, set only while the key waits for its confirmation: a legacy
+	// key's administrator holds the text but never saw a generating response.
+	Positions []int
 }
 
 // KeyStatus is the active key, the key waiting for its confirmation and the retired keys.
@@ -261,7 +265,7 @@ func repoOf(active *Key, succeeded []pgstore.BackupRun) Repo {
 	return repo
 }
 
-// readKeyStatus reads the key state without the ciphertext or the challenge.
+// readKeyStatus reads the key state without the ciphertext or the challenge hash; positions only for the pending key.
 func readKeyStatus(ctx context.Context, q *pgstore.Queries) (KeyStatus, error) {
 	rows, err := q.ListBackupKeyStates(ctx)
 	if err != nil {
@@ -272,6 +276,12 @@ func readKeyStatus(ctx context.Context, q *pgstore.Queries) (KeyStatus, error) {
 		k := Key{KeyID: r.KeyID, Fingerprint: r.Fingerprint, State: r.State, CreatedAt: r.CreatedAt,
 			CreatedBy: r.CreatedBy, ConfirmedAt: r.ConfirmedAt, ConfirmedBy: r.ConfirmedBy, RetiredAt: r.RetiredAt,
 			Attempts: int(r.Attempts), Legacy: r.Legacy}
+		if r.State == keyStateUnconfirmed && r.PendingPositions != nil {
+			k.Positions = make([]int, len(r.PendingPositions))
+			for i, p := range r.PendingPositions {
+				k.Positions[i] = int(p)
+			}
+		}
 		switch r.State {
 		case "confirmed":
 			out.Active = &k

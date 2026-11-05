@@ -96,6 +96,8 @@ type handlers struct {
 	// serverVersion is server_version of GET and PATCH /api/v1/me.
 	serverVersion string
 
+	// backupKeys is the platform backup key (plan M15 decision 7).
+	backupKeys *app.BackupKeys
 	// backupTargets, backupSchedule and backupRuns are the platform backup (plan M15 decisions 10–14).
 	backupTargets  *app.BackupTargets
 	backupSchedule *app.BackupSchedule
