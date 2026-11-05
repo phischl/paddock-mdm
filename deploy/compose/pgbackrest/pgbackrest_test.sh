@@ -75,12 +75,16 @@ check "the first backup completes (exit $first_rc)" "$([[ $first_rc == 0 ]] && e
 label="$(pgb info --output=json | grep -o '"label":"[^"]*"' | tail -1 | cut -d'"' -f4)"
 report="$(pgb verify --set="$label" --output=text --verbose)"
 check "verify reports an intact set as status: ok" "$(grep -q '^status: ok$' <<<"$report" && echo 0 || echo 1)"
+# The file is moved aside and put back after the check: this repository is the old key's repository below, and a
+# damaged set left in it would fail every later whole-stanza verify (plan M15, amendment 2026-11-05, A7).
 docker run --rm -u 0 --entrypoint sh -v "$id-repo:/repo" "$image" \
-  -c "rm \"\$(find /repo/backup/test/$label/pg_data/base -type f -size +10k | head -1)\""
+  -c "f=\"\$(find /repo/backup/test/$label/pg_data/base -type f -size +10k | head -1)\"; mv \"\$f\" /repo/aside && echo \"\$f\" >/repo/aside.path"
 rc=0
 report="$(pgb verify --set="$label" --output=text --verbose)" || rc=$?
 check "verify reports a set with a missing file as status: error, exit $rc" \
   "$(grep -q '^status: error$' <<<"$report" && grep -q 'missing: 1' <<<"$report" && echo 0 || echo 1)"
+docker run --rm -u 0 --entrypoint sh -v "$id-repo:/repo" "$image" \
+  -c 'mv /repo/aside "$(cat /repo/aside.path)" && rm /repo/aside.path'
 
 # run.sh against a second cluster of the same major. The first repository (stanza test of the first cluster) is the
 # repository of an older key, mounted at its path in the set; schedule.env and the key file stand in for the backup

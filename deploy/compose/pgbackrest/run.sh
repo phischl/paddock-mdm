@@ -145,7 +145,7 @@ full_backup() {
     return 0
   fi
   if ((rc == 124)); then
-    echo "pgbackrest: the verify of stanza $STANZA did not finish within $((VERIFY_S / 60)) minutes; verifying backup" \
+    echo "pgbackrest: the verify of stanza $STANZA did not finish within $VERIFY_S seconds; verifying backup" \
       "$label only (WAL stays on the backup targets)" >&2
   else
     echo "pgbackrest: the verify of stanza $STANZA reported a problem (WAL stays on the backup targets):" >&2
