@@ -87,6 +87,22 @@ type Escrow struct {
 	ReceivedAt     time.Time  `json:"received_at"`
 }
 
+// DiagnosticsAnnounced is a device's announcement of a sealed diagnostics bundle (POST /v1/diagnostics, plan M12
+// decision 5). It travels on the escrow ingest queue (routing key ingest.escrow.<org>, message_id "diagnostics:" +
+// DiagnosticsID); the worker tells it from an Escrow by DiagnosticsID. DiagnosticsID is the collect_status command's
+// ID. The gateway checked that the command is held for the device.
+type DiagnosticsAnnounced struct {
+	DiagnosticsID  uuid.UUID `json:"diagnostics_id"`
+	DeviceID       uuid.UUID `json:"device_id"`
+	OrganizationID uuid.UUID `json:"organization_id"`
+	ObjectKey      string    `json:"object_key"`
+	SHA256         string    `json:"sha256"`
+	Size           int64     `json:"size"`
+	Nonce          []byte    `json:"nonce"`
+	WrappedDEK     []byte    `json:"wrapped_dek"`
+	ReceivedAt     time.Time `json:"received_at"`
+}
+
 // CommandResult is the result of a device command (routing key ingest.command_result.<org>, message_id = CommandID +
 // ":" + Status). The gateway checked that the command was pending for the device.
 type CommandResult struct {

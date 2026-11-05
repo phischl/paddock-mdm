@@ -158,11 +158,17 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getAgentRelease` | read | no | The release with its artifacts and rollout, including device counts. |
 | `getAgentReleaseSource` | read | no | The configured agent release source (ADR 0043 decision 6); repository and url are null while the source is switched off. |
 | `getAutoUnseal` | read | no | The automatic-unseal setting (ADR 0035): the acknowledged decision, the unsealer's report and OpenBao's seal status. |
+| `getBackupOverview` | read | no | The backup overview (plan M15 decision 13): the key state, the schedule, every target with its mirror state per kind, the local repository and the newest run per kind. |
+| `getBackupSchedule` | read | no | The backup schedule and retention; without a stored schedule the defaults (full backup every 24 h, OpenBao every 6 h, Fleet every 24 h, escrow every hour, 14 full backups, 30 days of snapshots and dumps) with updated_by and updated_at null. |
+| `getBackupTarget` | read | no | One target with its last test and its mirror state per kind; 404 not_found for a missing or deleted one. |
 | `getIpAllowlistEntry` | read | no | One entry. |
 | `getOrganization` | read | no | GET /api/platform/v1/organizations/{id} |
 | `getPlatformNotificationDestination` | read | no | One destination with its delivery state; 404 not_found for another scope's. |
+| `getUpgradeCheck` | read | no | The read-only report before an upgrade to target_version (ADR 0047 decision 2, plan M16 decision 4), the same as paddock-server admin upgrade-check: migrations (FAIL when the database is ahead of this release), agents (active devices whose agent is a release older than the target's support window: FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending (running agent rollout, halted configuration rollouts: WARN) and sessions. |
 | `haltAgentRollout` | write | yes | POST /api/platform/v1/agent-releases/{version}/rollout/halt |
 | `listAgentReleases` | read | no | Agent releases with their rollout status (plan M2b decision 20). |
+| `listBackupRuns` | read | no | The backup runs, one per kind and attempt, with the mirror result per target. |
+| `listBackupTargets` | read | no | The backup targets: local directories of the host, SMB and NFS shares the host mounts, S3-compatible buckets. |
 | `listComponentTargets` | read | no | The versions devices are expected to run (plan M8d decision 55): paddockd, the supervisor and paddock-revoke from the current release, fleetd from the newest published release, Himmelblau from the compiler. |
 | `listIpAllowlist` | read | no | The IP allow list of the administrative surfaces (plan M7a decision 16): while it has entries, the portal and the admin API answer 403 ip_not_allowed to every client address outside it, sessions and API tokens alike. |
 | `listOrganizations` | read | no | GET /api/platform/v1/organizations |
@@ -280,32 +286,40 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `confirmPermissionProfileRootGrant` | privileges | Confirms an effectively Full profile that existed before the step-up rule covered it; needs a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). |
 | `createApiToken` | api-tokens | The role may not be above the creator's: org_admin creates any organization role, org_operator creates org_operator and org_auditor (403 forbidden). |
 | `createAuditExport` | audit | Requests a signed evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). |
+| `createBackupTarget` | platform | Adds a target. |
 | `createIpAllowlistEntry` | platform | Adds a range. |
 | `createNotificationDestination` | notifications | Creates a destination. |
 | `createPlatformNotificationDestination` | platform | Creates a destination. |
 | `createSoftwareSource` | software | Adds an APT package source with its signing key. |
+| `deleteBackupTarget` | platform | Deletes the target; the backup sets already on it stay. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
 | `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |
 | `deletePlatformNotificationDestination` | platform | Deletes the destination with its delivery state and history. |
 | `deleteSoftwareSource` | software | Removes the source; the devices remove its source file and keyring with their next bundle. |
 | `destroyDevice` | revocation | POST /api/v1/devices/{id}/destroy |
 | `disableAutoUnseal` | platform | Disables the setting: the unsealer stops unsealing at once; the shares stay on the host until the operator runs ./paddock auto-unseal disable. |
+| `disableBackupTarget` | platform | Disables an enabled target: the backup role no longer writes to it. |
 | `downloadDeviceHeader` | devices | Returns a stored LUKS header backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup luksHeaderRestore; confirm_hostname must equal the device's hostname. |
 | `enableAutoUnseal` | platform | Records the typed acknowledgement of the current disclaimer and enables the setting; the unsealer on the host acts only while it is enabled. |
+| `enableBackupTarget` | platform | Enables a disabled target; 409 invalid_state when it is enabled. |
 | `enableMcpWrite` | mcp | Enables MCP write access for the caller's own account (ADR 0044 amendment 2026-10-25): their MCP sessions may change data where the scope's MCP policy allows it. |
 | `encryptDevice` | devices | Issues the signed command encrypt_disk (lifetime 7 days, ADR 0039, plan M8e decision 7): the device escrows a recovery key, prepares itself and encrypts its root volume in place after its next restart; disk_conversion follows the phases. |
 | `endAllSessions` | platform | Ends every portal session and every identity-provider browser session of every portal user (platform administrators and organization role members); device logins and API tokens are not affected. |
 | `importAgentRelease` | platform | Imports the version from the configured release source (ADR 0043): the version must be newer than the newest published release, every file is verified with the release public key before anything is stored, and the release is published without a rollout; paddock-revoke is never imported. |
 | `lockDevice` | revocation | POST /api/v1/devices/{id}/lock |
+| `putBackupSchedule` | platform | Replaces the schedule; every field is required and checked against its range (400 invalid_request naming the field). |
 | `rejectRevocationRequest` | revocation | POST /api/v1/revocation-requests/{id}/reject |
+| `requestBackupRun` | platform | Backs up now: one run in state requested per kind (kinds absent, null or empty: every kind), which the backup role runs in its next round. |
 | `resolveNotificationPseudonym` | notifications | Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's notifications stands for. |
 | `revealDeviceLocalAdmin` | devices | Returns the active password and a pending one; confirm_hostname must equal the device's hostname. |
 | `revealDeviceRecoveryKey` | devices | Returns the newest stored recovery key of the device; confirm_hostname must equal the device's hostname. |
 | `rotateNotificationDestinationSecret` | notifications | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
 | `rotatePlatformNotificationDestinationSecret` | platform | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
+| `testBackupTarget` | platform | Requests a connection test. |
 | `testNotificationDestination` | notifications | Requests a test delivery. |
 | `testPlatformNotificationDestination` | platform | Requests a test delivery. |
 | `uninstallDevice` | devices | Issues the signed command uninstall (lifetime 7 days, plan M8d decision 37): the device removes Paddock at its next check-in and is retired by its report. |
+| `updateBackupTarget` | platform | Replaces the settings; the type cannot change (400 invalid_request). |
 | `updateIpAllowlistEntry` | platform | Changes the range and/or the label (at least one). |
 | `updateManagedFileSettings` | settings | Replaces the operator roots: directories of the form /etc/<name>/, /usr/local/etc/<name>/ or /opt/<name>/ (trailing slash), outside the denied and sensitive paths and the never-operator directories (422 path_not_allowed naming the root), at most 50. |
 | `updateMcpSettings` | mcp | Replaces the MCP policy of the organization. |
@@ -325,12 +339,16 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | `disableMcpWrite` | mcp | Disables MCP write access for the caller's own account; no step-up is needed. |
 | `downloadAuditExport` | audit | Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. |
 | `enforceDevice` | devices | Ends the report-only mode of an adopted device (plan M11 decision 42): its next bundle quarantines foreign sudoers files, removes unexpected members of privileged groups (never the last administrator), installs the login component and applies every managed resource. |
+| `exportAccessReview` | overview | The access review as a download: format json (the same object as the view) or csv (one file for every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a leading apostrophe). |
+| `exportPlatformAccessReview` | platform | The access review as a download: format json (the same object as the view) or csv (one file for every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a leading apostrophe). |
 | `feedAuditEvents` | audit | Commit-ordered cursor feed of the organization's audit events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. |
 | `generateAutoinstall` | enrollment-tokens | Generates the Ubuntu autoinstall user-data that installs one device with Paddock (plan M4b decisions 2–4): LVM inside LUKS2 under a random temporary passphrase, the Debian packages of the newest published agent release that has both (pinned by SHA-256; 409 invalid_state if there is none), the enrollment configuration, and the first-boot disk setup with the organization's boot_pin_min_length. |
+| `getAccessReview` | overview | The access review of the organization: role members, role changes, accounts, API tokens, reveals of secrets, step-ups, ended sessions and destructive actions in the period. |
 | `getMcpAccess` | mcp | What the caller's MCP sessions may do under the MCP policy of its scope (the organization's, or the platform's for a platform administrator): allowed_operations lists the exposed tools without a step-up of that scope the policy allows, write tools only while write_effective (policy enabled and write_enabled, and the account opted in) and the caller's role may perform them. |
 | `getMcpCatalog` | mcp | The MCP tool catalog shared by paddockctl mcp and the server's MCP guard: one entry per admin API operation outside the tag auth, with its class, scope and whether the MCP offers it at all (ADR 0044 decision 5). |
 | `getMcpSettings` | mcp | The MCP policy of the organization (ADR 0044 decision 5). |
 | `getNotificationPseudonymLookup` | notifications | The result of a pseudonym lookup: resolved false until the notifier has resolved it; once resolved, username is the matching user name ("" when none matches) and the lookup is deleted with this read, so a second read is 404 not_found. |
+| `getPlatformAccessReview` | platform | The access review of the platform: platform role members, platform administrators, privileged platform events and the organizations created in the period. |
 | `getPlatformMcpSettings` | mcp | The MCP policy of the platform (platform administrators' MCP sessions) (ADR 0044 decision 5). |
 | `getSoftwareCatalogIcon` | software | The entry's icon as image/png (Cache-Control: private, max-age=300); 404 not_found without an icon or for another organization's entry. |
 | `revokeApiToken` | api-tokens | A request made with an API token cannot revoke (403 forbidden). |
