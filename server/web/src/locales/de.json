@@ -120,6 +120,7 @@
     "ipAllowlist": "IP-Freigabeliste",
     "sessions": "Sitzungen",
     "openbao": "OpenBao",
+    "backup": "Backup",
     "platformMcp": "MCP-Richtlinie",
     "users": "Benutzer",
     "userGroups": "Gruppen",
@@ -317,7 +318,10 @@
     "notification_test_pending": "Ein früherer Test dieses Ziels wartet noch auf sein Ergebnis. Versuchen Sie es gleich noch einmal.",
     "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal.",
     "rollout_conflict": "Ein laufender oder angehaltener Rollout staffelt diesen Eintrag. Schließen Sie den Rollout ab oder machen Sie seinen Änderungssatz zuerst rückgängig.",
-    "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend."
+    "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend.",
+    "backup_key_mismatch": "Die Zeichen passen nicht zum Schlüssel.",
+    "backup_target_state_unchanged": "Das Ziel hat diesen Zustand bereits.",
+    "backup_key_discarded_after_mismatches": "Der Schlüssel wurde nach drei falschen Bestätigungen verworfen. Erzeugen Sie einen neuen."
   },
   "audit": {
     "vulnerability": {
@@ -1556,6 +1560,204 @@
       "sentence": "Ich verstehe und akzeptiere das Risiko"
     }
   },
+  "backup": {
+    "title": "Backup",
+    "summary": "Sicherungen der Datenbanken der Kontrollebene, des OpenBao-Snapshots und des Escrows, gespiegelt auf die Ziele unten und mit einem Schlüssel geschützt.",
+    "on": "An",
+    "off": "Aus",
+    "tabs": {
+      "overview": "Übersicht",
+      "targets": "Ziele",
+      "key": "Schlüssel",
+      "schedule": "Zeitplan",
+      "history": "Verlauf"
+    },
+    "kinds": {
+      "postgres": "Datenbanken",
+      "authentik": "Identitätsanbieter",
+      "openbao": "OpenBao",
+      "fleet": "Fleet",
+      "escrow": "Escrow"
+    },
+    "outcomes": {
+      "succeeded": "Erfolgreich",
+      "failed": "Fehlgeschlagen"
+    },
+    "states": {
+      "requested": "Angefordert",
+      "running": "Läuft",
+      "finished": "Beendet"
+    },
+    "hostStates": {
+      "n/a": "Nicht zutreffend",
+      "pending_host": "Wartet auf den Host",
+      "mounted": "Eingehängt",
+      "unreachable": "Nicht erreichbar"
+    },
+    "tests": {
+      "waiting": "Test angefordert",
+      "never": "Nicht getestet",
+      "ok": "Test bestanden",
+      "failed": "Test fehlgeschlagen"
+    },
+    "kindStates": {
+      "ok": "Gesichert",
+      "failed": "Fehlgeschlagen",
+      "never": "Nie"
+    },
+    "run": {
+      "title": "Jetzt sichern",
+      "confirm": "Das startet eine Sicherung aller Arten. Der Backup-Dienst führt sie in seiner nächsten Runde aus.",
+      "now": "Jetzt sichern",
+      "requested": "Die Sicherung wurde angefordert."
+    },
+    "overview": {
+      "grid": "Letzte erfolgreiche Sicherung je Ziel",
+      "noTargets": "Noch kein Ziel. Legen Sie eines im Reiter Ziele an.",
+      "repo": "Lokales Repository",
+      "repoUnknown": "Der Backup-Dienst hat das Repository noch nicht gemeldet.",
+      "repoUsage": "{used} belegt, {free} frei",
+      "lastRuns": "Letzte Läufe"
+    },
+    "targets": {
+      "type": "Typ",
+      "types": {
+        "local": "Lokales Verzeichnis",
+        "smb": "SMB-Freigabe",
+        "nfs": "NFS-Export",
+        "s3": "S3-Bucket"
+      },
+      "enabled": "Aktiv",
+      "hostState": "Host-Status",
+      "test": "Testen",
+      "nameInvalid": "Der Name muss mit einem Buchstaben oder einer Ziffer beginnen und darf Buchstaben, Ziffern, Leerzeichen und . _ - enthalten (bis 64 Zeichen).",
+      "nameHint": "Buchstaben, Ziffern, Leerzeichen und . _ -",
+      "nameTaken": "Ein Ziel mit diesem Namen gibt es schon.",
+      "pathInvalid": "Geben Sie ein absolutes Verzeichnis ohne \"..\" an.",
+      "required": "Dieses Feld ist erforderlich.",
+      "passwordAgain": "Das Ziel hat sich geändert: Geben Sie das Passwort erneut ein.",
+      "keysAgain": "Das Ziel oder die Schlüssel haben sich geändert: Geben Sie beide Schlüssel erneut ein.",
+      "exportInvalid": "Geben Sie einen absoluten Export-Pfad an.",
+      "endpointInvalid": "Geben Sie eine https-URL an.",
+      "localPath": "Verzeichnis auf dem Host",
+      "localPathHint": "Ein absolutes Verzeichnis des Hosts der Kontrollebene.",
+      "host": "Host",
+      "share": "Freigabe",
+      "subPath": "Pfad darunter (optional)",
+      "domain": "Domäne (optional)",
+      "username": "Benutzername",
+      "password": "Passwort",
+      "unchanged": "unverändert",
+      "secretHint": "Verschlüsselt gespeichert, nie wieder angezeigt.",
+      "options": "Mount-Optionen (optional)",
+      "smbOptionsHint": "Kommagetrennt: vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N.",
+      "nfsOptionsHint": "Kommagetrennt: vers=4|4.1|4.2, hard, timeo=N, retrans=N, nconnect=N.",
+      "export": "Export",
+      "endpoint": "Endpunkt",
+      "bucket": "Bucket",
+      "region": "Region (optional)",
+      "regionHint": "Standard us-east-1.",
+      "prefix": "Präfix (optional)",
+      "caPem": "CA-Zertifikate (optional)",
+      "caPemHint": "PEM-Zertifikate einer privaten CA, auf die der Endpunkt verweist.",
+      "accessKey": "Zugriffsschlüssel",
+      "secretKey": "Geheimer Schlüssel",
+      "saved": "Das Ziel wurde gespeichert.",
+      "deleted": "Das Ziel {name} wurde gelöscht.",
+      "enabledDone": "Das Ziel {name} ist aktiv.",
+      "disabledDone": "Das Ziel {name} ist deaktiviert.",
+      "deleteTitle": "Dieses Ziel löschen?",
+      "deleteConfirm": "Die Sicherungssätze auf {name} bleiben bestehen, es wird aber keine weitere Sicherung dorthin geschrieben.",
+      "disableTitle": "Dieses Ziel deaktivieren?",
+      "disableConfirm": "Auf {name} wird keine Sicherung mehr geschrieben, bis es wieder aktiviert wird.",
+      "disable": "Deaktivieren",
+      "enable": "Aktivieren",
+      "create": "Ziel hinzufügen",
+      "createTitle": "Backup-Ziel hinzufügen",
+      "editTitle": "Backup-Ziel bearbeiten",
+      "testLabel": "{name} testen",
+      "disableLabel": "{name} deaktivieren",
+      "enableLabel": "{name} aktivieren",
+      "editLabel": "{name} bearbeiten",
+      "deleteLabel": "{name} löschen",
+      "hostStep": "Das Einhängen einer Freigabe braucht den Host: Führen Sie {apply} und danach {up} auf der Kontrollebene aus. Das Ziel zeigt \"Eingehängt\", sobald der Backup-Dienst es sieht.",
+      "reenter": "Ihre Identität wurde bestätigt. Geben Sie die Zugangsdaten erneut ein; sie bleiben nie im Browser.",
+      "testWaiting": "{name} wird getestet. Der Backup-Dienst antwortet in seiner nächsten Runde.",
+      "testOk": "Der Verbindungstest von {name} war erfolgreich.",
+      "testError": "Der Verbindungstest von {name} ist fehlgeschlagen: {error}",
+      "testUnknown": "unbekannter Fehler",
+      "testTimeout": "Der Backup-Dienst hat den Test von {name} noch nicht beantwortet. Prüfen Sie die Liste später.",
+      "empty": {
+        "title": "Kein Backup-Ziel",
+        "description": "Legen Sie ein lokales Verzeichnis, eine Freigabe oder einen S3-Bucket an, um Sicherungen außerhalb des Repositorys aufzubewahren."
+      }
+    },
+    "runs": {
+      "kind": "Art",
+      "outcome": "Ergebnis",
+      "startedAt": "Gestartet",
+      "size": "Größe",
+      "targets": "Ziele",
+      "targetsOk": "{ok} von {total} Zielen",
+      "empty": {
+        "title": "Noch keine Sicherung gelaufen",
+        "description": "Läufe erscheinen hier nach der ersten Sicherung."
+      }
+    },
+    "key": {
+      "dialog": {
+        "title1": "Backup-Schlüssel",
+        "title2": "Backup-Schlüssel aufbewahren",
+        "title3": "Backup-Schlüssel bestätigen"
+      },
+      "explain": "Paddock schützt jede Sicherung mit einem Schlüssel. Sie sehen ihn genau einmal. Bewahren Sie ihn dort auf, wo ein verlorener Server ihn nicht mitnimmt — in einem Passwortmanager, als Ausdruck im Tresor — und zusammen mit den OpenBao-Entsiegelungsanteilen. Ohne den Schlüssel lässt sich keine Sicherung je lesen.",
+      "shownOnce": "Nur jetzt zeigt Paddock den Schlüssel.",
+      "keyText": "Backup-Schlüssel",
+      "fingerprint": "Fingerabdruck: {fingerprint}",
+      "download": "Herunterladen",
+      "fileSentence": "Dies ist die einzige Kopie, die Paddock je zeigt. Bewahren Sie sie außerhalb des Servers auf.",
+      "confirmText": "Geben Sie die Zeichen an den angezeigten Positionen ein. Das beweist, dass der Schlüssel Ihren sicheren Ort erreicht hat. Nach drei Fehlern wird der Schlüssel verworfen und ein neuer erzeugt.",
+      "positionsGroup": "Zeichen des Schlüssels",
+      "position": "Position {n}",
+      "attemptsLeft": "{count, plural, =0 {Kein Versuch übrig.} one {Das passt nicht. Noch # Versuch.} other {Das passt nicht. Noch # Versuche.}}",
+      "generate": "Schlüssel erzeugen",
+      "discardTitle": "Backup-Schlüssel verwerfen?",
+      "discardConfirm": "Der Schlüssel wird vernichtet und kann nicht erneut angezeigt werden. Bis Sie einen neuen Schlüssel erzeugen und bestätigen, ist kein Backup möglich. Haben Sie ihn noch nicht gesichert, ist das die richtige Wahl.",
+      "discardAction": "Schlüssel verwerfen",
+      "discard": "Ich habe den Schlüssel nicht gesichert — verwerfen",
+      "stored": "Ich habe den Schlüssel gesichert",
+      "confirm": "Bestätigen",
+      "discarded": "Der Schlüssel wurde verworfen. Erzeugen Sie einen neuen.",
+      "confirmed": "Der Schlüssel ist bestätigt und aktiv.",
+      "statePending": "Ein Backup-Schlüssel wartet auf seine Bestätigung. Vorher läuft keine Sicherung.",
+      "stateActive": "Ein Backup-Schlüssel ist aktiv.",
+      "stateNone": "Noch kein Backup-Schlüssel. Keine Sicherung läuft, bevor einer erzeugt und bestätigt ist.",
+      "fingerprintColumn": "Fingerabdruck",
+      "retiredAt": "Außer Dienst",
+      "pendingText": "Der Schlüssel {fingerprint} wartet auf seine Bestätigung.",
+      "confirmNow": "Schlüssel bestätigen",
+      "active": "Aktiver Schlüssel",
+      "activeSince": "Bestätigt von {by}",
+      "rotate": "Schlüssel wechseln",
+      "create": "Schlüssel erzeugen",
+      "retired": "Ausgemusterte Schlüssel",
+      "noRetired": "Kein ausgemusterter Schlüssel"
+    },
+    "schedule": {
+      "saved": "Der Zeitplan wurde gespeichert.",
+      "range": "{min}–{max}",
+      "invalid": "Geben Sie eine ganze Zahl von {min} bis {max} ein.",
+      "fields": {
+        "full_interval_hours": "Vollsicherung alle (Stunden)",
+        "openbao_interval_hours": "OpenBao-Snapshot alle (Stunden)",
+        "fleet_interval_hours": "Fleet-Dump alle (Stunden)",
+        "escrow_interval_hours": "Escrow-Spiegelung alle (Stunden)",
+        "retention_full": "Aufbewahrte Vollsicherungen",
+        "openbao_keep_days": "Aufbewahrte OpenBao-Snapshots (Tage)",
+        "fleet_keep_days": "Aufbewahrte Fleet-Dumps (Tage)"
+      }
+    }
+  },
   "changeSets": {
     "title": "Änderungssätze",
     "summary": "Jede mit paddockctl oder PUT /api/v1/config angewendete Konfiguration, die etwas geändert hat, mit ihrem Plan.",
@@ -2686,6 +2888,7 @@
       "organization": "Erste Organisation anlegen",
       "orgAdmin": "Ersten Organisationsadministrator im Identity Provider zuweisen",
       "release": "Agent-Release veröffentlichen",
+      "backup": "Plattform sichern (Schlüssel bestätigen, Ziel aktivieren)",
       "allowlist": "Plattform auf eine IP-Allowlist beschränken (optional)",
       "breakGlass": "Break-Glass-Konten benennen",
       "users": "Identitätsquelle anbinden, die Benutzer liefert",
