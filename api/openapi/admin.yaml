@@ -4848,12 +4848,13 @@ paths:
       x-paddock-list:
         sort: [requested_at, state]
         default_sort: -requested_at
-        search: []
+        search: [requested_by, reason]
         filters: [state]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
         - $ref: "#/components/parameters/DeviceDiagnosticsSort"
+        - $ref: "#/components/parameters/Search"
         - $ref: "#/components/parameters/DiagnosticsStateFilter"
       responses:
         "200":

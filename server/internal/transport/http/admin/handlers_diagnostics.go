@@ -25,7 +25,7 @@ func (h *handlers) RequestDeviceDiagnostics(ctx context.Context, req adminapi.Re
 
 func (h *handlers) ListDeviceDiagnostics(ctx context.Context, req adminapi.ListDeviceDiagnosticsRequestObject) (adminapi.ListDeviceDiagnosticsResponseObject, error) {
 	params, err := listing.Parse(deviceDiagnosticsList, listing.Query{
-		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort),
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
 	})
 	if err != nil {
 		return nil, err

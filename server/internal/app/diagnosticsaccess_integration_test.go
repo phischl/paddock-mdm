@@ -453,6 +453,15 @@ func TestDiagnosticsLists(t *testing.T) {
 	if err != nil || res.Count != 1 || res.Items[0].ID != stored {
 		t.Fatalf("stored filter %+v %v", res, err)
 	}
+	reasonQ := "%second look%"
+	res, err = w.access.List(w.operator(), w.device, app.DiagnosticsQuery{Page: app.ListPage{Sort: "requested_at", Limit: 25, QPattern: &reasonQ}})
+	if err != nil || res.Count != 1 || res.Items[0].ID != pending.ID {
+		t.Fatalf("device list search by reason %+v %v", res, err)
+	}
+	devNobody := "%nobody-matches%"
+	if res, err := w.access.List(w.operator(), w.device, app.DiagnosticsQuery{Page: app.ListPage{Sort: "requested_at", Limit: 25, QPattern: &devNobody}}); err != nil || res.Count != 0 || len(res.Items) != 0 {
+		t.Fatalf("device list search without match %+v %v", res, err)
+	}
 	host := w.hostname[3:]
 	res, err = w.access.ListAll(w.as(w.org, principal.RoleOrgAdmin, false), app.DiagnosticsQuery{
 		Page: app.ListPage{Sort: "hostname", Limit: 25, QPattern: &[]string{"%" + host + "%"}[0]}})

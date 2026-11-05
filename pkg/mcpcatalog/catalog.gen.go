@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "bfeb7d3f7fea178d7ebeaa39afa10c6be63f72a26dc2356ac7aef1411939dbcc"
+const Version = "ba6635023752791fb250df448ae3fd4f858f8cf98bc0ec480aab76e39e89579e"
 
 var tools = []Tool{
 	{
@@ -2795,8 +2795,8 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator. The diagnostics bundles of the device (ADR 0048 decision 4); org_auditor: 403.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: requested_at, state).",
-		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"sort\":{\"default\":\"-requested_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"requested_at\",\"-requested_at\",\"state\",\"-state\"],\"type\":\"string\"},\"state\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"requested\",\"uploaded\",\"stored\",\"failed\",\"expired\",\"purged\"],\"type\":\"string\"},\"type\":\"array\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+		Description: "Roles: org_admin, org_operator. The diagnostics bundles of the device (ADR 0048 decision 4); org_auditor: 403.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: requested_at, state), q (search over: requested_by, reason).",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-requested_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"requested_at\",\"-requested_at\",\"state\",\"-state\"],\"type\":\"string\"},\"state\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"requested\",\"uploaded\",\"stored\",\"failed\",\"expired\",\"purged\"],\"type\":\"string\"},\"type\":\"array\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listDeviceGroupDevices",
