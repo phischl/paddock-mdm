@@ -848,3 +848,21 @@ Decision taken by the architect lead on 2026-11-04 after Review 1 of PDK-731; th
      (together; the region is compared after its default is applied, so spelling out `us-east-1` is no change).
    - Not counted: SMB `path`, S3 `prefix` (same server), local and NFS (no credentials).
    With new credentials the change is accepted, and any mount-relevant change raises `host_revision` (§3.4).
+
+## Amendment 2026-11-04 — challenge positions of the pending backup key (PDK-730)
+
+Architect decision of 2026-11-04 (alpha.9 decisions, item 4), found in the review of PDK-730: the challenge
+positions of key `legacy` reached no response, so an imported key could never be confirmed (decision 9). Positions
+are indices, not key material.
+
+- **Decision 7**, the sentence "Reads never return `ciphertext`, `challenge_positions` or `challenge_sha256`" now
+  reads: reads never return the key text, `ciphertext` or `challenge_sha256`; they return `challenge_positions` only
+  for the key in state `unconfirmed` (freshly generated or the imported `legacy` key) and never once it is
+  `confirmed`, `retired` or `discarded`. `Key` gains `positions` (nullable, six 1-based positions in ascending
+  order, set only while the key waits for its confirmation). The answer is never stored or returned; there is no
+  legacy skip: key `legacy` is confirmed with the characters of the host file at these positions.
+- **§6.2**: `BackupKey` gains the required, nullable `positions` (array of six integers); the required list ends
+  `…, attempts, legacy, positions]`. No migration: `backup_key.challenge_positions` (§6.6) already holds them.
+- **PDK-730 AC 3** now reads: `GET /backup/key` never contains the key text or the challenge hash; it contains the
+  challenge positions only while a key waits for its confirmation (`pending.positions`), and `null` for every
+  other key (the test asserts on the raw JSON).

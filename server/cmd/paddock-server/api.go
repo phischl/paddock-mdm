@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/githubreleases"
 	"github.com/phischl/paddock-mdm/server/internal/allowlistcache"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/backup"
 	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/bundlesign"
 	"github.com/phischl/paddock-mdm/server/internal/config"
@@ -110,6 +111,14 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	// addresses only on the development stack, whose acceptance sinks run on the host.
 	smtpEnabled := l.Bool("PADDOCK_SMTP_ENABLED", false)
 	outboundPolicy := outbound.Policy{AllowPrivate: common.Development() && l.Bool("PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE", false)}
+	// The host key file of an installation older than M15, imported once by the api (plan M15 decision 9).
+	var legacyBackupKey string
+	if l.String("PADDOCK_BACKUP_LEGACY_KEY_FILE", "") != "" {
+		legacyBackupKey = l.SecretFile("PADDOCK_BACKUP_LEGACY_KEY_FILE")
+		if _, err := backup.ParseKey(legacyBackupKey); legacyBackupKey != "" && err != nil {
+			l.Invalid("PADDOCK_BACKUP_LEGACY_KEY_FILE", err.Error())
+		}
+	}
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -188,6 +197,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	}
 	ak := authentik.New(authentikURL, authentikToken)
 	allowlistVersion := allowlistcache.NewVersion(vk)
+	backupKeys := app.NewBackupKeys(runner, platformPool, baoClient)
 	ipAllowlist := app.NewIPAllowlist(runner, platformPool, allowlistVersion)
 	ipDenials := app.NewIPDenials(runner, denialWindow, time.Now)
 	ipGuard := admin.NewIPGuard(ipAllowlist.Load, allowlistVersion, ipDenials, allowlistBypass)
@@ -259,6 +269,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		StepUpAccounts:  accounts,
 		EndSessions:     app.NewSessions(runner, sessionStore, app.NewPortalUsers(platformPool, ak), ak),
 		AutoUnseal:      app.NewAutoUnseal(runner, platformPool, baoClient),
+		BackupKeys:      backupKeys,
 		// Backup targets follow the outbound policy: S3 endpoints on private addresses only on the development stack.
 		BackupTargets:  app.NewBackupTargets(runner, platformPool, baoClient, backupset.Policy{AllowPrivate: outboundPolicy.AllowPrivate}),
 		BackupSchedule: app.NewBackupSchedule(runner, platformPool),
@@ -323,9 +334,36 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 			return ipGuard.Run(ctx)
 		},
 		ipDenials.Run,
+		func(ctx context.Context) error {
+			if legacyBackupKey != "" {
+				// OpenBao may still be sealed and PostgreSQL starting: the import waits for both.
+				go retryUntilDone(ctx, "importing the legacy backup key", time.Second, time.Minute, func(ctx context.Context) error {
+					return importLegacyBackupKey(ctx, backupKeys, legacyBackupKey)
+				})
+			}
+			<-ctx.Done()
+			return nil
+		},
 		func(ctx context.Context) error { return listenAndServe(ctx, srv) },
 	)
 }
 
 // ipDenialWindow is the aggregation window of the IP allow list denials (plan M7a decision 20).
 const ipDenialWindow = 10 * time.Minute
+
+// importLegacyBackupKey imports the host key file once and warns while the file stays configured after a key was
+// confirmed. Neither the key nor its file content is logged.
+func importLegacyBackupKey(ctx context.Context, keys *app.BackupKeys, keyText string) error {
+	res, err := keys.ImportLegacy(ctx, keyText)
+	if err != nil {
+		return err
+	}
+	switch res {
+	case app.LegacyImported:
+		slog.InfoContext(ctx, "legacy backup key imported: no backup runs until a platform administrator confirms it in the portal")
+	case app.LegacyKeyConfirmed:
+		slog.WarnContext(ctx, "PADDOCK_BACKUP_LEGACY_KEY_FILE is set while a confirmed backup key exists: remove the variable and the key file from paddock-api")
+	case app.LegacyKeyPresent:
+	}
+	return nil
+}

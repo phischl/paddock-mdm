@@ -139,6 +139,9 @@ var (
 	// FingerprintMismatch: the fingerprint an administrator typed for a software source's signing key differs from the
 	// key's (plan M13a decision 2); the detail names both.
 	FingerprintMismatch = &Error{Code: "fingerprint_mismatch", Status: http.StatusUnprocessableEntity}
+	// BackupKeyMismatch: the characters typed to confirm a backup key differ from the key's at the challenge's
+	// positions (plan M15 decision 8); the detail names the attempts left. Recorded as failure.
+	BackupKeyMismatch = &Error{Code: "backup_key_mismatch", Status: http.StatusConflict}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.
 	InvalidToken   = &Error{Code: "invalid_token", Status: http.StatusUnprocessableEntity}
 	TokenRevoked   = &Error{Code: "token_revoked", Status: http.StatusUnprocessableEntity}
