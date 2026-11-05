@@ -25,6 +25,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/platform/migrate"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
@@ -153,6 +154,10 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		return err
 	}
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID, runnerOpts...)
+	schemaVersion, err := migrate.LatestPaddock()
+	if err != nil {
+		return err
+	}
 	stepUpTokens := stepupproof.NewStore(vk)
 	sessionStore := sessions.NewStore(vk)
 	releases := app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, verifyRevokeRelease, common.Development())
@@ -257,6 +262,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		BackupTargets:  app.NewBackupTargets(runner, platformPool, baoClient, backupset.Policy{AllowPrivate: outboundPolicy.AllowPrivate}),
 		BackupSchedule: app.NewBackupSchedule(runner, platformPool),
 		BackupRuns:     app.NewBackupRuns(runner, platformPool),
+		UpgradeCheck:   app.NewUpgradeCheck(orgPool, platformPool, baoClient, sessionStore, schemaVersion),
 		PublicURL:      publicURL,
 		Static:         static,
 		// Development only: LoadDevStepUp refuses the variables in production.

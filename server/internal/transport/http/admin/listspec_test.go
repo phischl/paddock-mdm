@@ -157,8 +157,13 @@ func TestListSpecsMatchContract(t *testing.T) {
 }
 
 // isCollection reports whether op is a collection GET: its 200 response is an object with an items array.
+// reports are objects whose items are a fixed set of report lines, not a collection.
+var reports = map[string]bool{
+	"getUpgradeCheck": true, // the six items of the upgrade check (plan M16 §6.2)
+}
+
 func isCollection(op *openapi3.Operation) bool {
-	if op == nil {
+	if op == nil || reports[op.OperationID] {
 		return false
 	}
 	ok := op.Responses.Status(http.StatusOK)

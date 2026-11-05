@@ -29,7 +29,10 @@ import (
 	"github.com/google/uuid"
 	vk "github.com/valkey-io/valkey-go"
 
+	"github.com/phischl/paddock-mdm/pkg/command"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/revocation"
+	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
@@ -112,17 +115,21 @@ func newEnv(t *testing.T, perKey, perIP int) *env {
 	return newEnvTrusting(t, perKey, perIP, nil)
 }
 
-// newEnvTrusting is newEnv with trusted proxies (plan M7a decision 5).
-func newEnvTrusting(t *testing.T, perKey, perIP int, trusted []netip.Prefix) *env {
+// newEnvTrusting is newEnv with trusted proxies (plan M7a decision 5); opts change the dependencies further.
+func newEnvTrusting(t *testing.T, perKey, perIP int, trusted []netip.Prefix, opts ...func(*device.Deps)) *env {
 	t.Helper()
 	vc := valkeytest.Start(t).Client(t)
 	e := &env{t: t, cache: devicecache.New(vc), valkey: vc, pub: &fakePublisher{},
 		now: time.Now().Truncate(time.Second), org: uuid.New()}
-	e.handler = device.NewHandler(device.Deps{
+	deps := device.Deps{
 		Cache: e.cache, Publisher: e.pub, Presigner: fakePresigner{}, Artifacts: fakePresigner{}, Escrow: fakePresigner{},
 		PerKeyLimit: perKey, PerIPLimit: perIP,
 		Now: func() time.Time { return e.now }, CheckinDelay: func() int { return 300 }, TrustedProxies: trusted,
-	})
+	}
+	for _, opt := range opts {
+		opt(&deps)
+	}
+	e.handler = device.NewHandler(deps)
 	_, file, _, _ := runtime.Caller(0)
 	doc, err := openapi3.NewLoader().LoadFromFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "..", "api", "openapi", "device.yaml"))
 	if err != nil {
@@ -970,6 +977,89 @@ func TestCheckinAgentUpdate(t *testing.T) {
 	_ = e.cache.PutOffer(context.Background(), nil)
 	if u := checkin("amd64", "1.0.0"); u != nil {
 		t.Fatal("offered after the offer was deleted")
+	}
+}
+
+// TestCheckinOutsideWindow (ADR 0013 amendment 2026-11-04, plan M16 decision 4a): an agent outside the support window
+// gets the agent update of the current rollout regardless of its wave, unmarked, and no bundle; of its commands only the
+// safety commands, revocation tokens and delete_self_lock (PDK-765), reported as delivered, even behind more withheld
+// commands than one response carries. Its heartbeat is still published. Inside the window nothing changes.
+func TestCheckinOutsideWindow(t *testing.T) {
+	const maxCommandsPerCheckin = 20 // the gateway's cap per check-in response
+	window := []string{"0.1.0-alpha.7", "0.1.0-alpha.8", "0.1.0-alpha.9"}
+	e := newEnvTrusting(t, 0, 0, nil, func(d *device.Deps) {
+		d.AgentOutsideWindow = func(v string) bool { return buildinfo.Outside(window, v) }
+	})
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	commandEnvelope := func(typ string) json.RawMessage {
+		return json.RawMessage(`{"payloadType":"` + command.PayloadType + `","payload":"` +
+			base64.StdEncoding.EncodeToString([]byte(`{"type":"`+typ+`"}`)) + `","signatures":[{"keyid":"command-signing:v1","sig":"AA=="}]}`)
+	}
+	// More withheld commands than one response carries, all older than the safety commands: the filter must run before
+	// the cap, or they would push a Lock out (Review 3 minor 3).
+	for i := range maxCommandsPerCheckin {
+		cmd := uuid.Must(uuid.NewV7())
+		env := envelope(cmd)
+		if i%2 == 0 {
+			env = commandEnvelope(command.TypeRotateAdminPassword)
+		}
+		if err := e.cache.PutCommand(ctx, id, cmd, devicecache.Command{ExpiresAt: e.now.Add(time.Hour), Envelope: env}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lock, disarm := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	disarmEnvelope := commandEnvelope(command.TypeDeleteSelfLock)
+	if err := e.cache.PutCommand(ctx, id, disarm, devicecache.Command{ExpiresAt: e.now.Add(time.Hour), Envelope: disarmEnvelope}); err != nil {
+		t.Fatal(err)
+	}
+	lockEnvelope := json.RawMessage(`{"payloadType":"` + revocation.PayloadType + `","payload":"` +
+		base64.StdEncoding.EncodeToString([]byte(lock.String())) + `","signatures":[{"keyid":"revocation-signing:v1","sig":"AA=="}]}`)
+	if err := e.cache.PutCommand(ctx, id, lock, devicecache.Command{ExpiresAt: e.now.Add(time.Hour), Envelope: lockEnvelope}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cache.PutBundlePointer(ctx, id, devicecache.BundlePointer{Version: 3, SHA256: "abc", ObjectKey: "org/o/devices/d/bundles/3.dsse"}); err != nil {
+		t.Fatal(err)
+	}
+	// The device's bucket is outside the only wave but the last: the out-of-window answer ignores waves.
+	offer := agentrelease.Offer{Version: "0.1.0-alpha.9", Status: agentrelease.RolloutRunning, Waves: []int{agentrelease.Bucket(id), 100},
+		Artifacts: map[string]agentrelease.Artifact{"amd64": {SHA256: "ab12", Size: 42, Minisig: "c2ln", ObjectKey: "releases/a9/amd64/paddockd"}}}
+	if err := e.cache.PutOffer(ctx, &offer); err != nil {
+		t.Fatal(err)
+	}
+	seq := int64(0)
+	checkin := func(version string) protocol.CheckinResponse {
+		t.Helper()
+		body := checkinBody(0)
+		body.Arch, body.AgentVersion = "amd64", version
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: body, seq: seq})
+		var out protocol.CheckinResponse
+		if err := json.Unmarshal(r.body, &out); err != nil || r.status != http.StatusOK {
+			t.Fatalf("checkin %s: %d %s", version, r.status, r.body)
+		}
+		seq = out.Seq
+		return out
+	}
+	out := checkin("0.1.0-alpha.6")
+	if u := out.AgentUpdate; u == nil || u.Version != "0.1.0-alpha.9" || u.Requested || u.RequestedAt != nil {
+		t.Fatalf("outside the window: agent update %+v", u)
+	}
+	// The revocation token and delete_self_lock still reach the device; the other commands and the bundle stay
+	// withheld (PDK-765).
+	if out.Bundle != nil || len(out.Commands) != 2 || !bytes.Equal(out.Commands[0], lockEnvelope) || !bytes.Equal(out.Commands[1], disarmEnvelope) {
+		t.Fatalf("outside the window: bundle %+v commands %s", out.Bundle, out.Commands)
+	}
+	var hb ingest.Heartbeat
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if hb.DeviceID != id || hb.AgentVersion != "0.1.0-alpha.6" || !slices.Equal(hb.DeliveredCommands, []uuid.UUID{lock, disarm}) {
+		t.Fatalf("outside the window: heartbeat %+v", hb)
+	}
+	for _, version := range []string{"0.1.0-alpha.7", "0.0.0-devicesim"} {
+		out = checkin(version)
+		if out.AgentUpdate != nil || out.Bundle == nil || out.Bundle.Version != 3 || len(out.Commands) != maxCommandsPerCheckin {
+			t.Fatalf("inside the window (%s): %+v", version, out)
+		}
 	}
 }
 

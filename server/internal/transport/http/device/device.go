@@ -90,6 +90,9 @@ type Deps struct {
 	CheckinDelay func() int // seconds until the next check-in; default 300 × U(0.8, 1.2)
 	// TrustedProxies may name the client through X-Paddock-Client-IP (plan M7a decision 5).
 	TrustedProxies []netip.Prefix
+	// AgentOutsideWindow reports whether an agent version is outside the server's support window (ADR 0013
+	// amendment 2026-11-04); nil judges no version outside.
+	AgentOutsideWindow func(agentVersion string) bool
 }
 
 type gateway struct{ d Deps }

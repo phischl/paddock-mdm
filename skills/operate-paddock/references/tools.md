@@ -164,6 +164,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getIpAllowlistEntry` | read | no | One entry. |
 | `getOrganization` | read | no | GET /api/platform/v1/organizations/{id} |
 | `getPlatformNotificationDestination` | read | no | One destination with its delivery state; 404 not_found for another scope's. |
+| `getUpgradeCheck` | read | no | The read-only report before an upgrade to target_version (ADR 0047 decision 2, plan M16 decision 4), the same as paddock-server admin upgrade-check: migrations (FAIL when the database is ahead of this release), agents (active devices whose agent is a release older than the target's support window: FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending (running agent rollout, halted configuration rollouts: WARN) and sessions. |
 | `haltAgentRollout` | write | yes | POST /api/platform/v1/agent-releases/{version}/rollout/halt |
 | `listAgentReleases` | read | no | Agent releases with their rollout status (plan M2b decision 20). |
 | `listBackupRuns` | read | no | The backup runs, one per kind and attempt, with the mirror result per target. |

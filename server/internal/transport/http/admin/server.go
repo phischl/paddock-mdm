@@ -104,9 +104,11 @@ type Deps struct {
 	EndSessions *app.Sessions
 	// AutoUnseal is the automatic unseal of OpenBao (plan M8u decision 7).
 	AutoUnseal *app.AutoUnseal
-	PublicURL  string
-	Static     *StaticHandler // portal build
-	Now        func() time.Time
+	// UpgradeCheck is the report before an upgrade (plan M16 decision 4).
+	UpgradeCheck *app.UpgradeCheck
+	PublicURL    string
+	Static       *StaticHandler // portal build
+	Now          func() time.Time
 	// StepUpMaxAuthAge replaces the production StepUpMaxAuthAge (development only; zero keeps it).
 	StepUpMaxAuthAge time.Duration
 	// StepUpMFAClass replaces StepUpWebAuthnClass, the authenticator class a step-up must validate (development only;
@@ -301,6 +303,7 @@ func NewHandler(d Deps) http.Handler {
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,
+		upgradeCheck: d.UpgradeCheck,
 		mcpSettings:  d.MCPSettings,
 		mcpAccess:    d.MCPAccess,
 		imports:      d.ReleaseImports,

@@ -13,7 +13,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/revocation"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	domaindevice "github.com/phischl/paddock-mdm/server/internal/domain/device"
@@ -143,7 +146,8 @@ func (g *gateway) enrollStatus(w http.ResponseWriter, r *http.Request) {
 
 // checkin issues the next sequence number, publishes the heartbeat and points to a newer bundle (plan M2a
 // decision 11); it carries the device's pending commands (plan M4a decision 3). A quarantined device gets neither
-// a bundle URL nor commands.
+// a bundle URL nor commands; an agent outside the support window gets the agent update and its
+// safety commands only (revocation tokens and delete_self_lock).
 func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	dev, err := g.authenticateDevice(w, r, maxCheckinBody)
 	if err != nil {
@@ -174,16 +178,33 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	}
 	out := protocol.CheckinResponse{Seq: seq, ServerTime: g.d.Now().UTC(), NextCheckinS: g.d.CheckinDelay(), Commands: []json.RawMessage{}}
 	var delivered []uuid.UUID
-	if dev.key.Status == devicecache.KeyActive {
+	// An agent outside the support window gets the update pointer only (ADR 0013 amendment 2026-11-04, plan M16
+	// decision 4a): it keeps its last applied state, and a bundle or a command it may not understand never reaches it.
+	// The safety commands are the exception: every supported release understands them, a device must never escape a
+	// Lock or Destroy by reporting an old agent version, and a disarmed dead man's switch must disarm it too (contract 8;
+	// ADR 0013 amendment 2026-11-04, PDK-765).
+	outside := g.d.AgentOutsideWindow != nil && g.d.AgentOutsideWindow(req.AgentVersion)
+	switch {
+	case dev.key.Status != devicecache.KeyActive:
+	case outside:
+		if out.AgentUpdate, err = g.agentUpdate(r, dev, req, true); err != nil {
+			fail(err)
+			return
+		}
+		if out.Commands, delivered, err = g.commands(r, dev, safetyCommand); err != nil {
+			fail(err)
+			return
+		}
+	default:
 		if out.Bundle, err = g.bundleRef(r, dev, req.AppliedBundleVersion); err != nil {
 			fail(err)
 			return
 		}
-		if out.AgentUpdate, err = g.agentUpdate(r, dev, req); err != nil {
+		if out.AgentUpdate, err = g.agentUpdate(r, dev, req, false); err != nil {
 			fail(err)
 			return
 		}
-		if out.Commands, delivered, err = g.commands(r, dev); err != nil {
+		if out.Commands, delivered, err = g.commands(r, dev, nil); err != nil {
 			fail(err)
 			return
 		}
@@ -250,14 +271,35 @@ func (g *gateway) releaseSeq(r *http.Request, device uuid.UUID, seq int64) {
 	}
 }
 
+// safetyCommand reports whether an envelope is a revocation token or a delete_self_lock command, the commands an agent
+// outside the support window still receives. It reads the unverified payload type: the envelopes in the cache are the
+// server's own, and the device verifies every signature anyway.
+func safetyCommand(envelope []byte) bool {
+	if revocation.IsRevocation(envelope) {
+		return true
+	}
+	env, payload, err := dsse.Decode(envelope)
+	if err != nil || env.PayloadType != command.PayloadType {
+		return false
+	}
+	var c struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(payload, &c) == nil && c.Type == command.TypeDeleteSelfLock
+}
+
 // maxCommands bounds the commands of one check-in response; the rest follow with the next check-ins.
 const maxCommands = 20
 
-// commands returns the device's unexpired command envelopes in ID order (oldest first, UUIDv7) and their IDs.
-func (g *gateway) commands(r *http.Request, dev device) ([]json.RawMessage, []uuid.UUID, error) {
+// commands returns the device's unexpired command envelopes in ID order (oldest first, UUIDv7) and their IDs; a non-nil
+// keep limits them to the envelopes it accepts.
+func (g *gateway) commands(r *http.Request, dev device, keep func(envelope []byte) bool) ([]json.RawMessage, []uuid.UUID, error) {
 	cmds, err := g.d.Cache.Commands(r.Context(), dev.id, g.d.Now())
 	if err != nil {
 		return nil, nil, err
+	}
+	if keep != nil {
+		maps.DeleteFunc(cmds, func(_ uuid.UUID, c devicecache.Command) bool { return !keep(c.Envelope) })
 	}
 	ids := slices.SortedFunc(maps.Keys(cmds), func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
 	ids = ids[:min(len(ids), maxCommands)]
@@ -359,8 +401,9 @@ func validateResult(req protocol.CommandResult) error {
 // requested. A device that already runs the release gets it marked requested while its request is open, so that it
 // may upgrade paddock-supervisor and fleetd under the manual policy (review finding 5); the agent never stages its
 // own version. The request is read only for a device that does not run a newer agent, so devices ahead of the offer
-// cost no second Valkey round trip.
-func (g *gateway) agentUpdate(r *http.Request, dev device, req protocol.CheckinRequest) (*protocol.AgentUpdate, error) {
+// cost no second Valkey round trip. anyWave offers the release outside the device's wave without marking it requested
+// (an agent outside the support window, plan M16 decision 4a).
+func (g *gateway) agentUpdate(r *http.Request, dev device, req protocol.CheckinRequest, anyWave bool) (*protocol.AgentUpdate, error) {
 	if g.d.Artifacts == nil || req.Arch == "" {
 		return nil, nil
 	}
@@ -382,7 +425,7 @@ func (g *gateway) agentUpdate(r *http.Request, dev device, req protocol.CheckinR
 		art, ok = offer.Artifacts[req.Arch]
 		ok = ok && requested && offer.Status != agentrelease.RolloutHalted
 	} else {
-		art, ok = offer.For(dev.id, req.Arch, req.AgentVersion, requested)
+		art, ok = offer.For(dev.id, req.Arch, req.AgentVersion, requested || anyWave)
 	}
 	if !ok {
 		return nil, nil
