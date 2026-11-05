@@ -130,7 +130,7 @@ manual (`bao` CLI), so after every one of them (a new or rotated Transit key, ne
 keys or secret IDs) take a snapshot at once, so that a restore never brings back an older key state:
 
 ```sh
-docker compose … run --rm --no-deps paddock-worker backup openbao
+docker compose … run --rm --no-deps paddock-backup backup now --kind openbao --wait
 ```
 
 ## 6. Automatic unseal
@@ -223,7 +223,7 @@ copy of the shares file:
 ```sh
 bao operator rekey -key-shares=5 -key-threshold=3   # three custodians each enter their current share
 # hand the five new shares to the custodians, then take a snapshot at once:
-./paddock compose run --rm --no-deps paddock-worker backup openbao
+./paddock compose run --rm --no-deps paddock-backup backup now --kind openbao --wait
 ```
 
 ### Monitoring

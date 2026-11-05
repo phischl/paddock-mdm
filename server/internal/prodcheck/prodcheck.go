@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -143,7 +144,7 @@ type Result struct {
 var devOnly = []string{
 	"PADDOCK_STEPUP_WINDOW", "PADDOCK_STEPUP_MAX_AUTH_AGE", "PADDOCK_STALENESS_UNIT", "PADDOCK_REAPER_THRESHOLD",
 	"PADDOCK_OSV_SYNC_INTERVAL", "PADDOCK_LOGIN_MFA_OPTIONAL", "PADDOCK_RETENTION_UNIT", "PADDOCK_STEPUP_MFA_CLASS",
-	"PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE",
+	"PADDOCK_OUTBOUND_DEV_ALLOW_PRIVATE", "PADDOCK_BACKUP_FULL_INTERVAL_S",
 }
 
 // releaseKeyVars name the minisign public keys of agent and revocation releases.
@@ -183,6 +184,14 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	}
 	if usesAny(c, []string{legacyBackupKeyVar}) {
 		results = append(results, checkLegacyBackupKey(c))
+	}
+	_, backupRole := c.Services[backupService]
+	_, pgbackrest := c.Services["pgbackrest"]
+	if backupRole || pgbackrest {
+		results = append(results, checkBackupRole(c), checkBackupRepoVolume(c))
+	}
+	if len(c.Services) > 0 {
+		results = append(results, checkBackupSecretsConfined(c))
 	}
 	if usesAny(c, []string{"PADDOCK_RETENTION_INTERVAL"}) {
 		results = append(results, checkRetentionInterval(c))
@@ -1094,6 +1103,91 @@ func checkLegacyBackupKey(c Config) Result {
 		}
 	}
 	return Result{Item: "backup: legacy key import", OK: true, Warn: true, Detail: strings.Join(f, "\n")}
+}
+
+// backupService is the backup role (plan M15 decision 15).
+const backupService = "paddock-backup"
+
+// backupRoleSecrets are the secrets of the backup role (plan M15 decisions 15 and 18).
+var backupRoleSecrets = []string{"db_paddock_backup_url", "db_paddock_platform_url", "approle_backup_role_id",
+	"approle_backup_secret_id", "rustfs_escrow_backup_access_key", "rustfs_escrow_backup_secret_key"}
+
+func mountsSecret(s Service, name string) bool {
+	for _, m := range s.Secrets {
+		if m.Source == name {
+			return true
+		}
+	}
+	return false
+}
+
+// checkBackupRole fails a host with backups whose backup role is missing, lacks one of its secrets or still names the
+// backup bucket of the releases before M15 (PADDOCK_BACKUP_S3_*): backups would stop silently.
+func checkBackupRole(c Config) Result {
+	var f []string
+	s, ok := c.Services[backupService]
+	if !ok {
+		f = append(f, "the pgBackRest services run without "+backupService+": nothing hands them the backup key")
+	}
+	if ok {
+		for _, name := range backupRoleSecrets {
+			if !mountsSecret(s, name) {
+				f = append(f, backupService+": secret "+name+" is not mounted")
+			}
+		}
+	}
+	for _, name := range sortedServices(c) {
+		for _, v := range slices.Sorted(maps.Keys(c.Services[name].Environment)) {
+			if strings.HasPrefix(v, "PADDOCK_BACKUP_S3_") {
+				f = append(f, name+": "+v+" is set; backups go to the local repository and the portal's targets")
+			}
+		}
+	}
+	return result("backup: paddock-backup service present with its secrets", f)
+}
+
+// checkBackupRepoVolume requires the local repository to be the named volume backup-repo wherever it is mounted: a
+// bind mount or an anonymous volume would not be shared by the backup role and the pgBackRest services, and an
+// anonymous one is lost with its container.
+func checkBackupRepoVolume(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		for _, v := range c.Services[name].Volumes {
+			if v.Target == "/backup-repo" && (v.Type != "volume" || v.Source != "backup-repo") {
+				f = append(f, name+": /backup-repo is not the named volume backup-repo")
+			}
+		}
+	}
+	return result("backup: repo volume named", f)
+}
+
+// checkBackupSecretsConfined fails when a backup secret reaches another role than the one that needs it (plan M15
+// decisions 5, 9 and 18): the AppRole paddock-backup (it decrypts the backup key) and the escrow bucket's read-only
+// backup credential only the backup role, the host key file of the legacy import only the api, and no role any backup
+// variable of the worker's former backup job.
+func checkBackupSecretsConfined(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		s := c.Services[name]
+		for _, m := range s.Secrets {
+			switch {
+			case strings.HasPrefix(m.Source, "approle_backup_") && name != backupService,
+				strings.HasPrefix(m.Source, "rustfs_escrow_backup_") && name != backupService,
+				m.Source == "backup_encryption_key" && name != "paddock-api",
+				strings.HasPrefix(m.Source, "backup_") && m.Source != "backup_encryption_key":
+				f = append(f, name+": holds the backup secret "+m.Source)
+			}
+		}
+		for _, v := range slices.Sorted(maps.Keys(s.Environment)) {
+			switch {
+			case v == legacyBackupKeyVar && name != "paddock-api" && env(s, v) != "",
+				v == "PADDOCK_BACKUP_ENCRYPTION_KEY_FILE",
+				strings.HasPrefix(v, "PADDOCK_BACKUP_OPENBAO_"):
+				f = append(f, name+": "+v+" is set")
+			}
+		}
+	}
+	return result("backup: no S3 credentials or encryption key on the worker", f)
 }
 
 // checkRetentionInterval fails on a retention round shorter than the production minimum or longer than the maximum,

@@ -404,6 +404,14 @@ Binding rules:
 8. Authentik and Fleet are not organization-aware in the same way; their isolation is enforced by
    the adapters (§9.2, §15).
 
+> **Amendment 2026-11-05 (plan M15 amendment A2, PDK-732; architect lead, recorded deviation from rule 3).** The
+> backup role `paddock_backup` has one further cross-organization read: a permissive `FOR SELECT` policy on `action`
+> limited to `code = 'device.escrow_destroyed' AND status = 'finished' AND outcome = 'success'` (migration 00107), and
+> only inside its platform context, so a missing context still fails closed. It reads only `organization_id`, the
+> target device ID and `finished_at` of those rows: the audited evidence of a Destroy, the only path that deletes
+> escrowed LUKS headers, without which no escrowed header copy leaves the backup set. Its write policy on `action`
+> stays bound to the platform pseudo-organization; no other role gains anything.
+
 The automated **negative isolation test** (§22) walks all OpenAPI operations with a principal of
 organization A and IDs of organization B and requires 404 for every one.
 

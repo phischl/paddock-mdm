@@ -528,7 +528,9 @@
       "backup_target_deleted": "{actor} deleted the backup target {name} ({type})",
       "backup_target_tested": "{actor} requested a connection test of the backup target {name}",
       "backup_schedule_changed": "{actor} changed the backup schedule: full backup every {full_interval_hours} h, {retention_full} full backups kept",
-      "backup_run_requested": "{actor} requested a backup now"
+      "backup_run_requested": "{actor} requested a backup now",
+      "backup_completed": "The {kind} backup completed and reached {targets_ok} targets",
+      "backup_failed": "The {kind} backup failed ({error_class})"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",

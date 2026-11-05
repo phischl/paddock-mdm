@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/backup"
 )
@@ -72,12 +71,5 @@ func TestParseKey(t *testing.T) {
 		if _, err := backup.ParseKey(bad); err == nil {
 			t.Fatalf("%q must fail", bad)
 		}
-	}
-}
-
-func TestOpenBaoKey(t *testing.T) {
-	at := time.Date(2026, 10, 8, 14, 5, 9, 0, time.FixedZone("CEST", 2*3600))
-	if got := backup.OpenBaoKey(at); got != "openbao/20261008T120509Z.snap.enc" {
-		t.Fatal(got)
 	}
 }

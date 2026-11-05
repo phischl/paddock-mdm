@@ -311,6 +311,9 @@ const (
 	CodePlatformBackupTargetTested    Code = "platform.backup_target_tested"
 	CodePlatformBackupScheduleChanged Code = "platform.backup_schedule_changed"
 	CodePlatformBackupRunRequested    Code = "platform.backup_run_requested"
+	// Runs of the backup role (plan M15 decision 16).
+	CodePlatformBackupCompleted Code = "platform.backup_completed"
+	CodePlatformBackupFailed    Code = "platform.backup_failed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -325,6 +328,10 @@ type Definition struct {
 
 // backupTargetParams are the params of the backup target events (plan M15 §6.4): never a credential.
 var backupTargetParams = []string{"target_id", "name", "type", "enabled", "host_revision"}
+
+// backupRunParams are the params of the run events of the backup role (plan M15 §6.4).
+var backupRunParams = []string{"run_id", "kind", "label", "bytes", "duration_s", "targets_ok", "targets_failed",
+	"error_class"}
 
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
@@ -1874,6 +1881,20 @@ var registry = map[Code]Definition{
 		Params:      []string{"kinds", "label"},
 		Outcomes:    adminOutcomes,
 		Note:        "kinds lists postgres, authentik, openbao, fleet and escrow, or the requested subset. Failure with invalid_state while no backup key is confirmed, invalid_request for an unknown kind or a label longer than 64 characters. Platform pseudo-organization.",
+	},
+	CodePlatformBackupCompleted: {
+		Code: CodePlatformBackupCompleted, Emitted: true,
+		Description: "The backup role finished one backup of one kind (a pgBackRest full backup, an OpenBao snapshot, a Fleet dump, an escrow mirror pass) and mirrored the backup set to the enabled targets.",
+		Params:      backupRunParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Actor is the system paddock-backup; target is the run (type backup_run, display the kind). targets_ok and targets_failed count the enabled targets the set reached or missed in that round; a missed target does not fail the run. Never a key, a credential or a path's content. Platform pseudo-organization.",
+	},
+	CodePlatformBackupFailed: {
+		Code: CodePlatformBackupFailed, Emitted: true,
+		Description: "One backup of one kind failed in the backup role, or a requested run got no result within an hour.",
+		Params:      backupRunParams,
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "error_class names the cause without detail: openbao, fleet, escrow, pgbackrest, repo, timeout. The log of paddock-backup or of the pgbackrest container has the detail. Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

@@ -1,5 +1,5 @@
-// Package backup encrypts the OpenBao snapshots of the control plane's backup (plan M6a decision 5) and names the
-// objects of the backup bucket whose age the monitoring watches (decision 9).
+// Package backup seals the OpenBao snapshots and Fleet dumps of the control plane's backup set (plan M6a decision 5,
+// plan M15 decision 16) with the backup key.
 package backup
 
 import (
@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // magic starts every sealed file, so that a wrong file is recognized before decryption.
@@ -76,35 +75,4 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 		return nil, err
 	}
 	return cipher.NewGCM(block)
-}
-
-// Kind is one kind of backup in the bucket.
-type Kind struct {
-	Name string
-	// Prefix is the object key prefix whose newest object marks the last successful backup.
-	Prefix string
-}
-
-// Kinds are the backups of the control plane (compose.backup.yaml). pgBackRest rewrites a stanza's backup.info at the
-// end of every backup.
-var Kinds = []Kind{
-	{Name: "postgres", Prefix: "pgbackrest/backup/paddock/backup.info"},
-	{Name: "authentik", Prefix: "pgbackrest/backup/authentik/backup.info"},
-	{Name: "openbao", Prefix: OpenBaoPrefix},
-	{Name: "fleet", Prefix: "fleet/"},
-}
-
-// WALStanzas are the pgBackRest stanzas whose WAL is archived continuously (compose.backup.yaml).
-var WALStanzas = []string{"paddock", "authentik"}
-
-// WALArchivePrefix is the key prefix of a stanza's WAL archive: below it pgBackRest keeps one directory per archive ID
-// (<PostgreSQL version>-<n>), in it one directory per timeline and log (16 hex digits) holding the segments.
-func WALArchivePrefix(stanza string) string { return "pgbackrest/archive/" + stanza + "/" }
-
-// OpenBaoPrefix is the key prefix of the OpenBao snapshots.
-const OpenBaoPrefix = "openbao/"
-
-// OpenBaoKey is the object key of a snapshot taken at t.
-func OpenBaoKey(t time.Time) string {
-	return OpenBaoPrefix + t.UTC().Format("20060102T150405Z") + ".snap.enc"
 }

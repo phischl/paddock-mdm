@@ -1035,3 +1035,79 @@ L8/L9, `TestMirrorGuardIgnoresEmptyLastFull` → L8, `TestMirrorGuardPartialInfo
   be written (step 5), size check before the manifest (step 4), no put of a label directory without
   `backup.manifest` (step 3), and a hard cap on a trickling target (cancel the mirror context at
   `started + budget + size/min_rate` with `min_rate` = 1 MiB/s).
+
+### Note 2026-11-05 a — A6 rows L5 and L8 corrected (A3 wins; decisions-alpha9 item 26)
+
+- **L5** (`TestMirrorKindPartialLossFollowsKeep`): D4 applies to S2 as well, because S3 (10 d) is newer than S2 (31 d),
+  so S2 is not the newest of its kind on the step-1 listing. Round 1 puts S4, deletes S1 and S2 and holds S3, the
+  newest. The "second round" (25 days later; T holds S3 and S4) deletes S3. The newest file of a kind on the step-1
+  listing is never deleted.
+- **L8** (`TestMirrorRotationPutsNewPathHoldsOld`): in the main case, L still holds P1, so T holds nothing that L
+  lacks, and **held = 0**. The assertion "held counts P1's files" moves to **L9a**, where L lacks P1. The L8 subtest
+  "A complete, T.Newest(P1) older than keep: P1 deleted whole" runs with a local set that has already expired P1.
+
+### Note 2026-11-05 b — escrow headers leave only on Destroy evidence (decisions-alpha9 items 27 and 29)
+
+PDK-732 review 6 (S1): under A2 and D5, a *successful* escrow listing that lacked a header removed it from L and from
+every target. A lost RustFS volume, whose bucket `rustfs-bundles-bootstrap.sh` re-creates empty, or a wrong
+`PADDOCK_ESCROW_S3_BUCKET` would therefore have wiped every escrow copy. From now on, **absence from the listing never
+deletes on its own**. This note replaces the `escrow/<key>` row of A2 and rule D5 of A3.
+
+- **Evidence.** An escrowed header copy, in L or on a target, may be deleted only on audited evidence that its
+  device's escrow was removed on purpose, and only after the keep window has passed since that evidence. The only
+  such evidence in the code base is the revocation-issuer's Destroy (crypto-shredding): the audit action
+  `device.escrow_destroyed` with `status = 'finished'` and `outcome = 'success'`. The issuer deletes the device's header
+  objects only there. Device retirement (`device.retired`) deletes no escrow, so it is no evidence. The role reads
+  `organization_id`, the target device ID and the newest `finished_at` per device (`BackupRoleEscrowEvidence`).
+- **Keep window** = `retention_full × full_interval`, the window in which a retained database full can still predate
+  the Destroy. No schema change.
+- **Rule** (`escrowRule.gone`, used by the local expire and by D5): delete `escrow/<key>` iff this round's bucket
+  listing succeeded, was not suspicious, lacks `<key>`, and the device of `<key>` has evidence older than the keep
+  window. Otherwise HOLD (counted in `held` on targets).
+- **Suspicious listing.** *Unevidenced* absences are the headers L holds that the listing lacks and whose device has
+  no evidence. Evidenced absences go through the keep window and never count. When the unevidenced absences are all
+  of L's headers, or more than 10 % of them, the listing is suspicious. In that case the escrow pass copies nothing
+  from the bucket (a wrong bucket's headers never enter the set), deletes nothing in L or on any target, records the
+  escrow run as failed (class `escrow`), and sets `paddock_backup_escrow_listing_suspicious` = 1, which fires
+  `PaddockBackupEscrowListingSuspicious` (critical, 5 min). Fewer unevidenced absences are held, logged once per
+  change of their set, and counted in `paddock_backup_escrow_unevidenced_missing`. A failed listing or a failed
+  evidence query fails the escrow run and deletes nothing.
+- **Known limit.** When L has also lost `escrow/`, an empty listing cannot be told apart from a new installation. No
+  alert fires, but nothing is deleted either: the targets hold every header that has no evidence.
+- **Recorded deviation from organization isolation** (architect lead, item 29; also in `docs/architecture.md` §5):
+  migration 00107 adds a permissive `FOR SELECT` policy `backup_escrow_evidence` on `action` TO `paddock_backup`,
+  limited to `code = 'device.escrow_destroyed' AND status = 'finished' AND outcome = 'success'` and to the role's
+  platform context (`current_setting('paddock.org_id')` = the nil organization, so a missing context fails closed).
+  The nil-organization policy `backup` is unchanged, and no other role gains anything.
+- **A6 L7** (`TestMirrorEscrowFollowsBucket`) becomes these subtests: listing failed / bucket has x / bucket lacks x
+  without evidence / evidence within the keep window / suspicious listing / empty bucket → **held**; evidence older
+  than the keep window → **deleted**. Engine-level regression tests: `TestEscrowEmptyBucketHoldsEverything`,
+  `TestEscrowWrongBucketHoldsEverything`, `TestEscrowPartialAbsenceWithoutEvidence`, `TestEscrowEvidenceKeepWindow`,
+  `TestEscrowEvidenceQueryFailsHoldsEverything`, `TestEscrowUnevidencedWarnedOncePerChange`. The invariants oracle
+  states the same rule.
+
+### Note 2026-11-05 c — Destroy evidence applies per copy (decisions-alpha9 item 31)
+
+PDK-732 review 7 (M1): note b matched the evidence per device. A device that has not yet executed its Destroy token
+(valid for 30 days) can still escrow new header generations, and an old Destroy then let such a newer copy leave L
+and every target as soon as it left the bucket for any other reason. This note narrows the evidence rule of note b.
+
+- **Per copy.** A Destroy covers a header copy only if the escrow object existed at or before the Destroy's
+  `finished_at`. A copy newer than the Destroy, or one without a recorded time, is *unevidenced*: held in L and on
+  every target, counted in `paddock_backup_escrow_unevidenced_missing`, and part of the suspicious share.
+- **Time source.** The escrow object's own time: its `LastModified` (on a versioned bucket, the current version's
+  time) from the bucket listing at copy time, never the local file's mtime (A1). The escrow pass lists through
+  `objectstore.Store.ListInfo` (size and `LastModified`).
+- **L's index.** The time is recorded in the set's index, `manifest.json`: each `contents.escrow` entry gains
+  `"at"` (optional, omitted when unknown; no schema bump). A manifest without it stays readable; its copies are
+  unevidenced until the bucket lists the same key with the same size again, whose `LastModified` is then recorded
+  (objects are immutable, so that is the time at copy time). A recorded time is ignored when L's copy no longer has
+  the recorded size.
+- **Targets.** A target copy is judged with the time L's index held at the start of the round. Once L has deleted
+  its copy, a target copy the same round could not delete (a failed or skipped target mirror) has no recorded time
+  and stays held.
+- **Tests.** `TestEscrowGenerationNewerThanDestroyHeld` (a generation newer than the Destroy goes missing: held on L
+  and both targets, counted), `TestEscrowOlderGenerationWithEvidenceDeleted` (older generations with evidence beyond
+  the keep window still leave), `TestEscrowIndexRecordsObjectTime` (manifest records `LastModified`; a manifest
+  without times holds); A6 L7 gains "copy as old as the Destroy" (deleted), "copy newer than the Destroy" and "copy
+  without a recorded time" (held); the invariants oracle draws the copy times as well.

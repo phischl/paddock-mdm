@@ -170,6 +170,8 @@ export const auditCodes = [
   'platform.access_review_viewed',
   'platform.auto_unseal_disabled',
   'platform.auto_unseal_enabled',
+  'platform.backup_completed',
+  'platform.backup_failed',
   'platform.backup_key_confirmed',
   'platform.backup_key_discarded',
   'platform.backup_key_generated',

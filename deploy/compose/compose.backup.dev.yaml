@@ -1,53 +1,42 @@
-# Development wiring of compose.backup.yaml (`make up BACKUP=1`, restore drill): the backup bucket paddock-backup lives
-# on the audit host's RustFS (plan M6a decision 4), which speaks plain HTTP. pgBackRest speaks TLS only, so it reaches
-# RustFS through backup-s3-tls, a Caddy reverse proxy with a certificate of its own internal CA; the worker and the
-# Fleet dump reach RustFS directly. Never use this file in production.
+# Development wiring of compose.backup.yaml (`make up BACKUP=1`, restore drill). Never use this file in production.
+# The development stack has no internal TLS, so the backup role reaches OpenBao over plain HTTP. `make dev-seed
+# BACKUP=1` creates two backup targets (plan M15 decision 18): an S3 target on the audit host's RustFS (bucket
+# paddock-backup, rustfs-backup-bootstrap.sh) and a local target on the volume backup-local-dev, which stands in for
+# the volumes ./paddock backup-target apply renders on a host. A full backup is due every 120 seconds instead of the
+# schedule's hours, so the gates see one within minutes.
 services:
-  backup-s3-tls:
-    image: ${CADDY_IMAGE}
-    restart: unless-stopped
-    pids_limit: 256
-    # The proxy keeps the Host header, so the S3 signatures stay valid. It copies its root certificate to a volume
-    # pgBackRest reads, because Caddy's own PKI directory is private to root.
-    command:
-      - sh
-      - -c
-      - >-
-        caddy reverse-proxy --from https://backup-s3-tls:9443 --to http://audit-rustfs:9000 --internal-certs &
-        until [ -s /data/caddy/pki/authorities/local/root.crt ]; do sleep 1; done;
-        install -m 644 /data/caddy/pki/authorities/local/root.crt /ca/root.crt; wait
-    volumes:
-      - backup-s3-tls-data:/data
-      - backup-s3-ca:/ca
-    networks: [cp, audit-store]
-
   pgbackrest: &pgbackrest-dev
     build:
       context: ../..
       dockerfile: deploy/compose/pgbackrest/Dockerfile
       args:
         COMPILER_RUNTIME_IMAGE: ${COMPILER_RUNTIME_IMAGE}
-    environment:
-      PADDOCK_BACKUP_S3_ENDPOINT: https://backup-s3-tls:9443
-      PADDOCK_BACKUP_S3_CA_FILE: /backup-s3-ca/root.crt
-    volumes:
-      - backup-s3-ca:/backup-s3-ca:ro
-    depends_on:
-      backup-s3-tls:
-        condition: service_started
 
   pgbackrest-authentik: *pgbackrest-dev
 
-  fleet-backup-upload:
+  paddock-backup:
     environment:
-      PADDOCK_BACKUP_S3_ENDPOINT: http://audit-rustfs:9000
-    networks: [audit-store]
+      PADDOCK_ENV: development
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      BAO_CACERT: ""
+      SSL_CERT_FILE: ""
+      PADDOCK_BACKUP_FULL_INTERVAL_S: "120"
+      PADDOCK_BACKUP_ROUND_INTERVAL: 15s
+    secrets: !override
+      - db_paddock_backup_url
+      - db_paddock_platform_url
+      - approle_backup_role_id
+      - approle_backup_secret_id
+      - rustfs_escrow_backup_access_key
+      - rustfs_escrow_backup_secret_key
+    volumes:
+      - backup-local-dev:/backup-targets
+    networks: [cp, audit-store]
 
-  paddock-worker:
+  # The legacy key import has its own gate (plan M15 §9 B6); the development stack starts without a key.
+  paddock-api:
     environment:
-      PADDOCK_BACKUP_S3_ENDPOINT: http://audit-rustfs:9000
-    networks: [audit-store]
+      PADDOCK_BACKUP_LEGACY_KEY_FILE: ""
 
 volumes:
-  backup-s3-tls-data: {}
-  backup-s3-ca: {}
+  backup-local-dev: {}

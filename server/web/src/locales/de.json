@@ -528,7 +528,9 @@
       "backup_target_deleted": "{actor} hat das Sicherungsziel {name} ({type}) gelöscht",
       "backup_target_tested": "{actor} hat einen Verbindungstest des Sicherungsziels {name} angefordert",
       "backup_schedule_changed": "{actor} hat den Sicherungsplan geändert: Vollsicherung alle {full_interval_hours} h, {retention_full} Vollsicherungen aufbewahrt",
-      "backup_run_requested": "{actor} hat eine sofortige Sicherung angefordert"
+      "backup_run_requested": "{actor} hat eine sofortige Sicherung angefordert",
+      "backup_completed": "Die Sicherung {kind} ist abgeschlossen und hat {targets_ok} Ziele erreicht",
+      "backup_failed": "Die Sicherung {kind} ist fehlgeschlagen ({error_class})"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",

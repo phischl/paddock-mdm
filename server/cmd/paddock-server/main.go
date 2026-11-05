@@ -22,7 +22,7 @@ import (
 const usage = `usage: paddock-server <command> [arguments] [+ <command> [arguments] ...]
 
 commands:
-  serve api|gateway|worker|compiler|outbox-relay|audit-writer|escrow-reader|revocation-issuer|unsealer|notifier
+  serve api|gateway|worker|compiler|outbox-relay|audit-writer|escrow-reader|revocation-issuer|unsealer|notifier|backup
   migrate paddock|audit
   provision rabbitmq
   audit seal [--day YYYY-MM-DD]
@@ -44,7 +44,8 @@ commands:
   admin agent-rollout-halt --version <x.y.z>
   admin agent-rollout-resume --version <x.y.z>
   admin upgrade-check --target-version <x.y.z> [--json]
-  backup openbao
+  backup now [--kind postgres|authentik|openbao|fleet|escrow]... [--label <text>] [--wait]
+  backup status
   backup decrypt <in> <out|->
   prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
   healthcheck
@@ -161,6 +162,8 @@ func runServe(ctx context.Context, l *config.Loader, common config.Common, args 
 		return serveUnsealer(ctx, l, common)
 	case "notifier":
 		return serveNotifier(ctx, l, common)
+	case "backup":
+		return serveBackup(ctx, l, common)
 	default:
 		return errUsage
 	}

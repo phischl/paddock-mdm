@@ -76,9 +76,9 @@ shipped=(
   valkey/valkey.conf
   postgres/provision-roles.sh
   authentik/entrypoint.sh
-  fleet/entrypoint.sh fleet/backup.sh fleet/backup-upload.sh
+  fleet/entrypoint.sh fleet/backup.sh
   prometheus/prometheus.yml prometheus/alerts.yml prometheus/scrape/controlplane.yml prometheus/scrape/audit.yml
-  prometheus/scrape/auto-unseal.yml
+  prometheus/scrape/auto-unseal.yml prometheus/scrape/backup.yml
   scripts/lib.sh scripts/gen-prod-secrets.sh scripts/openbao-configure.sh scripts/rustfs-bundles-bootstrap.sh
   scripts/rustfs-audit-bootstrap.sh scripts/fleet-bootstrap.sh scripts/wait-healthy.sh scripts/postgres-unsealer-role.sh
   scripts/upgrade-check.sh
@@ -175,7 +175,6 @@ for host in controlplane audit lab; do
   args=()
   for f in $files; do args+=(-f "$dir/$f"); done
   if ! rendered="$(env -u PADDOCK_IMAGE -u PADDOCK_COMPILER_IMAGE -u PADDOCK_PGBACKREST_IMAGE \
-    PADDOCK_BACKUP_S3_ENDPOINT=https://backup-s3.example.org \
     docker compose --project-directory "$dir" -p paddock-bundle-check --env-file "$dir/versions.env" \
     --env-file "$dir/$settings" "${args[@]}" --profile '*' config 2>&1)"; then
     printf '%s\n' "$rendered" >&2
