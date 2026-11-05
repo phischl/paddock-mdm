@@ -162,7 +162,8 @@ func TestFormatSyslogHeaderLimits(t *testing.T) {
 // TestSyslogMsgIDsDistinct: every registered code reaches the frame with its registry MSGID, and none collides with
 // the MSGID of a control message, so a receiver can tell events from heartbeats, tests and checkpoints by MSGID alone.
 func TestSyslogMsgIDsDistinct(t *testing.T) {
-	control := map[string]bool{outbound.MsgIDHeartbeat: true, outbound.MsgIDCheckpoint: true, outbound.MsgIDTest: true}
+	control := map[string]bool{outbound.MsgIDHeartbeat: true, outbound.MsgIDCheckpoint: true, outbound.MsgIDTest: true,
+		outbound.MsgIDMissing: true}
 	m := syslogMessage()
 	for _, d := range audit.Definitions() {
 		p := parseSyslog(t, outbound.FormatSyslog(m, syslogEvent(d.Code, audit.OutcomeSuccess), "h"))
@@ -284,5 +285,22 @@ func TestValidateSyslogDestination(t *testing.T) {
 	dev := outbound.Policy{AllowPrivate: true}
 	if err := dev.ValidateDestination(ctx, syslog(func(d *outbound.Destination) { d.SyslogHost = "127.0.0.1" })); err != nil {
 		t.Errorf("development policy refused a private address: %v", err)
+	}
+}
+
+// TestFormatSyslogMissing: a replayed event the index no longer holds is one message with PRI 132, MSGID
+// paddock.missing, TIMESTAMP sent_at and the MSG {schema, forward_seq, event_id, delivery_id, missing: true}.
+func TestFormatSyslogMissing(t *testing.T) {
+	m := syslogMessage()
+	id := uuid.MustParse("0193a1b2-0000-7000-8000-0000000000bb")
+	p := parseSyslog(t, outbound.FormatSyslog(m, outbound.MessageEvent{ForwardSeq: 9, EventID: id, Missing: true}, "h"))
+	if p.pri != outbound.SyslogPRIWarning || p.msgID != outbound.MsgIDMissing || p.timestamp != "2026-11-04T09:30:00Z" ||
+		p.procID != "acme" {
+		t.Fatalf("header %+v", p)
+	}
+	want := `{"schema":"paddock.audit.v1","forward_seq":9,"event_id":"` + id.String() +
+		`","delivery_id":"0193a1b2-0000-7000-8000-000000000001","missing":true}`
+	if string(p.msg) != want {
+		t.Fatalf("MSG %s, want %s", p.msg, want)
 	}
 }

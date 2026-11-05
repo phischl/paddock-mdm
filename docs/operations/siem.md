@@ -105,5 +105,6 @@ reconciled. A syslog destination pushes the same events over TLS as RFC 5424 mes
 longer than 32 characters ([Syslog MSGID aliases](../compliance/audit-codes.md#syslog-msgid-aliases)), and
 `event.code` in the message body is always the full code. Syslog confirms delivery at TCP level only: a receiver that
 acknowledges a batch and then drops part of it unread is not detected by Paddock (RR-113), so check `forward_seq` for
-gaps on the receiver and reconcile with the checkpoint message (sent from a later alpha.9 change), which a receiver can compare with the WORM hash
-chain. The feed's format `paddock.audit.feed.v1` does not change with it.
+gaps on the receiver and reconcile with the daily checkpoint message, which carries the day's event count and the
+WORM manifest hash. After an outage longer than the receiver's buffer, *Replay from…* sends the stored batches again
+with their original numbers ([Checkpoints and replay](notifications.md#checkpoints-and-replay)). The feed's format `paddock.audit.feed.v1` does not change with it.

@@ -19,6 +19,8 @@ const (
 	MsgIDHeartbeat  = "paddock.heartbeat"
 	MsgIDCheckpoint = "paddock.checkpoint"
 	MsgIDTest       = "paddock.test"
+	// MsgIDMissing is the MSGID of a replayed event that is no longer in the audit index (plan M12 decision 21).
+	MsgIDMissing = "paddock.missing"
 	// PRI = facility local0 (16) × 8 + severity: notice (5) or warning (4).
 	SyslogPRINotice  = 16*8 + 5
 	SyslogPRIWarning = 16*8 + 4
@@ -43,12 +45,31 @@ type syslogEvent struct {
 	Event      audit.Event `json:"event"`
 }
 
+// syslogMissing is the MSG of a replayed event the index no longer holds.
+type syslogMissing struct {
+	Schema     string `json:"schema"`
+	ForwardSeq int64  `json:"forward_seq"`
+	EventID    string `json:"event_id"`
+	DeliveryID string `json:"delivery_id"`
+	Missing    bool   `json:"missing"`
+}
+
 // FormatSyslog returns the RFC 5424 message of one forwarded event with octet-counting framing (RFC 6587 section
 // 3.4.1): PRI local0.warning for the outcomes failure and denied, local0.notice otherwise; TIMESTAMP the event's
 // occurred_at; HOSTNAME hostname; APP-NAME paddock; PROCID the organization slug of m; MSGID the audit code or, for
 // a code longer than 32 characters, its fixed alias (audit.Code.MsgID); STRUCTURED-DATA nil; MSG the BOM and the
 // JSON of schema paddock.audit.v1, which always carries the full code.
+//
+// A Missing event of a replay is sent with PRI local0.warning, TIMESTAMP sent_at, MSGID paddock.missing and the MSG
+// {schema, forward_seq, event_id, delivery_id, missing: true}, so the receiver sees the number it cannot fill.
 func FormatSyslog(m Message, ev MessageEvent, hostname string) []byte {
+	if ev.Missing {
+		body, _ := json.Marshal(syslogMissing{
+			Schema: AuditSchema, ForwardSeq: ev.ForwardSeq, EventID: ev.EventID.String(), DeliveryID: m.DeliveryID,
+			Missing: true,
+		})
+		return syslogFrame(SyslogPRIWarning, m.SentAt, hostname, m.Organization, MsgIDMissing, body)
+	}
 	pri := SyslogPRINotice
 	if ev.Event.Outcome == audit.OutcomeFailure || ev.Event.Outcome == audit.OutcomeDenied {
 		pri = SyslogPRIWarning

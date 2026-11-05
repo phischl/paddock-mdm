@@ -310,6 +310,11 @@ func emailBody(d Destination, m outbound.Message, scope string) string {
 		if i == MaxDetailedEvents {
 			break
 		}
+		if me.Missing {
+			line("event %s (forward_seq %d) is no longer in the audit index", me.EventID, me.ForwardSeq)
+			line("")
+			continue
+		}
 		ev := me.Event
 		line("%s  %s  %s", ev.OccurredAt.UTC().Format(time.RFC3339), ev.Code, ev.Outcome)
 		if ev.Target != nil {
@@ -339,6 +344,10 @@ func emailBody(d Destination, m outbound.Message, scope string) string {
 	if rest := m.Events[min(len(m.Events), MaxDetailedEvents):]; len(rest) > 0 {
 		counts := map[audit.Code]int{}
 		for _, me := range rest {
+			if me.Missing {
+				counts["(no longer in the audit index)"]++
+				continue
+			}
 			counts[me.Event.Code]++
 		}
 		codes := make([]audit.Code, 0, len(counts))

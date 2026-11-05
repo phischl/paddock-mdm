@@ -298,6 +298,8 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `importAgentRelease` | platform | Imports the version from the configured release source (ADR 0043): the version must be newer than the newest published release, every file is verified with the release public key before anything is stored, and the release is published without a rollout; paddock-revoke is never imported. |
 | `lockDevice` | revocation | POST /api/v1/devices/{id}/lock |
 | `rejectRevocationRequest` | revocation | POST /api/v1/revocation-requests/{id}/reject |
+| `replayNotificationDestination` | notifications | Asks the notifier to send the destination's stored batches and checkpoints again from from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the cursor; the receiver sees the same numbers again and must deduplicate. |
+| `replayPlatformNotificationDestination` | platform | Asks the notifier to send the destination's stored batches and checkpoints again from from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the cursor; the receiver sees the same numbers again and must deduplicate. |
 | `resolveNotificationPseudonym` | notifications | Asks which user name a pseudonym (u_ and 24 hexadecimal characters) of the organization's notifications stands for. |
 | `revealDeviceLocalAdmin` | devices | Returns the active password and a pending one; confirm_hostname must equal the device's hostname. |
 | `revealDeviceRecoveryKey` | devices | Returns the newest stored recovery key of the device; confirm_hostname must equal the device's hostname. |

@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "e2cf5e11778f2d1a6043be24461b356cae6a961f76cdd3e13d69558f81a2a22a"
+const Version = "29787eeae18428e8ecf7a94bcc93eeaa9ee31587d4b3e9ac07553df1ce890b47"
 
 var tools = []Tool{
 	{
@@ -3139,6 +3139,42 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator. Reopens a closed finding with a reason (1 to 1000 characters, 400 invalid_request otherwise): a tamper finding always, unless a newer finding of the same device and subject is open; an attention finding only while its condition is still open. 409 invalid_state otherwise.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"properties\":{\"reason\":{\"maxLength\":1000,\"type\":\"string\"}},\"required\":[\"reason\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "replayNotificationDestination",
+		Method:      "POST",
+		Path:        "/api/v1/notification-destinations/{id}/replay",
+		Pattern:     "POST /api/v1/notification-destinations/{id}/replay",
+		Tag:         "notifications",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "notification.replay_requested",
+		Summary:     "",
+		Description: "Roles: org_admin. Asks the notifier to send the destination's stored batches and checkpoints again from from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the cursor; the receiver sees the same numbers again and must deduplicate. An event the index retention purged meanwhile is sent as {forward_seq, event_id, missing: true}. Each re-sent delivery is recorded as notification.replayed. 400 invalid_request when from_forward_seq is below 1 or above state.forward_seq; 409 invalid_state while a batch is being retried, a replay is still running (state.replay_from is set) or a skip request from enabling with cursor skip awaits the next delivery round. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"from_forward_seq\":{\"description\":\"The first forward sequence number to send again.\",\"format\":\"int64\",\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"from_forward_seq\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "replayPlatformNotificationDestination",
+		Method:      "POST",
+		Path:        "/api/platform/v1/notification-destinations/{id}/replay",
+		Pattern:     "POST /api/platform/v1/notification-destinations/{id}/replay",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "notification.replay_requested",
+		Summary:     "",
+		Description: "Roles: platform_admin. Asks the notifier to send the destination's stored batches and checkpoints again from from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the cursor; the receiver sees the same numbers again and must deduplicate. An event the index retention purged meanwhile is sent as {forward_seq, event_id, missing: true}. Each re-sent delivery is recorded as notification.replayed. 400 invalid_request when from_forward_seq is below 1 or above state.forward_seq; 409 invalid_state while a batch is being retried, a replay is still running (state.replay_from is set) or a skip request from enabling with cursor skip awaits the next delivery round. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"from_forward_seq\":{\"description\":\"The first forward sequence number to send again.\",\"format\":\"int64\",\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"from_forward_seq\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "resolveNotificationPseudonym",

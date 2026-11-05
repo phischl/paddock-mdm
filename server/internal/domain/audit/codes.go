@@ -235,6 +235,8 @@ const (
 	CodeNotificationTestRequested            Code = "notification.test_requested"
 	CodeNotificationTestSent                 Code = "notification.test_sent"
 	CodeNotificationPseudonymResolved        Code = "notification.pseudonym_resolved"
+	// Replay of a push destination (plan M12 decision 21, §6.4).
+	CodeNotificationReplayRequested Code = "notification.replay_requested"
 
 	// Privacy settings per organization (ADR 0032 §2, plan M10 §6.4).
 	CodeSettingsPrivacyChanged Code = "settings.privacy_changed"
@@ -263,6 +265,9 @@ const (
 	CodeNotificationDelivered          Code = "notification.delivered"
 	CodeNotificationDestinationStalled Code = "notification.destination_stalled"
 	CodeNotificationDestinationResumed Code = "notification.destination_resumed"
+	// Checkpoints and replayed batches (plan M12 decisions 20 and 21, §6.4).
+	CodeNotificationReplayed       Code = "notification.replayed"
+	CodeNotificationCheckpointSent Code = "notification.checkpoint_sent"
 
 	// Software sources (plan M13a §6.3).
 	CodeSoftwareSourceCreated Code = "software_source.created"
@@ -1616,6 +1621,27 @@ var registry = map[Code]Definition{
 		Params:      []string{"destination", "destination_id", "stalled_for_s", "forward_from", "forward_to"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per stall. forward_from and forward_to name the batch that arrived (absent when a heartbeat ended the stall).",
+	},
+	CodeNotificationReplayRequested: {
+		Code: CodeNotificationReplayRequested, Emitted: true,
+		Description: "An administrator asked, after a step-up, that a push destination receive its stored batches again from a forward sequence number on; the notifier re-sends them with their original delivery IDs and numbers before it continues at the cursor.",
+		Params:      []string{"destination", "destination_id", "from_forward_seq", "to_forward_seq"},
+		Outcomes:    adminOutcomes,
+		Note:        "to_forward_seq is the destination's last forward sequence number at the request. Denied with step_up_required without a fresh step-up (API tokens never have one); failure with invalid_request when from_forward_seq is below 1 or above to_forward_seq, invalid_state while a batch is being retried or a replay of the destination runs.",
+	},
+	CodeNotificationReplayed: {
+		Code: CodeNotificationReplayed, Emitted: true,
+		Description: "The notifier re-sent a stored batch or checkpoint of a push destination after a replay request, with its original delivery ID (original_delivery_id) and forward sequence numbers.",
+		Params:      []string{"destination_id", "forward_from", "forward_to", "original_delivery_id", "missing"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "One event per replayed delivery. missing counts the events the index retention purged meanwhile, sent as {forward_seq, event_id, missing: true}. A failed attempt is retried with backoff like a batch and shows in notification.destination_stalled.",
+	},
+	CodeNotificationCheckpointSent: {
+		Code: CodeNotificationCheckpointSent, Emitted: true,
+		Description: "The notifier sent the daily checkpoint of a sealed recording day to a push destination: the day's event count and the SHA-256, signature and key version of its WORM manifest, numbered in the destination's forward sequence.",
+		Params:      []string{"destination_id", "day", "event_count", "forward_seq"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Once per destination and sealed day, after the day's events were forwarded; days sealed before the destination was created are not sent. A failed attempt is retried with backoff under the same number and shows in notification.destination_stalled.",
 	},
 	CodeSoftwareSourceCreated: {
 		Code: CodeSoftwareSourceCreated, Emitted: true,

@@ -319,6 +319,27 @@ export async function requestTest(scope: NotificationScope, id: string): Promise
   return error ? problemOf(error) : null
 }
 
+/**
+ * The first forward sequence number of a replay as typed (plan M12 decision 21): a whole number from 1 to the last
+ * number sent, otherwise null.
+ */
+export function replayFrom(value: string, last: number): number | null {
+  const text = value.trim()
+  if (!/^[0-9]+$/.test(text)) return null
+  const n = Number(text)
+  return Number.isSafeInteger(n) && n >= 1 && n <= last ? n : null
+}
+
+/** Asks the notifier to resend the stored batches from the forward sequence number from on; null when requested. */
+export async function requestReplay(scope: NotificationScope, id: string, from: number): Promise<NotificationProblem | null> {
+  const params = { path: { id }, header: csrf }
+  const body = { from_forward_seq: from }
+  const { error } = scope === 'platform'
+    ? await api.POST('/api/platform/v1/notification-destinations/{id}/replay', { params, body })
+    : await api.POST('/api/v1/notification-destinations/{id}/replay', { params, body })
+  return error ? problemOf(error) : null
+}
+
 /** Asks which user name a pseudonym stands for; the lookup id on success. */
 export async function requestPseudonym(id: string, pseudonym: string): Promise<string | NotificationProblem> {
   const { data, error } = await api.POST('/api/v1/notification-destinations/{id}/resolve-pseudonym', {

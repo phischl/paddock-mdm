@@ -2405,6 +2405,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notification-destinations/{id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Asks the notifier to send the destination's stored batches and checkpoints again from
+         *     from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the
+         *     cursor; the receiver sees the same numbers again and must deduplicate. An event the index retention purged
+         *     meanwhile is sent as {forward_seq, event_id, missing: true}. Each re-sent delivery is recorded as
+         *     notification.replayed. 400 invalid_request when from_forward_seq is below 1 or above state.forward_seq; 409
+         *     invalid_state while a batch is being retried, a replay is still running (state.replay_from is set) or a skip
+         *     request from enabling with cursor skip awaits the next delivery round. Needs a step-up within the last 5
+         *     minutes (403 step_up_required).
+         */
+        post: operations["replayNotificationDestination"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notification-destinations/{id}/resolve-pseudonym": {
         parameters: {
             query?: never;
@@ -3955,6 +3983,34 @@ export interface paths {
          *     minutes (403 step_up_required).
          */
         post: operations["testPlatformNotificationDestination"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/notification-destinations/{id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Asks the notifier to send the destination's stored batches and checkpoints again from
+         *     from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the
+         *     cursor; the receiver sees the same numbers again and must deduplicate. An event the index retention purged
+         *     meanwhile is sent as {forward_seq, event_id, missing: true}. Each re-sent delivery is recorded as
+         *     notification.replayed. 400 invalid_request when from_forward_seq is below 1 or above state.forward_seq; 409
+         *     invalid_state while a batch is being retried, a replay is still running (state.replay_from is set) or a skip
+         *     request from enabling with cursor skip awaits the next delivery round. Needs a step-up within the last 5
+         *     minutes (403 step_up_required).
+         */
+        post: operations["replayPlatformNotificationDestination"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6278,6 +6334,23 @@ export interface components {
                 ok: boolean;
                 error: string | null;
             } | null;
+            /**
+             * Format: date
+             * @description The last sealed recording day whose checkpoint was delivered (checkpoints on).
+             */
+            last_checkpoint_day: string | null;
+            /**
+             * Format: int64
+             * @description The forward sequence number a requested replay continues at; null without a replay.
+             */
+            replay_from: number | null;
+        };
+        NotificationReplayRequest: {
+            /**
+             * Format: int64
+             * @description The first forward sequence number to send again.
+             */
+            from_forward_seq: number;
         };
         NotificationDestinationCreate: {
             type: components["schemas"]["NotificationDestinationType"];
@@ -12104,6 +12177,37 @@ export interface operations {
             409: components["responses"]["Problem"];
         };
     };
+    replayNotificationDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationReplayRequest"];
+            };
+        };
+        responses: {
+            /** @description Requested; state.replay_from shows it until the replay is complete. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
     resolveNotificationPseudonym: {
         parameters: {
             query?: never;
@@ -14692,6 +14796,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["NotificationTestRequested"];
                 };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    replayPlatformNotificationDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationReplayRequest"];
+            };
+        };
+        responses: {
+            /** @description Requested; state.replay_from shows it until the replay is complete. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
