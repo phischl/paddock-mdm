@@ -242,6 +242,14 @@ func TestBackupScheduleAndRuns(t *testing.T) {
 	if r.status != http.StatusOK || page.Total != 2 || page.Sort != "-started_at" {
 		t.Fatalf("runs: %d %s", r.status, r.body)
 	}
+	for q, want := range map[string]int{"before%20upgrade": 2, "ESCROW": 2, "no-such-run": 0} {
+		r = e.do(call{method: "GET", path: "/api/platform/v1/backup/runs?q=" + q, cookie: root})
+		var found adminapi.BackupRunPage
+		r.decode(t, &found)
+		if r.status != http.StatusOK || found.Total != want {
+			t.Fatalf("runs q=%s: %d %s, want %d", q, r.status, r.body, want)
+		}
+	}
 	r = e.do(call{method: "GET", path: "/api/platform/v1/backup", cookie: root})
 	var ov adminapi.BackupOverview
 	r.decode(t, &ov)

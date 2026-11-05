@@ -3698,7 +3698,7 @@ export interface paths {
          *     of this release), agents (active devices whose agent is a release older than the target's support window:
          *     FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending
          *     (running agent rollout, halted configuration rollouts: WARN) and sessions. Changes nothing and is not
-         *     audited. 400 invalid_request when target_version is no release this server knows.
+         *     audited. 400 invalid_request when target_version is missing or no release this server knows.
          */
         get: operations["getUpgradeCheck"];
         put?: never;
@@ -15393,9 +15393,9 @@ export interface operations {
     };
     getUpgradeCheck: {
         parameters: {
-            query: {
-                /** @description The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9). */
-                target_version: string;
+            query?: {
+                /** @description The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9). Required in effect, but checked after the role, so that other roles get 403 and not 400. */
+                target_version?: string;
             };
             header?: never;
             path?: never;
@@ -16673,6 +16673,8 @@ export interface operations {
                 page_size?: components["parameters"]["PageSize"];
                 /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
                 sort?: components["parameters"]["BackupRunSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
                 /** @description Repeatable. */
                 kind?: components["schemas"]["BackupKind"][];
                 /** @description Repeatable. */

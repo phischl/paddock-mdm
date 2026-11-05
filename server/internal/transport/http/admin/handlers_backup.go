@@ -161,7 +161,7 @@ func (h *handlers) RequestBackupRun(ctx context.Context, req adminapi.RequestBac
 
 func (h *handlers) ListBackupRuns(ctx context.Context, req adminapi.ListBackupRunsRequestObject) (adminapi.ListBackupRunsResponseObject, error) {
 	params, err := listing.Parse(backupRunList, listing.Query{
-		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort),
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
 	})
 	if err != nil {
 		return nil, err
