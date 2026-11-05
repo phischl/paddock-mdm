@@ -30,6 +30,8 @@ usage: ./paddock <command> [arguments]
   auto-unseal status|enable|disable
                                   automatic unseal of OpenBao on this host (docs/operations/openbao.md section 6)
   migrate-from <old dir>          take over .env and .secrets/ of the bundle directory of the running version
+  upgrade-check <old dir> [--json]
+                                  read-only check of what an upgrade from the running version needs (changes nothing)
 EOF
   exit 2
 }
@@ -64,6 +66,13 @@ case "$cmd" in
     cp -a "$old/.secrets" "$BUNDLE_DIR/.secrets"
     echo "copied .env and .secrets/ from $old"
     exit 0
+    ;;
+  upgrade-check)
+    # shellcheck source=../compose/scripts/upgrade-check.sh
+    . "$BUNDLE_DIR/scripts/upgrade-check.sh"
+    status=0
+    upgrade_check "$BUNDLE_DIR" "$@" || status=$?
+    exit "$status"
     ;;
   secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal) ;;
   *) usage ;;
