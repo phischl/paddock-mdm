@@ -162,7 +162,9 @@
     "platformNotifications": "Platform notifications",
     "configRollouts": "Configuration rollouts",
     "softwareSources": "Package sources",
-    "softwareCatalog": "Software catalog"
+    "softwareCatalog": "Software catalog",
+    "accessReview": "Access review",
+    "platformAccessReview": "Platform access review"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -2859,6 +2861,77 @@
     "confirmFile": "Confirm that {name} may stay managed on a sensitive path? You confirm your identity next.",
     "deniedIntro": "Paddock no longer manages these paths. Agents of this release or newer keep the files on the devices unchanged; an older agent deletes an unchanged file once it is no longer shipped. Delete the definitions you no longer need.",
     "deleteDefinition": "Delete definition"
+  },
+  "accessReview": {
+    "title": "Access review",
+    "platformTitle": "Platform access review",
+    "intro": "Who may do what in this organization during a period: role members and changes, administrator accounts, API tokens, reveals of secrets, step-ups, ended sessions and destructive actions. Every list shows at most the rows the report holds and its total.",
+    "platformIntro": "Who may administer the platform during a period: platform role members and changes, administrators, privileged platform events and organizations created.",
+    "generatedAt": "Report generated",
+    "exportJson": "Export JSON",
+    "exportCsv": "Export CSV",
+    "stepUp": "Step-ups in the period: {succeeded, plural, one {# successful action} other {# successful actions}} of step-up sessions, {failed, plural, one {# refusal} other {# refusals}} for a missing step-up.",
+    "tokenDenials": "{count, plural, one {# request was} other {# requests were}} refused for a revoked or expired token or an inactive creator.",
+    "capNotice": "Showing {shown, number} of {total, number} rows. Narrow the period to see the rest; the export holds the same rows.",
+    "yes": "Yes",
+    "no": "No",
+    "period": {
+      "label": "Period",
+      "days": "Last {days, number} days",
+      "from": "From",
+      "to": "To",
+      "apply": "Custom range"
+    },
+    "errors": {
+      "dates": "Enter the first and the last day.",
+      "order": "The last day must not be before the first day.",
+      "tooLong": "The period may span at most 400 days."
+    },
+    "forbidden": {
+      "title": "No access to the access review",
+      "description": "Only administrators and auditors can see the access review."
+    },
+    "empty": {
+      "title": "Nothing in this period",
+      "description": "No rows match the period or the search."
+    },
+    "sections": {
+      "roles": "Role members",
+      "roleChanges": "Role changes",
+      "accounts": "Administrator accounts",
+      "tokens": "API tokens",
+      "reveals": "Reveals and downloads of secrets",
+      "sessionsRevoked": "Ended sessions",
+      "destructive": "Destructive and locking actions",
+      "breakGlass": "Break-glass accounts",
+      "administrators": "Platform administrators",
+      "platformEvents": "Privileged platform events",
+      "organizationsCreated": "Organizations created"
+    },
+    "columns": {
+      "role": "Role",
+      "username": "User",
+      "firstSeen": "First seen",
+      "at": "Time",
+      "code": "Action",
+      "actor": "Actor",
+      "displayName": "Name",
+      "lastLogin": "Last sign-in",
+      "disabled": "Disabled",
+      "name": "Name",
+      "prefix": "Prefix",
+      "createdBy": "Created by",
+      "createdAt": "Created",
+      "expiresAt": "Expires",
+      "lastUsed": "Last used",
+      "revokedAt": "Revoked",
+      "revokedBy": "Revoked by",
+      "device": "Device",
+      "params": "Details",
+      "reason": "Reason",
+      "target": "Target",
+      "slug": "Slug"
+    }
   },
   "mcp": {
     "title": "AI assistants (MCP)",

@@ -100,7 +100,7 @@ describe('navigation drawer', () => {
       'Overview', 'Attention', 'Findings',
       'Devices', 'Device groups', 'Diagnostics', 'Enrollment tokens',
       'Permission profiles', 'Managed files', 'Managed units', 'Operator roots', 'Package sources', 'Software catalog', 'Package holds', 'Change sets', 'Configuration rollouts', 'Configuration status',
-      'Security review', 'Revocations', "Dead man's switch", 'Watched units', 'Login & privileges',
+      'Security review', 'Access review', 'Revocations', "Dead man's switch", 'Watched units', 'Login & privileges',
       'Software', 'Vulnerabilities',
       'Users', 'Groups', 'API tokens', 'Notifications', 'MCP', 'Updates', 'Rollouts', 'Privacy', 'Audit log', 'Evidence integrity',
       'Evidence exports',
@@ -161,6 +161,7 @@ describe('navigation drawer', () => {
     expect(linkLabels(operator.w)).toContain('Enrollment tokens')
     expect(linkLabels(operator.w)).toContain('Diagnostics')
     expect(linkLabels(operator.w)).not.toContain('Revocations')
+    expect(linkLabels(operator.w)).not.toContain('Access review')
     expect(linkLabels(operator.w)).not.toContain('Audit log')
     expect(linkLabels(operator.w)).not.toContain('Evidence integrity')
     expect(linkLabels(operator.w)).not.toContain('Evidence exports')
@@ -171,6 +172,7 @@ describe('navigation drawer', () => {
     expect(linkLabels(auditor.w)).not.toContain('Enrollment tokens')
     expect(linkLabels(auditor.w)).not.toContain('Revocations')
     expect(linkLabels(auditor.w)).not.toContain('Diagnostics')
+    expect(linkLabels(auditor.w)).toContain('Access review')
     expect(linkLabels(auditor.w)).toContain('Audit log')
     expect(linkLabels(auditor.w)).toContain('Evidence integrity')
     expect(linkLabels(auditor.w)).toContain('Evidence exports')
@@ -178,7 +180,7 @@ describe('navigation drawer', () => {
 
     const platform = await mountApp({ ...admin, role: 'platform_admin', organization: null }, '/platform/organizations')
     expect(groupLabels(platform.w)).toEqual(['Overview', 'Platform'])
-    expect(linkLabels(platform.w)).toEqual(['Overview', 'Organizations', 'Agent releases', 'IP allow list', 'Sessions', 'OpenBao', 'Backup', 'Platform notifications', 'MCP policy'])
+    expect(linkLabels(platform.w)).toEqual(['Overview', 'Organizations', 'Agent releases', 'IP allow list', 'Sessions', 'OpenBao', 'Backup', 'Platform notifications', 'Platform access review', 'MCP policy'])
     expect(platform.w.find('[data-testid="app-bar-attention"]').exists()).toBe(false)
     expect(platform.w.find('[data-testid="org-name"]').exists()).toBe(false)
   })
@@ -201,10 +203,10 @@ describe('navigation drawer', () => {
   it('is one Tab stop with a roving tabindex: Up/Down move, Home/End jump', async () => {
     const { w } = await mountApp(admin, '/managed-files')
     const links = drawer(w).findAll('a.pd-nav-item')
-    expect(links.length).toBe(35)
+    expect(links.length).toBe(36)
     const stops = links.filter((a) => a.attributes('tabindex') === '0')
     expect(stops.map((a) => a.attributes('href'))).toEqual(['/managed-files'])
-    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(34)
+    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(35)
 
     ;(stops[0].element as HTMLElement).focus()
     await stops[0].trigger('keydown', { key: 'ArrowDown' })
