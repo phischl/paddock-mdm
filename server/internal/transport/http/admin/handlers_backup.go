@@ -272,25 +272,33 @@ func toBackupRuns(runs []app.Run) []adminapi.BackupRun {
 	return out
 }
 
-func toBackupKeyStatus(s app.KeyStatus) adminapi.BackupKeyStatus {
-	key := func(k app.Key) adminapi.BackupKey {
-		return adminapi.BackupKey{
-			KeyId: k.KeyID, Fingerprint: k.Fingerprint, State: adminapi.BackupKeyState(k.State), CreatedAt: k.CreatedAt.UTC(),
-			CreatedBy: k.CreatedBy, ConfirmedAt: utcPtr(k.ConfirmedAt), ConfirmedBy: k.ConfirmedBy,
-			RetiredAt: utcPtr(k.RetiredAt), Attempts: k.Attempts, Legacy: k.Legacy,
-		}
+func toBackupKey(k app.Key) adminapi.BackupKey {
+	return adminapi.BackupKey{
+		KeyId: k.KeyID, Fingerprint: k.Fingerprint, State: adminapi.BackupKeyState(k.State), CreatedAt: k.CreatedAt.UTC(),
+		CreatedBy: k.CreatedBy, ConfirmedAt: utcPtr(k.ConfirmedAt), ConfirmedBy: k.ConfirmedBy,
+		RetiredAt: utcPtr(k.RetiredAt), Attempts: k.Attempts, Legacy: k.Legacy, Positions: positionsPtr(k.Positions),
 	}
+}
+
+func positionsPtr(p []int) *[]int {
+	if p == nil {
+		return nil
+	}
+	return &p
+}
+
+func toBackupKeyStatus(s app.KeyStatus) adminapi.BackupKeyStatus {
 	out := adminapi.BackupKeyStatus{Retired: make([]adminapi.BackupKey, len(s.Retired))}
 	if s.Active != nil {
-		k := key(*s.Active)
+		k := toBackupKey(*s.Active)
 		out.Active = &k
 	}
 	if s.Pending != nil {
-		k := key(*s.Pending)
+		k := toBackupKey(*s.Pending)
 		out.Pending = &k
 	}
 	for i, k := range s.Retired {
-		out.Retired[i] = key(k)
+		out.Retired[i] = toBackupKey(k)
 	}
 	return out
 }

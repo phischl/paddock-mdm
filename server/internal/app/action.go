@@ -530,6 +530,38 @@ func (r *ActionRunner) RecordAllOnce(ctx context.Context, scope Scope, specs []A
 	return recorded, nil
 }
 
+// RecordOnceInScope is RecordAllOnce for one event whose claim sets its target and params through the recorder: the
+// same contract (system principals only; recorded exactly when claim reports true and the transaction commits; claim
+// false or an error records nothing). It serves a system transition that a concurrent replica may already have made,
+// such as the import of the legacy backup key (plan M15 decision 9).
+func (r *ActionRunner) RecordOnceInScope(ctx context.Context, scope Scope, spec ActionSpec,
+	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindSystem {
+		return false, problem.Unauthenticated
+	}
+	if scope == ScopeOrg && p.OrganizationID == uuid.Nil {
+		return false, problem.NoOrganization
+	}
+	rec := r.newRecorder(ctx, p, scope, spec)
+	recorded := false
+	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
+		fresh, err := claim(ctx, q, rec)
+		if err != nil || !fresh {
+			return err
+		}
+		if err := r.insertFinished(ctx, q, rec, nil); err != nil {
+			return err
+		}
+		recorded = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return recorded, nil
+}
+
 // OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
 // without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
 // login) and reports false. After (optional) runs when the event was recorded.
