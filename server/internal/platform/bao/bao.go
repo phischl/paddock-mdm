@@ -309,6 +309,37 @@ func (c *Client) Encrypt(ctx context.Context, key string, org uuid.UUID, field C
 	})
 }
 
+// EncryptPlatform encrypts plaintext with a Transit key that is not derived and returns the ciphertext as Transit
+// writes it ("vault:vN:…"); for platform data that belongs to no organization, e.g. backup-wrap (plan M15 decision 5).
+func (c *Client) EncryptPlatform(ctx context.Context, key string, plaintext []byte) (string, error) {
+	return c.writeCiphertext(ctx, "transit/encrypt/"+key, map[string]any{
+		"plaintext": base64.StdEncoding.EncodeToString(plaintext),
+	})
+}
+
+// DecryptPlatform decrypts a ciphertext of EncryptPlatform. The caller must zero the plaintext after use.
+func (c *Client) DecryptPlatform(ctx context.Context, key, ciphertext string) ([]byte, error) {
+	if err := c.ensureToken(ctx); err != nil {
+		return nil, err
+	}
+	s, err := c.api.Logical().WriteWithContext(ctx, "transit/decrypt/"+key, map[string]any{"ciphertext": ciphertext})
+	if err != nil {
+		return nil, fmt.Errorf("bao: decrypt: %w", err)
+	}
+	if s == nil {
+		return nil, errors.New("bao: decrypt returned no plaintext")
+	}
+	plain, _ := s.Data["plaintext"].(string)
+	if plain == "" {
+		return nil, errors.New("bao: decrypt returned no plaintext")
+	}
+	out, err := base64.StdEncoding.DecodeString(plain)
+	if err != nil {
+		return nil, fmt.Errorf("bao: plaintext encoding: %w", err)
+	}
+	return out, nil
+}
+
 // WrappedDataKey returns a new random 256-bit data key, wrapped by the derived Transit key under the context of the
 // organization and field; the caller never sees the plaintext key (pseudonym keys, ADR 0031 amendment 2026-10-31).
 func (c *Client) WrappedDataKey(ctx context.Context, key string, org uuid.UUID, field ContextField) (string, error) {

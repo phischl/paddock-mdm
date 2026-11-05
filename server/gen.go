@@ -7,3 +7,4 @@ package server
 //go:generate go run ./cmd/mcpgen -spec ../api/openapi/admin.yaml -skill ../skills/operate-paddock/references/tools.md
 //go:generate go run ./internal/domain/audit/gendoc ../docs/compliance/audit-codes.md
 //go:generate go run ./internal/domain/audit/gendoc web/src/lib/auditCodes.gen.ts
+//go:generate go run ./cmd/releaseseq -changelog ../CHANGELOG.md -current 0.1.0-alpha.9 -out internal/buildinfo/releases.gen.go

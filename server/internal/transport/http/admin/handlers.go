@@ -41,6 +41,8 @@ type handlers struct {
 	sessions *app.Sessions
 	// autoUnseal is the automatic unseal of OpenBao (plan M8u decision 7).
 	autoUnseal *app.AutoUnseal
+	// upgradeCheck is the report before an upgrade (plan M16 decision 4).
+	upgradeCheck *app.UpgradeCheck
 
 	users         *app.Users
 	userGroups    *app.UserGroups
@@ -93,6 +95,11 @@ type handlers struct {
 	stepUpWindow time.Duration
 	// serverVersion is server_version of GET and PATCH /api/v1/me.
 	serverVersion string
+
+	// backupTargets, backupSchedule and backupRuns are the platform backup (plan M15 decisions 10–14).
+	backupTargets  *app.BackupTargets
+	backupSchedule *app.BackupSchedule
+	backupRuns     *app.BackupRuns
 }
 
 // stepUpTiming is the step-up window of the action runner and the maximum auth age of the step-up callback.

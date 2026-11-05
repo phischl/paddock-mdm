@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
+	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,21 +18,25 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
 	"github.com/phischl/paddock-mdm/server/internal/allowlistcache"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/domain/autounseal"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/migrate"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
+	adminhttp "github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/internal/worker"
 )
 
 // adminCommand is a parsed paddock-server admin command line (plan M6c decision 20; allowlist: plan M7a decision 21;
 // agent-release: plan M7b decision 31; auto-unseal: plan M8u decision 8; agent-rollout, agent-rollout-halt,
-// agent-rollout-resume: ADR 0034 amendment 2026-10-26).
+// agent-rollout-resume: ADR 0034 amendment 2026-10-26; upgrade-check: plan M16 decision 4).
 type adminCommand struct {
-	name    string             // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | security-review | end-sessions | auto-unseal
+	name    string             // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | security-review | end-sessions | auto-unseal | upgrade-check
 	by      int64              // bump-bundle-seq only
 	sub     string             // allowlist: show | disable | add; auto-unseal: show | verify | disable
 	cidr    string             // allowlist add
@@ -37,6 +44,7 @@ type adminCommand struct {
 	version string             // agent-release, agent-rollout, agent-rollout-halt, agent-rollout-resume
 	dir     string             // agent-release
 	rollout app.RolloutOptions // agent-rollout
+	json    bool               // upgrade-check
 }
 
 // parseAdmin parses the arguments after "admin"; every error is a usage error.
@@ -120,6 +128,12 @@ func parseAdmin(args []string) (adminCommand, error) {
 		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || cmd.version == "" {
 			return adminCommand{}, errUsage
 		}
+	case "upgrade-check":
+		fs.Func("target-version", "", onceFlag(&cmd.version))
+		fs.BoolVar(&cmd.json, "json", false, "")
+		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || cmd.version == "" {
+			return adminCommand{}, errUsage
+		}
 	default:
 		return adminCommand{}, errUsage
 	}
@@ -142,8 +156,12 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 	dsn := l.SecretFile("PADDOCK_DB_WORKER_URL_FILE")
 	platformDSN := l.SecretFile("PADDOCK_DB_PLATFORM_URL_FILE")
 	var vkCfg config.Valkey
-	if cmd.name == "rebuild-cache" || cmd.name == "allowlist" || cmd.name == "end-sessions" {
+	if cmd.name == "rebuild-cache" || cmd.name == "allowlist" || cmd.name == "end-sessions" || cmd.name == "upgrade-check" {
 		vkCfg = config.LoadValkey(l)
+	}
+	var baoAddr string
+	if cmd.name == "upgrade-check" {
+		baoAddr = config.LoadOpenBaoAddr(l)
 	}
 	// End all sessions also ends the portal users' Authentik sessions (plan M8f decision 18).
 	var akCfg config.Authentik
@@ -214,8 +232,62 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 		fmt.Fprintf(os.Stdout, "every portal session ended (generation %d)\n", gen)
 	case "auto-unseal":
 		return runAutoUnsealCLI(ctx, cmd.sub, app.NewAutoUnseal(admin.Runner(), platformPool, nil), os.Stdout)
+	case "upgrade-check":
+		return runUpgradeCheck(ctx, cmd, pool, platformPool, vkCfg, baoAddr, os.Stdout)
 	}
 	return nil
+}
+
+// errUpgradeCheckFailed ends admin upgrade-check with exit code 1 after the report is printed.
+var errUpgradeCheckFailed = errors.New("the upgrade check failed")
+
+// runUpgradeCheck is paddock-server admin upgrade-check (plan M16 decision 4): the read-only report before an
+// upgrade, run by the target release's binary against the running installation. Valkey and OpenBao are optional:
+// without them the sessions and seal state read n/a.
+func runUpgradeCheck(ctx context.Context, cmd adminCommand, pool *db.OrgPool, platformPool *db.PlatformPool, vkCfg config.Valkey,
+	baoAddr string, out io.Writer) error {
+	latest, err := migrate.LatestPaddock()
+	if err != nil {
+		return err
+	}
+	var sessionCounter app.UpgradeSessionCounter
+	if vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password}); err == nil {
+		defer vk.Close()
+		sessionCounter = sessions.NewStore(vk)
+	}
+	var seal app.UpgradeSealStatus
+	if c, err := bao.New(baoAddr, "", ""); err == nil {
+		seal = c
+	}
+	report, err := app.NewUpgradeCheck(pool, platformPool, seal, sessionCounter, latest).ReportCLI(ctx, cmd.version)
+	if errors.Is(err, app.ErrUnknownTargetVersion) {
+		fmt.Fprintf(os.Stderr, "unknown --target-version %s; this release knows %s\n", cmd.version, strings.Join(buildinfo.ReleaseSequence(), ", "))
+		return errUsage
+	}
+	if err != nil {
+		return err
+	}
+	if err := writeUpgradeCheck(out, report, cmd.json); err != nil {
+		return err
+	}
+	if report.Failed() {
+		return errUpgradeCheckFailed
+	}
+	return nil
+}
+
+func writeUpgradeCheck(out io.Writer, r app.UpgradeCheckReport, asJSON bool) error {
+	if asJSON {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(adminhttp.UpgradeCheckDocument(r))
+	}
+	fmt.Fprintf(out, "upgrade check for %s (agent window: %s)\n", r.TargetVersion, strings.Join(r.Window, ", "))
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	for _, it := range r.Items {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", it.Status, it.Name, it.Detail)
+	}
+	return w.Flush()
 }
 
 // errAutoUnsealNotEnabled ends admin auto-unseal verify with exit code 1 after the message is printed.

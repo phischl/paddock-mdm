@@ -63,6 +63,8 @@ var lists = map[string]struct {
 
 	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
 	"listIpAllowlist":   {ipAllowlistList, "postgres/queries/ip_allowlist.sql", "ListIPAllowlistEntries", "id"},
+	"listBackupTargets": {backupTargetList, "postgres/queries/backup.sql", "ListBackupTargets", "id"},
+	"listBackupRuns":    {backupRunList, "postgres/queries/backup.sql", "ListBackupRuns", "id"},
 
 	"listDeviceSoftware":        {deviceSoftwareList, "postgres/queries/inventory.sql", "ListDeviceSoftware", "name, version, source"},
 	"listDeviceVulnerabilities": {findingList, "postgres/queries/inventory.sql", "ListDeviceVulnerabilities", "cve, software_name, software_version"},
@@ -155,8 +157,13 @@ func TestListSpecsMatchContract(t *testing.T) {
 }
 
 // isCollection reports whether op is a collection GET: its 200 response is an object with an items array.
+// reports are objects whose items are a fixed set of report lines, not a collection.
+var reports = map[string]bool{
+	"getUpgradeCheck": true, // the six items of the upgrade check (plan M16 §6.2)
+}
+
 func isCollection(op *openapi3.Operation) bool {
-	if op == nil {
+	if op == nil || reports[op.OperationID] {
 		return false
 	}
 	ok := op.Responses.Status(http.StatusOK)

@@ -510,7 +510,13 @@
       "auto_unseal_enabled": "{actor} hat das automatische Entsiegeln von OpenBao aktiviert und den Hinweis {disclaimer_version} bestätigt",
       "auto_unseal_disabled": "{method, select, cli {Das automatische Entsiegeln von OpenBao wurde auf dem Host deaktiviert} other {{actor} hat das automatische Entsiegeln von OpenBao deaktiviert}}",
       "openbao_auto_unsealed": "{failures, plural, =0 {Der Unsealer hat OpenBao automatisch entsiegelt ({unseals, number} Mal seit dem letzten Bericht)} other {Der Unsealer konnte OpenBao nicht entsiegeln ({failures, number} Fehlversuche, letzter Grund {last_failure_reason})}}",
-      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Plattform geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}"
+      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Plattform geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}",
+      "backup_target_created": "{actor} hat das Sicherungsziel {name} ({type}) hinzugefügt",
+      "backup_target_updated": "{change, select, enabled {{actor} hat das Sicherungsziel {name} aktiviert} disabled {{actor} hat das Sicherungsziel {name} deaktiviert} other {{actor} hat das Sicherungsziel {name} geändert (Host-Revision {host_revision})}}",
+      "backup_target_deleted": "{actor} hat das Sicherungsziel {name} ({type}) gelöscht",
+      "backup_target_tested": "{actor} hat einen Verbindungstest des Sicherungsziels {name} angefordert",
+      "backup_schedule_changed": "{actor} hat den Sicherungsplan geändert: Vollsicherung alle {full_interval_hours} h, {retention_full} Vollsicherungen aufbewahrt",
+      "backup_run_requested": "{actor} hat eine sofortige Sicherung angefordert"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
