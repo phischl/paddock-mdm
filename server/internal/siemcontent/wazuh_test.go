@@ -399,6 +399,8 @@ func contains(l []string, s string) bool {
 // the registry fails TestEveryRegisteredCodeIsClassified until it gets a rule or is added here, so a new
 // security-relevant code is never classified by accident.
 var informational = map[audit.Code]bool{
+	"access_review.exported":                        true,
+	"access_review.viewed":                          true,
 	"agent_release.artifact_uploaded":               true,
 	"agent_release.created":                         true,
 	"agent_release.imported":                        true,
@@ -432,6 +434,10 @@ var informational = map[audit.Code]bool{
 	"device.clock_drift":                            true,
 	"device.clock_drift_cleared":                    true,
 	"device.config_drift_corrected":                 true,
+	"device.diagnostics_collected":                  true,
+	"device.diagnostics_downloaded":                 true,
+	"device.diagnostics_purged":                     true,
+	"device.diagnostics_requested":                  true,
 	"device.disk_conversion_aborted":                true,
 	"device.disk_conversion_completed":              true,
 	"device.disk_conversion_completed_after_cancel": true,
