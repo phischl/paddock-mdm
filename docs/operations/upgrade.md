@@ -227,8 +227,9 @@ what is specific to alpha.9. It has no audit migration, so on the audit host `au
 4. **Removed settings.** `PADDOCK_BACKUP_S3_*` in `.env`, the secrets `backup_{pgbackrest,worker,fleet}_{access,secret}_key`
    and the service `fleet-backup-upload` are not used by this release, and `./paddock check` fails on a service that
    still names the S3 variables. Leave them in A's directory: they are the rollback to 0.1.0-alpha.8, which restores
-   from the old bucket. `./paddock upgrade-check` lists them as INFO (retired by this release; kept for the rollback). New setting: `PADDOCK_BACKUP_LOCAL_ROOT` (default `/srv/paddock-backup`), the base directory of
-   local backup targets; `./paddock check` verifies it. `./paddock upgrade` removes the container of
+   from the old bucket. `./paddock upgrade-check` lists them as INFO (retired by this release; kept for the
+   rollback). New setting: `PADDOCK_BACKUP_LOCAL_ROOT` (default `/srv/paddock-backup`), the base directory of local
+   backup targets; `./paddock check` verifies it. `./paddock upgrade` removes the container of
    `fleet-backup-upload`, which B no longer defines, right before `up` (by hand: `<A>/paddock compose rm -sf
    fleet-backup-upload` after the pre-upgrade backup and before `up`); a rollback to A starts it again.
 5. **The old bucket becomes an S3 target.** To keep backing up to the same bucket, add it in the portal under *Backup* →

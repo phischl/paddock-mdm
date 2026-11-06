@@ -204,6 +204,9 @@ if [[ -f "$work/b/paddock-deploy-0.1.0-alpha.7/RELEASES" ]]; then
   if [[ "$(tail -n 1 "$bd/RELEASES")" == 0.1.0-alpha.7 ]]; then pass "RELEASES ends with the stable bundle's version"; else fail "RELEASES: $(tail -n 2 "$bd/RELEASES")"; fi
   if [[ "$(head -n 1 "$bd/RELEASES")" == 0.1.0-alpha.1 ]]; then pass "RELEASES is oldest first"; else fail "RELEASES: $(head -n 1 "$bd/RELEASES")"; fi
   if [[ -f "$bd/RELEASE-NOTES" ]]; then pass "bundle ships RELEASE-NOTES (alpha.7 predates the Upgrade lines, so it is empty)"; else fail "no RELEASE-NOTES"; fi
+  if grep -qE '^0\.1\.0-alpha\.9 PADDOCK_BACKUP_S3_ENDPOINT$' "$bd/RETIRED-SETTINGS" 2>/dev/null; then
+    pass "bundle ships RETIRED-SETTINGS"
+  else fail "no RETIRED-SETTINGS with the settings 0.1.0-alpha.9 retired"; fi
 else
   fail "build.sh produced no RELEASES file"
 fi
