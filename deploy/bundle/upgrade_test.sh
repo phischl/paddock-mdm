@@ -557,6 +557,8 @@ run 0 "lab with backups" "$work/t/old" --yes
 has "a lab with backups names the rollback" '^Rollback afterwards: \./paddock rollback '
 before "the lab backup completes before up" "$BACKUP" "$UP"
 called "the lab with backups runs the online check" '^docker run .*prod-check .*--online'
+before "the lab with backups checks online before up" '^docker run .*prod-check .*--online' "$UP"
+before "the lab with backups reads the targets' revisions only after up" "$UP" 'admin backup-targets revisions'
 
 # Usage and preconditions.
 setup controlplane "Schema: unchanged"
