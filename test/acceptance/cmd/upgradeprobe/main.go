@@ -157,7 +157,11 @@ func do(ctx context.Context, p *env.Portal, method, path string, body any, want 
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	if res.Status != want {
-		return fmt.Errorf("%s %s: HTTP %d (%s), want %d", method, path, res.Status, res.ProblemCode(), want)
+		var p struct {
+			Detail string `json:"detail"`
+		}
+		_ = res.JSON(&p)
+		return fmt.Errorf("%s %s: HTTP %d (%s: %s), want %d", method, path, res.Status, res.ProblemCode(), p.Detail, want)
 	}
 	if out != nil {
 		if err := res.JSON(out); err != nil {
@@ -251,7 +255,9 @@ func runSeed(ctx context.Context, dir, akShell, enrollOut string) error {
 	}
 	if err := do(ctx, p, http.MethodPost, "/api/v1/notification-destinations", map[string]any{
 		"type": "webhook", "name": "ci upgrade", "enabled": false, "filter_mode": "security",
-		"url": "https://hooks.example.com/paddock-ci-upgrade",
+		// The production URL policy refuses a host that does not resolve to a public address; example.com is reserved
+		// for documentation and resolves. The destination stays disabled, so nothing is ever sent there.
+		"url": "https://example.com/paddock-ci-upgrade",
 	}, http.StatusCreated, &created); err != nil {
 		return err
 	}
