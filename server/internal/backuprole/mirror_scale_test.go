@@ -147,11 +147,12 @@ func (s *stallingTarget) Put(ctx context.Context, p string, r io.Reader, size in
 
 // TestStalledMirrorEndsCleanly: a target that stalls fails the round's mirror with io after the stall deadline; the
 // mirror's goroutine returns, the target is no longer busy, no goroutine is left behind, and the stalled mirror made
-// exactly one attempt (no retry loop). The next round mirrors the recovered target (PDK-861).
+// exactly one attempt (no retry loop). The next round mirrors the recovered target. It pins the watchdog's side of
+// PDK-861; the regression tests of the spin itself are the two above.
 func TestStalledMirrorEndsCleanly(t *testing.T) {
 	f := newFixture(t)
 	f.confirmKey()
-	f.engine.stall = 50 * time.Millisecond
+	f.engine.stall = 500 * time.Millisecond
 	dst := &stallingTarget{memTarget: newMemTarget(), calls: map[string]int{}}
 	dst.stall.Store(true)
 	rec := f.addTarget(t, backupset.TypeS3, dst)
