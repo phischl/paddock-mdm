@@ -78,8 +78,23 @@ func (c *cancellingReader) Read(b []byte) (int, error) {
 	return c.r.Read(b)
 }
 
+// cancelAtEOF cancels a context once its reader is exhausted: the copy is complete when the context ends, as the
+// stall watchdog giving up while the file is synced to a slow share.
+type cancelAtEOF struct {
+	r      io.Reader
+	cancel context.CancelFunc
+}
+
+func (c *cancelAtEOF) Read(b []byte) (int, error) {
+	n, err := c.r.Read(b)
+	if errors.Is(err, io.EOF) {
+		c.cancel()
+	}
+	return n, err
+}
+
 // TestDirTargetPutHonoursContext: a directory target writes nothing, and leaves no temporary file, for a Put whose
-// context ended before or during the copy (PDK-862).
+// context ended before, during or right after the copy (PDK-862).
 func TestDirTargetPutHonoursContext(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "target")
 	if err := os.MkdirAll(root, 0o750); err != nil {
@@ -99,6 +114,14 @@ func TestDirTargetPutHonoursContext(t *testing.T) {
 		defer cancel()
 		src := &cancellingReader{r: strings.NewReader(body), cancel: cancel}
 		if err := dst.Put(ctx, "fleet/b.enc", src, int64(len(body))); !errors.Is(err, context.Canceled) {
+			t.Errorf("error %v, want context.Canceled", err)
+		}
+	})
+	t.Run("before the rename", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		src := &cancelAtEOF{r: strings.NewReader(body), cancel: cancel}
+		if err := dst.Put(ctx, "fleet/d.enc", src, int64(len(body))); !errors.Is(err, context.Canceled) {
 			t.Errorf("error %v, want context.Canceled", err)
 		}
 	})
