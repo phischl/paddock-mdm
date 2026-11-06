@@ -143,6 +143,10 @@ compose() {
     *" openbao bao operator init "*)
       printf '{\n  "unseal_keys_b64": [\n    "dGVtcA=="\n  ],\n  "root_token": "s.temporary"\n}\n'
       ;;
+    *" backup-restore-escrow backup restore-escrow "*)
+      echo "escrow: skipped device d3 (organization o1, escrow destroyed 2026-11-03T00:00:00Z): org/o1/devices/d3/luks-header/h1, org/o1/devices/d3/luks-header/h2"
+      echo "escrow: 1 headers put, 0 already present, 2 skipped (device escrow destroyed)"
+      ;;
     *" ps --format "*) echo healthy ;;
     *" run "* | *" exec -T openbao sh "* | *" exec -T openbao bao write "*) cat >/dev/null ;;
   esac
@@ -315,6 +319,20 @@ if called "--operator" && called "--components postgres,openbao,fleet,escrow" &&
 else
   bad "report: $(grep restore-report "$calls")"
 fi
+# PDK-831 (decisions-alpha9 item 44): the escrow step runs in its own one-off service of profile restore, which holds the
+# audit reader and the gateway credential in its Compose definition; the backup role is not used for it.
+escrow_call="$(grep -F "backup restore-escrow" "$calls" || true)"
+if [[ "$escrow_call" == "compose --profile restore run --rm --no-deps -T -e PADDOCK_LOG_LEVEL=error -v $set_dir:/restore-set:ro backup-restore-escrow backup restore-escrow /restore-set" ]]; then
+  ok "the escrow step runs once in backup-restore-escrow (profile restore) with the set mounted read-only and no extra mount"
+else
+  bad "escrow call: $escrow_call"
+fi
+if [[ "$out" == *"escrow: skipped device d3 (organization o1, escrow destroyed 2026-11-03T00:00:00Z): org/o1/devices/d3/luks-header/h1, org/o1/devices/d3/luks-header/h2"* ]] &&
+  called "backup restore-report --outcome completed" && grep -F -- "--outcome completed" "$calls" | grep -qF -- "--escrow-skipped-destroyed 2"; then
+  ok "the skipped headers reach the terminal, their count the completed report"
+else
+  bad "escrow skips: out: $out, report: $(grep restore-report "$calls")"
+fi
 if ! grep -qF -- "$key_text" "$calls" && [[ "$out" != *"$key_text"* ]]; then
   ok "the key appears on no command line and in no output"
 else
@@ -370,6 +388,26 @@ else
   bad "postgres without openbao: rc $rc, up $p_up status $p_status bump $p_bump, out: $out"
 fi
 rm -f "$sealed_polls"
+if ! called "restore-escrow" && ! called "--escrow-skipped-destroyed"; then
+  ok "without the escrow step the completed report carries no skip count"
+else
+  bad "skip count without escrow: $(grep -E 'restore-report|escrow' "$calls")"
+fi
+run_restore restore fresh "$set_dir" --only escrow
+if ((rc == 0)) && called "backup-restore-escrow backup restore-escrow /restore-set" && called "--escrow-skipped-destroyed 2" &&
+  ! called "paddock-backup backup restore-escrow"; then
+  ok "--only escrow runs the escrow service and reports its skip count"
+else
+  bad "only escrow: rc $rc, $(grep -E 'restore-report|escrow' "$calls")"
+fi
+fail_on="backup-restore-escrow"
+run_restore restore fresh "$set_dir" --only escrow
+fail_on=""
+if ((rc != 0)) && called "--outcome failed" && called "--component escrow" && ! called "--escrow-skipped-destroyed"; then
+  ok "a failed escrow step (an unreadable audit index) stops the run and is reported failed without a count"
+else
+  bad "escrow failure: rc $rc, $(grep -E 'restore-report|escrow' "$calls")"
+fi
 
 run_restore restore plan=11111111-2222-3333-4444-555555555555 repo --only postgres
 if ((rc == 0)) && (($(position "--outcome running") < $(position " stop"))) && ! called "fetch-set" &&

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -123,6 +124,7 @@ func parseRestoreReport(args []string) (app.RestoreReport, error) {
 	at := fs.String("at", "", "")
 	component := fs.String("component", "", "")
 	detail := fs.String("detail", "", "")
+	escrowSkipped := fs.String("escrow-skipped-destroyed", "", "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *outcome == "" || *operator == "" || *source == "" ||
 		*components == "" {
 		return app.RestoreReport{}, errUsage
@@ -142,6 +144,13 @@ func parseRestoreReport(args []string) (app.RestoreReport, error) {
 			return app.RestoreReport{}, errUsage
 		}
 		in.At = &t
+	}
+	if *escrowSkipped != "" {
+		n, err := strconv.Atoi(*escrowSkipped)
+		if err != nil || n < 0 {
+			return app.RestoreReport{}, errUsage
+		}
+		in.EscrowSkippedDestroyed = &n
 	}
 	return in, nil
 }

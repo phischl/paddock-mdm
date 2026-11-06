@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -205,8 +206,13 @@ func TestRestoreEscrow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res != (EscrowResult{Put: 2, Present: 1, Destroyed: 2}) {
+	if res.Put != 2 || res.Present != 1 || res.Destroyed != 2 {
 		t.Errorf("result %+v", res)
+	}
+	wantSkipped := []EscrowSkip{{Key: key("d3", "h1"), Device: org + "/d3", DestroyedAt: destroyedAt},
+		{Key: key("d4", "h1"), Device: org + "/d4", DestroyedAt: destroyedAt}}
+	if !slices.Equal(res.Skipped, wantSkipped) {
+		t.Errorf("skipped %+v, want %+v", res.Skipped, wantSkipped)
 	}
 	for k, want := range map[string]string{key("d1", "h1"): "aaaa", key("d3", "h2"): "dddd"} {
 		if bucket.objects[k] != want {

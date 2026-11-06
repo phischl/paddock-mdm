@@ -50,6 +50,7 @@ commands:
   backup plan <id>           (prints the restore plan as JSON; exit 1 unless it is approved and unexpired)
   backup restore-report --outcome running|completed|failed --operator <name> --source set|repo|target
         --components a,b [--plan <id>] [--at <RFC 3339>] [--component <step> --detail <text>]
+        [--escrow-skipped-destroyed <count>]
   backup decrypt <in> <out|->
   backup manifest <set dir> [--at <RFC 3339 time>]
   backup fetch-set --dir <set dir>|--target <name|id>|--target-file - [--path <prefix>] [--no-clobber] <dest dir>

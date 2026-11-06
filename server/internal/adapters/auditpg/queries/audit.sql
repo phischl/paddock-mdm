@@ -314,3 +314,13 @@ SELECT (count(*) FILTER (WHERE outcome = 'success' AND (actor->>'step_up')::bool
        (count(*) FILTER (WHERE outcome = 'denied' AND params->>'error_code' = 'step_up_required'))::bigint AS refused
 FROM audit_event
 WHERE occurred_at >= @from_time AND occurred_at < @to_time;
+
+-- name: EscrowDestroyEvidence :many
+-- The newest successful Destroy per device of one organization (device.escrow_destroyed). The escrow step of a restore
+-- reads it here because the audit index survives the restore and the restored database may predate the Destroy
+-- (decisions-alpha9 items 39 and 44). Only the device and the time are read.
+SELECT (target->>'id')::text AS device_id, max(occurred_at)::timestamptz AS destroyed_at
+FROM audit_event
+WHERE organization_id = @organization_id AND code = 'device.escrow_destroyed' AND outcome = 'success'
+  AND target->>'type' = 'device'
+GROUP BY target->>'id';
