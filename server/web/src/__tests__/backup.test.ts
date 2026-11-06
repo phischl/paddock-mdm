@@ -26,6 +26,15 @@ function target(over: Partial<BackupTarget> = {}): BackupTarget {
   }
 }
 
+/**
+ * The input of an interrupted SMB update as the portal keeps it during a step-up: changed host, every credential
+ * empty. Built field by field rather than through withoutSecrets, whose result code scanning treats as a secret.
+ */
+function interruptedUpdate(): TargetInput {
+  const i = inputOf(target())
+  return { ...i, smb: { ...i.smb, host: 'other.example.org', password: '' }, s3: { ...i.s3, accessKey: '', secretKey: '' } }
+}
+
 function overviewOf(over: Partial<BackupOverview> = {}): BackupOverview {
   return {
     key: { active: null, pending: null, retired: [] },
@@ -95,6 +104,7 @@ describe('backup rules', () => {
     expect(body.smb).not.toHaveProperty('password')
     expect(toBody({ ...smb, smb: { ...smb.smb, password: 'pw' } }).smb?.password).toBe('pw')
     expect(withoutSecrets({ ...smb, smb: { ...smb.smb, password: 'pw' } }).smb.password).toBe('')
+    expect(withoutSecrets(interruptedUpdate())).toEqual(interruptedUpdate())
   })
 
   it('checks the schedule ranges', () => {
@@ -606,7 +616,7 @@ describe('PlatformBackup', () => {
   })
 
   it('reopens an interrupted update of the existing target and asks for the credentials again', async () => {
-    const input = withoutSecrets({ ...inputOf(target()), smb: { ...inputOf(target()).smb, host: 'other.example.org', password: '' } })
+    const input = interruptedUpdate()
     sessionStorage.setItem('paddock.stepup', JSON.stringify({ action: 'backup', target: 'backup', payload: { op: 'update', id: 't1', input, hadSecrets: true }, at: Date.now() }))
     fetchTarget.mockResolvedValue(target())
     await mountPage('?tab=targets')
@@ -618,7 +628,7 @@ describe('PlatformBackup', () => {
   })
 
   it('shows the problem instead of a create form when the target of an interrupted update cannot be read', async () => {
-    const input = withoutSecrets({ ...inputOf(target()), smb: { ...inputOf(target()).smb, host: 'other.example.org', password: '' } })
+    const input = interruptedUpdate()
     sessionStorage.setItem('paddock.stepup', JSON.stringify({ action: 'backup', target: 'backup', payload: { op: 'update', id: 't1', input, hadSecrets: true }, at: Date.now() }))
     fetchTarget.mockResolvedValue({ code: 'not_found' })
     await mountPage('?tab=targets')
