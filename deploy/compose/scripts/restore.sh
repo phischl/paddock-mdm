@@ -268,15 +268,27 @@ restore: no database was touched, but the local backup repository is empty or pa
 HELP
     return 0
   fi
-  cat >&2 <<HELP
+  if [[ "$1" == start ]]; then
+    echo "restore: the run stopped before its first step; nothing on the host was changed and the stack runs as before." >&2
+  else
+    cat >&2 <<HELP
 restore: the host is half restored. The writers of ${RESTORE_ONLY[*]} are stopped; the steps before $1 replaced
   their volumes, the step $1 and the ones after it did not finish.
   - Do not run ./paddock up on these volumes: the stack would start on partly restored data.
   - Fix the cause shown above, then run the same ./paddock restore command again: it restores every chosen component
     from the backup set again.
 HELP
+  fi
   if [[ -n "$RESTORE_PLAN" && "$2" == yes ]]; then
     echo "  - The plan $RESTORE_PLAN is recorded as failed: plan the restore again in the portal, or restore with --from." >&2
+  elif [[ -n "$RESTORE_PLAN" && "$1" == start ]]; then
+    cat >&2 <<HELP
+  - The run was interrupted while it marked the plan $RESTORE_PLAN as running, so it may still be approved or may be
+    running. Check it in the portal. If it is approved, nothing needs recording. If it is running, abandon it in the
+    portal or record the failure: ./paddock compose --profile paddock run --rm --no-deps -T paddock-backup backup
+    restore-report --outcome failed --plan $RESTORE_PLAN --operator $(restore_operator) --source $RESTORE_SOURCE_KIND
+    --components $(IFS=,; echo "${RESTORE_ONLY[*]}") --component start --detail "the step start failed"
+HELP
   elif [[ -n "$RESTORE_PLAN" ]]; then
     cat >&2 <<HELP
   - The failure could not be recorded, so the plan $RESTORE_PLAN stays running and blocks a new plan. Once PostgreSQL
@@ -317,7 +329,13 @@ _restore_on_exit() {
     else
       echo "restore: the step $RESTORE_COMPONENT failed (exit $status); the run stopped there" >&2
     fi
-    restore_report failed "$RESTORE_COMPONENT" || recorded=no
+    # The trap runs before the running report's exit status is used, so whether this run started the plan is unknown:
+    # an automatic failed report could close another run's plan or a lapsed approved one (PDK-837, Review 1 M1).
+    if [[ "$RESTORE_COMPONENT" == start ]]; then
+      recorded=no
+    else
+      restore_report failed "$RESTORE_COMPONENT" || recorded=no
+    fi
     restore_failure_help "$RESTORE_COMPONENT" "$recorded"
   fi
   return "$status"
@@ -686,7 +704,13 @@ restore_run() {
   fi
   restore_confirm
   if [[ -n "$RESTORE_PLAN" ]]; then
-    restore_report running || restore_die "the plan $RESTORE_PLAN cannot be started (no longer approved?); nothing was changed"
+    # Set before the report: a signal during it is handled only after the report ended, when the plan may be running;
+    # the handler then prints how to check and record it instead of reporting it (PDK-837).
+    RESTORE_COMPONENT=start
+    restore_report running || {
+      RESTORE_COMPONENT=""
+      restore_die "the plan $RESTORE_PLAN cannot be started (no longer approved?); nothing was changed"
+    }
   fi
   started=$SECONDS
   RESTORE_WORK="$(mktemp -d)"
@@ -731,14 +755,18 @@ restore_prompt_key() {
 restore_key_cleanup() {
   local file="${RESTORE_KEY_WRITTEN:-}"
   [[ -n "$file" ]] || return 0
-  RESTORE_KEY_WRITTEN=""
   rm -f "$file.tmp"
   if [[ -n "${RESTORE_KEEP_KEY_FILE:-}" && -e "$file" ]]; then
+    RESTORE_KEY_WRITTEN=""
     echo "restore: the backup key stays in $file (--keep-key-file)" >&2
     return 0
   fi
-  [[ -e "$file" ]] || return 0
-  if command -v shred >/dev/null; then shred -u "$file" 2>/dev/null || rm -f "$file"; else rm -f "$file"; fi
+  # Cleared only after the delete: a Ctrl-C during the shred exits through the signal handler, which then deletes the
+  # rest of the key (PDK-837).
+  if [[ -e "$file" ]]; then
+    if command -v shred >/dev/null; then shred -u "$file" 2>/dev/null || rm -f "$file"; else rm -f "$file"; fi
+  fi
+  RESTORE_KEY_WRITTEN=""
 }
 
 # restore_set_root <dir>: the set's root below dir (dir itself or its paddock-backup/), or fails.

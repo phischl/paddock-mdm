@@ -49,6 +49,16 @@ stepping="$work/stepping"
 fetch_mode="" # backup fetch-set: slow (writes a directory after fetch_sleep seconds; touches $fetching first) or locked
 fetch_sleep=""  # (a planted link beside a directory its owner cannot write to)
 fetching="$work/fetching"
+shred_sleep="" # seconds the first shred takes before it runs (touches $shredding first): a slow key delete
+shredding="$work/shredding"
+# shred: the real shred, slowed once when shred_sleep is set.
+shred() {
+  if [[ -n "$shred_sleep" && ! -e "$shredding" ]]; then
+    touch "$shredding"
+    sleep "$shred_sleep"
+  fi
+  command shred "$@"
+}
 cli_log="$work/cli.log"
 # cli_check <compose arguments...>: hands the paddock-server arguments after the service name to the real binary without
 # a database (PDK-735's CLI): a line that parses fails on the missing PADDOCK_DB_BACKUP_URL_FILE, a line the CLI does
@@ -381,8 +391,8 @@ fi
 
 report_rc=1
 run_restore restore plan=11111111-2222-3333-4444-555555555555 repo --only postgres
-if ((rc != 0)) && ! called " stop"; then
-  ok "a plan that cannot be started changes nothing"
+if ((rc != 0)) && ! called " stop" && ! called "--outcome failed"; then
+  ok "a plan that cannot be started changes nothing and is not reported as failed"
 else
   bad "plan not startable: rc $rc"
 fi
@@ -671,6 +681,61 @@ for sig in TERM:parent INT:group; do
     bad "SIG${sig%%:*} during a step: rc $rc, reports: $(grep restore-report "$calls" || true), out: $out"
   fi
 done
+
+# PDK-837: TERM while the plan is being marked running, before the first step. The handler runs once the report
+# ended and cannot tell whether it was accepted: it reports nothing (a refused report would otherwise close another
+# run's plan or a lapsed one, Review 1 M1) and prints how to check the plan and record it by hand.
+plan_json='{"id":"11111111-2222-3333-4444-555555555555","kind":"components","state":"approved","expires_at":"2099-01-01T00:00:00Z","at":null,"source":"repo","source_target_id":null,"source_target_name":null,"components":["openbao"],"created_by":"admin"}'
+for report_rc in 0 1; do
+  step_sleep_on="restore-report --outcome running" step_sleep=2
+  rm -f "$stepping"
+  : >"$calls"
+  (trap - EXIT && set -e && restore_main --plan 11111111-2222-3333-4444-555555555555) \
+    <<<"$key_text"$'\n'restore >"$work/signal.out" 2>&1 &
+  pid=$!
+  for _ in $(seq 1 200); do
+    [[ ! -e "$stepping" ]] || break
+    sleep 0.1
+  done
+  kill -TERM "$pid" 2>/dev/null || true
+  rc=0
+  wait "$pid" || rc=$?
+  step_sleep_on="" step_sleep=""
+  out="$(cat "$work/signal.out")"
+  if [[ -e "$stepping" ]] && ((rc != 0)) && ! called "--outcome failed" && ! called " stop" &&
+    [[ "$out" == *"nothing on the host was changed"* && "$out" == *"may still be approved"* ]] &&
+    [[ "$out" == *"--outcome failed --plan 11111111-2222-3333-4444-555555555555"*"--component start"* ]] &&
+    no_key_left; then
+    ok "SIGTERM while the plan is marked running (report rc $report_rc) reports nothing and prints the record command"
+  else
+    bad "SIGTERM during the running report (rc $report_rc): rc $rc, reports: $(grep restore-report "$calls" || true), out: $out"
+  fi
+done
+report_rc=0
+
+# PDK-837: Ctrl-C (INT to the process group) while the success path shreds the key. The handler deletes the rest.
+shred_sleep=2
+rm -f "$shredding"
+: >"$calls"
+set -m
+(trap - EXIT && set -e && restore_main --from "$set_dir" --only openbao) \
+  <<<"$key_text"$'\n'restore >"$work/signal.out" 2>&1 &
+pid=$!
+set +m
+for _ in $(seq 1 200); do
+  [[ ! -e "$shredding" ]] || break
+  sleep 0.1
+done
+kill -INT -- "-$pid" 2>/dev/null || true
+rc=0
+wait "$pid" || rc=$?
+shred_sleep=""
+if [[ -e "$shredding" ]] && ((rc != 0)) && called "--outcome completed" && no_key_left; then
+  ok "SIGINT during the key shred on the success path leaves no key file behind"
+else
+  bad "SIGINT during the shred: rc $rc, key left: $(ls "$SECRETS_DIR/restore" 2>&1), out: $(cat "$work/signal.out")"
+fi
+rm -f "$keyfile"
 
 # Review 3 (R3-m1): a signal to the restore's shell alone while the set is being staged. The writer is not signalled
 # and keeps writing; the staged set must still be gone afterwards.
