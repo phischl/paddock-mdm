@@ -296,6 +296,16 @@ type EscrowResult struct {
 	// Destroyed headers were skipped because their device's escrow was destroyed after (or, without a recorded time,
 	// possibly after) the copy was taken.
 	Destroyed int
+	// Skipped lists those headers in the set's order, for the restore's terminal output (decisions-alpha9 item 44).
+	Skipped []EscrowSkip
+}
+
+// EscrowSkip is one escrowed header RestoreEscrow kept out: its object key, its device ("<org>/<device>") and the time
+// of the device's newest Destroy.
+type EscrowSkip struct {
+	Key         string
+	Device      string
+	DestroyedAt time.Time
 }
 
 // RestoreEscrow puts every escrowed LUKS header of the set at root into the escrow bucket that the bucket lacks or
@@ -328,6 +338,7 @@ func RestoreEscrow(ctx context.Context, root *os.Root, m backupset.Manifest, lis
 			copied, known := recorded[p]
 			if !known || !copied.After(at) {
 				res.Destroyed++
+				res.Skipped = append(res.Skipped, EscrowSkip{Key: key, Device: escrowDevice(p), DestroyedAt: at})
 				continue
 			}
 		}

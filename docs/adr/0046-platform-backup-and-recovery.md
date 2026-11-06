@@ -179,3 +179,17 @@ Decision (architect lead, `decisions-alpha9` item 35):
   the configuration without the overlay, and `bundle_test.sh` tests all three.
 - Residual risk RR-122: members of the `docker` group can read the password with `docker volume inspect`.
 - No cifs-utils on the host and no SMB client library.
+
+## Amendment 2026-11-06 — restore plan abandoned (PDK-832)
+
+A plan stays `running` when the host never reports its end (the host crashed, or PostgreSQL was unreachable when the
+restore stopped), and a running plan blocks a new one. Decisions 6 and 7 gain a way out (decisions-alpha9 item 41):
+
+- **State.** The restore plan state machine gains `abandoned`, reached only from `running`:
+  `approved → running → completed | failed | abandoned`. A platform administrator abandons a running plan through the
+  audited verb `POST /api/platform/v1/backup/restore-plans/{id}/abandon`, with step-up and the typed word `abandon`;
+  an approved plan is cancelled instead. The plan's outcome detail names the administrator.
+- **Audit.** The code `platform.restore_abandoned` joins the restore codes of decision 7.
+- **Late host report.** A host report for an abandoned plan is refused (409 `invalid_state`) and still recorded: the
+  report's event (`platform.restore_completed` or `platform.restore_failed`) is written with outcome failure, so the
+  late end of the run stays in the audit trail.
