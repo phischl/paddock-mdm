@@ -29,6 +29,11 @@ usage: ./paddock <command> [arguments]
   agent-rollout-resume <version>  resume the halted rollout of a release (control plane)
   auto-unseal status|enable|disable
                                   automatic unseal of OpenBao on this host (docs/operations/openbao.md section 6)
+  restore --plan <id> | --from <path> | --from-target-file <file> [--at <time>] [--only <component>]...
+          [--keep-key-file]       restore the control plane from a backup set (./paddock restore --help)
+  backup-target export <name|id> <file>
+                                  write an S3 backup target with its credentials to a 0600 file, for a restore
+                                  without a database (keep it offline with the backup key)
   migrate-from <old dir>          take over .env and .secrets/ of the bundle directory of the running version
   upgrade-check <old dir> [--json]
                                   read-only check of what an upgrade from the running version needs (changes nothing)
@@ -74,7 +79,7 @@ case "$cmd" in
     upgrade_check "$BUNDLE_DIR" "$@" || status=$?
     exit "$status"
     ;;
-  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal) ;;
+  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal | restore | backup-target) ;;
   *) usage ;;
 esac
 
@@ -228,6 +233,26 @@ case "$cmd" in
     shift
     # shellcheck disable=SC2046
     compose run --rm --no-deps $(tty_flag) paddock-api admin "$cmd" --version "$version" "$@"
+    ;;
+  restore)
+    # Plan M15 decisions 23–24: the steps live in restore.sh, which restore-drill.sh shares.
+    require_host controlplane lab "restore"
+    lab_warning
+    # shellcheck source=../compose/scripts/restore.sh
+    . "$BUNDLE_DIR/scripts/restore.sh"
+    restore_main "$@"
+    ;;
+  backup-target)
+    require_host controlplane lab "backup-target"
+    case "${1:-}" in
+      export)
+        shift
+        # shellcheck source=../compose/scripts/restore.sh
+        . "$BUNDLE_DIR/scripts/restore.sh"
+        restore_target_export "$@"
+        ;;
+      *) die "usage: ./paddock backup-target export <name|id> <file>" 2 ;;
+    esac
     ;;
   auto-unseal)
     # Automatic unseal of OpenBao (ADR 0035, plan M8u decision 18). A share is never printed, logged or put on a

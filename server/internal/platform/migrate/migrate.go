@@ -34,6 +34,11 @@ func LatestPaddock() (int64, error) {
 	return latest(migrations.Paddock, "paddock")
 }
 
+// LatestAudit returns the version of the newest embedded migration of database paddock_audit.
+func LatestAudit() (int64, error) {
+	return latest(migrations.Audit, "audit")
+}
+
 func latest(fsys fs.FS, dir string) (int64, error) {
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {

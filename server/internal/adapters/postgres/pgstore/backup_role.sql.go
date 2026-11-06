@@ -233,6 +233,18 @@ func (q *Queries) BackupRoleRequestedRuns(ctx context.Context) ([]BackupRoleRequ
 	return items, nil
 }
 
+const backupRoleRunningRestorePlans = `-- name: BackupRoleRunningRestorePlans :one
+SELECT count(*) FROM backup_restore_plan WHERE state = 'running'
+`
+
+// A repository restore from a target refuses while a restore plan runs (plan M15, amendment 2026-11-05, A5).
+func (q *Queries) BackupRoleRunningRestorePlans(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, backupRoleRunningRestorePlans)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const backupRoleSetHostState = `-- name: BackupRoleSetHostState :exec
 UPDATE backup_target SET host_state = $1 WHERE id = $2 AND host_state <> $1
 `

@@ -22,4 +22,7 @@ func TestLatest(t *testing.T) {
 	if v, err := LatestPaddock(); err != nil || v < 102 {
 		t.Errorf("LatestPaddock = %d, %v", v, err)
 	}
+	if v, err := LatestAudit(); err != nil || v < 10 {
+		t.Errorf("LatestAudit = %d, %v", v, err)
+	}
 }
