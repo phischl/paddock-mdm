@@ -1120,6 +1120,10 @@ func checkLegacyBackupKey(c Config) Result {
 // backupService is the backup role (plan M15 decision 15).
 const backupService = "paddock-backup"
 
+// restoreEscrowService is the one-off escrow step of ./paddock restore (decisions-alpha9 item 44): it lists with the
+// backup role's escrow credential and alone reads the audit index among the backup services.
+const restoreEscrowService = "backup-restore-escrow"
+
 // backupRoleSecrets are the secrets of the backup role (plan M15 decisions 15 and 18).
 var backupRoleSecrets = []string{"db_paddock_backup_url", "db_paddock_platform_url", "approle_backup_role_id",
 	"approle_backup_secret_id", "rustfs_escrow_backup_access_key", "rustfs_escrow_backup_secret_key"}
@@ -1209,17 +1213,34 @@ func ownedBy(fi fs.FileInfo, uid uint32) bool {
 }
 
 // checkBackupSecretsConfined fails when a backup secret reaches another role than the one that needs it (plan M15
-// decisions 5, 9 and 18): the AppRole paddock-backup (it decrypts the backup key) and the escrow bucket's read-only
-// backup credential only the backup role, the host key file of the legacy import only the api, and no role any backup
-// variable of the worker's former backup job.
+// decisions 5, 9 and 18): the AppRole paddock-backup (it decrypts the backup key) only the backup role, the escrow
+// bucket's read-only backup credential only the backup role and the restore's escrow step, the host key file of the
+// legacy import only the api, and no role any backup variable of the worker's former backup job. The long-running
+// backup role never reaches the audit index (decisions-alpha9 item 44), and the restore's escrow step, which holds the
+// gateway's put credential, no database credential but the audit reader's (decisions-alpha9 item 45).
 func checkBackupSecretsConfined(c Config) Result {
 	var f []string
+	if b, ok := c.Services[backupService]; ok {
+		if mountsSecret(b, "db_paddock_audit_reader_url") {
+			f = append(f, backupService+": holds the audit reader credential db_paddock_audit_reader_url")
+		}
+		if _, ok := b.Networks["audit-index"]; ok {
+			f = append(f, backupService+": joins the network audit-index")
+		}
+	}
+	if r, ok := c.Services[restoreEscrowService]; ok {
+		for _, m := range r.Secrets {
+			if strings.HasPrefix(m.Source, "db_") && m.Source != "db_paddock_audit_reader_url" {
+				f = append(f, restoreEscrowService+": holds the database credential "+m.Source)
+			}
+		}
+	}
 	for _, name := range sortedServices(c) {
 		s := c.Services[name]
 		for _, m := range s.Secrets {
 			switch {
 			case strings.HasPrefix(m.Source, "approle_backup_") && name != backupService,
-				strings.HasPrefix(m.Source, "rustfs_escrow_backup_") && name != backupService,
+				strings.HasPrefix(m.Source, "rustfs_escrow_backup_") && name != backupService && name != restoreEscrowService,
 				m.Source == "backup_encryption_key" && name != "paddock-api",
 				strings.HasPrefix(m.Source, "backup_") && m.Source != "backup_encryption_key":
 				f = append(f, name+": holds the backup secret "+m.Source)

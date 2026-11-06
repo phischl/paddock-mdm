@@ -146,6 +146,15 @@ Commands (in the control plane's bundle directory, `docs/operations/install.md`)
 Use this procedure when the control-plane databases or OpenBao are lost, for example after a host failure. The audit
 store is not restored; the audit host keeps running. Commands run in the control plane's bundle directory.
 
+The escrow step of `./paddock restore` runs in the one-off service `backup-restore-escrow` (profile `restore`, never
+started by `./paddock up`). It never puts back an escrowed LUKS header whose device has a successful
+`device.escrow_destroyed` that is not older than the copy, even when the restore goes back to a point before that
+Destroy: it reads the evidence from the audit index, which the restore does not touch.
+It prints one `escrow: skipped device …` line per such device with its headers, and `platform.restore_completed`
+records their number as `escrow_skipped_destroyed`. If the audit index cannot be read (audit host down, wrong
+`db_paddock_audit_reader_url`), the step fails and puts nothing back; fix the connection and run
+`./paddock restore --only escrow` again.
+
 1. **Prepare.** A rebuilt host with the repository, `.env` and `.secrets/` as in `docs/operations/install.md`
    (secrets from your secret store, `backup_encryption_key` from the custodians' offline copy). Three OpenBao
    custodians are available. Do not run `./paddock up` before step 3, not even `./paddock up --infra`: it starts

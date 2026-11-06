@@ -248,6 +248,7 @@ restore_report() {
   [[ -n "$RESTORE_PLAN" ]] && args+=(--plan "$RESTORE_PLAN")
   [[ -n "$RESTORE_AT" ]] && args+=(--at "$RESTORE_AT")
   [[ -n "$component" ]] && args+=(--component "$component" --detail "the step $component failed")
+  [[ "$outcome" == completed && -n "${RESTORE_ESCROW_SKIPPED:-}" ]] && args+=(--escrow-skipped-destroyed "$RESTORE_ESCROW_SKIPPED")
   if restore_backup_run -- "${args[@]}" </dev/null; then
     restore_log "recorded the restore as $outcome"
     return 0
@@ -600,17 +601,18 @@ restore_fleet() {
   restore_log "Fleet: restored"
 }
 
-# restore_escrow: the set's escrowed headers back into the escrow bucket (step 7), written with the gateway's
-# credential, the only one allowed to put headers.
+# restore_escrow: the set's escrowed headers back into the escrow bucket (step 7) in the one-off service
+# backup-restore-escrow (decisions-alpha9 item 44): it alone reaches the audit index, whose Destroy evidence survives the
+# restore, and holds the gateway's credential, the only one allowed to put headers. Every header of a destroyed device
+# is skipped and listed; RESTORE_ESCROW_SKIPPED keeps the count for the completed report.
 restore_escrow() {
+  local out
   RESTORE_COMPONENT=escrow
   restore_log "escrow: putting the set's escrowed headers back into the bucket"
-  restore_backup_run "${RESTORE_SET_MOUNT[@]}" \
-    -v "$SECRETS_DIR/rustfs_bundles_gateway_access_key:/run/secrets/escrow_restore_access_key:ro" \
-    -v "$SECRETS_DIR/rustfs_bundles_gateway_secret_key:/run/secrets/escrow_restore_secret_key:ro" \
-    -e PADDOCK_ESCROW_RESTORE_S3_ACCESS_KEY_FILE=/run/secrets/escrow_restore_access_key \
-    -e PADDOCK_ESCROW_RESTORE_S3_SECRET_KEY_FILE=/run/secrets/escrow_restore_secret_key \
-    -- backup restore-escrow "$RESTORE_SET_DIR" </dev/null
+  out="$(compose --profile restore run --rm --no-deps -T -e PADDOCK_LOG_LEVEL=error "${RESTORE_SET_MOUNT[@]}" \
+    backup-restore-escrow backup restore-escrow "$RESTORE_SET_DIR" </dev/null)"
+  printf '%s\n' "$out"
+  RESTORE_ESCROW_SKIPPED="$(sed -n 's/^escrow: .*, \([0-9][0-9]*\) skipped (device escrow destroyed)$/\1/p' <<<"$out")"
 }
 
 # restore_backup_repo: rebuilds the local repository from the source (amendment 2026-11-05, A5) and resets
@@ -650,7 +652,7 @@ restore_run() {
   local mode="$1" c started own_trap=""
   RESTORE_SOURCE="$2"
   shift 2
-  RESTORE_AT="" RESTORE_PLAN="" RESTORE_COMPONENT="" RESTORE_REPORTED="" RESTORE_WORK=""
+  RESTORE_AT="" RESTORE_PLAN="" RESTORE_COMPONENT="" RESTORE_REPORTED="" RESTORE_WORK="" RESTORE_ESCROW_SKIPPED=""
   RESTORE_ONLY=()
   case "$mode" in
     fresh) RESTORE_MODE=fresh ;;

@@ -371,6 +371,9 @@ type RestoreReport struct {
 	// Component names the failed step and Detail what happened, both only with outcome failed.
 	Component string
 	Detail    string
+	// EscrowSkippedDestroyed counts the escrowed headers the escrow step kept out because their device's escrow was
+	// destroyed (decisions-alpha9 item 44); nil when the step did not run. Only with outcome completed.
+	EscrowSkippedDestroyed *int
 }
 
 // RestoreReports are the host's side of the restore plans: it reads a plan and reports the run through the backup
@@ -450,6 +453,9 @@ func checkReport(in RestoreReport) (RestoreReport, *string, error) {
 		return in, nil, err
 	}
 	in.Components = components
+	if n := in.EscrowSkippedDestroyed; n != nil && (*n < 0 || in.Outcome != RestoreStateCompleted || !slices.Contains(components, "escrow")) {
+		return in, nil, problem.InvalidRequest.WithDetail("escrow_skipped_destroyed is a count of a completed run with the escrow step")
+	}
 	detail, err := restoreDetail(in)
 	return in, detail, err
 }
@@ -555,6 +561,9 @@ func (r *RestoreReports) finish(ctx context.Context, in RestoreReport, detail *s
 	}
 	spec.Params = map[string]any{"plan_id": planID, "source": in.Source, "at": rfc3339OrNil(in.At),
 		"components": in.Components, "detail": deref(detail, "")}
+	if in.EscrowSkippedDestroyed != nil {
+		spec.Params["escrow_skipped_destroyed"] = *in.EscrowSkippedDestroyed
+	}
 	write := func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		id, kind := uuid.Must(uuid.NewV7()), RestoreKindFreshInstall
 		if in.PlanID != nil {

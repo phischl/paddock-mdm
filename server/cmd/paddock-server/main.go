@@ -53,6 +53,7 @@ commands:
   backup plan <id>           (prints the restore plan as JSON; exit 1 unless it is approved and unexpired)
   backup restore-report --outcome running|completed|failed --operator <name> --source set|repo|target
         --components a,b [--plan <id>] [--at <RFC 3339>] [--component <step> --detail <text>]
+        [--escrow-skipped-destroyed <count>]
   backup decrypt <in> <out|->
   backup mark-mount <id> <revision>...
   backup resolve-local [--root <dir>] <path>...

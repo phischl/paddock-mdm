@@ -279,6 +279,42 @@ func (q *Queries) EnsureAuditPartition(ctx context.Context, month time.Time) err
 	return err
 }
 
+const escrowDestroyEvidence = `-- name: EscrowDestroyEvidence :many
+SELECT (target->>'id')::text AS device_id, max(occurred_at)::timestamptz AS destroyed_at
+FROM audit_event
+WHERE organization_id = $1 AND code = 'device.escrow_destroyed' AND outcome = 'success'
+  AND target->>'type' = 'device'
+GROUP BY target->>'id'
+`
+
+type EscrowDestroyEvidenceRow struct {
+	DeviceID    string
+	DestroyedAt time.Time
+}
+
+// The newest successful Destroy per device of one organization (device.escrow_destroyed). The escrow step of a restore
+// reads it here because the audit index survives the restore and the restored database may predate the Destroy
+// (decisions-alpha9 items 39 and 44). Only the device and the time are read.
+func (q *Queries) EscrowDestroyEvidence(ctx context.Context, organizationID uuid.UUID) ([]EscrowDestroyEvidenceRow, error) {
+	rows, err := q.db.Query(ctx, escrowDestroyEvidence, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EscrowDestroyEvidenceRow{}
+	for rows.Next() {
+		var i EscrowDestroyEvidenceRow
+		if err := rows.Scan(&i.DeviceID, &i.DestroyedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const firstAuditDay = `-- name: FirstAuditDay :one
 SELECT LEAST(
   (SELECT min(o.day) FROM audit_object o WHERE o.organization_id = $1),
