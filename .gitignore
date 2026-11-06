@@ -1,5 +1,6 @@
 # Secrets generated for local development
 deploy/compose/.secrets/
+deploy/compose/restore-staging/
 deploy/compose/.env
 
 # Build output

@@ -802,6 +802,48 @@ func TestLUKSRefusedVolume(t *testing.T) {
 	}
 }
 
+// TestLUKSRefusedAfterDestroy (PDK-794): the server refuses the recovery key and the root volume's header of a device
+// with an issued Destroy. The agent records no volume state for them and retries only at the pace of LUKSEscrowWait,
+// never in a loop.
+func TestLUKSRefusedAfterDestroy(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.server.answer = func(escrow.Request) string { return escrow.StatusRefused }
+	f.pass()
+	for range 5 {
+		f.poll()
+		f.pass()
+	}
+	if recs := f.server.of(escrow.KindLUKSRecoveryKey); len(recs) != 1 || len(f.st.Volumes) != 0 {
+		t.Fatalf("recovery escrows %d within the wait, volume state %+v", len(recs), f.st.Volumes)
+	}
+	f.now = f.now.Add(reconcile.LUKSEscrowWait)
+	f.poll()
+	f.pass()
+	if recs := f.server.of(escrow.KindLUKSRecoveryKey); len(recs) != 2 || recs[1].Generation != 2 || len(f.st.Volumes) != 0 {
+		t.Fatalf("recovery escrows %+v after the wait, volume state %+v", recs, f.st.Volumes)
+	}
+
+	g := newLUKSFixture(t, "password", "tpm2+pin")
+	g.server.answer = func(r escrow.Request) string {
+		if r.Kind == escrow.KindLUKSHeader {
+			return escrow.StatusRefused
+		}
+		return escrow.StatusStored
+	}
+	g.pass()
+	g.poll()
+	if len(g.server.of(escrow.KindLUKSHeader)) != 1 {
+		t.Fatalf("root headers %d", len(g.server.of(escrow.KindLUKSHeader)))
+	}
+	for range 5 {
+		g.poll()
+		g.pass()
+	}
+	if n := len(g.server.of(escrow.KindLUKSHeader)); n != 1 || len(g.st.Volumes) != 0 || g.st.HeaderStored != 0 {
+		t.Fatalf("root headers %d within the wait, state %+v", n, g.st)
+	}
+}
+
 // TestLUKSHungVolumeKeepsTicking (PDK-009 review round 3, design contract 8): a crypttab volume whose cryptsetup hangs
 // never holds up the agent loop. The inventory of the other volumes runs in the background, at most once at a time;
 // until it completes the root volume is reported alone and nothing else is escrowed, and the result is used once it

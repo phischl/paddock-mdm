@@ -238,6 +238,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/wait-healthy_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
+	bash $(COMPOSE_DIR)/scripts/restore_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-configure_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-policy-removal_test.sh

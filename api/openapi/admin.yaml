@@ -7042,6 +7042,40 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /api/platform/v1/backup/restore-plans/{id}/abandon:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: abandonBackupRestorePlan
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Marks a running plan as abandoned when the host never reported its end (the host
+        crashed, or the database was unreachable when the restore stopped): the plan no longer blocks a new one, its
+        outcome_detail names the administrator, and the host's later report for it is refused (409).
+        confirmation must be the typed word abandon (400 invalid_request otherwise). 409 invalid_state for a plan that
+        is not running; cancel an approved plan instead. Needs a step-up within the last 5 minutes (403
+        step_up_required).
+      x-paddock-audit: platform.restore_abandoned
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupRestorePlanAbandonInput" }
+      responses:
+        "200":
+          description: Abandoned; the plan's state is abandoned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRestorePlan" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /api/platform/v1/notification-destinations/{id}/replay:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -10436,7 +10470,7 @@ components:
         sort: { type: string, description: Applied sort. }
     BackupRestorePlanState:
       type: string
-      enum: [approved, running, completed, failed, expired]
+      enum: [approved, running, completed, failed, expired, abandoned]
     BackupRestorePlanInput:
       type: object
       additionalProperties: false
@@ -10450,6 +10484,12 @@ components:
           minItems: 1
           items: { type: string, enum: [postgres, openbao, fleet, escrow] }
         confirmation: { type: string, description: The typed word restore. }
+    BackupRestorePlanAbandonInput:
+      type: object
+      additionalProperties: false
+      required: [confirmation]
+      properties:
+        confirmation: { type: string, description: The typed word abandon. }
     BackupRestorePlan:
       type: object
       required: [id, kind, source, source_target_id, source_target_name, at, components, state, created_by, created_at, expires_at, started_at, finished_at, outcome_detail, host_command]
@@ -10469,7 +10509,7 @@ components:
         expires_at: { type: string, format: date-time, nullable: true, description: 24 hours after the approval; null for a restore without a plan. }
         started_at: { type: string, format: date-time, nullable: true }
         finished_at: { type: string, format: date-time, nullable: true }
-        outcome_detail: { type: string, nullable: true, description: "The failed step and what happened, as <step>: <text>." }
+        outcome_detail: { type: string, nullable: true, description: "The failed step and what happened, as <step>: <text>; abandoned by <administrator> for a plan in state abandoned." }
         host_command: { type: string, description: "The command that executes the plan on the host: ./paddock restore --plan <id>." }
     BackupRestorePlanPage:
       type: object

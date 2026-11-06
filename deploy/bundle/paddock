@@ -29,8 +29,13 @@ usage: ./paddock <command> [arguments]
   agent-rollout-resume <version>  resume the halted rollout of a release (control plane)
   auto-unseal status|enable|disable
                                   automatic unseal of OpenBao on this host (docs/operations/openbao.md section 6)
+  restore --plan <id> | --from <path> | --from-target-file <file> [--at <time>] [--only <component>]...
+          [--keep-key-file]       restore the control plane from a backup set (./paddock restore --help)
   backup-target apply             mount the local, SMB and NFS backup targets saved in the portal (control plane, lab
                                   with backups); then ./paddock up
+  backup-target export <name|id> <file>
+                                  write an S3 backup target with its credentials to a 0600 file, for a restore
+                                  without a database (keep it offline with the backup key)
   backup now [--kind k]... [--label l] [--wait]
                                   request a backup run of every kind or the named ones; --wait follows it
   backup status                   the backup key, the newest runs and the targets
@@ -100,7 +105,7 @@ case "$cmd" in
     upgrade_check "$BUNDLE_DIR" "$@" || status=$?
     exit "$status"
     ;;
-  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal | backup-target | backup) ;;
+  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal | restore | backup-target | backup) ;;
   *) usage ;;
 esac
 
@@ -308,6 +313,14 @@ case "$cmd" in
     # shellcheck disable=SC2046
     compose run --rm --no-deps $(tty_flag) paddock-api admin "$cmd" --version "$version" "$@"
     ;;
+  restore)
+    # Plan M15 decisions 23–24: the steps live in restore.sh, which restore-drill.sh shares.
+    require_host controlplane lab "restore"
+    lab_warning
+    # shellcheck source=../compose/scripts/restore.sh
+    . "$BUNDLE_DIR/scripts/restore.sh"
+    restore_main "$@"
+    ;;
   auto-unseal)
     # Automatic unseal of OpenBao (ADR 0035, plan M8u decision 18). A share is never printed, logged or put on a
     # command line: it is read from stdin and written to its file only.
@@ -391,7 +404,16 @@ case "$cmd" in
     # decisions-alpha9 items 35 and 36). The render holds the decrypted SMB passwords: it travels on a pipe into this
     # process and into the 0600 file only, never onto a command line or into the output. Pipes instead of here-strings:
     # bash spills a here-string above 64 KiB into a temp file in $TMPDIR.
-    [[ "${1:-}" == apply && $# -eq 1 ]] || die "usage: ./paddock backup-target apply" 2
+    if [[ "${1:-}" == export ]]; then
+      require_host controlplane lab "backup-target"
+      shift
+      # shellcheck source=../compose/scripts/restore.sh
+      . "$BUNDLE_DIR/scripts/restore.sh"
+      restore_target_export "$@"
+      exit 0
+    fi
+    [[ "${1:-}" == apply && $# -eq 1 ]] ||
+      die "usage: ./paddock backup-target apply | ./paddock backup-target export <name|id> <file>" 2
     require_backup_host "backup-target apply"
     uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     root="$(dotenv PADDOCK_BACKUP_LOCAL_ROOT)"

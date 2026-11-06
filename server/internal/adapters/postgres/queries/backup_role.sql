@@ -67,3 +67,7 @@ WHERE id = @id AND state = 'requested';
 -- name: BackupRoleInsertFinishedRun :exec
 INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, bytes, error_class, targets)
 VALUES (@id, @kind, '', 'finished', @outcome, @started_at, @finished_at, @bytes, sqlc.narg(error_class), @targets);
+
+-- A repository restore from a target refuses while a restore plan runs (plan M15, amendment 2026-11-05, A5).
+-- name: BackupRoleRunningRestorePlans :one
+SELECT count(*) FROM backup_restore_plan WHERE state = 'running';

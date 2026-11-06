@@ -1146,6 +1146,23 @@ deny list of system and deployment directories (PDK-729 review): there is no abs
 - Alpha: existing local targets with an absolute path fail validation on the next edit and need the subpath form;
   there is no migration (no users).
 
+### Note 2026-11-06 — host restore: escrow credential, key file, fresh-install duration (PDK-734; decisions-alpha9 items 38 and 39)
+
+- **Escrow credential (M5 accepted).** The escrow step of `./paddock restore` runs `backup restore-escrow` in a
+  one-off `paddock-backup` container that mounts the gateway's RustFS escrow write credential
+  (`rustfs_bundles_gateway_access_key`, `rustfs_bundles_gateway_secret_key`) read-only as files, because only that
+  credential may put headers. The mount exists only in that one-off container and only for the duration of the
+  restore step; the long-running `paddock-backup` role never holds it. A host restore is operator-initiated and the
+  host already holds every secret, so this crosses no boundary the operator does not already hold. No dedicated
+  restore credential is introduced.
+- **Key file.** `./paddock restore` writes the entered backup key to `.secrets/restore/backup_key` (0600), which no
+  Compose file mounts, and deletes it on every exit (success, failure, refusal; EXIT trap) unless `--keep-key-file`
+  is given. It never writes the api-mounted `.secrets/backup_encryption_key`.
+- **No duration for a fresh install.** A `fresh_install` run has no plan and therefore no `started_at`; its
+  `platform.restore_completed` / `platform.restore_failed` event carries no `duration_s` (§6.4 lists it for planned
+  runs only). `backup restore-report` has no `--duration-s` flag; the duration is computed from the plan's
+  `started_at`.
+
 ## Note 2026-11-06 — §6.7: the SMB login in the volume's options (PDK-733, `decisions-alpha9.md` item 35)
 
 `credentials=` is a mount.cifs option the kernel ignores, and Docker's local driver mounts with `mount(2)`; ADR 0046

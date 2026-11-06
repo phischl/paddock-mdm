@@ -94,6 +94,16 @@ VALUES (@id, @organization_id, @device_id, 'luks_header', @generation, 'failed',
         @nonce, @sha256, @size, @created_at, @volume::uuid)
 ON CONFLICT DO NOTHING;
 
+-- name: EscrowRefusedAfterDestroy :one
+-- Whether the device's upload was refused for an issued Destroy (PDK-794): a redelivered message is refused again.
+SELECT EXISTS (SELECT 1 FROM escrow_refusal WHERE id = @id AND device_id = @device_id);
+
+-- name: InsertEscrowRefusal :execrows
+-- The natural key of a refusal for an issued Destroy, without key material; a redelivered message is not audited again.
+INSERT INTO escrow_refusal (id, organization_id, device_id, kind, generation, reason, created_at)
+VALUES (@id, @organization_id, @device_id, @kind, @generation, 'destroy_issued', @created_at)
+ON CONFLICT (organization_id, id) DO NOTHING;
+
 -- name: DeviceHeaderVolumeKnown :one
 -- Whether volume already has a header generation that did not fail, and how many distinct volumes of the device do
 -- (PDK-009, review round 1: at most 32 per device, the volumes a token can carry).

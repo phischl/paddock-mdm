@@ -69,7 +69,8 @@ type Events struct {
 // Escrow is an escrowed secret uploaded by a device (routing key ingest.escrow.<org>, message_id = EscrowID, plan M4a
 // decision 12). Ciphertext is the RSA-OAEP ciphertext; only OpenBao can decrypt it. A LUKS header (plan M4b decision
 // 10) has no ciphertext but the object key the gateway chose and the facts of the sealed object the device uploads
-// there.
+// there. DestroyIssued marks an upload the gateway refused because the device holds an issued Destroy (PDK-794): it
+// carries no key material and no object key, and the worker records the refusal.
 type Escrow struct {
 	DeviceID       uuid.UUID  `json:"device_id"`
 	OrganizationID uuid.UUID  `json:"organization_id"`
@@ -85,6 +86,7 @@ type Escrow struct {
 	SHA256         string     `json:"sha256,omitempty"`
 	Size           int64      `json:"size,omitempty"`
 	ReceivedAt     time.Time  `json:"received_at"`
+	DestroyIssued  bool       `json:"destroy_issued,omitempty"`
 }
 
 // DiagnosticsAnnounced is a device's announcement of a sealed diagnostics bundle (POST /v1/diagnostics, plan M12

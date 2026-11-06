@@ -446,6 +446,7 @@
       "tamper_agent_not_running": "fleetd meldet, dass der Paddock-Agent auf {target} nicht läuft",
       "revocation_trust_pinned_tofu": "Das Gerät {target} hat die Widerrufsschlüssel seines ersten Bundles, das sie enthielt, festgeschrieben (Trust on First Use)",
       "escrow_destroyed": "Die in der Treuhand-Ablage hinterlegten Festplattenschlüssel von {hostname} wurden vernichtet und die Vernichtung des Geräts wurde ausgestellt",
+      "escrow_refused_destroyed": "Ein Festplattenschlüssel von {target} wurde nicht hinterlegt: Die Vernichtung des Geräts ist ausgestellt",
       "revocation_confirmed": "Das Gerät {target} hat bestätigt, dass seine Keyslots gelöscht sind",
       "revocation_refused": "Das Gerät {target} hat einen Widerruf abgelehnt ({reason})",
       "presumed_self_locked": "Das Gerät {target} hat Paddock länger als die Frist des Totmannschalters nicht erreicht und hat sich vermutlich selbst gesperrt",
@@ -536,7 +537,8 @@
       "restore_cancelled": "Wiederherstellungsplan abgebrochen",
       "restore_started": "Wiederherstellung auf dem Host gestartet (aus {source})",
       "restore_completed": "Wiederherstellung auf dem Host abgeschlossen",
-      "restore_failed": "Wiederherstellung auf dem Host fehlgeschlagen ({detail})"
+      "restore_failed": "Wiederherstellung auf dem Host fehlgeschlagen ({detail})",
+      "restore_abandoned": "Laufender Wiederherstellungsplan aufgegeben"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",

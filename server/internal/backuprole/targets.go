@@ -532,16 +532,9 @@ func (f *targetFactory) Open(ctx context.Context, t TargetRecord) (Target, error
 	if t.Type != backupset.TypeS3 {
 		return nil, fmt.Errorf("backup target %s: unknown type %q", t.ID, t.Type)
 	}
-	if t.CredentialsCiphertext == "" {
-		return nil, fmt.Errorf("backup target %s: no credentials", t.ID)
-	}
-	plain, err := f.keys.DecryptPlatform(ctx, app.BackupWrapKey, t.CredentialsCiphertext)
+	creds, err := decryptCredentials(ctx, f.keys, t)
 	if err != nil {
-		return nil, fmt.Errorf("backup target %s: decrypt credentials: %w", t.ID, err)
-	}
-	creds, err := backupset.ParseCredentials(plain)
-	if err != nil {
-		return nil, fmt.Errorf("backup target %s: %w", t.ID, err)
+		return nil, err
 	}
 	store, err := objectstore.NewWithOptions(t.Settings.Endpoint, creds.AccessKey, creds.SecretKey, t.Settings.Bucket,
 		objectstore.Options{Region: t.Settings.Region, CAPEM: t.Settings.CAPEM})
@@ -549,6 +542,22 @@ func (f *targetFactory) Open(ctx context.Context, t TargetRecord) (Target, error
 		return nil, err
 	}
 	return NewS3Target(store, t.Settings.Prefix), nil
+}
+
+// decryptCredentials decrypts the Transit-wrapped credentials of a target (backup-wrap).
+func decryptCredentials(ctx context.Context, keys Decrypter, t TargetRecord) (backupset.Credentials, error) {
+	if t.CredentialsCiphertext == "" {
+		return backupset.Credentials{}, fmt.Errorf("backup target %s: no credentials", t.ID)
+	}
+	plain, err := keys.DecryptPlatform(ctx, app.BackupWrapKey, t.CredentialsCiphertext)
+	if err != nil {
+		return backupset.Credentials{}, fmt.Errorf("backup target %s: decrypt credentials: %w", t.ID, err)
+	}
+	creds, err := backupset.ParseCredentials(plain)
+	if err != nil {
+		return backupset.Credentials{}, fmt.Errorf("backup target %s: %w", t.ID, err)
+	}
+	return creds, nil
 }
 
 // MountDir is the directory of a volume target in the backup role's container (plan M15 decision 16 g).

@@ -24,6 +24,7 @@ const usage = `usage: paddock-server <command> [arguments] [+ <command> [argumen
 commands:
   serve api|gateway|worker|compiler|outbox-relay|audit-writer|escrow-reader|revocation-issuer|unsealer|notifier|backup
   migrate paddock|audit
+  migrate --version          (prints the newest embedded migration of each database: paddock <n>, audit <n>)
   provision rabbitmq
   audit seal [--day YYYY-MM-DD]
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD   (recorded as a verification run; prints run <id>)
@@ -55,6 +56,11 @@ commands:
   backup decrypt <in> <out|->
   backup mark-mount <id> <revision>...
   backup resolve-local [--root <dir>] <path>...
+  backup manifest <set dir> [--at <RFC 3339 time>]
+  backup fetch-set --dir <set dir>|--target <name|id>|--target-file - [--path <prefix>] [--no-clobber] <dest dir>
+  backup restore-repo --dir <set dir>|--target <name|id>|--target-file - | --check
+  backup restore-escrow <set dir>
+  backup target-export <name|id>   (prints the S3 target with its credentials; ./paddock backup-target export)
   prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online]
         [--backup-revisions-file <list> --backup-revisions-db <list>] < config.json
   healthcheck
@@ -210,6 +216,8 @@ func runMigrate(ctx context.Context, l *config.Loader, args []string) error {
 		return errUsage
 	}
 	switch args[0] {
+	case "--version":
+		return printSchemaVersions(os.Stdout)
 	case "paddock":
 		dsn := l.SecretFile("PADDOCK_DB_OWNER_URL_FILE")
 		if err := l.Err(); err != nil {
@@ -225,6 +233,21 @@ func runMigrate(ctx context.Context, l *config.Loader, args []string) error {
 	default:
 		return errUsage
 	}
+}
+
+// printSchemaVersions prints the newest embedded migration of each database, the schema this binary brings: a restore
+// refuses a backup set whose schema is newer (plan M15 decision 23).
+func printSchemaVersions(out io.Writer) error {
+	paddock, err := migrate.LatestPaddock()
+	if err != nil {
+		return err
+	}
+	audit, err := migrate.LatestAudit()
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "paddock %d\naudit %d\n", paddock, audit)
+	return err
 }
 
 // runHealthcheck is the container health check: GET /readyz on the ops listener.
