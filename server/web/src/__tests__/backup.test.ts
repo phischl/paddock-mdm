@@ -53,6 +53,14 @@ describe('backup rules', () => {
     expect(validateTarget({ ...original, smb: { ...original.smb, host: 'other', password: 'pw' } }, original)).toEqual({})
   })
 
+  it('refuses an SMB password with a comma or whitespace and names the fix', () => {
+    const original = inputOf(target())
+    for (const password of ['x,bind', 'correct horse', 'tab\there', 'a\u00a0b']) {
+      expect(validateTarget({ ...original, smb: { ...original.smb, password } }, original).smbPassword).toBe('backup.targets.passwordChars')
+    }
+    expect(validateTarget({ ...original, smb: { ...original.smb, password: 'p=a$s;x' } }, original)).toEqual({})
+  })
+
   it('asks for both S3 keys after a destination change and when only one is typed', () => {
     const s3 = target({
       type: 's3', settings: { s3: { endpoint: 'https://s3.example.org', bucket: 'b', region: '', prefix: '', ca_pem: '' } },
@@ -190,6 +198,16 @@ describe('BackupTargetForm', () => {
     await password.setValue('pw')
     await w.find('form').trigger('submit')
     expect(w.emitted('submit')).toHaveLength(2)
+    w.unmount()
+  })
+
+  it('tells the operator to choose another SMB password when it has a space', async () => {
+    const w = mountForm({ initial: target() })
+    expect(w.text()).toContain('No comma and no spaces')
+    await w.find('#backup-smb-password').setValue('correct horse')
+    await w.find('form').trigger('submit')
+    expect(w.emitted('submit')).toBeUndefined()
+    expect(w.text()).toContain('Choose another password for the share.')
     w.unmount()
   })
 

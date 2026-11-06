@@ -170,6 +170,15 @@ Diagnostics bundles requested by an operator for one device (ADR 0048, `docs/ope
 | RR-108 | **Journals name users.** Himmelblau's journal carries user principal names and the agent's carries the names of locked users and sudo decisions; a bundle is personal data of the device's users. | Closed content list, equal to the privacy document by test; a reason is required and shown to the user; notice on the device; step-up and audit event for every download; only the hash in the audit trail; 7-day purge; no auditor or platform access; the works-council text in `privacy.md`. | Purpose limitation of diagnostics; who may be an operator. |
 | RR-109 | **The notice is best effort.** A device without an active graphical session, or one where the desktop cannot show notifications, shows nothing; the user learns of the bundle from the organization's information to employees only. | `notified_sessions` is recorded with the bundle and in `device.diagnostics_collected` and returned with the bundle by the admin API; the agent logs that no session was reached; the privacy document names the bundle. | The organization's information to employees. |
 
+## Backup targets on the host (M15)
+
+Local, SMB and NFS backup targets mounted as Docker volumes by `./paddock backup-target apply` (ADR 0046, amendment
+2026-11-06).
+
+| ID | Risk | Mitigation in Paddock | Record in the ISMS |
+| --- | --- | --- | --- |
+| RR-122 | **The SMB password is readable on the control-plane host.** Docker's local volume driver takes the share's login as a mount option, so it sits in the 0600 file `compose.backup-targets.yaml` and in Docker's volume metadata, where every member of the `docker` group reads it with `docker volume inspect`. | The password is Transit-encrypted in the database and decrypted only into that file; `./paddock` redacts it in its own output and in Compose's and Docker's errors and never prints the overlay's configuration; members of the `docker` group are root-equivalent on the host anyway. Use a dedicated SMB account with write access to the backup share only. | Who is in the `docker` group of the control-plane host; the dedicated SMB account and its scope. |
+
 ## Software catalog (M13a)
 
 APT package sources, catalog entries and their assignments, enforced by the agent (ADR 0042,

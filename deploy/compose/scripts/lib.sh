@@ -14,12 +14,24 @@ PROD_FILES_lab="compose.yaml compose.prod.yaml compose.audit.yaml compose.lab.ya
 LAB_BACKUP_FILES="compose.backup.yaml"
 # The unsealer of the automatic unseal of OpenBao (ADR 0035), on a control-plane or lab host with PADDOCK_AUTO_UNSEAL=yes.
 AUTO_UNSEAL_FILES="compose.auto-unseal.yaml"
+# The volume backup targets rendered by ./paddock backup-target apply (plan M15 decision 20): host-local, mode 0600, it
+# holds the SMB passwords, never shipped or committed. compose_files appends it on a host with backups.
+BACKUP_TARGETS_FILE="$COMPOSE_DIR/compose.backup-targets.yaml"
 
 # redact_tokens replaces the value of every token=<value> field, and of every "token": "<value>" field of the JSON
 # lines Authentik writes in a container, in a log stream: Authentik 2026.8.3 logs the raw refresh token of a refused
 # refresh ("Refresh token is revoked", providers/oauth2/token/refresh_token.py), and Paddock's rule is that no secret
 # is ever printed (RR-63). -u keeps `logs -f` live instead of block-buffered.
 redact_tokens() { sed -u -E -e 's/(token=)[A-Za-z0-9._~+\/=-]+/\1<redacted>/g' -e 's/("token": ?")[^"]*/\1<redacted>/g'; }
+
+# redact_mount_secrets replaces everything after password= on a line: Docker prints a volume's mount options in its mount
+# errors, and Compose prints them in its configuration (decisions-alpha9 item 35). The password is the last option of a
+# rendered SMB volume, so only it is lost. Behind Docker's own mask the errno stays (": permission denied" tells a wrong
+# login from an unreachable share); it is only lower-case words, so no quoted Compose value passes as one.
+redact_mount_secrets() { sed -u -E 's/(password=)(\*{8}(: [a-z][a-z ]*)|.*)$/\1<redacted>\3/'; }
+
+# run_redacted <command…>: runs the command with its stderr through redact_mount_secrets and keeps its exit code.
+run_redacted() { { "$@" 2>&1 1>&3 3>&- | redact_mount_secrets >&2; } 3>&1; }
 
 # env_value <name>: value from the process environment, else from .env, else from .env.example.
 env_value() {
@@ -63,6 +75,17 @@ backup_root_mount() {
   printf '%s\n' --mount "type=bind,src=$parent,dst=$parent,readonly"
 }
 
+# backup_host succeeds on a production host that runs the backup role: the control plane, or a lab host with
+# PADDOCK_LAB_BACKUP=yes.
+backup_host() {
+  [[ "$(env_value PADDOCK_ENV)" != development ]] || return 1
+  case "$(env_value PADDOCK_HOST)" in
+    controlplane) return 0 ;;
+    lab) [[ "$(env_value PADDOCK_LAB_BACKUP)" == yes ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 compose_files() {
   local files f host
   if [[ "$(env_value PADDOCK_ENV)" == development ]]; then
@@ -88,6 +111,9 @@ compose_files() {
     esac
   fi
   for f in $files; do printf '%s\n' "$COMPOSE_DIR/$f"; done
+  # BACKUP_TARGETS_OVERLAY replaces the rendered file (backup-target apply tries a new one first); empty leaves it out.
+  f="${BACKUP_TARGETS_OVERLAY-$BACKUP_TARGETS_FILE}"
+  if [[ -n "$f" && -f "$f" ]] && backup_host; then printf '%s\n' "$f"; fi
   for f in ${PADDOCK_COMPOSE_EXTRA:-}; do printf '%s\n' "$f"; done
 }
 

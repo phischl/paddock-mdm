@@ -84,7 +84,8 @@ type Store interface {
 	Keys(ctx context.Context) ([]KeyRecord, error)
 	Schedule(ctx context.Context) (backupset.Schedule, error)
 	Targets(ctx context.Context) ([]TargetRecord, error)
-	SetHostState(ctx context.Context, id uuid.UUID, state string) error
+	// SetHostState changes the host state only while the target still has the revision the caller read.
+	SetHostState(ctx context.Context, id uuid.UUID, revision int, state string) error
 	SetTestResult(ctx context.Context, id uuid.UUID, errClass string) error
 	SetTargetStatus(ctx context.Context, id uuid.UUID, kind string, s KindStatus) error
 	RequestedRuns(ctx context.Context) ([]RequestedRun, error)
@@ -213,9 +214,9 @@ func (s *pgStore) Targets(ctx context.Context) ([]TargetRecord, error) {
 	return out, err
 }
 
-func (s *pgStore) SetHostState(ctx context.Context, id uuid.UUID, state string) error {
+func (s *pgStore) SetHostState(ctx context.Context, id uuid.UUID, revision int, state string) error {
 	return s.pool.InBackup(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		return q.BackupRoleSetHostState(ctx, pgstore.BackupRoleSetHostStateParams{ID: id, HostState: state})
+		return q.BackupRoleSetHostState(ctx, pgstore.BackupRoleSetHostStateParams{ID: id, HostRevision: int32(revision), HostState: state}) //nolint:gosec // the revision was read from this int column
 	})
 }
 

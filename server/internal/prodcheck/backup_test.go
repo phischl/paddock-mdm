@@ -180,3 +180,32 @@ func TestBackupLocalRootCheck(t *testing.T) {
 		t.Errorf("a root of another owner: %s %q, want FAIL", status, detail)
 	}
 }
+
+// TestBackupTargetRevisionsCheck covers plan M15 decision 22: online, the rendered targets file is compared with the
+// database; a difference or an unreadable database warns and never fails, offline the item is absent.
+func TestBackupTargetRevisionsCheck(t *testing.T) {
+	const item = "backup: targets file matches the database revision"
+	for name, tc := range map[string]struct {
+		rev          prodcheck.BackupRevisions
+		want, detail string
+	}{
+		"equal":               {prodcheck.BackupRevisions{File: "a=2 b=1", Database: "a=2 b=1"}, "PASS", ""},
+		"no targets":          {prodcheck.BackupRevisions{File: "none", Database: "none"}, "PASS", ""},
+		"newer in database":   {prodcheck.BackupRevisions{File: "a=1", Database: "a=2"}, "WARN", "run ./paddock backup-target apply, then ./paddock up"},
+		"file missing":        {prodcheck.BackupRevisions{File: "none", Database: "a=1"}, "WARN", "the database a=1"},
+		"database unreadable": {prodcheck.BackupRevisions{File: "a=1"}, "WARN", "could not read"},
+	} {
+		var out bytes.Buffer
+		prodcheck.Write(&out, prodcheck.Run(context.Background(), backupHost(),
+			prodcheck.Options{LocalRootUID: uint32(os.Getuid()), BackupRevisions: &tc.rev}))
+		status, detail := itemBlock(t, out.String(), item)
+		if status != tc.want || !strings.Contains(detail, tc.detail) {
+			t.Errorf("%s: %s %q", name, status, detail)
+		}
+	}
+	var out bytes.Buffer
+	prodcheck.Write(&out, prodcheck.Run(context.Background(), backupHost(), prodcheck.Options{LocalRootUID: uint32(os.Getuid())}))
+	if strings.Contains(out.String(), item) {
+		t.Errorf("offline the item must be absent:\n%s", out.String())
+	}
+}
