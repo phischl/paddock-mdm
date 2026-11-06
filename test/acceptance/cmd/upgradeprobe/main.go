@@ -140,7 +140,7 @@ func session(ctx context.Context, dir, user, password string) (*env.Portal, *aut
 // stepUp runs one step-up of the session with the user's passkey. A fresh session needs only one: the step-up
 // covers the privileged actions of the next minutes.
 func stepUp(ctx context.Context, p *env.Portal, password string, key *authflow.WebAuthn) error {
-	res, err := authflow.StepUpMFA(ctx, p.Client, stack.AdminURL(), "/", p.User, password, key)
+	res, err := authflow.StepUpMFA(ctx, p.Client, stack.AdminURL(), "/", p.User, password, key, false)
 	if err != nil {
 		return fmt.Errorf("step-up of %s: %w", p.User, err)
 	}

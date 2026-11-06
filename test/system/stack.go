@@ -32,6 +32,9 @@ type Stack struct {
 	// composeFiles are the Compose files the stack ran with when the test started: after a `make down` nothing is
 	// running any more to tell whether `make up` needs the backup overlay (PDK-018).
 	composeFiles []string
+	// lab is set when the Stack drives the lab-profile installation of the backup gates (lab.go) instead of the
+	// development stack: alice is then the lab organization's administrator, who signs in and steps up with WebAuthn.
+	lab *Lab
 }
 
 func newStack(t *testing.T) *Stack {
@@ -50,6 +53,13 @@ func newStack(t *testing.T) *Stack {
 // Login (re)signs in alice, e.g. after the stack was restarted.
 func (s *Stack) Login(t *testing.T) {
 	t.Helper()
+	if s.lab != nil {
+		admin := s.lab.login(t, s.lab.orgAdmin)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.alice = admin
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	alice, err := portal.Login(ctx, portal.Alice)
@@ -78,6 +88,10 @@ const stepUpRetryAfter = 20 * time.Second
 // callback. A refused step-up is therefore repeated once, after that age.
 func (s *Stack) StepUp(t *testing.T) {
 	t.Helper()
+	if s.lab != nil {
+		s.lab.stepUp(t, s.session(), s.lab.orgAdmin)
+		return
+	}
 	for attempt := 1; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		final, err := s.session().StepUp(ctx, portal.Alice, "/")

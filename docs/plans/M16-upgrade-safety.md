@@ -564,3 +564,34 @@ path lives in `deploy/compose/scripts/legacy-alpha8.sh`, which both commands sou
    0.1.0-alpha.8 leaves the support window (ADR 0013 amendment: its own release plus two).
 6. **Proof.** PDK-744's CI job proves the pair end to end, including the rollback. The legacy rollback is never run
    against a development stack that holds lab-linked secrets.
+
+## Note 2026-11-06 — the upgrade job as implemented (PDK-744; decisions-alpha9 items 53 and 54; pending architect-lead sign-off)
+
+The upgrade job deviates from §3.5 decisions 10 and 11 in these points:
+
+1. **The candidate of `ci.yml` carries the release under development as its version**, the last entry of
+   `server/internal/buildinfo/releases.gen.go` (today `0.1.0-alpha.9`). It is built with `deploy/bundle/build.sh
+   --channel stable --images local`, not `make release-bundle RELEASE_VERSION=ci-<sha>` or `edge-<date>-<sha7>` with
+   `RELEASE_CHANNEL=edge`. The reason: `./paddock upgrade`'s post-check runs `admin upgrade-check --target-version
+   <bundle version>`, which refuses a version outside the binary's release sequence (`ErrUnknownTargetVersion`). An
+   edge version would fail every run. With the version under development, "versions adjacent" judges the real pair.
+   `UPGRADE_CANDIDATE_UNRELEASED=1` lets only `release notes`, `images pullable` and `disk` warn, because a tree has no
+   notes and its images are not in a registry. Between a release tag and the move of `-current` in `server/gen.go`, a
+   candidate equals the newest tag and step 3 fails with "versions adjacent".
+2. **No image of a pull request is pushed (item 54).** The candidate's images are built in the job and named by local
+   tag (`*:upgrade-ci`), not by `images.txt` digests: an image that was never pushed has no registry digest.
+   `./paddock pull` without arguments pulls only images that are not present by their reference, so the upgrade's
+   pull step passes. Hosts that load their images with `docker load` benefit from the same change.
+3. **The chain check reads `GET /api/v1/audit/integrity`** (no `last_failure_at`) together with an audit event count
+   that only grows. `TestAuditChain`'s `audit seal --day` of the current day is development-only, so a production
+   stack cannot verify today's events.
+4. **Administrators sign in with WebAuthn passkeys.** The plan's "smoke test's first administrator" and "WebAuthn
+   helper" did not exist, and a production bundle validates WebAuthn at every sign-in and step-up. The job creates
+   its platform and organization administrators as Authentik users. It registers a software passkey for each
+   (`authflow.WebAuthn`, shared with the system gates of PDK-738) with `ak shell`, as the gates install TOTP devices.
+   The escrow reveal uses a WebAuthn step-up. `UPGRADE_SKIP_REVEAL=1` exists only while the job is brought up; it
+   must be off and green before the alpha.9 tag (item 53).
+5. **"The previous devicesim"** is `test/acceptance/cmd/upgradesim`. This driver keeps the device's identity in a
+   state file and is built in a checkout of the previous tag against that release's `devicesim` package. The
+   previous release's `devicesim` CLI enrolls a new device on every call, so it cannot check in again after the
+   upgrade.
