@@ -72,7 +72,7 @@ both roles and follows the control plane's steps.
    | `old bundle verified` | `<old dir>/paddock verify` passes: no shipped file of A changed (FAIL otherwise). |
    | `versions adjacent` | A is the release directly before B in the release list of B's bundle (`RELEASES`). FAIL when A is older by more than one release (the detail says which releases to go through first), is not older than B, or is no known release; WARN when B is not a release (a bundle of another channel). |
    | `release notes` | Prints the `Upgrade:` and the `Agents:` line of B. PASS for `automatic`, WARN when the line names steps or is missing. |
-   | `env` | FAIL for every key of B's `.env.example` (`.env.lab.example` on a lab) that A's `.env` lacks and the Compose files do not default, with the example's comment; WARN for keys of A's `.env` that B does not know. |
+   | `env` | FAIL for every key of B's `.env.example` (`.env.lab.example` on a lab) that A's `.env` lacks and the Compose files do not default, with the example's comment; WARN for keys of A's `.env` that B does not know; INFO for keys B's release retired (`RETIRED-SETTINGS` in the bundle), which A keeps for the rollback. |
    | `secrets` | FAIL for secret files that `./paddock secrets` cannot generate and A lacks (`release-production/…`, `approle/…`); INFO for the files it will generate. |
    | `disk` | FAIL when the free space of Docker's data root is below the size of B's new images times two plus 2 GiB; WARN when a size cannot be read (offline). |
    | `images pullable` | `docker manifest inspect` of every image of this host; WARN for those without a manifest (offline, unreachable registry). |
@@ -106,7 +106,7 @@ both roles and follows the control plane's steps.
    | `migrate-from` | Copies `.env`, `.secrets/` and `compose.backup-targets.yaml` (`cp -a`) from A. A partial copy of an earlier run of this command is removed and copied again. |
    | `secrets` | `./paddock secrets`: generates missing secrets only and prints their names. |
    | `pull` | `./paddock pull`. |
-   | `check` | `./paddock check`: every item PASS, else the run stops, and A still runs. |
+   | `check` | `./paddock check` (`--online` on the audit host and a lab: the audit bucket's Object Lock, read over A's running stack; the backup targets' revisions are compared in the post-checks): every item PASS, else the run stops, and A still runs. |
    | `backup` | On the control plane and on a lab host with backups: `<old dir>/paddock backup now --label pre-upgrade-<B> --wait`. A release without `backup now` (other than 0.1.0-alpha.8, below) is refused before anything changes. |
    | `audit-writer-stop` | Audit host and lab, when B's `Schema:` line names audit migrations (or is missing): `<old dir>/paddock compose stop paddock-audit-writer`. B's writer starts only after the audit migrations, but A's writer would keep running while they hold their table locks; its writes fail and are redelivered until the queue dead-letters them. Stopped, new audit events wait in the queue and `./paddock up` starts B's writer, which writes them. A backfill can take minutes on a large index (`docs/operations/capacity.md`, *Audit index commit sequence backfill*). |
    | `up` | Records the rollback point (below), then `./paddock up`: Compose recreates the containers with B's images and `paddock-migrate` applies the schema migrations. |
@@ -227,8 +227,9 @@ what is specific to alpha.9. It has no audit migration, so on the audit host `au
 4. **Removed settings.** `PADDOCK_BACKUP_S3_*` in `.env`, the secrets `backup_{pgbackrest,worker,fleet}_{access,secret}_key`
    and the service `fleet-backup-upload` are not used by this release, and `./paddock check` fails on a service that
    still names the S3 variables. Leave them in A's directory: they are the rollback to 0.1.0-alpha.8, which restores
-   from the old bucket. New setting: `PADDOCK_BACKUP_LOCAL_ROOT` (default `/srv/paddock-backup`), the base directory of
-   local backup targets; `./paddock check` verifies it. `./paddock upgrade` removes the container of
+   from the old bucket. `./paddock upgrade-check` lists them as INFO (retired by this release; kept for the
+   rollback). New setting: `PADDOCK_BACKUP_LOCAL_ROOT` (default `/srv/paddock-backup`), the base directory of local
+   backup targets; `./paddock check` verifies it. `./paddock upgrade` removes the container of
    `fleet-backup-upload`, which B no longer defines, right before `up` (by hand: `<A>/paddock compose rm -sf
    fleet-backup-upload` after the pre-upgrade backup and before `up`); a rollback to A starts it again.
 5. **The old bucket becomes an S3 target.** To keep backing up to the same bucket, add it in the portal under *Backup* →
