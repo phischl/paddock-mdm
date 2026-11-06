@@ -468,10 +468,13 @@ restore_decrypt() {
 
 # bao and bao_restart for openbao-restore.sh; BAO_TOKEN reaches the container by name only.
 bao() {
-  local env=(-e "BAO_ADDR=${RESTORE_BAO_ADDR:-https://127.0.0.1:8200}") ca="${RESTORE_BAO_CACERT-/run/secrets/internal_ca_bundle}"
-  [[ -z "$ca" ]] || env+=(-e "BAO_CACERT=$ca")
+  local env=(-e BAO_ADDR) ca="${RESTORE_BAO_CACERT-/run/secrets/internal_ca_bundle}"
+  [[ -z "$ca" ]] || env+=(-e BAO_CACERT)
   [[ -z "${BAO_TOKEN:-}" ]] || env+=(-e BAO_TOKEN)
-  compose exec -T "${env[@]}" openbao bao "$@"
+  (
+    export BAO_ADDR="${RESTORE_BAO_ADDR:-https://127.0.0.1:8200}" BAO_CACERT="$ca"
+    compose exec -T "${env[@]}" openbao bao "$@"
+  )
 }
 bao_restart() { compose restart openbao >/dev/null; }
 
