@@ -181,14 +181,16 @@ func renderCompose(now time.Time, targets []HostTarget, vols []hostVolume) ([]by
 	}
 	b.WriteString("volumes:\n")
 	for i, v := range vols {
-		fields := [][2]string{{"type", v.typ}, {"device", v.device}, {"o", v.opts}}
+		// The option name and its value are separate fields so that no error string can carry a value: o holds the
+		// SMB password.
+		fields := []struct{ key, value string }{{"type", v.typ}, {"device", v.device}, {"o", v.opts}}
 		b.WriteString("  " + v.name + ":\n    driver: local\n    driver_opts:\n")
 		for _, f := range fields {
-			q, err := quote(f[1])
+			q, err := quote(f.value)
 			if err != nil {
-				return nil, fmt.Errorf("%w: target %q: %s %w", ErrHostRender, targets[i].Name, f[0], err)
+				return nil, fmt.Errorf("%w: target %q: %s %w", ErrHostRender, targets[i].Name, f.key, err)
 			}
-			b.WriteString("      " + f[0] + ": " + q + "\n")
+			b.WriteString("      " + f.key + ": " + q + "\n")
 		}
 	}
 	return []byte(b.String()), nil
