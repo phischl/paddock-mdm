@@ -77,7 +77,7 @@ func (s *fakeStore) RequestedRuns(context.Context) ([]RequestedRun, error)   { r
 func (s *fakeStore) History(context.Context) (map[string]KindHistory, error) { return s.history, nil }
 func (s *fakeStore) InstallationID(context.Context) (string, error)          { return InstallationID(42), nil }
 func (s *fakeStore) SchemaVersion(context.Context) (int, error)              { return 107, nil }
-func (s *fakeStore) SetHostState(_ context.Context, id uuid.UUID, st string) error {
+func (s *fakeStore) SetHostState(_ context.Context, id uuid.UUID, _ int, st string) error {
 	s.hostState[id] = st
 	return nil
 }

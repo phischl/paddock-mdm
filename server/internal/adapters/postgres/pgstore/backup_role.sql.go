@@ -13,6 +13,51 @@ import (
 	"github.com/google/uuid"
 )
 
+const backupHostTargets = `-- name: BackupHostTargets :many
+SELECT id, name, type, settings, credentials_ciphertext, host_revision, (deleted_at IS NOT NULL)::boolean AS deleted
+FROM backup_target WHERE type <> 's3' ORDER BY id
+`
+
+type BackupHostTargetsRow struct {
+	ID                    uuid.UUID
+	Name                  string
+	Type                  string
+	Settings              json.RawMessage
+	CredentialsCiphertext *string
+	HostRevision          int32
+	Deleted               bool
+}
+
+// Every volume target with its credentials, deleted ones included, for ./paddock backup-target apply (plan M15
+// decision 20): a deleted target loses its volume on the host before its row goes.
+func (q *Queries) BackupHostTargets(ctx context.Context) ([]BackupHostTargetsRow, error) {
+	rows, err := q.db.Query(ctx, backupHostTargets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BackupHostTargetsRow{}
+	for rows.Next() {
+		var i BackupHostTargetsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Type,
+			&i.Settings,
+			&i.CredentialsCiphertext,
+			&i.HostRevision,
+			&i.Deleted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const backupRoleActiveKey = `-- name: BackupRoleActiveKey :one
 
 SELECT key_id, ciphertext, fingerprint FROM backup_key WHERE state = 'confirmed'
@@ -246,16 +291,20 @@ func (q *Queries) BackupRoleRunningRestorePlans(ctx context.Context) (int64, err
 }
 
 const backupRoleSetHostState = `-- name: BackupRoleSetHostState :exec
-UPDATE backup_target SET host_state = $1 WHERE id = $2 AND host_state <> $1
+UPDATE backup_target SET host_state = $1
+WHERE id = $2 AND host_revision = $3 AND deleted_at IS NULL AND host_state <> $1
 `
 
 type BackupRoleSetHostStateParams struct {
-	HostState string
-	ID        uuid.UUID
+	HostState    string
+	ID           uuid.UUID
+	HostRevision int32
 }
 
+// Compare-and-set on the revision the role read: an update of the target in between raised host_revision and reset
+// the state to pending_host, which a stale mounted must not overwrite (PDK-731 review).
 func (q *Queries) BackupRoleSetHostState(ctx context.Context, arg BackupRoleSetHostStateParams) error {
-	_, err := q.db.Exec(ctx, backupRoleSetHostState, arg.HostState, arg.ID)
+	_, err := q.db.Exec(ctx, backupRoleSetHostState, arg.HostState, arg.ID, arg.HostRevision)
 	return err
 }
 

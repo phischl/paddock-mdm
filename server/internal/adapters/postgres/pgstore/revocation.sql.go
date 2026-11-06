@@ -224,6 +224,30 @@ func (q *Queries) DeleteDeviceLUKSEscrows(ctx context.Context, deviceID uuid.UUI
 	return items, nil
 }
 
+const deviceDestroyIssued = `-- name: DeviceDestroyIssued :one
+SELECT EXISTS (SELECT 1 FROM revocation_request
+               WHERE device_id = $1 AND action = 'destroy' AND issued_at IS NOT NULL
+                 AND CASE WHEN status IN ('issued','delivered') THEN expires_at
+                          ELSE coalesce(finished_at, expires_at) END > $2::timestamptz)
+`
+
+type DeviceDestroyIssuedParams struct {
+	DeviceID   uuid.UUID
+	ReceivedAt time.Time
+}
+
+// Whether a LUKS escrow upload received at received_at falls under a Destroy of the device (PDK-794 review round 2):
+// any issued Destroy that had not ended by then, whatever its status now. The issuer deleted the device's escrows at
+// issuance, so an upload received before the end but processed later would otherwise bring the shredded key back.
+// The end is expires_at while the Destroy is open, else finished_at (expires_at for rows without one); an upload
+// received before issuance is covered too, because it may carry the same key.
+func (q *Queries) DeviceDestroyIssued(ctx context.Context, arg DeviceDestroyIssuedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, deviceDestroyIssued, arg.DeviceID, arg.ReceivedAt)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const deviceEscrowDestroyed = `-- name: DeviceEscrowDestroyed :one
 SELECT EXISTS (SELECT 1 FROM revocation_request
                WHERE device_id = $1 AND action = 'destroy' AND status IN ('issued','delivered','confirmed','expired'))
@@ -930,6 +954,19 @@ func (q *Queries) ListRevocationRequests(ctx context.Context, arg ListRevocation
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockDeviceEscrowDestroy = `-- name: LockDeviceEscrowDestroy :exec
+SELECT pg_advisory_xact_lock(hashtextextended('escrow_destroy:' || CAST($1::uuid AS text), 0))
+`
+
+// Serializes a LUKS escrow store of the worker with the crypto-shredding of a Destroy (PDK-794 review round 1): under
+// READ COMMITTED a worker insert could otherwise commit between the issuer's DELETE and its commit and survive the
+// Destroy. Both take this lock before they check or change the device's LUKS escrows; released at the end of the
+// transaction.
+func (q *Queries) LockDeviceEscrowDestroy(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockDeviceEscrowDestroy, deviceID)
+	return err
 }
 
 const markRevocationsDelivered = `-- name: MarkRevocationsDelivered :execrows

@@ -70,7 +70,12 @@ The overlay `deploy/compose/compose.backup.yaml` (part of the production configu
   `pgbackrest-authentik` push it to the repository every 2 seconds and take a full backup when the last one is older
   than 24 hours. They read the data directory and the socket of their database through shared volumes; pgBackRest
   needs the data directory at the path the server reports (`/var/lib/postgresql/18/docker` inside the volume). Every
-  full backup is read back with `pgbackrest verify` and counts only when it is intact. The stanza's lock lives in its
+  full backup is read back with `pgbackrest verify` and counts only when it is intact. When the verify of the whole
+  stanza after a full backup takes longer than 15 minutes, only the new backup is verified and the targets keep every
+  WAL segment (`PaddockBackupTargetHolding` fires after a week); then run
+  `./paddock compose run --rm --no-deps pgbackrest verify` (and `pgbackrest-authentik verify`): it waits for a running
+  backup, holds the stanza so that no full backup starts beside it, verifies the whole stanza without a time limit,
+  and when that reports ok the backup role releases the held WAL in its next round. The stanza's lock lives in its
   state volume, so a backup taken by hand (`./paddock compose run … pgbackrest backup`) waits for a running scheduled one instead of
   running beside it. When the repository holds the stanza for another cluster (a fresh installation into a kept
   bucket, or a host being restored), the service refuses it, logs why and takes no backup. On a host being restored,

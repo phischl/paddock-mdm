@@ -1,7 +1,7 @@
 title: Paddock device integrity event
 id: cd6f8d73-1f0d-42af-b48d-ca8c14171fe9
 status: experimental
-description: A device event stream shows a gap, a reset or a rejected header, or the device looks cloned.
+description: A device event stream shows a gap, a reset or a rejected header, the device looks cloned, or it escrows a disk key after its Destroy was issued.
 references:
   - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
 author: Paddock
@@ -19,6 +19,7 @@ detection:
       - 'device.event_seq_reset'
       - 'device.header_object_rejected'
       - 'device.header_escrow_refused'
+      - 'device.escrow_refused_destroyed'
   condition: selection
 falsepositives:
   - A device restored from a backup or re-imaged.

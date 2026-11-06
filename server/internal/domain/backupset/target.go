@@ -164,11 +164,23 @@ func validateSMB(s SMB) error {
 	if err := text("smb.password", s.Password, 1, 256); err != nil {
 		return err
 	}
+	if !SMBPasswordPassable(s.Password) {
+		return invalidTarget("smb.password", "must not contain a comma or whitespace, which cannot be passed to the "+
+			"share's mount; choose another password")
+	}
 	if err := text("smb.domain", s.Domain, 0, 64); err != nil {
 		return err
 	}
 	return options("smb.options", s.Options, smbOptionAllow,
 		"vers=3.0|3.1.1, seal, noperm, cache=none|strict and actimeo=N")
+}
+
+// SMBPasswordPassable reports whether pw can travel in the comma-separated mount options of the target's Docker volume
+// (ADR 0046 amendment 2026-11-06): Docker splits them on every comma and takes a segment that names a mount flag as a
+// flag of the mount, and Compose folds a long value at a space onto a continuation line, which no line-based redaction
+// of its output catches (PDK-733 review 3).
+func SMBPasswordPassable(pw string) bool {
+	return !strings.ContainsFunc(pw, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
 }
 
 func validateNFS(n NFS) error {

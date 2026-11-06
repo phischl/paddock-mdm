@@ -24,6 +24,8 @@ func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io
 	host := fs.String("host", prodcheck.HostControlPlane, "controlplane, audit or lab")
 	files := fs.String("compose-files", "", "comma-separated Compose files of the configuration")
 	online := fs.Bool("online", false, "also read the audit bucket's Object Lock configuration (audit or lab host)")
+	revFile := fs.String("backup-revisions-file", "", "revisions in compose.backup-targets.yaml (with --online)")
+	revDB := fs.String("backup-revisions-db", "", "revisions in the database (with --online)")
 	var devKeys multiFlag
 	fs.Var(&devKeys, "dev-release-key", "public key written by make dev-release-key (repeatable)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
@@ -39,6 +41,9 @@ func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io
 	opts := prodcheck.Options{Host: *host, DevReleaseKeys: devKeys}
 	if *files != "" {
 		opts.ComposeFiles = strings.Split(*files, ",")
+	}
+	if *online && *revFile != "" {
+		opts.BackupRevisions = &prodcheck.BackupRevisions{File: *revFile, Database: *revDB}
 	}
 	if *online && (*host == prodcheck.HostAudit || *host == prodcheck.HostLab) {
 		store, err := auditBucket(cfg)

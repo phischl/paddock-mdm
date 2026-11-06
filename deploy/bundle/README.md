@@ -45,18 +45,20 @@ line.
 | `./paddock verify` | Checks every shipped file against `SHA256SUMS`. |
 | `./paddock secrets` | Generates this host's secrets into `.secrets/` (idempotent, prints file names only). |
 | `./paddock pull` | Pulls every image of this host. |
-| `./paddock check [--online]` | Production checklist of this host's configuration; exit code 0 only when every item passes. `--online` (audit or lab host) also reads the audit bucket's Object Lock. |
+| `./paddock check [--online]` | Production checklist of this host's configuration; exit code 0 only when every item passes. `--online` also reads the audit bucket's Object Lock (audit or lab host) and warns when `compose.backup-targets.yaml` is older than the targets in the database (host with backups). |
 | `./paddock up [--infra]` | Starts the stack and waits until every service is healthy; `--infra` starts the infrastructure only (before the bootstrap). |
 | `./paddock down [--volumes]` | Stops the stack; `--volumes` also deletes all data. |
 | `./paddock ps`, `./paddock logs [service…]` | Service list, last log lines. |
-| `./paddock compose <args…>` | `docker compose` with this host's files and project. |
+| `./paddock compose <args…>` | `docker compose` with this host's files and project. `compose config` (and its alias `convert`) refuses to print while `compose.backup-targets.yaml` is part of the files: Compose would print the SMB passwords. |
 | `./paddock bao <args…>` | The `bao` CLI inside the OpenBao container (control plane, lab); `BAO_TOKEN` is passed on when set. |
 | `./paddock bootstrap openbao` | Configures an initialized and unsealed OpenBao (needs `BAO_TOKEN`). |
 | `./paddock bootstrap buckets` | Creates the control plane's buckets and credentials. |
 | `./paddock bootstrap audit-bucket` | Creates the WORM audit bucket (audit host, lab). |
 | `./paddock bootstrap fleet` | Sets up Fleet and its API token (control plane, lab). |
+| `./paddock backup-target apply` | Mounts the local, SMB and NFS backup targets saved in the portal as Docker volumes of `paddock-backup` (control plane, lab with `PADDOCK_LAB_BACKUP=yes`), then run `./paddock up`. Writes `compose.backup-targets.yaml` (mode 0600, it holds the share passwords: never copy, commit or print it; `migrate-from` moves it to a new version), tries every mount before it replaces the previous file, and removes the volumes of changed and deleted targets once they are unused. A local target is a directory below `PADDOCK_BACKUP_LOCAL_ROOT`, writable by uid 999; every parent root-owned and not writable by group or others. An SMB password with a comma or whitespace is refused when the target is saved, and by `apply` for one saved earlier: choose another password for the share. A mount error shows the password as `<redacted>` and keeps Docker's reason (for example `permission denied`). After `apply` the portal shows a target `mounted` once its share accepts the new settings; `paddock-backup` uses them after `./paddock up`. Refused while a restore plan runs. |
+| `./paddock backup now [--kind k]… [--label l] [--wait]`, `./paddock backup status` | Requests a backup run of every kind (or the named ones) without the portal; `--wait` follows it and exits non-zero naming a failed kind. `status` prints the key, the newest run per kind and the targets. |
 | `./paddock agent-release <version> <dir>` | Uploads and publishes the signed agent artifacts of a release (control plane, lab). |
-| `./paddock migrate-from <old dir>` | Copies `.env` and `.secrets/` from the bundle directory of the running version (upgrade). |
+| `./paddock migrate-from <old dir>` | Copies `.env`, `.secrets/` and, when present, `compose.backup-targets.yaml` (mode and owner kept) from the bundle directory of the running version (upgrade); refuses to overwrite any of them. |
 | `./paddock upgrade-check <old dir> [--json]` | Read-only check, run in this (new) directory before `migrate-from`: old bundle intact, adjacent release, release notes, missing `.env` keys, secrets, disk, images, the old stack's server report, unseal path, stack health. PASS/WARN/FAIL table, or `{items, exit}` as JSON; exit 0 without FAIL, 1 with, 2 on usage. Changes nothing. |
 
 Keep local settings in `.env`; never edit the shipped files (`./paddock verify` would report them, and an upgrade

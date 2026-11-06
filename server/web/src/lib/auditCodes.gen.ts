@@ -67,6 +67,7 @@ export const auditCodes = [
   'device.enforcement_enabled',
   'device.enrolled',
   'device.escrow_destroyed',
+  'device.escrow_refused_destroyed',
   'device.event_gap',
   'device.event_gap_filled',
   'device.event_seq_reset',
