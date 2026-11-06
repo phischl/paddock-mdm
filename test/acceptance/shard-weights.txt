@@ -14,6 +14,10 @@
 # reports ~400 s but costs ~1730 s that way.
 1733 TestAuditExactlyOnce
 381 TestRoleMembership
+# Estimate, not yet measured (PDK-756): the syslog gates wait for a 60 s heartbeat interval, the 1-minute stall of the
+# development notifier and several 5 s rounds.
+300 TestNotificationsSyslog
+240 TestNotificationsReplay
 235 TestStalenessGate
 209 TestDiskConversionUninstall
 196 TestSupervisorPackage
@@ -39,6 +43,8 @@
 104 TestDiskConversion
 103 TestEventGap
 103 TestIPAllowlist
+# Estimate, not yet measured (PDK-756): one sealed day and two notifier rounds.
+90 TestNotificationsCheckpoints
 # Estimate, not yet measured (PDK-158): gate organization, two devicesims, a temporary auditor.
 90 TestConfigRolloutActions
 90 TestDeclarativeConfig
