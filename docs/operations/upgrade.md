@@ -227,8 +227,9 @@ applies to the control plane and to a lab with `PADDOCK_LAB_BACKUP=yes`.
 **What changes.** Backups no longer go to the one S3 bucket of `PADDOCK_BACKUP_S3_*`. pgBackRest writes to the local
 volume `backup-repo`, and the new role `paddock-backup` adds the OpenBao snapshots, the Fleet dumps and the escrowed LUKS
 headers and mirrors the set to the targets a platform administrator configures in the portal. The worker no longer
-takes snapshots, `fleet-backup-upload` is gone, and `fleet-backup` writes plaintext dumps that only the backup role
-seals. **Until a platform administrator has confirmed a backup key, nothing is backed up** (the alert
+takes snapshots, `fleet-backup-upload` is gone (`./paddock upgrade` removes its container right before `up`; by
+hand, run `<A>/paddock compose rm -sf fleet-backup-upload` after the pre-upgrade backup and before `up`), and
+`fleet-backup` writes plaintext dumps that only the backup role seals. **Until a platform administrator has confirmed a backup key, nothing is backed up** (the alert
 `PaddockBackupKeyUnconfirmed` fires after an hour).
 
 1. **The key is imported once, then confirmed.** The key of 0.1.0-alpha.8 is the file `.secrets/backup_encryption_key`

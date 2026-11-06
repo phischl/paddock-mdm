@@ -27,7 +27,7 @@ cat >"$work/bin/docker" <<'STUB'
 #!/usr/bin/env bash
 printf 'docker %s\n' "$*" >>"$STUB_LOG"
 case "$*" in
-  "ps -a --filter label=com.docker.compose.project=paddock-cp"*) printf '%s\n' "c1 postgres" "c2 fleet-backup-upload" "c3 paddock-api" ;;
+  "ps -a --filter label=com.docker.compose.project=paddock-cp"*) printf '%s\n' postgres ${STUB_ORPHAN:-} paddock-api ;;
 esac
 exit 0
 STUB
@@ -180,12 +180,25 @@ else failed "later segments: $out"; fi
 
 # --- orphans ---------------------------------------------------------------------------------------------------------
 : >"$STUB_LOG"
-out="$(GITHUB_ACTIONS=true lib eval 'cp_paddock() { printf "%s\n" postgres paddock-api; }; orphans' 2>&1)"
-if grep -qx 'docker rm -f c2' "$STUB_LOG" && ! grep -q 'docker rm -f c[13]' "$STUB_LOG" &&
-  [[ "$out" == *"orphaned containers of the previous release removed: fleet-backup-upload (PDK-845)"* &&
-    "$out" == *"::warning title=upgrade::orphaned containers after the upgrade: fleet-backup-upload"* ]]; then
-  pass "an orphaned container is reported, annotated and removed; the release's own are kept"
-else failed "orphans: $out $(cat "$STUB_LOG")"; fi
+set +e
+out="$(GITHUB_ACTIONS=true STUB_ORPHAN=fleet-backup-upload lib eval '
+  smoke_logs() { :; }
+  smoke_down() { :; }
+  trap finish EXIT
+  step "4.3 upgrade: the release'"'"'s bootstrap and orphans"
+  cp_paddock() { printf "%s\n" postgres paddock-api; }
+  orphans
+  echo "not failed"' 2>&1)"
+rc=$?
+set -e
+if ((rc == 1)) && [[ "$out" == *"upgrade: orphaned containers after the upgrade: fleet-backup-upload"* &&
+  "$out" == *"::error title=upgrade::step '4.3 upgrade: the release's bootstrap and orphans' failed"* &&
+  "$out" != *"not failed"* ]] && ! grep -q 'docker rm' "$STUB_LOG"; then
+  pass "an orphaned container fails the step that found it"
+else failed "orphans (exit $rc): $out $(cat "$STUB_LOG")"; fi
+if out="$(lib eval 'cp_paddock() { printf "%s\n" postgres paddock-api; }; orphans' 2>&1)" && [[ "$out" == *"no orphaned containers"* ]]; then
+  pass "without orphans the step passes"
+else failed "no orphans: $out"; fi
 
 # --- failure report ----------------------------------------------------------------------------------------------------
 : >"$STUB_LOG"
