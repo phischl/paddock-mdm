@@ -113,7 +113,7 @@ func writable(dir string) error {
 }
 
 // runBackup implements `paddock-server backup now|status` (the host's emergency path, plan M15 decision 21; run in a
-// one-off paddock-backup container) and `paddock-server backup decrypt <in> <out|->` (restore,
+// one-off paddock-backup container), `backup plan|restore-report` (the restore plan's host side, restoreplan.go) and `paddock-server backup decrypt <in> <out|->` (restore,
 // docs/operations/restore.md; "-" writes to stdout).
 func runBackup(ctx context.Context, l *config.Loader, args []string) error {
 	switch {
@@ -121,6 +121,10 @@ func runBackup(ctx context.Context, l *config.Loader, args []string) error {
 		return backupNow(ctx, l, args[1:], os.Stdout)
 	case len(args) == 1 && args[0] == "status":
 		return backupStatus(ctx, l, os.Stdout)
+	case len(args) >= 1 && args[0] == "plan":
+		return backupPlan(ctx, l, args[1:], os.Stdout)
+	case len(args) >= 1 && args[0] == "restore-report":
+		return backupRestoreReport(ctx, l, args[1:], os.Stdout)
 	case len(args) == 3 && args[0] == "decrypt":
 		raw := l.SecretFile("PADDOCK_BACKUP_ENCRYPTION_KEY_FILE")
 		if err := l.Err(); err != nil {

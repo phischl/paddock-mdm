@@ -6935,6 +6935,112 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/restore-plans:
+    get:
+      operationId: listBackupRestorePlans
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The restore plans: approved in the portal, executed on the host with host_command,
+        and the restores the host ran without a plan (kind fresh_install). An approved plan reads as expired 24 hours
+        after its approval.
+      x-paddock-list:
+        sort: [created_at, state]
+        default_sort: -created_at
+        search: [created_by, kind]
+        filters: [state]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/BackupRestorePlanSort"
+        - $ref: "#/components/parameters/Search"
+        - name: state
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/BackupRestorePlanState" }
+      responses:
+        "200":
+          description: One page of restore plans.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRestorePlanPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createBackupRestorePlan
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Approves a restore plan, which the host executes within 24 hours with
+        ./paddock restore --plan <id> (host_command). confirmation must be the typed word restore (400
+        invalid_request otherwise); 400 invalid_request also for a point_in_time plan without at, a point in the
+        future, an unknown component or a source_target_id that names no target. 409 invalid_state while another
+        plan is approved or running, or when the source (the local backup repository without source_target_id) has
+        no successful backup of a chosen component at or before at; the detail names the missing kind. Needs a
+        step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.restore_planned
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupRestorePlanInput" }
+      responses:
+        "201":
+          description: The approved plan.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRestorePlan" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/restore-plans/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getBackupRestorePlan
+      tags: [platform]
+      description: "Roles: platform_admin. One restore plan."
+      responses:
+        "200":
+          description: The plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRestorePlan" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/restore-plans/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: cancelBackupRestorePlan
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Cancels an approved plan: it is expired and the host refuses it. 409 invalid_state for
+        a plan that is not approved. Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.restore_cancelled
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Cancelled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRestorePlan" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /api/platform/v1/notification-destinations/{id}/replay:
     parameters:
@@ -7023,6 +7129,14 @@ components:
         type: string
         enum: [started_at, -started_at, kind, -kind, outcome, -outcome]
         default: -started_at
+    BackupRestorePlanSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [created_at, -created_at, state, -state]
+        default: -created_at
     NotificationDestinationSort:
       name: sort
       in: query
@@ -10131,7 +10245,13 @@ components:
       additionalProperties: false
       required: [path]
       properties:
-        path: { type: string, maxLength: 256, description: An absolute directory of the host without "..". }
+        path:
+          type: string
+          maxLength: 256
+          description: >-
+            A relative subpath of the host's local backup root (PADDOCK_BACKUP_LOCAL_ROOT, default
+            /srv/paddock-backup) without "..", "." or empty elements (400 invalid_request local.path). The host step
+            refuses a symlink component.
     BackupTargetLocalSettings:
       type: object
       required: [path]
@@ -10309,6 +10429,55 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/BackupRun" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    BackupRestorePlanState:
+      type: string
+      enum: [approved, running, completed, failed, expired]
+    BackupRestorePlanInput:
+      type: object
+      additionalProperties: false
+      required: [kind, components, confirmation]
+      properties:
+        kind: { type: string, enum: [point_in_time, components], description: "point_in_time needs at." }
+        source_target_id: { type: string, format: uuid, nullable: true, description: The target to restore from; absent or null for the local backup repository. }
+        at: { type: string, format: date-time, nullable: true, description: "The point in time; required for kind point_in_time, absent or null for kind components (the newest backups)." }
+        components:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [postgres, openbao, fleet, escrow] }
+        confirmation: { type: string, description: The typed word restore. }
+    BackupRestorePlan:
+      type: object
+      required: [id, kind, source, source_target_id, source_target_name, at, components, state, created_by, created_at, expires_at, started_at, finished_at, outcome_detail, host_command]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [point_in_time, components, fresh_install] }
+        source: { type: string, enum: [repo, target, set], description: "repo: the local backup repository; target: source_target_id; set: a backup set the host was given." }
+        source_target_id: { type: string, format: uuid, nullable: true }
+        source_target_name: { type: string, nullable: true, description: Null when the target is gone or the source is not a target. }
+        at: { type: string, format: date-time, nullable: true }
+        components:
+          type: array
+          items: { type: string, enum: [postgres, openbao, fleet, escrow, backup-repo] }
+        state: { $ref: "#/components/schemas/BackupRestorePlanState" }
+        created_by: { type: string, description: "The administrator who approved the plan, or the host operator of a restore without a plan." }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, nullable: true, description: 24 hours after the approval; null for a restore without a plan. }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        outcome_detail: { type: string, nullable: true, description: "The failed step and what happened, as <step>: <text>." }
+        host_command: { type: string, description: "The command that executes the plan on the host: ./paddock restore --plan <id>." }
+    BackupRestorePlanPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BackupRestorePlan" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }

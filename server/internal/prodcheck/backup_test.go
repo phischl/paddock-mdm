@@ -3,6 +3,8 @@ package prodcheck_test
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,8 +13,13 @@ import (
 
 func backupCheck(t *testing.T, c prodcheck.Config, item string) (string, string) {
 	t.Helper()
+	return backupCheckAs(t, c, item, uint32(os.Getuid()))
+}
+
+func backupCheckAs(t *testing.T, c prodcheck.Config, item string, uid uint32) (string, string) {
+	t.Helper()
 	var out bytes.Buffer
-	prodcheck.Write(&out, prodcheck.Run(context.Background(), c, prodcheck.Options{}))
+	prodcheck.Write(&out, prodcheck.Run(context.Background(), c, prodcheck.Options{LocalRootUID: uid}))
 	return itemBlock(t, out.String(), item)
 }
 
@@ -122,5 +129,54 @@ func TestBackupSecretsConfined(t *testing.T) {
 				t.Errorf("%s: %s\n%s", name, status, detail)
 			}
 		})
+	}
+}
+
+// TestBackupLocalRootCheck covers plan M15 decision 36: the root of local targets passes as a private directory, warns
+// when missing and fails as a symlink, a file, a group-writable directory or a relative path.
+func TestBackupLocalRootCheck(t *testing.T) {
+	const item = "backup: local target root"
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good")
+	open := filepath.Join(dir, "open")
+	file := filepath.Join(dir, "file")
+	link := filepath.Join(dir, "link")
+	for _, d := range []string{good, open} {
+		if err := os.Mkdir(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(open, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(good, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		root, want string
+	}{
+		"private directory": {good, "PASS"},
+		"missing":           {filepath.Join(dir, "missing"), "WARN"},
+		"symlink":           {link, "FAIL"},
+		"file":              {file, "FAIL"},
+		"group writable":    {open, "FAIL"},
+		"relative":          {"srv/backup", "FAIL"},
+		"filesystem root":   {"/", "FAIL"},
+		"first level":       {"/backup", "FAIL"},
+	} {
+		c := backupHost()
+		c.Prod.BackupLocalRoot = tc.root
+		status, detail := backupCheck(t, c, item)
+		if status != tc.want {
+			t.Errorf("%s: %s %q, want %s", name, status, detail, tc.want)
+		}
+	}
+	c := backupHost()
+	c.Prod.BackupLocalRoot = good
+	if status, detail := backupCheckAs(t, c, item, uint32(os.Getuid())+1); status != "FAIL" {
+		t.Errorf("a root of another owner: %s %q, want FAIL", status, detail)
 	}
 }

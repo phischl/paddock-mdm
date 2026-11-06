@@ -32,7 +32,7 @@ func testCAPEM(t *testing.T) string {
 }
 
 func local(mut func(*backupset.Target)) backupset.Target {
-	t := backupset.Target{Name: "nas local", Type: backupset.TypeLocal, Local: backupset.Local{Path: "/srv/backup"}}
+	t := backupset.Target{Name: "nas local", Type: backupset.TypeLocal, Local: backupset.Local{Path: "nas/backup"}}
 	if mut != nil {
 		mut(&t)
 	}
@@ -103,12 +103,17 @@ func TestValidateTargetRefuses(t *testing.T) {
 		"name too long":     local(func(t *backupset.Target) { t.Name = long(65) }),
 		"name slash":        local(func(t *backupset.Target) { t.Name = "a/b" }),
 		"type":              local(func(t *backupset.Target) { t.Type = "ftp" }),
-		"local relative":    local(func(t *backupset.Target) { t.Local.Path = "srv/backup" }),
+		"local absolute":    local(func(t *backupset.Target) { t.Local.Path = "/srv/backup" }),
+		"local etc":         local(func(t *backupset.Target) { t.Local.Path = "/etc" }),
 		"local empty":       local(func(t *backupset.Target) { t.Local.Path = "" }),
-		"local dotdot":      local(func(t *backupset.Target) { t.Local.Path = "/srv/../etc" }),
-		"local too long":    local(func(t *backupset.Target) { t.Local.Path = "/" + long(256) }),
-		"local root":        local(func(t *backupset.Target) { t.Local.Path = "/" }),
-		"local newline":     local(func(t *backupset.Target) { t.Local.Path = "/srv/b\nx: y" }),
+		"local dotdot":      local(func(t *backupset.Target) { t.Local.Path = "nas/../../etc" }),
+		"local only dotdot": local(func(t *backupset.Target) { t.Local.Path = ".." }),
+		"local dot":         local(func(t *backupset.Target) { t.Local.Path = "nas/./x" }),
+		"local trailing":    local(func(t *backupset.Target) { t.Local.Path = "nas/" }),
+		"local double":      local(func(t *backupset.Target) { t.Local.Path = "nas//x" }),
+		"local backslash":   local(func(t *backupset.Target) { t.Local.Path = "nas\\x" }),
+		"local too long":    local(func(t *backupset.Target) { t.Local.Path = long(257) }),
+		"local newline":     local(func(t *backupset.Target) { t.Local.Path = "nas/b\nx: y" }),
 		"smb host empty":    smb(func(t *backupset.Target) { t.SMB.Host = "" }),
 		"smb host comma":    smb(func(t *backupset.Target) { t.SMB.Host = "nas,uid=0" }),
 		"smb host url":      smb(func(t *backupset.Target) { t.SMB.Host = "//nas/share" }),
@@ -248,6 +253,17 @@ func TestValidateSchedule(t *testing.T) {
 			if err := backupset.ValidateSchedule(s); !errors.Is(err, backupset.ErrInvalidSchedule) {
 				t.Errorf("field %d: %+v: %v, want ErrInvalidSchedule", i, s, err)
 			}
+		}
+	}
+}
+
+func TestLocalRoot(t *testing.T) {
+	for root, ok := range map[string]bool{
+		backupset.DefaultLocalRoot: true, "/srv/paddock-backup/x": true, "/": false, "/srv": false, "": false,
+		"srv/backup": false, "/srv/backup/": false, "/srv//backup": false, "/srv/../backup": false,
+	} {
+		if err := backupset.LocalRoot(root); (err == nil) != ok {
+			t.Errorf("LocalRoot(%q) = %v, want ok=%v", root, err, ok)
 		}
 	}
 }
