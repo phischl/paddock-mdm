@@ -396,7 +396,11 @@ func TestNotificationsIsolation(t *testing.T) {
 		waitStarted(t, sc.u.Portal, sc.collection+"/"+sc.dest.ID)
 	}
 	groupA, groupB := namedGroup(t, a.Portal, "n7a"), namedGroup(t, b.Portal, "n7b")
-	second, _ := createDestination(t, root, platformDestinations, webhookBody(destinationName("n7p"), scopes[2].s.URL()))
+	// The second platform destination only produces the platform event; disabled, it never delivers into the
+	// platform scope's sink, which must hold messages of that scope's destination alone.
+	secondBody := webhookBody(destinationName("n7p"), scopes[2].s.URL())
+	secondBody["enabled"] = false
+	second, _ := createDestination(t, root, platformDestinations, secondBody)
 	for _, w := range []struct {
 		sc     *scope
 		target string
