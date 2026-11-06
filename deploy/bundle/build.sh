@@ -101,6 +101,7 @@ copy "$here/paddock" "$dir/paddock"
 chmod 0755 "$dir/paddock"
 copy "$src/prod.env.example" "$dir/.env.example"
 copy "$src/lab.env.example" "$dir/.env.lab.example"
+copy "$src/retired-settings" "$dir/RETIRED-SETTINGS"
 
 # versions.env: the third-party images of the stack (everything above the build and tooling images) and the three
 # Paddock images of this version (decision 12).

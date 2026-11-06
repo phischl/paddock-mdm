@@ -1,0 +1,8 @@
+# Settings of .env that a release retired, one per line: <release> <setting>. The bundle ships this file as
+# RETIRED-SETTINGS; ./paddock upgrade-check reports a setting of the old .env that the new bundle's release retired as
+# INFO, because the old directory keeps it for the rollback (docs/operations/upgrade.md, section of that release).
+# Any other setting the new bundle does not know stays a WARN. Lines of earlier releases stay as history.
+0.1.0-alpha.9 PADDOCK_BACKUP_S3_ENDPOINT
+0.1.0-alpha.9 PADDOCK_BACKUP_S3_BUCKET
+0.1.0-alpha.9 PADDOCK_BACKUP_S3_REGION
+0.1.0-alpha.9 PADDOCK_BACKUP_S3_CA_FILE
