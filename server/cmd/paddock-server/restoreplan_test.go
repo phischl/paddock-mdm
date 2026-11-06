@@ -28,12 +28,19 @@ func TestParseRestoreReport(t *testing.T) {
 		"--components", "backup-repo"}); err != nil || in.PlanID != nil || in.At != nil {
 		t.Fatalf("without a plan: %+v %v", in, err)
 	}
+	if in, err := parseRestoreReport([]string{"--outcome", "completed", "--operator", "root", "--source", "set",
+		"--components", "escrow", "--escrow-skipped-destroyed", "3"}); err != nil || in.EscrowSkippedDestroyed == nil ||
+		*in.EscrowSkippedDestroyed != 3 {
+		t.Fatalf("escrow skip count: %+v %v", in, err)
+	}
 	for _, args := range [][]string{
 		{"--operator", "alice", "--source", "set", "--components", "postgres"},
 		{"--outcome", "completed", "--operator", "alice", "--source", "set"},
 		{"--outcome", "completed", "--operator", "alice", "--source", "set", "--components", "postgres", "--plan", "x"},
 		{"--outcome", "completed", "--operator", "alice", "--source", "set", "--components", "postgres", "--at", "yesterday"},
 		{"--outcome", "completed", "--operator", "alice", "--source", "set", "--components", "postgres", "extra"},
+		{"--outcome", "completed", "--operator", "alice", "--source", "set", "--components", "escrow", "--escrow-skipped-destroyed", "-1"},
+		{"--outcome", "completed", "--operator", "alice", "--source", "set", "--components", "escrow", "--escrow-skipped-destroyed", "two"},
 	} {
 		if _, err := parseRestoreReport(args); !errors.Is(err, errUsage) {
 			t.Errorf("%v: %v", args, err)

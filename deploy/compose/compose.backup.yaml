@@ -175,6 +175,44 @@ services:
       openbao:
         condition: service_healthy
 
+  # The escrow step of ./paddock restore (decisions-alpha9 item 44): restore.sh runs it once with `run`, `up` never
+  # starts it (profile restore). It reads the Destroy evidence from the audit index, which a restore does not touch, so
+  # it alone joins audit-index and holds the reader credential; the long-running backup role reaches neither. It
+  # lists with the backup role's read-only escrow credential and writes with the gateway's, the only one that may put
+  # headers. It holds no control-plane database credential: the restored database is no source of evidence
+  # (decisions-alpha9 item 45). internal_ca_bundle is the public CA of the reader's verify-full DSN.
+  backup-restore-escrow:
+    logging: *paddock-logging
+    image: ${PADDOCK_IMAGE:-paddock-server:dev}
+    profiles: [restore]
+    user: "999:999"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    command: ["backup", "restore-escrow", "/backup-repo"]
+    environment:
+      PADDOCK_ENV: ${PADDOCK_ENV:-production}
+      PADDOCK_LOG_LEVEL: error
+      # postgres://…@<audit host>:5432/paddock_audit?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca_bundle
+      PADDOCK_AUDIT_DB_READER_URL_FILE: /run/secrets/db_paddock_audit_reader_url
+      PADDOCK_ESCROW_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_backup_access_key
+      PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_backup_secret_key
+      PADDOCK_ESCROW_RESTORE_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_gateway_access_key
+      PADDOCK_ESCROW_RESTORE_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_gateway_secret_key
+    secrets:
+      - db_paddock_audit_reader_url
+      - rustfs_escrow_backup_access_key
+      - rustfs_escrow_backup_secret_key
+      - rustfs_bundles_gateway_access_key
+      - rustfs_bundles_gateway_secret_key
+      - internal_ca_bundle
+    volumes:
+      - backup-repo:/backup-repo:ro
+    networks: [cp, audit-index]
+
   prometheus:
     volumes:
       - ./prometheus/scrape/backup.yml:/etc/prometheus/scrape/backup.yml:ro

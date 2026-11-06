@@ -3,6 +3,7 @@ package prodcheck_test
 import (
 	"bytes"
 	"context"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -155,6 +156,25 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 			if strings.HasPrefix(r.Item, "backup:") && !r.OK {
 				t.Errorf("%s:\n%s", r.Item, r.Detail)
 			}
+		}
+		// decisions-alpha9 item 44: the restore's escrow step alone reaches the audit index with the reader credential.
+		restore := mounted("backup-restore-escrow")
+		for _, want := range []string{"db_paddock_audit_reader_url", "rustfs_escrow_backup_access_key",
+			"rustfs_escrow_backup_secret_key", "rustfs_bundles_gateway_access_key", "rustfs_bundles_gateway_secret_key",
+			"internal_ca_bundle"} {
+			if !restore[want] {
+				t.Errorf("backup-restore-escrow does not mount %s", want)
+			}
+		}
+		if restore["approle_backup_secret_id"] || restore["db_paddock_backup_url"] || backup["db_paddock_audit_reader_url"] {
+			t.Error("the AppRole or the backup database credential reaches the escrow step, or the audit reader the backup role")
+		}
+		networks := slices.Sorted(maps.Keys(cfg.Services["backup-restore-escrow"].Networks))
+		if !slices.Equal(networks, []string{"audit-index", "cp"}) {
+			t.Errorf("backup-restore-escrow networks %v, want [audit-index cp]", networks)
+		}
+		if _, ok := cfg.Services["paddock-backup"].Networks["audit-index"]; ok {
+			t.Error("paddock-backup joins audit-index")
 		}
 	})
 }

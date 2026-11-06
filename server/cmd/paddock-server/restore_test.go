@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/server/internal/backuprole"
 	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
 )
 
@@ -99,5 +100,31 @@ func TestRestoreRepoArguments(t *testing.T) {
 		if err := backupRestoreRepo(context.Background(), nil, args, nil, &bytes.Buffer{}); !errors.Is(err, errUsage) {
 			t.Errorf("%q: %v, want the usage error", args, err)
 		}
+	}
+}
+
+// TestPrintEscrowSkips: one line per device whose headers the escrow step kept out, naming each header, sorted
+// (decisions-alpha9 item 44); nothing without skips.
+func TestPrintEscrowSkips(t *testing.T) {
+	const org = "11111111-1111-1111-1111-111111111111"
+	at := time.Date(2026, 11, 3, 10, 0, 0, 0, time.FixedZone("x", 3600))
+	key := func(dev, name string) string { return "org/" + org + "/devices/" + dev + "/luks-header/" + name }
+	var out bytes.Buffer
+	if err := printEscrowSkips(&out, []backuprole.EscrowSkip{
+		{Key: key("d2", "h2"), Device: org + "/d2", DestroyedAt: at},
+		{Key: key("d1", "h1"), Device: org + "/d1", DestroyedAt: at},
+		{Key: key("d2", "h1"), Device: org + "/d2", DestroyedAt: at},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := "escrow: skipped device d1 (organization " + org + ", escrow destroyed 2026-11-03T09:00:00Z): " + key("d1", "h1") + "\n" +
+		"escrow: skipped device d2 (organization " + org + ", escrow destroyed 2026-11-03T09:00:00Z): " + key("d2", "h1") + ", " +
+		key("d2", "h2") + "\n"
+	if out.String() != want {
+		t.Errorf("output:\n%s\nwant:\n%s", out.String(), want)
+	}
+	out.Reset()
+	if err := printEscrowSkips(&out, nil); err != nil || out.Len() != 0 {
+		t.Errorf("no skips: %q %v", out.String(), err)
 	}
 }
