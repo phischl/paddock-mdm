@@ -438,7 +438,7 @@ fleet-bootstrap: ## Set up Fleet: admin user, API-only user paddock (token), glo
 	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
 
 .PHONY: dev-seed
-dev-seed: ## Create organizations acme and globex and assign the dev users (BACKUP=1: and the development backup targets)
+dev-seed: ## Create organizations acme and globex and assign the dev users (BACKUP=1: and a confirmed backup key and the development backup targets)
 	BACKUP=$(BACKUP) go run ./test/acceptance/cmd/devseed
 
 # Guard against hangs; the whole suite took ~85 min on a development machine and ~82 min on a GitHub runner since M8x

@@ -2,9 +2,9 @@
 # Restore drill on the development stack (plan M15 decision 30 and §9 B8, docs/operations/restore.md): back up every
 # kind, wait until the local development target holds the set, lose PostgreSQL, Authentik's database, OpenBao, Fleet's
 # MySQL and the local backup repository, rebuild the repository from the target and run restore_run of restore.sh
-# (the code ./paddock restore runs), then the acceptance subset. Prints the measured RTO. Requires the stack started with
-# `make up BACKUP=1`, dev-seeded, and a backup key confirmed in the portal; the audit store is not touched. Destroys the
-# development volumes named above.
+# (the code ./paddock restore runs), then the acceptance subset. Prints the measured RTO. Requires the stack started
+# with `make up BACKUP=1` and `make dev-seed BACKUP=1` (which confirms a backup key); the audit store is not touched.
+# Destroys the development volumes named above.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,8 +40,14 @@ export RESTORE_KEY_FILE="$work/backup_encryption_key"
 log "1. the confirmed backup key, every kind backed up, the set on the target $TARGET"
 # The backup role hands the decrypted key to pgBackRest in the runtime tmpfs; the drill takes it from there, as an
 # operator types it from the offline copy.
-(umask 077 && compose exec -T pgbackrest cat /run/paddock-backup/key >"$RESTORE_KEY_FILE" </dev/null) ||
-  { echo "restore drill: no confirmed backup key; generate and confirm one in the portal (Platform → Backup)" >&2; exit 1; }
+# The role writes the file in its next round (15 s on the development stack) after a key was confirmed.
+for _ in $(seq 1 60); do
+  (umask 077 && compose exec -T pgbackrest cat /run/paddock-backup/key >"$RESTORE_KEY_FILE" 2>/dev/null </dev/null) && break
+  rm -f "$RESTORE_KEY_FILE"
+  sleep 1
+done
+[[ -s "$RESTORE_KEY_FILE" ]] || { echo "restore drill: no confirmed backup key; run make dev-seed BACKUP=1 or confirm one" \
+  "in the portal (Platform → Backup)" >&2; exit 1; }
 target_id="$(psql_in postgres postgres paddock "select id from backup_target where name = '$TARGET' and deleted_at is null")"
 [[ "$target_id" =~ ^[0-9a-f-]{36}$ ]] || { echo "restore drill: no backup target $TARGET (make dev-seed BACKUP=1)" >&2; exit 1; }
 target_set="/backup-targets/$target_id/paddock-backup"
@@ -75,6 +81,11 @@ done
 log "3. the local repository rebuilt from $TARGET, then restore_run"
 compose --profile paddock run --rm --no-deps -T paddock-backup backup fetch-set --dir "$target_set" /backup-repo </dev/null
 restore_run fresh repo <<<"restore"
+# PDK-831: the escrow step runs in backup-restore-escrow against the audit index and ends with its summary line; without
+# the count, restore_escrow did not reach the audit index's Destroy evidence and the drill is not a valid one.
+[[ "${RESTORE_ESCROW_SKIPPED:-}" =~ ^[0-9]+$ ]] ||
+  { echo "restore drill: the escrow step printed no summary (backup-restore-escrow, audit index)" >&2; exit 1; }
+log "escrow: $RESTORE_ESCROW_SKIPPED headers of destroyed devices kept out"
 # The decrypted key is not needed for the acceptance subset; restore_run kept this script's trap for the failure paths.
 rm -rf "$work"
 ready="$(date +%s)"

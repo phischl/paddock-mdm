@@ -1199,3 +1199,15 @@ doubled. The header records `# revisions:` (for the online check item of decisio
 - **Report.** The terminal lists every skipped header, one line per device ID. `platform.restore_completed` gains the
   additive param `escrow_skipped_destroyed` (a count, no device IDs), set only for a completed run that included the
   escrow step (`backup restore-report --escrow-skipped-destroyed <n>`).
+
+### Note 2026-11-06 c — decision 30: the drill restores as a fresh install (PDK-737, decisions-alpha9 item 48)
+
+- **Change.** `restore-drill.sh` runs `restore_run fresh repo` after `backup fetch-set` from the local development
+  target, not `restore_run plan …` as decision 30 states. The rest of decision 30 holds: backup now, destroy, restore
+  through `restore.sh`, acceptance subset, RTO line in `docs/operations/restore.md`.
+- **Reason.** A restore plan lives in the control-plane database, which is what the drill destroys; a plan cannot
+  survive the loss the drill measures. The drill measures the RTO from losing the databases, the case an operator
+  restores without a plan.
+- **Plan path.** The plan-based path is covered by the `TestRestorePlan` gates (§9 B5: typed word, point in time,
+  approval, expiry, cancel, the host command `./paddock restore --plan <id>`); its execution on a host stays with
+  system gate BS4.
