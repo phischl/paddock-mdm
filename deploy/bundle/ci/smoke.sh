@@ -7,6 +7,7 @@
 # Exit 0: every step passed; 1: a step failed (named on stderr); 2: usage. Needs docker, docker compose >= 2.24, go
 # (throwaway minisign keys), curl and sha256sum; binds 80 and 443 and, on the primary address, 5432, 5671 and 8200.
 # Environment: WAIT_TIMEOUT (default 900 s per wait). The Compose logs of both projects end up in <work>/logs/.
+# shellcheck source-path=SCRIPTDIR
 set -euo pipefail
 
 usage() {
@@ -18,7 +19,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tarball="${1:-}"
 [[ -f "$tarball" ]] || usage
 shift
-agent_artifacts= work=
+agent_artifacts='' work=''
 while (($#)); do
   case "$1" in
     --agent-artifacts) agent_artifacts="${2:-}"; shift 2 || usage ;;

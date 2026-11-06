@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Tests of the upgrade job's helpers (deploy/bundle/ci/upgrade.sh, `make bundle-test`) without a stack: the judgement of
-# ./paddock upgrade-check, the staging of the previous release's agent files, the unsealer's guard, the orphan report
-# and the failure report (step named on stderr and as a GitHub annotation, logs collected). docker, sudo and git are
-# stubs; upgrade.sh is sourced with UPGRADE_LIB_ONLY=1, which stops it before the first step.
+# ./paddock upgrade-check, the staging of the previous release's agent files, the unsealer's guard, the restore drill's
+# point in time, the orphan report and the failure report (step named on stderr and as a GitHub annotation, logs
+# collected; also after a TERM). docker, sudo and git are stubs; upgrade.sh is sourced with UPGRADE_LIB_ONLY=1, which
+# stops it before the first step.
 # The snippets in single quotes run in the shell that sourced upgrade.sh, which also assigns its own `work` there;
 # pass and failed always succeed.
 # shellcheck disable=SC2016,SC2031,SC2015
@@ -65,6 +66,13 @@ if out="$(UPGRADE_CANDIDATE_UNRELEASED=1 lib check_upgrade "$json" 2>&1)"; then 
   failed "FAIL: $out"
 fi
 
+for json in '' 'Error: the upgrade-check failed before its report'; do
+  if out="$(UPGRADE_CANDIDATE_UNRELEASED=1 lib check_upgrade "$json" 2>&1)"; then failed "output without items passes: '$json'"; elif
+    [[ "$out" == *"upgrade-check: no item in its output"* ]]; then pass "output without items fails: '${json:0:12}'"; else
+    failed "no items: $out"
+  fi
+done
+
 # --- prev_artifacts_staged ------------------------------------------------------------------------------------------
 v=0.1.0-alpha.8
 for f in "paddockd_${v}_linux_amd64" "paddock-agent_${v}_amd64.deb" "paddock-supervisor_${v}_amd64.deb" \
@@ -100,6 +108,76 @@ out="$(lib_unseal '{"initialized": false, "sealed": true, "t": 0}')"
 out="$(lib_unseal '{"initialized": true, "sealed": false, "t": 3}')"
 [[ "$out" != *unseal\ s* ]] && pass "an unsealed OpenBao is left alone" || failed "unsealed: $out"
 
+# --- drill_point -----------------------------------------------------------------------------------------------------
+# lib_drill <wal_max paddock> <wal_max authentik> <archived: switched|older> [<snippet>]: drill_point against stubbed
+# databases (postgres switches to segment …07, authentik-postgres to …03, each archives it 5 s in the future unless
+# "older") and a local target whose manifest.json was generated an hour from now; prints the SQL log, drill_at and
+# set_dir. The snippet runs first (a no-op sleep).
+lib_drill() {
+  rm -rf "$work/w/target" "$work/w/sql.log"
+  mkdir -p "$work/w/target/set1/paddock-backup"
+  cat >"$work/w/target/set1/paddock-backup/manifest.json" <<JSON
+{
+  "generated_at": "$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)",
+  "contents": {
+    "pgbackrest": {
+      "stanzas": [
+        {
+          "name": "paddock",
+          "wal_max": "$1"
+        },
+        {
+          "name": "authentik",
+          "last_full": "x",
+          "wal_max": "$2"
+        }
+      ]
+    }
+  }
+}
+JSON
+  ARCHIVED="$3" lib eval "${4:-}"'
+    local_target="$W/target"
+    sudo() { "$@"; }
+    db_sql() {
+      local seg=000000010000000000000003
+      [[ "$1" != postgres ]] || seg=000000010000000000000007
+      printf "%s %s %s\n" "$(date +%s.%N)" "$1" "$4" >>"$W/sql.log"
+      case "$4" in
+        *pg_switch_wal*) echo "$seg" ;;
+        *pg_stat_archiver*)
+          [[ "$ARCHIVED" == switched ]] || seg=000000010000000000000002
+          echo "$seg|$(($(date +%s) + 5))" ;;
+      esac
+    }
+    drill_point
+    cat "$W/sql.log"
+    echo "drill_at $drill_at"
+    echo "set_dir $set_dir"'
+}
+seg_p=000000010000000000000007 seg_a=000000010000000000000003
+if out="$(lib_drill "$seg_p" "$seg_a" switched 2>&1)"; then
+  at="$(date -u -d "$(sed -n 's/^drill_at //p' <<<"$out")" +%s)"
+  order="$(awk '{print $2, $3, $4}' <<<"$out" | grep -E '^(postgres|authentik-postgres) select (txid_current|pg_walfile_name)' | paste -sd,)"
+  early="$(awk -v at="$at" '$4 == "txid_current()" && $1 < at + 1' <<<"$out")"
+  if [[ "$order" == "postgres select txid_current(),postgres select pg_walfile_name(pg_switch_wal()),authentik-postgres select txid_current(),authentik-postgres select pg_walfile_name(pg_switch_wal())" &&
+    -z "$early" && "$out" == *"set_dir $work/w/target/set1/paddock-backup"* ]]; then
+    pass "the drill's point precedes both databases' commits by a second; their WAL is switched after the commit"
+  else failed "drill order (at $at): $out"; fi
+else failed "drill_point: $out"; fi
+nosleep='sleep() { :; }; '
+if out="$(lib_drill 000000010000000000000006 "$seg_a" switched "$nosleep" 2>&1)"; then failed "a set without postgres' segment is taken: $out"; elif
+  [[ "$out" == *"the local target holds no backup set with the WAL past"*"paddock $seg_p"* ]]; then
+  pass "a mirror set that does not hold a switched segment is not taken"
+else failed "older wal_max: $out"; fi
+if out="$(lib_drill "$seg_p" "$seg_a" older "$nosleep" 2>&1)"; then failed "an unarchived segment passes: $out"; elif
+  [[ "$out" == *"postgres archived no WAL past"*"(segment $seg_p) within 5 minutes"* ]]; then
+  pass "a switched segment the archiver has not reached fails the drill"
+else failed "unarchived: $out"; fi
+if out="$(lib_drill 00000002000000000000000A 00000002000000000000000B switched "$nosleep" 2>&1)"; then
+  pass "a set with later segments (a later timeline) is taken"
+else failed "later segments: $out"; fi
+
 # --- orphans ---------------------------------------------------------------------------------------------------------
 : >"$STUB_LOG"
 out="$(GITHUB_ACTIONS=true lib eval 'cp_paddock() { printf "%s\n" postgres paddock-api; }; orphans' 2>&1)"
@@ -126,6 +204,23 @@ if ((rc == 1)) && [[ "$out" == *"upgrade: GET /api/v1/managed-files/x: HTTP 404"
   "$out" == *down* && "$out" == *"upgrade: failed after"* ]] && grep -q 'paddock-ci-s3 .* down --volumes' "$STUB_LOG"; then
   pass "a failing probe names its step, annotates it, collects the logs and takes everything down"
 else failed "failure report (exit $rc): $out $(cat "$STUB_LOG")"; fi
+
+# --- an interrupted run (the workflow's timeout sends TERM) ----------------------------------------------------------
+: >"$STUB_LOG"
+set +e
+out="$(lib eval '
+  smoke_logs() { echo "logs $1"; }
+  smoke_down() { echo down; }
+  install_traps
+  step "6 restore drill: backup"
+  kill -TERM "$BASHPID"
+  echo "not interrupted"' 2>&1)"
+rc=$?
+set -e
+if ((rc == 143)) && [[ "$out" == *"upgrade: step '6 restore drill: backup' failed"* && "$out" == *"logs -prev"* &&
+  "$out" == *down* && "$out" == *"upgrade: failed after"* && "$out" != *"not interrupted"* ]]; then
+  pass "a TERM fails the run through finish, which names the step and collects the logs"
+else failed "TERM (exit $rc): $out"; fi
 
 ((failures == 0)) || { echo "upgrade-ci: $failures check(s) failed" >&2; exit 1; }
 echo "upgrade-ci: all checks passed"

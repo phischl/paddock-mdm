@@ -135,16 +135,19 @@ finish() {
 
 # check_upgrade <json>: no FAIL; a WARN only for the item every run shows (custodians unseal OpenBao) and, for a
 # candidate built from a tree that is no published release (UPGRADE_CANDIDATE_UNRELEASED=1: a pull request, main),
-# the items that judge a published release: its notes and its images in the registry.
+# the items that judge a published release: its notes and its images in the registry. Output without a single item
+# (empty, not JSON) fails: a check that inspected nothing must not pass.
 check_upgrade() {
-  local json="$1" allowed=("openbao unseal path") name status bad=()
+  local json="$1" allowed=("openbao unseal path") name status bad=() items=0
   if [[ "${UPGRADE_CANDIDATE_UNRELEASED:-}" == 1 ]]; then allowed+=("release notes" "images pullable" "disk"); fi
   while IFS=$'\t' read -r name status; do
+    items=$((items + 1))
     case "$status" in
       FAIL) bad+=("FAIL $name") ;;
       WARN) printf '%s\n' "${allowed[@]}" | grep -qxF "$name" || bad+=("WARN $name") ;;
     esac
   done < <(grep -o '"name":"[^"]*","status":"[A-Z]*"' <<<"$json" | sed 's/"name":"\([^"]*\)","status":"\([A-Z]*\)"/\1\t\2/')
+  ((items > 0)) || fail "upgrade-check: no item in its output"
   ((${#bad[@]} == 0)) || fail "upgrade-check: ${bad[*]}"
 }
 
@@ -199,10 +202,87 @@ if [[ "${UPGRADE_SKIP_REVEAL:-}" == 1 ]]; then reveal=(); fi
 # device_checks_in <sim> <want>: the seeded device checks in, receives a newer bundle with <want> and reports it.
 device_checks_in() { probe_env "$1" checkin --state "$W/seed/device.json" --want "$2"; }
 
+# local_target: the directory the local backup target mirrors to (step 6).
+local_target=/srv/paddock-backup/ci
+# db_sql <service> <user> <database> <sql>: one statement through psql in the service's container, unaligned.
+db_sql() { cp_paddock compose exec -T "$1" psql -U "$2" -d "$3" -Atc "$4" </dev/null; }
+
+# archived_past <service> <user> <database> <segment> <epoch>: polls pg_stat_archiver every 5 s, at most 5 minutes,
+# until the WAL segment <segment> and a later archive time than <epoch> are reached; sets archived_at (epoch).
+archived_past() {
+  local row wal at i
+  for ((i = 0; i < 60; i++)); do
+    row="$(db_sql "$1" "$2" "$3" "select coalesce(last_archived_wal, ''), coalesce(extract(epoch from last_archived_time)::bigint, 0) from pg_stat_archiver")" || row=''
+    IFS='|' read -r wal at <<<"$row"
+    [[ "$at" =~ ^[0-9]+$ ]] || at=0
+    # The archiver works in segment order, so a later segment name means <segment> is archived too.
+    if [[ ! "${wal:0:24}" < "$4" ]] && ((at > $5)); then
+      archived_at=$at
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
+# wal_max <manifest> <stanza>: the newest archived WAL segment manifest.json records for the stanza.
+wal_max() {
+  sudo cat "$1" | awk -v want="\"$2\"," '$1 == "\"name\":" { name = $2 } $1 == "\"wal_max\":" && name == want { gsub(/[",]/, "", $2); print $2 }'
+}
+
+# drill_point: the restore drill's point in time, as gate BS4 of test/system/backup_test.go does it. drill_at is taken
+# first; a second later both databases commit and switch their WAL, because a recovery to a time ends with FATAL
+# "recovery ended before configured recovery target was reached" unless a commit after that time reaches it. The wait
+# ends once both databases have archived the switched segment after drill_at and a mirror set on the local target was
+# generated after those archives and records the segments: a round lists the repository before it writes the
+# manifest, so its time alone does not prove the segments are in it. Polled every 5 s, at most 10 minutes for the
+# set. Sets drill_at and set_dir.
+drill_point() {
+  local at spec svc user db stanza seg last=0 want=() manifest generated i ok w
+  drill_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  at="$(date -u -d "$drill_at" +%s)"
+  sleep 1
+  for spec in "postgres postgres paddock paddock" "authentik-postgres authentik authentik authentik"; do
+    read -r svc user db stanza <<<"$spec"
+    db_sql "$svc" "$user" "$db" 'select txid_current()' >/dev/null
+    seg="$(db_sql "$svc" "$user" "$db" 'select pg_walfile_name(pg_switch_wal())')"
+    archived_past "$svc" "$user" "$db" "$seg" "$at" ||
+      fail "$svc archived no WAL past $drill_at (segment $seg) within 5 minutes"
+    ((archived_at <= last)) || last=$archived_at
+    want+=("$stanza $seg")
+  done
+  for ((i = 0; i < 120; i++)); do
+    manifest="$(sudo find "$local_target" -maxdepth 3 -name manifest.json -path '*/paddock-backup/*' 2>/dev/null | head -1 || true)"
+    generated="$(sudo sed -n 's/.*"generated_at": *"\([^"]*\)".*/\1/p' "${manifest:-/nonexistent}" 2>/dev/null | head -1 || true)"
+    if [[ -n "$generated" ]] && (($(date -u -d "$generated" +%s) > last)); then
+      ok=true
+      for w in "${want[@]}"; do
+        read -r stanza seg <<<"$w"
+        if [[ "$(wal_max "$manifest" "$stanza")" < "$seg" ]]; then ok=false; fi
+      done
+      if $ok; then
+        set_dir="$(dirname "$manifest")"
+        return 0
+      fi
+    fi
+    sleep 5
+  done
+  fail "the local target holds no backup set with the WAL past $drill_at (${want[*]}) within 10 minutes"
+}
+
+# install_traps: finish on every exit. A TERM (the workflow's timeout) or an INT exits non-zero through finish, which
+# collects the logs; without these traps bash would run finish with the status 0 of the interrupted command and report
+# a pass.
+install_traps() {
+  trap finish EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+}
+
 [[ -z "$UPGRADE_LIB_ONLY" ]] || return 0
 
 mkdir -p "$W/logs" "$W/bin" "$PADDOCK_CI_S3_CA_DIR"
-trap finish EXIT
+install_traps
 
 # --- 1 previous release ------------------------------------------------------------------------------------------------
 step "1.1 previous: extract and verify"
@@ -312,23 +392,11 @@ if [[ -n "$agent_artifacts" ]]; then smoke_agent_release "$agent_artifacts"; fi
 step "6 restore drill: backup"
 probe_env "$UPGRADEPROBE" backup-key --state "$W/seed" --key-out "$W/seed/backup.key"
 sudo install -d -m 0755 -o root -g root /srv/paddock-backup
-sudo install -d -m 0750 -o 999 -g 999 /srv/paddock-backup/ci
+sudo install -d -m 0750 -o 999 -g 999 "$local_target"
 cp_paddock backup-target apply
 cp_paddock up
 cp_paddock backup now --label ci --wait </dev/null
-cp_paddock compose exec -T postgres psql -U postgres -d paddock -Atc 'select pg_switch_wal()' </dev/null >/dev/null
-cp_paddock compose exec -T authentik-postgres psql -U authentik -d authentik -Atc 'select pg_switch_wal()' </dev/null >/dev/null
-drill_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-# Two mirror rounds after the WAL switch: the first may have listed the repository before the segments arrived.
-mirrored=false set_dir=
-for _ in $(seq 1 120); do
-  manifest="$(sudo find /srv/paddock-backup/ci -maxdepth 3 -name manifest.json -path '*/paddock-backup/*' 2>/dev/null | head -1 || true)"
-  set_dir="$(dirname "${manifest:-.}")"
-  generated="$(sudo sed -n 's/.*"generated_at": *"\([^"]*\)".*/\1/p' "${manifest:-/nonexistent}" 2>/dev/null | head -1 || true)"
-  if [[ -n "$generated" ]] && (($(date -u -d "$generated" +%s) > $(date -u -d "$drill_at" +%s) + 30)); then mirrored=true; break; fi
-  sleep 5
-done
-$mirrored || fail "the local target holds no backup set written after $drill_at within 10 minutes"
+drill_point
 
 # --- 7 restore drill: loss and restore -------------------------------------------------------------------------------
 step "7 restore drill: down --volumes, secrets, restore --from --at $drill_at"
