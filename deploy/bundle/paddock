@@ -145,8 +145,11 @@ case "$cmd" in
     names="$(xargs -n1 basename <<<"$files" | paste -sd, -)"
     # The configuration names host paths (secret files, mounted files), hence the bundle directory at its own path;
     # root, because .secrets/ is the operator's 0700 directory and the image's default user is 65532.
+    # The backup root's parent too (read-only), so that the check sees the root itself and not a path inside the image.
+    mounts=()
+    while IFS= read -r m; do mounts+=("$m"); done < <(backup_root_mount "$(dotenv PADDOCK_BACKUP_LOCAL_ROOT)")
     PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
-      docker run --rm -i --user 0:0 ${online:+--network "${PADDOCK_PROJECT}_audit-store"} \
+      docker run --rm -i --user 0:0 ${online:+--network "${PADDOCK_PROJECT}_audit-store"} "${mounts[@]}" \
         -v "$BUNDLE_DIR:$BUNDLE_DIR:ro" -w "$BUNDLE_DIR" "$PADDOCK_IMAGE" \
         prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online}
     ;;

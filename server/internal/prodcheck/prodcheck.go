@@ -8,8 +8,10 @@ package prodcheck
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"net"
 	"net/netip"
@@ -23,6 +25,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/config"
+	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
 )
 
 // Hosts of the two-host topology (architecture §4.1) and the single lab host (ADR 0029).
@@ -47,6 +50,8 @@ type Prod struct {
 	LabProxyAddr string `json:"lab_proxy_addr"`
 	// AutoUnseal is PADDOCK_AUTO_UNSEAL (compose.prod.yaml), set by ./paddock auto-unseal (ADR 0035).
 	AutoUnseal string `json:"auto_unseal"`
+	// BackupLocalRoot is PADDOCK_BACKUP_LOCAL_ROOT (compose.prod.yaml), the base directory of local backup targets.
+	BackupLocalRoot string `json:"backup_local_root"`
 }
 
 // Service is one Compose service.
@@ -126,6 +131,8 @@ type Options struct {
 	DevReleaseKeys []string
 	// ObjectLock reads the audit bucket online; nil means offline.
 	ObjectLock ObjectLockReader
+	// LocalRootUID is the owner the local backup root must have; the zero value is root. Tests set the current user.
+	LocalRootUID uint32
 }
 
 // Result is one line of the checklist.
@@ -188,7 +195,7 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	_, backupRole := c.Services[backupService]
 	_, pgbackrest := c.Services["pgbackrest"]
 	if backupRole || pgbackrest {
-		results = append(results, checkBackupRole(c), checkBackupRepoVolume(c))
+		results = append(results, checkBackupRole(c), checkBackupRepoVolume(c), checkBackupLocalRoot(c, o.LocalRootUID))
 	}
 	if len(c.Services) > 0 {
 		results = append(results, checkBackupSecretsConfined(c))
@@ -1159,6 +1166,41 @@ func checkBackupRepoVolume(c Config) Result {
 		}
 	}
 	return result("backup: repo volume named", f)
+}
+
+// checkBackupLocalRoot checks the base directory of local backup targets (plan M15 decision 36): every local target is
+// a subpath of it, so a symlink, a file or a directory others can write would let a target leave it or be replaced. A
+// missing root only warns: a host without local targets needs none, and with one the host step refuses to apply.
+func checkBackupLocalRoot(c Config, owner uint32) Result {
+	const item = "backup: local target root"
+	root := strings.TrimSpace(c.Prod.BackupLocalRoot)
+	if root == "" {
+		root = backupset.DefaultLocalRoot
+	}
+	if err := backupset.LocalRoot(root); err != nil {
+		return result(item, []string{"PADDOCK_BACKUP_LOCAL_ROOT=" + root + ": " + err.Error()})
+	}
+	fi, err := os.Lstat(root)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return Result{Item: item, OK: true, Warn: true, Detail: root + " does not exist: local backup targets stay " +
+			"pending_host until it does (mkdir -m 0750 " + root + ")"}
+	case err != nil:
+		return result(item, []string{root + ": " + err.Error()})
+	case !fi.IsDir():
+		return result(item, []string{root + " is a symlink or not a directory"})
+	case !ownedBy(fi, owner):
+		return result(item, []string{root + " is not owned by uid " + strconv.Itoa(int(owner)) + " (chown root)"})
+	case fi.Mode().Perm()&0o022 != 0:
+		return result(item, []string{root + " is writable by group or others (mode " + fmt.Sprintf("%04o", fi.Mode().Perm()) +
+			"): chmod go-w"})
+	}
+	return result(item, nil)
+}
+
+func ownedBy(fi fs.FileInfo, uid uint32) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && st.Uid == uid
 }
 
 // checkBackupSecretsConfined fails when a backup secret reaches another role than the one that needs it (plan M15

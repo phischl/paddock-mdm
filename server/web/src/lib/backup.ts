@@ -173,6 +173,16 @@ export type TargetField =
   | 's3Endpoint' | 's3Bucket' | 's3AccessKey' | 's3SecretKey'
 export type TargetErrors = Partial<Record<TargetField, string>>
 
+const controlChars = /[\u0000-\u001f\u007f-\u009f]/
+function hasControl(p: string): boolean {
+  return controlChars.test(p)
+}
+
+/** A relative subpath of the host's local backup root: no empty, '.' or '..' element (plan M15 decision 36). */
+function validLocalSubpath(p: string): boolean {
+  return p !== '' && new TextEncoder().encode(p).length <= 256 && !p.includes('\\') && !hasControl(p) && p.split('/').every((el) => el !== '' && el !== '.' && el !== '..')
+}
+
 /** Validates like the server's first line of defense (plan M15 §6.1); returns message keys by field. */
 export function validateTarget(input: TargetInput, original: TargetInput | null): TargetErrors {
   const errors: TargetErrors = {}
@@ -180,7 +190,7 @@ export function validateTarget(input: TargetInput, original: TargetInput | null)
   if (!namePattern.test(input.name)) errors.name = 'backup.targets.nameInvalid'
   switch (input.type) {
     case 'local':
-      if (!input.local.path.startsWith('/') || input.local.path.split('/').includes('..')) errors.localPath = 'backup.targets.pathInvalid'
+      if (!validLocalSubpath(input.local.path)) errors.localPath = 'backup.targets.pathInvalid'
       break
     case 'smb':
       if (input.smb.host.trim() === '') errors.smbHost = 'backup.targets.required'

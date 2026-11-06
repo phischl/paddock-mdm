@@ -421,7 +421,8 @@ amendment, `docs/reqirements/`.
 
 ```
 name: 1–64 characters, the API-token name pattern ^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$; unique
-local: path absolute, no "..", ≤ 256 bytes (a host directory; must exist on the host — checked by apply)
+local: path a relative subpath of PADDOCK_BACKUP_LOCAL_ROOT (amendment 2026-11-05, decision 36): no leading "/",
+       no "..", "." or empty element, ≤ 256 bytes; resolved and checked on the host by apply
 smb:   host (DNS name or IP literal, ≤ 253), share (^[A-Za-z0-9_$. -]{1,80}$), path (relative, optional, no ".."),
        username (1–104), password (1–256, write-only), domain (optional ≤ 64), options (optional, ≤ 256, the
        allow list vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N; anything else 400)
@@ -1127,6 +1128,23 @@ and every target as soon as it left the bucket for any other reason. This note n
   database lost is re-inserted with an unambiguous kind.
 - **Additive param.** `source_target_id` is part of every restore event (§6.4 lists only `source`).
 - The CLI flags of `backup plan` and `backup restore-report` (PDK-734's contract) are unchanged.
+
+## Amendment 2026-11-05 — local targets are subpaths of a configured root (PDK-760, `decisions-alpha9.md` item 36)
+
+Decision: a local target no longer names an absolute host directory. A new host setting `PADDOCK_BACKUP_LOCAL_ROOT`
+(default `/srv/paddock-backup`) is the base directory; `local.path` is a **relative subpath** of it. This replaces any
+deny list of system and deployment directories (PDK-729 review): there is no absolute path to deny.
+
+- `backupset.ValidateTarget` refuses an empty path, a leading `/`, a `..`, `.` or empty element, a backslash, control
+  characters and more than 256 bytes (400 `invalid_request`, field `local.path`). The server does not know the root.
+- `backuprole.ResolveLocal(root, sub)` is the host step's join (`./paddock backup-target apply`, PDK-733): the root and
+  every component must exist, be a directory and not be a symlink; otherwise the target is refused and nothing is
+  mounted (fail closed). The backup role itself still sees only the mounted volume and keeps its `os.Root`
+  confinement, so its `dirTarget` is unchanged.
+- `./paddock check` item `backup: local target root`: FAIL when the root is not a clean absolute path other than `/`,
+  is a symlink or not a directory, or is writable by group or others; WARN when it does not exist.
+- Alpha: existing local targets with an absolute path fail validation on the next edit and need the subpath form;
+  there is no migration (no users).
 
 ### Note 2026-11-06 — host restore: escrow credential, key file, fresh-install duration (PDK-734; decisions-alpha9 items 38 and 39)
 
