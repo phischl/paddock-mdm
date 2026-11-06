@@ -565,9 +565,15 @@ path lives in `deploy/compose/scripts/legacy-alpha8.sh`, which both commands sou
 6. **Proof.** PDK-744's CI job proves the pair end to end, including the rollback. The legacy rollback is never run
    against a development stack that holds lab-linked secrets.
 
-## Note 2026-11-06 — the upgrade job as implemented (PDK-744; decisions-alpha9 items 53 and 54; pending architect-lead sign-off)
+## Note 2026-11-06 — the upgrade job as implemented (PDK-744; decisions-alpha9 items 53–55; accepted (architect lead, 2026-11-06))
 
-The upgrade job deviates from §3.5 decisions 10 and 11 in these points:
+This note replaces three passages of §3.5, and they are read as written here:
+- decision 10's "the smoke test's first administrator" and "the smoke test's WebAuthn helper" (items 4 and 5 below);
+- decision 11's candidate "`make release-bundle RELEASE_VERSION=ci-<sha> RELEASE_CHANNEL=edge` … images from the PR's
+  `make image`" (items 1 and 2);
+- decision 10's "`TestAuditChain`'s verification endpoint" (item 3).
+
+The points:
 
 1. **The candidate of `ci.yml` carries the release under development as its version**, the last entry of
    `server/internal/buildinfo/releases.gen.go` (today `0.1.0-alpha.9`). It is built with `deploy/bundle/build.sh
@@ -576,8 +582,9 @@ The upgrade job deviates from §3.5 decisions 10 and 11 in these points:
    <bundle version>`, which refuses a version outside the binary's release sequence (`ErrUnknownTargetVersion`). An
    edge version would fail every run. With the version under development, "versions adjacent" judges the real pair.
    `UPGRADE_CANDIDATE_UNRELEASED=1` lets only `release notes`, `images pullable` and `disk` warn, because a tree has no
-   notes and its images are not in a registry. Between a release tag and the move of `-current` in `server/gen.go`, a
-   candidate equals the newest tag and step 3 fails with "versions adjacent".
+   notes and its images are not in a registry. The release-prep commit of N therefore already moves `-current` in
+   `server/gen.go` to N+1 (`docs/operations/agent-releases.md`, "Changelog" step 3). Otherwise a pull request's
+   candidate would equal the newest tag and step 3 would fail "versions adjacent".
 2. **No image of a pull request is pushed (item 54).** The candidate's images are built in the job and named by local
    tag (`*:upgrade-ci`), not by `images.txt` digests: an image that was never pushed has no registry digest.
    `./paddock pull` without arguments pulls only images that are not present by their reference, so the upgrade's
