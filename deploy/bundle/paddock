@@ -42,6 +42,11 @@ usage: ./paddock <command> [arguments]
   migrate-from <old dir>          take over .env and .secrets/ of the bundle directory of the running version
   upgrade-check <old dir> [--json]
                                   read-only check of what an upgrade from the running version needs (changes nothing)
+  upgrade <old dir> [--yes] [--allow-unsupported-agents] [--skip-backup]
+                                  upgrade from the running version: the check, migrate-from, secrets, pull, check, the
+                                  labelled pre-upgrade backup, up, post-checks; a second run continues a failed one
+  rollback <old dir> [--yes]      back to the version of <old dir>: down, the restore of the pre-upgrade backup when the
+                                  schema changed, up in <old dir> (every change since the upgrade is lost then)
 EOF
   exit 2
 }
@@ -105,7 +110,16 @@ case "$cmd" in
     upgrade_check "$BUNDLE_DIR" "$@" || status=$?
     exit "$status"
     ;;
-  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal | restore | backup-target | backup) ;;
+  upgrade)
+    # Before the .env check: this directory gets its .env from the old one during the upgrade (migrate-from).
+    # shellcheck source=../compose/scripts/upgrade-check.sh
+    . "$BUNDLE_DIR/scripts/upgrade-check.sh"
+    # shellcheck source=../compose/scripts/upgrade.sh
+    . "$BUNDLE_DIR/scripts/upgrade.sh"
+    upgrade_main "$BUNDLE_DIR" "$@"
+    exit 0
+    ;;
+  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal | restore | backup-target | backup | rollback) ;;
   *) usage ;;
 esac
 
@@ -320,6 +334,11 @@ case "$cmd" in
     # shellcheck source=../compose/scripts/restore.sh
     . "$BUNDLE_DIR/scripts/restore.sh"
     restore_main "$@"
+    ;;
+  rollback)
+    # shellcheck source=../compose/scripts/rollback.sh
+    . "$BUNDLE_DIR/scripts/rollback.sh"
+    rollback_main "$BUNDLE_DIR" "$@"
     ;;
   auto-unseal)
     # Automatic unseal of OpenBao (ADR 0035, plan M8u decision 18). A share is never printed, logged or put on a
