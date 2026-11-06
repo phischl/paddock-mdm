@@ -11,7 +11,7 @@ usage: ./paddock <command> [arguments]
   version                         print the bundle version
   verify                          check the shipped files against SHA256SUMS
   secrets                         generate this host's secrets into .secrets/ (idempotent)
-  pull                            pull every image of this host
+  pull [service...]               pull every image of this host that is not present locally (services: always)
   check [--online]                production checklist (prod-check) of this host's configuration
   up [--infra]                    start the stack and wait until healthy (--infra: infrastructure only)
   down [--volumes]                stop the stack (--volumes also deletes the data)
@@ -199,7 +199,22 @@ case "$cmd" in
     exec "$BUNDLE_DIR/scripts/gen-prod-secrets.sh" "$PADDOCK_HOST"
     ;;
   pull)
-    compose --profile '*' pull "$@"
+    if (($#)); then
+      compose --profile '*' pull "$@"
+      exit
+    fi
+    # An image already present by its reference (tag and digest) is not pulled again: a host that loaded the images
+    # with `docker load` (offline) and the CI upgrade job's locally built candidate pass the pull (decisions-alpha9
+    # item 54). An image whose reference names a digest is identified by it, so a present one is the shipped one.
+    refs="$(compose --profile '*' config --images)" || die "cannot read the images of this host's Compose files"
+    while IFS= read -r ref; do
+      [[ -n "$ref" ]] || continue
+      if docker image inspect "$ref" >/dev/null 2>&1; then
+        echo "present: $ref"
+      else
+        docker pull "$ref" || die "pulling $ref failed"
+      fi
+    done < <(sort -u <<<"$refs")
     ;;
   check)
     online=

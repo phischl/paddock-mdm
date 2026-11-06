@@ -783,6 +783,41 @@ else
     fail "backup-target apply feeds the render through a here-string" ||
     pass "backup-target apply feeds the render through pipes (strace not available)"
 fi
+
+# ./paddock pull pulls only the images that are not present by their reference (decisions-alpha9 item 54).
+mkdir -p "$work/fakebin-pull"
+cat >"$work/fakebin-pull/docker" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
+case "$*" in
+  *" config --images") printf '%s\n' reg/a:1@sha256:aa reg/b:2@sha256:bb reg/a:1@sha256:aa ;;
+  "image inspect reg/a:1@sha256:aa") exit 0 ;;
+  "image inspect "*) exit 1 ;;
+  "pull reg/b:2@sha256:bb") exit "${FAKE_PULL_EXIT:-0}" ;;
+esac
+exit 0
+FAKE
+chmod +x "$work/fakebin-pull/docker"
+paddock_pull() {
+  : >"$FAKE_DOCKER_LOG"
+  set +e
+  out="$(cd "$work/t" && env -u SECRETS_DIR PATH="$work/fakebin-pull:$PATH" ./paddock pull "$@" 2>&1 </dev/null)"
+  rc=$?
+  set -e
+}
+paddock_pull
+if [[ $rc == 0 ]] && grep -qx 'pull reg/b:2@sha256:bb' "$FAKE_DOCKER_LOG" && ! grep -q '^pull reg/a' "$FAKE_DOCKER_LOG" &&
+  [[ "$(grep -c '^image inspect reg/a' "$FAKE_DOCKER_LOG")" == 1 && "$out" == *"present: reg/a:1@sha256:aa"* ]]; then
+  pass "pull skips an image present by its reference and pulls the missing one, each image once"
+else
+  fail "pull: exit $rc, $out, $(cat "$FAKE_DOCKER_LOG")"
+fi
+FAKE_PULL_EXIT=1 paddock_pull
+[[ $rc != 0 && "$out" == *"pulling reg/b:2@sha256:bb failed"* ]] && pass "pull fails when a missing image cannot be pulled" ||
+  fail "failed pull: exit $rc, $out"
+paddock_pull paddock-api
+grep -q -- "--profile \* pull paddock-api$" "$FAKE_DOCKER_LOG" && ! grep -q '^image inspect' "$FAKE_DOCKER_LOG" &&
+  pass "pull <service> pulls the named service through Compose as before" || fail "pull paddock-api: $(cat "$FAKE_DOCKER_LOG")"
 unset FAKE_DOCKER_LOG
 if ((failures > 0)); then
   echo "bundle: $failures check(s) failed" >&2
