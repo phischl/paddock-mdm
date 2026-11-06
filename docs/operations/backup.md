@@ -330,6 +330,6 @@ every write needs a step-up, which an API token can never satisfy. Lists follow 
 
 ## From 0.1.0-alpha.8
 
-The upgrade moves the backup (`docs/operations/upgrade.md`, "From 0.1.0-alpha.8: the backup moves"). In short: the S3
+The upgrade moves the backup (`docs/operations/upgrade.md`, "0.1.0-alpha.9, from 0.1.0-alpha.8"). In short: the S3
 bucket of `PADDOCK_BACKUP_S3_*` is no longer written by anyone; add it, or another bucket, as an S3 target in the
 portal and confirm the imported key.

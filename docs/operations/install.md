@@ -364,7 +364,7 @@ recovery. After the first start (section 9):
    `./paddock backup status`), and that `./paddock compose run --rm --no-deps pgbackrest info` lists a full backup.
 5. Keep with the key a copy of `.secrets/` and `.env` and, for an S3 target, the file of
    `./paddock backup-target export <name> <file>`: a restore onto a rebuilt host needs them
-   (`docs/operations/restore.md`, "Fresh installation"). The quarterly restore drill is in the same document.
+   (`docs/operations/restore.md`, "Scenario 1: fresh installation"). The quarterly restore drill is in the same document.
 
 ## 12. Upgrade
 
