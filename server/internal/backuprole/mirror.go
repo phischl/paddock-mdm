@@ -99,7 +99,8 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		return 0, err
 	}
 	hooks.tick()
-	plan, err := guard(ctx, dst, idx, have, ret)
+	facts := newIndexFacts(idx)
+	plan, err := guard(ctx, dst, facts, have, ret)
 	if err != nil {
 		return 0, err
 	}
@@ -145,7 +146,10 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		}
 	}
 
-	held, drop := judge(idx, plan, ret, have, after)
+	held, drop, err := judge(ctx, facts, plan, ret, have, after)
+	if err != nil {
+		return 0, err
+	}
 	if !ret.manifestOK {
 		if plan.unknown {
 			return held, errUnknownPath
@@ -183,19 +187,23 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 
 // judge applies step 6's verdicts to every object of the step-1 listing (have) that the local set lacks and the
 // step-4 listing (after) still holds. It returns the number of held objects and the objects to delete; with an
-// unknown path every deletable object counts as held instead.
-func judge(idx repoIndex, plan guardPlan, ret retention, have, after map[string]int64) (int, []string) {
+// unknown path every deletable object counts as held instead. It stops as soon as ctx ends.
+func judge(ctx context.Context, facts *indexFacts, plan guardPlan, ret retention,
+	have, after map[string]int64) (int, []string, error) {
 	newest := newestKindFiles(have)
 	held := 0
 	var drop []string
 	for _, p := range slices.Sorted(maps.Keys(have)) {
-		if _, ok := idx[p]; ok || p == backupset.ManifestPath {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, err
+		}
+		if _, ok := facts.idx[p]; ok || p == backupset.ManifestPath {
 			continue
 		}
 		if _, still := after[p]; !still {
 			continue
 		}
-		switch verdict(idx, plan, ret, newest, p) {
+		switch verdict(facts, plan, ret, newest, p) {
 		case keepUntouched:
 		case keepHeld:
 			held++
@@ -207,7 +215,7 @@ func judge(idx repoIndex, plan guardPlan, ret retention, have, after map[string]
 			drop = append(drop, p)
 		}
 	}
-	return held, drop
+	return held, drop, nil
 }
 
 // rewritten reports whether pgBackRest rewrites the file at p in place (backup.info, archive.info and their copies),
@@ -277,15 +285,21 @@ func (f repoFile) segment() string {
 // its copy (G2); else the set is shrunk. A repository path the local set lacks entirely is the active key's (shrunk),
 // a retired key's (removed once the local expire rule holds on the target's own copy, else held), or one no key
 // names (held, unknown_path) (G3). OpenBao snapshots, Fleet dumps, escrowed headers and WAL never shrink the set (G4).
-func guard(ctx context.Context, dst Target, idx repoIndex, have map[string]int64, ret retention) (guardPlan, error) {
+// It stops as soon as ctx ends.
+func guard(ctx context.Context, dst Target, facts *indexFacts, have map[string]int64,
+	ret retention) (guardPlan, error) {
+	idx := facts.idx
 	plan := guardPlan{drop: map[string]bool{}, hold: map[string]bool{}}
 	lacking := map[string]bool{}
 	for _, p := range slices.Sorted(maps.Keys(have)) {
+		if err := ctx.Err(); err != nil {
+			return guardPlan{}, err
+		}
 		f, ok := parseRepo(p)
 		if !ok {
 			continue
 		}
-		if !idx.holdsPath(f.repoPath) {
+		if !facts.holdsPath(f.repoPath) {
 			lacking[f.repoPath] = true
 			continue
 		}
@@ -294,7 +308,7 @@ func guard(ctx context.Context, dst Target, idx repoIndex, have map[string]int64
 		}
 		switch {
 		case f.label() != "" && len(f.rest) == 2 && f.rest[1] == fullManifest:
-			if !idx.expired(f.repoPath, f.stanza, f.label(), ret.full) {
+			if !facts.expired(f.repoPath, f.stanza, f.label(), ret.full) {
 				return guardPlan{}, errSetShrunk
 			}
 		case f.info():
@@ -352,21 +366,21 @@ const (
 
 // verdict applies the delete rules D1–D7 of A3 step 6 to the object p the target holds and the local set lacks.
 // newest is the time of the newest OpenBao snapshot and Fleet dump on the target's step-1 listing.
-func verdict(idx repoIndex, plan guardPlan, ret retention, newest map[string]time.Time, p string) int {
+func verdict(facts *indexFacts, plan guardPlan, ret retention, newest map[string]time.Time, p string) int {
 	if f, ok := parseRepo(p); ok {
 		dir := f.repoPath + "/"
 		switch {
 		case plan.drop[dir]:
 			return drop1
-		case plan.hold[dir], !idx.holdsPath(f.repoPath), f.info():
+		case plan.hold[dir], !facts.holdsPath(f.repoPath), f.info():
 			return keepHeld
 		case f.label() != "":
-			if idx.expired(f.repoPath, f.stanza, f.label(), ret.full) {
+			if facts.expired(f.repoPath, f.stanza, f.label(), ret.full) {
 				return drop1
 			}
 		case f.segment() != "":
-			low := idx.lowestWAL(f.repoPath, f.stanza)
-			if len(idx.fulls(f.repoPath, f.stanza)) >= max(ret.full, 1) && low != "" && f.segment() < low &&
+			low := facts.lowestWAL(f.repoPath, f.stanza)
+			if len(facts.fulls(f.repoPath, f.stanza)) >= max(ret.full, 1) && low != "" && f.segment() < low &&
 				ret.walOK[f.repoPath+"/"+f.stanza] {
 				return drop1
 			}
@@ -377,7 +391,7 @@ func verdict(idx repoIndex, plan guardPlan, ret retention, newest map[string]tim
 	switch dir += "/"; dir {
 	case "openbao/", "fleet/":
 		at, ok := nameTime(p)
-		if ok && at.Before(newest[dir]) && ret.now.Sub(at) > ret.kindKeep[dir] && len(idx.under(dir)) > 0 {
+		if ok && at.Before(newest[dir]) && ret.now.Sub(at) > ret.kindKeep[dir] && facts.hasUnder(dir) {
 			return drop1
 		}
 		return keepHeld

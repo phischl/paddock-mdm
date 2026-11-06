@@ -165,6 +165,74 @@ func (idx repoIndex) holdsPath(repoPath string) bool {
 	return false
 }
 
+// indexFacts answers the per-repository questions of a mirror's guard and delete verdicts from idx and computes each
+// answer once: asked of idx directly, every object of a target's listing rescans and re-sorts the whole index, which
+// on a set of a few hundred thousand files holds a CPU core for hours and stalls every mirror (PDK-861).
+type indexFacts struct {
+	idx      repoIndex
+	holds    map[string]bool
+	full     map[string][]string
+	lowest   map[string]string
+	nonEmpty map[string]bool
+}
+
+func newIndexFacts(idx repoIndex) *indexFacts {
+	return &indexFacts{idx: idx, holds: map[string]bool{}, full: map[string][]string{}, lowest: map[string]string{},
+		nonEmpty: map[string]bool{}}
+}
+
+// holdsPath is repoIndex.holdsPath.
+func (f *indexFacts) holdsPath(repoPath string) bool {
+	v, ok := f.holds[repoPath]
+	if !ok {
+		v = f.idx.holdsPath(repoPath)
+		f.holds[repoPath] = v
+	}
+	return v
+}
+
+// fulls is repoIndex.fulls.
+func (f *indexFacts) fulls(repoPath, stanza string) []string {
+	k := repoPath + "/" + stanza
+	v, ok := f.full[k]
+	if !ok {
+		v = f.idx.fulls(repoPath, stanza)
+		f.full[k] = v
+	}
+	return v
+}
+
+// expired is repoIndex.expired.
+func (f *indexFacts) expired(repoPath, stanza, label string, retention int) bool {
+	labels := f.fulls(repoPath, stanza)
+	i, found := slices.BinarySearch(labels, label)
+	if found {
+		i++
+	}
+	return len(labels)-i >= max(retention, 1)
+}
+
+// lowestWAL is repoIndex.lowestWAL.
+func (f *indexFacts) lowestWAL(repoPath, stanza string) string {
+	k := repoPath + "/" + stanza
+	v, ok := f.lowest[k]
+	if !ok {
+		v = f.idx.lowestWAL(repoPath, stanza)
+		f.lowest[k] = v
+	}
+	return v
+}
+
+// hasUnder reports whether idx holds a file below dir (with a trailing slash).
+func (f *indexFacts) hasUnder(dir string) bool {
+	v, ok := f.nonEmpty[dir]
+	if !ok {
+		v = len(f.idx.under(dir)) > 0
+		f.nonEmpty[dir] = v
+	}
+	return v
+}
+
 // walSegment matches a WAL segment file in pgBackRest's archive: the segment name, a dash and the checksum.
 var walSegment = regexp.MustCompile(`^([0-9A-F]{24})-[0-9a-f]{40}`)
 
