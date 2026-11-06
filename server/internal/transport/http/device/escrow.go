@@ -1,6 +1,7 @@
 package device
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -9,14 +10,18 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/dsse"
 	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/pkg/revocation"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
 )
 
 // escrowUpload accepts an encrypted secret (plan M4a decision 12) or announces a sealed LUKS header (plan M4b
 // decision 10) and publishes it to ingest.escrow; the worker stores it and sets its status, which the device polls
-// with GET /v1/escrow/{escrow_id}. A header is answered with a presigned PUT of the object key the gateway chose.
+// with GET /v1/escrow/{escrow_id}. A header is answered with a presigned PUT of the object key the gateway chose. A
+// LUKS upload of a device with an issued Destroy token gets no presigned PUT and is published without key material for
+// the worker to refuse (PDK-794).
 func (g *gateway) escrowUpload(w http.ResponseWriter, r *http.Request) {
 	dev, err := g.authenticateDevice(w, r, maxBody)
 	if err != nil {
@@ -35,7 +40,17 @@ func (g *gateway) escrowUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	msg.DeviceID, msg.OrganizationID, msg.ReceivedAt = dev.id, dev.key.OrganizationID, g.d.Now().UTC()
 	accepted := escrow.Accepted{EscrowID: msg.EscrowID.String()}
-	if req.Kind == escrow.KindLUKSHeader {
+	if req.Kind == escrow.KindLUKSRecoveryKey || req.Kind == escrow.KindLUKSHeader {
+		if msg.DestroyIssued, err = g.destroyIssued(r.Context(), dev.id); err != nil {
+			g.fail(w, r, err)
+			return
+		}
+	}
+	if msg.DestroyIssued {
+		// No presigned PUT, so no header object reaches the bucket and its backup copy; the worker records the
+		// refusal and the device polls it as refused.
+		msg.Ciphertext, msg.WrappedDEK, msg.Nonce = nil, nil, nil
+	} else if req.Kind == escrow.KindLUKSHeader {
 		if g.d.Escrow == nil {
 			g.fail(w, r, errInternal) // a gateway without the escrow bucket is misconfigured
 			return
@@ -62,6 +77,26 @@ func (g *gateway) escrowUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, accepted)
+}
+
+// destroyIssued reports whether cmd:<device_id> holds an unexpired Destroy token of the device (PDK-794). The
+// revocation-issuer publishes every issued token there and the worker removes it once the device confirmed it.
+func (g *gateway) destroyIssued(ctx context.Context, device uuid.UUID) (bool, error) {
+	cmds, err := g.d.Cache.Commands(ctx, device, g.d.Now())
+	if err != nil {
+		return false, err
+	}
+	for _, cmd := range cmds {
+		env, payload, err := dsse.Decode(cmd.Envelope)
+		if err != nil || env.PayloadType != revocation.PayloadType {
+			continue
+		}
+		var tok revocation.Token
+		if json.Unmarshal(payload, &tok) == nil && tok.Action == revocation.ActionDestroy && tok.DeviceID == device.String() {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // validateEscrow checks a request and returns its message without device, organization and time: a secret needs a

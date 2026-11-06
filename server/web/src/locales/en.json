@@ -446,6 +446,7 @@
       "tamper_agent_not_running": "fleetd reports that the Paddock agent does not run on {target}",
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
       "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
+      "escrow_refused_destroyed": "A disk key of {target} was not escrowed: a Destroy of the device is issued",
       "revocation_confirmed": "The device {target} confirmed that its disk keyslots are erased",
       "revocation_refused": "The device {target} refused a revocation ({reason})",
       "presumed_self_locked": "The device {target} has not reached Paddock for longer than the dead man's switch period and presumably locked itself",
