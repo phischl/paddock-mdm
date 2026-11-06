@@ -164,7 +164,7 @@ var errPlanted = errors.New("backup target: unexpected file type")
 // openMount opens a target's volume as an os.Root. The volume's directory is the role's own mount point; everything
 // below it belongs to whoever can write to the share.
 func openMount(mount string) (*os.Root, error) {
-	info, err := os.Lstat(mount)
+	info, err := os.Lstat(mount) //nolint:gosec // the role's own mount point below the configured targets directory
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errNotMounted, err)
 	}
