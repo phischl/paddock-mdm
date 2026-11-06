@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { VApp } from 'vuetify/components'
 import BackupKeyDialog from '../components/BackupKeyDialog.vue'
+import BackupRestorePlanDialog from '../components/BackupRestorePlanDialog.vue'
 import BackupTargetForm from '../components/BackupTargetForm.vue'
 import PlatformBackup from '../views/PlatformBackup.vue'
 import { createPortalI18n } from '../i18n'
@@ -12,8 +13,8 @@ import { vuetify } from '../plugins/vuetify'
 import { pendingConfirm, settleConfirm } from '../composables/useConfirm'
 import { useSessionStore } from '../stores/session'
 import {
-  attemptsLeft, credentialsRequired, emptyTarget, hostStateStatus, inputOf, keyFileText, scheduleErrors, toBody, validateTarget,
-  withoutSecrets, type BackupKey, type BackupOverview, type BackupTarget, type TargetInput,
+  attemptsLeft, credentialsRequired, emptyPlan, emptyTarget, hostStateStatus, inputOf, keyFileText, newestSuccess, planBody, planErrors,
+  planStateStatus, scheduleErrors, timeLeft, toBody, validateTarget, withoutSecrets, type BackupKey, type BackupRestorePlan, type BackupOverview, type BackupTarget, type TargetInput,
 } from '../lib/backup'
 
 function target(over: Partial<BackupTarget> = {}): BackupTarget {
@@ -215,6 +216,10 @@ const fetchTarget = vi.fn()
 const saveSched = vi.fn()
 const toggle = vi.fn()
 const runNow = vi.fn()
+const planCreate = vi.fn()
+const planCancel = vi.fn()
+const planAbandon = vi.fn()
+let plans: BackupRestorePlan[] = []
 let targets: BackupTarget[] = []
 vi.mock('../lib/backup', async (importOriginal) => {
   const original = await importOriginal<typeof import('../lib/backup')>()
@@ -231,6 +236,10 @@ vi.mock('../lib/backup', async (importOriginal) => {
     saveSchedule: (...a: unknown[]) => saveSched(...a),
     setTargetEnabled: (...a: unknown[]) => toggle(...a),
     requestRun: () => runNow(),
+    createRestorePlan: (...a: unknown[]) => planCreate(...a),
+    cancelRestorePlan: (...a: unknown[]) => planCancel(...a),
+    abandonRestorePlan: (...a: unknown[]) => planAbandon(...a),
+    planLister: () => () => Promise.resolve({ items: plans, page: 1, page_size: 25, total: plans.length, total_capped: false, sort: '-created_at' }),
     targetLister: () => () => Promise.resolve({ items: targets, page: 1, page_size: 25, total: targets.length, total_capped: false, sort: 'name' }),
     runLister: () => () => Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_capped: false, sort: '-started_at' }),
   }
@@ -242,7 +251,8 @@ const assign = vi.fn()
 beforeEach(() => {
   sessionStorage.clear()
   localStorage.clear()
-  for (const f of [getOverview, generate, confirmK, discard, remove, create, update, fetchTarget, saveSched, toggle, runNow, assign]) f.mockReset()
+  for (const f of [getOverview, generate, confirmK, discard, remove, create, update, fetchTarget, saveSched, toggle, runNow, planCreate, planCancel, planAbandon, assign]) f.mockReset()
+  plans = []
   getOverview.mockResolvedValue(overviewOf())
   targets = [target()]
   Object.defineProperty(window, 'location', { value: { ...window.location, assign, href: 'https://admin.test/platform/backup', search: '' }, writable: true })
@@ -623,5 +633,249 @@ describe('PlatformBackup', () => {
     settleConfirm({ reason: '' })
     await flushPromises()
     for (const s of spies) expect(s).not.toHaveBeenCalled()
+  })
+})
+
+function plan(over: Partial<BackupRestorePlan> = {}): BackupRestorePlan {
+  return {
+    id: 'p1', kind: 'components', source: 'repo', source_target_id: null, source_target_name: null, at: null,
+    components: ['postgres', 'openbao'], state: 'approved', created_by: 'alice', created_at: '2026-11-06T10:00:00Z',
+    expires_at: '2099-11-07T10:00:00Z', started_at: null, finished_at: null, outcome_detail: null,
+    host_command: './paddock restore --plan p1', ...over,
+  }
+}
+
+describe('restore plan rules', () => {
+  const now = new Date('2026-11-06T12:00:00Z')
+
+  it('needs the typed word, a component and for a point in time a point in the past', () => {
+    const input = emptyPlan()
+    expect(planErrors(input, now)).toEqual(['confirmation'])
+    expect(planErrors({ ...input, confirmation: 'restore' }, now)).toEqual([])
+    expect(planErrors({ ...input, confirmation: 'Restore' }, now)).toEqual(['confirmation'])
+    expect(planErrors({ ...input, confirmation: 'restore', components: [] }, now)).toEqual(['components'])
+    expect(planErrors({ ...input, kind: 'point_in_time', confirmation: 'restore' }, now)).toEqual(['at'])
+    expect(planErrors({ ...input, kind: 'point_in_time', at: '2030-01-01T00:00', confirmation: 'restore' }, now)).toEqual(['at'])
+    expect(planErrors({ ...input, kind: 'point_in_time', at: '2026-11-06T10:00', confirmation: 'restore' }, now)).toEqual([])
+  })
+
+  it('sends the source and the point only when they apply', () => {
+    expect(planBody({ ...emptyPlan(), confirmation: 'restore' })).toEqual({
+      kind: 'components', components: ['postgres', 'openbao', 'fleet', 'escrow'], confirmation: 'restore',
+    })
+    const body = planBody({ kind: 'point_in_time', sourceTargetId: 't1', at: '2026-11-06T10:00', components: ['escrow', 'postgres'], confirmation: 'restore' })
+    expect(body.source_target_id).toBe('t1')
+    expect(body.at).toBe(new Date('2026-11-06T10:00').toISOString())
+    expect(body.components).toEqual(['postgres', 'escrow'])
+  })
+
+  it('reads the newest success per kind of a target or of the repository', () => {
+    const ov = overviewOf({
+      targets: [target({ status: [{ kind: 'postgres', last_success_at: '2026-11-06T09:00:00Z', last_error: null }] as never })],
+      last_runs: [{ id: 'r', kind: 'fleet', outcome: 'succeeded', started_at: '2026-11-06T08:00:00Z', finished_at: '2026-11-06T08:05:00Z' }, { id: 'r2', kind: 'escrow', outcome: 'failed', started_at: null, finished_at: null }] as never,
+    })
+    expect(newestSuccess(ov, 't1').postgres).toBe('2026-11-06T09:00:00Z')
+    expect(newestSuccess(ov, 't1').fleet).toBeNull()
+    expect(newestSuccess(ov, null).fleet).toBe('2026-11-06T08:05:00Z')
+    expect(newestSuccess(ov, null).escrow).toBeNull()
+  })
+
+  it('counts the time left and reports an elapsed plan', () => {
+    expect(timeLeft('2026-11-07T11:30:30Z', now)).toEqual({ hours: 23, minutes: 30 })
+    expect(timeLeft('2026-11-06T12:00:00Z', now)).toBeNull()
+    expect(planStateStatus('expired').status).toBe('neutral')
+  })
+})
+
+describe('BackupRestorePlanDialog', () => {
+  function mountPlan(props: Record<string, unknown> = {}) {
+    return mount(BackupRestorePlanDialog, {
+      props: { overview: overviewOf({ targets: [target({ name: 'Cloud', type: 's3' })] }), plan: null, problem: '', pending: false, ...props },
+      global: { plugins: [createPortalI18n(), vuetify] }, attachTo: document.body,
+    })
+  }
+  const bodyText = () => document.body.textContent ?? ''
+  const typeWord = async (value: string) => {
+    const el = document.querySelector('#backup-restore-word') as HTMLInputElement
+    el.value = value
+    el.dispatchEvent(new Event('input'))
+    await flushPromises()
+  }
+
+  it('states the consequence and keeps the approval disabled until the word is typed', async () => {
+    const w = mountPlan()
+    expect(bodyText()).toContain("Restoring replaces the control plane's databases")
+    const submit = document.querySelector('[data-testid="backup-restore-submit"]') as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+    await typeWord('restor')
+    expect(submit.disabled).toBe(true)
+    await typeWord('restore')
+    expect(submit.disabled).toBe(false)
+    ;(document.querySelector('form') as HTMLFormElement).dispatchEvent(new Event('submit'))
+    expect(w.emitted('submit')?.[0]?.[0]).toMatchObject({ kind: 'components', sourceTargetId: null, confirmation: 'restore' })
+    w.unmount()
+  })
+
+  it('asks for the point in time only for that kind and refuses it empty', async () => {
+    const w = mountPlan()
+    expect(document.querySelector('#backup-restore-at')).toBeNull()
+    await (document.querySelector('[data-testid="backup-restore-kind-point_in_time"] input') as HTMLElement).click()
+    await flushPromises()
+    expect(document.querySelector('#backup-restore-at')).not.toBeNull()
+    await typeWord('restore')
+    ;(document.querySelector('form') as HTMLFormElement).dispatchEvent(new Event('submit'))
+    await flushPromises()
+    expect(w.emitted('submit')).toBeUndefined()
+    expect(bodyText()).toContain('Choose a point in the past')
+    w.unmount()
+  })
+
+  it('shows the host command exactly as returned, with copy and the expiry', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const w = mountPlan({ plan: plan({ host_command: './paddock restore --plan abc' }) })
+    expect(document.querySelector('[data-testid="backup-restore-command"]')?.textContent).toBe('./paddock restore --plan abc')
+    expect(document.querySelector('[data-testid="backup-restore-expiry"]')?.textContent).toContain('expires in')
+    await (document.querySelector('[data-testid="backup-restore-copy"]') as HTMLElement).click()
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith('./paddock restore --plan abc')
+    w.unmount()
+  })
+})
+
+describe('PlatformBackup restore tab', () => {
+  it('lists the plans and cancels an approved one only after a confirmation', async () => {
+    plans = [plan(), plan({ id: 'p2', state: 'completed' })]
+    planCancel.mockResolvedValue(plan({ state: 'expired' }))
+    await mountPage('?tab=restore')
+    const list = document.querySelector('[data-testid="backup-plan-list"]')
+    expect(list?.textContent).toContain('Approved')
+    expect(list?.textContent).toContain('Completed')
+    expect(document.querySelector('[data-testid="backup-plan-cancel-p2"]')).toBeNull()
+    await click('[data-testid="backup-plan-cancel-p1"]')
+    expect(pendingConfirm.value?.options.destructive).toBe(true)
+    settleConfirm(false)
+    await flushPromises()
+    expect(planCancel).not.toHaveBeenCalled()
+    await click('[data-testid="backup-plan-cancel-p1"]')
+    settleConfirm({ reason: '' })
+    await flushPromises()
+    expect(planCancel).toHaveBeenCalledWith('p1')
+  })
+
+  it('offers Abandon only on running plans and sends nothing without the typed word', async () => {
+    plans = [plan({ id: 'p1', state: 'running' }), plan({ id: 'p2' }), plan({ id: 'p3', state: 'abandoned' })]
+    planAbandon.mockResolvedValue(plan({ id: 'p1', state: 'abandoned' }))
+    await mountPage('?tab=restore')
+    expect(document.querySelector('[data-testid="backup-plan-abandon-p2"]')).toBeNull()
+    expect(document.querySelector('[data-testid="backup-plan-abandon-p3"]')).toBeNull()
+    expect(document.querySelector('[data-testid="backup-plan-list"]')?.textContent).toContain('Abandoned')
+    await click('[data-testid="backup-plan-abandon-p1"]')
+    expect(pendingConfirm.value?.options.destructive).toBe(true)
+    expect(pendingConfirm.value?.options.requireTypedText).toBe('abandon')
+    settleConfirm(false)
+    await flushPromises()
+    expect(planAbandon).not.toHaveBeenCalled()
+    await click('[data-testid="backup-plan-abandon-p1"]')
+    settleConfirm({ reason: '' })
+    await flushPromises()
+    expect(planAbandon).toHaveBeenCalledWith('p1', 'abandon')
+  })
+
+  it('starts the step-up for an abandon and keeps only the id and the word', async () => {
+    plans = [plan({ id: 'p1', state: 'running' })]
+    planAbandon.mockResolvedValueOnce({ code: 'step_up_required' })
+    await mountPage('?tab=restore')
+    await click('[data-testid="backup-plan-abandon-p1"]')
+    settleConfirm({ reason: '' })
+    await flushPromises()
+    expect(assign).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(sessionStorage.getItem('paddock.stepup') ?? '{}').payload).toEqual({ op: 'abandon-plan', id: 'p1', confirmation: 'abandon' })
+  })
+
+  it('resumes an interrupted abandon after the step-up', async () => {
+    plans = [plan({ id: 'p1', state: 'running' })]
+    planAbandon.mockResolvedValue(plan({ id: 'p1', state: 'abandoned' }))
+    sessionStorage.setItem('paddock.stepup', JSON.stringify({ action: 'backup', target: 'backup', payload: { op: 'abandon-plan', id: 'p1', confirmation: 'abandon' }, at: Date.now() }))
+    await mountPage('?tab=restore')
+    await vi.waitFor(() => expect(planAbandon).toHaveBeenCalledWith('p1', 'abandon'))
+    await vi.waitFor(() => expect(document.body.textContent).toContain('The restore plan was abandoned.'))
+  })
+
+  it('resumes an interrupted cancel after the step-up', async () => {
+    plans = [plan()]
+    planCancel.mockResolvedValue(plan({ state: 'expired' }))
+    sessionStorage.setItem('paddock.stepup', JSON.stringify({ action: 'backup', target: 'backup', payload: { op: 'cancel-plan', id: 'p1' }, at: Date.now() }))
+    await mountPage('?tab=restore')
+    await vi.waitFor(() => expect(planCancel).toHaveBeenCalledWith('p1'))
+    await vi.waitFor(() => expect(document.body.textContent).toContain('The restore plan was cancelled.'))
+  })
+
+  it('resumes an interrupted plan and shows its host command', async () => {
+    const input = { kind: 'components', sourceTargetId: null, at: '', components: ['postgres'], confirmation: 'restore' }
+    sessionStorage.setItem('paddock.stepup', JSON.stringify({ action: 'backup', target: 'backup', payload: { op: 'plan', input }, at: Date.now() }))
+    planCreate.mockResolvedValue(plan({ host_command: './paddock restore --plan p1' }))
+    await mountPage('?tab=restore')
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="backup-restore-command"]')?.textContent).toBe('./paddock restore --plan p1'))
+    expect(planCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a refusal of a resumed plan', async () => {
+    const input = { kind: 'components', sourceTargetId: null, at: '', components: ['postgres'], confirmation: 'restore' }
+    sessionStorage.setItem('paddock.stepup', JSON.stringify({ action: 'backup', target: 'backup', payload: { op: 'plan', input }, at: Date.now() }))
+    planCreate.mockResolvedValue({ code: 'invalid_state' })
+    await mountPage('?tab=restore')
+    await vi.waitFor(() => expect(planCreate).toHaveBeenCalledTimes(1))
+    await flushPromises()
+    expect(document.querySelector('[data-testid="backup-restore-command"]')).toBeNull()
+    expect(document.querySelector('[data-testid="backup-page-problem"]')).not.toBeNull()
+  })
+
+  it('lists the components by their names and labels the row buttons with a formatted time', async () => {
+    plans = [plan({ components: ['postgres', 'backup-repo'] })]
+    await mountPage('?tab=restore')
+    expect(document.querySelector('[data-testid="backup-plan-list"]')?.textContent).toContain('Backup repository')
+    expect(document.querySelector('[data-testid="backup-plan-list"]')?.textContent).not.toContain('backup-repo')
+    const label = document.querySelector('[data-testid="backup-plan-cancel-p1"]')?.getAttribute('aria-label') ?? ''
+    expect(label).not.toMatch(/\d{4}-\d{2}-\d{2}T/)
+  })
+
+  it('creates a plan from the overview and shows its host command', async () => {
+    planCreate.mockResolvedValue(plan({ host_command: './paddock restore --plan p1' }))
+    await mountPage()
+    await click('[data-testid="backup-plan-restore"]')
+    const word = document.querySelector('#backup-restore-word') as HTMLInputElement
+    word.value = 'restore'
+    word.dispatchEvent(new Event('input'))
+    await flushPromises()
+    await click('[data-testid="backup-restore-submit"]')
+    expect(planCreate).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('[data-testid="backup-restore-command"]')?.textContent).toBe('./paddock restore --plan p1')
+  })
+
+  it('starts the step-up when the plan is refused for it and keeps the typed word with the operation', async () => {
+    planCreate.mockResolvedValueOnce({ code: 'step_up_required' })
+    await mountPage('?tab=restore')
+    await click('[data-testid="backup-plan-restore-tab"]')
+    const word = document.querySelector('#backup-restore-word') as HTMLInputElement
+    word.value = 'restore'
+    word.dispatchEvent(new Event('input'))
+    await flushPromises()
+    await click('[data-testid="backup-restore-submit"]')
+    expect(assign).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(sessionStorage.getItem('paddock.stepup') ?? '{}').payload.op).toBe('plan')
+  })
+
+  it('shows the refusal inside the dialog and keeps it open', async () => {
+    planCreate.mockResolvedValueOnce({ code: 'invalid_state' })
+    await mountPage()
+    await click('[data-testid="backup-plan-restore"]')
+    const word = document.querySelector('#backup-restore-word') as HTMLInputElement
+    word.value = 'restore'
+    word.dispatchEvent(new Event('input'))
+    await flushPromises()
+    await click('[data-testid="backup-restore-submit"]')
+    expect(document.querySelector('[data-testid="backup-restore-problem"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="backup-restore-form"]')).not.toBeNull()
   })
 })

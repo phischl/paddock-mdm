@@ -1629,7 +1629,8 @@
       "targets": "Ziele",
       "key": "Schlüssel",
       "schedule": "Zeitplan",
-      "history": "Verlauf"
+      "history": "Verlauf",
+      "restore": "Wiederherstellung"
     },
     "kinds": {
       "postgres": "Datenbanken",
@@ -1814,6 +1815,74 @@
         "retention_full": "Aufbewahrte Vollsicherungen",
         "openbao_keep_days": "Aufbewahrte OpenBao-Snapshots (Tage)",
         "fleet_keep_days": "Aufbewahrte Fleet-Dumps (Tage)"
+      }
+    },
+    "restore": {
+      "planAction": "Wiederherstellung planen",
+      "planTitle": "Wiederherstellung planen",
+      "commandTitle": "Wiederherstellung auf dem Host ausführen",
+      "consequence": "Die Wiederherstellung ersetzt die Datenbanken der Kontrollebene durch das Backup. Jede Änderung nach dem gewählten Zeitpunkt geht verloren. Geräte arbeiten weiter und verbinden sich neu; das Audit-Log auf dem Audit-Host bleibt unberührt.",
+      "kind": "Was wiederhergestellt wird",
+      "kinds": {
+        "components": "Die neuesten Backups der Komponenten",
+        "point_in_time": "Der Stand zu einem Zeitpunkt",
+        "fresh_install": "Neuinstallation"
+      },
+      "source": "Wiederherstellen aus",
+      "sourceRepo": "Dem lokalen Backup-Repository",
+      "at": "Zeitpunkt",
+      "atHint": "Oben stehen die neuesten erfolgreichen Backups der Quelle. Die Zeit gilt in Ihrer Zeitzone.",
+      "atInvalid": "Wählen Sie einen Zeitpunkt in der Vergangenheit.",
+      "noSuccess": "kein erfolgreiches Backup",
+      "components": "Komponenten",
+      "componentNames": {
+        "postgres": "Datenbanken (Paddock und Identitätsanbieter)",
+        "openbao": "OpenBao",
+        "fleet": "Fleet",
+        "escrow": "Escrow",
+        "backup-repo": "Backup-Repository"
+      },
+      "componentsInvalid": "Wählen Sie mindestens eine Komponente.",
+      "typeWord": "Zur Bestätigung {word} eingeben",
+      "wordInvalid": "Geben Sie das Wort {word} genau so ein.",
+      "approve": "Wiederherstellungsplan freigeben",
+      "commandIntro": "Der Plan ist freigegeben. Führen Sie diesen Befehl auf dem Host der Kontrollebene aus.",
+      "commandLabel": "Host-Befehl",
+      "expiresIn": "Der Plan läuft in {hours} h {minutes} min ab, am",
+      "expired": "Der Plan ist abgelaufen, er galt bis",
+      "done": "Fertig",
+      "created": "Der Wiederherstellungsplan wurde freigegeben.",
+      "showCommand": "Befehl anzeigen",
+      "cancelAction": "Plan abbrechen",
+      "cancelTitle": "Wiederherstellungsplan abbrechen",
+      "cancelConfirm": "Der Host lehnt diesen Plan dann ab. Sie können danach einen neuen freigeben.",
+      "cancelled": "Der Wiederherstellungsplan wurde abgebrochen.",
+      "cancelLabel": "Wiederherstellungsplan vom {time} abbrechen",
+      "abandonAction": "Plan aufgeben",
+      "abandonTitle": "Laufenden Wiederherstellungsplan aufgeben",
+      "abandonConfirm": "Nur wenn der Host das Ende der Wiederherstellung nie gemeldet hat. Der Plan gilt als aufgegeben, eine spätere Meldung des Hosts wird abgelehnt. Die Kontrollebene kann teilweise wiederhergestellt sein, prüfen Sie daher zuerst den Host.",
+      "abandoned": "Der Wiederherstellungsplan wurde aufgegeben.",
+      "abandonLabel": "Wiederherstellungsplan vom {time} aufgeben",
+      "showLabel": "Host-Befehl des Plans vom {time} anzeigen",
+      "state": "Zustand",
+      "states": {
+        "approved": "Freigegeben",
+        "running": "Läuft",
+        "completed": "Abgeschlossen",
+        "failed": "Fehlgeschlagen",
+        "expired": "Abgelaufen",
+        "abandoned": "Aufgegeben"
+      },
+      "source_column": "Quelle",
+      "createdBy": "Freigegeben von",
+      "pointInTime": "Zeitpunkt",
+      "components_column": "Komponenten",
+      "newest": "Neueste Backups",
+      "sourceSet": "Backup-Satz des Hosts",
+      "sourceTargetGone": "Gelöschtes Ziel",
+      "empty": {
+        "title": "Noch keine Wiederherstellung geplant",
+        "description": "Eine hier freigegebene Wiederherstellung wird auf dem Host mit dem danach angezeigten Befehl ausgeführt."
       }
     }
   },
