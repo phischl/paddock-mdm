@@ -199,6 +199,7 @@ ug_up_step() {
   fi
   ug_retire || {
     echo "upgrade: cannot remove the services $UG_NEW_VERSION retired; ./paddock up did not run" >&2
+    UG_UP_NOT_RUN=1
     return 1
   }
   ug_show "$UG_NEW/paddock" up

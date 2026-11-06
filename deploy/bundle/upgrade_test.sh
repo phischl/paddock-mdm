@@ -375,6 +375,7 @@ setup_alpha8
 FIXTURE_OLD_NO_BACKUP=1 FIXTURE_RM_EXIT=1 run 1 "the removal of the retired service fails" "$work/t/old" --yes
 has "the failed removal is named" 'cannot remove the services 0\.1\.0-alpha\.9 retired; \./paddock up did not run'
 not_called "no up after a failed removal" "$UP"
+hasnt "a failed removal does not claim the new release may be running" 'may be partly running'
 if [[ -f "$work/t/new/.upgrade-rollback" ]]; then pass "the rollback point is recorded before the removal"; else fail "no record before the removal"; fi
 FIXTURE_OLD_NO_BACKUP=1 run 0 "the run after a failed removal" "$work/t/old" --yes
 if [[ "$(grep -cE "$RETIRE" "$calls")" == 2 ]]; then pass "the next run repeats the removal"; else fail "the removal ran $(grep -cE "$RETIRE" "$calls") times"; fi
