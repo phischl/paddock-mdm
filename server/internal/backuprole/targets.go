@@ -164,7 +164,7 @@ var errPlanted = errors.New("backup target: unexpected file type")
 // openMount opens a target's volume as an os.Root. The volume's directory is the role's own mount point; everything
 // below it belongs to whoever can write to the share.
 func openMount(mount string) (*os.Root, error) {
-	info, err := os.Lstat(mount)
+	info, err := os.Lstat(mount) //nolint:gosec // the role's own mount point below the configured targets directory
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errNotMounted, err)
 	}
@@ -302,20 +302,43 @@ func readLimited(r io.Reader, p string) ([]byte, error) {
 	return b, err
 }
 
-func (d *dirTarget) Put(_ context.Context, p string, src io.Reader, size int64) error {
+// Put stops copying once ctx ends and then leaves no file at p: a mirror the stall watchdog gave up must not write
+// to the target any more (PDK-862).
+func (d *dirTarget) Put(ctx context.Context, p string, src io.Reader, size int64) error {
 	if !validPath(p) {
 		return fmt.Errorf("backup target: invalid path %q", p)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	r, err := d.open()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = r.Close() }()
-	return writeInRoot(r, p, src, size)
+	return writeInRootCtx(ctx, r, p, ctxReader{ctx: ctx, r: src}, size)
+}
+
+// ctxReader ends a copy with ctx's error once ctx ended.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(b []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(b)
 }
 
 // writeInRoot writes src to p below r through a temporary file and a rename, so a reader never sees a partial file.
 func writeInRoot(r *os.Root, p string, src io.Reader, size int64) error {
+	return writeInRootCtx(context.Background(), r, p, src, size)
+}
+
+// writeInRootCtx is writeInRoot and does not rename the temporary file into place once ctx ended.
+func writeInRootCtx(ctx context.Context, r *os.Root, p string, src io.Reader, size int64) error {
 	dir := path.Dir(p)
 	if dir != "." {
 		if err := r.MkdirAll(dir, 0o750); err != nil {
@@ -340,6 +363,9 @@ func writeInRoot(r *os.Root, p string, src io.Reader, size int64) error {
 	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
+	}
+	if err == nil {
+		err = ctx.Err()
 	}
 	if err == nil {
 		err = r.Rename(tmp, p)
