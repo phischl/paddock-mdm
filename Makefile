@@ -118,6 +118,8 @@ lint-shell:
 	shellcheck -s bash scripts/release-notes-check.sh scripts/release-notes-check_test.sh
 	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade-check.sh deploy/bundle/upgrade-check_test.sh
+	shellcheck -s bash deploy/compose/scripts/upgrade.sh deploy/compose/scripts/rollback.sh deploy/bundle/upgrade_test.sh \
+		deploy/bundle/rollback_test.sh
 
 # Changelog fragments (PDK-518): every change adds changelog.d/<ticket-id>.<section>.md instead of editing the
 # [Unreleased] section of CHANGELOG.md, so parallel pull requests do not conflict; the release manager assembles them
@@ -250,6 +252,8 @@ test: ## Unit and integration tests (requires Docker)
 	bash packaging/release_test.sh
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/upgrade-check_test.sh
+	bash deploy/bundle/upgrade_test.sh
+	bash deploy/bundle/rollback_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
 	bash deploy/bundle/ci/assert-hardening_test.sh
 	bash test/scan-secrets_test.sh
@@ -319,6 +323,8 @@ bundle: ## Build a local operator bundle of the local images (IMAGE, COMPILER_IM
 bundle-test: ## Drift test of the operator bundle against deploy/compose/ (part of make test)
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/upgrade-check_test.sh
+	bash deploy/bundle/upgrade_test.sh
+	bash deploy/bundle/rollback_test.sh
 
 .PHONY: bundle-smoke-lab
 bundle-smoke-lab: ## Smoke test of the lab profile of the local bundle behind Nginx (plan M8a decision 18; binds 80, 443, 8080)
