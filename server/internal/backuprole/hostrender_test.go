@@ -167,13 +167,20 @@ func TestWriteHostRenderRefuses(t *testing.T) {
 		"comma password, no flag":    {"", []HostTarget{smb("svc", "", "p,,a")}},
 		"space password":             {"", []HostTarget{smb("svc", "", "correct horse battery staple")}},
 		"no-break space password":    {"", []HostTarget{smb("svc", "", "a\u00a0b")}},
+		"bell character password":    {"", []HostTarget{smb("svc", "", "s3cr3t\apw")}},
 		"s3 is no volume target":     {"", []HostTarget{{ID: smbID, Name: "s3", Type: backupset.TypeS3}}},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := WriteHostRender(&buf, renderAt, c.root, c.targets); !errors.Is(err, ErrHostRender) {
-				t.Errorf("err = %v, want ErrHostRender", err)
+			err := WriteHostRender(&buf, renderAt, c.root, c.targets)
+			if !errors.Is(err, ErrHostRender) {
+				t.Fatalf("err = %v, want ErrHostRender", err)
+			}
+			for _, x := range c.targets {
+				if pw := x.Credentials.Password; len(pw) > 2 && strings.Contains(err.Error(), pw) {
+					t.Errorf("err = %q carries the password", err)
+				}
 			}
 			if buf.Len() != 0 {
 				t.Errorf("rendered %q", buf.String())
