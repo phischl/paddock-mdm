@@ -1,0 +1,51 @@
+# The backup bucket endpoint of 0.1.0-alpha.8 in the upgrade job (deploy/bundle/ci/upgrade.sh, compose.ci-alpha8.yaml):
+# a Compose project of its own, paddock-ci-s3, so that no ./paddock command of either release starts, stops or
+# removes it. One Caddy (CADDY_IMAGE of the candidate's versions.env) forwards to the audit project's RustFS over the
+# network audit-store. upgrade.sh also connects it to the control plane's network cp under the name backup-s3-tls,
+# where alpha.8's services reach it:
+#   backup-s3-tls:19100  plain HTTP, for alpha.8's paddock-worker and fleet-backup-upload (PADDOCK_BACKUP_S3_ENDPOINT
+#                        of .env);
+#   backup-s3-tls:19443  TLS with Caddy's internal CA, for alpha.8's pgBackRest, which speaks TLS only and checks the
+#                        name; the root certificate goes to PADDOCK_CI_S3_CA_DIR/root.crt.
+# ./paddock down leaves cp in place while this container is attached ("Resource is still in use"), and the next up
+# reuses it. Never shipped.
+name: paddock-ci-s3
+services:
+  backup-s3:
+    image: ${CADDY_IMAGE:?run with the candidate's versions.env}
+    restart: unless-stopped
+    pids_limit: 128
+    volumes:
+      - backup-s3-data:/data
+      - ${PADDOCK_CI_S3_CA_DIR:?set by upgrade.sh}:/ca
+    networks: [audit-store]
+    command:
+      - sh
+      - -c
+      - |
+        cat >/tmp/Caddyfile <<'CADDY'
+        {
+        	admin off
+        	skip_install_trust
+        	auto_https disable_redirects
+        }
+        http://:19100 {
+        	reverse_proxy audit-rustfs:9000
+        }
+        https://backup-s3-tls:19443 {
+        	tls internal
+        	reverse_proxy audit-rustfs:9000
+        }
+        CADDY
+        caddy run --config /tmp/Caddyfile --adapter caddyfile &
+        until [ -s /data/caddy/pki/authorities/local/root.crt ]; do sleep 1; done
+        install -m 644 /data/caddy/pki/authorities/local/root.crt /ca/root.crt
+        wait
+
+networks:
+  audit-store:
+    external: true
+    name: paddock-audit_audit-store
+
+volumes:
+  backup-s3-data: {}

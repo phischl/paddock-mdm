@@ -112,10 +112,52 @@ jobs:
           name: smoke-logs
           path: ${{ runner.temp }}/smoke/logs/
 
+  # The upgrade gate (plan M16 decisions 10–12, ADR 0047 decision 5): the previous release (the newest v* tag below
+  # this one) installed from its published, cosign-verified bundle and agent artifacts, seeded, upgraded to this
+  # release, probed, restored from a backup and rolled back (deploy/bundle/ci/upgrade.sh). A failure blocks sign and
+  # publish; a flake follows the flake rule (docs/operations/testing-strategy.md).
+  upgrade:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read # gh release download of the previous release; no registry login: the images must be public
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the previous tag: its bundle, and its devicesim package built from its checkout
+      - uses: ./.github/actions/free-disk
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: "**/go.sum"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist/release/
+      - name: Previous release (gh release download, cosign verify-blob)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: deploy/bundle/ci/fetch-previous.sh "$RUNNER_TEMP/previous" "$GITHUB_REF_NAME" | tee "$RUNNER_TEMP/previous.txt"
+      - name: Upgrade from the previous release, restore drill, rollback
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          prev="$(tail -n 1 "$RUNNER_TEMP/previous.txt")"
+          deploy/bundle/ci/upgrade.sh "$RUNNER_TEMP/previous/paddock-deploy-${prev#v}.tar.gz" \
+            "dist/release/$v/paddock-deploy-$v.tar.gz" --prev-agent-artifacts "$RUNNER_TEMP/previous" \
+            --agent-artifacts "dist/release/$v" --work "$RUNNER_TEMP/upgrade"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: upgrade-logs
+          retention-days: 7
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/upgrade/logs/
+
   # The only job that sees the agent release key (ADR 0006 amendment 2026-10-11). The environment `release` admits only
   # v* tags and waits for the maintainer's approval; the key never reaches build, smoke or publish.
   sign:
-    needs: smoke # sign only a build that passed the smoke test
+    needs: [smoke, upgrade] # sign only a build that passed the smoke test and the upgrade gate
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: release
@@ -168,7 +210,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: sign
+    needs: [sign, upgrade]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

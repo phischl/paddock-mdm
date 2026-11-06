@@ -291,6 +291,69 @@ jobs:
           if-no-files-found: ignore
           path: ${{ runner.temp }}/compose-logs/
 
+  # The upgrade gate (plan M16 decisions 10–12, ADR 0047 decision 5), gated like acceptance-e2e: the previous release
+  # (the newest v* tag) installed from its published, cosign-verified bundle and agent artifacts, seeded, upgraded to a
+  # bundle of this tree, probed, restored from a backup and rolled back (deploy/bundle/ci/upgrade.sh). The candidate
+  # carries the release under development as its version (the last entry of the binary's release sequence), so the
+  # upgrade checks judge the real pair. Its images are built here and stay on the runner: nothing of a pull request is
+  # pushed to the registry (decisions-alpha9 item 54); the bundle names them by tag and ./paddock pull keeps images
+  # that are present. A flake follows the flake rule (docs/operations/testing-strategy.md).
+  upgrade:
+    name: upgrade (previous release to this tree)
+    needs: [acceptance-scope, lint, test, web, secrets, trivy]
+    if: (github.event_name != 'pull_request' || github.base_ref == 'main') && needs.acceptance-scope.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # the three images 15 min + upgrade.sh 60 min + logs
+    permissions:
+      contents: read # gh release download of the previous release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the previous tag: its bundle, and its devicesim package built from its checkout
+      - uses: ./.github/actions/free-disk
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: "**/go.sum"
+      - name: Previous release (gh release download, cosign verify-blob)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: deploy/bundle/ci/fetch-previous.sh "$RUNNER_TEMP/previous" | tee "$RUNNER_TEMP/previous.txt"
+      - name: Candidate images and bundle from the tree
+        run: |
+          v="$(sed -n 's/^\t\t"\(.*\)",$/\1/p' server/internal/buildinfo/releases.gen.go | tail -n 1)"
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]] || { echo "no release under development in releases.gen.go: '$v'"; exit 1; }
+          echo "CANDIDATE_VERSION=$v" >> "$GITHUB_ENV"
+          images=(IMAGE=paddock-server:upgrade-ci COMPILER_IMAGE=paddock-compiler:upgrade-ci PGBACKREST_IMAGE=paddock-pgbackrest:upgrade-ci)
+          make image image-compiler image-pgbackrest "${images[@]}" SERVER_VERSION="$v"
+          LOCAL_SERVER_IMAGE=paddock-server:upgrade-ci LOCAL_COMPILER_IMAGE=paddock-compiler:upgrade-ci \
+            LOCAL_PGBACKREST_IMAGE=paddock-pgbackrest:upgrade-ci \
+            deploy/bundle/build.sh --version "$v" --channel stable --images local --out "$RUNNER_TEMP/candidate"
+      - name: Disk usage after the image build
+        run: |
+          df -h /
+          docker system df || true
+      - name: Upgrade from the previous release, restore drill, rollback
+        env:
+          UPGRADE_CANDIDATE_UNRELEASED: "1"
+        run: |
+          prev="$(tail -n 1 "$RUNNER_TEMP/previous.txt")"
+          deploy/bundle/ci/upgrade.sh "$RUNNER_TEMP/previous/paddock-deploy-${prev#v}.tar.gz" \
+            "$RUNNER_TEMP/candidate/paddock-deploy-$CANDIDATE_VERSION.tar.gz" \
+            --prev-agent-artifacts "$RUNNER_TEMP/previous" --work "$RUNNER_TEMP/upgrade"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: upgrade-logs
+          retention-days: 7
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/upgrade/logs/
+      - name: Disk usage
+        if: failure()
+        run: |
+          df -h
+          docker system df || true
+
   # The required status check "acceptance" of the default branch ruleset: green only if every shard and the e2e job
   # are; a skipped job (failed prerequisites) fails it too. On a pull request to main it always runs, so it never
   # reports gates that did not run as passed. On pull requests into other branches it succeeds without checking, under

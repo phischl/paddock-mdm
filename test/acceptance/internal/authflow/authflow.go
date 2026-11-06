@@ -70,7 +70,35 @@ func NewClient(caRoot string) (*http.Client, error) {
 // Login signs in username/password at adminURL ("https://admin.paddock.localhost:8443"). On a Paddock denial it
 // returns the result together with ErrDenied.
 func Login(ctx context.Context, client *http.Client, adminURL, username, password string) (*Result, error) {
-	return follow(ctx, client, adminURL, strings.TrimRight(adminURL, "/")+"/api/auth/login?return_to=%2F", username, password, nil, false)
+	return LoginMFA(ctx, client, adminURL, username, password, nil)
+}
+
+// MFA answers the authenticator validation stage of an Authentik flow: *TOTP with a code, *WebAuthn with an assertion.
+type MFA interface {
+	validate(ctx context.Context, raw json.RawMessage, page *url.URL) (map[string]any, error)
+}
+
+func (t *TOTP) validate(ctx context.Context, raw json.RawMessage, _ *url.URL) (map[string]any, error) {
+	return validateAnswer(ctx, raw, t)
+}
+
+// totpMFA keeps a nil *TOTP a nil MFA, so that a flow without a second factor still reports "asks for MFA".
+func totpMFA(t *TOTP) MFA {
+	if t == nil {
+		return nil
+	}
+	return t
+}
+
+// LoginMFA is Login with a second factor, for a stack that validates one at the sign-in (production).
+func LoginMFA(ctx context.Context, client *http.Client, adminURL, username, password string, mfa MFA) (*Result, error) {
+	return follow(ctx, client, adminURL, strings.TrimRight(adminURL, "/")+"/api/auth/login?return_to=%2F", username, password, mfa, false)
+}
+
+// StepUpMFA is StepUp with any second factor; a production step-up validates WebAuthn only.
+func StepUpMFA(ctx context.Context, client *http.Client, adminURL, returnTo, username, password string, mfa MFA) (*Result, error) {
+	start := strings.TrimRight(adminURL, "/") + "/api/auth/stepup?" + url.Values{"return_to": {returnTo}}.Encode()
+	return follow(ctx, client, adminURL, start, username, password, mfa, false)
 }
 
 // StepUp runs a step-up authentication (plan M4a decision 6) for the session in client: /api/auth/stepup, the flow
@@ -80,13 +108,13 @@ func Login(ctx context.Context, client *http.Client, adminURL, username, passwor
 // be another user.
 func StepUp(ctx context.Context, client *http.Client, adminURL, returnTo, username, password string, totp *TOTP, dropHint bool) (*Result, error) {
 	start := strings.TrimRight(adminURL, "/") + "/api/auth/stepup?" + url.Values{"return_to": {returnTo}}.Encode()
-	return follow(ctx, client, adminURL, start, username, password, totp, dropHint)
+	return follow(ctx, client, adminURL, start, username, password, totpMFA(totp), dropHint)
 }
 
 // Follow follows the redirects from next (an authorization URL held by the caller) through Authentik flows back into
 // the portal, as StepUp does after its start.
 func Follow(ctx context.Context, client *http.Client, adminURL, next, username, password string, totp *TOTP) (*Result, error) {
-	return follow(ctx, client, adminURL, next, username, password, totp, false)
+	return follow(ctx, client, adminURL, next, username, password, totpMFA(totp), false)
 }
 
 // RunFlow runs the Authentik flow page flowURL ("https://auth…/if/flow/<slug>/") through the executor API with the
@@ -100,11 +128,11 @@ func RunFlow(ctx context.Context, client *http.Client, flowURL, username, passwo
 	if !ok {
 		return "", fmt.Errorf("authflow: %s is no flow page", flowURL)
 	}
-	return runFlow(ctx, client, u, strings.TrimSuffix(slug, "/"), username, password, totp)
+	return runFlow(ctx, client, u, strings.TrimSuffix(slug, "/"), username, password, totpMFA(totp))
 }
 
 // follow follows the redirects from next through Authentik flows (run with the executor API) back into the portal.
-func follow(ctx context.Context, client *http.Client, adminURL, next, username, password string, totp *TOTP, dropHint bool) (*Result, error) {
+func follow(ctx context.Context, client *http.Client, adminURL, next, username, password string, mfa MFA, dropHint bool) (*Result, error) {
 	admin, err := url.Parse(adminURL)
 	if err != nil {
 		return nil, err
@@ -131,7 +159,7 @@ func follow(ctx context.Context, client *http.Client, adminURL, next, username, 
 		// An Authentik flow page: run it through the executor API instead of the browser UI.
 		if slug, ok := strings.CutPrefix(u.Path, "/if/flow/"); ok {
 			slug = strings.TrimSuffix(slug, "/")
-			next, err = runFlow(ctx, client, u, slug, username, password, totp)
+			next, err = runFlow(ctx, client, u, slug, username, password, mfa)
 			if err != nil {
 				return nil, err
 			}
@@ -194,9 +222,9 @@ type challenge struct {
 	Raw       json.RawMessage
 }
 
-// runFlow executes one Authentik flow and returns the URL it redirects to. An MFA stage is answered with a code of
-// totp (nil: MFA is not supported).
-func runFlow(ctx context.Context, client *http.Client, page *url.URL, slug, username, password string, totp *TOTP) (string, error) {
+// runFlow executes one Authentik flow and returns the URL it redirects to. An MFA stage is answered by mfa (nil: MFA
+// is not supported).
+func runFlow(ctx context.Context, client *http.Client, page *url.URL, slug, username, password string, mfa MFA) (string, error) {
 	exec := &url.URL{Scheme: page.Scheme, Host: page.Host, Path: "/api/v3/flows/executor/" + slug + "/",
 		RawQuery: url.Values{"query": {page.RawQuery}}.Encode()}
 	ch, err := executor(ctx, client, http.MethodGet, exec, nil)
@@ -219,10 +247,10 @@ func runFlow(ctx context.Context, client *http.Client, page *url.URL, slug, user
 		case "ak-stage-consent":
 			answer = map[string]any{"component": ch.Component, "token": ch.Token}
 		case "ak-stage-authenticator-validate":
-			if totp == nil {
+			if mfa == nil {
 				return "", fmt.Errorf("authflow: flow %s asks for MFA", slug)
 			}
-			if answer, err = validateAnswer(ctx, ch.Raw, totp); err != nil {
+			if answer, err = mfa.validate(ctx, ch.Raw, page); err != nil {
 				return "", err
 			}
 			answer["component"] = ch.Component

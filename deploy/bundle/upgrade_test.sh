@@ -27,8 +27,10 @@ case "$1" in
   manifest) printf '{\n "config": {"size": 1000},\n "layers": [{"size": 1000}]\n}\n' ;;
   info) printf '%s\n' "$FIXTURE_ROOT" ;;
   run) cat >/dev/null; exit "${FIXTURE_CHECK_EXIT:-0}" ;;
+  image) exit 1 ;;
   compose)
     case " $* " in
+      *" config --images "*) printf '%s\n' ghcr.io/x/a:1@sha256:0000 docker.io/x/b:2@sha256:1111 ;;
       *" admin upgrade-check "*) printf '%s\n' "${FIXTURE_NEW_REPORT-PASS  migrations  00104 = 00104}" ;;
       *" ps -q"*) echo c ;;
       *" ps "*) printf '%s\n' "${FIXTURE_NEW_PS-paddock-api|running|healthy|0}" ;;
@@ -157,8 +159,8 @@ BACKUP='^old backup now --label pre-upgrade-0.1.0-alpha.10 --wait$'
 # The whole run on the control plane.
 setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
 run 0 "upgrade of the control plane" "$work/t/old" --yes
-before "migrate-from before secrets" '^script gen-prod-secrets.sh controlplane' ' pull$'
-before "pull before the configuration check" ' pull$' '^docker run .*prod-check'
+before "migrate-from before secrets" '^script gen-prod-secrets.sh controlplane' '^docker pull '
+before "pull before the configuration check" '^docker pull ' '^docker run .*prod-check'
 before "configuration check before the backup" '^docker run .*prod-check' "$BACKUP"
 before "the backup completes before up uses the pulled images" "$BACKUP" "$UP"
 before "up before the post-check report" "$UP" '^docker compose .*admin upgrade-check --target-version 0.1.0-alpha.10'
@@ -359,7 +361,7 @@ else fail "state: $(cat "$work/t/new/.upgrade-state")"; fi
 : >"$calls"
 sleep 1
 run 0 "the second run continues" "$work/t/old" --yes
-not_called "the second run does not pull again" ' pull$'
+not_called "the second run does not pull again" '^docker pull '
 not_called "the second run takes no second backup" '^old backup'
 not_called "the second run does not migrate again" '^script gen-prod-secrets'
 called "the second run runs up" "$UP"

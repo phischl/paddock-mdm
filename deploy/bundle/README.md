@@ -44,7 +44,7 @@ line.
 | `./paddock version` | Prints `VERSION`. |
 | `./paddock verify` | Checks every shipped file against `SHA256SUMS`. |
 | `./paddock secrets` | Generates this host's secrets into `.secrets/` (idempotent, prints file names only). |
-| `./paddock pull` | Pulls every image of this host. |
+| `./paddock pull [service...]` | Pulls every image of this host that is not already present locally by its reference (tag and digest), so images loaded with `docker load` are kept; with services, pulls those services always. |
 | `./paddock check [--online]` | Production checklist of this host's configuration; exit code 0 only when every item passes. `--online` also reads the audit bucket's Object Lock (audit or lab host) and warns when `compose.backup-targets.yaml` is older than the targets in the database (host with backups). |
 | `./paddock up [--infra]` | Starts the stack and waits until every service is healthy; `--infra` starts the infrastructure only (before the bootstrap). |
 | `./paddock down [--volumes]` | Stops the stack; `--volumes` also deletes all data. |
