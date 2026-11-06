@@ -23,6 +23,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -85,6 +86,7 @@ func run(args []string) error {
 	touch := fs.String("touch", "", "new content line of the managed file (probe)")
 	reveal := fs.String("reveal", "", "state file of the device whose password is revealed (probe)")
 	keyOut := fs.String("key-out", "", "file for the backup key (backup-key)")
+	legacyKey := fs.String("legacy-key-file", "", "the previous release's backup key file, imported as key legacy (backup-key)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "overall time limit")
 	if err := fs.Parse(args[1:]); err != nil || *dir == "" {
 		return errors.New(usage)
@@ -111,7 +113,7 @@ func run(args []string) error {
 		if *keyOut == "" {
 			return errors.New(usage)
 		}
-		return runBackupKey(ctx, *dir, *keyOut)
+		return runBackupKey(ctx, *dir, *keyOut, *legacyKey)
 	}
 	return errors.New(usage)
 }
@@ -466,7 +468,7 @@ func auditCount(ctx context.Context, p *env.Portal) (int, error) {
 
 // --- backup key -----------------------------------------------------------------------------------------------------
 
-func runBackupKey(ctx context.Context, dir, keyOut string) error {
+func runBackupKey(ctx context.Context, dir, keyOut, legacyKeyFile string) error {
 	s, err := loadSeed(dir)
 	if err != nil {
 		return err
@@ -483,14 +485,26 @@ func runBackupKey(ctx context.Context, dir, keyOut string) error {
 		Active *struct {
 			KeyID string `json:"key_id"`
 		} `json:"active"`
+		Pending *struct {
+			KeyID     string `json:"key_id"`
+			Legacy    bool   `json:"legacy"`
+			Positions []int  `json:"positions"`
+		} `json:"pending"`
 	}
 	if err := do(ctx, p, http.MethodGet, path, nil, http.StatusOK, &status); err != nil {
 		return err
 	}
 	// The key text exists only in the answer that generated it: an active key is reused only when this job wrote it.
-	if _, err := os.Stat(keyOut); err == nil && status.Active != nil {
+	// After an upgrade from a release before M15 the api has imported the old key file as key legacy, which the
+	// upgrade guide says to keep and confirm; generating another key is refused until it is confirmed or discarded.
+	switch {
+	case status.Active == nil && status.Pending != nil && status.Pending.Legacy && legacyKeyFile != "":
+		if err := confirmLegacyKey(ctx, p, path, status.Pending.KeyID, status.Pending.Positions, legacyKeyFile, keyOut); err != nil {
+			return err
+		}
+	case status.Active != nil && fileExists(keyOut):
 		say("backup key %s active", status.Active.KeyID)
-	} else {
+	default:
 		if err := newBackupKey(ctx, p, path, keyOut); err != nil {
 			return err
 		}
@@ -520,6 +534,55 @@ func runBackupKey(ctx context.Context, dir, keyOut string) error {
 	}
 	say("backup target ci-local: %s", target.ID)
 	return nil
+}
+
+// confirmLegacyKey confirms the imported key legacy with the characters of the old key file at the challenge's positions,
+// as a platform administrator types them, and writes the key text to keyOut (0600) for the restore drill. The challenge
+// is drawn from the key's canonical standard base64, so the file's text is decoded and encoded again first.
+func confirmLegacyKey(ctx context.Context, p *env.Portal, path, keyID string, positions []int, legacyKeyFile, keyOut string) error {
+	b, err := os.ReadFile(legacyKeyFile) //nolint:gosec // the CI job's own key file
+	if err != nil {
+		return err
+	}
+	text, answer, err := challengeAnswer(string(b), positions)
+	if err != nil {
+		return fmt.Errorf("backup key %s from %s: %w", keyID, legacyKeyFile, err)
+	}
+	if err := os.WriteFile(keyOut, []byte(text+"\n"), 0o600); err != nil {
+		return err
+	}
+	if err := do(ctx, p, http.MethodPost, path+"/"+keyID+"/confirm", map[string]string{"answer": answer},
+		http.StatusOK, nil); err != nil {
+		return err
+	}
+	say("backup key %s (imported from the previous release) confirmed", keyID)
+	return nil
+}
+
+// challengeAnswer returns the canonical text of the key in fileText (32 bytes, standard base64, surrounding space
+// ignored) and its characters at the 1-based positions.
+func challengeAnswer(fileText string, positions []int) (string, string, error) {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(fileText))
+	if err != nil || len(raw) != 32 {
+		return "", "", errors.New("no 32-byte base64 backup key")
+	}
+	text := base64.StdEncoding.EncodeToString(raw)
+	if len(positions) == 0 {
+		return "", "", errors.New("no challenge positions")
+	}
+	var answer strings.Builder
+	for _, pos := range positions {
+		if pos < 1 || pos > len(text) {
+			return "", "", fmt.Errorf("challenge position %d outside the key", pos)
+		}
+		answer.WriteByte(text[pos-1])
+	}
+	return text, answer.String(), nil
+}
+
+func fileExists(name string) bool {
+	_, err := os.Stat(name)
+	return err == nil
 }
 
 // newBackupKey generates a backup key, writes it to keyOut (0600) and confirms it with the characters the

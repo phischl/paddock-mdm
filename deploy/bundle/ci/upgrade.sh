@@ -384,7 +384,10 @@ if [[ -n "$agent_artifacts" ]]; then smoke_agent_release "$agent_artifacts"; fi
 
 # --- 6 restore drill: backup -----------------------------------------------------------------------------------------
 step "6 restore drill: backup"
-probe_env "$UPGRADEPROBE" backup-key --state "$W/seed" --key-out "$W/seed/backup.key"
+# From 0.1.0-alpha.8 the api imported the old key file as key legacy; the drill confirms it, as the upgrade guide says.
+legacy_key=()
+if $legacy; then legacy_key=(--legacy-key-file "$CP_DIR/.secrets/backup_encryption_key"); fi
+probe_env "$UPGRADEPROBE" backup-key --state "$W/seed" --key-out "$W/seed/backup.key" "${legacy_key[@]}"
 sudo install -d -m 0755 -o root -g root /srv/paddock-backup
 sudo install -d -m 0750 -o 999 -g 999 "$local_target"
 cp_paddock backup-target apply
