@@ -491,7 +491,14 @@ func runBackupKey(ctx context.Context, dir, keyOut, legacyKeyFile string) error 
 			Positions []int  `json:"positions"`
 		} `json:"pending"`
 	}
-	if err := do(ctx, p, http.MethodGet, path, nil, http.StatusOK, &status); err != nil {
+	// The api imports the old key file in the background after its start: with a key file, wait for key legacy (or an
+	// active key) instead of generating a new key that would make the import a no-op.
+	if err := waitFor(ctx, "the imported backup key legacy", func() (bool, error) {
+		if err := do(ctx, p, http.MethodGet, path, nil, http.StatusOK, &status); err != nil {
+			return false, err
+		}
+		return legacyKeyFile == "" || status.Active != nil || (status.Pending != nil && status.Pending.Legacy), nil
+	}); err != nil {
 		return err
 	}
 	// The key text exists only in the answer that generated it: an active key is reused only when this job wrote it.
