@@ -69,8 +69,21 @@ test('the targets list and the key tab are keyboard reachable and accessible', a
   await expectAccessible(page)
 })
 
+/**
+ * Whether the local repository holds a successful newest run of every kind a plan of all components needs. The server
+ * refuses any other plan (409 invalid_state); a stack started without BACKUP=1, like CI's, never has one.
+ */
+async function backupsReady(page: Page): Promise<boolean> {
+  const overview = await (await page.request.get('/api/platform/v1/backup')).json() as {
+    last_runs: { kind: string; outcome: string | null }[]
+  }
+  const succeeded = new Set(overview.last_runs.filter((r) => r.outcome === 'succeeded').map((r) => r.kind))
+  return ['postgres', 'authentik', 'openbao', 'fleet', 'escrow'].every((k) => succeeded.has(k))
+}
+
 // Plan M15 decisions 25 and 27: a restore plan is only sent with the typed word; the created plan shows its host command.
-// Needs a stack without an open restore plan (only one plan is open at a time).
+// Needs a stack without an open restore plan (only one plan is open at a time). The typed word is checked on every
+// stack; sending the plan needs successful backups, as the backup gates' requireBackupStack does.
 test('the restore plan dialog requires the typed word, shows the host command and the plan is cancelled', async ({ page }) => {
   test.setTimeout(120_000)
   const dialogs: string[] = []
@@ -87,6 +100,9 @@ test('the restore plan dialog requires the typed word, shows the host command an
   await expect(submit).toBeDisabled()
   await page.locator('#backup-restore-word').fill('restore')
   await expect(submit).toBeEnabled()
+  const ready = await backupsReady(page)
+  if (!ready) expect(dialogs).toEqual([])
+  test.skip(!ready, 'sending a plan needs successful backups: start the stack with `make up BACKUP=1`, run `make dev-seed BACKUP=1` and let every kind back up once')
   await withStepUp(page, () => submit.click())
   await expect(page.getByTestId('backup-restore-command')).toContainText('restore')
   await expect(page.getByTestId('backup-restore-expiry')).toContainText('expires in')
