@@ -286,6 +286,7 @@ var privileged = map[string]struct {
 	"POST /api/platform/v1/backup/run":                                     {app.ScopePlatform, app.SpecBackupRunRequest},
 	"POST /api/platform/v1/backup/restore-plans":                           {app.ScopePlatform, app.SpecRestorePlan},
 	"POST /api/platform/v1/backup/restore-plans/{id}/cancel":               {app.ScopePlatform, app.SpecRestoreCancel},
+	"POST /api/platform/v1/backup/restore-plans/{id}/abandon":              {app.ScopePlatform, app.SpecRestoreAbandon},
 }
 
 // ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the

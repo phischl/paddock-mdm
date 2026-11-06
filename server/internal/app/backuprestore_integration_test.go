@@ -365,3 +365,136 @@ func TestRestoreReports(t *testing.T) {
 		t.Errorf("start actors %v %v", starters, err)
 	}
 }
+
+// TestRestorePlanAbandon (PDK-832): a running plan whose host never reported its end blocks every new plan until a
+// platform administrator abandons it with a step-up and the typed word; the host's later reports are refused and
+// audited.
+func TestRestorePlanAbandon(t *testing.T) {
+	w := newRestoreWorld(t)
+	ctx := steppedPlatform()
+	w.run(t, "openbao", "succeeded", time.Now().Add(-time.Hour), `[]`)
+	in := app.PlanInput{Kind: "components", Components: []string{"openbao"}, Confirmation: "restore"}
+	plan, err := w.plans.Create(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.plans.Abandon(ctx, plan.ID, "abandon"); !isProblem(err, "invalid_state") {
+		t.Fatalf("abandon an approved plan: %v", err)
+	}
+	host := context.Background()
+	report := func(outcome string) app.RestoreReport {
+		return app.RestoreReport{Outcome: outcome, Operator: "alice", Source: "repo", Components: []string{"openbao"}, PlanID: &plan.ID}
+	}
+	if _, err := w.reports.Report(host, report("running")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.plans.Create(ctx, in); !isProblem(err, "invalid_state") {
+		t.Fatalf("new plan while one is running: %v", err)
+	}
+
+	if _, err := w.plans.Abandon(platformCtx(), plan.ID, "abandon"); !errors.Is(err, problem.StepUpRequired) {
+		t.Errorf("without step-up: %v", err)
+	}
+	if _, err := w.plans.Abandon(adminCtx(uuid.Must(uuid.NewV7()), principal.RoleOrgAdmin, "alice"), plan.ID, "abandon"); !errors.Is(err, problem.Forbidden) {
+		t.Errorf("organization admin: %v", err)
+	}
+	if _, err := w.plans.Abandon(ctx, plan.ID, "Abandon"); !isProblem(err, "invalid_request") {
+		t.Errorf("without the typed word: %v", err)
+	}
+	if _, err := w.plans.Abandon(ctx, uuid.Must(uuid.NewV7()), "abandon"); !isProblem(err, "not_found") {
+		t.Errorf("unknown plan: %v", err)
+	}
+	if s, _ := w.state(t, plan.ID); s != "running" {
+		t.Fatalf("refused abandons changed the plan to %s", s)
+	}
+
+	abandoned, err := w.plans.Abandon(ctx, plan.ID, "abandon")
+	if err != nil || abandoned.State != "abandoned" || abandoned.FinishedAt == nil || abandoned.OutcomeDetail == nil ||
+		*abandoned.OutcomeDetail != "abandoned by root" {
+		t.Fatalf("abandon: %+v %v", abandoned, err)
+	}
+	if _, err := w.plans.Abandon(ctx, plan.ID, "abandon"); !isProblem(err, "invalid_state") {
+		t.Errorf("abandon twice: %v", err)
+	}
+
+	for _, outcome := range []string{"completed", "failed"} {
+		if _, err := w.reports.Report(host, report(outcome)); !isProblem(err, "invalid_state") ||
+			!strings.Contains(problem.From(err).Detail, "abandoned") {
+			t.Errorf("host reports %s after the abandon: %v", outcome, err)
+		}
+	}
+	if _, err := w.reports.Report(host, report("running")); !errors.Is(err, app.ErrRestorePlanNotExecutable) {
+		t.Errorf("host restarts the abandoned plan: %v", err)
+	}
+	if s, d := w.state(t, plan.ID); s != "abandoned" || d == nil || *d != "abandoned by root" {
+		t.Errorf("host reports changed the abandoned plan to %s %v", s, d)
+	}
+
+	next, err := w.plans.Create(ctx, in)
+	if err != nil {
+		t.Fatalf("new plan after the abandon: %v", err)
+	}
+	if _, err := w.plans.Cancel(ctx, next.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	evs, params := w.restoreEvents(t)
+	want := []string{"platform.restore_planned:success:", "platform.restore_abandoned:failure:invalid_state",
+		"platform.restore_started:success:", "platform.restore_planned:failure:invalid_state",
+		"platform.restore_abandoned:denied:step_up_required", "platform.restore_abandoned:denied:forbidden",
+		"platform.restore_abandoned:failure:invalid_request", "platform.restore_abandoned:failure:not_found",
+		"platform.restore_abandoned:success:", "platform.restore_abandoned:failure:invalid_state",
+		"platform.restore_completed:failure:invalid_state", "platform.restore_failed:failure:invalid_state",
+		"platform.restore_started:failure:invalid_state", "platform.restore_planned:success:",
+		"platform.restore_cancelled:success:"}
+	if strings.Join(evs, " ") != strings.Join(want, " ") {
+		t.Fatalf("events %v, want %v", evs, want)
+	}
+	if !strings.Contains(params[8], plan.ID.String()) || !strings.Contains(params[8], `"kind": "components"`) ||
+		!strings.Contains(params[8], `"components": ["openbao"]`) {
+		t.Errorf("abandon params %s", params[8])
+	}
+	// Refused attempts name the plan they were about, the typed-word refusal before the plan is even read included.
+	for i := 4; i <= 6; i++ {
+		if !strings.Contains(params[i], `"plan_id": "`+plan.ID.String()+`"`) {
+			t.Errorf("refused abandon %s params %s", evs[i], params[i])
+		}
+	}
+	var target string
+	if err := w.super.QueryRow(context.Background(), `SELECT coalesce(target::text, '') FROM action
+		WHERE code = 'platform.restore_abandoned' AND error_code = 'invalid_request' AND correlation_id = $1`,
+		"corr-"+t.Name()).Scan(&target); err != nil || !strings.Contains(target, plan.ID.String()) {
+		t.Errorf("typed-word refusal target %q %v", target, err)
+	}
+}
+
+// TestRestoreHostFailureNotAbandon proves a host failure report cannot pass for an administrator's abandon (PDK-832
+// review 1): a failed step named abandoned leaves the plan failed, and the next report is refused as finished.
+func TestRestoreHostFailureNotAbandon(t *testing.T) {
+	w := newRestoreWorld(t)
+	ctx := steppedPlatform()
+	w.run(t, "openbao", "succeeded", time.Now().Add(-time.Hour), `[]`)
+	plan, err := w.plans.Create(ctx, app.PlanInput{Kind: "components", Components: []string{"openbao"}, Confirmation: "restore"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := context.Background()
+	report := func(outcome string) app.RestoreReport {
+		return app.RestoreReport{Outcome: outcome, Operator: "alice", Source: "repo", Components: []string{"openbao"}, PlanID: &plan.ID}
+	}
+	if _, err := w.reports.Report(host, report("running")); err != nil {
+		t.Fatal(err)
+	}
+	failed := report("failed")
+	failed.Component, failed.Detail = "abandoned", "by root"
+	if _, err := w.reports.Report(host, failed); err != nil {
+		t.Fatalf("failed: %v", err)
+	}
+	if s, _ := w.state(t, plan.ID); s != "failed" {
+		t.Fatalf("host failure recorded as %s", s)
+	}
+	_, err = w.reports.Report(host, report("completed"))
+	if !isProblem(err, "invalid_state") || strings.Contains(problem.From(err).Detail, "abandon") {
+		t.Errorf("report after the host failure: %v", err)
+	}
+}

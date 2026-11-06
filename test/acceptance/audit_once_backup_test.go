@@ -62,6 +62,21 @@ var backupAuditCases = map[string][]auditCase{
 				expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.restore_cancelled", "failure", auditPollTimeout)
 			}})
 	}(),
+	"POST /api/platform/v1/backup/restore-plans/{id}/abandon": func() []auditCase {
+		path := func() string { return restorePlans + "/" + uuid.NewString() + "/abandon" }
+		word := func() any { return map[string]any{"confirmation": "abandon"} }
+		return append(backupRefusals("platform.restore_abandoned", http.MethodPost, path, word),
+			auditCase{"validation failure", func(t *testing.T, w *auditWorld) {
+				res := call(t, steppedUpRoot(t), http.MethodPost, path(), map[string]any{"confirmation": "Abandon"})
+				expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+				expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.restore_abandoned", "failure", auditPollTimeout)
+			}},
+			auditCase{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, steppedUpRoot(t), http.MethodPost, path(), word())
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.restore_abandoned", "failure", auditPollTimeout)
+			}})
+	}(),
 }
 
 const restorePlans = "/api/platform/v1/backup/restore-plans"

@@ -321,6 +321,7 @@ const (
 	CodePlatformRestoreStarted   Code = "platform.restore_started"
 	CodePlatformRestoreCompleted Code = "platform.restore_completed"
 	CodePlatformRestoreFailed    Code = "platform.restore_failed"
+	CodePlatformRestoreAbandoned Code = "platform.restore_abandoned"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1937,14 +1938,14 @@ var registry = map[Code]Definition{
 		Description: "The host started an approved restore plan (paddock-server backup restore-report --outcome running); from here it stops the stack and overwrites data (actor: the operator on the host).",
 		Params:      restoreStartParams,
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "Recorded once per attempt, a refused one included. Actor is system with the operator's login name ($SUDO_USER or $USER) as display, or host when the name is not a login name. source, source_target_id and components are the stored plan's. Failure with invalid_request for a report without a plan or with invalid input, not_found for an unknown plan, invalid_state for a plan that is expired, cancelled, already running or finished, or whose backup target was deleted. Platform pseudo-organization.",
+		Note:        "Recorded once per attempt, a refused one included. Actor is system with the operator's login name ($SUDO_USER or $USER) as display, or host when the name is not a login name. source, source_target_id and components are the stored plan's. Failure with invalid_request for a report without a plan or with invalid input, not_found for an unknown plan, invalid_state for a plan that is expired, cancelled, already running, finished or abandoned, or whose backup target was deleted. Platform pseudo-organization.",
 	},
 	CodePlatformRestoreCompleted: {
 		Code: CodePlatformRestoreCompleted, Emitted: true,
 		Description: "The host finished a restore (paddock-server backup restore-report): a planned restore, a fresh installation from a backup set, or the repository alone (actor: the operator on the host).",
 		Params:      restoreRunParams,
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "Actor is system with the operator's login name ($SUDO_USER or $USER) as display. plan_id is empty for a restore without a plan, which is recorded as a plan of kind fresh_install; source is set, repo or target. A plan the restored database no longer holds is recorded again under its ID. Failure with invalid_state when the plan is already finished. Never the backup key. Platform pseudo-organization.",
+		Note:        "Actor is system with the operator's login name ($SUDO_USER or $USER) as display. plan_id is empty for a restore without a plan, which is recorded as a plan of kind fresh_install; source is set, repo or target. A plan the restored database no longer holds is recorded again under its ID. Failure with invalid_state when the plan is already finished or a platform administrator abandoned it (platform.restore_abandoned). Never the backup key. Platform pseudo-organization.",
 	},
 	CodePlatformRestoreFailed: {
 		Code: CodePlatformRestoreFailed, Emitted: true,
@@ -1952,6 +1953,13 @@ var registry = map[Code]Definition{
 		Params:      restoreRunParams,
 		Outcomes:    []Outcome{OutcomeFailure},
 		Note:        "detail is <step>: <text> with the step stop, postgres, openbao, paddock, fleet, escrow or backup-repo; the terminal and the container logs have the cause. Platform pseudo-organization.",
+	},
+	CodePlatformRestoreAbandoned: {
+		Code: CodePlatformRestoreAbandoned, Emitted: true,
+		Description: "A platform administrator marked a running restore plan as abandoned after a step-up and the typed word abandon, because the host never reported its end; the slot for a new plan is free and the host's later report for the plan is refused.",
+		Params:      restorePlanParams,
+		Outcomes:    adminOutcomes,
+		Note:        "The plan's state becomes abandoned and its outcome_detail reads abandoned by <administrator>. Failure with invalid_request without the typed word, not_found, or invalid_state for a plan that is not running (cancel an approved plan instead). Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

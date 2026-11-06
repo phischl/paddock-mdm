@@ -537,7 +537,8 @@
       "restore_cancelled": "Wiederherstellungsplan abgebrochen",
       "restore_started": "Wiederherstellung auf dem Host gestartet (aus {source})",
       "restore_completed": "Wiederherstellung auf dem Host abgeschlossen",
-      "restore_failed": "Wiederherstellung auf dem Host fehlgeschlagen ({detail})"
+      "restore_failed": "Wiederherstellung auf dem Host fehlgeschlagen ({detail})",
+      "restore_abandoned": "Laufender Wiederherstellungsplan aufgegeben"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",

@@ -238,6 +238,14 @@ func (h *handlers) CancelBackupRestorePlan(ctx context.Context, req adminapi.Can
 	return adminapi.CancelBackupRestorePlan200JSONResponse(toBackupRestorePlan(p)), nil
 }
 
+func (h *handlers) AbandonBackupRestorePlan(ctx context.Context, req adminapi.AbandonBackupRestorePlanRequestObject) (adminapi.AbandonBackupRestorePlanResponseObject, error) {
+	p, err := h.backupRestorePlans.Abandon(ctx, req.Id, req.Body.Confirmation)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.AbandonBackupRestorePlan200JSONResponse(toBackupRestorePlan(p)), nil
+}
+
 func toBackupRestorePlan(p app.Plan) adminapi.BackupRestorePlan {
 	components := make([]adminapi.BackupRestorePlanComponents, len(p.Components))
 	for i, c := range p.Components {

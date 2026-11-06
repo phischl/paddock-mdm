@@ -287,6 +287,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 
 | Operation | Tag | Summary |
 | --- | --- | --- |
+| `abandonBackupRestorePlan` | platform | Marks a running plan as abandoned when the host never reported its end (the host crashed, or the database was unreachable when the restore stopped): the plan no longer blocks a new one, its outcome_detail names the administrator, and the host's later report for it is refused (409). |
 | `approveRevocationRequest` | revocation | POST /api/v1/revocation-requests/{id}/approve |
 | `cancelBackupRestorePlan` | platform | Cancels an approved plan: it is expired and the host refuses it. |
 | `cancelDeviceEncryption` | devices | Cancels the open in-place encryption before the device restarts (plan M8e decision 8): while the encrypt_disk command has not reached the device (pending, failed or expired) it is withdrawn and the conversion is cancelled at once; once the device received it, or while the conversion is prepared, the device is sent the signed command encrypt_disk_abort and the conversion keeps its phase until the device reports the abort (cancelled) or refuses it (abort_refused_reason). |

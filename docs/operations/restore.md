@@ -219,6 +219,26 @@ The databases are fine, but the `backup-repo` volume or the pgBackRest state vol
 `restore --only backup-repo` touches neither database, OpenBao nor Fleet and needs no restore plan; it refuses to run
 while a restore plan is `running`. It records `platform.restore_completed` with `components: [backup-repo]`.
 
+## A restore plan stuck in `running`
+
+A restore plan is `running` from the moment the host starts it (`./paddock restore --plan <id>`) until the host reports
+`completed` or `failed`. If that report never arrives (the host crashed, or the database was unreachable when the
+restore stopped), the plan stays `running`, and only one plan may be approved or running: every new plan is refused
+with 409 `invalid_state`. Cancel accepts only approved plans.
+
+1. Make sure the restore really is over: no `./paddock restore` is running on the host, and the stack is in the state
+   you expect (`./paddock check`). If the restore stopped half-way, the components it had already overwritten are
+   in an unknown state; plan the next restore for them.
+2. A platform administrator abandons the plan after a step-up, typing the word `abandon`:
+   `POST /api/platform/v1/backup/restore-plans/{id}/abandon` with `{"confirmation": "abandon"}`. The plan becomes
+   `abandoned` with `outcome_detail` `abandoned by <administrator>`, and the audit trail records
+   `platform.restore_abandoned`. A plan that is not `running` is refused with 409 `invalid_state`.
+3. Approve a new plan.
+
+A report the host sends for the abandoned plan afterwards (`paddock-server backup restore-report`) is refused with
+`invalid_state` and recorded as a failed `platform.restore_completed` or `platform.restore_failed` event; it never
+changes the plan again.
+
 ## Restore drill (quarterly)
 
 `make restore-drill` runs the whole procedure on the development stack (started with `make up BACKUP=1`, dev-seeded):

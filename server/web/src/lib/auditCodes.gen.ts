@@ -191,6 +191,7 @@ export const auditCodes = [
   'platform.openbao_auto_unsealed',
   'platform.osv_imported',
   'platform.osv_stale',
+  'platform.restore_abandoned',
   'platform.restore_cancelled',
   'platform.restore_completed',
   'platform.restore_failed',

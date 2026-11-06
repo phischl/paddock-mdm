@@ -12,6 +12,23 @@ import (
 	"github.com/google/uuid"
 )
 
+const abandonBackupRestorePlan = `-- name: AbandonBackupRestorePlan :exec
+UPDATE backup_restore_plan SET state = 'abandoned', finished_at = now(), outcome_detail = $1
+WHERE id = $2 AND state = 'running'
+`
+
+type AbandonBackupRestorePlanParams struct {
+	OutcomeDetail *string
+	ID            uuid.UUID
+}
+
+// A running plan whose host never reported its end (PDK-832): abandoned, so it no longer holds the one open place and
+// the host's later report finds it finished.
+func (q *Queries) AbandonBackupRestorePlan(ctx context.Context, arg AbandonBackupRestorePlanParams) error {
+	_, err := q.db.Exec(ctx, abandonBackupRestorePlan, arg.OutcomeDetail, arg.ID)
+	return err
+}
+
 const backupRestoreAvailableKinds = `-- name: BackupRestoreAvailableKinds :many
 SELECT DISTINCT available.kind::text AS kind FROM (
   SELECT r.kind FROM backup_run r
