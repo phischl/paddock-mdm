@@ -141,19 +141,6 @@ func (idx repoIndex) newestFull(repoPath, stanza string) (string, time.Time) {
 	return best, t
 }
 
-// expired reports whether pgBackRest's retention has removed the full backup label of stanza in repoPath, or would
-// have: the local stanza holds at least retention completed full backups newer than it (plan M15, amendment
-// 2026-11-05, A2; repo1-retention-full).
-func (idx repoIndex) expired(repoPath, stanza, label string, retention int) bool {
-	newer := 0
-	for _, l := range idx.fulls(repoPath, stanza) {
-		if l > label {
-			newer++
-		}
-	}
-	return newer >= max(retention, 1)
-}
-
 // holdsPath reports whether the local set holds any file of the repository path repoPath.
 func (idx repoIndex) holdsPath(repoPath string) bool {
 	dir := repoPath + "/"
@@ -202,7 +189,9 @@ func (f *indexFacts) fulls(repoPath, stanza string) []string {
 	return v
 }
 
-// expired is repoIndex.expired.
+// expired reports whether pgBackRest's retention has removed the full backup label of stanza in repoPath, or would
+// have: the local stanza holds at least retention completed full backups newer than it (plan M15, amendment
+// 2026-11-05, A2; repo1-retention-full).
 func (f *indexFacts) expired(repoPath, stanza, label string, retention int) bool {
 	labels := f.fulls(repoPath, stanza)
 	i, found := slices.BinarySearch(labels, label)
