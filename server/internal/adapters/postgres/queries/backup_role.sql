@@ -23,8 +23,17 @@ GROUP BY organization_id, target->>'id';
 SELECT id, name, type, enabled, settings, credentials_ciphertext, host_state, host_revision, test_requested_at
 FROM backup_target WHERE deleted_at IS NULL ORDER BY name, id;
 
+-- Compare-and-set on the revision the role read: an update of the target in between raised host_revision and reset
+-- the state to pending_host, which a stale mounted must not overwrite (PDK-731 review).
 -- name: BackupRoleSetHostState :exec
-UPDATE backup_target SET host_state = @host_state WHERE id = @id AND host_state <> @host_state;
+UPDATE backup_target SET host_state = @host_state
+WHERE id = @id AND host_revision = @host_revision AND deleted_at IS NULL AND host_state <> @host_state;
+
+-- Every volume target with its credentials, deleted ones included, for ./paddock backup-target apply (plan M15
+-- decision 20): a deleted target loses its volume on the host before its row goes.
+-- name: BackupHostTargets :many
+SELECT id, name, type, settings, credentials_ciphertext, host_revision, (deleted_at IS NOT NULL)::boolean AS deleted
+FROM backup_target WHERE type <> 's3' ORDER BY id;
 
 -- name: BackupRoleSetTestResult :exec
 UPDATE backup_target SET test_requested_at = NULL, last_test_at = now(), last_test_ok = @ok,

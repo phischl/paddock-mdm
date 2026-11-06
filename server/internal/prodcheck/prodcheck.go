@@ -133,6 +133,8 @@ type Options struct {
 	ObjectLock ObjectLockReader
 	// LocalRootUID is the owner the local backup root must have; the zero value is root. Tests set the current user.
 	LocalRootUID uint32
+	// BackupRevisions compares the rendered compose.backup-targets.yaml with the database online; nil means not checked.
+	BackupRevisions *BackupRevisions
 }
 
 // Result is one line of the checklist.
@@ -196,6 +198,9 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	_, pgbackrest := c.Services["pgbackrest"]
 	if backupRole || pgbackrest {
 		results = append(results, checkBackupRole(c), checkBackupRepoVolume(c), checkBackupLocalRoot(c, o.LocalRootUID))
+		if o.BackupRevisions != nil {
+			results = append(results, checkBackupTargetRevisions(*o.BackupRevisions))
+		}
 	}
 	if len(c.Services) > 0 {
 		results = append(results, checkBackupSecretsConfined(c))
@@ -1384,6 +1389,29 @@ func checkObjectLock(ctx context.Context, o Options) Result {
 		return Result{Item: item, Detail: fmt.Sprintf("default retention mode is %q, not COMPLIANCE", mode)}
 	case days < MinObjectLockDays:
 		return Result{Item: item, Detail: fmt.Sprintf("default retention is %d days, less than %d", days, MinObjectLockDays)}
+	}
+	return Result{Item: item, OK: true}
+}
+
+// BackupRevisions are the two revision lists of the volume backup targets (backuprole.Revisions): File from the header
+// of the rendered compose.backup-targets.yaml ("none" without the file), Database from a one-off
+// `admin backup-targets revisions` ("" when it failed).
+type BackupRevisions struct {
+	File     string
+	Database string
+}
+
+// checkBackupTargetRevisions warns when the host has not applied what a platform administrator saved (plan M15
+// decision 22): a target stays pending_host until ./paddock backup-target apply and ./paddock up ran. A warning, not a
+// failure: the stack runs, only that target receives no copy.
+func checkBackupTargetRevisions(r BackupRevisions) Result {
+	const item = "backup: targets file matches the database revision"
+	switch {
+	case r.Database == "":
+		return Result{Item: item, OK: true, Warn: true, Detail: "could not read the backup targets from the database"}
+	case r.File != r.Database:
+		return Result{Item: item, OK: true, Warn: true, Detail: "compose.backup-targets.yaml has revisions " + r.File +
+			", the database " + r.Database + ": run ./paddock backup-target apply, then ./paddock up"}
 	}
 	return Result{Item: item, OK: true}
 }

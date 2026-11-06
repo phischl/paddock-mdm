@@ -130,7 +130,7 @@ applies again to the move from 0.1.0-alpha.7 to 0.1.0-alpha.8.
 2. In B's directory:
 
    ```sh
-   ./paddock migrate-from ../paddock-deploy-<A>     # copies .env and .secrets/ (cp -a); refuses if they exist here
+   ./paddock migrate-from ../paddock-deploy-<A>     # copies .env, .secrets/ and compose.backup-targets.yaml (cp -a); refuses if they exist here
    ./paddock pull
    ./paddock check                                  # audit host: ./paddock check --online; every item PASS
    ```

@@ -44,13 +44,19 @@ commands:
   admin agent-rollout-halt --version <x.y.z>
   admin agent-rollout-resume --version <x.y.z>
   admin upgrade-check --target-version <x.y.z> [--json]
+  admin backup-targets render [--local-root <dir>]   (for ./paddock backup-target apply; prints share passwords)
+  admin backup-targets revisions
+  admin backup-targets purge <id>...
   backup now [--kind postgres|authentik|openbao|fleet|escrow]... [--label <text>] [--wait]
   backup status
   backup plan <id>           (prints the restore plan as JSON; exit 1 unless it is approved and unexpired)
   backup restore-report --outcome running|completed|failed --operator <name> --source set|repo|target
         --components a,b [--plan <id>] [--at <RFC 3339>] [--component <step> --detail <text>]
   backup decrypt <in> <out|->
-  prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
+  backup mark-mount <id> <revision>...
+  backup resolve-local [--root <dir>] <path>...
+  prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online]
+        [--backup-revisions-file <list> --backup-revisions-db <list>] < config.json
   healthcheck
   version
 

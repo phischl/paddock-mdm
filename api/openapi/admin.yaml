@@ -10266,7 +10266,7 @@ components:
         share: { type: string, maxLength: 80 }
         path: { type: string, maxLength: 256, description: Relative path below the share; optional. }
         username: { type: string, maxLength: 104 }
-        password: { type: string, maxLength: 256, writeOnly: true, description: "Required on creation and when host, share, domain, username or options change; otherwise absent on an update keeps the stored one. Stored encrypted, never returned." }
+        password: { type: string, maxLength: 256, writeOnly: true, description: "No comma and no whitespace (they cannot be passed to the share's mount). Required on creation and when host, share, domain, username or options change; otherwise absent on an update keeps the stored one. Stored encrypted, never returned." }
         domain: { type: string, maxLength: 64 }
         options: { type: string, maxLength: 256, description: "Comma-separated: vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N." }
     BackupTargetSmbSettings:

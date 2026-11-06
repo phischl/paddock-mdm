@@ -29,6 +29,11 @@ usage: ./paddock <command> [arguments]
   agent-rollout-resume <version>  resume the halted rollout of a release (control plane)
   auto-unseal status|enable|disable
                                   automatic unseal of OpenBao on this host (docs/operations/openbao.md section 6)
+  backup-target apply             mount the local, SMB and NFS backup targets saved in the portal (control plane, lab
+                                  with backups); then ./paddock up
+  backup now [--kind k]... [--label l] [--wait]
+                                  request a backup run of every kind or the named ones; --wait follows it
+  backup status                   the backup key, the newest runs and the targets
   migrate-from <old dir>          take over .env and .secrets/ of the bundle directory of the running version
   upgrade-check <old dir> [--json]
                                   read-only check of what an upgrade from the running version needs (changes nothing)
@@ -61,10 +66,31 @@ case "$cmd" in
     [[ "$old" != "$BUNDLE_DIR" ]] || die "migrate-from: <old dir> is this directory" 2
     [[ ! -e "$BUNDLE_DIR/.env" ]] || die "migrate-from: .env exists here; refusing to overwrite it"
     [[ ! -e "$BUNDLE_DIR/.secrets" ]] || die "migrate-from: .secrets/ exists here; refusing to overwrite it"
+    # The rendered backup targets hold the SMB passwords: they move with cp -a (mode 0600, owner) instead of a new
+    # render, which would decrypt them again; without the file the new stack runs paddock-backup without its volumes.
+    targets=compose.backup-targets.yaml
+    [[ ! -e "$BUNDLE_DIR/$targets" && ! -L "$BUNDLE_DIR/$targets" ]] ||
+      die "migrate-from: $targets exists here; refusing to overwrite it"
     [[ -f "$old/.env" && -d "$old/.secrets" ]] || die "migrate-from: $old has no .env and .secrets/"
+    if [[ -L "$old/$targets" ]] || [[ -e "$old/$targets" && ! -f "$old/$targets" ]]; then
+      die "migrate-from: $old/$targets is not a regular file"
+    fi
+    # The targets file goes first, to a temp name: a failed copy (disk full, a source the caller cannot read) leaves
+    # nothing behind, neither a truncated overlay nor the .env that would refuse the next run (PDK-733 review 3).
+    tmp=
+    if [[ -f "$old/$targets" ]]; then
+      tmp="$(mktemp "$BUNDLE_DIR/.$targets.XXXXXX")"
+      trap 'rm -f "$tmp"' EXIT
+      cp -a "$old/$targets" "$tmp" || die "migrate-from: could not copy $old/$targets; nothing changed"
+    fi
     cp -a "$old/.env" "$BUNDLE_DIR/.env"
     cp -a "$old/.secrets" "$BUNDLE_DIR/.secrets"
-    echo "copied .env and .secrets/ from $old"
+    if [[ -n "$tmp" ]]; then
+      mv -T "$tmp" "$BUNDLE_DIR/$targets"
+      echo "copied .env, .secrets/ and $targets from $old"
+    else
+      echo "copied .env and .secrets/ from $old"
+    fi
     exit 0
     ;;
   upgrade-check)
@@ -74,7 +100,7 @@ case "$cmd" in
     upgrade_check "$BUNDLE_DIR" "$@" || status=$?
     exit "$status"
     ;;
-  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal) ;;
+  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal | backup-target | backup) ;;
   *) usage ;;
 esac
 
@@ -120,6 +146,33 @@ lab_warning() {
     echo "lab profile (PADDOCK_HOST=lab): not for production — see docs/operations/lab-install.md" >&2
 }
 
+# require_backup_host <command>: the command runs where the backup role runs (control plane, lab with backups).
+require_backup_host() {
+  backup_host || die "$1 runs on the control plane or on a lab host with PADDOCK_LAB_BACKUP=yes (PADDOCK_HOST is $PADDOCK_HOST)" 2
+}
+
+# backup_role <args…>: paddock-server in a one-off paddock-backup container, without the rendered target volumes: the
+# database commands need none, and an unreachable share must not block the emergency path.
+backup_role() {
+  BACKUP_TARGETS_OVERLAY='' compose --profile paddock run --rm --no-deps "$@"
+}
+
+# resolve_local_targets <file>: every local device the rendered file names must still be a real directory below
+# PADDOCK_BACKUP_LOCAL_ROOT (plan M15 decision 36), checked by paddock-server in a container without network or
+# capabilities that sees the root's parent read-only, as ./paddock check does. The kernel resolves a bind mount on
+# every container start, hence the check before every up and not only at apply.
+resolve_local_targets() {
+  local root line devs=() mounts=() m
+  root="$(dotenv PADDOCK_BACKUP_LOCAL_ROOT)"
+  while IFS= read -r line; do
+    devs+=("$(base64 -d <<<"${line#\# local: }")") || return 1
+  done < <(grep '^# local: ' "$1")
+  ((${#devs[@]})) || return 0
+  while IFS= read -r m; do mounts+=("$m"); done < <(backup_root_mount "$root")
+  docker run --rm --user 0:0 --network none --cap-drop ALL --read-only "${mounts[@]}" "$PADDOCK_IMAGE" \
+    backup resolve-local ${root:+--root "$root"} -- "${devs[@]}" </dev/null >/dev/null
+}
+
 case "$cmd" in
   secrets)
     exec "$BUNDLE_DIR/scripts/gen-prod-secrets.sh" "$PADDOCK_HOST"
@@ -135,7 +188,9 @@ case "$cmd" in
       *) die "usage: ./paddock check [--online]" 2 ;;
     esac
     lab_warning
-    # The check reads the production configuration exactly as shipped: no extra Compose files (the CI overlay).
+    # The check reads the production configuration exactly as shipped: no extra Compose files (the CI overlay), and
+    # not the rendered backup targets, whose volume options hold the SMB passwords (decisions-alpha9 item 35).
+    export BACKUP_TARGETS_OVERLAY=''
     files="$(PADDOCK_COMPOSE_EXTRA='' compose_files)"
     names="$(xargs -n1 basename <<<"$files" | paste -sd, -)"
     # The configuration names host paths (secret files, mounted files), hence the bundle directory at its own path;
@@ -143,10 +198,21 @@ case "$cmd" in
     # The backup root's parent too (read-only), so that the check sees the root itself and not a path inside the image.
     mounts=()
     while IFS= read -r m; do mounts+=("$m"); done < <(backup_root_mount "$(dotenv PADDOCK_BACKUP_LOCAL_ROOT)")
+    # Online, the audit bucket is read over audit-store (audit, lab), and on a host with backups the rendered targets'
+    # revisions are compared with the database's (plan M15 decision 22): the header line only, never the file.
+    network=() revisions=()
+    if [[ -n "$online" && "$PADDOCK_HOST" != controlplane ]]; then network=(--network "${PADDOCK_PROJECT}_audit-store"); fi
+    if [[ -n "$online" ]] && backup_host; then
+      rev_file=none
+      [[ ! -f "$BACKUP_TARGETS_FILE" ]] || rev_file="$(sed -n 's/^# revisions: //p' "$BACKUP_TARGETS_FILE" | head -1)"
+      rev_db="$(backup_role -T paddock-backup admin backup-targets revisions </dev/null 2>/dev/null | tail -1)" || rev_db=""
+      [[ "$rev_db" =~ ^(none|[0-9a-f=\ -]+)$ ]] || rev_db=""
+      revisions=(--backup-revisions-file "${rev_file:-none}" --backup-revisions-db "$rev_db")
+    fi
     PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
-      docker run --rm -i --user 0:0 ${online:+--network "${PADDOCK_PROJECT}_audit-store"} "${mounts[@]}" \
+      docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" \
         -v "$BUNDLE_DIR:$BUNDLE_DIR:ro" -w "$BUNDLE_DIR" "$PADDOCK_IMAGE" \
-        prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online}
+        prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online} "${revisions[@]}"
     ;;
   up)
     profiles=(--profile paddock --profile observability)
@@ -159,7 +225,11 @@ case "$cmd" in
     if [[ "$PADDOCK_HOST" != audit && "$(uname -m)" != x86_64 ]]; then
       die "the control plane needs an amd64 host: the Fleet image (fleetdm/fleet) is published for linux/amd64 only"
     fi
-    compose "${profiles[@]}" up -d
+    if backup_host && [[ -f "$BACKUP_TARGETS_FILE" ]]; then
+      resolve_local_targets "$BACKUP_TARGETS_FILE" ||
+        die "a local backup target no longer resolves below PADDOCK_BACKUP_LOCAL_ROOT (see above); fix the directory or the target, then ./paddock backup-target apply"
+    fi
+    run_redacted compose "${profiles[@]}" up -d
     "$BUNDLE_DIR/scripts/wait-healthy.sh" "${profiles[@]}"
     ;;
   down)
@@ -176,7 +246,16 @@ case "$cmd" in
     compose --profile '*' logs --no-color --tail 300 "$@" | redact_tokens
     ;;
   compose)
-    compose "$@"
+    # The rendered backup targets hold the SMB passwords in their volume options. Compose folds a long option line onto
+    # continuation lines, which no line-based redaction catches, so its configuration (config, alias convert) is not
+    # printed at all while the overlay is in the file set; mount errors stay redacted (PDK-733 review 3).
+    if [[ " $* " == *" config "* || " $* " == *" convert "* ]]; then
+      files="$(compose_files)" || exit 2
+      if [[ $'\n'"$files"$'\n' == *$'\n'"${BACKUP_TARGETS_OVERLAY-$BACKUP_TARGETS_FILE}"$'\n'* ]]; then
+        die "compose config: refusing to print the configuration: compose.backup-targets.yaml holds the SMB passwords of the backup targets and Compose would print them; read the shipped compose files instead"
+      fi
+    fi
+    run_redacted compose "$@"
     ;;
   bao)
     # shellcheck disable=SC2046
@@ -296,5 +375,87 @@ case "$cmd" in
         ;;
       *) die "usage: ./paddock auto-unseal status|enable|disable" 2 ;;
     esac
+    ;;
+  backup)
+    # The host's emergency path without the portal (plan M15 decision 21, ADR 0046 decision 9).
+    case "${1:-}" in
+      now | status) ;;
+      *) die "usage: ./paddock backup now [--kind k]... [--label l] [--wait] | ./paddock backup status" 2 ;;
+    esac
+    require_backup_host "backup $1"
+    # shellcheck disable=SC2046
+    backup_role $(tty_flag) paddock-backup backup "$@"
+    ;;
+  backup-target)
+    # Mounts the local, SMB and NFS targets of the database as Docker volumes of paddock-backup (plan M15 decision 20,
+    # decisions-alpha9 items 35 and 36). The render holds the decrypted SMB passwords: it travels on a pipe into this
+    # process and into the 0600 file only, never onto a command line or into the output. Pipes instead of here-strings:
+    # bash spills a here-string above 64 KiB into a temp file in $TMPDIR.
+    [[ "${1:-}" == apply && $# -eq 1 ]] || die "usage: ./paddock backup-target apply" 2
+    require_backup_host "backup-target apply"
+    uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    root="$(dotenv PADDOCK_BACKUP_LOCAL_ROOT)"
+    render="$(backup_role -T paddock-backup admin backup-targets render ${root:+--local-root "$root"} </dev/null)" ||
+      die "backup-target apply: the targets could not be rendered (see above); nothing changed"
+    doc="" marks=() keep=() deleted=() names=()
+    while read -r kind a b c d; do
+      case "$kind" in
+        compose) doc="$a" ;;
+        mount)
+          [[ "$a" =~ $uuid_re && "$b" =~ ^[1-9][0-9]*$ && "$d" =~ ^backup-target-$a-r$b-[0-9a-f]{12}$ ]] ||
+            die "backup-target apply: unexpected render line"
+          marks+=("$a" "$b")
+          keep+=("${PADDOCK_PROJECT}_$d")
+          names+=("$(printf '%s' "$c" | base64 -d)")
+          ;;
+        deleted)
+          [[ "$a" =~ $uuid_re ]] || die "backup-target apply: unexpected render line"
+          deleted+=("$a")
+          ;;
+        "") ;;
+        *) die "backup-target apply: unexpected render line" ;;
+      esac
+    done < <(printf '%s\n' "$render")
+    unset render
+    if [[ -n "$doc" ]]; then
+      # The new file is tried first: the one-off container mounts every volume and writes each marker. A share that
+      # does not mount leaves the running configuration untouched, so ./paddock up never meets it.
+      tmp="$(umask 077 && mktemp --suffix=.yaml "$BUNDLE_DIR/.compose.backup-targets.XXXXXX")"
+      trap 'rm -f "$tmp"' EXIT
+      printf '%s' "$doc" | base64 -d >"$tmp"
+      unset doc
+      resolve_local_targets "$tmp" ||
+        die "backup-target apply: a local target does not resolve below PADDOCK_BACKUP_LOCAL_ROOT (see above); nothing changed"
+      BACKUP_TARGETS_OVERLAY="$tmp" run_redacted compose --profile paddock run --rm --no-deps -T paddock-backup \
+        backup mark-mount "${marks[@]}" </dev/null >/dev/null ||
+        die "backup-target apply: a target could not be mounted (see above); nothing changed"
+      chmod 600 "$tmp"
+      mv "$tmp" "$BACKUP_TARGETS_FILE"
+      trap - EXIT
+      echo "rendered $BACKUP_TARGETS_FILE (mode 0600; it holds the share passwords: never copy, commit or print it)"
+      printf 'target: %s\n' "${names[@]}"
+    else
+      rm -f "$BACKUP_TARGETS_FILE"
+      echo "no local, SMB or NFS target in the database; $BACKUP_TARGETS_FILE removed"
+    fi
+    # Volumes of earlier revisions and of deleted targets go once paddock-backup no longer uses them.
+    in_use=()
+    while IFS= read -r vol; do
+      [[ "$vol" == "${PADDOCK_PROJECT}_backup-target-"* ]] || continue
+      [[ " ${keep[*]} " != *" $vol "* ]] || continue
+      if docker volume rm "$vol" </dev/null >/dev/null 2>&1; then echo "removed volume $vol"; else in_use+=("$vol"); fi
+    done < <(docker volume ls -q --filter "label=com.docker.compose.project=$PADDOCK_PROJECT")
+    gone=()
+    for id in "${deleted[@]}"; do
+      [[ " ${in_use[*]} " == *"_backup-target-$id-r"* ]] || gone+=("$id")
+    done
+    if ((${#gone[@]})); then
+      backup_role -T paddock-backup admin backup-targets purge "${gone[@]}" </dev/null ||
+        die "backup-target apply: the deleted targets' rows could not be removed; run ./paddock backup-target apply again"
+    fi
+    echo "next: ./paddock up (recreates paddock-backup with these targets; the portal shows them mounted within a minute)"
+    if ((${#in_use[@]})); then
+      echo "after ./paddock up run ./paddock backup-target apply again to remove the volumes still in use: ${in_use[*]}"
+    fi
     ;;
 esac

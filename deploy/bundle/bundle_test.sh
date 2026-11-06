@@ -211,8 +211,49 @@ cp -a "$bundle" "$work/q"
 expect 0 "migrate-from into a fresh directory" "$work/q" migrate-from "$work/p"
 [[ "$(cat "$work/q/.secrets/marker" 2>/dev/null)" == old ]] && pass "migrate-from copied .secrets/" ||
   fail "migrate-from did not copy .secrets/"
+[[ ! -e "$work/q/compose.backup-targets.yaml" ]] && pass "migrate-from without a targets file creates none" ||
+  fail "migrate-from created compose.backup-targets.yaml"
 rm "$work/q/.env"
 expect 1 "migrate-from onto an existing .secrets/" "$work/q" migrate-from "$work/p"
+# PDK-733 review 2 (R2-M1): the rendered backup targets move with the upgrade, or paddock-backup loses its volumes.
+(umask 077 && echo 'services: {} # old targets' >"$work/p/compose.backup-targets.yaml")
+cp -a "$bundle" "$work/q2"
+expect 0 "migrate-from with a targets file" "$work/q2" migrate-from "$work/p"
+cmp -s "$work/p/compose.backup-targets.yaml" "$work/q2/compose.backup-targets.yaml" &&
+  [[ "$(stat -c '%a %u' "$work/q2/compose.backup-targets.yaml")" == "600 $(id -u)" ]] &&
+  pass "migrate-from copies compose.backup-targets.yaml with mode 0600 and its owner" ||
+  fail "migrate-from targets file: $(stat -c '%a %u' "$work/q2/compose.backup-targets.yaml" 2>&1)"
+cp -a "$bundle" "$work/q3"
+echo 'services: {} # newer' >"$work/q3/compose.backup-targets.yaml"
+expect 1 "migrate-from onto an existing targets file" "$work/q3" migrate-from "$work/p"
+[[ "$(cat "$work/q3/compose.backup-targets.yaml")" == *newer* && ! -e "$work/q3/.env" ]] &&
+  pass "migrate-from onto an existing targets file changes nothing" || fail "migrate-from overwrote a targets file"
+rm "$work/p/compose.backup-targets.yaml"
+ln -s /etc/hostname "$work/p/compose.backup-targets.yaml"
+cp -a "$bundle" "$work/q4"
+expect 1 "migrate-from with a symlinked targets file" "$work/q4" migrate-from "$work/p"
+rm "$work/p/compose.backup-targets.yaml"
+# PDK-733 review 3 (R3-m1): a targets copy that fails halfway (disk full) leaves nothing, so the next run is not refused.
+(umask 077 && echo 'services: {} # old targets' >"$work/p/compose.backup-targets.yaml")
+mkdir -p "$work/fakebin-cp"
+cat >"$work/fakebin-cp/cp" <<FAKE
+#!/usr/bin/env bash
+if [[ "\$*" == *"/compose.backup-targets.yaml "* ]]; then echo 'services: {' >"\${*: -1}"; echo "cp: No space left on device" >&2; exit 1; fi
+exec $(command -v cp) "\$@"
+FAKE
+chmod +x "$work/fakebin-cp/cp"
+cp -a "$bundle" "$work/q5"
+PATH="$work/fakebin-cp:$PATH" expect 1 "migrate-from with a failing targets copy" "$work/q5" migrate-from "$work/p"
+[[ "$out" == *"could not copy"*"nothing changed"* ]] &&
+  [[ ! -e "$work/q5/.env" && ! -e "$work/q5/.secrets" && ! -e "$work/q5/compose.backup-targets.yaml" ]] &&
+  [[ -z "$(find "$work/q5" -maxdepth 1 -name '.compose.backup-targets.yaml.*')" ]] &&
+  pass "a failing targets copy leaves neither .env, .secrets/, the targets file nor a temp file" ||
+  fail "failing targets copy left: $(ls -A "$work/q5" | grep -e '^\.env$' -e secrets -e backup-targets)"
+expect 0 "migrate-from again after a failing targets copy" "$work/q5" migrate-from "$work/p"
+cmp -s "$work/p/compose.backup-targets.yaml" "$work/q5/compose.backup-targets.yaml" &&
+  [[ -z "$(find "$work/q5" -maxdepth 1 -name '.compose.backup-targets.yaml.*')" ]] &&
+  pass "the re-run copies the targets file and leaves no temp file" || fail "re-run after a failing copy"
+rm "$work/p/compose.backup-targets.yaml"
 
 # agent-release refuses a release directory the paddock-api service (uid 65532) cannot read (plan M8x decision 50).
 mkdir -p "$work/release"
@@ -496,6 +537,242 @@ set -e
 [[ $rc -eq 0 ]] && pass "auto-unseal disable a second time: exit 0" || fail "disable a second time: exit $rc, $out"
 unset FAKE_DOCKER_LOG
 
+
+# Backup targets on the host (plan M15 decisions 20–22, decisions-alpha9 items 35 and 36): the rendered file joins the
+# file set only on a host with backups; ./paddock backup-target apply writes it 0600 from the render, tries it before it
+# replaces the old one, removes stale volumes and the rows of deleted targets, and no SMB password reaches an output or
+# a command line.
+redacted="$( (. "$compose_src/scripts/lib.sh" && printf '%s\n' \
+  "mount //127.0.0.1/share:/var/lib/docker/volumes/x/_data, data: vers=3,username=u,password=********,,tail: connection refused" \
+  'o: "uid=999,username=svc,password=S3cr3t,,pass$$word"' 'no secret here' | redact_mount_secrets))"
+if [[ "$redacted" == $'mount //127.0.0.1/share:/var/lib/docker/volumes/x/_data, data: vers=3,username=u,password=<redacted>\no: "uid=999,username=svc,password=<redacted>\nno secret here' ]]; then
+  pass "redact_mount_secrets cuts every line after password="
+else
+  fail "redact_mount_secrets: $redacted"
+fi
+# PDK-733 review 2 (R2-m2): behind Docker's mask the errno stays; anything else after password= still goes.
+redacted="$( (. "$compose_src/scripts/lib.sh" && printf '%s\n' \
+  "data: vers=3,username=u,password=********: permission denied" \
+  'o: "uid=999,username=svc,password=********: secret"' \
+  "data: vers=3,username=u,password=********: Secret" | redact_mount_secrets))"
+if [[ "$redacted" == $'data: vers=3,username=u,password=<redacted>: permission denied\no: "uid=999,username=svc,password=<redacted>\ndata: vers=3,username=u,password=<redacted>' ]]; then
+  pass "redact_mount_secrets keeps the errno behind Docker's mask"
+else
+  fail "redact_mount_secrets errno: $redacted"
+fi
+rr_rc=0
+rr_out="$( (. "$compose_src/scripts/lib.sh" && run_redacted bash -c 'echo out; echo "password=hunter2" >&2; exit 7') 2>&1)" || rr_rc=$?
+[[ $rr_rc == 7 && "$rr_out" == *out* && "$rr_out" == *"password=<redacted>"* && "$rr_out" != *hunter2* ]] &&
+  pass "run_redacted keeps stdout and the exit code and redacts stderr" || fail "run_redacted: exit $rr_rc, $rr_out"
+if tar -tzf "$work/a/paddock-deploy-0.0.0-test.tar.gz" | grep -q 'compose.backup-targets'; then
+  fail "the tarball ships compose.backup-targets.yaml"
+else
+  pass "the tarball does not ship compose.backup-targets.yaml"
+fi
+grep -qxF 'deploy/compose/compose.backup-targets.yaml' "$here/../../.gitignore" &&
+  pass ".gitignore excludes compose.backup-targets.yaml" || fail ".gitignore does not exclude compose.backup-targets.yaml"
+
+cp -a "$bundle" "$work/t"
+cp "$work/t/.env.example" "$work/t/.env"
+targets_file="$work/t/compose.backup-targets.yaml"
+echo 'services: {}' >"$targets_file"
+[[ "$(files_of "$work/t")" == "$(lib_files "$work/t" PROD_FILES_controlplane) compose.backup-targets.yaml" ]] &&
+  pass "controlplane: the rendered targets file joins the file set last" || fail "controlplane with targets: $(files_of "$work/t")"
+[[ "$(cd "$work/t" && BACKUP_TARGETS_OVERLAY='' bash -c '. scripts/lib.sh; compose_files' | grep -c backup-targets)" == 0 ]] &&
+  pass "BACKUP_TARGETS_OVERLAY='' leaves the targets file out" || fail "BACKUP_TARGETS_OVERLAY='' keeps the targets file"
+cp "$work/t/.env.lab.example" "$work/t/.env"
+[[ "$(files_of "$work/t")" != *backup-targets* ]] && pass "lab without backups: no targets file" ||
+  fail "lab without backups: $(files_of "$work/t")"
+expect 2 "backup-target apply on a lab host without backups" "$work/t" backup-target apply
+sed -i 's/^PADDOCK_LAB_BACKUP=.*/PADDOCK_LAB_BACKUP=yes/' "$work/t/.env"
+[[ "$(files_of "$work/t")" == *" compose.backup.yaml compose.backup-targets.yaml" ]] &&
+  pass "lab with backups: the targets file after compose.backup.yaml" || fail "lab with backups: $(files_of "$work/t")"
+cp "$work/t/.env.example" "$work/t/.env"
+sed -i 's/^PADDOCK_HOST=.*/PADDOCK_HOST=audit/' "$work/t/.env"
+expect 2 "backup-target apply on the audit host" "$work/t" backup-target apply
+expect 2 "backup now on the audit host" "$work/t" backup now
+cp "$work/t/.env.example" "$work/t/.env"
+rm "$targets_file"
+expect 2 "backup-target without apply" "$work/t" backup-target
+expect 2 "backup without a subcommand" "$work/t" backup
+
+# The render fixture: an SMB target whose password has a comma and a dollar, an NFS and a local target, and a deleted
+# target whose old volume is still there.
+password='S3cr3t,,pass$$word'
+smb=10000000-0000-4000-8000-000000000001 nfs=20000000-0000-4000-8000-000000000002
+loc=30000000-0000-4000-8000-000000000003 gone=40000000-0000-4000-8000-000000000004
+smbv=backup-target-$smb-r3-0123456789ab nfsv=backup-target-$nfs-r1-0a1b2c3d4e5f locv=backup-target-$loc-r1-ffeeddccbbaa
+fixture="# Rendered by ./paddock backup-target apply on 2026-11-06T10:00:00Z from the database; do not edit.
+# revisions: $smb=3 $nfs=1 $loc=1
+# local: $(printf %s /srv/paddock-backup/paddock-backup | base64 -w0)
+services:
+  paddock-backup:
+    volumes:
+      - \"$smbv:/backup-targets/$smb\"
+volumes:
+  $smbv:
+    driver: local
+    driver_opts:
+      type: \"cifs\"
+      device: \"//nas.example.org/backup\$\$\"
+      o: \"uid=999,gid=999,file_mode=0640,dir_mode=0750,vers=3,username=svc,password=$password\"
+"
+b64() { printf %s "$1" | base64 -w0; }
+render_out="compose $(b64 "$fixture")
+mount $smb 3 $(b64 nas) $smbv
+mount $nfs 1 $(b64 nfs) $nfsv
+mount $loc 1 $(b64 local) $locv
+deleted $gone $(b64 'old share')"
+mkdir -p "$work/fakebin-backup"
+cat >"$work/fakebin-backup/docker" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
+[[ -t 0 ]] || cat >/dev/null
+case "$*" in
+  *"admin backup-targets render"*)
+    [[ "$FAKE_RENDER" != fail ]] || { echo "command failed error=\"a restore plan is running\"" >&2; exit 1; }
+    printf '%s\n' "$FAKE_RENDER"
+    ;;
+  *"admin backup-targets revisions"*) echo "$FAKE_REVISIONS" ;;
+  *"admin backup-targets purge"*) shift "$#" ;;
+  *"backup resolve-local"*) exit "${FAKE_RESOLVE:-0}" ;;
+  *"backup mark-mount"*)
+    if [[ "$FAKE_MARK" == fail ]]; then
+      echo "Error response from daemon: failed to mount local volume: mount //10.0.0.5/backup:/var/lib/docker/volumes/x/_data, data: vers=3,username=svc,password=********,,pass\$word: permission denied" >&2
+      exit 1
+    fi
+    ;;
+  "volume ls"*) printf '%s\n' $FAKE_VOLUMES ;;
+  "volume rm"*) [[ " $FAKE_IN_USE " != *" ${*: -1} "* ]] || exit 1 ;;
+  # Compose folds a long plain scalar at its spaces onto more-indented continuation lines (PDK-733 review 3).
+  *" config"*) printf '%s\n' '      o: uid=999,gid=999,file_mode=0640,dir_mode=0750,vers=3,username=svc,password=S3cr3t' \
+    '        pass$word battery staple' ;;
+esac
+exit 0
+FAKE
+chmod +x "$work/fakebin-backup/docker"
+export FAKE_DOCKER_LOG="$work/docker-backup.log"
+# paddock_t <args…>: ./paddock in $work/t with the stand-in; output in $out, exit code in $rc.
+paddock_t() {
+  set +e
+  out="$(cd "$work/t" && env -u SECRETS_DIR PATH="$work/fakebin-backup:$PATH" ./paddock "$@" 2>&1 </dev/null)"
+  rc=$?
+  set -e
+}
+leaks() { [[ "$out" == *S3cr3t* || "$out" == *'pass$word'* ]] || grep -q -e 'S3cr3t' -e 'pass\$word' "$FAKE_DOCKER_LOG"; }
+: >"$FAKE_DOCKER_LOG"
+FAKE_RENDER="$render_out" FAKE_VOLUMES="paddock_backup-target-$smb-r2-0123456789ab paddock_backup-target-$smb-r3-aaaaaaaaaaaa paddock_$smbv paddock_$locv paddock_backup-target-$gone-r5-0123456789ab paddock_postgres-data" \
+  paddock_t backup-target apply
+if [[ $rc == 0 ]] && cmp -s <(printf %s "$fixture") "$targets_file" && [[ "$(stat -c %a "$targets_file")" == 600 ]]; then
+  pass "backup-target apply writes the rendered file unchanged with mode 0600"
+else
+  fail "backup-target apply: exit $rc, mode $(stat -c %a "$targets_file" 2>/dev/null), $out"
+fi
+grep -q "backup mark-mount $smb 3 $nfs 1 $loc 1" "$FAKE_DOCKER_LOG" && grep -q -- "-f $work/t/.compose.backup-targets.*\.yaml.* run --rm --no-deps -T paddock-backup backup mark-mount" "$FAKE_DOCKER_LOG" &&
+  pass "apply writes every marker through the new file before it replaces the old one" || fail "mark-mount: $(cat "$FAKE_DOCKER_LOG")"
+grep -q -- "--user 0:0 --network none --cap-drop ALL --read-only .* backup resolve-local --root /srv/paddock-backup -- /srv/paddock-backup/paddock-backup" "$FAKE_DOCKER_LOG" &&
+  pass "apply resolves every local target below the root in a container without network and capabilities" ||
+  fail "resolve-local: $(grep resolve-local "$FAKE_DOCKER_LOG")"
+grep -q "admin backup-targets render --local-root /srv/paddock-backup" "$FAKE_DOCKER_LOG" &&
+  ! grep "admin backup-targets render" "$FAKE_DOCKER_LOG" | grep -q -- "compose.backup-targets" &&
+  pass "the render runs without the target volumes and with the local root" || fail "render: $(grep render "$FAKE_DOCKER_LOG")"
+grep -qx "volume rm paddock_backup-target-$smb-r2-0123456789ab" "$FAKE_DOCKER_LOG" && grep -qx "volume rm paddock_backup-target-$gone-r5-0123456789ab" "$FAKE_DOCKER_LOG" &&
+  ! grep -q "volume rm paddock_$smbv\|volume rm paddock_$locv\|volume rm paddock_postgres-data" "$FAKE_DOCKER_LOG" &&
+  pass "apply removes the stale and deleted targets' volumes and keeps the current ones" || fail "volumes: $(grep volume "$FAKE_DOCKER_LOG")"
+# PDK-733 review 1 (R1-M1): Docker keeps an existing volume's options, so a volume of the same revision whose mount
+# changed (another local root, other default options) has another name and must go like an older revision's.
+grep -qx "volume rm paddock_backup-target-$smb-r3-aaaaaaaaaaaa" "$FAKE_DOCKER_LOG" &&
+  pass "apply removes a volume of the current revision whose mount changed" || fail "same-revision volume kept: $(grep volume "$FAKE_DOCKER_LOG")"
+grep -q "admin backup-targets purge $gone" "$FAKE_DOCKER_LOG" && pass "apply removes the deleted target's row after its volume" ||
+  fail "purge: $(cat "$FAKE_DOCKER_LOG")"
+[[ "$out" == *"target: nas"* && "$out" == *"target: local"* && "$out" == *"next: ./paddock up"* ]] &&
+  pass "apply names the targets and the next step" || fail "apply output: $out"
+leaks && fail "a password reached the output or a command line" || pass "no SMB password in the output or on a command line"
+first="$(cat "$targets_file")"
+: >"$FAKE_DOCKER_LOG"
+FAKE_RENDER="$render_out" FAKE_VOLUMES="paddock_$smbv paddock_backup-target-$gone-r5-0123456789ab" FAKE_IN_USE="paddock_backup-target-$gone-r5-0123456789ab" \
+  paddock_t backup-target apply
+[[ $rc == 0 && "$(cat "$targets_file")" == "$first" ]] && ! grep -q "purge" "$FAKE_DOCKER_LOG" &&
+  [[ "$out" == *"run ./paddock backup-target apply again"*"paddock_backup-target-$gone-r5-0123456789ab"* ]] &&
+  pass "apply again: same file; a volume still in use keeps its target's row and is named" || fail "apply again: exit $rc, $out"
+: >"$FAKE_DOCKER_LOG"
+FAKE_RENDER="$render_out" FAKE_MARK=fail paddock_t backup-target apply
+[[ $rc == 1 && "$(cat "$targets_file")" == "$first" && "$out" == *"password=<redacted>"* && "$out" == *"nothing changed"* ]] &&
+  [[ -z "$(find "$work/t" -maxdepth 1 -name '.compose.backup-targets.*')" ]] &&
+  pass "a share that does not mount: exit 1, the old file stays, the mount error is redacted" || fail "mount failure: exit $rc, $out"
+leaks && fail "a mount error leaked the password" || pass "no password in the mount error"
+FAKE_RENDER="$render_out" FAKE_RESOLVE=1 paddock_t backup-target apply
+[[ $rc == 1 && "$(cat "$targets_file")" == "$first" && "$out" == *"does not resolve below PADDOCK_BACKUP_LOCAL_ROOT"* ]] &&
+  pass "a local target that does not resolve: exit 1, nothing changed" || fail "resolve failure: exit $rc, $out"
+FAKE_RENDER=fail paddock_t backup-target apply
+[[ $rc == 1 && "$(cat "$targets_file")" == "$first" && "$out" == *"could not be rendered"* ]] &&
+  pass "a refused render (a restore plan running): exit 1, nothing changed" || fail "render failure: exit $rc, $out"
+for bad in "mount $smb 3 $(b64 nas)" "mount $smb 3 $(b64 nas) backup-target-$nfs-r3-0123456789ab" "mount $smb 3 $(b64 nas) ../$smbv"; do
+  FAKE_RENDER="compose $(b64 "$fixture")
+$bad" paddock_t backup-target apply
+  [[ $rc == 1 && "$(cat "$targets_file")" == "$first" && "$out" == *"unexpected render line"* ]] ||
+    fail "a mount record without its own volume name is taken: '$bad': exit $rc, $out"
+done
+pass "a mount record without the target's own volume name is refused"
+cp "$targets_file" "$work/targets.keep"
+FAKE_RENDER="" paddock_t backup-target apply
+[[ $rc == 0 && ! -e "$targets_file" && "$out" == *"no local, SMB or NFS target"* ]] &&
+  pass "apply without a volume target removes the file" || fail "apply without targets: exit $rc, $out"
+cp -p "$work/targets.keep" "$targets_file"
+: >"$FAKE_DOCKER_LOG"
+FAKE_RESOLVE=1 paddock_t up
+[[ $rc == 1 && "$out" == *"no longer resolves"* ]] && ! grep -q " up -d" "$FAKE_DOCKER_LOG" &&
+  pass "up refuses to start when a local target no longer resolves" || fail "up with a broken local target: exit $rc, $out"
+# PDK-733 review 3 (R3-M1): a folded o: line defeats any line-based redaction, so with the targets file in the file
+# set the configuration is not printed at all, and Compose is not even asked for it.
+for args in "config" "--profile backup config --services" "convert"; do
+  : >"$FAKE_DOCKER_LOG"
+  # shellcheck disable=SC2086
+  paddock_t compose $args
+  [[ $rc == 1 && "$out" == *"refusing to print the configuration"* && "$out" != *"o:"* && "$out" != *battery* ]] &&
+    ! leaks && ! grep -q " config\| convert" "$FAKE_DOCKER_LOG" ||
+    fail "compose $args with the targets file: exit $rc, $out, docker: $(cat "$FAKE_DOCKER_LOG")"
+done
+pass "./paddock compose config refuses to print while the targets file is in the file set; nothing printed"
+mv "$targets_file" "$work/targets.aside"
+: >"$FAKE_DOCKER_LOG"
+paddock_t compose config
+[[ $rc == 0 && "$out" == *"o: uid=999"* ]] && grep -q " config$" "$FAKE_DOCKER_LOG" &&
+  pass "./paddock compose config prints without the targets file" || fail "compose config without targets: exit $rc, $out"
+mv "$work/targets.aside" "$targets_file"
+: >"$FAKE_DOCKER_LOG"
+paddock_t backup now --wait
+grep -q "run --rm --no-deps -T paddock-backup backup now --wait" "$FAKE_DOCKER_LOG" &&
+  ! grep "backup now" "$FAKE_DOCKER_LOG" | grep -q "compose.backup-targets" &&
+  pass "backup now runs in a one-off paddock-backup without the target volumes" || fail "backup now: $(cat "$FAKE_DOCKER_LOG")"
+: >"$FAKE_DOCKER_LOG"
+FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
+grep -q -- "prod-check --host controlplane .* --online --backup-revisions-file $smb=3 $nfs=1 $loc=1 --backup-revisions-db $smb=4 $nfs=1 $loc=1" "$FAKE_DOCKER_LOG" &&
+  ! grep "config --format json" "$FAKE_DOCKER_LOG" | grep -q "compose.backup-targets" &&
+  ! grep -q -- "--network paddock_audit-store" "$FAKE_DOCKER_LOG" &&
+  pass "check --online compares the file's revisions with the database's and leaves the targets file out" ||
+  fail "check --online: $(grep -e prod-check -e 'config --format' "$FAKE_DOCKER_LOG")"
+# PDK-733 review 2 (R2-m1): bash writes a here-string above 64 KiB to a temp file (sh-thd.*), so a large render with the
+# passwords must reach the loop and base64 through pipes. Without strace the backup-target branch is read instead.
+big="$fixture# $(head -c 60000 /dev/zero | tr '\0' x)
+"
+big_render="compose $(b64 "$big")
+mount $smb 3 $(b64 nas) $smbv"
+if command -v strace >/dev/null && strace -f -qq -o /dev/null true 2>/dev/null; then
+  set +e
+  out="$(cd "$work/t" && FAKE_RENDER="$big_render" env -u SECRETS_DIR PATH="$work/fakebin-backup:$PATH" \
+    strace -f -qq -e trace=openat,open,creat -o "$work/heredoc.trace" ./paddock backup-target apply 2>&1 </dev/null)"
+  rc=$?
+  set -e
+  [[ $rc == 0 ]] && cmp -s <(printf %s "$big") "$targets_file" && ! grep -q 'sh-thd' "$work/heredoc.trace" &&
+    pass "a render above 64 KiB never reaches a temp file" ||
+    fail "large render: exit $rc, $(grep -c 'sh-thd' "$work/heredoc.trace") temp file(s), $out"
+else
+  sed -n '/^  backup-target)$/,/^    ;;$/p' "$bundle/paddock" | grep -q '<<<' &&
+    fail "backup-target apply feeds the render through a here-string" ||
+    pass "backup-target apply feeds the render through pipes (strace not available)"
+fi
+unset FAKE_DOCKER_LOG
 if ((failures > 0)); then
   echo "bundle: $failures check(s) failed" >&2
   exit 1

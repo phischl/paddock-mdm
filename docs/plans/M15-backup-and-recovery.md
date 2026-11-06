@@ -1145,3 +1145,18 @@ deny list of system and deployment directories (PDK-729 review): there is no abs
   is a symlink or not a directory, or is writable by group or others; WARN when it does not exist.
 - Alpha: existing local targets with an absolute path fail validation on the next edit and need the subpath form;
   there is no migration (no users).
+
+## Note 2026-11-06 — §6.7: the SMB login in the volume's options (PDK-733, `decisions-alpha9.md` item 35)
+
+`credentials=` is a mount.cifs option the kernel ignores, and Docker's local driver mounts with `mount(2)`; ADR 0046
+amendment 2026-11-06 records it. §6.7 changes accordingly: no `.secrets/backup-targets/<id>.cifs` file; an SMB
+volume's `o` is `uid=999,gid=999,file_mode=0640,dir_mode=0750,<options, vers=3 by default>,username=…[,domain=…],password=…`
+(password last). A comma or whitespace in the password is refused when the target is saved and again at render (PDK-733 review 3: Compose folds the `o` line at a space, past any line-based redaction): Docker splits `o` on every comma and takes a segment
+that names a mount flag (`bind`, `ro`, `remount`, …) as a flag of the mount, so doubled commas do not protect it. The
+volume name is `backup-target-<id>-r<revision>-<fingerprint>`, the fingerprint being the first 12 hex digits of the
+SHA-256 of type, device and options without the password, because Docker never changes an existing volume's options
+and a non-interactive Compose run keeps a volume whose options changed: another `PADDOCK_BACKUP_LOCAL_ROOT` or a
+release's new default options change the name without a new revision (a new password always raises the revision).
+`apply` removes every other volume of the targets once `paddock-backup` no longer uses them, then the deleted targets' rows. Every value is YAML-quoted with `$`
+doubled. The header records `# revisions:` (for the online check item of decision 22) and every local device
+(`# local: <base64>`), which `./paddock up` resolves again below `PADDOCK_BACKUP_LOCAL_ROOT` before each start.

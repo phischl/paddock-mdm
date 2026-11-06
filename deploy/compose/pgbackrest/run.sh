@@ -7,6 +7,9 @@
 #             verify it (the service's command); without the key file it waits and takes nothing
 #   backup    take a full backup now (further arguments go to `pgbackrest backup`, e.g. --start-fast), after the
 #             service's running backup if there is one, and verify it
+#   verify    verify the whole stanza (every backup and the WAL archive) without a time limit and record verify-ok when
+#             it reports ok: the operator's path when the verify after a full backup keeps exceeding its 15 minutes and
+#             the targets hold WAL (plan M15, amendment 2026-11-05, A7; decisions-alpha9 item 33)
 #   flush     push every WAL file still in the spool
 #   info      pgbackrest info
 #   restore [--at <timestamp>] [--repo-path <pgbackrest/key_id>]
@@ -58,6 +61,8 @@ export PGBACKREST_LOG_LEVEL_FILE=off
 # drill) share: with a lock in each container's own /tmp a one-off backup ran beside the service's, and the expire of
 # one deleted the files of the other's backup set (restore drill, 2026-10-09).
 export PGBACKREST_LOCK_PATH="$STATE/lock"
+# pgBackRest's backup lock of the stanza; flock(1) sees it.
+STANZA_LOCK="$PGBACKREST_LOCK_PATH/$STANZA-backup-1.lock"
 export PGBACKREST_SPOOL_PATH=/tmp/pgbackrest
 export PGBACKREST_COMPRESS_TYPE=zst
 # The backup waits for its last WAL segment, which reaches the repository through the spool.
@@ -211,7 +216,10 @@ case "${1:-serve}" in
       switch_repo_path
       if ensure_stanza; then
         if full_due; then
-          if ! full_backup; then
+          # The operator's verify holds the lock for as long as it runs: the full waits for it instead of failing.
+          if [[ -e "$STANZA_LOCK" ]] && ! flock -n "$STANZA_LOCK" true; then
+            :
+          elif ! full_backup; then
             date +%s >"$STATE/last-error"
             echo "pgbackrest: full backup of $STANZA failed; retrying in $((RETRY_S / 60)) minutes" >&2
           fi
@@ -231,7 +239,7 @@ case "${1:-serve}" in
     # The service may be taking its scheduled backup: wait for the stanza's lock for up to 15 minutes. flock(1) sees
     # pgBackRest's lock, so the wait is one log line instead of a failed backup (ERROR [050]) every round; a backup
     # that loses the race to the lock still exits 50 and is retried.
-    lock="$PGBACKREST_LOCK_PATH/$STANZA-backup-1.lock"
+    lock="$STANZA_LOCK"
     waiting=false
     for _ in $(seq 1 90); do
       if [[ -e "$lock" ]] && ! flock -n "$lock" true; then
@@ -249,6 +257,47 @@ case "${1:-serve}" in
     done
     echo "pgbackrest: the running backup of $STANZA did not finish within 15 minutes" >&2
     exit 50
+    ;;
+  verify)
+    require_runtime
+    # verify-ok gets the start time and the backup role trusts it only when it is newer than the newest full, whose
+    # time is its label, the full's start. pgBackRest's verify sees only the backups already in backup.info, so a full
+    # running beside it would start before verify-ok without being covered: the verify holds the stanza's backup lock
+    # throughout (PDK-733 review 1), after the running backup if there is one, as `backup` waits for it.
+    mkdir -p "$PGBACKREST_LOCK_PATH"
+    locked=false waiting=false
+    for _ in $(seq 1 91); do
+      exec 9>>"$STANZA_LOCK"
+      # pgBackRest removes its lock file on release: a lock on a file no longer at the path would exclude nothing.
+      if flock -n 9 && [[ "$STANZA_LOCK" -ef /dev/fd/9 ]]; then
+        locked=true
+        break
+      fi
+      exec 9>&-
+      if ! $waiting; then
+        echo "$(date -u '+%F %T') INFO: waiting for the running backup of $STANZA to finish"
+        waiting=true
+      fi
+      sleep 10
+    done
+    if ! $locked; then
+      echo "pgbackrest: the running backup of $STANZA did not finish within 15 minutes" >&2
+      exit 50
+    fi
+    started="$(date +%s)"
+    rc=0
+    report="$(pgb verify --output=text --verbose 9>&-)" || rc=$?
+    if ((rc == 0)) && grep -q '^status: ok$' <<<"$report"; then
+      # serve's own verify may have recorded a later time meanwhile.
+      prev="$(cat "$STATE/verify-ok" 2>/dev/null || echo 0)"
+      [[ "$prev" =~ ^[0-9]+$ ]] || prev=0
+      if ((started > prev)); then echo "$started" >"$STATE/verify-ok"; fi
+      echo "pgbackrest: stanza $STANZA verified; the backup role releases the WAL held on the targets in its next round"
+      exit 0
+    fi
+    echo "pgbackrest: the verify of stanza $STANZA failed (exit $rc); WAL stays on the backup targets:" >&2
+    echo "$report" >&2
+    exit 1
     ;;
   flush)
     require_runtime
