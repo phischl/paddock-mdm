@@ -218,7 +218,7 @@ be chosen.
 | 12 | roles' address at the proxy | `PADDOCK_INTERNAL_CIDRS` | `192.0.2.10/32` |
 | 13 | release public keys | `.secrets/release-production/` (step 7) | `minisign.pub`, `revoke-minisign.pub` |
 | 14 | five OpenBao custodians | the unseal shares of step 5 | five people, or five safe places |
-| 15 | backups (optional) | `PADDOCK_LAB_BACKUP`, `PADDOCK_BACKUP_S3_*` | `no` (section 7) |
+| 15 | backups (optional) | `PADDOCK_LAB_BACKUP`, `PADDOCK_BACKUP_LOCAL_ROOT` | `no` (section 7) |
 | 16 | SMTP relay for e-mail notifications (optional) | `PADDOCK_SMTP_ENABLED`, `PADDOCK_SMTP_*` (`docs/operations/install.md`, *E-mail relay*) | `false` |
 
 With the proxy on the Paddock host (section 4), rows 7, 9, 10 and 12 change: `127.0.0.1`, the host's LAN address,
@@ -301,12 +301,23 @@ no backup service and `./paddock check` does not ask for backup credentials. The
 everything for good, the WORM audit bucket included: its Object Lock protects the objects against S3 deletes, not
 against the deletion of the Docker volume.
 
-To back up, set `PADDOCK_LAB_BACKUP=yes` and `PADDOCK_BACKUP_S3_ENDPOINT` (https), `PADDOCK_BACKUP_S3_BUCKET`,
-`PADDOCK_BACKUP_S3_REGION` (and `PADDOCK_BACKUP_S3_CA_FILE` for a private CA) in `.env`. Create the bucket and its
-three credentials as `docs/operations/restore.md` "Backup bucket" describes, write them to
-`.secrets/backup_{pgbackrest,worker,fleet}_{access,secret}_key`, store a copy of `.secrets/backup_encryption_key`
-offline, then run `./paddock check` and `./paddock up` again. After the first run,
-`./paddock compose run --rm --no-deps pgbackrest info` lists a full backup.
+To back up, set `PADDOCK_LAB_BACKUP=yes` in `.env`, run `./paddock check` and `./paddock up` again. The lab then runs the
+backup role and keeps the backup set in the local volume `backup-repo` (`docs/operations/backup.md`). Targets, key and
+schedule are set in the portal, so there are no backup credentials in `.env` or `.secrets/`:
+
+1. In the portal under *Platform* → *Backup* → *Key*, confirm the imported key: type the characters at the six
+   positions shown from `.secrets/backup_encryption_key`, or discard it and generate a new one. Nothing is backed up
+   until a key is confirmed. **Keep a copy of the key outside the lab host**: `./paddock down --volumes` or a lost host
+   takes the local copy with it.
+2. Add a target outside the lab host under *Backup* → *Targets* (an S3-compatible bucket, or an SMB or NFS share, or
+   a directory below `PADDOCK_BACKUP_LOCAL_ROOT`, default `/srv/paddock-backup`, that is mounted from another disk).
+   SMB, NFS and local targets need the host step `./paddock backup-target apply` and `./paddock up`.
+3. After the first run, `./paddock backup status` shows the key, a run per kind and the targets, and
+   `./paddock compose run --rm --no-deps pgbackrest info` lists a full backup.
+
+The recovery is `docs/operations/restore.md`: with the key, the lab's `.env` and `.secrets/` and a set (a copy, or a
+connected S3 target exported with `./paddock backup-target export`), one `sudo ./paddock restore --from …` rebuilds the
+lab on a fresh host.
 
 ## 8. What `./paddock check` enforces in the lab
 

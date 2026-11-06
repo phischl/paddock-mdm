@@ -400,3 +400,24 @@ The object holds Paddock's own logs and managed configuration of one device and 
 the audit trail and the WORM store hold only its SHA-256. The 7 days of the bundle are fixed by ADR 0048 decision 5,
 not configurable per organization. `docs/compliance/retention.md` carries the row; `docs/compliance/privacy.md` describes
 the bundle.
+
+## Amendment 2026-11-06 (plan M15, PDK-739) — platform backup and recovery
+
+Authorised by the plan M15 §7 for the architect role. Plan M15 (ADR 0046, migrations `00100`, `00108`) adds platform
+data without an organization column and moves the backups from one S3 bucket to the local set `backup-repo` and the
+targets a platform administrator configures. The rows state what the code does. `backup_run` and `backup_restore_plan`
+are operational evidence with the retention class of 400 days; **no job deletes them yet** (the follow-up is the
+purge by the backup role with `retention.purged` and the store names `backup_run` and `backup_restore_plan`), which is
+the residual risk RR-125. Column meanings as in decision 1.
+
+| Store | Data class | Content (personal data) | Retention | Legal basis (GDPR) | Purge (role, event) | Configurable |
+| --- | --- | --- | --- | --- | --- | --- |
+| `backup_run` (M15, `00100`) | Operational evidence | Kind, the label an administrator typed (at most 64 characters, may name people), who requested it (administrator or host operator), times, bytes, error class, per target the ID and result; never a key or credential | 400 days (operational evidence); the row is kept until the purge exists | Art. 6(1)(f), Art. 32 (A.8.13) | Planned: backup role, `retention.purged` store `backup_run`; none today (RR-125). Every run is also an audit event (`platform.backup_completed`, `platform.backup_failed`) | — |
+| `backup_restore_plan` (M15, `00100`, `00108`) | Operational evidence | Kind, source, point in time, components, the approving administrator, state, expiry, the host's failed step as free text, `abandoned by <administrator>` | 400 days (operational evidence); the row is kept until the purge exists | Art. 6(1)(f), Art. 32 | Planned: backup role, `retention.purged` store `backup_restore_plan`; none today (RR-125). Every planning, start, end, cancellation and abandonment is also an audit event (`platform.restore_*`) | — |
+| `backup_target_status` (M15, `00100`) | State | Per target and kind the last success, last error class and bytes; no personal data | Lifetime of the target: removed with it (`ON DELETE CASCADE`); overwritten by every mirror | Art. 6(1)(f) | None (state) | — |
+| `backup_key`, `backup_target`, `backup_schedule` (M15, `00100`) | State | The Transit-encrypted key and its challenge hash (never the key), the targets' settings and Transit-encrypted credentials, the schedule, the names of the administrators who changed them | Lifetime of the installation: a retired key is never deleted (a set made with it stays readable); a deleted target's row stays (`deleted_at`) until `./paddock backup-target apply` removed its volume and then deletes it | Art. 6(1)(f), Art. 32 | None (state); `./paddock backup-target apply` removes deleted targets | Schedule (`PUT /api/platform/v1/backup/schedule`) |
+| The backup set (`backup-repo` and every target, replacing the row "Backups" of decision 1) | Copies of the above and of the escrowed LUKS headers | Everything above except WORM | `retention_full` full backups (default 14) plus the WAL they need; OpenBao snapshots and Fleet dumps `openbao_keep_days` and `fleet_keep_days` (default 30, 7–365); escrowed headers until a recorded Destroy and the retention window after it; a retired key's repository until its retention has passed (`docs/operations/backup.md`) | Art. 6(1)(c)/(f), Art. 32 | Backup role (local expire and the mirror's rules, `docs/operations/backup.md`); pgBackRest | Schedule: all four periods |
+
+**Deletion lag.** The sentence of decision 1 stands with the new periods: a row that a retention purge deletes survives
+in the backup set until the full backups, snapshots and dumps that hold it have expired (up to 30 days with the
+defaults, longer with a longer schedule), and a restore brings it back until the next purge run (residual risk RR-94).
