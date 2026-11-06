@@ -564,6 +564,14 @@ path lives in `deploy/compose/scripts/legacy-alpha8.sh`, which both commands sou
    0.1.0-alpha.8 leaves the support window (ADR 0013 amendment: its own release plus two).
 6. **Proof.** PDK-744's CI job proves the pair end to end, including the rollback. The legacy rollback is never run
    against a development stack that holds lab-linked secrets.
+7. **Retired services (note 2026-11-06, PDK-845; decisions-alpha9 items 52 and 55).** alpha.9 no longer defines
+   alpha.8's `fleet-backup-upload` (the only service of the bundle's Compose files that alpha.9 drops; the other,
+   `backup-s3-tls`, belongs to the development overlay and never ships). `up` and `down` without `--remove-orphans`
+   left its container running under alpha.9. The upgrade step `up` therefore runs `<old>/paddock compose rm -sf` for
+   the services of an explicit list in `upgrade.sh` (`UG_RETIRED`) that the old directory defines, after the fence and
+   the record and right before `up`, on every run of the step. The legacy backup's dump has reached the bucket by
+   then; a run that stops earlier leaves alpha.8 complete; a rollback's `<old>/paddock up` starts the service again.
+   No volume is removed. PDK-744's job fails on any container of a service the running release does not define.
 
 ## Note 2026-11-06 — the upgrade job as implemented (PDK-744; decisions-alpha9 items 53–55; accepted (architect lead, 2026-11-06))
 

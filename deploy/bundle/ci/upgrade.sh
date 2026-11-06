@@ -163,23 +163,17 @@ prev_artifacts_staged() {
   printf '%s' "$out"
 }
 
-# orphans: containers of paddock-cp whose service the running release does not define (PDK-845: 0.1.0-alpha.8's
-# fleet-backup-upload). They are reported and removed, so that the drill and the rollback act on the release's own
-# services.
+# orphans: containers of paddock-cp whose service the running release does not define. ./paddock upgrade removes the
+# services the release retired (PDK-845: 0.1.0-alpha.8's fleet-backup-upload), so any such container fails the job.
 orphans() {
-  local services found=() c svc
+  local services found=() svc
   services="$(cp_paddock compose --profile '*' config --services </dev/null)"
-  while read -r c svc; do
+  while read -r svc; do
     grep -qxF "$svc" <<<"$services" || found+=("$svc")
-    grep -qxF "$svc" <<<"$services" || docker rm -f "$c" >/dev/null
   done < <(docker ps -a --filter label=com.docker.compose.project=paddock-cp \
-    --format '{{.ID}} {{.Label "com.docker.compose.service"}}')
-  if ((${#found[@]})); then
-    echo "upgrade: orphaned containers of the previous release removed: ${found[*]} (PDK-845)" >&2
-    annotate warning "orphaned containers after the upgrade: ${found[*]} (PDK-845)"
-  else
-    echo "no orphaned containers"
-  fi
+    --format '{{.Label "com.docker.compose.service"}}')
+  ((${#found[@]} == 0)) || fail "orphaned containers after the upgrade: ${found[*]} (services the release does not define; PDK-845)"
+  echo "no orphaned containers"
 }
 
 # hosts_healthy: the probes of smoke.sh step 8 on the running release.

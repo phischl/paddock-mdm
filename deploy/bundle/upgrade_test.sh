@@ -59,6 +59,11 @@ case "${1:-}" in
       exit "${FIXTURE_REPORT_EXIT:-0}"
     fi
     case "$*" in
+      "compose config --services")
+        if [[ -f "$(dirname "$0")/services" ]]; then cat "$(dirname "$0")/services"; else printf '%s\n' paddock-api postgres fleet-backup; fi
+        exit "${FIXTURE_SERVICES_EXIT:-0}"
+        ;;
+      "compose rm -sf "*) exit "${FIXTURE_RM_EXIT:-0}" ;;
       *" pgbackrest backup --start-fast")
         echo "pgbackrest: backup 20261106-100000F of paddock verified"
         exit "${FIXTURE_PG_EXIT:-0}"
@@ -178,6 +183,9 @@ has "the old directory is named as the rollback" "Keep $work/t/old until the nex
 has "the plan names the versions" 'from 0.1.0-alpha.9 to 0.1.0-alpha.10'
 has "without BAO_TOKEN the OpenBao step is skipped" 'skipped: BAO_TOKEN is not set'
 not_called "the control plane stops no audit writer" 'paddock-audit-writer'
+called "the old release's services are read" '^old compose config --services$'
+not_called "an old release without retired services removes nothing" ' rm '
+hasnt "the plan names no removal" 'compose rm -sf'
 not_called "the control plane runs no online check" 'prod-check .*--online'
 
 # BAO_TOKEN set: openbao-configure.sh runs after up.
@@ -224,6 +232,7 @@ not_called "nothing runs for the refused old release" '^(docker|script)'
 # 0.1.0-alpha.8 (decisions-alpha9 item 46): its own backup through its own Compose files, checked in the bucket, before
 # up; the record names what its restore procedure needs.
 LEGACY_PG='^old compose run --rm --no-deps -T pgbackrest backup --start-fast$'
+RETIRE='^old compose rm -sf fleet-backup-upload$'
 LEGACY_FLEET_HEAD='^old compose run .* fleet-backup-upload .* la8-s3 head fleet/20261106T100300Z\.sql\.gz\.enc$'
 FENCE_STOP='^old compose stop pgbackrest pgbackrest-authentik$'
 FENCE_FLUSH='^old compose run --rm --no-deps -T pgbackrest flush$'
@@ -234,6 +243,7 @@ setup_alpha8() {
   sed -i 's/^version=.*/version=0.1.0-alpha.8/' "$work/t/old/VERSION"
   sed -i '/^0\.1\.0-alpha\.10$/d' "$work/t/new/RELEASES"
   sed -i 's/^version=.*/version=0.1.0-alpha.9/' "$work/t/new/VERSION"
+  printf '%s\n' paddock-api postgres pgbackrest pgbackrest-authentik fleet-backup fleet-backup-upload >"$work/t/old/services"
 }
 setup_alpha8
 FIXTURE_OLD_NO_BACKUP=1 run 0 "upgrade from 0.1.0-alpha.8 with its own backup" "$work/t/old" --yes
@@ -257,12 +267,23 @@ if grep -qx 'method=legacy-0.1.0-alpha.8' "$rec" && grep -qx 'legacy-paddock=202
   fail "the record of alpha.8's backups: $(cat "$rec" 2>&1)"
 fi
 # The bucket's WAL archive ends before up (Review 1, M1): alpha.8's pusher must not push this release's migration WAL.
-has "the plan names the fence of alpha.8's WAL archive" 'stop pgbackrest pgbackrest-authentik and flush both \(the backup bucket.s WAL archive ends here\), then \./paddock up'
+has "the plan names the fence of alpha.8's WAL archive" 'stop pgbackrest pgbackrest-authentik and flush both \(the backup bucket.s WAL archive ends here\), then '
 before "the fence follows the bucket checks" "$LEGACY_FLEET_HEAD" "$FENCE_STOP"
 before "alpha.8's pgBackRest stops before the flush" "$FENCE_STOP" "$FENCE_FLUSH"
 before "paddock's spool is flushed, then authentik's" "$FENCE_FLUSH" "$FENCE_FLUSH_AUTHENTIK"
 before "the fence ends before up" "$FENCE_FLUSH_AUTHENTIK" "$UP"
 not_called "a fenced archive is not started again" "$FENCE_RESTART"
+# PDK-845: the services 0.1.0-alpha.9 retired go through alpha.8's own Compose files after its backup has reached the
+# bucket and after the fence, right before up; nothing else is removed.
+has "the plan names the removal of the retired service before up" "flush both .*, then $work/t/old/paddock compose rm -sf fleet-backup-upload \(services 0\.1\.0-alpha\.9 retired\), then \./paddock up"
+before "the dump's upload is checked before its uploader goes" "$LEGACY_FLEET_HEAD" "$RETIRE"
+before "the fence precedes the removal" "$FENCE_FLUSH_AUTHENTIK" "$RETIRE"
+before "the retired service goes before up" "$RETIRE" "$UP"
+has "the removal prints its command" "^\+ $work/t/old/paddock compose rm -sf fleet-backup-upload$"
+if [[ "$(grep -cE ' rm ' "$calls")" == 1 && "$(grep -cE "$RETIRE" "$calls")" == 1 ]]; then pass "one removal, of fleet-backup-upload only"; else
+  fail "removals: $(grep -E ' rm ' "$calls" | paste -sd ';' -)"
+fi
+not_called "no volume removed and no orphan sweep" '(volume rm|--remove-orphans|compose .*down)'
 
 # A failed fence: up does not run, no record is written, alpha.8 archives again, and the next run repeats the fence.
 setup_alpha8
@@ -272,6 +293,7 @@ has "a failed fence says that up did not run" '\./paddock up did not run: 0\.1\.
 has "a failed fence names the next run" "Fix the cause, then run \./paddock upgrade $work/t/old again\.$"
 hasnt "a failed fence does not send to the rollback" 'Roll back|may be partly running'
 not_called "no up after a failed fence" "$UP"
+not_called "a failed fence leaves the retired service running" "$RETIRE"
 called "alpha.8's pgBackRest starts again after a failed fence" "$FENCE_RESTART"
 if [[ ! -e "$work/t/new/.upgrade-rollback" ]]; then pass "no record after a failed fence"; else fail "a record after a failed fence"; fi
 FIXTURE_OLD_NO_BACKUP=1 run 0 "the second run after a failed fence" "$work/t/old" --yes
@@ -340,6 +362,27 @@ if [[ "$(grep -cE "$FENCE_STOP" "$calls")" == 1 ]]; then pass "the fence before 
 if grep -qx 'legacy-openbao=openbao/20261106T100200Z.snap.enc' "$work/t/new/.upgrade-rollback"; then pass "the resumed run's record keeps alpha.8's names"; else
   fail "the resumed record: $(cat "$work/t/new/.upgrade-rollback")"
 fi
+last_retire="$(grep -nE "$RETIRE" "$calls" | tail -n 1 | cut -d: -f1)" last_up="$(grep -nE "$UP" "$calls" | tail -n 1 | cut -d: -f1)"
+if [[ "$(grep -cE "$RETIRE" "$calls")" == 2 && "$(grep -cE "$UP" "$calls")" == 2 && "$last_retire" -lt "$last_up" ]]; then
+  pass "the resumed step up removes the retired service again before its up"
+else
+  fail "removal and up on resume: $(grep -nE "$RETIRE|$UP" "$calls" | paste -sd ';' -)"
+fi
+
+# A failed removal of the retired service: up does not run, the rollback point is recorded (./paddock rollback starts
+# alpha.8's services again), and the next run repeats the removal without a second fence.
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_RM_EXIT=1 run 1 "the removal of the retired service fails" "$work/t/old" --yes
+has "the failed removal is named" 'cannot remove the services 0\.1\.0-alpha\.9 retired; \./paddock up did not run'
+not_called "no up after a failed removal" "$UP"
+if [[ -f "$work/t/new/.upgrade-rollback" ]]; then pass "the rollback point is recorded before the removal"; else fail "no record before the removal"; fi
+FIXTURE_OLD_NO_BACKUP=1 run 0 "the run after a failed removal" "$work/t/old" --yes
+if [[ "$(grep -cE "$RETIRE" "$calls")" == 2 ]]; then pass "the next run repeats the removal"; else fail "the removal ran $(grep -cE "$RETIRE" "$calls") times"; fi
+if [[ "$(grep -cE "$FENCE_STOP" "$calls")" == 1 ]]; then pass "the repeated removal does not fence again"; else fail "the fence ran $(grep -cE "$FENCE_STOP" "$calls") times"; fi
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_SERVICES_EXIT=1 run 1 "the old release's services cannot be read" "$work/t/old" --yes
+has "the unreadable services are named" 'cannot read the services of .*/old'
+not_called "no removal and no up without the old release's services" "$RETIRE|$UP"
 
 # A failed backup stops before up; the old stack is untouched.
 setup controlplane "Schema: migrations 00105–00106"

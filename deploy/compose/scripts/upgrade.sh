@@ -12,6 +12,14 @@
 
 UG_STEPS=(upgrade-check migrate-from secrets pull check backup audit-writer-stop up openbao post-checks)
 
+# UG_RETIRED: the services an earlier release defines and this one no longer does. `up` and `down` without
+# --remove-orphans leave their containers running beside this release (PDK-845), so the step up removes them through
+# the old directory's Compose files. An explicit list instead of --remove-orphans, which would also remove every other
+# container of the project this release's files do not name.
+#   fleet-backup-upload  0.1.0-alpha.8's uploader of Fleet's dumps to the backup bucket; 0.1.0-alpha.9 backs Fleet up
+#                        into the local repository (plan M15). Its own legacy backup needs it until the step backup is done.
+UG_RETIRED=(fleet-backup-upload)
+
 ug_usage() {
   echo "usage: ./paddock upgrade <old bundle directory> [--yes] [--allow-unsupported-agents] [--skip-backup]" >&2
   exit 2
@@ -163,6 +171,8 @@ ug_audit_writer_step() {
 # fence leaves no record, and the next run repeats it. Its recorded backups must still be the newest after the fence
 # (alpha.8 may have taken a newer one while the run was stopped); if not, the step backup is forgotten and runs again.
 # Every failure here leaves `up` not run (UG_UP_NOT_RUN), which ug_fail reports apart from a failed `up`.
+# The retired services go after the record and on every run of the step: a run that stops before the record leaves
+# the old release complete, and from the record on ./paddock rollback starts them again with the old release's `up`.
 ug_up_step() {
   local legacy=""
   UG_UP_NOT_RUN=""
@@ -187,7 +197,33 @@ ug_up_step() {
       return 1
     }
   fi
+  ug_retire || {
+    echo "upgrade: cannot remove the services $UG_NEW_VERSION retired; ./paddock up did not run" >&2
+    return 1
+  }
   ug_show "$UG_NEW/paddock" up
+}
+
+# ug_retired_in_old: the services of UG_RETIRED that the old directory's Compose files define, one per line.
+ug_retired_in_old() {
+  local defined svc
+  defined="$("$UG_OLD/paddock" compose config --services </dev/null)" || {
+    echo "upgrade: cannot read the services of $UG_OLD (./paddock compose config --services)" >&2
+    return 1
+  }
+  for svc in "${UG_RETIRED[@]}"; do
+    if grep -qxF "$svc" <<<"$defined"; then echo "$svc"; fi
+  done
+}
+
+# ug_retire: stops and removes the containers of the retired services, never a volume; without a container it changes
+# nothing, so a repeated step is safe.
+ug_retire() {
+  local list svcs=()
+  list="$(ug_retired_in_old)" || return 1
+  [[ -n "$list" ]] || return 0
+  mapfile -t svcs <<<"$list"
+  ug_show "$UG_OLD/paddock" compose rm -sf "${svcs[@]}" </dev/null
 }
 
 # ug_forget_backup: removes the step backup and the names it recorded from .upgrade-state, so the next run takes the
@@ -272,7 +308,7 @@ ug_post_checks_step() {
 
 # ug_plan prints the steps with their state.
 ug_plan() {
-  local step mark what
+  local step mark what retired
   echo "Upgrade of this host ($UG_HOST, project $UG_PROJECT) from $UG_OLD_VERSION to $UG_NEW_VERSION:"
   for step in "${UG_STEPS[@]}"; do
     mark=""
@@ -297,6 +333,10 @@ ug_plan() {
         ;;
       up)
         what="./paddock up (the new images; paddock-migrate applies the migrations)"
+        retired="$(ug_retired_in_old 2>/dev/null)" || retired="${UG_RETIRED[*]}"
+        if [[ -n "$retired" ]]; then
+          what="$UG_OLD/paddock compose rm -sf $(paste -sd ' ' <<<"$retired") (services $UG_NEW_VERSION retired), then $what"
+        fi
         if [[ "$UG_BACKUP" == yes ]] && la8_applies "$UG_OLD_VERSION"; then
           what="$UG_OLD/paddock compose stop pgbackrest pgbackrest-authentik and flush both (the backup bucket's WAL archive ends here), then $what"
         fi
