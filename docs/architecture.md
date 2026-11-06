@@ -163,7 +163,7 @@ flowchart LR
   upstream[(Upstream IdP<br/>e.g. Entra ID)]
   vulndb[(Vulnerability feeds<br/>NVD, Ubuntu OVAL)]
   git[("Optional Git remote<br/>config export (not scheduled)")]
-  siem[("Optional SIEM<br/>(planned: M12; cursor feed M9)")]
+  siem[("Optional SIEM<br/>(cursor feed M9, syslog push M12)")]
 
   admin -->|HTTPS, OIDC| paddock
   auditor -->|HTTPS, OIDC| paddock
@@ -1141,6 +1141,17 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 > approves a device sign-in through the brand sign-in is not asked to enrol a passkey (ADR 0034 and ADR 0007
 > amendments 2026-10-29).
 
+> **Amendment 2026-11-06 (M12, plan M12 amendment 2026-11-04):** the **access review** is an auditor-visible report of
+> who holds which role and what they did with it: role members and their changes, administrator accounts and last logins,
+> API tokens created or revoked in the period, reveals and diagnostics downloads, step-up counts per actor (successful
+> events of a step-up actor; denied events with `step_up_required`), revoked sessions, break-glass accounts and the
+> destructive actions (revocation approvals, escrow destruction, retirement, user locks). It reads snapshots: the roles
+> come from the worker's five-minute snapshot of the Authentik groups (RR-112). The organization report is read **by
+> role, under the same rule as the audit log** (`org_admin`, `org_auditor`; the operator is refused), with no
+> organization switch; the platform report belongs to `platform_admin`. `audit_search_recorded` does not decide who may
+> read it, only whether a view is recorded. The api reads the role tables through read-only grants and never writes
+> them.
+
 ---
 
 ## 10. Permission profiles and sudo
@@ -1413,7 +1424,7 @@ Commands are delivered in the check-in response, signed individually (DSSE,
 | `rotate_admin_password` | 7 d | by `command_id` |
 | `delete_self_lock` | 30 d | by `command_id` |
 | `escrow_luks_header` *(dropped; header escrow is part of the `luks` reconciler, §12.4)* | — | — |
-| `collect_status` *(planned: M12 diagnostics bundle)* | 1 h | by `command_id` |
+| `collect_status` | 1 h | by `command_id`; the device announces its upload once with `POST /v1/diagnostics` (§17.2) |
 | `lock` | 30 d | by `command_id`; device-bound token |
 | `destroy` | 30 d | by `command_id`; device-bound token |
 
@@ -1432,6 +1443,21 @@ Expired commands are marked `expired` and never executed (platform outage questi
 > when an administrator cancels after delivery: the agent discards the preparation and answers `{aborted: true}`, or
 > refuses with `not_abortable` once the device has restarted into the encryption. Older agents fail both with
 > `unsupported_type`. Runbook `docs/operations/in-place-encryption.md`.
+
+> **Amendment 2026-11-06 (M12, ADR 0048, plan M12):** command `collect_status` (1 h, params `{request_id, reason}`)
+> asks the device for a **diagnostics bundle**. The agent answers asynchronously: the handler validates and queues the
+> command (at most four waiting; a full queue answers `failed` with `collect_failed`) and one worker collects the closed
+> content list of ADR 0048 decision 2 (Paddock's own state, journals of Paddock's units, managed configuration; no home
+> directories, no identity state, no `bundle.dsse`: the archive carries `paddock/bundle-redacted.json`). The archive is
+> sealed on the device (AES-256-GCM with a random key and the command ID as additional data, the key RSA-OAEP-wrapped to
+> the `escrow-wrap` key), announced with `POST /v1/diagnostics` and uploaded with a presigned PUT into the escrow bucket
+> below `org/<org>/devices/<device>/diagnostics/`; the result is `{uploaded, files, bytes, truncated_entries,
+> notified_sessions}` or `{uploaded: false, reason}`. Before the upload the agent shows a notice in every active graphical
+> session. The gateway has no database: a command counts as pending for the announcement while it is held in
+> `cmd:<device_id>`, so a cached but not yet delivered command is accepted (202). The bundle is stored 7 days
+> (`device_diagnostics`, §16.1), downloaded only by `org_admin` and `org_operator` with a step-up (§17.1) and never
+> readable by the auditor or a platform role. Runbook `docs/operations/diagnostics.md`, privacy text
+> `docs/compliance/privacy.md`.
 
 ### 11.5 Events and detection (layer 3)
 
@@ -1810,6 +1836,37 @@ flowchart LR
 > described in `docs/operations/notifications.md`. Both are bounded by the index retention: an event purged from the
 > index is in neither. The push forward to syslog follows in M12 on the same engine.
 
+> **Amendment 2026-11-06 (M12, ADR 0031 amendment 2026-11-04, plan M12):** the SIEM push is built. The notifier's
+> destination type `syslog` delivers **RFC 5424 messages over TLS (1.2 or newer) with octet-counting framing** (RFC 6587)
+> to a host and port of the organization, one connection per delivery: `HOSTNAME` is the platform host, `APP-NAME`
+> `paddock`, `PROCID` the organization slug, `MSGID` the audit code, `MSG` the byte order mark and the JSON of schema
+> `paddock.audit.v1` (the full event with `forward_seq`, `commit_seq` and `delivery_id`). RFC 5424 limits `MSGID` to 32
+> characters: a longer code is sent under a fixed, add-only alias from the table next to the code registry
+> (`audit.Code.MsgID`, `docs/compliance/audit-codes.md`) and `MSG` always carries the full code. Heartbeat, test and
+> checkpoint messages use the `MSGID`s `paddock.heartbeat`, `paddock.test` and `paddock.checkpoint`; an event a replay
+> finds purged from the index is `paddock.missing`. The destination's address obeys the webhook rules (no private or
+> reserved address, resolved once and pinned; only the development stack relaxes them), the optional `syslog_ca_pem`
+> replaces the system roots for that destination. **Delivery is confirmed at TCP level only**: after the last message
+> the notifier closes the TLS connection, waits until the receiver's TCP stack acknowledged every sent byte and then up
+> to 5 s for the receiver to close; unacknowledged bytes within the 30 s deadline fail the batch, which is retried
+> under the same numbers (residual risks RR-110, RR-113).
+>
+> **Checkpoints** (`checkpoints` on a webhook or syslog destination, never e-mail): for every day the audit writer
+> sealed after the destination was created, once the destination has forwarded every matching event recorded on that
+> day, the notifier sends one `kind: checkpoint` message with the day, the event count of the day and the SHA-256,
+> signature and key version of the day's WORM manifest. A checkpoint is numbered in the destination's `forward_seq` like
+> a batch, so a receiver detects a missing batch by a gap and reconciles the day against the manifest; the SIEM copy
+> itself is not evidence (RR-111). `notification.checkpoint_sent` records each one.
+>
+> **Replay** (`POST /api/v1/notification-destinations/{id}/replay`, org_admin with a step-up; platform twin): the
+> notifier sends the destination's stored batches and checkpoints again from a `forward_seq` on, with their original
+> delivery IDs and numbers, before it continues at the cursor; events the index retention purged are sent as `missing`.
+> The request sets `replay_from` through a column grant (`GRANT UPDATE (replay_from)` on
+> `notification_destination_state` to `paddock_api` and `paddock_platform`) under the table's row level security; it is
+> refused (409) while a batch is being retried or a replay runs. `notification.replay_requested` records the request,
+> `notification.replayed` each re-sent delivery. Operations: `docs/operations/notifications.md`,
+> `docs/operations/siem.md` (Wazuh decoders and rules, rsyslog relay).
+
 ### 14.2 Event schema
 
 ```json
@@ -2108,6 +2165,20 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > **Amendment 2026-10-24 (M13a, ADR 0042):** new tables in the database `paddock`: `software_source`,
 > `software_catalog_entry`, `software_assignment`, `device_software_status`; new column `device_status.software_digest`.
 
+> **Amendment 2026-11-06 (M12, ADR 0048, ADR 0031 amendment 2026-11-04, plan M12):** new organization-scoped table
+> `device_diagnostics` (RLS with the tenant policy; `paddock_api` selects, inserts and updates, `paddock_worker` selects,
+> updates and deletes; migration `00103`): one row per `collect_status` request, its ID the command ID, with the
+> requester, reason, state (`requested`, `uploaded`, `stored`, `failed`, `expired`, `purged`), the object key, size and
+> SHA-256 of the sealed bundle, its nonce and wrapped key, the counts the device reported, the download count and the
+> times. The bundle's content is an object in the escrow bucket, never a column. The syslog destination type adds
+> `syslog_host`, `syslog_port`, `syslog_ca_pem`, `syslog_server_name` and `checkpoints` to `notification_destination`
+> and `last_checkpoint_day` and `replay_from` to `notification_destination_state` (migration `00101`); the `checkpoint`
+> delivery kind, its `checkpoint_day` and the column grant of `replay_from` follow in migration `00105`; `00106` adds the
+> `key_version` of a bundle and a read-only tenant policy for `paddock_escrow_reader` with a column grant on `id`,
+> `organization_id`, `device_id`, `state`, `wrapped_dek` and `key_version` only; the access review reads `organization_role_member` and
+> `organization_role_snapshot` through a read-only tenant policy for `paddock_api` (migration `00104`). Retention of
+> `device_diagnostics`: ADR 0032 amendment 2026-11-06, `docs/compliance/retention.md`.
+
 ### 16.2 Conventions
 
 - Primary keys UUIDv7 (time-ordered) generated in Go; timestamps `timestamptz` in UTC.
@@ -2196,9 +2267,34 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > carries `rollout`, `rollout_id`, `urgent_reason`, `reverts_change_set_id`, `reverted_by` and `before_available`, and
 > `EffectiveConfig` carries `rollout`. Guide: `docs/operations/configuration-rollouts.md`.
 
+> **Amendment 2026-11-06 (M12, ADR 0048, ADR 0031 amendment 2026-11-04, plan M12):** new endpoints
+> `POST`/`GET /api/v1/devices/{id}/diagnostics` (request with a reason, `org_admin` and `org_operator`; the device's list),
+> `GET /api/v1/diagnostics` and `GET /api/v1/diagnostics/{id}` (the organization's bundles, the same two roles, never
+> `org_auditor`), `GET /api/v1/diagnostics/{id}/download` (a step-up; the escrow-reader unwraps the key for the purpose
+> `diagnostics`, and the api re-verifies the SHA-256 before it serves the archive; a purge, expiry or race answers 409),
+> `POST /api/v1/diagnostics/{id}/purge` (`org_admin`), audited as `device.diagnostics_requested`, `_downloaded` and
+> `_purged`; `POST /api/v1/notification-destinations/{id}/replay` with the platform twin `POST
+> /api/platform/v1/notification-destinations/{id}/replay` (body `{from_forward_seq}`; 202; 400, 404, 409 `invalid_state`;
+> step-up; `notification.replay_requested`); the destination schemas gain the syslog fields, `checkpoints`,
+> `last_checkpoint_day` and `replay_from`; `GET /api/v1/access-review?from&to` and `GET
+> /api/v1/access-review/export?from&to&format=json|csv` (read by role like the audit log: `org_admin` and `org_auditor`,
+> operators get 403), the platform pair `GET /api/platform/v1/access-review[/export]` (`platform_admin`), audited as
+> `access_review.viewed` (coalesced to one event per actor and day, only while `audit_search_recorded` is on),
+> `access_review.exported`, `platform.access_review_viewed` and `platform.access_review_exported`. The access review is
+> one report object, not a collection: it follows no list contract and carries no `x-paddock-list`. Plan:
+> `docs/plans/M12-operator-toolbox-and-siem-push.md`.
+
 ### 17.2 Device API
 
 See §6.8; contract in `api/openapi/device.yaml`; Go types shared with the agent in `pkg/protocol`.
+
+> **Amendment 2026-11-06 (M12, ADR 0048, ADR 0013):** new endpoint `POST /v1/diagnostics` (signed like every device
+> request). The device answers a delivered `collect_status` command with `{command_id, sha256, size (at most 32 MiB),
+> nonce, wrapped_dek, key_version}` of the sealed bundle and receives `202 {diagnostics_id, upload_url}`, a presigned PUT
+> (10 minutes, bound to the announced size) to the escrow bucket; 404 `not_found` for a command ID that is not a
+> `collect_status` command held for the device, 409 `already_uploaded` for a second announcement, 413 and 429. An absent
+> `key_version` means version 1 of the `escrow-wrap` key (additive change, ADR 0013). The gateway holds no database and
+> hands the announcement to the worker.
 
 ### 17.3 Git export *(not scheduled)*
 

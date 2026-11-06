@@ -385,3 +385,18 @@ and of every rollout that named it; deleting a software source is refused while 
 
 `docs/compliance/retention.md` carries the rows above; `docs/compliance/privacy.md` already describes the software
 status (plan M13a amendment 2026-10-31, PDK-414).
+
+## Amendment 2026-11-06 (plan M12, PDK-756) — diagnostics bundles
+
+Authorised by the plan M12 §7 for the architect role. Plan M12 (ADR 0048) adds the store `device_diagnostics` (migration
+`00103`) and an object per bundle in the escrow bucket. The row states what the code does; column meanings as in
+decision 1.
+
+| Store | Data class | Content (personal data) | Retention | Legal basis (GDPR) | Purge (role, event) | Configurable |
+| --- | --- | --- | --- | --- | --- | --- |
+| `device_diagnostics` (M12, `00103`; the object in the escrow bucket) | Device data of a person's laptop | Metadata per request: who asked (`requested_by`), when, the reason text, the device, the state, size and SHA-256 of the sealed bundle, file count, truncated entries, sessions notified, download count and last download time. The bundle itself (Paddock's own logs and configuration, which name users, RR-108) is an encrypted object whose key material is in the row | The object, its key material (`nonce`, `wrapped_dek`) and `object_key` go **7 days after `stored_at`**; a bundle that failed or expired unstored loses them at its `expires_at` (the upload window), a purged one at once (the object once more when its upload window ends). The row stays until the audit index retention has passed since `requested_at` and its object is gone, then the worker deletes it | Art. 6(1)(f), Art. 5(1)(c) | Worker (retention round); `retention.purged`, store `device_diagnostics`, once for the objects (`cutoff`) and once for the rows (`index_days`); an administrator's early purge is `device.diagnostics_purged` | 7 days fixed; the row follows `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` |
+
+The object holds Paddock's own logs and managed configuration of one device and names its users (residual risk RR-108);
+the audit trail and the WORM store hold only its SHA-256. The 7 days of the bundle are fixed by ADR 0048 decision 5,
+not configurable per organization. `docs/compliance/retention.md` carries the row; `docs/compliance/privacy.md` describes
+the bundle.
