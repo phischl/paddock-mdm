@@ -5,9 +5,27 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "bdcefe25d4dbf3c682cceae469a668ad4ea2899b06dceaf0597f45867d2c420f"
+const Version = "8ed15ccda000b702fddbd40191e6f89c2cf245a8d0c238d3e45a57a46cf8b8f5"
 
 var tools = []Tool{
+	{
+		Name:        "abandonBackupRestorePlan",
+		Method:      "POST",
+		Path:        "/api/platform/v1/backup/restore-plans/{id}/abandon",
+		Pattern:     "POST /api/platform/v1/backup/restore-plans/{id}/abandon",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "platform.restore_abandoned",
+		Summary:     "",
+		Description: "Roles: platform_admin. Marks a running plan as abandoned when the host never reported its end (the host crashed, or the database was unreachable when the restore stopped): the plan no longer blocks a new one, its outcome_detail names the administrator, and the host's later report for it is refused (409). confirmation must be the typed word abandon (400 invalid_request otherwise). 409 invalid_state for a plan that is not running; cancel an approved plan instead. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"confirmation\":{\"description\":\"The typed word abandon.\",\"type\":\"string\"}},\"required\":[\"confirmation\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
 	{
 		Name:        "acknowledgeFinding",
 		Method:      "POST",
@@ -2670,7 +2688,7 @@ var tools = []Tool{
 		AuditCode:   "",
 		Summary:     "",
 		Description: "Roles: platform_admin. The restore plans: approved in the portal, executed on the host with host_command, and the restores the host ran without a plan (kind fresh_install). An approved plan reads as expired 24 hours after its approval.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: created_at, state), q (search over: created_by, kind).",
-		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-created_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"created_at\",\"-created_at\",\"state\",\"-state\"],\"type\":\"string\"},\"state\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"approved\",\"running\",\"completed\",\"failed\",\"expired\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
+		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-created_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"created_at\",\"-created_at\",\"state\",\"-state\"],\"type\":\"string\"},\"state\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"approved\",\"running\",\"completed\",\"failed\",\"expired\",\"abandoned\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listBackupRuns",

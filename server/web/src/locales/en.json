@@ -536,7 +536,8 @@
       "restore_cancelled": "Restore plan cancelled",
       "restore_started": "Restore started on the host (from {source})",
       "restore_completed": "Restore completed on the host",
-      "restore_failed": "Restore failed on the host ({detail})"
+      "restore_failed": "Restore failed on the host ({detail})",
+      "restore_abandoned": "Running restore plan abandoned"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",

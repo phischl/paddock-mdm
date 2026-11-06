@@ -4583,6 +4583,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/backup/restore-plans/{id}/abandon": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Marks a running plan as abandoned when the host never reported its end (the host
+         *     crashed, or the database was unreachable when the restore stopped): the plan no longer blocks a new one, its
+         *     outcome_detail names the administrator, and the host's later report for it is refused (409).
+         *     confirmation must be the typed word abandon (400 invalid_request otherwise). 409 invalid_state for a plan that
+         *     is not running; cancel an approved plan instead. Needs a step-up within the last 5 minutes (403
+         *     step_up_required).
+         */
+        post: operations["abandonBackupRestorePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/notification-destinations/{id}/replay": {
         parameters: {
             query?: never;
@@ -7289,7 +7315,7 @@ export interface components {
             sort: string;
         };
         /** @enum {string} */
-        BackupRestorePlanState: "approved" | "running" | "completed" | "failed" | "expired";
+        BackupRestorePlanState: "approved" | "running" | "completed" | "failed" | "expired" | "abandoned";
         BackupRestorePlanInput: {
             /**
              * @description point_in_time needs at.
@@ -7308,6 +7334,10 @@ export interface components {
             at?: string | null;
             components: ("postgres" | "openbao" | "fleet" | "escrow")[];
             /** @description The typed word restore. */
+            confirmation: string;
+        };
+        BackupRestorePlanAbandonInput: {
+            /** @description The typed word abandon. */
             confirmation: string;
         };
         BackupRestorePlan: {
@@ -7341,7 +7371,7 @@ export interface components {
             started_at: string | null;
             /** Format: date-time */
             finished_at: string | null;
-            /** @description The failed step and what happened, as <step>: <text>. */
+            /** @description The failed step and what happened, as <step>: <text>; abandoned by <administrator> for a plan in state abandoned. */
             outcome_detail: string | null;
             /** @description The command that executes the plan on the host: ./paddock restore --plan <id>. */
             host_command: string;
@@ -16957,6 +16987,39 @@ export interface operations {
                     "application/json": components["schemas"]["BackupRestorePlan"];
                 };
             };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    abandonBackupRestorePlan: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupRestorePlanAbandonInput"];
+            };
+        };
+        responses: {
+            /** @description Abandoned; the plan's state is abandoned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRestorePlan"];
+                };
+            };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];

@@ -22,16 +22,20 @@ import (
 // Restore plans (plan M15 decisions 25–26): a platform administrator approves and cancels with a step-up; the host
 // reports the run as a system principal through the backup role.
 var (
-	SpecRestorePlan   = ActionSpec{Code: audit.CodePlatformRestorePlanned, AllowedRoles: RolesPlatform, RequiresStepUp: true}
-	SpecRestoreCancel = ActionSpec{Code: audit.CodePlatformRestoreCancelled, AllowedRoles: RolesPlatform, RequiresStepUp: true}
-	specRestoreStart  = ActionSpec{Code: audit.CodePlatformRestoreStarted}
-	specRestoreDone   = ActionSpec{Code: audit.CodePlatformRestoreCompleted}
-	specRestoreFailed = ActionSpec{Code: audit.CodePlatformRestoreFailed}
+	SpecRestorePlan    = ActionSpec{Code: audit.CodePlatformRestorePlanned, AllowedRoles: RolesPlatform, RequiresStepUp: true}
+	SpecRestoreCancel  = ActionSpec{Code: audit.CodePlatformRestoreCancelled, AllowedRoles: RolesPlatform, RequiresStepUp: true}
+	SpecRestoreAbandon = ActionSpec{Code: audit.CodePlatformRestoreAbandoned, AllowedRoles: RolesPlatform, RequiresStepUp: true}
+	specRestoreStart   = ActionSpec{Code: audit.CodePlatformRestoreStarted}
+	specRestoreDone    = ActionSpec{Code: audit.CodePlatformRestoreCompleted}
+	specRestoreFailed  = ActionSpec{Code: audit.CodePlatformRestoreFailed}
 )
 
 // RestoreConfirmation is the word the administrator types to approve a restore plan; it is checked here, not only in
 // the portal (ADR 0018).
 const RestoreConfirmation = "restore"
+
+// RestoreAbandonConfirmation is the word the administrator types to abandon a running plan (PDK-832).
+const RestoreAbandonConfirmation = "abandon"
 
 // Restore plan kinds, sources and states (plan M15 decisions 2 and 25).
 const (
@@ -48,6 +52,7 @@ const (
 	RestoreStateCompleted = "completed"
 	RestoreStateFailed    = "failed"
 	RestoreStateExpired   = "expired"
+	RestoreStateAbandoned = "abandoned"
 )
 
 // RestoreComponents are what a plan restores, in the order of the restore (plan M15 decision 23).
@@ -315,6 +320,42 @@ func (p *BackupRestorePlans) Cancel(ctx context.Context, id uuid.UUID) (Plan, er
 	return out, err
 }
 
+// Abandon marks a running plan as abandoned (audited: platform.restore_abandoned) when the host never reported its end,
+// e.g. after a crash: only this frees the one open place for a new plan (PDK-832). The typed word must be abandon (400
+// invalid_request); a plan that is not running is invalid_state. The host's later report for the plan is refused.
+func (p *BackupRestorePlans) Abandon(ctx context.Context, id uuid.UUID, confirmation string) (Plan, error) {
+	// The plan is named before RunTx, so a denied attempt or a wrong typed word still says which plan it was about.
+	spec := SpecRestoreAbandon
+	spec.Params = map[string]any{"plan_id": id.String()}
+	spec.Target = new(restorePlanAudit(id, ""))
+	var out Plan
+	err := p.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		if confirmation != RestoreAbandonConfirmation {
+			return problem.InvalidRequest.WithDetail("confirmation must be the word abandon")
+		}
+		cur, err := q.LockBackupRestorePlan(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		recordPlan(rec, cur)
+		rec.SetParam("kind", cur.Kind)
+		if cur.State != RestoreStateRunning {
+			state := cur.State
+			if cur.Lapsed {
+				state = RestoreStateExpired
+			}
+			return problem.InvalidState.WithDetail("the restore plan is " + state + ", not running")
+		}
+		detail := "abandoned by " + actorDisplay(ctx)
+		if err := q.AbandonBackupRestorePlan(ctx, pgstore.AbandonBackupRestorePlanParams{ID: id, OutcomeDetail: &detail}); err != nil {
+			return err
+		}
+		out, err = getPlan(ctx, q, id)
+		return err
+	})
+	return out, err
+}
+
 // RestoreReport is what the host reports about a restore run (paddock-server backup restore-report, plan M15
 // decision 23 step 8).
 type RestoreReport struct {
@@ -530,6 +571,9 @@ func (r *RestoreReports) finish(ctx context.Context, in RestoreReport, detail *s
 			rec.SetParam("plan_id", planID)
 			if cur.StartedAt != nil {
 				rec.SetParam("duration_s", int64(time.Since(*cur.StartedAt).Round(time.Second)/time.Second))
+			}
+			if cur.State == RestoreStateAbandoned {
+				return problem.InvalidState.WithDetail("a platform administrator abandoned the restore plan")
 			}
 			if cur.State != RestoreStateApproved && cur.State != RestoreStateRunning {
 				return problem.InvalidState.WithDetail("the restore plan is already " + cur.State)

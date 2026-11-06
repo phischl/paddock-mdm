@@ -149,3 +149,70 @@ func TestBackupRestorePlanEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// TestBackupRestorePlanAbandonEndpoint (PDK-832): the typed word, the step-up, a plan that is not running, the
+// abandon that frees the slot for a new plan, and the organization roles.
+func TestBackupRestorePlanAbandonEndpoint(t *testing.T) {
+	e := newRestoreEnv(t)
+	root := e.platformSession()
+	su := e.steppedUp(root, time.Now())
+	e.succeeded(time.Now().Add(-time.Hour), "openbao")
+	body := map[string]any{"kind": "components", "components": []string{"openbao"}, "confirmation": "restore"}
+	r := e.do(call{method: "POST", path: restorePlans, cookie: su, body: body})
+	var plan adminapi.BackupRestorePlan
+	r.decode(t, &plan)
+	if r.status != http.StatusCreated {
+		t.Fatalf("create: %d %s", r.status, r.body)
+	}
+	abandon := restorePlans + "/" + plan.Id.String() + "/abandon"
+	word := map[string]any{"confirmation": "abandon"}
+
+	r = e.do(call{method: "POST", path: abandon, cookie: su, body: word})
+	if r.status != http.StatusConflict || r.problemCode(t) != "invalid_state" {
+		t.Fatalf("abandon an approved plan: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "platform.restore_abandoned:failure:invalid_state")
+
+	if _, err := e.super.Exec(context.Background(), `UPDATE backup_restore_plan SET state = 'running', started_at = now()
+		WHERE id = $1`, plan.Id); err != nil {
+		t.Fatal(err)
+	}
+	r = e.do(call{method: "POST", path: abandon, cookie: root, body: word})
+	if r.status != http.StatusForbidden || r.problemCode(t) != "step_up_required" {
+		t.Fatalf("without step-up: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "platform.restore_abandoned:denied:step_up_required")
+	r = e.do(call{method: "POST", path: abandon, cookie: su, body: map[string]any{"confirmation": "yes"}})
+	if r.status != http.StatusBadRequest || r.problemCode(t) != "invalid_request" {
+		t.Fatalf("without the typed word: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "platform.restore_abandoned:failure:invalid_request")
+	r = e.do(call{method: "POST", path: restorePlans + "/" + uuid.NewString() + "/abandon", cookie: su, body: word})
+	if r.status != http.StatusNotFound || r.problemCode(t) != "not_found" {
+		t.Fatalf("abandon unknown: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "platform.restore_abandoned:failure:not_found")
+
+	for _, role := range []principal.Role{principal.RoleOrgAdmin, principal.RoleOrgOperator, principal.RoleOrgAuditor} {
+		org := e.steppedUp(e.session(e.acme, role), time.Now())
+		if r := e.do(call{method: "POST", path: abandon, cookie: org, body: word}); r.status != http.StatusForbidden {
+			t.Errorf("%s abandon: %d %s", role, r.status, r.body)
+		}
+	}
+
+	r = e.do(call{method: "POST", path: restorePlans, cookie: su, body: body})
+	if r.status != http.StatusConflict {
+		t.Fatalf("new plan while one is running: %d %s", r.status, r.body)
+	}
+	r = e.do(call{method: "POST", path: abandon, cookie: su, body: word})
+	r.decode(t, &plan)
+	if r.status != http.StatusOK || plan.State != "abandoned" || plan.OutcomeDetail == nil || *plan.OutcomeDetail != "abandoned by root@test" ||
+		plan.FinishedAt == nil {
+		t.Fatalf("abandon: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "platform.restore_abandoned:success:")
+	r = e.do(call{method: "POST", path: restorePlans, cookie: su, body: body})
+	if r.status != http.StatusCreated {
+		t.Fatalf("new plan after the abandon: %d %s", r.status, r.body)
+	}
+}
