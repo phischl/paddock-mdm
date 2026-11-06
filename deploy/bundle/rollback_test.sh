@@ -106,7 +106,7 @@ setup() {
   mkdir -p "$work/t/new/scripts" "$work/t/old/scripts" "$work/t/old/.secrets"
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
-  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
+  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
   sed -i 's/^version=.*/version=0.1.0-alpha.10/' "$work/t/new/VERSION"
   printf '%s\n' "$schema" >"$work/t/new/RELEASE-NOTES"
   echo "FLEET_IMAGE=fleetdm/fleet:v4.94.0" >>"$work/t/new/versions.env"
@@ -369,6 +369,185 @@ run 2 "another old directory than the upgrade's" "$work/t/other" --yes
 run 2 "no argument"
 run 2 "unknown flag" "$work/t/old" --force
 run 2 "this directory" "$work/t/new"
+
+# The rollback to 0.1.0-alpha.8 (decisions-alpha9 items 46 and 49): that release's restore procedure through its own
+# ./paddock compose, every precondition before down. The fake alpha.8 ./paddock answers what the procedure asks;
+# openbao-restore.sh is a fake as well (openbao-restore_test.sh tests the real one).
+cat >"$work/alpha8-paddock" <<'FAKE'
+#!/usr/bin/env bash
+printf 'old %s\n' "${*//$'\n'/ }" >>"$FIXTURE_CALLS"
+case "${1:-}" in
+  up) exit "${FIXTURE_OLD_UP_EXIT:-0}" ;;
+  compose)
+    case "$*" in
+      *" pgbackrest info") echo "        full backup: ${FIXTURE_NEWEST-20261106-100000F}" ;;
+      *" pgbackrest-authentik info") echo "        full backup: 20261106-100100F" ;;
+      *" la8-s3 get "*)
+        [[ -z "${FIXTURE_S3_GET_FAIL:-}" ]] || exit 1
+        echo "sealed object"
+        ;;
+      *" backup decrypt /in /dev/null") exit "${FIXTURE_DECRYPT_EXIT:-0}" ;;
+      *" backup decrypt /in -") echo "plain snapshot" ;;
+      *" la8-fleet check") exit "${FIXTURE_FLEET_CHECK_EXIT:-0}" ;;
+      *" exec -T openbao sh -c cat >/tmp/snapshot") cat >/dev/null ;;
+      *" psql "*"pg_is_in_recovery()"*) echo f ;;
+      *" ps --format "*) echo healthy ;;
+      *" pgbackrest restore") exit "${FIXTURE_PG_RESTORE_EXIT:-0}" ;;
+    esac
+    ;;
+esac
+exit 0
+FAKE
+cat >"$work/fake-openbao-restore.sh" <<'FAKE'
+# shellcheck shell=bash
+openbao_status() { printf '{"initialized": %s, "sealed": false}\n' "${FAKE_BAO_INITIALIZED:-${FIXTURE_BAO_INITIALIZED:-false}}"; }
+openbao_wait() { echo "openbao_wait" >>"$FIXTURE_CALLS"; }
+openbao_restore_sealed() {
+  echo "openbao_restore_sealed bao=$(declare -F bao) restart=$(declare -F bao_restart)" >>"$FIXTURE_CALLS"
+  echo "temporary root token" >"$1/init.json"
+  FAKE_BAO_INITIALIZED=true
+}
+FAKE
+# setup_alpha8 [fleet]: the new directory is 0.1.0-alpha.9, upgraded from an alpha.8 directory by its own backup.
+setup_alpha8() {
+  setup controlplane "Schema: migrations 00100–00106"
+  sed -i 's/^version=.*/version=0.1.0-alpha.9/' "$work/t/new/VERSION"
+  sed -i 's/^version=.*/version=0.1.0-alpha.8/' "$work/t/old/VERSION"
+  cp "$work/alpha8-paddock" "$work/t/old/paddock"
+  echo "PADDOCK_AUTO_UNSEAL=yes" >>"$work/t/old/.env"
+  rm "$work/t/old/scripts/restore.sh"
+  cp "$work/fake-openbao-restore.sh" "$work/t/new/scripts/openbao-restore.sh"
+  [[ "${1:-}" != fleet ]] || sed -i 's/^FLEET_IMAGE=.*/FLEET_IMAGE=fleetdm\/fleet:v4.93.2/' "$work/t/old/versions.env"
+  head -c 24 /dev/urandom | base64 >"$work/t/old/.secrets/backup_pgbackrest_access_key"
+  head -c 24 /dev/urandom | base64 >"$work/t/old/.secrets/backup_pgbackrest_secret_key"
+  printf 'old=%s\nfrom=0.1.0-alpha.8\nto=0.1.0-alpha.9\nbackup=yes\nlabel=pre-upgrade-0.1.0-alpha.9\nat=%s\nattempt=%s\n' \
+    "$work/t/old" "$AT" "$ATTEMPT" >"$work/t/new/.upgrade-rollback"
+  printf 'method=legacy-0.1.0-alpha.8\nlegacy-paddock=20261106-100000F\nlegacy-authentik=20261106-100100F\n' >>"$work/t/new/.upgrade-rollback"
+  printf 'legacy-openbao=openbao/20261106T095900Z.snap.enc\nlegacy-fleet=fleet/20261106T095930Z.sql.gz.enc\nlegacy-at=2026-11-06T09:59:40Z\n' \
+    >>"$work/t/new/.upgrade-rollback"
+  export FIXTURE_RUNNING="Paddock|0.1.0-alpha.9"
+}
+VOLRM='^docker volume rm '
+setup_alpha8
+run 0 "rollback to 0.1.0-alpha.8 by its restore procedure" "$work/t/old" --yes
+has "the plan names alpha.8's restore procedure" "0\.1\.0-alpha\.8's restore procedure"
+has "the plan names the loss from the backup on" 'Every change after the pre-upgrade backup \(2026-11-06T09:59:40Z\) can be lost'
+has "the plan names the custodians" 'unsealed by three custodians or the automatic unseal'
+has "the plan names the fence as the archive's end" 'reaches the WAL 0\.1\.0-alpha\.8 archived until the upgrade stopped its pgBackRest right before \./paddock up'
+not_called "no restore.sh function" '^restore_'
+before "the newest paddock backup is checked before down" '^old compose run --rm --no-deps -T pgbackrest info$' "$DOWN"
+before "the newest authentik backup is checked before down" '^old compose run --rm --no-deps -T pgbackrest-authentik info$' "$DOWN"
+before "the snapshot is downloaded before down" '^old compose run .* la8-s3 get openbao/20261106T095900Z\.snap\.enc$' "$DOWN"
+before "the snapshot decrypts before down" '^old compose run .* paddock-worker backup decrypt /in /dev/null$' "$DOWN"
+before "down before the first volume goes" "$DOWN" "$VOLRM"
+before "the volumes go before the pgBackRest restore" "${VOLRM}.*_postgres-data$" '^old compose run --rm --no-deps -T pgbackrest restore$'
+before "paddock's stanza, then authentik's" '^old compose run --rm --no-deps -T pgbackrest restore$' '^old compose run --rm --no-deps -T pgbackrest-authentik restore$'
+before "the databases start after the restore" '^old compose run --rm --no-deps -T pgbackrest-authentik restore$' '^old compose up -d --no-deps postgres authentik-postgres$'
+before "OpenBao after PostgreSQL" '^old compose up -d --no-deps postgres authentik-postgres$' "${VOLRM}.*_openbao-data$"
+before "the fresh OpenBao starts before its restore" '^old compose up -d --no-deps openbao$' '^openbao_restore_sealed'
+called "openbao-restore.sh runs with alpha.8's bao" '^openbao_restore_sealed bao=bao restart=bao_restart$'
+before "the snapshot reaches OpenBao before its restore" '^old compose exec -T openbao sh -c cat >/tmp/snapshot$' '^openbao_restore_sealed'
+before "OpenBao before the restore commands" '^openbao_restore_sealed' '^old compose run --rm --no-deps -T paddock-worker admin bump-bundle-seq --by 1000000$'
+before "the compiler stops before bump-bundle-seq" '^old compose --profile paddock stop paddock-compiler$' 'admin bump-bundle-seq'
+before "bump-bundle-seq before the compiler starts" 'admin bump-bundle-seq' '^old compose --profile paddock up -d --no-deps paddock-compiler$'
+before "the compiler before rebuild-cache" '^old compose --profile paddock up -d --no-deps paddock-compiler$' 'admin rebuild-cache$'
+before "rebuild-cache before recompile" 'admin rebuild-cache$' 'admin recompile --all$'
+before "pgBackRest starts after the restore commands" 'admin recompile --all$' '^old compose up -d --no-deps pgbackrest pgbackrest-authentik$'
+before "alpha.8 starts last" '^old compose up -d --no-deps pgbackrest pgbackrest-authentik$' "$OLDUP"
+called "the automatic unseal starts" '^old compose --profile paddock up -d --no-deps paddock-unsealer$'
+deleted="$(grep -E "$VOLRM" "$calls" | sed -E 's/.*_//' | sort | paste -sd' ' -)"
+if [[ "$deleted" == "authentik-postgres-data openbao-data pgbackrest-spool-authentik pgbackrest-spool-paddock pgbackrest-state-authentik pgbackrest-state-paddock postgres-data" ]]; then
+  pass "exactly the volumes of decisions-alpha9 item 49 are deleted"
+else fail "deleted volumes: $deleted"; fi
+not_called "no Compose down with volumes" 'down (-v|--volumes)'
+not_called "Fleet is untouched when its image stays" 'fleet-mysql|la8-fleet'
+if compgen -G "$work/t/new/.rollback-legacy.*" >/dev/null; then fail "the work directory is left"; else pass "the work directory is removed"; fi
+if [[ -f "$work/t/new/.upgrade-rollback.rolled-back-$ATTEMPT" ]]; then pass "the alpha.8 record is retired"; else fail "the alpha.8 record is not retired"; fi
+for f in backup_pgbackrest_access_key backup_pgbackrest_secret_key backup_encryption_key; do
+  if grep -qF -- "$(cat "$work/t/old/.secrets/$f")" "$calls" <<<"$out" || grep -qF -- "$(cat "$work/t/old/.secrets/$f")" <<<"$out"; then
+    fail "$f appears in a command or the output"
+  else pass "$f appears in no command and no output"; fi
+done
+
+# A changed FLEET_IMAGE: the dump is downloaded and checked before down, Fleet's database replaced, its volume kept.
+setup_alpha8 fleet
+run 0 "rollback to alpha.8 with Fleet's dump" "$work/t/old" --yes
+before "the dump is downloaded before down" '^old compose run .* la8-s3 get fleet/20261106T095930Z\.sql\.gz\.enc$' "$DOWN"
+before "the dump decrypts before down" ' la8-fleet check$' "$DOWN"
+before "OpenBao before Fleet" '^openbao_restore_sealed' '^old compose up -d --no-deps fleet-mysql$'
+before "fleet-mysql runs before the load" '^old compose up -d --no-deps fleet-mysql$' ' la8-fleet load$'
+before "Fleet before the restore commands" ' la8-fleet load$' 'admin bump-bundle-seq'
+not_called "fleet-mysql's volume is kept" "${VOLRM}.*fleet"
+has "the plan names Fleet's dump" "Fleet's database from fleet/20261106T095930Z\.sql\.gz\.enc"
+
+# Without the automatic unseal: the custodians are asked.
+setup_alpha8
+sed -i '/^PADDOCK_AUTO_UNSEAL=/d' "$work/t/old/.env"
+run 0 "rollback to alpha.8 with custodians" "$work/t/old" --yes
+has "the custodians are asked" 'Three custodians unseal it now'
+not_called "no unsealer without the automatic unseal" 'paddock-unsealer'
+
+# Every precondition fails before anything stops.
+setup_alpha8
+FIXTURE_NEWEST=20261106-120000F run 1 "a newer backup in alpha.8's stanza" "$work/t/old" --yes
+has "the newer backup is named" 'newest backup of pgbackrest in the bucket is 20261106-120000F, not the pre-upgrade backup 20261106-100000F'
+not_called "nothing stops when the newest backup is another" "$DOWN"
+has "the stack still runs" 'stopped before any change'
+setup_alpha8
+FIXTURE_S3_GET_FAIL=1 run 1 "the snapshot cannot be downloaded" "$work/t/old" --yes
+has "the download failure is named" 'cannot download openbao/20261106T095900Z\.snap\.enc'
+not_called "nothing stops without the snapshot" "$DOWN"
+setup_alpha8
+FIXTURE_DECRYPT_EXIT=1 run 1 "the snapshot does not decrypt" "$work/t/old" --yes
+has "the decryption failure is named" 'the OpenBao snapshot does not decrypt'
+not_called "nothing stops with a wrong key" "$DOWN"
+setup_alpha8 fleet
+FIXTURE_FLEET_CHECK_EXIT=1 run 1 "Fleet's dump does not decrypt" "$work/t/old" --yes
+not_called "nothing stops with a broken dump" "$DOWN"
+setup_alpha8
+rm "$work/t/old/.secrets/backup_pgbackrest_secret_key"
+run 1 "alpha.8's pgBackRest credential is missing" "$work/t/old" --yes
+has "the missing file is named" 'backup_pgbackrest_secret_key is missing or empty'
+not_called "nothing stops without the credential" "$DOWN"
+if compgen -G "$work/t/new/.rollback-legacy.*" >/dev/null; then fail "a failed preflight leaves the work directory"; else pass "a failed preflight removes the work directory"; fi
+# Both directories must name the project whose volumes go (Review 1, m1): checked before anything stops.
+setup_alpha8
+echo "PADDOCK_PROJECT=paddock-old" >>"$work/t/old/.env"
+run 1 "the old directory names another Compose project" "$work/t/old" --yes
+has "the differing projects are named" 'names the project paddock-old, this directory.s \.env paddock'
+not_called "nothing stops with differing projects" "$DOWN"
+not_called "no volume goes with differing projects" "$VOLRM"
+setup_alpha8
+echo "PADDOCK_PROJECT=paddock" >>"$work/t/old/.env"
+run 0 "the old directory names the default project explicitly" "$work/t/old" --yes
+called "the restore runs when the projects match" '^old compose run --rm --no-deps -T pgbackrest restore$'
+setup_alpha8
+echo "PADDOCK_PROJECT=paddock-old" >>"$work/t/old/.env"
+echo "PADDOCK_PROJECT=paddock-old" >>"$work/t/new/.env"
+run 0 "both directories name the same project" "$work/t/old" --yes
+called "the volumes of the named project go" "${VOLRM}paddock-old_postgres-data$"
+setup_alpha8
+sed -i '/^legacy-/d; /^method=/d' "$work/t/new/.upgrade-rollback"
+run 1 "a record without alpha.8's backup" "$work/t/old" --yes
+has "the record's problem is named" "cannot be restored by 0\.1\.0-alpha\.8's procedure \(it records no backup of 0\.1\.0-alpha\.8's own procedure\)"
+not_called "nothing runs without alpha.8's backup in the record" '^(old compose|docker compose .* down$)'
+setup_alpha8
+sed -i 's/^legacy-openbao=.*/legacy-openbao=openbao\/..\/x/' "$work/t/new/.upgrade-rollback"
+run 1 "an invalid snapshot name in the record" "$work/t/old" --yes
+not_called "nothing runs with an invalid name" '^old compose'
+
+# Failures after down: the message tells the host's state; an initialized OpenBao is never initialized again.
+setup_alpha8
+FIXTURE_PG_RESTORE_EXIT=1 run 1 "alpha.8's pgBackRest restore fails" "$work/t/old" --yes
+has "the partial restore is named" 'the restore failed while it replaced the data'
+not_called "alpha.8 is not started on a partial restore" "$OLDUP"
+setup_alpha8
+FIXTURE_BAO_INITIALIZED=true run 1 "the fresh OpenBao reports initialized" "$work/t/old" --yes
+has "the refusal to initialize is named" 'it is not initialized again'
+not_called "no second initialization" '^openbao_restore_sealed'
+# A repeated rollback after that failure finds the stack down and restores again.
+FIXTURE_RUNNING="" run 0 "the repeated rollback to alpha.8" "$work/t/old" --yes
+called "the repeated rollback restores OpenBao" '^openbao_restore_sealed'
 
 # The old release's restore.sh is an interface between releases: the real one defines every function rollback.sh
 # calls and reads every variable it sets.

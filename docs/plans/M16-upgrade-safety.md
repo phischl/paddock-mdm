@@ -486,3 +486,81 @@ Binding refinements of decisions 6 and 7; where they differ, this amendment wins
 Consequences: §6.1 gains no flag; `docs/operations/upgrade.md` (PDK-746) documents the point-in-time semantics,
 the pre-`down` checks, the lab rule and the one-rollback rule; RR-107 keeps its text (the loss window ends at
 `up-started`).
+
+## Amendment 2026-11-06 — the pair 0.1.0-alpha.8 → 0.1.0-alpha.9 (PDK-840; decisions-alpha9 items 46 and 49)
+
+0.1.0-alpha.8 has none of what decisions 6 and 7 rely on. It has no `backup now --label`, no M15 tables or key, no
+local repository and no `restore.sh`. It is still the first guaranteed pair, so that pair gets a legacy path. The
+path lives in `deploy/compose/scripts/legacy-alpha8.sh`, which both commands source.
+
+1. **Detection.** The path applies when the old directory's `VERSION` is exactly `0.1.0-alpha.8`, the release
+   sequence that `upgrade-check` already checks. It never probes the old bundle for features. Every other old
+   release without `backup now` is still refused.
+2. **Pre-upgrade backup (upgrade step `backup`, before `up`).** The upgrade runs alpha.8's runbook step 3 through
+   `<old>/paddock compose`, which uses alpha.8's Compose files and images, while alpha.8 still runs:
+   - `run --rm --no-deps -T pgbackrest backup --start-fast`, then the same for `pgbackrest-authentik`;
+   - `paddock-worker backup openbao`;
+   - `fleet-backup once`.
+
+   It reads the backup labels, the snapshot key and the dump name from what those commands print. Then it checks
+   them in the bucket:
+   - the newest backup of each stanza (`pgbackrest info`) is the new one;
+   - the snapshot exists;
+   - the dump exists, waiting up to 5 minutes for `fleet-backup-upload`. The upgrade does not upload the dump
+     itself, because that would race with the running service.
+
+   The bucket is read through a one-off of alpha.8's AWS CLI service, with the pgBackRest credential (the one that
+   alpha.8 grants `s3:GetObject` on `openbao/` and `fleet/`) mounted as read-only files.
+   `.upgrade-rollback` gains `method=legacy-0.1.0-alpha.8`, `legacy-paddock`, `legacy-authentik`, `legacy-openbao`,
+   `legacy-fleet` and `legacy-at` (the time the backup completed). These fields are bound to the attempt like the
+   rest of the record (amendment 2026-11-06 item 5).
+
+   **The fence (upgrade step `up`, before the record).** alpha.8's restore stages every WAL segment the bucket holds,
+   and alpha.8's pgBackRest would otherwise keep pushing from the shared spool while alpha.9's `up` migrates. So right
+   before the rollback point is recorded, the upgrade runs `<old>/paddock compose stop pgbackrest
+   pgbackrest-authentik`, then `run --rm --no-deps -T pgbackrest flush` and the same for `pgbackrest-authentik`. The
+   bucket's archive then ends before alpha.9 touches a database; WAL written after that reaches alpha.9's local
+   repository only. A failed stop or flush starts alpha.8's pgBackRest again, writes no record and does not run `up`;
+   the next run repeats the fence. After the fence, when nothing new can reach the bucket, the upgrade checks that the
+   newest backup of both stanzas is still the one recorded by the step `backup`: alpha.8's pgBackRest takes a full
+   backup on its own once the last is 24 h old, for example while a stopped run waits, and alpha.8's restore always
+   restores the newest. On a mismatch (or an unreadable `info`) it starts alpha.8's pgBackRest again, removes the step
+   `backup` and its `legacy-*` lines from `.upgrade-state`, writes no record and does not run `up`; the next run takes
+   the backup again. Every failure before `up` (fence, this check, the record write) says that `up` did not run and
+   alpha.8 runs unchanged, and leaves alpha.8's pgBackRest running. The record's `at` is the time right after the fence.
+3. **Rollback.** Instead of the old `restore.sh`, `rollback.sh` runs alpha.8's `docs/operations/restore.md` steps
+   2–6 through `<old>/paddock compose`.
+   - **Before anything stops**, in this order:
+     - the record names a valid legacy backup;
+     - the old directory names the same Compose project as this one (`PADDOCK_PROJECT` of the environment, else of
+       each `.env`, default `paddock`), because the volumes of this project are deleted and alpha.8 starts in its own;
+     - alpha.8's key and pgBackRest credential files exist;
+     - the newest backup of each stanza is the recorded one (alpha.8's `restore` always takes the newest);
+     - the recorded snapshot and, when `FLEET_IMAGE` changed, the dump are downloaded into a private work directory
+       and decrypt with the key.
+   - **Then:**
+     - `./paddock down`;
+     - both PostgreSQL clusters are restored by alpha.8's `pgbackrest restore` to the newest WAL alpha.8 archived.
+       The fence of item 2 ends that archive before `up`, and 0.1.0-alpha.9 archives into its local repository;
+     - the recovery is awaited;
+     - the snapshot is restored into a fresh OpenBao with one temporary share (`openbao-restore.sh`), and the restored
+       OpenBao is unsealed by the custodians or the automatic unseal;
+     - when Fleet changed, Fleet's database is dropped and loaded from the dump;
+     - step 5's restore commands run in their binding order;
+     - pgBackRest starts, then `<old>/paddock up`.
+   - **pgBackRest starts last, not in step 3.** With its fresh state it takes a full backup at once, which would make
+     a repeated rollback refuse after a later failure.
+   - **The loss window.** It starts at `legacy-at` at the latest, not at `up-started`: the restore reaches the WAL
+     that alpha.8 archived until the fence. The plan says so.
+   - **Escrow.** The escrow bucket is not part of alpha.8's restore and is not restored.
+4. **Volumes and OpenBao (item 49).** The legacy rollback deletes and recreates exactly these volumes:
+   `postgres-data`, `authentik-postgres-data`, both `pgbackrest-spool-*`, both `pgbackrest-state-*` and
+   `openbao-data`.
+   - The spools and the states go, so that WAL left behind by alpha.9 never reaches alpha.8's stanza.
+   - Fleet's volume is kept: its database is dropped instead.
+   - Only the OpenBao whose volume was just emptied is initialized, and only after it reports
+     `"initialized": false`.
+5. **Removal.** `legacy-alpha8.sh` and its call sites in `upgrade.sh`, `rollback.sh` and `paddock` are removed once
+   0.1.0-alpha.8 leaves the support window (ADR 0013 amendment: its own release plus two).
+6. **Proof.** PDK-744's CI job proves the pair end to end, including the rollback. The legacy rollback is never run
+   against a development stack that holds lab-linked secrets.

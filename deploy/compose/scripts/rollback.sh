@@ -9,6 +9,7 @@
 # the old images restore it and start on it; the new paddock-migrate must never see it. It restores from the local
 # backup repository to the point ./paddock upgrade recorded just before its first `up` (.upgrade-rollback), which lies
 # after the labelled pre-upgrade backup.
+# 0.1.0-alpha.8 has no restore.sh: a rollback to it runs that release's documented procedure (legacy-alpha8.sh).
 # shellcheck shell=bash
 
 rb_usage() {
@@ -105,10 +106,28 @@ rb_restore() {
   restore_trap_reset
 }
 
+# rb_legacy_restore <old dir> <new dir> <record> <with fleet: yes|no>: the rollback to 0.1.0-alpha.8 by that release's
+# restore procedure (legacy-alpha8.sh), in a subshell. Its preconditions run before anything stops; RB_PHASE as in
+# rb_restore.
+rb_legacy_restore() {
+  local old="$1" new="$2" record="$3" fleet="$4"
+  trap - EXIT INT TERM HUP
+  RB_LEGACY_WORK="$(mktemp -d "$new/.rollback-legacy.XXXXXX")"
+  # The downloaded sets and the temporary OpenBao root token of the fresh instance live here only.
+  trap 'rm -rf "$RB_LEGACY_WORK"' EXIT
+  la8_preflight "$old" "$record" "$RB_LEGACY_WORK" "$fleet" "$PADDOCK_PROJECT"
+  rb_mark_started
+  echo down >"$RB_PHASE"
+  echo "+ ./paddock down"
+  "$new/paddock" down </dev/null
+  echo restore >"$RB_PHASE"
+  la8_restore "$old" "$PADDOCK_PROJECT" "$RB_LEGACY_WORK" "$fleet"
+}
+
 # rollback_main <new dir> <arguments of ./paddock rollback>
 rollback_main() {
   local new="$1" old="" yes="" arg schema record state at="" attempt="" stale="" old_version new_version components=()
-  local answer="" status=0 current superseded running="" lenient="" v bad=""
+  local answer="" status=0 current superseded running="" lenient="" v bad="" legacy="" fleet=no problem
   shift
   for arg in "$@"; do
     case "$arg" in
@@ -198,13 +217,29 @@ rollback_main() {
       rb_die "the rollback point in .upgrade-rollback is stale ($stale): restoring it would lose every change since that attempt; restore by hand with ./paddock restore (docs/operations/restore.md); nothing was changed"
     [[ -n "$at" ]] ||
       rb_die "no pre-upgrade backup is recorded in .upgrade-rollback (the upgrade did not take one, or did not reach ./paddock up); restore by hand with ./paddock restore (docs/operations/restore.md); nothing was changed"
-    [[ -f "$old/scripts/restore.sh" ]] ||
-      rb_die "the old release $old_version ships no scripts/restore.sh; follow docs/operations/upgrade.md for this rollback; nothing was changed"
+    if la8_applies "$old_version"; then
+      legacy=1
+      problem="$(la8_record_problem "$record")"
+      [[ -z "$problem" ]] ||
+        rb_die "the rollback point in .upgrade-rollback cannot be restored by $old_version's procedure ($problem); restore by hand (docs/operations/restore.md of $old_version); nothing was changed"
+      [[ " ${components[*]} " != *" fleet "* ]] || fleet=yes
+    else
+      [[ -f "$old/scripts/restore.sh" ]] ||
+        rb_die "the old release $old_version ships no scripts/restore.sh; follow docs/operations/upgrade.md for this rollback; nothing was changed"
+    fi
   fi
 
   echo "Rollback of this host ($PADDOCK_HOST, project $PADDOCK_PROJECT) from $new_version to $old_version (${schema:-no Schema line}):"
   echo "  1. ./paddock down"
-  if ((${#components[@]} > 0)); then
+  if [[ -n "$legacy" ]]; then
+    echo "  2. $old_version's restore procedure (its docs/operations/restore.md) from the backup bucket:"
+    echo "     PostgreSQL to the newest archived WAL after the backups $(rb_value "$record" legacy-paddock) (paddock) and $(rb_value "$record" legacy-authentik) (authentik);"
+    echo "     OpenBao from $(rb_value "$record" legacy-openbao) into a fresh OpenBao, unsealed by three custodians or the automatic unseal;"
+    if [[ "$fleet" == yes ]]; then echo "     Fleet's database from $(rb_value "$record" legacy-fleet);"; fi
+    echo "     then the restore commands (bump-bundle-seq, rebuild-cache, recompile --all). The escrow bucket is not part of it."
+    echo "  3. $old/paddock up"
+    echo "Every change after the pre-upgrade backup ($(rb_value "$record" legacy-at)) can be lost: the restore reaches the WAL $old_version archived until the upgrade stopped its pgBackRest right before ./paddock up ($at)."
+  elif ((${#components[@]} > 0)); then
     echo "  2. restore ${components[*]} from the local backup repository at $at (the pre-upgrade set $(rb_value "$record" label))"
     echo "  3. $old/paddock up"
     echo "Every change after $at is lost."
@@ -221,7 +256,11 @@ rollback_main() {
     set +e
     (
       set -e
-      rb_restore "$old" "$new" "$at" "$yes" "${components[@]}"
+      if [[ -n "$legacy" ]]; then
+        rb_legacy_restore "$old" "$new" "$record" "$fleet"
+      else
+        rb_restore "$old" "$new" "$at" "$yes" "${components[@]}"
+      fi
     )
     status=$?
     set -e

@@ -82,7 +82,7 @@ shipped=(
   scripts/lib.sh scripts/gen-prod-secrets.sh scripts/openbao-configure.sh scripts/rustfs-bundles-bootstrap.sh
   scripts/rustfs-audit-bootstrap.sh scripts/fleet-bootstrap.sh scripts/wait-healthy.sh scripts/postgres-unsealer-role.sh
   scripts/upgrade-check.sh scripts/upgrade.sh scripts/rollback.sh scripts/restore.sh
-  scripts/openbao-restore.sh
+  scripts/openbao-restore.sh scripts/legacy-alpha8.sh
 )
 for f in "$src"/authentik/blueprints/*.yaml; do shipped+=("authentik/blueprints/$(basename "$f")"); done
 
