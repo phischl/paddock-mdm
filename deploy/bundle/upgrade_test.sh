@@ -520,6 +520,8 @@ run 0 "upgrade of the audit host" "$work/t/old" --yes
 not_called "the audit host takes no backup" '^old backup'
 before "the old audit writer stops before up" '^old compose stop paddock-audit-writer$' "$UP"
 called "the audit host runs the online check" '^docker run .*prod-check .*--online'
+before "the audit host checks online before up" '^docker run .*prod-check .*--online' "$UP"
+has "the audit host's plan names the online check" '^  check +\./paddock check --online '
 not_called "the audit host asks no server report" '^docker compose .*admin upgrade-check'
 setup audit "Schema: migrations 00105 (control-plane database); audit unchanged"
 run 0 "audit host without audit migrations" "$work/t/old" --yes
@@ -541,6 +543,7 @@ has "the plan states the data loss" 'The pre-upgrade data is lost'
 hasnt "no plain rollback line" '^Rollback afterwards: \./paddock rollback'
 not_called "the lab takes no backup" '^old backup'
 called "the lab runs the online check" '^docker run .*prod-check .*--online'
+before "the lab checks online before up" '^docker run .*prod-check .*--online' "$UP"
 setup lab "Schema: unchanged"
 sed -i 's/^FLEET_IMAGE=.*/FLEET_IMAGE=fleetdm\/fleet:v4.93.2/' "$work/t/old/versions.env"
 run 2 "lab without backups and a Fleet change" "$work/t/old" --yes
