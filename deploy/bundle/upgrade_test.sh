@@ -43,10 +43,11 @@ chmod +x "$work/bin/docker"
 export PATH="$work/bin:$PATH" FIXTURE_ROOT="$work" FIXTURE_CALLS="$calls"
 
 # The old bundle's ./paddock: it answers what upgrade and upgrade-check ask, and prints a usage with or without the
-# backup commands (0.1.0-alpha.8 has none).
+# backup commands (0.1.0-alpha.8 has none). For 0.1.0-alpha.8's own backup it reports what that release's commands
+# print, and the bucket (the AWS CLI one-off) answers FIXTURE_S3_EXIT. A one-off's script is logged on the same line.
 cat >"$work/old-paddock" <<'FAKE'
 #!/usr/bin/env bash
-echo "old $*" >>"$FIXTURE_CALLS"
+printf 'old %s\n' "${*//$'\n'/ }" >>"$FIXTURE_CALLS"
 case "${1:-}" in
   verify) echo "all shipped files unchanged" ;;
   ps) printf '%s\n' "paddock-api|running|healthy|0" "postgres|running|healthy|0" ;;
@@ -55,6 +56,20 @@ case "${1:-}" in
       printf '%s\n' "${FIXTURE_REPORT-PASS  migrations  ok}"
       exit "${FIXTURE_REPORT_EXIT:-0}"
     fi
+    case "$*" in
+      *" pgbackrest backup --start-fast")
+        echo "pgbackrest: backup 20261106-100000F of paddock verified"
+        exit "${FIXTURE_PG_EXIT:-0}"
+        ;;
+      *" pgbackrest-authentik backup --start-fast") echo "pgbackrest: backup 20261106-100100F of authentik verified" ;;
+      *" pgbackrest info") printf 'stanza: paddock\n        full backup: 20261105-000000F\n        full backup: %s\n' "${FIXTURE_NEWEST-20261106-100000F}" ;;
+      *" pgbackrest-authentik info") echo "        full backup: 20261106-100100F" ;;
+      *" paddock-worker backup openbao")
+        [[ -n "${FIXTURE_NO_SNAPSHOT:-}" ]] || echo 'time=2026-11-06T10:02:00Z level=INFO msg="OpenBao snapshot stored" key=openbao/20261106T100200Z.snap.enc'
+        ;;
+      *" fleet-backup once") echo "fleet backup: dumped 20261106T100300Z.sql.gz.enc" ;;
+      *" fleet-backup-upload "*) exit "${FIXTURE_S3_EXIT:-0}" ;;
+    esac
     ;;
   backup) exit "${FIXTURE_BACKUP_EXIT:-0}" ;;
   up) ;;
@@ -74,7 +89,7 @@ setup() {
   mkdir -p "$work/t/new/scripts" "$work/t/old"
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
-  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
+  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
   for s in gen-prod-secrets.sh wait-healthy.sh openbao-configure.sh; do
     # shellcheck disable=SC2016 # the stub expands its arguments when it runs
     printf '#!/usr/bin/env bash\necho "script %s $*" >>"$FIXTURE_CALLS"\n' "$s" >"$work/t/new/scripts/$s"
@@ -195,11 +210,71 @@ run 0 "--skip-backup with Schema: unchanged" "$work/t/old" --yes --skip-backup
 not_called "no backup with --skip-backup" '^old backup'
 if grep -qx 'backup=no' "$work/t/new/.upgrade-rollback"; then pass "the record says no backup"; else fail "record: $(cat "$work/t/new/.upgrade-rollback")"; fi
 
-# 0.1.0-alpha.8 has no labelled backup: refused before anything runs.
+# An old release other than 0.1.0-alpha.8 without the labelled backup: refused before anything runs.
 setup controlplane "Schema: migrations 00105–00106"
 FIXTURE_OLD_NO_BACKUP=1 run 1 "an old release without backup now is refused" "$work/t/old" --yes
 has "the refusal names the missing command" 'has no ./paddock backup now --label'
 not_called "nothing runs for the refused old release" '^(docker|script)'
+
+# 0.1.0-alpha.8 (decisions-alpha9 item 46): its own backup through its own Compose files, checked in the bucket, before
+# up; the record names what its restore procedure needs.
+LEGACY_PG='^old compose run --rm --no-deps -T pgbackrest backup --start-fast$'
+LEGACY_FLEET_HEAD='^old compose run .* fleet-backup-upload .* la8-s3 head fleet/20261106T100300Z\.sql\.gz\.enc$'
+setup_alpha8() {
+  setup controlplane "Schema: migrations 00100–00106"
+  sed -i 's/^version=.*/version=0.1.0-alpha.8/' "$work/t/old/VERSION"
+  sed -i '/^0\.1\.0-alpha\.10$/d' "$work/t/new/RELEASES"
+  sed -i 's/^version=.*/version=0.1.0-alpha.9/' "$work/t/new/VERSION"
+}
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 run 0 "upgrade from 0.1.0-alpha.8 with its own backup" "$work/t/old" --yes
+has "the plan names alpha.8's own backup" "0\.1\.0-alpha\.8's own backup through .*/paddock compose"
+has "the plan names alpha.8's restore procedure for the rollback" "It runs 0\.1\.0-alpha\.8's restore procedure"
+not_called "no backup now for alpha.8" '^old backup'
+before "paddock's full backup first" "$LEGACY_PG" '^old compose run --rm --no-deps -T pgbackrest-authentik backup --start-fast$'
+before "then authentik's" '^old compose run --rm --no-deps -T pgbackrest-authentik backup --start-fast$' '^old compose run --rm --no-deps -T paddock-worker backup openbao$'
+before "then the OpenBao snapshot" '^old compose run --rm --no-deps -T paddock-worker backup openbao$' '^old compose run --rm --no-deps -T fleet-backup once$'
+before "then Fleet's dump" '^old compose run --rm --no-deps -T fleet-backup once$' '^old compose run --rm --no-deps -T pgbackrest info$'
+before "the snapshot is checked in the bucket" '^old compose run .* la8-s3 head openbao/20261106T100200Z\.snap\.enc$' "$UP"
+before "the dump's upload is awaited before up" "$LEGACY_FLEET_HEAD" "$UP"
+before "the check before the backup" '^docker run .*prod-check' "$LEGACY_PG"
+called "the bucket is read with the pgBackRest credential mounted as files" \
+  "-v $work/t/old/\.secrets/backup_pgbackrest_access_key:/run/paddock-legacy/access_key:ro -v $work/t/old/\.secrets/backup_pgbackrest_secret_key:/run/paddock-legacy/secret_key:ro --entrypoint /bin/bash fleet-backup-upload"
+rec="$work/t/new/.upgrade-rollback"
+if grep -qx 'method=legacy-0.1.0-alpha.8' "$rec" && grep -qx 'legacy-paddock=20261106-100000F' "$rec" &&
+  grep -qx 'legacy-authentik=20261106-100100F' "$rec" && grep -qx 'legacy-openbao=openbao/20261106T100200Z.snap.enc' "$rec" &&
+  grep -qx 'legacy-fleet=fleet/20261106T100300Z.sql.gz.enc' "$rec" && grep -qE '^legacy-at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$' "$rec" &&
+  grep -qx 'from=0.1.0-alpha.8' "$rec" && grep -qx 'backup=yes' "$rec"; then pass "the record names alpha.8's backups"; else
+  fail "the record of alpha.8's backups: $(cat "$rec" 2>&1)"
+fi
+
+# Every failure of alpha.8's backup stops before up, with nothing changed on the running stack.
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_PG_EXIT=1 run 1 "a failed pgBackRest backup of alpha.8" "$work/t/old" --yes
+not_called "no up after alpha.8's failed backup" "$UP"
+has "nothing changed after alpha.8's failed backup" 'Nothing changed on the running stack'
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_NEWEST=20261106-110000F run 1 "a newer backup than alpha.8's pre-upgrade one" "$work/t/old" --yes
+has "the newest-backup check is named" 'the newest backup of stanza paddock in the bucket is not 20261106-100000F'
+not_called "no up when the newest backup is another" "$UP"
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_NO_SNAPSHOT=1 run 1 "alpha.8's snapshot not reported" "$work/t/old" --yes
+has "the unreported backup is named" "OpenBao '\?'"
+not_called "no up without the snapshot's name" "$UP"
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_S3_EXIT=1 LA8_UPLOAD_TIMEOUT=0 run 1 "alpha.8's objects not in the bucket" "$work/t/old" --yes
+has "the missing object is named" 'openbao/20261106T100200Z\.snap\.enc is not in the backup bucket'
+not_called "no up when an object is missing" "$UP"
+if [[ ! -e "$work/t/new/.upgrade-rollback" ]]; then pass "no record without alpha.8's backup"; else fail "a record without alpha.8's backup"; fi
+
+# A failed up after alpha.8's backup: the second run continues at up, without a second backup, and keeps its names.
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_UP_EXIT=1 run 1 "up fails after alpha.8's backup" "$work/t/old" --yes
+FIXTURE_OLD_NO_BACKUP=1 run 0 "the second run after alpha.8's backup" "$work/t/old" --yes
+if [[ "$(grep -cE "$LEGACY_PG" "$calls")" == 1 ]]; then pass "alpha.8's backup ran once"; else fail "alpha.8's backup ran $(grep -cE "$LEGACY_PG" "$calls") times"; fi
+if grep -qx 'legacy-openbao=openbao/20261106T100200Z.snap.enc' "$work/t/new/.upgrade-rollback"; then pass "the resumed run's record keeps alpha.8's names"; else
+  fail "the resumed record: $(cat "$work/t/new/.upgrade-rollback")"
+fi
 
 # A failed backup stops before up; the old stack is untouched.
 setup controlplane "Schema: migrations 00105–00106"
@@ -309,7 +384,7 @@ if [[ ! -e "$work/t/old/.upgrade-rollback" && -f "$work/t/old/.upgrade-rollback.
 else fail "the old directory's rollback point stays: $(ls -a "$work/t/old")"; fi
 cp "$here/paddock" "$work/t/old/paddock"
 mkdir -p "$work/t/old/scripts"
-for f in lib.sh upgrade-check.sh upgrade.sh rollback.sh; do cp "$scripts/$f" "$work/t/old/scripts/$f"; done
+for f in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh; do cp "$scripts/$f" "$work/t/old/scripts/$f"; done
 for f in compose.yaml compose.prod.yaml compose.backup.yaml; do cp "$fixtures/new/$f" "$work/t/old/$f"; done
 echo "Schema: unchanged" >"$work/t/old/RELEASE-NOTES"
 : >"$calls"
@@ -377,7 +452,7 @@ run 2 "a state of another old directory" "$work/t/old" --yes
 
 # build.sh ships the scripts the commands source.
 "$here/build.sh" --version 0.1.0-alpha.7 --channel stable --images local --out "$work/b" >/dev/null 2>&1 || true
-for s in upgrade.sh rollback.sh; do
+for s in upgrade.sh rollback.sh legacy-alpha8.sh; do
   if [[ -f "$work/b/paddock-deploy-0.1.0-alpha.7/scripts/$s" ]]; then pass "bundle ships scripts/$s"; else fail "bundle lacks scripts/$s"; fi
 done
 

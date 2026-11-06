@@ -131,6 +131,10 @@ ug_backup_step() {
     echo "skipped: $UG_BACKUP"
     return 0
   fi
+  if la8_applies "$UG_OLD_VERSION"; then
+    la8_backup "$UG_OLD" "$UG_STATE"
+    return
+  fi
   ug_show "$UG_OLD/paddock" backup now --label "$UG_LABEL" --wait </dev/null
 }
 
@@ -169,8 +173,11 @@ ug_record_rollback_point() {
   if [[ -f "$UG_OLD/.upgrade-rollback" ]]; then
     mv -T "$UG_OLD/.upgrade-rollback" "$UG_OLD/.upgrade-rollback.superseded-by-$UG_NEW_VERSION" || return 1
   fi
-  printf 'old=%s\nfrom=%s\nto=%s\nbackup=%s\nlabel=%s\nat=%s\nattempt=%s\n' "$UG_OLD" "$UG_OLD_VERSION" \
-    "$UG_NEW_VERSION" "$backup" "$UG_LABEL" "$at" "$attempt" >"$UG_NEW/.upgrade-rollback.tmp" || return 1
+  {
+    printf 'old=%s\nfrom=%s\nto=%s\nbackup=%s\nlabel=%s\nat=%s\nattempt=%s\n' "$UG_OLD" "$UG_OLD_VERSION" \
+      "$UG_NEW_VERSION" "$backup" "$UG_LABEL" "$at" "$attempt"
+    if [[ "$backup" == yes ]] && la8_applies "$UG_OLD_VERSION"; then la8_record_fields "$UG_STATE"; fi
+  } >"$UG_NEW/.upgrade-rollback.tmp" || return 1
   mv -T "$UG_NEW/.upgrade-rollback.tmp" "$UG_NEW/.upgrade-rollback" || return 1
   printf 'attempt=%s\nup-started=%s\n' "$attempt" "$at" >>"$UG_STATE"
 }
@@ -239,7 +246,13 @@ ug_plan() {
       pull) what="./paddock pull" ;;
       check) what="./paddock check (every item PASS, else stop: the old stack still runs)" ;;
       backup)
-        if [[ "$UG_BACKUP" == yes ]]; then what="$UG_OLD/paddock backup now --label $UG_LABEL --wait"; else what="no backup: $UG_BACKUP"; fi
+        if [[ "$UG_BACKUP" != yes ]]; then
+          what="no backup: $UG_BACKUP"
+        elif la8_applies "$UG_OLD_VERSION"; then
+          what="$UG_OLD_VERSION's own backup through $UG_OLD/paddock compose: pgbackrest and pgbackrest-authentik backup --start-fast, paddock-worker backup openbao, fleet-backup once, each checked in the backup bucket"
+        else
+          what="$UG_OLD/paddock backup now --label $UG_LABEL --wait"
+        fi
         ;;
       audit-writer-stop)
         if [[ -n "$UG_STOP_AUDIT_WRITER" ]]; then what="$UG_OLD/paddock compose stop paddock-audit-writer (audit migrations)"; else continue; fi
@@ -259,6 +272,10 @@ ug_plan() {
     echo "  ./paddock rollback refuses after a schema change."
   else
     echo "Rollback afterwards: ./paddock rollback $UG_OLD"
+    if [[ "$UG_BACKUP" == yes ]] && la8_applies "$UG_OLD_VERSION"; then
+      echo "  It runs $UG_OLD_VERSION's restore procedure: the data comes back from the backup bucket as of this backup"
+      echo "  (plus the WAL archived until ./paddock up), and the restored OpenBao is unsealed by three custodians or the automatic unseal."
+    fi
   fi
 }
 
@@ -323,7 +340,7 @@ upgrade_main() {
     ! ug_fleet_changed "$UG_NEW" "$UG_OLD" ||
       ug_die "--skip-backup is refused on this host: FLEET_IMAGE changes, so a rollback restores Fleet's dump from the pre-upgrade backup" 2
     UG_BACKUP="--skip-backup (Schema: unchanged)"
-  elif ! ug_done backup && ! ug_has_backup_now "$UG_OLD"; then
+  elif ! la8_applies "$UG_OLD_VERSION" && ! ug_done backup && ! ug_has_backup_now "$UG_OLD"; then
     ug_die "the running release $UG_OLD_VERSION has no ./paddock backup now --label, so the labelled pre-upgrade backup cannot be taken; nothing was changed. Follow docs/operations/upgrade.md for this upgrade." 1
   fi
   UG_STOP_AUDIT_WRITER=""

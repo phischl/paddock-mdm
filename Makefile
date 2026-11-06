@@ -119,7 +119,7 @@ lint-shell:
 	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade-check.sh deploy/bundle/upgrade-check_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade.sh deploy/compose/scripts/rollback.sh deploy/bundle/upgrade_test.sh \
-		deploy/bundle/rollback_test.sh
+		deploy/bundle/rollback_test.sh deploy/compose/scripts/legacy-alpha8.sh
 
 # Changelog fragments (PDK-518): every change adds changelog.d/<ticket-id>.<section>.md instead of editing the
 # [Unreleased] section of CHANGELOG.md, so parallel pull requests do not conflict; the release manager assembles them

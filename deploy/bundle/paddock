@@ -116,6 +116,8 @@ case "$cmd" in
     . "$BUNDLE_DIR/scripts/upgrade-check.sh"
     # shellcheck source=../compose/scripts/upgrade.sh
     . "$BUNDLE_DIR/scripts/upgrade.sh"
+    # shellcheck source=../compose/scripts/legacy-alpha8.sh
+    . "$BUNDLE_DIR/scripts/legacy-alpha8.sh"
     upgrade_main "$BUNDLE_DIR" "$@"
     exit 0
     ;;
@@ -338,6 +340,10 @@ case "$cmd" in
   rollback)
     # shellcheck source=../compose/scripts/rollback.sh
     . "$BUNDLE_DIR/scripts/rollback.sh"
+    # shellcheck source=../compose/scripts/legacy-alpha8.sh
+    . "$BUNDLE_DIR/scripts/legacy-alpha8.sh"
+    # shellcheck source=../compose/scripts/openbao-restore.sh
+    . "$BUNDLE_DIR/scripts/openbao-restore.sh"
     rollback_main "$BUNDLE_DIR" "$@"
     ;;
   auto-unseal)
