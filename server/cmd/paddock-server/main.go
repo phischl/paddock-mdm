@@ -45,6 +45,9 @@ commands:
   admin agent-rollout-halt --version <x.y.z>
   admin agent-rollout-resume --version <x.y.z>
   admin upgrade-check --target-version <x.y.z> [--json]
+  admin backup-targets render [--local-root <dir>]   (for ./paddock backup-target apply; prints share passwords)
+  admin backup-targets revisions
+  admin backup-targets purge <id>...
   backup now [--kind postgres|authentik|openbao|fleet|escrow]... [--label <text>] [--wait]
   backup status
   backup plan <id>           (prints the restore plan as JSON; exit 1 unless it is approved and unexpired)
@@ -52,12 +55,15 @@ commands:
         --components a,b [--plan <id>] [--at <RFC 3339>] [--component <step> --detail <text>]
         [--escrow-skipped-destroyed <count>]
   backup decrypt <in> <out|->
+  backup mark-mount <id> <revision>...
+  backup resolve-local [--root <dir>] <path>...
   backup manifest <set dir> [--at <RFC 3339 time>]
   backup fetch-set --dir <set dir>|--target <name|id>|--target-file - [--path <prefix>] [--no-clobber] <dest dir>
   backup restore-repo --dir <set dir>|--target <name|id>|--target-file - | --check
   backup restore-escrow <set dir>
   backup target-export <name|id>   (prints the S3 target with its credentials; ./paddock backup-target export)
-  prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
+  prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online]
+        [--backup-revisions-file <list> --backup-revisions-db <list>] < config.json
   healthcheck
   version
 

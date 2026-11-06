@@ -143,6 +143,9 @@ func parseAdmin(args []string) (adminCommand, error) {
 // runAdmin runs a restore command with the worker's configuration (plan M6c decisions 20–22): in the Compose stack as
 // docker compose … run --rm --no-deps paddock-worker admin <command>. It prints one line on stdout.
 func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
+	if len(args) > 0 && args[0] == "backup-targets" {
+		return runBackupTargets(ctx, l, args[1:], os.Stdout)
+	}
 	cmd, err := parseAdmin(args)
 	if err != nil {
 		return err

@@ -10,10 +10,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
@@ -88,7 +90,16 @@ func TestPGStore(t *testing.T) {
 		targets[1].HostRevision != 2 || !targets[1].TestRequested || targets[1].Settings.Host != "nas.example" {
 		t.Errorf("targets %+v", targets)
 	}
-	if err := s.SetHostState(ctx, smb, HostMounted); err != nil {
+	// A round that read revision 1 must not mark the target mounted after an update raised it to 2 (PDK-731 review).
+	if err := s.SetHostState(ctx, smb, 1, HostMounted); err != nil {
+		t.Fatal(err)
+	}
+	var stale string
+	if err := super.QueryRow(ctx, `SELECT host_state FROM backup_target WHERE id = $1`, smb).Scan(&stale); err != nil ||
+		stale != HostPending {
+		t.Errorf("host state after a stale revision: %s %v", stale, err)
+	}
+	if err := s.SetHostState(ctx, smb, 2, HostMounted); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetTestResult(ctx, smb, ClassAuth); err != nil {
@@ -216,5 +227,82 @@ func TestPGStoreEscrowEvidence(t *testing.T) {
 	}
 	if _, ok := got[org.String()+"/"+failedDevice]; ok {
 		t.Error("a failed Destroy counts as evidence")
+	}
+}
+
+// TestHostTargetQueries covers the queries of ./paddock backup-target apply (plan M15 decision 20): the role
+// paddock_backup reads every volume target with its credentials, deleted ones flagged and S3 targets left out, and
+// the purge deletes a deleted target's row only while no open restore plan reads from it.
+func TestHostTargetQueries(t *testing.T) {
+	ctx := context.Background()
+	pg := pgtest.SharedPaddock(t)
+	pool, err := db.NewBackupPool(ctx, pg.Backup, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	platform, err := db.NewPlatformPool(ctx, pg.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, pg.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := super.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec("DELETE FROM backup_restore_plan")
+	exec("DELETE FROM backup_target_status")
+	exec("DELETE FROM backup_target")
+	live, gone, planned, s3 := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	exec(`INSERT INTO backup_target (id, name, type, settings, credentials_ciphertext, host_state, host_revision, created_by,
+		deleted_at) VALUES
+		($1, 'nas', 'smb', '{"host":"nas","share":"b"}', 'vault:v1:smb', 'mounted', 3, 'alice', NULL),
+		($2, 'old', 'nfs', '{"host":"h","export":"/e"}', NULL, 'mounted', 1, 'alice', now()),
+		($3, 'planned', 'local', '{"path":"p"}', NULL, 'mounted', 2, 'alice', now()),
+		($4, 'bucket', 's3', '{"endpoint":"https://s3.example","bucket":"b"}', 'vault:v1:s3', 'n/a', 1, 'alice', NULL)`,
+		live, gone, planned, s3)
+	exec(`INSERT INTO backup_restore_plan (id, kind, source_target_id, source, components, state, created_by, expires_at)
+		VALUES ($1, 'components', $2, 'target', '{postgres}', 'approved', 'alice', now() + interval '1 hour')`, uuid.New(), planned)
+
+	var rows []pgstore.BackupHostTargetsRow
+	if err := pool.InBackup(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		rows, err = q.BackupHostTargets(ctx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]pgstore.BackupHostTargetsRow{}
+	for _, r := range rows {
+		got[r.ID] = r
+	}
+	if len(rows) != 3 || got[live].Deleted || got[live].CredentialsCiphertext == nil || got[live].HostRevision != 3 ||
+		!got[gone].Deleted || !got[planned].Deleted {
+		t.Errorf("host targets %+v", rows)
+	}
+
+	purged := map[uuid.UUID]int64{}
+	if err := platform.InPlatform(principal.With(ctx, principal.Principal{Kind: principal.KindSystem}),
+		func(ctx context.Context, q *pgstore.Queries) error {
+			for _, id := range []uuid.UUID{live, gone, planned} {
+				n, err := q.PurgeDeletedBackupTarget(ctx, id)
+				if err != nil {
+					return err
+				}
+				purged[id] = n
+			}
+			return nil
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if purged[live] != 0 || purged[gone] != 1 || purged[planned] != 0 {
+		t.Errorf("purged %v: only the deleted target without an open plan may go", purged)
 	}
 }
