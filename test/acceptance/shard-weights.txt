@@ -145,3 +145,13 @@
 0 TestEveryTestRunsInExactlyOneShard
 0 TestVerifyMode
 0 TestParseWeightsRejectsMalformedLines
+# Estimate, not yet measured (PDK-737): the backup gates skip on a stack without BACKUP=1, as CI's stacks are; on
+# `make up BACKUP=1` B1 ~2 min, B2 ~2 min, B3 ~4 min, B4 ~5 min, B5 ~2 min. B6 is disruptive. B7 runs everywhere:
+# an administrator with a step-up, an API token and 2 × 22 refused calls.
+0 TestBackupKeyConfirmation
+0 TestBackupTargets
+0 TestBackupRuns
+0 TestBackupRotation
+0 TestRestorePlan
+0 TestBackupLegacyKey
+40 TestBackupIsolation
