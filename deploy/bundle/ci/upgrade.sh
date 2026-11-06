@@ -403,11 +403,15 @@ sudo cp -a "$set_dir" "$W/drill-set"
 sudo chown -R "$(id -u):$(id -g)" "$W/drill-set"
 cp_paddock down --volumes </dev/null
 cp_paddock secrets
-# The key and the confirmation on stdin, as an operator types them: never on a command line.
+# The key and the confirmation on stdin, as an operator types them: never on a command line. As root, as
+# docs/operations/restore.md says (sudo ./paddock restore): staging hands the set to the backup role's uid 999. sudo
+# resets the environment, so the job's PADDOCK_* settings and the CI overlay are passed on.
+restore_env=("PATH=$PATH" "PADDOCK_COMPOSE_EXTRA=$CP_OVERLAY" "WAIT_TIMEOUT=$WAIT_TIMEOUT")
+while IFS= read -r v; do restore_env+=("$v"); done < <(env | grep -E '^PADDOCK_[A-Z0-9_]*=' | grep -v '^PADDOCK_COMPOSE_EXTRA=')
 {
   cat "$W/seed/backup.key"
   echo restore
-} | cp_paddock restore --from "$W/drill-set" --at "$drill_at"
+} | (cd "$CP_DIR" && sudo -n env "${restore_env[@]}" ./paddock restore --from "$W/drill-set" --at "$drill_at")
 
 # --- 8 probes after the restore --------------------------------------------------------------------------------------
 step "8.1 probes after the restore: hosts"
