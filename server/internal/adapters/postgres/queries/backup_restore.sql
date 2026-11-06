@@ -92,3 +92,9 @@ WHERE id = @id;
 -- name: BackupRoleInsertFinishedRestorePlan :exec
 INSERT INTO backup_restore_plan (id, kind, source, at, components, state, created_by, finished_at, outcome_detail)
 VALUES (@id, @kind, @source, sqlc.narg(at), @components, @state, @created_by, now(), sqlc.narg(outcome_detail));
+
+-- A running plan whose host never reported its end (PDK-832): abandoned, so it no longer holds the one open place and
+-- the host's later report finds it finished.
+-- name: AbandonBackupRestorePlan :exec
+UPDATE backup_restore_plan SET state = 'abandoned', finished_at = now(), outcome_detail = @outcome_detail
+WHERE id = @id AND state = 'running';
