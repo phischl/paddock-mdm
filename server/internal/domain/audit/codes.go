@@ -149,6 +149,7 @@ const (
 	CodeRevocationIssueRefused          Code = "revocation.issue_refused"
 	CodeRevocationLimitExceeded         Code = "revocation.limit_exceeded"
 	CodeDeviceEscrowDestroyed           Code = "device.escrow_destroyed"
+	CodeDeviceEscrowRefusedDestroyed    Code = "device.escrow_refused_destroyed"
 	CodeDeviceRevocationConfirmed       Code = "device.revocation_confirmed"
 	CodeDeviceRevocationRefused         Code = "device.revocation_refused"
 	CodeSettingsDMSChanged              Code = "settings.dms_changed"
@@ -337,11 +338,14 @@ type Definition struct {
 var backupTargetParams = []string{"target_id", "name", "type", "enabled", "host_revision"}
 
 // restorePlanParams are the params of a restore plan's portal events, restoreStartParams those of the host's start and
-// restoreRunParams those of the host's final report (plan M15 §6.4).
+// restoreRunParams those of the host's final report (plan M15 §6.4); a completed run also counts the escrowed headers
+// it kept out because their device's escrow was destroyed (decisions-alpha9 item 44).
 var (
-	restorePlanParams  = []string{"plan_id", "kind", "source", "source_target_id", "at", "components"}
-	restoreStartParams = []string{"plan_id", "source", "source_target_id", "components"}
-	restoreRunParams   = []string{"plan_id", "source", "source_target_id", "at", "components", "duration_s", "detail"}
+	restorePlanParams      = []string{"plan_id", "kind", "source", "source_target_id", "at", "components"}
+	restoreStartParams     = []string{"plan_id", "source", "source_target_id", "components"}
+	restoreRunParams       = []string{"plan_id", "source", "source_target_id", "at", "components", "duration_s", "detail"}
+	restoreCompletedParams = []string{"plan_id", "source", "source_target_id", "at", "components", "duration_s", "detail",
+		"escrow_skipped_destroyed"}
 )
 
 // backupRunParams are the params of the run events of the backup role (plan M15 §6.4).
@@ -1130,6 +1134,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"action", "hostname", "request_id", "requested_by", "approved_by", "expires_at", "objects", "escrows"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeUnknown},
 		Note:        "failure leaves the request approved; the issuer retries it.",
+	},
+	CodeDeviceEscrowRefusedDestroyed: {
+		Code: CodeDeviceEscrowRefusedDestroyed, Emitted: true,
+		Description: "The worker refused a LUKS recovery key or header escrow of a device with an issued, unexpired Destroy: the crypto-shredding was decided, so the key is not escrowed again (actor: the device).",
+		Params:      []string{"kind", "generation", "volume"},
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "error_code invalid_state; recorded once per escrow ID. kind is luks_recovery_key or luks_header, volume the header's LUKS UUID (empty for the root volume of an older agent and for a recovery key). No key material is kept; the device sees the escrow as refused.",
 	},
 	CodeRevocationLimitExceeded: {
 		Code: CodeRevocationLimitExceeded, Emitted: true,
@@ -1935,9 +1946,9 @@ var registry = map[Code]Definition{
 	CodePlatformRestoreCompleted: {
 		Code: CodePlatformRestoreCompleted, Emitted: true,
 		Description: "The host finished a restore (paddock-server backup restore-report): a planned restore, a fresh installation from a backup set, or the repository alone (actor: the operator on the host).",
-		Params:      restoreRunParams,
+		Params:      restoreCompletedParams,
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "Actor is system with the operator's login name ($SUDO_USER or $USER) as display. plan_id is empty for a restore without a plan, which is recorded as a plan of kind fresh_install; source is set, repo or target. A plan the restored database no longer holds is recorded again under its ID. Failure with invalid_state when the plan is already finished or a platform administrator abandoned it (platform.restore_abandoned). Never the backup key. Platform pseudo-organization.",
+		Note:        "Actor is system with the operator's login name ($SUDO_USER or $USER) as display. plan_id is empty for a restore without a plan, which is recorded as a plan of kind fresh_install; source is set, repo or target. A plan the restored database no longer holds is recorded again under its ID. Failure with invalid_state when the plan is already finished or a platform administrator abandoned it (platform.restore_abandoned). escrow_skipped_destroyed, set when the escrow step ran, counts the escrowed headers not put back because the audit trail holds a successful device.escrow_destroyed of their device; a count only, never a device ID. Never the backup key. Platform pseudo-organization.",
 	},
 	CodePlatformRestoreFailed: {
 		Code: CodePlatformRestoreFailed, Emitted: true,

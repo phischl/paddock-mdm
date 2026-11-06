@@ -342,6 +342,9 @@ func (i *Issuer) issueDestroy(ctx context.Context, s subject) error {
 			if externalErr != nil {
 				return nil
 			}
+			if err := q.LockDeviceEscrowDestroy(ctx, s.dev.ID); err != nil {
+				return err
+			}
 			rows, err := q.DeleteDeviceLUKSEscrows(ctx, s.dev.ID)
 			if err != nil {
 				return err

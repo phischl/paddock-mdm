@@ -268,7 +268,10 @@ func backupRestoreRepo(ctx context.Context, l *config.Loader, args []string, in 
 
 // backupRestoreEscrow puts the escrowed LUKS headers of the set in dir back into the escrow bucket: listing with the
 // backup role's read-only credential, writing with the credential PADDOCK_ESCROW_RESTORE_S3_*_FILE (the gateway's,
-// the only one that may put headers), and skipping every copy a Destroy covers.
+// the only one that may put headers), and skipping every copy a Destroy covers. It runs in the one-off service
+// backup-restore-escrow (decisions-alpha9 items 44 and 45): the Destroy evidence comes from the audit index alone,
+// which the restore does not touch; the step holds no control-plane database credential. An unreadable audit index
+// fails the step.
 func backupRestoreEscrow(ctx context.Context, l *config.Loader, args []string, out io.Writer) error {
 	if len(args) != 1 {
 		return errUsage
@@ -279,11 +282,12 @@ func backupRestoreEscrow(ctx context.Context, l *config.Loader, args []string, o
 		l.SecretFile("PADDOCK_ESCROW_S3_SECRET_KEY_FILE"), bucket)
 	putter := objectstore.New(endpoint, l.SecretFile("PADDOCK_ESCROW_RESTORE_S3_ACCESS_KEY_FILE"),
 		l.SecretFile("PADDOCK_ESCROW_RESTORE_S3_SECRET_KEY_FILE"), bucket)
-	pool, err := backupPool(ctx, l)
+	auditDSN := l.SecretFile("PADDOCK_AUDIT_DB_READER_URL_FILE")
+	reader, err := db.NewAuditReader(ctx, auditDSN, db.Options{ApplicationName: "paddock-restore-escrow", MaxConns: 2})
 	if err != nil {
-		return err
+		return fmt.Errorf("open the audit index: %w", err)
 	}
-	defer pool.Close()
+	defer reader.Close()
 	root, err := os.OpenRoot(args[0])
 	if err != nil {
 		return err
@@ -293,17 +297,47 @@ func backupRestoreEscrow(ctx context.Context, l *config.Loader, args []string, o
 	if err != nil {
 		return err
 	}
-	destroyed, err := backuprole.NewPGStore(pool, nil, nil).EscrowEvidence(ctx)
+	orgs, err := backuprole.EscrowOrganizations(root)
 	if err != nil {
-		return fmt.Errorf("read the Destroy evidence: %w", err)
+		return err
 	}
-	res, err := backuprole.RestoreEscrow(ctx, root, info.Manifest, lister, putter, destroyed)
+	audited, err := backuprole.AuditEscrowEvidence(ctx, reader, orgs)
 	if err != nil {
+		return fmt.Errorf("read the Destroy evidence from the audit index: %w", err)
+	}
+	res, err := backuprole.RestoreEscrow(ctx, root, info.Manifest, lister, putter, audited)
+	if err != nil {
+		return err
+	}
+	if err := printEscrowSkips(out, res.Skipped); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(out, "escrow: %d headers put, %d already present, %d skipped (device escrow destroyed)\n",
 		res.Put, res.Present, res.Destroyed)
 	return err
+}
+
+// printEscrowSkips writes one line per device whose headers were kept out, naming each header, so that the operator
+// sees which Destroys the restore honoured (decisions-alpha9 item 44).
+func printEscrowSkips(out io.Writer, skips []backuprole.EscrowSkip) error {
+	byDevice := map[string][]backuprole.EscrowSkip{}
+	for _, s := range skips {
+		byDevice[s.Device] = append(byDevice[s.Device], s)
+	}
+	for _, dev := range slices.Sorted(maps.Keys(byDevice)) {
+		list := byDevice[dev]
+		org, device, _ := strings.Cut(dev, "/")
+		keys := make([]string, 0, len(list))
+		for _, s := range list {
+			keys = append(keys, s.Key)
+		}
+		slices.Sort(keys)
+		if _, err := fmt.Fprintf(out, "escrow: skipped device %s (organization %s, escrow destroyed %s): %s\n", device, org,
+			list[0].DestroyedAt.UTC().Format(time.RFC3339), strings.Join(keys, ", ")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // backupTargetExport prints the target file of one S3 target, with its decrypted credentials, as JSON.

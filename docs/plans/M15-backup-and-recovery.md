@@ -1162,3 +1162,40 @@ deny list of system and deployment directories (PDK-729 review): there is no abs
   `platform.restore_completed` / `platform.restore_failed` event carries no `duration_s` (§6.4 lists it for planned
   runs only). `backup restore-report` has no `--duration-s` flag; the duration is computed from the plan's
   `started_at`.
+
+## Note 2026-11-06 — §6.7: the SMB login in the volume's options (PDK-733, `decisions-alpha9.md` item 35)
+
+`credentials=` is a mount.cifs option the kernel ignores, and Docker's local driver mounts with `mount(2)`; ADR 0046
+amendment 2026-11-06 records it. §6.7 changes accordingly: no `.secrets/backup-targets/<id>.cifs` file; an SMB
+volume's `o` is `uid=999,gid=999,file_mode=0640,dir_mode=0750,<options, vers=3 by default>,username=…[,domain=…],password=…`
+(password last). A comma or whitespace in the password is refused when the target is saved and again at render (PDK-733 review 3: Compose folds the `o` line at a space, past any line-based redaction): Docker splits `o` on every comma and takes a segment
+that names a mount flag (`bind`, `ro`, `remount`, …) as a flag of the mount, so doubled commas do not protect it. The
+volume name is `backup-target-<id>-r<revision>-<fingerprint>`, the fingerprint being the first 12 hex digits of the
+SHA-256 of type, device and options without the password, because Docker never changes an existing volume's options
+and a non-interactive Compose run keeps a volume whose options changed: another `PADDOCK_BACKUP_LOCAL_ROOT` or a
+release's new default options change the name without a new revision (a new password always raises the revision).
+`apply` removes every other volume of the targets once `paddock-backup` no longer uses them, then the deleted targets' rows. Every value is YAML-quoted with `$`
+doubled. The header records `# revisions:` (for the online check item of decision 22) and every local device
+(`# local: <base64>`), which `./paddock up` resolves again below `PADDOCK_BACKUP_LOCAL_ROOT` before each start.
+
+### Note 2026-11-06 b — the escrow step reads the Destroy evidence from the audit index (PDK-831; decisions-alpha9 items 39, 44 and 45)
+
+- **Evidence source.** A restore never puts back an escrowed LUKS header whose device has a successful
+  `device.escrow_destroyed` not older than the copy. `backup restore-escrow` reads that evidence from the audit index
+  (`paddock_audit_reader`, once per organization of the set's escrow keys, `max(occurred_at)` per device), because the
+  audit domain survives the restore and a point-in-time restore to before the Destroy leaves the restored database
+  without it. The audit index is the only source: item 44 allowed the restored database as an extra skip-only source,
+  item 45 dropped it together with its database credential (least privilege on a container that holds the gateway's
+  put credential). An unreadable audit index, or an escrow key whose organization or device segment is not a
+  canonical UUID (the evidence is matched on that exact string), fails the step and puts nothing back.
+- **Trust path (replaces the escrow-credential bullet of the note 2026-11-06 above).** The step runs in the one-off
+  service `backup-restore-escrow` of `compose.backup.yaml` (profile `restore`, never started by `up`; the backup image
+  and hardening, uid 999, read-only root, `backup-repo` read-only), on networks `cp` and `audit-index`, with the escrow
+  lister (`rustfs_escrow_backup_*`), the gateway putter (`rustfs_bundles_gateway_*`), `db_paddock_audit_reader_url`
+  and the public `internal_ca_bundle` for the reader's `verify-full` DSN, and with no control-plane database
+  credential (item 45). `restore.sh` no longer mounts the gateway credential into a `paddock-backup` container. The
+  long-running `paddock-backup` never holds the audit credential or joins `audit-index`, and the step never holds a
+  database credential other than the audit reader's; `./paddock check` fails if either happens.
+- **Report.** The terminal lists every skipped header, one line per device ID. `platform.restore_completed` gains the
+  additive param `escrow_skipped_destroyed` (a count, no device IDs), set only for a completed run that included the
+  escrow step (`backup restore-report --escrow-skipped-destroyed <n>`).

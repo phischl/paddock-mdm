@@ -7140,7 +7140,7 @@ export interface components {
             /** @description Relative path below the share; optional. */
             path?: string;
             username: string;
-            /** @description Required on creation and when host, share, domain, username or options change; otherwise absent on an update keeps the stored one. Stored encrypted, never returned. */
+            /** @description No comma and no whitespace (they cannot be passed to the share's mount). Required on creation and when host, share, domain, username or options change; otherwise absent on an update keeps the stored one. Stored encrypted, never returned. */
             password?: string;
             domain?: string;
             /** @description Comma-separated: vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N. */

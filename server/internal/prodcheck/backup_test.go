@@ -41,6 +41,11 @@ func backupHost() prodcheck.Config {
 		"paddock-api": {Environment: map[string]*string{"PADDOCK_BACKUP_LEGACY_KEY_FILE": ptr("/run/secrets/backup_encryption_key")},
 			Secrets: secrets("backup_encryption_key")},
 		"paddock-worker": {Environment: map[string]*string{}, Secrets: secrets("db_paddock_worker_url")},
+		"backup-restore-escrow": {Environment: map[string]*string{}, Volumes: []prodcheck.Volume{repo},
+			Networks: map[string]prodcheck.ServiceNetwork{"cp": {}, "audit-index": {}},
+			Secrets: secrets("db_paddock_audit_reader_url", "rustfs_escrow_backup_access_key",
+				"rustfs_escrow_backup_secret_key", "rustfs_bundles_gateway_access_key", "rustfs_bundles_gateway_secret_key",
+				"internal_ca_bundle")},
 	}}
 }
 
@@ -82,7 +87,8 @@ func TestBackupRoleChecks(t *testing.T) {
 }
 
 // TestBackupSecretsConfined: the worker holds no backup secret or variable, the AppRole paddock-backup reaches only
-// the backup role and the legacy key file only the api (plan M15 decisions 5, 9, 18).
+// the backup role and the legacy key file only the api (plan M15 decisions 5, 9, 18); the escrow credential reaches
+// the restore's escrow step too, the audit index only that step, never the backup role (decisions-alpha9 item 44).
 func TestBackupSecretsConfined(t *testing.T) {
 	const item = "backup: no S3 credentials or encryption key on the worker"
 	if status, detail := backupCheck(t, backupHost(), item); status != "PASS" {
@@ -112,6 +118,30 @@ func TestBackupSecretsConfined(t *testing.T) {
 			w.Secrets = append(w.Secrets, secrets("rustfs_escrow_backup_secret_key")...)
 			c.Services["paddock-worker"] = w
 			return "paddock-worker: holds the backup secret rustfs_escrow_backup_secret_key"
+		},
+		"backup role with the audit reader credential": func(c prodcheck.Config) string {
+			b := c.Services["paddock-backup"]
+			b.Secrets = append(b.Secrets, secrets("db_paddock_audit_reader_url")...)
+			c.Services["paddock-backup"] = b
+			return "paddock-backup: holds the audit reader credential db_paddock_audit_reader_url"
+		},
+		"backup role on the audit index network": func(c prodcheck.Config) string {
+			b := c.Services["paddock-backup"]
+			b.Networks = map[string]prodcheck.ServiceNetwork{"cp": {}, "audit-index": {}}
+			c.Services["paddock-backup"] = b
+			return "paddock-backup: joins the network audit-index"
+		},
+		"escrow restore step with the AppRole": func(c prodcheck.Config) string {
+			r := c.Services["backup-restore-escrow"]
+			r.Secrets = append(r.Secrets, secrets("approle_backup_secret_id")...)
+			c.Services["backup-restore-escrow"] = r
+			return "backup-restore-escrow: holds the backup secret approle_backup_secret_id"
+		},
+		"escrow restore step with a control-plane database credential": func(c prodcheck.Config) string {
+			r := c.Services["backup-restore-escrow"]
+			r.Secrets = append(r.Secrets, secrets("db_paddock_backup_url")...)
+			c.Services["backup-restore-escrow"] = r
+			return "backup-restore-escrow: holds the database credential db_paddock_backup_url"
 		},
 		"legacy key file outside the api": func(c prodcheck.Config) string {
 			b := c.Services["paddock-backup"]
@@ -178,5 +208,34 @@ func TestBackupLocalRootCheck(t *testing.T) {
 	c.Prod.BackupLocalRoot = good
 	if status, detail := backupCheckAs(t, c, item, uint32(os.Getuid())+1); status != "FAIL" {
 		t.Errorf("a root of another owner: %s %q, want FAIL", status, detail)
+	}
+}
+
+// TestBackupTargetRevisionsCheck covers plan M15 decision 22: online, the rendered targets file is compared with the
+// database; a difference or an unreadable database warns and never fails, offline the item is absent.
+func TestBackupTargetRevisionsCheck(t *testing.T) {
+	const item = "backup: targets file matches the database revision"
+	for name, tc := range map[string]struct {
+		rev          prodcheck.BackupRevisions
+		want, detail string
+	}{
+		"equal":               {prodcheck.BackupRevisions{File: "a=2 b=1", Database: "a=2 b=1"}, "PASS", ""},
+		"no targets":          {prodcheck.BackupRevisions{File: "none", Database: "none"}, "PASS", ""},
+		"newer in database":   {prodcheck.BackupRevisions{File: "a=1", Database: "a=2"}, "WARN", "run ./paddock backup-target apply, then ./paddock up"},
+		"file missing":        {prodcheck.BackupRevisions{File: "none", Database: "a=1"}, "WARN", "the database a=1"},
+		"database unreadable": {prodcheck.BackupRevisions{File: "a=1"}, "WARN", "could not read"},
+	} {
+		var out bytes.Buffer
+		prodcheck.Write(&out, prodcheck.Run(context.Background(), backupHost(),
+			prodcheck.Options{LocalRootUID: uint32(os.Getuid()), BackupRevisions: &tc.rev}))
+		status, detail := itemBlock(t, out.String(), item)
+		if status != tc.want || !strings.Contains(detail, tc.detail) {
+			t.Errorf("%s: %s %q", name, status, detail)
+		}
+	}
+	var out bytes.Buffer
+	prodcheck.Write(&out, prodcheck.Run(context.Background(), backupHost(), prodcheck.Options{LocalRootUID: uint32(os.Getuid())}))
+	if strings.Contains(out.String(), item) {
+		t.Errorf("offline the item must be absent:\n%s", out.String())
 	}
 }

@@ -6,7 +6,8 @@
 # waits without the key file, refuses a repository that holds the stanza for another cluster until its
 # `stanza-upgrade` runs, verifies the whole stanza after a full backup and writes verify-ok (the new backup alone when
 # the whole verify does not finish in time, then verify-ok stays), starts a new stanza with a full backup at once
-# when schedule.env names a new key's path, and `restore` passes --at and --repo-path to pgBackRest. Throwaway PostgreSQL and encrypted posix repositories in
+# when schedule.env names a new key's path, `restore` passes --at and --repo-path to pgBackRest, and `verify` writes
+# verify-ok only when the whole stanza verifies, after a running backup's lock and never older than the one there. Throwaway PostgreSQL and encrypted posix repositories in
 # volumes.
 set -euo pipefail
 
@@ -17,7 +18,7 @@ id="paddock-pgbackrest-test-$$"
 failures=0
 cleanup() {
   kill "${pusher_pid:-}" 2>/dev/null || true
-  docker rm -f "$id-pg" "$id-pg2" "$id-serve" >/dev/null 2>&1 || true
+  docker rm -f "$id-pg" "$id-pg2" "$id-serve" "$id-lock" >/dev/null 2>&1 || true
   docker volume rm "$id-data" "$id-sock" "$id-repo" "$id-state" "$id-data2" "$id-sock2" "$id-spool2" "$id-state2" \
     "$id-bin" "$id-brepo" "$id-runtime" "$id-empty" >/dev/null 2>&1 || true
 }
@@ -214,6 +215,46 @@ check "restore --repo-path reads the named key's repository" \
 rc=0
 docker run --rm "${restore_args[@]}" restore --repo-path ../../etc >/dev/null 2>&1 || rc=$?
 check "restore refuses a repository path outside the set (exit $rc)" "$([[ $rc == 3 ]] && echo 0 || echo 1)"
+# The operator's verify (decisions-alpha9 item 33): a verify that reports a problem leaves verify-ok absent, the
+# whole-stanza verify without a time limit writes it.
+docker run --rm -u 0 --entrypoint rm -v "$id-state2:/state" "$image" -f /state/verify-ok
+rc=0
+out="$(docker run --rm "${restore_args[@]}" verify 2>&1)" || rc=$?
+check "a verify that does not report ok fails (exit $rc)" \
+  "$([[ $rc == 1 ]] && grep -q 'WAL stays on the backup targets' <<<"$out" && echo 0 || echo 1)"
+check "a failed verify leaves verify-ok absent" "$([[ "$(verify_ok)" == none ]] && echo 0 || echo 1)"
+before="$(date +%s)"
+rc=0
+out="$(docker run --rm "${run_sh_args[@]}" verify 2>&1)" || rc=$?
+check "verify checks the whole stanza without a time limit (exit $rc)" \
+  "$([[ $rc == 0 ]] && grep -q 'pgbackrest: stanza test verified' <<<"$out" && echo 0 || echo 1)"
+ok_at="$(verify_ok)"
+check "a successful verify writes verify-ok with its start time ($ok_at)" \
+  "$([[ $ok_at =~ ^[0-9]+$ ]] && ((ok_at >= before)) && echo 0 || echo 1)"
+# A full that runs beside the verify would be newer than verify-ok without being covered (PDK-733 review 1): the verify
+# waits for a running backup's lock and starts after it.
+docker run -d --name "$id-lock" --entrypoint flock -v "$id-state2:/var/lib/pgbackrest" "$image" \
+  /var/lib/pgbackrest/lock/test-backup-1.lock sleep 6 >/dev/null
+sleep 2
+rc=0
+out="$(docker run --rm "${run_sh_args[@]}" verify 2>&1)" || rc=$?
+released="$(docker inspect -f '{{.State.FinishedAt}}' "$id-lock")"
+docker rm -f "$id-lock" >/dev/null
+lock_ok="$(verify_ok)"
+check "verify waits for a running backup's lock (exit $rc)" \
+  "$([[ $rc == 0 ]] && grep -q 'waiting for the running backup of test' <<<"$out" && echo 0 || echo 1)"
+check "verify-ok is the start after the lock ($lock_ok, lock released $released)" \
+  "$([[ $lock_ok =~ ^[0-9]+$ ]] && ((lock_ok >= $(date -d "$released" +%s))) && echo 0 || echo 1)"
+# serve's own verify may record a later time than the operator's start: it is never replaced by an older one.
+docker run --rm -u 0 --entrypoint sh -v "$id-state2:/state" "$image" -c 'echo 4102444800 >/state/verify-ok'
+rc=0
+docker run --rm "${run_sh_args[@]}" verify >/dev/null 2>&1 || rc=$?
+check "verify keeps a newer verify-ok (exit $rc)" "$([[ $rc == 0 && "$(verify_ok)" == 4102444800 ]] && echo 0 || echo 1)"
+rc=0
+docker run --rm -v "$id-data2:/var/lib/postgresql" -v "$id-sock2:/var/run/postgresql" -v "$id-brepo:/backup-repo" \
+  -v "$id-state2:/var/lib/pgbackrest" -v "$id-empty:/run/paddock-backup:ro" -e PADDOCK_BACKUP_STANZA=test "$image" \
+  verify >/dev/null 2>&1 || rc=$?
+check "verify without the key file fails (exit $rc)" "$([[ $rc == 3 ]] && echo 0 || echo 1)"
 rc=0
 docker run --rm -v "$id-data2:/var/lib/postgresql" -v "$id-sock2:/var/run/postgresql" -v "$id-brepo:/backup-repo" \
   -v "$id-state2:/var/lib/pgbackrest" -v "$id-empty:/run/paddock-backup:ro" -e PADDOCK_BACKUP_STANZA=test "$image" \

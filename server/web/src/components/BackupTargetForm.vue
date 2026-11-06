@@ -129,7 +129,7 @@ function submit(): void {
         v-model="form.smb.password"
         :label="t('backup.targets.password')"
         :placeholder="editing && !need.password ? t('backup.targets.unchanged') : ''"
-        :hint="need.password && editing ? t('backup.targets.passwordAgain') : t('backup.targets.secretHint')"
+        :hint="need.password && editing ? t('backup.targets.passwordAgain') : t('backup.targets.smbPasswordHint')"
         persistent-hint
         type="password"
         autocomplete="new-password"

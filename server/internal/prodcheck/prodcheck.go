@@ -133,6 +133,8 @@ type Options struct {
 	ObjectLock ObjectLockReader
 	// LocalRootUID is the owner the local backup root must have; the zero value is root. Tests set the current user.
 	LocalRootUID uint32
+	// BackupRevisions compares the rendered compose.backup-targets.yaml with the database online; nil means not checked.
+	BackupRevisions *BackupRevisions
 }
 
 // Result is one line of the checklist.
@@ -196,6 +198,9 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	_, pgbackrest := c.Services["pgbackrest"]
 	if backupRole || pgbackrest {
 		results = append(results, checkBackupRole(c), checkBackupRepoVolume(c), checkBackupLocalRoot(c, o.LocalRootUID))
+		if o.BackupRevisions != nil {
+			results = append(results, checkBackupTargetRevisions(*o.BackupRevisions))
+		}
 	}
 	if len(c.Services) > 0 {
 		results = append(results, checkBackupSecretsConfined(c))
@@ -1115,6 +1120,10 @@ func checkLegacyBackupKey(c Config) Result {
 // backupService is the backup role (plan M15 decision 15).
 const backupService = "paddock-backup"
 
+// restoreEscrowService is the one-off escrow step of ./paddock restore (decisions-alpha9 item 44): it lists with the
+// backup role's escrow credential and alone reads the audit index among the backup services.
+const restoreEscrowService = "backup-restore-escrow"
+
 // backupRoleSecrets are the secrets of the backup role (plan M15 decisions 15 and 18).
 var backupRoleSecrets = []string{"db_paddock_backup_url", "db_paddock_platform_url", "approle_backup_role_id",
 	"approle_backup_secret_id", "rustfs_escrow_backup_access_key", "rustfs_escrow_backup_secret_key"}
@@ -1204,17 +1213,34 @@ func ownedBy(fi fs.FileInfo, uid uint32) bool {
 }
 
 // checkBackupSecretsConfined fails when a backup secret reaches another role than the one that needs it (plan M15
-// decisions 5, 9 and 18): the AppRole paddock-backup (it decrypts the backup key) and the escrow bucket's read-only
-// backup credential only the backup role, the host key file of the legacy import only the api, and no role any backup
-// variable of the worker's former backup job.
+// decisions 5, 9 and 18): the AppRole paddock-backup (it decrypts the backup key) only the backup role, the escrow
+// bucket's read-only backup credential only the backup role and the restore's escrow step, the host key file of the
+// legacy import only the api, and no role any backup variable of the worker's former backup job. The long-running
+// backup role never reaches the audit index (decisions-alpha9 item 44), and the restore's escrow step, which holds the
+// gateway's put credential, no database credential but the audit reader's (decisions-alpha9 item 45).
 func checkBackupSecretsConfined(c Config) Result {
 	var f []string
+	if b, ok := c.Services[backupService]; ok {
+		if mountsSecret(b, "db_paddock_audit_reader_url") {
+			f = append(f, backupService+": holds the audit reader credential db_paddock_audit_reader_url")
+		}
+		if _, ok := b.Networks["audit-index"]; ok {
+			f = append(f, backupService+": joins the network audit-index")
+		}
+	}
+	if r, ok := c.Services[restoreEscrowService]; ok {
+		for _, m := range r.Secrets {
+			if strings.HasPrefix(m.Source, "db_") && m.Source != "db_paddock_audit_reader_url" {
+				f = append(f, restoreEscrowService+": holds the database credential "+m.Source)
+			}
+		}
+	}
 	for _, name := range sortedServices(c) {
 		s := c.Services[name]
 		for _, m := range s.Secrets {
 			switch {
 			case strings.HasPrefix(m.Source, "approle_backup_") && name != backupService,
-				strings.HasPrefix(m.Source, "rustfs_escrow_backup_") && name != backupService,
+				strings.HasPrefix(m.Source, "rustfs_escrow_backup_") && name != backupService && name != restoreEscrowService,
 				m.Source == "backup_encryption_key" && name != "paddock-api",
 				strings.HasPrefix(m.Source, "backup_") && m.Source != "backup_encryption_key":
 				f = append(f, name+": holds the backup secret "+m.Source)
@@ -1384,6 +1410,29 @@ func checkObjectLock(ctx context.Context, o Options) Result {
 		return Result{Item: item, Detail: fmt.Sprintf("default retention mode is %q, not COMPLIANCE", mode)}
 	case days < MinObjectLockDays:
 		return Result{Item: item, Detail: fmt.Sprintf("default retention is %d days, less than %d", days, MinObjectLockDays)}
+	}
+	return Result{Item: item, OK: true}
+}
+
+// BackupRevisions are the two revision lists of the volume backup targets (backuprole.Revisions): File from the header
+// of the rendered compose.backup-targets.yaml ("none" without the file), Database from a one-off
+// `admin backup-targets revisions` ("" when it failed).
+type BackupRevisions struct {
+	File     string
+	Database string
+}
+
+// checkBackupTargetRevisions warns when the host has not applied what a platform administrator saved (plan M15
+// decision 22): a target stays pending_host until ./paddock backup-target apply and ./paddock up ran. A warning, not a
+// failure: the stack runs, only that target receives no copy.
+func checkBackupTargetRevisions(r BackupRevisions) Result {
+	const item = "backup: targets file matches the database revision"
+	switch {
+	case r.Database == "":
+		return Result{Item: item, OK: true, Warn: true, Detail: "could not read the backup targets from the database"}
+	case r.File != r.Database:
+		return Result{Item: item, OK: true, Warn: true, Detail: "compose.backup-targets.yaml has revisions " + r.File +
+			", the database " + r.Database + ": run ./paddock backup-target apply, then ./paddock up"}
 	}
 	return Result{Item: item, OK: true}
 }

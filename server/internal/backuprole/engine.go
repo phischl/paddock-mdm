@@ -1102,7 +1102,7 @@ func (e *Engine) hostStates(ctx context.Context, targets []TargetRecord) error {
 		if state == t.HostState {
 			continue
 		}
-		if err := e.store.SetHostState(ctx, t.ID, state); err != nil {
+		if err := e.store.SetHostState(ctx, t.ID, t.HostRevision, state); err != nil {
 			errs = append(errs, err)
 			continue
 		}

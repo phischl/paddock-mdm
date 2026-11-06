@@ -202,6 +202,7 @@ export function validateTarget(input: TargetInput, original: TargetInput | null)
       if (input.smb.share.trim() === '') errors.smbShare = 'backup.targets.required'
       if (input.smb.username.trim() === '') errors.smbUsername = 'backup.targets.required'
       if (need.password && input.smb.password === '') errors.smbPassword = original === null ? 'backup.targets.required' : 'backup.targets.passwordAgain'
+      else if (/[\s,]/.test(input.smb.password)) errors.smbPassword = 'backup.targets.passwordChars'
       break
     case 'nfs':
       if (input.nfs.host.trim() === '') errors.nfsHost = 'backup.targets.required'

@@ -366,6 +366,38 @@ func TestRestoreReports(t *testing.T) {
 	}
 }
 
+// TestRestoreReportEscrowSkipCount (decisions-alpha9 item 44): a completed run with the escrow step records how many
+// escrowed headers it kept out, a count only; the count belongs to no other outcome and to no run without the step.
+func TestRestoreReportEscrowSkipCount(t *testing.T) {
+	w := newRestoreWorld(t)
+	host := context.Background()
+	two := 2
+	report := func(outcome string, components ...string) app.RestoreReport {
+		return app.RestoreReport{Outcome: outcome, Operator: "alice", Source: "set", Components: components,
+			EscrowSkippedDestroyed: &two}
+	}
+	if _, err := w.reports.Report(host, report("completed", "postgres", "escrow")); err != nil {
+		t.Fatalf("completed: %v", err)
+	}
+	failed := report("failed", "escrow")
+	failed.Component, failed.Detail = "paddock", "the step paddock failed"
+	for name, in := range map[string]app.RestoreReport{"failed": failed, "without the escrow step": report("completed", "postgres")} {
+		if _, err := w.reports.Report(host, in); !isProblem(err, "invalid_request") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	negative := report("completed", "escrow")
+	negative.EscrowSkippedDestroyed = new(-1)
+	if _, err := w.reports.Report(host, negative); !isProblem(err, "invalid_request") {
+		t.Errorf("negative count: %v", err)
+	}
+	evs, params := w.restoreEvents(t)
+	if len(evs) != 1 || evs[0] != "platform.restore_completed:success:" ||
+		!strings.Contains(params[0], `"escrow_skipped_destroyed": 2`) {
+		t.Fatalf("events %v, params %v", evs, params)
+	}
+}
+
 // TestRestorePlanAbandon (PDK-832): a running plan whose host never reported its end blocks every new plan until a
 // platform administrator abandons it with a step-up and the typed word; the host's later reports are refused and
 // audited.

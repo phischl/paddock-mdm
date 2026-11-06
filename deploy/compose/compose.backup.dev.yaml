@@ -33,6 +33,16 @@ services:
       - backup-local-dev:/backup-targets
     networks: [cp, audit-store]
 
+  backup-restore-escrow:
+    environment:
+      PADDOCK_ENV: development
+    secrets: !override
+      - db_paddock_audit_reader_url
+      - rustfs_escrow_backup_access_key
+      - rustfs_escrow_backup_secret_key
+      - rustfs_bundles_gateway_access_key
+      - rustfs_bundles_gateway_secret_key
+
   # The legacy key import has its own gate (plan M15 §9 B6); the development stack starts without a key.
   paddock-api:
     environment:

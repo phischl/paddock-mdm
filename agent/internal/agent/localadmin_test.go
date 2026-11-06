@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -135,5 +137,26 @@ func TestLocalAdminWaitsForEnforcement(t *testing.T) {
 	a.tickLocalAdmin(ctx)
 	if len(sys.TakeCalls()) == 0 || len(g.Escrows) != 1 {
 		t.Fatalf("enforced: escrows %d", len(g.Escrows))
+	}
+}
+
+// TestEscrowClientHeaderRefused (PDK-794): the server answers a header escrow it refuses for an issued Destroy without
+// an upload URL. The agent uploads nothing, reports no error, and reads the refusal from the escrow status.
+func TestEscrowClientHeaderRefused(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	g.EscrowAnswer = escrow.StatusRefused
+	ctx := context.Background()
+	c := escrowClient{a}
+	req := escrow.Request{EscrowID: "0190f000-0000-7000-8000-0000000000e1", Kind: escrow.KindLUKSHeader, Generation: 2,
+		KeyVersion: 1, WrappedDEK: "AQ==", Nonce: "AAAAAAAAAAAAAAAA", SHA256: strings.Repeat("ab", 32), Size: 6}
+	if err := c.UploadHeader(ctx, req, []byte("sealed")); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Escrows) != 1 || len(g.Uploads) != 0 {
+		t.Fatalf("escrows %d, uploads %d", len(g.Escrows), len(g.Uploads))
+	}
+	if status, err := c.Status(ctx, req.EscrowID); err != nil || status != escrow.StatusRefused {
+		t.Fatalf("status %q: %v", status, err)
 	}
 }
