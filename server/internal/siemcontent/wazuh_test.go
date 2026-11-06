@@ -576,6 +576,7 @@ func TestRuleLevels(t *testing.T) {
 		{audit.CodeRevocationIssued, audit.OutcomeSuccess, 100911, 12, "paddock_privilege"},
 		{audit.CodeDeviceRevocationTrustPinnedTOFU, audit.OutcomeSuccess, 100911, 12, "paddock_privilege"},
 		{audit.CodeAuditChainVerificationFailed, audit.OutcomeSuccess, 100914, 12, "paddock_integrity"},
+		{audit.CodeDeviceEscrowRefusedDestroyed, audit.OutcomeFailure, 100915, 10, "paddock_integrity"},
 		{audit.CodeDiskRecoveryKeyRevealed, audit.OutcomeSuccess, 100912, 10, "paddock_privilege"},
 		{audit.CodeLocalAdminRevealed, audit.OutcomeSuccess, 100912, 10, "paddock_privilege"},
 		{audit.CodePermissionProfileRootGrantConfirmed, audit.OutcomeSuccess, 100913, 10, "paddock_privilege"},

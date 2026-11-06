@@ -85,7 +85,7 @@
 
   <rule id="100915" level="10">
     <if_sid>100900,100901</if_sid>
-    <field name="event.code" type="pcre2">^device\.(?:clone_suspected|event_gap|event_seq_reset|header_object_rejected|header_escrow_refused)$</field>
+    <field name="event.code" type="pcre2">^device\.(?:clone_suspected|event_gap|event_seq_reset|header_object_rejected|header_escrow_refused|escrow_refused_destroyed)$</field>
     <description>Paddock: device integrity event $(event.code)</description>
   </rule>
 </group>

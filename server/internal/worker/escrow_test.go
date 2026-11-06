@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -269,6 +270,317 @@ func TestEscrowLUKS(t *testing.T) {
 	if id := send(known); status(id) != escrow.StatusPending {
 		t.Fatalf("a known volume beyond 32: %s", status(id))
 	}
+}
+
+// TestEscrowRefusedAfterDestroy (PDK-794): while the device holds an issued, unexpired Destroy, a recovery key or a
+// header is refused and audited once per escrow ID without keeping key material, also when only the gateway saw the
+// Destroy; an administrator password is stored. After the Destroy expired or was confirmed, uploads are accepted
+// again, and neither another device's Destroy nor another organization's refusal changes anything.
+func TestEscrowRefusedAfterDestroy(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	device, bystander := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, d := range []uuid.UUID{device, bystander} {
+		if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, $3, 'active')",
+			d, f.org, "lt-"+d.String()[24:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	destroy := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, `INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_by,
+		requested_at, approved_at, issued_at, expires_at) VALUES ($1, $2, $3, 'destroy', 'delivered', $4, $5, $5, $5, $6)`,
+		destroy, f.org, device, uuid.New(), now.Add(-time.Hour), now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	e := NewEscrow(app.NewEscrow(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool, &fakeObjects{objects: map[string][]byte{}}),
+		f.cache, f.pool, nil)
+	process := func(m ingest.Escrow) string {
+		t.Helper()
+		body, _ := json.Marshal(m)
+		if o := e.process(ctx, m.EscrowID.String(), body); o != ack {
+			t.Fatalf("process %s: %v", m.Kind, o)
+		}
+		_, status, ok, err := f.cache.EscrowStatus(ctx, m.EscrowID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			return escrow.StatusPending
+		}
+		return status
+	}
+	recovery := func(d uuid.UUID, g int64, at time.Time) ingest.Escrow {
+		return ingest.Escrow{DeviceID: d, OrganizationID: f.org, EscrowID: uuid.Must(uuid.NewV7()), Kind: escrow.KindLUKSRecoveryKey,
+			Generation: g, KeyVersion: 1, Ciphertext: []byte{9}, ReceivedAt: at}
+	}
+	sum := sha256.Sum256([]byte("sealed"))
+	header := func(g int64, at time.Time) ingest.Escrow {
+		return ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: uuid.Must(uuid.NewV7()), Kind: escrow.KindLUKSHeader,
+			Generation: g, KeyVersion: 1, ObjectKey: escrow.HeaderObjectKey(f.org.String(), device.String(), "", g), WrappedDEK: []byte{1},
+			Nonce: make([]byte, 12), SHA256: hex.EncodeToString(sum[:]), Size: 6, ReceivedAt: at}
+	}
+	audits := func() (n int, params string) {
+		t.Helper()
+		if err := f.super.QueryRow(ctx, `SELECT count(*), coalesce(string_agg(outcome || ' ' || coalesce(error_code, '') || ' ' ||
+			(params ->> 'kind') || ' ' || (params ->> 'generation') || ' [' || (params ->> 'volume') || '] ' || (actor ->> 'type'), ',' ORDER BY (params ->> 'generation')), '')
+			FROM action WHERE organization_id = $1 AND code = 'device.escrow_refused_destroyed'`, f.org).Scan(&n, &params); err != nil {
+			t.Fatal(err)
+		}
+		return n, params
+	}
+	secrets := func(d uuid.UUID) (n int) {
+		t.Helper()
+		if err := f.super.QueryRow(ctx, "SELECT count(*) FROM escrow_secret WHERE device_id = $1", d).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	refused := recovery(device, 1, now)
+	if status := process(refused); status != escrow.StatusRefused {
+		t.Fatalf("recovery key under a Destroy: %s", status)
+	}
+	if status := process(refused); status != escrow.StatusRefused {
+		t.Fatalf("redelivered refusal: %s", status)
+	}
+	flagged := header(2, now.Add(2*time.Hour))
+	flagged.DestroyIssued, flagged.ObjectKey, flagged.WrappedDEK, flagged.Nonce = true, "", nil, nil
+	if status := process(flagged); status != escrow.StatusRefused {
+		t.Fatalf("header the gateway refused: %s", status)
+	}
+	if status := process(ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: uuid.Must(uuid.NewV7()), Kind: escrow.KindAdminPassword,
+		Generation: 1, KeyVersion: 1, Ciphertext: []byte{1}, ReceivedAt: now}); status != escrow.StatusStored {
+		t.Fatalf("administrator password under a Destroy: %s", status)
+	}
+	if status := process(recovery(bystander, 1, now)); status != escrow.StatusStored {
+		t.Fatalf("another device's recovery key: %s", status)
+	}
+	want := "failure invalid_state luks_recovery_key 1 [] device,failure invalid_state luks_header 2 [] device"
+	if n, params := audits(); n != 2 || params != want {
+		t.Fatalf("%d refusal events %q, want 2 %q", n, params, want)
+	}
+	if n := secrets(device); n != 1 {
+		t.Fatalf("%d escrow rows of the device, want only the administrator password", n)
+	}
+
+	// The Destroy expired: an upload received after expires_at is accepted, a redelivered refusal stays refused.
+	if status := process(header(3, now.Add(2*time.Hour))); status != escrow.StatusPending {
+		t.Fatalf("header after the Destroy expired: %s", status)
+	}
+	if status := process(refused); status != escrow.StatusRefused {
+		t.Fatalf("redelivered refusal after the expiry: %s", status)
+	}
+	// The device confirmed the Destroy: uploads are accepted.
+	if _, err := f.super.Exec(ctx, "UPDATE revocation_request SET status = 'confirmed', finished_at = $2 WHERE id = $1", destroy, now); err != nil {
+		t.Fatal(err)
+	}
+	if status := process(recovery(device, 4, now)); status != escrow.StatusStored {
+		t.Fatalf("recovery key after the Destroy finished: %s", status)
+	}
+	if n, _ := audits(); n != 2 {
+		t.Fatalf("%d refusal events, want 2", n)
+	}
+
+	// Another organization never sees this organization's refusals: the same escrow ID is its own upload.
+	g := newFixture(t)
+	foreign := uuid.Must(uuid.NewV7())
+	if _, err := g.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-foreign', 'active')",
+		foreign, g.org); err != nil {
+		t.Fatal(err)
+	}
+	same := recovery(foreign, 1, now)
+	same.OrganizationID, same.EscrowID = g.org, refused.EscrowID
+	ge := NewEscrow(app.NewEscrow(app.NewActionRunner(g.pool, nil, httpx.RequestID), g.pool, nil), g.cache, g.pool, nil)
+	body, _ := json.Marshal(same)
+	if o := ge.process(ctx, same.EscrowID.String(), body); o != ack {
+		t.Fatalf("foreign upload: %v", o)
+	}
+	if _, status, _, err := g.cache.EscrowStatus(ctx, same.EscrowID); err != nil || status != escrow.StatusStored {
+		t.Fatalf("foreign upload with a refused escrow ID: %s %v", status, err)
+	}
+	var seen bool
+	if err := g.pool.InOrg(systemContext(ctx, g.org, "isolation"), func(ctx context.Context, q *pgstore.Queries) (err error) {
+		seen, err = q.EscrowRefusedAfterDestroy(ctx, pgstore.EscrowRefusedAfterDestroyParams{ID: refused.EscrowID, DeviceID: device})
+		return err
+	}); err != nil || seen {
+		t.Fatalf("another organization sees the refusal: %v %v", seen, err)
+	}
+}
+
+// TestEscrowRefusedAfterDestroyEnded (PDK-794 review round 2): the Destroy is judged at the upload's received_at, not
+// at processing time. A recovery key or header received before the Destroy ended (also before it was issued) is
+// refused even when the worker processes it after the Destroy was confirmed, failed or expired; the issuer deleted the
+// device's escrows, so storing it would undo the crypto-shredding. An upload received after the end is stored.
+func TestEscrowRefusedAfterDestroyEnded(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	e := NewEscrow(app.NewEscrow(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool, &fakeObjects{objects: map[string][]byte{}}),
+		f.cache, f.pool, nil)
+	sum := sha256.Sum256([]byte("sealed"))
+	for _, tc := range []struct {
+		name, status                    string
+		issued, expires, finished, late time.Time
+		early                           []time.Time
+	}{
+		{name: "confirmed", status: "confirmed", issued: now.Add(-2 * time.Hour), expires: now.Add(time.Hour), finished: now.Add(-time.Hour),
+			early: []time.Time{now.Add(-3 * time.Hour), now.Add(-90 * time.Minute)}, late: now.Add(-30 * time.Minute)},
+		{name: "failed", status: "failed", issued: now.Add(-2 * time.Hour), expires: now.Add(time.Hour), finished: now.Add(-time.Hour),
+			early: []time.Time{now.Add(-3 * time.Hour), now.Add(-90 * time.Minute)}, late: now.Add(-30 * time.Minute)},
+		{name: "expired unexecuted", status: "expired", issued: now.Add(-3 * time.Hour), expires: now.Add(-2 * time.Hour), finished: now.Add(-time.Hour),
+			early: []time.Time{now.Add(-4 * time.Hour), now.Add(-150 * time.Minute)}, late: now.Add(-30 * time.Minute)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			device := uuid.Must(uuid.NewV7())
+			if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, $3, 'active')",
+				device, f.org, "lt-"+device.String()[24:]); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.super.Exec(ctx, `INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_by,
+				requested_at, approved_at, issued_at, expires_at, finished_at) VALUES ($1, $2, $3, 'destroy', $4, $5, $6, $6, $6, $7, $8)`,
+				uuid.Must(uuid.NewV7()), f.org, device, tc.status, uuid.New(), tc.issued, tc.expires, tc.finished); err != nil {
+				t.Fatal(err)
+			}
+			process := func(m ingest.Escrow) string {
+				t.Helper()
+				body, _ := json.Marshal(m)
+				if o := e.process(ctx, m.EscrowID.String(), body); o != ack {
+					t.Fatalf("process %s: %v", m.Kind, o)
+				}
+				_, status, _, err := f.cache.EscrowStatus(ctx, m.EscrowID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return status
+			}
+			for i, at := range tc.early {
+				g := int64(2*i + 1)
+				if status := process(ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: uuid.Must(uuid.NewV7()),
+					Kind: escrow.KindLUKSRecoveryKey, Generation: g, KeyVersion: 1, Ciphertext: []byte{9}, ReceivedAt: at}); status != escrow.StatusRefused {
+					t.Fatalf("recovery key received at %s: %s", at, status)
+				}
+				if status := process(ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: uuid.Must(uuid.NewV7()),
+					Kind: escrow.KindLUKSHeader, Generation: g + 1, KeyVersion: 1, ObjectKey: escrow.HeaderObjectKey(f.org.String(), device.String(), "", g+1),
+					WrappedDEK: []byte{1}, Nonce: make([]byte, 12), SHA256: hex.EncodeToString(sum[:]), Size: 6, ReceivedAt: at}); status != escrow.StatusRefused {
+					t.Fatalf("header received at %s: %s", at, status)
+				}
+			}
+			var rows int
+			if err := f.super.QueryRow(ctx, "SELECT count(*) FROM escrow_secret WHERE device_id = $1", device).Scan(&rows); err != nil || rows != 0 {
+				t.Fatalf("%d escrow rows of uploads received before the Destroy ended (%v)", rows, err)
+			}
+			if status := process(ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: uuid.Must(uuid.NewV7()),
+				Kind: escrow.KindLUKSRecoveryKey, Generation: 9, KeyVersion: 1, Ciphertext: []byte{9}, ReceivedAt: tc.late}); status != escrow.StatusStored {
+				t.Fatalf("recovery key received after the Destroy ended: %s", status)
+			}
+		})
+	}
+}
+
+// TestEscrowRefusalPerOrganization (PDK-794 review round 1): the device chooses the escrow ID, so another
+// organization's refusal of the same ID, invisible under RLS, must not suppress this organization's refusal event.
+func TestEscrowRefusalPerOrganization(t *testing.T) {
+	ctx := context.Background()
+	escrowID := uuid.Must(uuid.NewV7())
+	for _, f := range []fixture{newFixture(t), newFixture(t)} {
+		device := uuid.Must(uuid.NewV7())
+		if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-refused', 'active')",
+			device, f.org); err != nil {
+			t.Fatal(err)
+		}
+		e := NewEscrow(app.NewEscrow(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool, nil), f.cache, f.pool, nil)
+		m := ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: escrowID, Kind: escrow.KindLUKSRecoveryKey, Generation: 1,
+			KeyVersion: 1, Ciphertext: []byte{9}, ReceivedAt: time.Now().UTC(), DestroyIssued: true}
+		body, _ := json.Marshal(m)
+		if o := e.process(ctx, escrowID.String(), body); o != ack {
+			t.Fatalf("process: %v", o)
+		}
+		if _, status, _, err := f.cache.EscrowStatus(ctx, escrowID); err != nil || status != escrow.StatusRefused {
+			t.Fatalf("status %s %v", status, err)
+		}
+		var n int
+		if err := f.super.QueryRow(ctx, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'device.escrow_refused_destroyed'`,
+			f.org).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("organization %s: %d refusal events (%v), want 1", f.org, n, err)
+		}
+	}
+}
+
+// TestEscrowStoreWaitsForDestroy (PDK-794 review round 1): a recovery key that arrives while the revocation-issuer's
+// transaction has deleted the device's LUKS escrows but not yet committed the Destroy waits for that transaction and
+// is then refused. Under READ COMMITTED it would otherwise be inserted unseen by the DELETE and survive the Destroy.
+func TestEscrowStoreWaitsForDestroy(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	device := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-race', 'active')", device, f.org); err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := f.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = issuer.Rollback(ctx) }()
+	q := pgstore.New(issuer)
+	if err := q.LockDeviceEscrowDestroy(ctx, device); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.DeleteDeviceLUKSEscrows(ctx, device); err != nil {
+		t.Fatal(err)
+	}
+
+	e := NewEscrow(app.NewEscrow(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool, nil), f.cache, f.pool, nil)
+	m := ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: uuid.Must(uuid.NewV7()), Kind: escrow.KindLUKSRecoveryKey,
+		Generation: 1, KeyVersion: 1, Ciphertext: []byte{9}, ReceivedAt: time.Now().UTC()}
+	body, _ := json.Marshal(m)
+	done := make(chan bool, 1)
+	go func() { done <- e.process(ctx, m.EscrowID.String(), body) == ack }()
+	waitForDestroyLockWaiter(t, issuer, device, done)
+
+	now := time.Now().UTC()
+	if _, err := issuer.Exec(ctx, `INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_by,
+		requested_at, approved_at, issued_at, expires_at) VALUES ($1, $2, $3, 'destroy', 'issued', $4, $5, $5, $5, $6)`,
+		uuid.Must(uuid.NewV7()), f.org, device, uuid.New(), now, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := issuer.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !<-done {
+		t.Fatal("process did not ack")
+	}
+	if _, status, _, err := f.cache.EscrowStatus(ctx, m.EscrowID); err != nil || status != escrow.StatusRefused {
+		t.Fatalf("recovery key during the Destroy: %s %v", status, err)
+	}
+	var left int
+	if err := f.super.QueryRow(ctx, "SELECT count(*) FROM escrow_secret WHERE device_id = $1", device).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("%d escrows survived the Destroy (%v)", left, err)
+	}
+}
+
+// waitForDestroyLockWaiter returns once a session waits for the device's escrow_destroy lock that conn holds, and
+// fails when the store finished first, i.e. did not serialize with the Destroy.
+func waitForDestroyLockWaiter(t *testing.T, conn pgstore.DBTX, device uuid.UUID, done <-chan bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-done:
+			t.Fatal("the escrow store finished while the Destroy's transaction was open")
+		default:
+		}
+		var waiting bool
+		if err := conn.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+			AND ((classid::bigint << 32) | objid::bigint) = hashtextextended('escrow_destroy:' || $1::text, 0))`, device).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("the escrow store neither waited for the Destroy's lock nor finished")
 }
 
 // TestEscrowVolumeCapConcurrent (PDK-009 review round 3, decision E5): two workers storing headers of two new volumes

@@ -52,11 +52,19 @@ const MaxHeaderVolumes = revocation.MaxVolumes
 // Store records an upload and returns the status the device polls: stored, pending for a header until its object is
 // verified, or failed for a generation that is not above the active administrator password or the last generation
 // of a LUKS kind, or refused for a header of a volume beyond MaxHeaderVolumes (audited as
-// device.header_escrow_refused). A repeated message reports the recorded status.
+// device.header_escrow_refused) or for a LUKS kind while the device holds an issued, unexpired Destroy (audited as
+// device.escrow_refused_destroyed). A repeated message reports the recorded status.
 func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 	status := escrow.StatusFailed
 	refused := -1
+	afterDestroy := false
+	luks := m.Kind == escrow.KindLUKSRecoveryKey || m.Kind == escrow.KindLUKSHeader
 	err := e.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if luks {
+			if err := q.LockDeviceEscrowDestroy(ctx, m.DeviceID); err != nil {
+				return err
+			}
+		}
 		if cur, err := q.GetEscrowSecret(ctx, m.EscrowID); err == nil {
 			switch {
 			case cur.DeviceID != m.DeviceID:
@@ -76,6 +84,12 @@ func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 			return nil
 		} else if !db.IsNoRows(err) {
 			return err
+		}
+		if luks {
+			var err error
+			if afterDestroy, err = destroyIssued(ctx, q, m); err != nil || afterDestroy {
+				return err
+			}
 		}
 		floor, err := e.generationFloor(ctx, q, m)
 		if err != nil {
@@ -116,10 +130,58 @@ func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 		}
 		return nil
 	})
-	if err != nil || refused < 0 {
+	switch {
+	case err != nil:
 		return status, err
+	case afterDestroy:
+		return e.refuseAfterDestroy(ctx, m)
+	case refused < 0:
+		return status, nil
 	}
 	return e.refuse(ctx, m, refused)
+}
+
+// destroyIssued reports whether a LUKS upload falls under an issued Destroy (PDK-794): the gateway saw the Destroy
+// token, an issued Destroy of the device had not ended when the upload was received (whatever its status at
+// processing time), or the upload was refused before.
+func destroyIssued(ctx context.Context, q *pgstore.Queries, m ingest.Escrow) (bool, error) {
+	if m.DestroyIssued {
+		return true, nil
+	}
+	issued, err := q.DeviceDestroyIssued(ctx, pgstore.DeviceDestroyIssuedParams{DeviceID: m.DeviceID, ReceivedAt: m.ReceivedAt})
+	if err != nil || issued {
+		return issued, err
+	}
+	return q.EscrowRefusedAfterDestroy(ctx, pgstore.EscrowRefusedAfterDestroyParams{ID: m.EscrowID, DeviceID: m.DeviceID})
+}
+
+// refuseAfterDestroy records the refusal of a LUKS upload under an issued Destroy together with its audit event, once
+// per escrow ID. Only the natural key is kept: the ciphertext or header facts are dropped, so that no key escrowed
+// after the crypto-shredding decision reaches the database or its backups.
+func (e *Escrow) refuseAfterDestroy(ctx context.Context, m ingest.Escrow) (string, error) {
+	volume := ""
+	if m.Volume != nil {
+		volume = m.Volume.String()
+	}
+	spec := ActionSpec{
+		Code:   audit.CodeDeviceEscrowRefusedDestroyed,
+		Actor:  &audit.Actor{Type: audit.ActorDevice, ID: m.DeviceID.String()},
+		Target: &audit.Target{Type: "device", ID: m.DeviceID.String()},
+		Params: map[string]any{"kind": m.Kind, "generation": m.Generation, "volume": volume},
+	}
+	refusal := problem.InvalidState.WithDetail("a Destroy of the device is issued")
+	_, err := e.runner.RecordOnceRefusal(ctx, spec, refusal, func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+		org, err := orgOf(ctx)
+		if err != nil {
+			return false, err
+		}
+		n, err := q.InsertEscrowRefusal(ctx, pgstore.InsertEscrowRefusalParams{
+			ID: m.EscrowID, OrganizationID: org, DeviceID: m.DeviceID, Kind: m.Kind,
+			Generation: int32(m.Generation), CreatedAt: m.ReceivedAt, //nolint:gosec // bounded by the gateway
+		})
+		return n == 1, err
+	})
+	return escrow.StatusRefused, err
 }
 
 // overCap takes the device's volume cap lock for the transaction and returns the number of volumes the device escrows
