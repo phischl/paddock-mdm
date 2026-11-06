@@ -132,3 +132,34 @@ func StepUpAs(ctx context.Context, s *Session, user, password string, totp *TOTP
 	}
 	return res.Final, nil
 }
+
+// WebAuthn is a software WebAuthn authenticator: the second factor of a production-profile installation, which accepts
+// no TOTP for the sign-in and the step-up (the lab installation of the backup system gates, plan M15 §9).
+type WebAuthn = authflow.WebAuthn
+
+// NewWebAuthn creates a software WebAuthn authenticator with a new credential.
+func NewWebAuthn() (*WebAuthn, error) { return authflow.NewWebAuthn() }
+
+// LoginWebAuthn signs user in at adminURL, trusting the CA in caFile, and answers the sign-in's MFA stage with w. The
+// session's API calls go to stack.AdminURL (PADDOCK_TEST_ADMIN_URL), which the caller points at adminURL.
+func LoginWebAuthn(ctx context.Context, caFile, adminURL, user, password string, w *WebAuthn) (*Session, error) {
+	client, err := authflow.NewClient(caFile)
+	if err != nil {
+		return nil, err
+	}
+	res, err := authflow.LoginMFA(ctx, client, adminURL, user, password, w)
+	if res == nil {
+		return nil, err
+	}
+	return &Session{User: user, Client: res.Client, Final: res.Final, LoginRequestID: res.CallbackRequestID}, err
+}
+
+// StepUpWebAuthn runs a step-up of s as its own user with w and returns the portal URL it returned to; it contains
+// stepup=failed when Paddock refused the step-up.
+func StepUpWebAuthn(ctx context.Context, s *Session, adminURL, password string, w *WebAuthn) (string, error) {
+	res, err := authflow.StepUpMFA(ctx, s.Client, adminURL, "/", s.User, password, w, false)
+	if err != nil {
+		return "", err
+	}
+	return res.Final, nil
+}
