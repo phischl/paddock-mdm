@@ -199,6 +199,7 @@ flowchart TB
     aud[audit-writer<br/>index + WORM + hash chain]
     outbox[outbox-relay]
     ntf[notifier<br/>webhooks, e-mail]
+    bkr[backup<br/>mirror, snapshots, key]
   end
 
   subgraph data[Data plane]
@@ -245,6 +246,9 @@ flowchart TB
   aud --> bao
   ntf --> pg
   ntf --> pga
+  bkr --> pg
+  bkr --> s3b
+  bkr --> bao
   ntf --> bao
 ```
 
@@ -259,6 +263,7 @@ flowchart TB
 | `audit-writer` | Writes audit index and WORM objects; daily signed hash chain | consumer replicas; chain sealing by leader | `audit-chain` |
 | `outbox-relay` | Moves outbox rows from PostgreSQL to RabbitMQ (publisher confirms) | 1–2 replicas (row locking) | none |
 | `notifier` | Delivers audit events to the destinations organizations and the platform configure: signed HTTPS webhooks and e-mail through the operator's SMTP relay, with retry, a stalled state and heartbeats; reads the audit index through the read-only `paddock_audit_reader`, holds its own database role `paddock_notifier`; the only role that decrypts a destination's URL and secret *(added 2026-10-31, plan M9, ADR 0031)* | exactly 1 active round (advisory lock); destinations are served in parallel inside it | `notification-wrap` and `notification-pseudonym` (decrypt only) |
+| `backup` | The only process that decrypts the backup key (ADR 0046, plan M15): takes the OpenBao snapshots, seals the Fleet dumps, copies the escrowed LUKS headers into the local backup set, writes `manifest.json`, mirrors the set to every enabled backup target and runs their connection tests; hands the key and the schedule to the pgBackRest containers through a tmpfs volume; exports the backup metrics; records one audit event per run (`platform.backup_completed`, `platform.backup_failed`). Holds its own database role `paddock_backup` and AppRole `paddock-backup`; mounts the volumes `backup-repo` and the rendered backup targets *(added 2026-11-06, plan M15)* | exactly 1 active replica (leader lock) | `backup-wrap` (decrypt), Raft snapshot read |
 
 One binary with roles keeps the build, versioning and security review in one place while every role
 scales and is privileged independently. Each role gets **its own OpenBao AppRole and its own database
@@ -308,6 +313,8 @@ flowchart LR
     ri[paddock revocation-issuer ×1]
     ob[paddock outbox-relay]
     nt[paddock notifier ×1]
+    bk[paddock backup ×1]
+    pgbr[pgbackrest ×2]
     mq1[rabbitmq ×3]
     vk1[valkey primary + replica]
     pg1[postgres paddock]
@@ -338,7 +345,9 @@ flowchart LR
   caddy --> fls
   aw --> mq1
   s3two --> rep
-  pg1 --> bkp
+  pg1 --> pgbr
+  pgbr --> bk
+  bk -->|mirror| bkp
 ```
 
 Public hostnames (each its own TLS certificate and rate limit profile):
@@ -2179,6 +2188,25 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > `organization_role_snapshot` through a read-only tenant policy for `paddock_api` (migration `00104`). Retention of
 > `device_diagnostics`: ADR 0032 amendment 2026-11-06, `docs/compliance/retention.md`.
 
+> **Amendment 2026-11-06 (M15, ADR 0046, plan M15 §6.6):** new platform tables in the database `paddock`, without
+> `organization_id` and without row-level security (the pattern of `platform_role_member`), reachable through
+> `paddock_platform` (the api's platform scope) and the new backup role `paddock_backup` only; the api's organization
+> role has no grant on any of them (migration `00100`): `backup_key` (the Transit-encrypted backup key, its
+> fingerprint, the challenge positions and hash, the attempts and the states `unconfirmed`, `confirmed`, `retired`,
+> `discarded`; a partial unique index allows one confirmed and one unconfirmed key), `backup_target` (type `local`,
+> `smb`, `nfs` or `s3`, secret-free settings, Transit-encrypted credentials, host state `n/a`, `pending_host`,
+> `mounted` or `unreachable`, host revision, the connection test's request and result), `backup_target_status` (per
+> target and kind the last success, last error class and bytes), `backup_schedule` (one row: intervals and
+> retention), `backup_run` (one row per run of one kind: requested, running, finished; outcome, bytes, error class,
+> per-target results) and `backup_restore_plan` (kind `point_in_time`, `components` or `fresh_install`, source,
+> point in time, components, state, expiry; a unique index allows one `approved` or `running` plan; migration `00108`
+> adds the state `abandoned`). `paddock_backup` selects `backup_key`, `backup_target` and `backup_schedule`, updates
+> only the host state and test columns of a target, owns `backup_target_status` and `backup_run`, reads and writes
+> `backup_restore_plan`, and inserts `action` and `outbox` rows for the platform pseudo-organization (migration `00107`
+> narrows its `outbox` grant to `INSERT` and adds the read-only evidence policy of §5). Migration `00109` adds
+> `escrow_refusal` (PDK-794): one row per escrow upload refused after an issued Destroy, with the tenant policy.
+> Retention: ADR 0032 amendment 2026-11-06.
+
 ### 16.2 Conventions
 
 - Primary keys UUIDv7 (time-ordered) generated in Go; timestamps `timestamptz` in UTC.
@@ -2284,6 +2312,22 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > one report object, not a collection: it follows no list contract and carries no `x-paddock-list`. Plan:
 > `docs/plans/M12-operator-toolbox-and-siem-push.md`.
 
+> **Amendment 2026-11-06 (M15, ADR 0046, plan M15 §6.2):** the platform backup endpoints, all under
+> `/api/platform/v1/backup`, platform administrators only (organization sessions and tokens get 403), every write with
+> a step-up that an API token never satisfies, every write with `x-paddock-audit`: `GET /backup` (overview),
+> `GET`/`POST /backup/key`, `POST /backup/key/{id}/confirm` and `/discard` (the key is in the response of `POST` only;
+> `confirm` takes `{answer}` of six characters, a wrong answer is 409 `backup_key_mismatch`), `GET`/`PUT
+> /backup/schedule`, `GET`/`POST /backup/targets` (list contract: sort `name`, `type`, `created_at`; search `name`;
+> filters `type`, `enabled`, `host_state`), `GET`/`PUT`/`DELETE /backup/targets/{id}` and `POST …/{id}/test` (asynchronous,
+> the api never decrypts credentials), `/enable`, `/disable`, `POST /backup/run` (`{kinds, label}`, refused while no
+> key is confirmed), `GET /backup/runs` (sort `started_at`, `kind`, `outcome`; filters `kind`, `outcome`,
+> `target_id`), `GET`/`POST /backup/restore-plans` (`{kind, source_target_id, at, components, confirmation}` with the
+> typed word `restore`), `GET /backup/restore-plans/{id}` and `POST …/{id}/cancel` and `…/{id}/abandon` (typed word
+> `abandon`). A backup target is `{name, type, enabled}` plus one object per type (`local`, `smb`, `nfs`, `s3`), no
+> `oneOf`; secrets are `writeOnly`. The host commands that work without the portal are `./paddock backup now`,
+> `backup status`, `backup-target apply`, `backup-target export` and `restore` (§20, `docs/operations/backup.md`,
+> `docs/operations/restore.md`); they record their audit events through the system actor with the operator's name.
+
 ### 17.2 Device API
 
 See §6.8; contract in `api/openapi/device.yaml`; Go types shared with the agent in `pkg/protocol`.
@@ -2349,18 +2393,51 @@ Strictly separate from the audit log.
 
 | Data | Method | RPO | RTO |
 | --- | --- | --- | --- |
-| PostgreSQL `paddock`, Authentik DB | pgBackRest, continuous WAL archive + daily full to a separate bucket | 5 min | 4 h |
-| OpenBao | Raft snapshot every 6 h and after every key operation, encrypted, to the backup bucket; unseal shares offline | 6 h (keys change rarely) | 4 h |
-| Escrow bucket | bucket versioning + replication to the backup site | 15 min | 4 h |
+| PostgreSQL `paddock`, Authentik DB | pgBackRest, continuous WAL archive + a full backup every 24 h by default, into the local repository `backup-repo` (`pgbackrest/<key_id>/`, `aes-256-cbc`), mirrored to every backup target | 5 min | 4 h |
+| OpenBao | Raft snapshot every 6 h by default and after every key operation done by hand, sealed (AES-256-GCM) into the set (`openbao/<UTC>.snap.enc`); unseal shares offline | 6 h (keys change rarely) | 4 h |
+| Escrow bucket | the objects are copied into the set (`escrow/<object key>`, already sealed to `escrow-wrap`) every hour by default; a copy leaves the set only on recorded Destroy evidence | 1 h | 4 h |
 | Bundles bucket | not backed up; recompiled from PostgreSQL (`paddock-server admin recompile --all`) | – | 1 h |
 | RabbitMQ | not backed up; quorum queues replicated on 3 nodes; devices re-send heartbeats and spooled events; definitions (exchanges, queues, users) are code (`paddock-server provision rabbitmq`) | – | – |
 | Valkey | not backed up; rebuilt from PostgreSQL (`paddock-server admin rebuild-cache`) | – | 15 min |
-| Fleet MySQL | daily dump; rebuildable from devices within 24 h | 24 h | 8 h |
+| Fleet MySQL | dump every 24 h by default, sealed into the set (`fleet/<UTC>.sql.gz.enc`); rebuildable from devices within 24 h | 24 h | 8 h |
 | Audit store | **excluded** from routine restore; protected by WORM + replica | – | – |
 
 **Restore rule:** after a PostgreSQL restore, `device.bundle_seq` could go backwards and devices would
-reject new bundles as downgrades. The restore runbook therefore runs `paddock-server admin bump-bundle-seq
---by 1000000` before the compiler starts. A restore drill is part of the release checklist (quarterly).
+reject new bundles as downgrades. `./paddock restore` therefore runs `paddock-server admin bump-bundle-seq
+--by 1000000` before the compiler starts, then `admin rebuild-cache` and `admin recompile --all`. A restore drill
+(`make restore-drill`) is part of the release checklist (quarterly).
+
+**Backup sets, targets and the key (M15, ADR 0046).** The set is one directory tree, `paddock-backup/`
+(`paddock.backup-set.v1`): `manifest.json`, `pgbackrest/<key_id>/`, `openbao/`, `fleet/` and `escrow/`. The role
+`backup` (§3.2, service `paddock-backup`) is the only process that decrypts the key; it takes the snapshots, seals the
+dumps, copies the escrow objects and mirrors the set to every enabled target (a local directory, an SMB or NFS share
+mounted as a Docker volume by `./paddock backup-target apply`, or an S3-compatible bucket), so a target outage never
+touches the WAL archive. A target loses only what the local retention would have removed from its own copy; a lost
+local repository never wipes the targets. The key is generated by the api (32 random bytes, Transit-wrapped with
+`backup-wrap`), shown once and trusted only after a confirmation of six characters; until then no backup runs; a
+rotation opens a new repository path and a full backup at once. Platform administrators manage targets, key, schedule
+and runs in the portal (§17.1 amendment 2026-11-06; step-up and audit on every write); `./paddock backup now|status`,
+`backup-target apply|export` and `restore` are the emergency path without the portal. Operator guides:
+`docs/operations/backup.md` and `docs/operations/restore.md`.
+
+**Three recovery scenarios.** (1) *Fresh installation* of a lost control plane: the same release, the lost host's
+`.env` and `.secrets/`, the backup key and the set (a directory or tarball on the host, or an S3 target exported with
+`./paddock backup-target export`), `./paddock restore --from <set>` or `--from-target-file <file>`; no portal exists
+yet, so the run is recorded as a restore plan of kind `fresh_install`. (2) *Rollback of a running installation*: a
+platform administrator approves a restore plan in the portal (point in time or components, source target, typed word
+`restore`, step-up; valid 24 h, one open plan), the operator executes `./paddock restore --plan <id>` on the host after
+a terminal confirmation; a plan stuck in `running` is abandoned with an audited verb. (3) *Partial restore* per
+component (`--only postgres|openbao|fleet|escrow`, and `backup-repo` alone to rebuild the local repository from a
+target). Restoring one organization is not offered: its rows span the database, Authentik, the escrow bucket and the
+devices' sequence numbers, and a row-level restore has no consistent cut (ADR 0046). A restore never puts back an
+escrowed LUKS header whose device has a recorded Destroy; it reads that evidence from the audit index, which survives
+the restore.
+
+**Host restore trust path.** `./paddock restore` asks for the key and writes it to `.secrets/restore/backup_key`
+(deleted on every exit); the escrow step runs in the one-off service `backup-restore-escrow` (profile `restore`, never
+started by `up`) with the escrow lister, the gateway's put credential and the audit reader, and no control-plane
+database credential. The events `platform.restore_started`, `_completed`, `_failed` record the operator's name.
+Residual risks RR-100 to RR-104 and RR-123 to RR-125 (`docs/compliance/residual-risks.md`).
 
 ---
 
