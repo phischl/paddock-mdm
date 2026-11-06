@@ -92,7 +92,7 @@ has "unseal path WARN" '^WARN +openbao unseal path +three custodians'
 has "running stack PASS" '^PASS +running stack healthy'
 has "table ends with the verdict" 'upgrade check: FAIL'
 # alpha.8 predates the command: the new image runs it through an override of the worker's image.
-if grep -q -- "-f .* run --rm --no-deps -T --entrypoint paddock-server paddock-worker admin upgrade-check --target-version 0.1.0-alpha.9" "$work/compose.log"; then
+if grep -q -- "-f .* run --rm --no-deps -T --entrypoint /paddock-server paddock-worker admin upgrade-check --target-version 0.1.0-alpha.9" "$work/compose.log"; then
   pass "the old alpha.8 stack is asked with the new image"
 else fail "compose log: $(cat "$work/compose.log")"; fi
 hasnt "no secret or setting value is printed" 'paddock.example.org|debug'
