@@ -71,8 +71,12 @@ describe('backup rules', () => {
     const errors = validateTarget(s3, null)
     expect(errors.s3Endpoint).toBe('backup.targets.endpointInvalid')
     expect(errors.s3AccessKey).toBe('backup.targets.required')
-    expect(validateTarget({ ...emptyTarget(), name: 'L', local: { path: '/srv/../x' } }, null).localPath).toBe('backup.targets.pathInvalid')
-    expect(validateTarget({ ...emptyTarget(), name: 'L', local: { path: '/srv/backup' } }, null)).toEqual({})
+    expect(validateTarget({ ...emptyTarget(), name: 'L', local: { path: 'srv/../x' } }, null).localPath).toBe('backup.targets.pathInvalid')
+    for (const path of ['/srv/backup', '', 'a//b', 'a/./b', 'a/', 'a\nb', 'a\u007fb', 'a\u0085b', 'é'.repeat(129)]) {
+      expect(validateTarget({ ...emptyTarget(), name: 'L', local: { path } }, null).localPath).toBe('backup.targets.pathInvalid')
+    }
+    expect(validateTarget({ ...emptyTarget(), name: 'L', local: { path: 'nas/backup' } }, null)).toEqual({})
+    expect(validateTarget({ ...emptyTarget(), name: 'L', local: { path: 'é'.repeat(128) } }, null)).toEqual({})
   })
 
   it('sends only the group of the chosen type and a credential only when typed', () => {
@@ -285,7 +289,7 @@ describe('PlatformBackup', () => {
       el.dispatchEvent(new Event('input'))
     }
     set('#backup-target-name', 'Disk')
-    set('#backup-local-path', '/srv/backup')
+    set('#backup-local-path', 'nas/backup')
     await flushPromises()
     ;(document.querySelector('form') as HTMLFormElement).dispatchEvent(new Event('submit'))
     await flushPromises()

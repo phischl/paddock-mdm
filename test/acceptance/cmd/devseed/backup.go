@@ -35,7 +35,7 @@ var devTargets = []devTarget{
 	}},
 	{name: "dev-local", local: true, body: func() (map[string]any, error) {
 		return map[string]any{"name": "dev-local", "type": "local", "enabled": true,
-			"local": map[string]any{"path": "/var/lib/paddock-backup-dev"}}, nil
+			"local": map[string]any{"path": "dev-local"}}, nil
 	}},
 }
 
