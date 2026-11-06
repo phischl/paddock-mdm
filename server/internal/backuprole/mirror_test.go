@@ -278,6 +278,13 @@ func (f *fakeS3) ListSizes(_ context.Context, prefix string) (map[string]int64, 
 	}
 	return out, nil
 }
+func (f *fakeS3) ListSizesPaged(ctx context.Context, prefix string, page func()) (map[string]int64, error) {
+	out, err := f.ListSizes(ctx, prefix)
+	for range out {
+		page()
+	}
+	return out, err
+}
 func (f *fakeS3) Newest(context.Context, string) (time.Time, bool, error) {
 	return time.Time{}, false, nil
 }

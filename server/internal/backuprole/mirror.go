@@ -94,7 +94,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 			return 0, fmt.Errorf("%w: %s", errForeignSet, theirs.InstallationID)
 		}
 	}
-	have, err := dst.List(ctx)
+	have, err := listProgress(ctx, dst, hooks.tick)
 	if err != nil {
 		return 0, err
 	}
@@ -135,7 +135,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		return 0, err
 	}
 
-	after, err := dst.List(ctx)
+	after, err := listProgress(ctx, dst, hooks.tick)
 	if err != nil {
 		return 0, err
 	}

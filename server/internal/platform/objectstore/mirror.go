@@ -49,16 +49,22 @@ func NewWithOptions(endpoint, accessKey, secretKey, bucket string, o Options) (*
 
 // ListSizes returns the size of every object below prefix, keyed by the object key.
 func (s *Store) ListSizes(ctx context.Context, prefix string) (map[string]int64, error) {
+	return s.ListSizesPaged(ctx, prefix, func() {})
+}
+
+// ListSizesPaged is ListSizes and calls page after every page of the listing.
+func (s *Store) ListSizesPaged(ctx context.Context, prefix string, page func()) (map[string]int64, error) {
 	out := map[string]int64{}
 	p := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &prefix})
 	for p.HasMorePages() {
-		page, err := p.NextPage(ctx)
+		res, err := p.NextPage(ctx)
 		if err != nil {
 			return nil, err
 		}
-		for _, o := range page.Contents {
+		for _, o := range res.Contents {
 			out[aws.ToString(o.Key)] = aws.ToInt64(o.Size)
 		}
+		page()
 	}
 	return out, nil
 }
