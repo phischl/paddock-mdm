@@ -285,10 +285,11 @@ uc_item_server() {
   fi
   # alpha.8 predates the command, so the new image runs it against the old stack's database; the old ./paddock exports
   # its own versions.env after the process environment, hence the override file instead of PADDOCK_IMAGE.
+  # The entrypoint is absolute: the binary lies in / of a distroless image, which is not on its PATH.
   if [[ "$oldv" == 0.1.0-alpha.8 ]]; then
     override="$(mktemp)"
     printf 'services:\n  paddock-worker:\n    image: %s\n' "$(uc_versions_ref "$new" PADDOCK_IMAGE)" >"$override"
-    out="$("$old/paddock" compose -f "$override" run --rm --no-deps -T --entrypoint paddock-server paddock-worker \
+    out="$("$old/paddock" compose -f "$override" run --rm --no-deps -T --entrypoint /paddock-server paddock-worker \
       admin upgrade-check --target-version "$newv" 2>&1 </dev/null)" || status=$?
     rm -f "$override"
   else
