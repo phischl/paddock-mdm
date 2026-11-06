@@ -157,6 +157,11 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		return held, nil
 	}
 	if !found || sha256.Sum256(remote) != sha256.Sum256(local) {
+		// A3: manifest.json follows a verified copy of a mirror still running; one the stall watchdog or the round
+		// already gave up writes nothing more.
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if err := dst.Put(ctx, backupset.ManifestPath, bytes.NewReader(local), int64(len(local))); err != nil {
 			return 0, err
 		}
