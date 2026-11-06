@@ -51,14 +51,19 @@ type installOptions struct{ reportOnly bool }
 // SetDriftInterval itself. Every other gate gets an enforced device.
 func ReportOnly() InstallOption { return func(o *installOptions) { o.reportOnly = true } }
 
-// prepareGuest adds the stack's hosts entries and Caddy CA to the guest and installs the packages from debDir.
+// prepareGuest adds the stack's hosts entries and CA (the lab's throwaway CA for the backup gates, whose names are the
+// same) to the guest and installs the packages from debDir.
 func prepareGuest(t *testing.T, s *Stack, vm *VM, debDir string) {
 	t.Helper()
-	secrets, err := filepath.Abs(filepath.Join(s.root, "deploy", "compose", ".secrets", "caddy-root.crt"))
+	ca := filepath.Join(s.root, "deploy", "compose", ".secrets", "caddy-root.crt")
+	if s.lab != nil {
+		ca = s.lab.caFile()
+	}
+	ca, err := filepath.Abs(ca)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm.Copy(secrets, "/tmp/paddock-dev-caddy-root.crt")
+	vm.Copy(ca, "/tmp/paddock-dev-caddy-root.crt")
 	vm.Must("sudo install -m 0644 /tmp/paddock-dev-caddy-root.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates >/dev/null" +
 		" && echo '" + guestHosts + "' | sudo tee -a /etc/hosts >/dev/null && getent hosts device.paddock.localhost")
 	debs, err := filepath.Glob(filepath.Join(debDir, "*.deb"))
