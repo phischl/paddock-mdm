@@ -219,6 +219,44 @@ stop the audit writer first (step 4). The backfill takes about 1.5 minutes per m
 1 000 000 events in 1 min 26 s on PostgreSQL 18); count them with `SELECT count(*) FROM audit_event` on
 `paddock_audit` (`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
 
+## From 0.1.0-alpha.8: the backup moves
+
+Plan M15, ADR 0046 (`docs/operations/backup.md`, `docs/operations/restore.md`). This subsection is self-contained; it
+applies to the control plane and to a lab with `PADDOCK_LAB_BACKUP=yes`.
+
+**What changes.** Backups no longer go to the one S3 bucket of `PADDOCK_BACKUP_S3_*`. pgBackRest writes to the local
+volume `backup-repo`, and the new role `paddock-backup` adds the OpenBao snapshots, the Fleet dumps and the escrowed LUKS
+headers and mirrors the set to the targets a platform administrator configures in the portal. The worker no longer
+takes snapshots, `fleet-backup-upload` is gone, and `fleet-backup` writes plaintext dumps that only the backup role
+seals. **Until a platform administrator has confirmed a backup key, nothing is backed up** (the alert
+`PaddockBackupKeyUnconfirmed` fires after an hour).
+
+1. **The key is imported once, then confirmed.** The key of 0.1.0-alpha.8 is the file `.secrets/backup_encryption_key`
+   (copied by `./paddock migrate-from`); the api imports it at its first start as the key `legacy`, state
+   `unconfirmed`. In the portal under *Platform* → *Backup* → *Key*, a platform administrator types the characters at the
+   six positions shown from that file. Keep this key: the backups of 0.1.0-alpha.8 in the old bucket are encrypted with
+   it, and a rollback to 0.1.0-alpha.8 needs them. Alternatively discard the imported key and generate a new one: new
+   backups then use the new key, and the old key stays necessary for the old bucket.
+2. **New secrets and OpenBao objects**, once, in B's directory after `./paddock migrate-from`: run `./paddock secrets`
+   (adds `db_paddock_backup_password` and `db_paddock_backup_url`; the database role itself is created by `db-provision`
+   before the migration), `./paddock bootstrap openbao` with a root token (the Transit key `backup-wrap` and the
+   policies of `paddock-api` and `paddock-backup`; `docs/operations/openbao.md` section 1) and `./paddock bootstrap
+   buckets` (the read-only escrow credential `rustfs_escrow_backup_*` of the backup role). `./paddock check` fails
+   until they exist.
+3. **Removed settings.** `PADDOCK_BACKUP_S3_*` in `.env`, the secrets `backup_{pgbackrest,worker,fleet}_{access,secret}_key`
+   and the service `fleet-backup-upload` are not used by this release, and `./paddock check` fails on a service that
+   still names the S3 variables. Leave them in A's directory: they are the rollback to 0.1.0-alpha.8, which restores
+   from the old bucket.
+4. **The lab's S3 bucket becomes an S3 target.** To keep backing up to the same bucket, add it in the portal under
+   *Backup* → *Targets* as an `s3` target with a **new** credential that may list, read, write and delete below the
+   target's prefix (the old pgBackRest credential only reaches `pgbackrest/`, `openbao/` and `fleet/`), and give it a
+   prefix such as `paddock` so that the new set (`<prefix>/paddock-backup/`) stays apart from the old objects. No
+   host step is needed for an S3 target. Do not delete the old objects while a rollback to 0.1.0-alpha.8 is still
+   wanted. The first copy of a large set takes several rounds (`docs/operations/backup.md`, "Targets").
+5. **Local, SMB and NFS targets** need the host step: `./paddock backup-target apply`, then `./paddock up`.
+
+After the first full backup, `./paddock backup status` shows the key, a run per kind and each target.
+
 ## Rollback
 
 Migrations only move forward (`server/migrations/`; there is no down migration), so a rollback depends on the release
