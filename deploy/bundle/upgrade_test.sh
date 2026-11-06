@@ -63,12 +63,14 @@ case "${1:-}" in
         ;;
       *" pgbackrest-authentik backup --start-fast") echo "pgbackrest: backup 20261106-100100F of authentik verified" ;;
       *" pgbackrest info") printf 'stanza: paddock\n        full backup: 20261105-000000F\n        full backup: %s\n' "${FIXTURE_NEWEST-20261106-100000F}" ;;
-      *" pgbackrest-authentik info") echo "        full backup: 20261106-100100F" ;;
+      *" pgbackrest-authentik info") echo "        full backup: ${FIXTURE_NEWEST_AUTHENTIK-20261106-100100F}" ;;
       *" paddock-worker backup openbao")
         [[ -n "${FIXTURE_NO_SNAPSHOT:-}" ]] || echo 'time=2026-11-06T10:02:00Z level=INFO msg="OpenBao snapshot stored" key=openbao/20261106T100200Z.snap.enc'
         ;;
       *" fleet-backup once") echo "fleet backup: dumped 20261106T100300Z.sql.gz.enc" ;;
       *" fleet-backup-upload "*) exit "${FIXTURE_S3_EXIT:-0}" ;;
+      *" stop pgbackrest pgbackrest-authentik") exit "${FIXTURE_STOP_EXIT:-0}" ;;
+      *" pgbackrest-authentik flush") exit "${FIXTURE_FLUSH_EXIT:-0}" ;;
     esac
     ;;
   backup) exit "${FIXTURE_BACKUP_EXIT:-0}" ;;
@@ -160,6 +162,7 @@ before "pull before the configuration check" ' pull$' '^docker run .*prod-check'
 before "configuration check before the backup" '^docker run .*prod-check' "$BACKUP"
 before "the backup completes before up uses the pulled images" "$BACKUP" "$UP"
 before "up before the post-check report" "$UP" '^docker compose .*admin upgrade-check --target-version 0.1.0-alpha.10'
+not_called "only an upgrade from 0.1.0-alpha.8 stops the old pgBackRest" 'compose stop pgbackrest'
 if [[ -f "$work/t/new/.env" && -d "$work/t/new/.secrets" ]]; then pass "migrate-from copied .env and .secrets/"; else fail "no .env or .secrets/ here"; fi
 if [[ ! -e "$work/t/new/.upgrade-state" ]]; then pass "success deletes .upgrade-state"; else fail ".upgrade-state is left"; fi
 rec="$work/t/new/.upgrade-rollback"
@@ -220,6 +223,10 @@ not_called "nothing runs for the refused old release" '^(docker|script)'
 # up; the record names what its restore procedure needs.
 LEGACY_PG='^old compose run --rm --no-deps -T pgbackrest backup --start-fast$'
 LEGACY_FLEET_HEAD='^old compose run .* fleet-backup-upload .* la8-s3 head fleet/20261106T100300Z\.sql\.gz\.enc$'
+FENCE_STOP='^old compose stop pgbackrest pgbackrest-authentik$'
+FENCE_FLUSH='^old compose run --rm --no-deps -T pgbackrest flush$'
+FENCE_FLUSH_AUTHENTIK='^old compose run --rm --no-deps -T pgbackrest-authentik flush$'
+FENCE_RESTART='^old compose start pgbackrest pgbackrest-authentik$'
 setup_alpha8() {
   setup controlplane "Schema: migrations 00100–00106"
   sed -i 's/^version=.*/version=0.1.0-alpha.8/' "$work/t/old/VERSION"
@@ -247,6 +254,61 @@ if grep -qx 'method=legacy-0.1.0-alpha.8' "$rec" && grep -qx 'legacy-paddock=202
   grep -qx 'from=0.1.0-alpha.8' "$rec" && grep -qx 'backup=yes' "$rec"; then pass "the record names alpha.8's backups"; else
   fail "the record of alpha.8's backups: $(cat "$rec" 2>&1)"
 fi
+# The bucket's WAL archive ends before up (Review 1, M1): alpha.8's pusher must not push this release's migration WAL.
+has "the plan names the fence of alpha.8's WAL archive" 'stop pgbackrest pgbackrest-authentik and flush both \(the backup bucket.s WAL archive ends here\), then \./paddock up'
+before "the fence follows the bucket checks" "$LEGACY_FLEET_HEAD" "$FENCE_STOP"
+before "alpha.8's pgBackRest stops before the flush" "$FENCE_STOP" "$FENCE_FLUSH"
+before "paddock's spool is flushed, then authentik's" "$FENCE_FLUSH" "$FENCE_FLUSH_AUTHENTIK"
+before "the fence ends before up" "$FENCE_FLUSH_AUTHENTIK" "$UP"
+not_called "a fenced archive is not started again" "$FENCE_RESTART"
+
+# A failed fence: up does not run, no record is written, alpha.8 archives again, and the next run repeats the fence.
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_FLUSH_EXIT=1 run 1 "a failed flush of alpha.8's spool" "$work/t/old" --yes
+has "the failed fence is named" "cannot end 0\.1\.0-alpha\.8's WAL archive in the backup bucket"
+has "a failed fence says that up did not run" '\./paddock up did not run: 0\.1\.0-alpha\.8 still runs unchanged from'
+has "a failed fence names the next run" "Fix the cause, then run \./paddock upgrade $work/t/old again\.$"
+hasnt "a failed fence does not send to the rollback" 'Roll back|may be partly running'
+not_called "no up after a failed fence" "$UP"
+called "alpha.8's pgBackRest starts again after a failed fence" "$FENCE_RESTART"
+if [[ ! -e "$work/t/new/.upgrade-rollback" ]]; then pass "no record after a failed fence"; else fail "a record after a failed fence"; fi
+FIXTURE_OLD_NO_BACKUP=1 run 0 "the second run after a failed fence" "$work/t/old" --yes
+if [[ "$(grep -cE "$FENCE_STOP" "$calls")" == 2 ]]; then pass "the second run repeats the fence"; else fail "the fence ran $(grep -cE "$FENCE_STOP" "$calls") times"; fi
+if [[ "$(grep -cE "$LEGACY_PG" "$calls")" == 1 ]]; then pass "the second run keeps alpha.8's backup"; else fail "alpha.8's backup ran $(grep -cE "$LEGACY_PG" "$calls") times"; fi
+# Review 2, M2: a run stopped between the backup and up leaves alpha.8's pgBackRest running, which takes a newer full
+# backup once the last is 24 h old; its restore takes the newest, so the recorded point is checked after the fence.
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_FLUSH_EXIT=1 run 1 "a run stopped after alpha.8's backup" "$work/t/old" --yes
+: >"$calls"
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_NEWEST=20261107-100000F run 1 "a newer paddock backup since the recorded one" "$work/t/old" --yes
+has "the newer backup is named" 'the newest backup of stanza paddock in the bucket is 20261107-100000F, not the recorded pre-upgrade backup 20261106-100000F'
+has "the newer backup says that up did not run" '\./paddock up did not run: 0\.1\.0-alpha\.8 still runs unchanged from'
+hasnt "a newer backup does not send to the rollback" 'Roll back|may be partly running'
+not_called "no up after a newer backup" "$UP"
+if [[ ! -e "$work/t/new/.upgrade-rollback" ]]; then pass "no record after a newer backup"; else fail "a record after a newer backup"; fi
+if ! grep -qE '^(done=backup|legacy-)' "$work/t/new/.upgrade-state"; then pass "the step backup and its names are forgotten"; else
+  fail "state after a newer backup: $(cat "$work/t/new/.upgrade-state")"
+fi
+before "alpha.8's pgBackRest starts again after the newest check" "$FENCE_FLUSH_AUTHENTIK" "$FENCE_RESTART"
+: >"$calls"
+FIXTURE_OLD_NO_BACKUP=1 run 0 "the run after a newer backup" "$work/t/old" --yes
+called "the run after a newer backup repeats alpha.8's backup" "$LEGACY_PG"
+before "the repeated backup precedes up" "$LEGACY_PG" "$UP"
+if grep -qx 'legacy-paddock=20261106-100000F' "$work/t/new/.upgrade-rollback"; then pass "the record names the repeated backup"; else
+  fail "the record after a repeated backup: $(cat "$work/t/new/.upgrade-rollback" 2>&1)"
+fi
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_FLUSH_EXIT=1 run 1 "a run stopped after alpha.8's backup (authentik)" "$work/t/old" --yes
+: >"$calls"
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_NEWEST_AUTHENTIK=20261107-100100F run 1 "a newer authentik backup since the recorded one" "$work/t/old" --yes
+has "the newer authentik backup is named" 'the newest backup of stanza authentik in the bucket is 20261107-100100F'
+not_called "no up after a newer authentik backup" "$UP"
+if ! grep -qx 'done=backup' "$work/t/new/.upgrade-state"; then pass "the step backup is forgotten (authentik)"; else fail "done=backup kept"; fi
+
+setup_alpha8
+FIXTURE_OLD_NO_BACKUP=1 FIXTURE_STOP_EXIT=1 run 1 "alpha.8's pgBackRest does not stop" "$work/t/old" --yes
+not_called "no flush when the stop failed" "$FENCE_FLUSH"
+not_called "no up when the stop failed" "$UP"
 
 # Every failure of alpha.8's backup stops before up, with nothing changed on the running stack.
 setup_alpha8
@@ -272,6 +334,7 @@ setup_alpha8
 FIXTURE_OLD_NO_BACKUP=1 FIXTURE_UP_EXIT=1 run 1 "up fails after alpha.8's backup" "$work/t/old" --yes
 FIXTURE_OLD_NO_BACKUP=1 run 0 "the second run after alpha.8's backup" "$work/t/old" --yes
 if [[ "$(grep -cE "$LEGACY_PG" "$calls")" == 1 ]]; then pass "alpha.8's backup ran once"; else fail "alpha.8's backup ran $(grep -cE "$LEGACY_PG" "$calls") times"; fi
+if [[ "$(grep -cE "$FENCE_STOP" "$calls")" == 1 ]]; then pass "the fence before the recorded point ran once"; else fail "the fence ran $(grep -cE "$FENCE_STOP" "$calls") times"; fi
 if grep -qx 'legacy-openbao=openbao/20261106T100200Z.snap.enc' "$work/t/new/.upgrade-rollback"; then pass "the resumed run's record keeps alpha.8's names"; else
   fail "the resumed record: $(cat "$work/t/new/.upgrade-rollback")"
 fi
@@ -326,6 +389,13 @@ run 1 "an unwritable rollback point stops before up" "$work/t/old" --yes
 not_called "no up without a rollback point" "$UP"
 has "the failure names the rollback point" 'cannot record the rollback point'
 if ! grep -q '^up-started=' "$work/t/new/.upgrade-state"; then pass "no up-started without a record"; else fail "up-started was recorded"; fi
+has "an unwritten record says that up did not run" '\./paddock up did not run: 0\.1\.0-alpha\.9 still runs unchanged from'
+hasnt "an unwritten record does not send to the rollback" 'Roll back|may be partly running'
+setup_alpha8
+mkdir "$work/t/new/.upgrade-rollback.tmp"
+FIXTURE_OLD_NO_BACKUP=1 run 1 "an unwritable rollback point after alpha.8's fence" "$work/t/old" --yes
+not_called "no up without alpha.8's rollback point" "$UP"
+before "alpha.8's pgBackRest starts again after an unwritten record" "$FENCE_FLUSH_AUTHENTIK" "$FENCE_RESTART"
 
 # A partial migrate-from (an interrupted copy) is removed and copied again on the next run.
 setup controlplane "Schema: migrations 00105–00106"

@@ -5,9 +5,9 @@
 # (docs/operations/restore.md and upgrade.md step 3 at the tag v0.1.0-alpha.8) through the old directory's ./paddock,
 # that is with alpha.8's Compose files and images:
 #   - the backup: pgBackRest --start-fast for both stanzas, `paddock-worker backup openbao`, `fleet-backup once`, each
-#     checked in the backup bucket;
-#   - the rollback: both stanzas restored to the newest archived WAL, OpenBao from the recorded snapshot into a fresh
-#     OpenBao, Fleet's dump when FLEET_IMAGE changed, then the restore commands of step 5.
+#     checked in the backup bucket; right before this release's `up`, the bucket's WAL archive is fenced (la8_fence);
+#   - the rollback: both stanzas restored to the newest WAL archived before that fence, OpenBao from the recorded
+#     snapshot into a fresh OpenBao, Fleet's dump when FLEET_IMAGE changed, then the restore commands of step 5.
 # Remove this file and its two call sites once 0.1.0-alpha.8 leaves the support window (ADR 0013 amendment: its own
 # release plus two).
 # shellcheck shell=bash
@@ -118,6 +118,67 @@ la8_backup() {
     "$authentik" "$openbao" "$fleet" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$state"
 }
 
+# la8_fence <old dir>: ends the backup bucket's WAL archive before this release's `up`. The rollback restores every
+# segment the bucket holds (alpha.8's `pgbackrest restore` stages them until there is no next one), so alpha.8's pusher
+# must not live on into `up`, where it would push this release's migration WAL from the shared spool. Stopping both
+# services and pushing what the spool holds then makes the archive end before this release touches a database; WAL
+# written after that reaches this release's local repository only. A failed fence starts the services again, so that
+# alpha.8 keeps archiving, and `up` does not run; the next run repeats the fence.
+la8_fence() {
+  local old="$1"
+  echo "+ $old/paddock compose stop pgbackrest pgbackrest-authentik (the backup bucket's WAL archive ends here)"
+  if la8_compose "$old" stop pgbackrest pgbackrest-authentik </dev/null &&
+    la8_flush "$old" pgbackrest && la8_flush "$old" pgbackrest-authentik; then
+    return 0
+  fi
+  echo "upgrade: cannot end $LA8_RELEASE's WAL archive in the backup bucket; starting its pgBackRest again" >&2
+  la8_unfence "$old"
+  return 1
+}
+
+# la8_unfence <old dir>: starts alpha.8's pgBackRest again after a fence whose `up` does not follow, so that alpha.8
+# keeps archiving WAL and taking its daily full backups.
+la8_unfence() {
+  echo "+ $1/paddock compose start pgbackrest pgbackrest-authentik"
+  la8_compose "$1" start pgbackrest pgbackrest-authentik </dev/null >/dev/null 2>&1 ||
+    echo "upgrade: starting pgbackrest and pgbackrest-authentik failed too: run $1/paddock up" >&2
+}
+
+# la8_still_newest <old dir> <state file>: the backups recorded by la8_backup are still the newest of both stanzas.
+# alpha.8's restore always restores the newest backup, and its pgBackRest takes a full one on its own once the last is
+# 24 h old (while a run that stopped between the backup and `up` leaves it running), so a recorded backup that is no
+# longer the newest is a rollback point that cannot be restored. Called after la8_fence, when no new backup can arrive.
+la8_still_newest() {
+  local old="$1" state="$2" svc stanza want got
+  echo "+ check that the recorded pre-upgrade backups are still the newest in the backup bucket"
+  for svc in pgbackrest pgbackrest-authentik; do
+    if [[ "$svc" == pgbackrest ]]; then stanza=paddock want="$(la8_value "$state" legacy-paddock)"; else
+      stanza=authentik want="$(la8_value "$state" legacy-authentik)"
+    fi
+    got="$(la8_pg_newest "$old" "$svc")" || got=""
+    if [[ -z "$want" || "$got" != "$want" ]]; then
+      echo "upgrade: the newest backup of stanza $stanza in the bucket is ${got:-unreadable}, not the recorded pre-upgrade backup ${want:-?}: $LA8_RELEASE's restore would not restore the recorded point; the next run takes the pre-upgrade backup again" >&2
+      return 1
+    fi
+  done
+}
+
+la8_flush() {
+  echo "+ $1/paddock compose run --rm --no-deps -T $2 flush"
+  la8_compose "$1" run --rm --no-deps -T "$2" flush </dev/null
+}
+
+# la8_project_problem <old dir> <project>: why the old directory's Compose project differs from the one whose volumes
+# the rollback deletes, empty when they match. The old directory's ./paddock reads PADDOCK_PROJECT from the process
+# environment when it is exported, else from its own .env (default paddock), as lib.sh does.
+la8_project_problem() {
+  local old_project
+  old_project="$(printenv PADDOCK_PROJECT || true)"
+  [[ -n "$old_project" ]] || old_project="$(la8_value "$1/.env" PADDOCK_PROJECT)"
+  old_project="${old_project:-paddock}"
+  [[ "$old_project" == "$2" ]] || echo "$1/.env names the project $old_project, this directory's .env $2"
+}
+
 # la8_record_fields <state file>: the backup's lines for .upgrade-rollback (empty when the step took none).
 la8_record_fields() {
   local name value
@@ -164,12 +225,17 @@ case "$1" in
   *) exit 2 ;;
 esac'
 
-# la8_preflight <old dir> <record> <work dir> <with fleet: yes|no>: every precondition of the restore, before anything
-# stops (Agent design contract 8): the credentials and the key, the newest backup of each stanza is the recorded one
-# (alpha.8 restores the newest), and the recorded OpenBao snapshot and Fleet dump are downloaded into <work dir> and
-# decrypt with the key.
+# la8_preflight <old dir> <record> <work dir> <with fleet: yes|no> <project>: every precondition of the restore, before
+# anything stops (Agent design contract 8): both directories name the project whose volumes are replaced, the
+# credentials and the key, the newest backup of each stanza is the recorded one (alpha.8 restores the newest), and the
+# recorded OpenBao snapshot and Fleet dump are downloaded into <work dir> and decrypt with the key.
 la8_preflight() {
-  local old="$1" record="$2" work="$3" fleet="$4" f svc want got
+  local old="$1" record="$2" work="$3" fleet="$4" project="$5" f svc want got problem
+  problem="$(la8_project_problem "$old" "$project")"
+  if [[ -n "$problem" ]]; then
+    echo "rollback: $problem; the restore would delete the volumes of one project and start $LA8_RELEASE in the other. Set the same PADDOCK_PROJECT in both; nothing was changed" >&2
+    return 1
+  fi
   for f in backup_encryption_key backup_pgbackrest_access_key backup_pgbackrest_secret_key; do
     [[ -s "$old/.secrets/$f" ]] || { echo "rollback: $old/.secrets/$f is missing or empty; nothing was changed" >&2; return 1; }
   done

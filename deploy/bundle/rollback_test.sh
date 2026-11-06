@@ -433,6 +433,7 @@ run 0 "rollback to 0.1.0-alpha.8 by its restore procedure" "$work/t/old" --yes
 has "the plan names alpha.8's restore procedure" "0\.1\.0-alpha\.8's restore procedure"
 has "the plan names the loss from the backup on" 'Every change after the pre-upgrade backup \(2026-11-06T09:59:40Z\) can be lost'
 has "the plan names the custodians" 'unsealed by three custodians or the automatic unseal'
+has "the plan names the fence as the archive's end" 'reaches the WAL 0\.1\.0-alpha\.8 archived until the upgrade stopped its pgBackRest right before \./paddock up'
 not_called "no restore.sh function" '^restore_'
 before "the newest paddock backup is checked before down" '^old compose run --rm --no-deps -T pgbackrest info$' "$DOWN"
 before "the newest authentik backup is checked before down" '^old compose run --rm --no-deps -T pgbackrest-authentik info$' "$DOWN"
@@ -509,6 +510,22 @@ run 1 "alpha.8's pgBackRest credential is missing" "$work/t/old" --yes
 has "the missing file is named" 'backup_pgbackrest_secret_key is missing or empty'
 not_called "nothing stops without the credential" "$DOWN"
 if compgen -G "$work/t/new/.rollback-legacy.*" >/dev/null; then fail "a failed preflight leaves the work directory"; else pass "a failed preflight removes the work directory"; fi
+# Both directories must name the project whose volumes go (Review 1, m1): checked before anything stops.
+setup_alpha8
+echo "PADDOCK_PROJECT=paddock-old" >>"$work/t/old/.env"
+run 1 "the old directory names another Compose project" "$work/t/old" --yes
+has "the differing projects are named" 'names the project paddock-old, this directory.s \.env paddock'
+not_called "nothing stops with differing projects" "$DOWN"
+not_called "no volume goes with differing projects" "$VOLRM"
+setup_alpha8
+echo "PADDOCK_PROJECT=paddock" >>"$work/t/old/.env"
+run 0 "the old directory names the default project explicitly" "$work/t/old" --yes
+called "the restore runs when the projects match" '^old compose run --rm --no-deps -T pgbackrest restore$'
+setup_alpha8
+echo "PADDOCK_PROJECT=paddock-old" >>"$work/t/old/.env"
+echo "PADDOCK_PROJECT=paddock-old" >>"$work/t/new/.env"
+run 0 "both directories name the same project" "$work/t/old" --yes
+called "the volumes of the named project go" "${VOLRM}paddock-old_postgres-data$"
 setup_alpha8
 sed -i '/^legacy-/d; /^method=/d' "$work/t/new/.upgrade-rollback"
 run 1 "a record without alpha.8's backup" "$work/t/old" --yes

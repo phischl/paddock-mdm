@@ -514,10 +514,26 @@ path lives in `deploy/compose/scripts/legacy-alpha8.sh`, which both commands sou
    `.upgrade-rollback` gains `method=legacy-0.1.0-alpha.8`, `legacy-paddock`, `legacy-authentik`, `legacy-openbao`,
    `legacy-fleet` and `legacy-at` (the time the backup completed). These fields are bound to the attempt like the
    rest of the record (amendment 2026-11-06 item 5).
+
+   **The fence (upgrade step `up`, before the record).** alpha.8's restore stages every WAL segment the bucket holds,
+   and alpha.8's pgBackRest would otherwise keep pushing from the shared spool while alpha.9's `up` migrates. So right
+   before the rollback point is recorded, the upgrade runs `<old>/paddock compose stop pgbackrest
+   pgbackrest-authentik`, then `run --rm --no-deps -T pgbackrest flush` and the same for `pgbackrest-authentik`. The
+   bucket's archive then ends before alpha.9 touches a database; WAL written after that reaches alpha.9's local
+   repository only. A failed stop or flush starts alpha.8's pgBackRest again, writes no record and does not run `up`;
+   the next run repeats the fence. After the fence, when nothing new can reach the bucket, the upgrade checks that the
+   newest backup of both stanzas is still the one recorded by the step `backup`: alpha.8's pgBackRest takes a full
+   backup on its own once the last is 24 h old, for example while a stopped run waits, and alpha.8's restore always
+   restores the newest. On a mismatch (or an unreadable `info`) it starts alpha.8's pgBackRest again, removes the step
+   `backup` and its `legacy-*` lines from `.upgrade-state`, writes no record and does not run `up`; the next run takes
+   the backup again. Every failure before `up` (fence, this check, the record write) says that `up` did not run and
+   alpha.8 runs unchanged, and leaves alpha.8's pgBackRest running. The record's `at` is the time right after the fence.
 3. **Rollback.** Instead of the old `restore.sh`, `rollback.sh` runs alpha.8's `docs/operations/restore.md` steps
    2–6 through `<old>/paddock compose`.
    - **Before anything stops**, in this order:
      - the record names a valid legacy backup;
+     - the old directory names the same Compose project as this one (`PADDOCK_PROJECT` of the environment, else of
+       each `.env`, default `paddock`), because the volumes of this project are deleted and alpha.8 starts in its own;
      - alpha.8's key and pgBackRest credential files exist;
      - the newest backup of each stanza is the recorded one (alpha.8's `restore` always takes the newest);
      - the recorded snapshot and, when `FLEET_IMAGE` changed, the dump are downloaded into a private work directory
@@ -525,7 +541,7 @@ path lives in `deploy/compose/scripts/legacy-alpha8.sh`, which both commands sou
    - **Then:**
      - `./paddock down`;
      - both PostgreSQL clusters are restored by alpha.8's `pgbackrest restore` to the newest WAL alpha.8 archived.
-       0.1.0-alpha.9 archives into its local repository, so that WAL ends before `up`;
+       The fence of item 2 ends that archive before `up`, and 0.1.0-alpha.9 archives into its local repository;
      - the recovery is awaited;
      - the snapshot is restored into a fresh OpenBao with one temporary share (`openbao-restore.sh`), and the restored
        OpenBao is unsealed by the custodians or the automatic unseal;
@@ -534,8 +550,8 @@ path lives in `deploy/compose/scripts/legacy-alpha8.sh`, which both commands sou
      - pgBackRest starts, then `<old>/paddock up`.
    - **pgBackRest starts last, not in step 3.** With its fresh state it takes a full backup at once, which would make
      a repeated rollback refuse after a later failure.
-   - **The loss window.** It starts at `legacy-at`, not at `up-started`: the restore reaches the WAL that alpha.8
-     archived before `up`. The plan says so.
+   - **The loss window.** It starts at `legacy-at` at the latest, not at `up-started`: the restore reaches the WAL
+     that alpha.8 archived until the fence. The plan says so.
    - **Escrow.** The escrow bucket is not part of alpha.8's restore and is not restored.
 4. **Volumes and OpenBao (item 49).** The legacy rollback deletes and recreates exactly these volumes:
    `postgres-data`, `authentik-postgres-data`, both `pgbackrest-spool-*`, both `pgbackrest-state-*` and

@@ -115,7 +115,7 @@ rb_legacy_restore() {
   RB_LEGACY_WORK="$(mktemp -d "$new/.rollback-legacy.XXXXXX")"
   # The downloaded sets and the temporary OpenBao root token of the fresh instance live here only.
   trap 'rm -rf "$RB_LEGACY_WORK"' EXIT
-  la8_preflight "$old" "$record" "$RB_LEGACY_WORK" "$fleet"
+  la8_preflight "$old" "$record" "$RB_LEGACY_WORK" "$fleet" "$PADDOCK_PROJECT"
   rb_mark_started
   echo down >"$RB_PHASE"
   echo "+ ./paddock down"
@@ -238,7 +238,7 @@ rollback_main() {
     if [[ "$fleet" == yes ]]; then echo "     Fleet's database from $(rb_value "$record" legacy-fleet);"; fi
     echo "     then the restore commands (bump-bundle-seq, rebuild-cache, recompile --all). The escrow bucket is not part of it."
     echo "  3. $old/paddock up"
-    echo "Every change after the pre-upgrade backup ($(rb_value "$record" legacy-at)) can be lost: the restore reaches the WAL $old_version archived before ./paddock up ($at)."
+    echo "Every change after the pre-upgrade backup ($(rb_value "$record" legacy-at)) can be lost: the restore reaches the WAL $old_version archived until the upgrade stopped its pgBackRest right before ./paddock up ($at)."
   elif ((${#components[@]} > 0)); then
     echo "  2. restore ${components[*]} from the local backup repository at $at (the pre-upgrade set $(rb_value "$record" label))"
     echo "  3. $old/paddock up"
