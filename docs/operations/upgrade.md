@@ -1,8 +1,317 @@
 # Upgrade and rollback
 
-How to move an installation from version A to version B with the operator bundle (plan M7b decisions 27–28,
-ADR 0013, ADR 0022). Upgrade the control plane first, the audit host second; agents after the servers — except
-where the release notes of B say otherwise.
+How to move an installation from release A to the next release B with the operator bundle: three commands, with a
+guarantee behind them (ADR 0047, plan M16). `./paddock upgrade-check <old dir>` tells you what will happen and what is
+missing and changes nothing; `./paddock upgrade <old dir>` does the upgrade; `./paddock rollback <old dir>` goes back.
+Upgrade the control plane first, the audit host second, and roll out the agents after the servers, except where the
+release notes of B say otherwise.
+
+## Before you start
+
+- **The guarantee.** From 0.1.0-alpha.8 on, every release B upgrades from the release directly before it, A, without
+  data loss, and rolls back to A. CI proves it for every release candidate: it installs A from its published bundle,
+  seeds data, upgrades, probes, restores a backup and rolls back (`docs/operations/testing-strategy.md`). A release
+  that could not keep it would not be cut. The guarantee covers one step at a time: `./paddock upgrade-check` refuses
+  to skip a release and names the releases to go through first. The first guaranteed pair is 0.1.0-alpha.8 →
+  0.1.0-alpha.9. Earlier releases have no guaranteed path (*Archive: releases before the guarantee*, below).
+- **Read the release notes of B** (`CHANGELOG.md`, and `RELEASE-NOTES` in the bundle directory, which the commands
+  read). Every release section carries three lines, and the commands act on them:
+  - `Schema: unchanged` or `Schema: migrations NNNNN–NNNNN (…); audit …` decides the rollback. Without a `Schema:` line
+    the commands assume a schema change. Audit migrations also decide whether the old audit writer is stopped.
+  - `Upgrade: from <A>: automatic` or `Upgrade: from <A>: steps: <text>`. The check prints it and warns when it names
+    steps. Do the steps.
+  - `Agents: supports <N-2>, <N-1>, <N>`, the agent window of B.
+- **The agent window.** Until 0.1.0, the server supports agents of its own release and the two previous releases
+  (ADR 0013, amendment 2026-11-04). A device whose agent is outside the window still checks in. It receives only the
+  agent update offer of the current rollout (regardless of its wave) and the safety commands, no configuration bundle
+  and no other command, until it runs a supported agent; the portal shows it as `agent_outdated`
+  (`docs/operations/agent-releases.md`). The check lists such devices before the upgrade: it fails when more than 1 %
+  of the active devices, or more than 5, whichever is larger, would be outside the window of B, and warns below that.
+  Residual risk RR-106 covers devices that are offline during the upgrade.
+- **A server upgrade never requires an agent upgrade**: the server supports agents of its own release and the two
+  previous releases. Upload an agent release only to a server of the same or a newer release.
+- **What the check reads.** `./paddock upgrade-check` asks the running stack and the files of both directories; it
+  never prints a setting or a secret, only their names. The items are listed under *Upgrade*, below. The same report
+  of the server, for the release the server runs, is the card *Upgrade* on the platform administrator's landing page
+  in the portal (the support window, the agents outside it, the backup state; no action) and
+  `GET /api/platform/v1/upgrade-check?target_version=<release>`.
+- **What you need.** B's bundle (downloaded, verified and extracted as `docs/operations/install.md` section 3
+  describes) next to the running bundle directory, for example `/opt/paddock/paddock-deploy-<B>/` beside
+  `/opt/paddock/paddock-deploy-<A>/`. On the control plane, three custodians of the OpenBao unseal shares when B
+  changes OpenBao's image or configuration (below), and a root token in `BAO_TOKEN` when B adds OpenBao keys, policies
+  or AppRoles (`docs/operations/openbao.md` section 1; revoke the token afterwards). Free disk space on Docker's data
+  root: the check wants the size of B's new images times two plus 2 GiB.
+- **Where each command runs.** `upgrade-check`, `upgrade` and `rollback` all run in B's directory. `<old dir>` is
+  always the directory of the running release A. Keep `PADDOCK_PROJECT` unchanged, so that B uses the same containers,
+  networks and volumes.
+
+## Upgrade (each host)
+
+Do the control plane first, then the audit host, each in its own B directory. A lab host (`PADDOCK_HOST=lab`) runs
+both roles and follows the control plane's steps.
+
+1. **Extract B** next to A as described above. Do not create `.env` or `.secrets/` in it: `./paddock upgrade` copies
+   them from A.
+2. **Check**, in B's directory. This is read-only:
+
+   ```sh
+   ./paddock upgrade-check ../paddock-deploy-<A>          # audit host: the same
+   ./paddock upgrade-check ../paddock-deploy-<A> --json   # {"items": [{name, status, detail}], "exit": n}
+   ```
+
+   | Flag | Effect |
+   | --- | --- |
+   | `<old dir>` (required) | The directory of the running release A. It must differ from B's directory. |
+   | `--json` | Prints `{"items":[{"name","status","detail"}],"exit":<code>}` instead of the table. |
+
+   The exit code is 0 without a FAIL, 1 with at least one FAIL and 2 on a usage error (a missing or unknown
+   argument, a missing directory, the same directory twice). The items, in this order:
+
+   | Item | What it checks |
+   | --- | --- |
+   | `old bundle verified` | `<old dir>/paddock verify` passes: no shipped file of A changed (FAIL otherwise). |
+   | `versions adjacent` | A is the release directly before B in the release list of B's bundle (`RELEASES`). FAIL when A is older by more than one release (the detail says which releases to go through first), is not older than B, or is no known release; WARN when B is not a release (a bundle of another channel). |
+   | `release notes` | Prints the `Upgrade:` and the `Agents:` line of B. PASS for `automatic`, WARN when the line names steps or is missing. |
+   | `env` | FAIL for every key of B's `.env.example` (`.env.lab.example` on a lab) that A's `.env` lacks and the Compose files do not default, with the example's comment; WARN for keys of A's `.env` that B does not know. |
+   | `secrets` | FAIL for secret files that `./paddock secrets` cannot generate and A lacks (`release-production/…`, `approle/…`); INFO for the files it will generate. |
+   | `disk` | FAIL when the free space of Docker's data root is below the size of B's new images times two plus 2 GiB; WARN when a size cannot be read (offline). |
+   | `images pullable` | `docker manifest inspect` of every image of this host; WARN for those without a manifest (offline, unreachable registry). |
+   | `server report` | The server's own report (`paddock-server admin upgrade-check --target-version <B>`) asked through A's stack: `migrations` (the database at or below B's newest migration), `agents` (above), `backups` (an active key; every enabled target with a success of every kind within 26 h, the escrow kind within 3 h), `openbao` (sealed state), `pending` (an open restore plan, a running agent rollout, a halted configuration rollout: WARN) and `sessions`. Printed below the table. With A = 0.1.0-alpha.8, which predates the command, B's image answers against A's database. WARN when A's stack is not running or the report cannot be produced; INFO on the audit host. |
+   | `openbao unseal path` | PASS with automatic unseal and its shares file; WARN otherwise (three custodians must be available during `./paddock up`); INFO on the audit host. |
+   | `running stack healthy` | Every service of A is healthy or finished cleanly (WARN otherwise). |
+
+   Fix every FAIL before you continue. `./paddock upgrade` runs the same check and stops on a FAIL.
+3. **Upgrade**, in B's directory:
+
+   ```sh
+   BAO_TOKEN=<root token> ./paddock upgrade ../paddock-deploy-<A> [--yes] [--allow-unsupported-agents] [--skip-backup]
+   ```
+
+   Leave `BAO_TOKEN` out when B's release notes name no OpenBao change.
+
+   | Flag | Effect |
+   | --- | --- |
+   | `<old dir>` (required) | The directory of the running release A. |
+   | `--yes` | Does not ask for `yes` on the terminal after the plan. Without it, any other answer stops the run before the next step. |
+   | `--allow-unsupported-agents` | Turns the agents FAIL of the server report into an accepted result: those devices stop receiving bundles and commands until their agent is updated. Nothing else is overridable: any other FAIL stops the upgrade. |
+   | `--skip-backup` | Takes no pre-upgrade backup. Refused on the control plane and on a lab host with backups unless the release notes say `Schema: unchanged` and `FLEET_IMAGE` is the same in both `versions.env`. On a lab host without backups (`PADDOCK_LAB_BACKUP` is not `yes`) it is required when the schema changes or `FLEET_IMAGE` changes: the rollback is then only `down` and the old `up`, and the data that B migrated stays (`./paddock rollback` refuses after a schema change there). The audit host takes no backup and needs no flag. |
+
+   The command starts in a freshly extracted directory. A directory that already has `.env` or `.secrets/` but no
+   `.upgrade-state` is refused (exit 2); so is a directory whose `.upgrade-state` names another old directory. It
+   prints the plan, asks for `yes`, and runs these steps, each printing its command first:
+
+   | Step | What it does |
+   | --- | --- |
+   | `upgrade-check` | The check above; stops on a FAIL. |
+   | `migrate-from` | Copies `.env`, `.secrets/` and `compose.backup-targets.yaml` (`cp -a`) from A. A partial copy of an earlier run of this command is removed and copied again. |
+   | `secrets` | `./paddock secrets`: generates missing secrets only and prints their names. |
+   | `pull` | `./paddock pull`. |
+   | `check` | `./paddock check`: every item PASS, else the run stops, and A still runs. |
+   | `backup` | On the control plane and on a lab host with backups: `<old dir>/paddock backup now --label pre-upgrade-<B> --wait`. A release without `backup now` (other than 0.1.0-alpha.8, below) is refused before anything changes. |
+   | `audit-writer-stop` | Audit host and lab, when B's `Schema:` line names audit migrations (or is missing): `<old dir>/paddock compose stop paddock-audit-writer`. B's writer starts only after the audit migrations, but A's writer would keep running while they hold their table locks; its writes fail and are redelivered until the queue dead-letters them. Stopped, new audit events wait in the queue and `./paddock up` starts B's writer, which writes them. A backfill can take minutes on a large index (`docs/operations/capacity.md`, *Audit index commit sequence backfill*). |
+   | `up` | Records the rollback point (below), then `./paddock up`: Compose recreates the containers with B's images and `paddock-migrate` applies the schema migrations. |
+   | `openbao` | Control plane and lab: with `BAO_TOKEN` set, `./paddock bootstrap openbao` (idempotent). Without it, the step prints the manual step when B's `Upgrade:` line names OpenBao and is otherwise skipped. |
+   | `post-checks` | `./paddock ps` shows every service healthy; the new server's `admin upgrade-check --target-version <B>` reports the `migrations` item at the binary's version (control plane and lab); `./paddock check --online` (audit host and lab). |
+
+   **Unseal.** When B changes the OpenBao image or its configuration, `./paddock up` recreates OpenBao and it starts
+   **sealed**. The Paddock roles cannot become healthy until it is unsealed, so `./paddock up` keeps waiting (up to
+   15 minutes, then it fails and names OpenBao as sealed). Have three custodians ready: while it waits, they run
+   `./paddock bao operator unseal` in a second shell, one share each (`docs/operations/install.md` section 6); if it
+   timed out, unseal and run `./paddock upgrade ../paddock-deploy-<A>` again. With automatic unseal on
+   (`docs/operations/openbao.md` section 6) the unsealer does this. `./paddock up` never unseals by itself: the shares
+   are not on the host.
+
+   **Nothing changes on A's stack before the backup is done.** The steps up to and including `backup` leave A running
+   (`audit-writer-stop` stops only its audit writer). A failed step stops the run with the state of the host and the
+   one next action. The progress is in `.upgrade-state` (one `done=<step>` line per finished step); running the same
+   command again continues at the first unfinished step, and a successful run deletes the file. A failed `up` may
+   leave B partly running with its migrations partly applied: fix the cause and run the command again, or roll back.
+4. **Watch** the readiness of the roles and the alerts for an hour (`docs/operations/monitoring.md`). Keep A's
+   directory until the next upgrade: it is the rollback. A's `.secrets/` stays a full copy of the secrets, including
+   the OpenBao shares file `.secrets/openbao/auto-unseal-shares` when automatic unseal is on. When you disable
+   automatic unseal later, delete that file in A's directory as well (`docs/operations/openbao.md` section 6,
+   *Disabling*): `./paddock auto-unseal disable` deletes only the copy of the directory it runs in. Rotate the shares if
+   the host may have been copied. When you delete A's directory, delete its `.secrets/` with it.
+
+Then the audit host, the same way (there is no `backup` step; the audit writer stop applies when B has audit
+migrations).
+
+**The rollback point.** Right before the first `./paddock up`, the upgrade writes `.upgrade-rollback` in B's directory:
+A's directory, both versions, whether a backup was taken, its label `pre-upgrade-<B>`, the time `at` and a random
+attempt ID that `.upgrade-state` carries too. A rollback uses the record only for the upgrade attempt that wrote it. A
+later upgrade from A's directory renames A's own record to `.upgrade-rollback.superseded-by-<version>`: a rollback from
+there would stop the newer release and restore a point before every change since.
+
+**Agents.** After the servers, roll out B's agent release with the staged rollout (`docs/operations/agent-releases.md`)
+unless the release notes of B say agents come first. Devices outside the window of B come back by updating.
+
+## Rollback
+
+`./paddock rollback <old dir> [--yes]`, in B's directory. `--yes` skips the terminal question `yes` (the restore's own
+confirmation is answered by it too); `<old dir>` is the directory the upgrade ran from. Migrations only move forward
+(`server/migrations/`; there is no down migration), so the rollback depends on B's `Schema:` line:
+
+- **`Schema: unchanged`**: `./paddock down` in B's directory, then `<old dir>/paddock up`. Same project, same volumes,
+  A's images by digest from A's `versions.env`.
+- **`Schema: migrations …`** (or no `Schema:` line): A cannot run on B's schema. On the control plane and on a lab
+  host with backups, the rollback restores PostgreSQL, OpenBao and the escrow bucket (and Fleet when `FLEET_IMAGE`
+  differs between the two `versions.env`: Fleet migrated its database, so A's Fleet needs the dump) from the **local**
+  backup repository to the point just before the upgrade's first `up` (`up-started`), with A's own `restore.sh`, then
+  starts A with `<old dir>/paddock up`. **Every change written after that point is lost**: devices that checked in,
+  audit events in the control-plane database, configuration edits. The audit domain's WORM evidence stays. The upgrade
+  guarantees the pre-upgrade backup exists at or before that point (`backup now --label` checks it). The key of the
+  set is `.secrets/backup_encryption_key` of A's directory when it made the set, otherwise the command asks for it.
+- **`Schema: unchanged` but `FLEET_IMAGE` changed**: only Fleet's dump is restored.
+- **The audit host** rolls back with `down` and A's `up` only: audit migrations within a guaranteed pair are additive,
+  so A's writer inserts into a superset schema.
+- **A lab host without backups** (`PADDOCK_LAB_BACKUP` not `yes`) refuses a rollback after a schema change: there is no
+  set to restore.
+
+**Before anything stops**, the command checks, in this order: the rollback record belongs to this upgrade attempt and
+names a point (else it refuses and points at `./paddock restore`, `docs/operations/restore.md`); the running stack is
+B (the version label of its containers; a later upgrade from this directory supersedes the record). It then prints the
+steps and *every change after the point is lost* and asks for `yes` (unless `--yes`). Still before `./paddock down`, a
+restore checks that the key matches the set's manifest and that A's preflight passes (schema versions, stanzas, the
+oldest backup at or before the point, the OpenBao snapshot and the Fleet dump), and asks its own confirmation `restore`
+(`--yes` answers it). A failure before `down` leaves the running stack untouched.
+
+**One rollback per upgrade attempt.** After a successful rollback `.upgrade-rollback` is renamed
+`.upgrade-rollback.rolled-back-<attempt>` and `.upgrade-state` gains `rolled-back=<time>`; a second rollback of the
+same attempt is refused. A new `./paddock upgrade` starts a new attempt and copies `.env` and `.secrets/` again: A runs
+in between and may have been reconfigured. A failed rollback is repeated by running the same command again. If it
+failed while it replaced data, A's containers may run on partly restored volumes: do not start B on them.
+
+Never edit the shipped files of a bundle to change behaviour: `./paddock verify` reports it, the check refuses it
+(`old bundle verified`), and the next upgrade replaces them. Settings belong in `.env`.
+
+## Per release
+
+One subsection per release from 0.1.0-alpha.8 on, newest first. Each states what B changes for A's installation. The
+older notes are in the *Archive*.
+
+### 0.1.0-alpha.9, from 0.1.0-alpha.8
+
+The release notes of this release carry these lines (the lines of `CHANGELOG.md` are authoritative):
+
+```text
+Schema: migrations 00100–00109 (control-plane database); audit unchanged
+Upgrade: from 0.1.0-alpha.8: steps: BAO_TOKEN for ./paddock upgrade, then ./paddock bootstrap buckets and ./paddock up; confirm the backup key in the portal
+Agents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9
+```
+
+This is the first guaranteed pair. It is the one upgrade where A lacks what the commands usually rely on: 0.1.0-alpha.8
+has no `backup now --label`, no local backup repository and no `restore.sh`. Both commands therefore carry a legacy path
+for exactly this pair (below). Control plane, audit host and lab follow *Upgrade* and *Rollback*; this subsection is
+what is specific to alpha.9. It has no audit migration, so on the audit host `audit-writer-stop` is skipped.
+
+1. **The steps after the upgrade.** Run `./paddock upgrade` with `BAO_TOKEN` set, so that `bootstrap openbao` runs in
+   its step: this release adds the Transit key `backup-wrap` and the policies and AppRole of `paddock-api` and
+   `paddock-backup` (`docs/operations/openbao.md` section 1). Then, on the control plane and a lab with backups, run
+   `./paddock bootstrap buckets` (the read-only escrow credential `rustfs_escrow_backup_*` of the backup role) and
+   `./paddock up` once more. `./paddock secrets` (the upgrade's step `secrets`) adds `db_paddock_backup_password` and
+   `db_paddock_backup_url`; the database role `paddock_backup` is created by `db-provision` before the migration.
+   `./paddock check` of the upgrade fails when the backup role or one of its secrets is not mounted.
+2. **Backups move.** Plan M15, ADR 0046 (`docs/operations/backup.md`, `docs/operations/restore.md`). Backups no longer go
+   to the one S3 bucket of `PADDOCK_BACKUP_S3_*`. pgBackRest writes to the local volume `backup-repo`, and the new role
+   `paddock-backup` adds the OpenBao snapshots, the Fleet dumps and the escrowed LUKS headers and mirrors the set to
+   the targets a platform administrator configures in the portal. The worker no longer takes snapshots,
+   `fleet-backup-upload` is gone, and `fleet-backup` writes plaintext dumps that only the backup role seals. **Until a
+   platform administrator has confirmed a backup key, nothing is backed up** (the alert `PaddockBackupKeyUnconfirmed`
+   fires after an hour).
+3. **The key is imported once, then confirmed.** The key of 0.1.0-alpha.8 is the file `.secrets/backup_encryption_key`
+   (copied by `migrate-from`); the api imports it at its first start as the key `legacy`, state `unconfirmed`. In the
+   portal under *Platform* → *Backup* → *Key*, a platform administrator types the characters at the six positions shown
+   from that file. Keep this key: the backups of 0.1.0-alpha.8 in the old bucket are encrypted with it, and a rollback
+   to 0.1.0-alpha.8 needs them. Alternatively discard the imported key and generate a new one: new backups then use the
+   new key, and the old key stays necessary for the old bucket.
+4. **Removed settings.** `PADDOCK_BACKUP_S3_*` in `.env`, the secrets `backup_{pgbackrest,worker,fleet}_{access,secret}_key`
+   and the service `fleet-backup-upload` are not used by this release, and `./paddock check` fails on a service that
+   still names the S3 variables. Leave them in A's directory: they are the rollback to 0.1.0-alpha.8, which restores
+   from the old bucket. New setting: `PADDOCK_BACKUP_LOCAL_ROOT` (default `/srv/paddock-backup`), the base directory of
+   local backup targets; `./paddock check` verifies it. `./paddock upgrade` removes the container of
+   `fleet-backup-upload`, which B no longer defines, right before `up` (by hand: `<A>/paddock compose rm -sf
+   fleet-backup-upload` after the pre-upgrade backup and before `up`); a rollback to A starts it again.
+5. **The old bucket becomes an S3 target.** To keep backing up to the same bucket, add it in the portal under *Backup* →
+   *Targets* as an `s3` target with a **new** credential that may list, read, write and delete below the target's
+   prefix (the old pgBackRest credential only reaches `pgbackrest/`, `openbao/` and `fleet/`), and give it a prefix such
+   as `paddock` so that the new set (`<prefix>/paddock-backup/`) stays apart from the old objects. No host step is
+   needed for an S3 target. Do not delete the old objects while a rollback to 0.1.0-alpha.8 is still wanted. The first
+   copy of a large set takes several rounds (`docs/operations/backup.md`, "Targets").
+6. **Local, SMB and NFS targets** need the host step: `./paddock backup-target apply`, then `./paddock up`. After the
+   first full backup, `./paddock backup status` shows the key, a run per kind and each target.
+7. **The pre-upgrade backup of 0.1.0-alpha.8 (the step `backup`).** The upgrade runs alpha.8's own backup through
+   `<old dir>/paddock compose`, with alpha.8's Compose files and images, while alpha.8 still runs: full pgBackRest
+   backups of both databases (`--start-fast`), an OpenBao snapshot and a Fleet dump. It checks in the old bucket that
+   all four exist and are the newest (the dump may take up to 5 minutes to appear: the running `fleet-backup-upload`
+   uploads it).
+8. **The fence (the step `up`).** alpha.8's restore stages every WAL segment the bucket holds, so right before the
+   rollback point is recorded the upgrade stops alpha.8's `pgbackrest` and `pgbackrest-authentik` and flushes both. The
+   bucket's WAL archive then ends before B touches a database; WAL written afterwards reaches B's local repository
+   only. It then checks again that the newest backup of each stanza is still the recorded one (alpha.8's pgBackRest
+   takes a full backup of its own once the last is 24 h old, for example while a stopped run waits). On any failure
+   it starts alpha.8's pgBackRest again, writes no record and does not run `up`: alpha.8 runs unchanged, and the next
+   run repeats the step (and, on a newer backup, takes the backup again).
+9. **Rolling back to 0.1.0-alpha.8.** `./paddock rollback` runs alpha.8's documented restore procedure through
+   `<old dir>/paddock compose`, from the old bucket. Before anything stops it checks that the record names a valid
+   legacy backup; that both directories name the same Compose project (the volumes of this project are deleted and
+   alpha.8 starts in its own); that alpha.8's key and pgBackRest credential files exist; that the newest backup of
+   each stanza is the recorded one; and that the recorded snapshot and, when `FLEET_IMAGE` changed, the dump download
+   and decrypt. Then it stops B (`./paddock down`) and:
+   - restores both PostgreSQL clusters with alpha.8's `pgbackrest restore` to the newest WAL alpha.8 archived (the
+     fence ended that archive before `up`) and waits for the recovery;
+   - restores the snapshot into a fresh OpenBao with one temporary share (`openbao-restore.sh`); the custodians or the
+     automatic unseal unseal the restored OpenBao;
+   - when Fleet changed, drops Fleet's database and loads the dump;
+   - runs the restore commands (`bump-bundle-seq`, `rebuild-cache`, `recompile --all`) in their binding order;
+   - starts pgBackRest, then `<old dir>/paddock up`. pgBackRest starts last: with its fresh state it takes a full
+     backup at once, which would make a repeated rollback refuse after a later failure.
+
+   **Which volumes are recreated.** Exactly these are deleted and recreated: `postgres-data`,
+   `authentik-postgres-data`, both `pgbackrest-spool-*`, both `pgbackrest-state-*` and `openbao-data`. The spools and
+   states go so that WAL left behind by B never reaches alpha.8's stanza. Fleet's volume is kept (its database is
+   dropped instead). Only the OpenBao whose volume was just emptied is initialized, and only after it reports
+   `"initialized": false`. No other volume is touched.
+
+   **What is lost.** The loss window starts at the time the pre-upgrade backup completed at the latest (`legacy-at` in
+   `.upgrade-rollback`): the restore reaches the WAL alpha.8 archived until the fence. The escrow bucket is not part
+   of alpha.8's restore and is not restored. The legacy path is removed once 0.1.0-alpha.8 leaves the support window.
+10. **Agents.** Upgrade the server first, then roll out this release's agent release
+    (`docs/operations/agent-releases.md`). Agents of 0.1.0-alpha.7 and 0.1.0-alpha.8 are inside the window and keep
+    working against the new server; agents of 0.1.0-alpha.6 and earlier are outside it (above): the check lists them
+    and FAILs when they exceed 1 % of the active devices or 5.
+
+### 0.1.0-alpha.8, from 0.1.0-alpha.7
+
+- **Upgrade in place from 0.1.0-alpha.7** with the manual runbook of that release (`docs/operations/upgrade.md` at the tag `v0.1.0-alpha.8`; the commands above replace it from the next pair on); from 0.1.0-alpha.6 or earlier
+  there is still no upgrade path (install 0.1.0-alpha.7 or this release fresh, as the Archive says). Only Paddock's own images
+  change: no third-party image, Compose file or Authentik blueprint, no new setting in `.env.example`, no new database
+  role, OpenBao AppRole or file under `.secrets/`. Schema: migrations 00090–00099 on the control plane (new tables,
+  columns and grants; 00097 fills three new device columns from the existing device data, so the upgrade recompiles no
+  device), no audit migration: on the audit host the stop of the audit writer does not apply. The rollback is the backup restore of the runbook's step 3 (the restore of alpha.8's own backup bucket).
+- What changes for existing data. Devices enrolled before the upgrade get the enrollment method
+  `unknown` and stay enforced; only devices adopted later start report-only. Staged configuration rollouts are off in
+  every organization until an organization administrator enables them under *Settings*, *Rollouts*
+  (`docs/operations/configuration-rollouts.md`). Change sets written before the upgrade have no stored previous state
+  and cannot be reverted; every change after it can, for 90 days. The software catalog is empty, and adding a package
+  source needs a fresh step-up (`docs/operations/software.md`).
+- Devices: upgrade the server first, then roll out this release's agent release
+  (`docs/operations/agent-releases.md`). The agent changes (report-only apply, enforcement of software assignments,
+  enrollment method and os-release in the check-in); the supervisor and `paddock-revoke` do not, and revocation stays
+  disabled. Agents of 0.1.0-alpha.7 keep working against the new server, but they ignore software assignments and
+  cannot run report-only: adopt existing laptops and assign software only once the devices run this release's agent
+  (`docs/operations/enroll-existing.md`, *Minimum agent release*). With software assignments, the agent writes
+  `/etc/apt/sources.list.d/paddock-<slug>.sources`, `/etc/apt/keyrings/paddock-<slug>.gpg` and
+  `/etc/apt/preferences.d/51paddock-software`; these files are a protected area: an edited one is restored, a foreign
+  `paddock-*` source or keyring is removed, each with `device.tamper_protected_file_changed`. When the last software
+  assignment of a device goes away, and when Paddock is removed from it, the agent deletes them again; installed
+  applications stay.
+
+## Archive: releases before the guarantee
+
+Notes of the releases before the guarantee (ADR 0047). These installations were upgraded by a manual runbook (`migrate-from`,
+`pull`, `check`, backup, `up`; `docs/operations/upgrade.md` at the tag `v0.1.0-alpha.8`), which the three commands above
+replace, or installed fresh. Releases before 0.1.0-alpha.8 have no guaranteed path: install the newest release fresh.
+"Step N" in this section is a step of that manual runbook, not of *Upgrade* above.
 
 **Binding exception — the release with the managed-file path tiers (ADR 0034, amendment 2026-10-16): agents first,
 then the server.** The new server stops shipping managed files on denied paths, and an agent older than that release
@@ -17,12 +326,8 @@ Paddock's service account the two permissions on authenticated sessions when it 
 start: restart Authentik once after the upgrade (`./paddock compose restart authentik-server authentik-worker`), or
 *End all sessions* records a failure with `upstream_unavailable` after it ended the portal sessions.
 
-## Before you start
+### Notes of the releases from 0.1.0-alpha.4 to 0.1.0-alpha.7
 
-- Read the release notes of every version between A and B (`CHANGELOG.md` of B). Each release states
-  `Schema: unchanged` or `Schema: migrations NNNNN–NNNNN` (both databases); that line decides how a rollback works.
-- A server upgrade never requires an agent upgrade: the server supports agents of its own and the two previous minor
-  versions (ADR 0013). Upload an agent release only to a server of the same or a newer minor version.
 - From 0.1.0-alpha.4: after this upgrade every Authentik sign-in — the portal, Authentik's own user and admin interfaces
   (`akadmin` included) and the device approval page — asks for a second factor and enrols one when missing.
 - From 0.1.0-alpha.4: the fix that keeps the Hello PIN working while a user stays signed in is on the device (the
@@ -95,95 +400,8 @@ start: restart Authentik once after the upgrade (`./paddock compose restart auth
   (`docs/operations/uninstall.md`), then publish this release's agent release on the new server
   (`docs/operations/agent-releases.md`) and enrol the devices with its packages, never with an older agent. The
   revocation tool `paddock-revoke` is unchanged and stays unsigned; revocation stays disabled.
-- **From 0.1.0-alpha.8: upgrade in place from 0.1.0-alpha.7** with the steps below; from 0.1.0-alpha.6 or earlier
-  there is still no upgrade path (install 0.1.0-alpha.7 or this release fresh, as above). Only Paddock's own images
-  change: no third-party image, Compose file or Authentik blueprint, no new setting in `.env.example`, no new database
-  role, OpenBao AppRole or file under `.secrets/`. Schema: migrations 00090–00099 on the control plane (new tables,
-  columns and grants; 00097 fills three new device columns from the existing device data, so the upgrade recompiles no
-  device), no audit migration: on the audit host step 4 does not apply. The rollback is the backup restore of step 3.
-- From 0.1.0-alpha.8: what changes for existing data. Devices enrolled before the upgrade get the enrollment method
-  `unknown` and stay enforced; only devices adopted later start report-only. Staged configuration rollouts are off in
-  every organization until an organization administrator enables them under *Settings*, *Rollouts*
-  (`docs/operations/configuration-rollouts.md`). Change sets written before the upgrade have no stored previous state
-  and cannot be reverted; every change after it can, for 90 days. The software catalog is empty, and adding a package
-  source needs a fresh step-up (`docs/operations/software.md`).
-- From 0.1.0-alpha.8 (devices): upgrade the server first, then roll out this release's agent release
-  (`docs/operations/agent-releases.md`). The agent changes (report-only apply, enforcement of software assignments,
-  enrollment method and os-release in the check-in); the supervisor and `paddock-revoke` do not, and revocation stays
-  disabled. Agents of 0.1.0-alpha.7 keep working against the new server, but they ignore software assignments and
-  cannot run report-only: adopt existing laptops and assign software only once the devices run this release's agent
-  (`docs/operations/enroll-existing.md`, *Minimum agent release*). With software assignments, the agent writes
-  `/etc/apt/sources.list.d/paddock-<slug>.sources`, `/etc/apt/keyrings/paddock-<slug>.gpg` and
-  `/etc/apt/preferences.d/51paddock-software`; these files are a protected area: an edited one is restored, a foreign
-  `paddock-*` source or keyring is removed, each with `device.tamper_protected_file_changed`. When the last software
-  assignment of a device goes away, and when Paddock is removed from it, the agent deletes them again; installed
-  applications stay.
 
-## Upgrade (each host)
-
-This section does not apply to the move to 0.1.0-alpha.7, which is a fresh installation ("Before you start"). It
-applies again to the move from 0.1.0-alpha.7 to 0.1.0-alpha.8.
-
-1. Download the bundle of B and its `.sigstore.json` and verify them as `docs/operations/install.md` section 3
-   describes. Extract it next to the running bundle directory, for example `/opt/paddock/paddock-deploy-<B>/` beside
-   `/opt/paddock/paddock-deploy-<A>/`.
-2. In B's directory:
-
-   ```sh
-   ./paddock migrate-from ../paddock-deploy-<A>     # copies .env, .secrets/ and compose.backup-targets.yaml (cp -a); refuses if they exist here
-   ./paddock pull
-   ./paddock check                                  # audit host: ./paddock check --online; every item PASS
-   ```
-
-   Compare `.env.example` of A and B: new settings of B have defaults; set them in `.env` if your installation needs
-   other values. Keep `PADDOCK_PROJECT` unchanged, so that B uses the same containers, networks and volumes.
-3. Control plane only: take a backup — full backups of both PostgreSQL databases, an OpenBao snapshot and a dump of
-   Fleet's MySQL (`docs/operations/restore.md`, "How the backups run") — and check that all four are in the backup
-   bucket. Fleet migrates its database when B brings a new Fleet version, so a rollback needs that dump:
-
-   ```sh
-   ./paddock compose run --rm --no-deps pgbackrest backup --start-fast
-   ./paddock compose run --rm --no-deps pgbackrest-authentik backup --start-fast
-   ./paddock compose run --rm --no-deps paddock-backup backup now --kind openbao --wait
-   ./paddock compose run --rm --no-deps fleet-backup once   # the backup role seals it within a minute
-   ```
-
-4. Audit host only, when the release notes of a version between A and B name **audit migrations** (`Schema: … audit
-   migrations …`): stop the running audit writer first, in A's directory:
-
-   ```sh
-   ./paddock compose stop paddock-audit-writer
-   ```
-
-   B's writer starts only after the audit migrations, but A's writer would keep running while they hold their table
-   locks; its writes fail and are redelivered until the queue dead-letters them. Stopped, new audit events wait in the
-   queue, and `./paddock up` starts B's writer, which writes them. A backfill can take minutes on a large index
-   (`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
-
-5. Start B:
-
-   ```sh
-   ./paddock up        # recreates the containers with B's images; paddock-migrate applies the schema migrations
-   ./paddock ps        # before the roles start
-   ```
-
-   Control plane: when B changes the OpenBao image or its configuration, `./paddock up` recreates OpenBao and it
-   starts **sealed**. The Paddock roles cannot become healthy until it is unsealed, so `./paddock up` keeps waiting
-   (up to 15 minutes, then it fails and names OpenBao as sealed). Have three custodians ready: while it waits, they
-   run `./paddock bao operator unseal` in a second shell, one share each (`docs/operations/install.md` section 6);
-   if it timed out, unseal and run `./paddock up` again. With automatic unseal on (`docs/operations/openbao.md`
-   section 6) the unsealer does this. `./paddock up` never unseals by itself: the shares are not on the host.
-
-6. Watch the readiness of the roles and the alerts for an hour (`docs/operations/monitoring.md`). Keep A's directory
-   until the next upgrade: it is the rollback. A's `.secrets/` stays a full copy of the secrets, including the
-   OpenBao shares file `.secrets/openbao/auto-unseal-shares` when automatic unseal is on. When you disable automatic
-   unseal later, delete that file in A's directory as well (`docs/operations/openbao.md` section 6, *Disabling*) —
-   `./paddock auto-unseal disable` deletes only the copy of the directory it runs in — and rotate the shares if the
-   host may have been copied. When you delete A's directory, delete its `.secrets/` with it.
-
-Then the audit host, the same way without step 3.
-
-## Notifications on a cluster initialized before them
+### Notifications on a cluster initialized before them
 
 The database roles need no manual step: the one-shot service `db-provision` creates every control-plane role whose
 password file is mounted (`paddock_notifier` among them) and sets every password again on each `./paddock up`, before
@@ -218,63 +436,6 @@ The same release adds the commit sequence of the audit index: its audit migratio
 stop the audit writer first (step 4). The backfill takes about 1.5 minutes per million events in the index (measured:
 1 000 000 events in 1 min 26 s on PostgreSQL 18); count them with `SELECT count(*) FROM audit_event` on
 `paddock_audit` (`docs/operations/capacity.md`, *Audit index commit sequence backfill*).
-
-## From 0.1.0-alpha.8: the backup moves
-
-Plan M15, ADR 0046 (`docs/operations/backup.md`, `docs/operations/restore.md`). This subsection is self-contained; it
-applies to the control plane and to a lab with `PADDOCK_LAB_BACKUP=yes`.
-
-**What changes.** Backups no longer go to the one S3 bucket of `PADDOCK_BACKUP_S3_*`. pgBackRest writes to the local
-volume `backup-repo`, and the new role `paddock-backup` adds the OpenBao snapshots, the Fleet dumps and the escrowed LUKS
-headers and mirrors the set to the targets a platform administrator configures in the portal. The worker no longer
-takes snapshots, `fleet-backup-upload` is gone (`./paddock upgrade` removes its container right before `up`; by
-hand, run `<A>/paddock compose rm -sf fleet-backup-upload` after the pre-upgrade backup and before `up`), and
-`fleet-backup` writes plaintext dumps that only the backup role seals. **Until a platform administrator has confirmed a backup key, nothing is backed up** (the alert
-`PaddockBackupKeyUnconfirmed` fires after an hour).
-
-1. **The key is imported once, then confirmed.** The key of 0.1.0-alpha.8 is the file `.secrets/backup_encryption_key`
-   (copied by `./paddock migrate-from`); the api imports it at its first start as the key `legacy`, state
-   `unconfirmed`. In the portal under *Platform* → *Backup* → *Key*, a platform administrator types the characters at the
-   six positions shown from that file. Keep this key: the backups of 0.1.0-alpha.8 in the old bucket are encrypted with
-   it, and a rollback to 0.1.0-alpha.8 needs them. Alternatively discard the imported key and generate a new one: new
-   backups then use the new key, and the old key stays necessary for the old bucket.
-2. **New secrets and OpenBao objects**, once, in B's directory after `./paddock migrate-from`: run `./paddock secrets`
-   (adds `db_paddock_backup_password` and `db_paddock_backup_url`; the database role itself is created by `db-provision`
-   before the migration), `./paddock bootstrap openbao` with a root token (the Transit key `backup-wrap` and the
-   policies of `paddock-api` and `paddock-backup`; `docs/operations/openbao.md` section 1) and `./paddock bootstrap
-   buckets` (the read-only escrow credential `rustfs_escrow_backup_*` of the backup role). `./paddock check` fails
-   until they exist.
-3. **Removed settings.** `PADDOCK_BACKUP_S3_*` in `.env`, the secrets `backup_{pgbackrest,worker,fleet}_{access,secret}_key`
-   and the service `fleet-backup-upload` are not used by this release, and `./paddock check` fails on a service that
-   still names the S3 variables. Leave them in A's directory: they are the rollback to 0.1.0-alpha.8, which restores
-   from the old bucket.
-4. **The lab's S3 bucket becomes an S3 target.** To keep backing up to the same bucket, add it in the portal under
-   *Backup* → *Targets* as an `s3` target with a **new** credential that may list, read, write and delete below the
-   target's prefix (the old pgBackRest credential only reaches `pgbackrest/`, `openbao/` and `fleet/`), and give it a
-   prefix such as `paddock` so that the new set (`<prefix>/paddock-backup/`) stays apart from the old objects. No
-   host step is needed for an S3 target. Do not delete the old objects while a rollback to 0.1.0-alpha.8 is still
-   wanted. The first copy of a large set takes several rounds (`docs/operations/backup.md`, "Targets").
-5. **Local, SMB and NFS targets** need the host step: `./paddock backup-target apply`, then `./paddock up`.
-
-After the first full backup, `./paddock backup status` shows the key, a run per kind and each target.
-
-## Rollback
-
-Migrations only move forward (`server/migrations/`; there is no down migration), so a rollback depends on the release
-notes of B:
-
-- **`Schema: unchanged`**: in B's directory `./paddock down`, then in A's directory `./paddock up`. Same project,
-  same volumes, A's images by digest from A's `versions.env`.
-- **`Schema: migrations …`**: A cannot run on B's schema. Restore the backup of step 3 with the restore runbook
-  (`docs/operations/restore.md`), then `./paddock up` in A's directory. **Every change written after that backup is
-  lost** (devices that checked in, audit events in the control-plane database, configuration edits); the audit
-  domain's WORM evidence stays.
-- **B changes the Fleet version** (`FLEET_IMAGE` in `versions.env`): in both cases A's Fleet cannot run on the
-  database B's Fleet migrated. Before `./paddock up` in A's directory, restore the Fleet dump of step 3 into an empty
-  `fleet-mysql` (`docs/operations/restore.md`, step 6).
-
-Never edit the shipped files of a bundle to change behaviour: `./paddock verify` reports it, and the next upgrade
-replaces them. Settings belong in `.env`.
 
 ## Upstream version watch
 

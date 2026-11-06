@@ -3075,6 +3075,24 @@
       }
     }
   },
+  "upgradeCard": {
+    "title": "Upgrade",
+    "version": "Release {version}",
+    "window": "Unterstützte Agents",
+    "agents": "Agents außerhalb des Fensters",
+    "noneOutside": "Kein aktives Gerät nutzt einen Agent außerhalb des Fensters.",
+    "outside": "{count, plural, one {# aktives Gerät nutzt einen Agent außerhalb des Fensters:} other {# aktive Geräte nutzen einen Agent außerhalb des Fensters:}}",
+    "more": "und {count} weitere",
+    "backups": "Backups",
+    "loading": "Der Upgrade-Bericht wird gelesen …",
+    "unknownVersion": "Kein Upgrade-Bericht für diese Server-Version: sie ist kein bekanntes Release.",
+    "status": {
+      "PASS": "In Ordnung",
+      "WARN": "Warnung",
+      "FAIL": "Fehlgeschlagen",
+      "INFO": "Info"
+    }
+  },
   "setup": {
     "title": "Paddock einrichten",
     "progress": "{done} von {total} Schritten erledigt",

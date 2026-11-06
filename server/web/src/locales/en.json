@@ -3075,6 +3075,24 @@
       }
     }
   },
+  "upgradeCard": {
+    "title": "Upgrade",
+    "version": "Release {version}",
+    "window": "Agents supported",
+    "agents": "Agents outside the window",
+    "noneOutside": "No active device runs an agent outside the window.",
+    "outside": "{count, plural, one {# active device runs an agent outside the window:} other {# active devices run an agent outside the window:}}",
+    "more": "and {count} more",
+    "backups": "Backups",
+    "loading": "Reading the upgrade report…",
+    "unknownVersion": "No upgrade report for this server version: it is not a known release.",
+    "status": {
+      "PASS": "OK",
+      "WARN": "Warning",
+      "FAIL": "Failed",
+      "INFO": "Info"
+    }
+  },
   "setup": {
     "title": "Set up Paddock",
     "progress": "{done} of {total} steps done",

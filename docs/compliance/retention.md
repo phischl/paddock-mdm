@@ -64,7 +64,11 @@ job that deletes and the audit event that proves it. "Now" means configurable pe
 | Valkey | Cache | Device keys, sequence numbers, step-up windows | Rebuilt from PostgreSQL; TTLs per key | — | — | — |
 | Container logs (Caddy access log, `slog` of the roles) | Operational | Client IPs, hostnames, usernames in messages; never secrets | Docker `json-file` rotation: 50 MiB × 10 files per container (`x-paddock-logging` anchor, this milestone) | Art. 6(1)(f) | Docker | Operator may shorten |
 | Prometheus | Metrics | No organization or person labels | 30 days (existing) | — | Prometheus | — |
-| Backups (pgBackRest, OpenBao snapshots, Fleet dumps, backup bucket) | Copies of the above | Everything above except WORM | 14 full backups (14 days) plus WAL; bucket noncurrent versions and `openbao/`, `fleet/` objects 30 days (`docs/operations/restore.md`) | Art. 6(1)(c)/(f), Art. 32 | Backup lifecycle (existing) | Operator |
+| `backup_run` (M15, `00100`) | Operational evidence | Kind, the label an administrator typed (at most 64 characters, may name people), who requested it (administrator or host operator), times, bytes, error class, per target the ID and result; never a key or credential | 400 days (operational evidence); the row is kept until the purge exists | Art. 6(1)(f), Art. 32 (A.8.13) | Planned: backup role, `retention.purged` store `backup_run`; none today (RR-125). Every run is also an audit event (`platform.backup_completed`, `platform.backup_failed`) | — |
+| `backup_restore_plan` (M15, `00100`, `00108`) | Operational evidence | Kind, source, point in time, components, the approving administrator, state, expiry, the host's failed step as free text, `abandoned by <administrator>` | 400 days (operational evidence); the row is kept until the purge exists | Art. 6(1)(f), Art. 32 | Planned: backup role, `retention.purged` store `backup_restore_plan`; none today (RR-125). Every planning, start, end, cancellation and abandonment is also an audit event (`platform.restore_*`) | — |
+| `backup_target_status` (M15, `00100`) | State | Per target and kind the last success, last error class and bytes; no personal data | Lifetime of the target: removed with it (`ON DELETE CASCADE`); overwritten by every mirror | Art. 6(1)(f) | None (state) | — |
+| `backup_key`, `backup_target`, `backup_schedule` (M15, `00100`) | State | The Transit-encrypted key and its challenge hash (never the key), the targets' settings and Transit-encrypted credentials, the schedule, the names of the administrators who changed them | Lifetime of the installation: a retired key is never deleted (a set made with it stays readable); a deleted target's row stays (`deleted_at`) until `./paddock backup-target apply` removed its volume and then deletes it | Art. 6(1)(f), Art. 32 | None (state); `./paddock backup-target apply` removes deleted targets | Schedule (`PUT /api/platform/v1/backup/schedule`) |
+| The backup set (`backup-repo` and every target; ADR 0032 amendment 2026-11-06) | Copies of the above and of the escrowed LUKS headers | Everything above except WORM | `retention_full` full backups (default 14) plus the WAL they need; OpenBao snapshots and Fleet dumps `openbao_keep_days` and `fleet_keep_days` (default 30, 7–365); escrowed headers until a recorded Destroy and the retention window after it; a retired key's repository until its retention has passed (`docs/operations/backup.md`) | Art. 6(1)(c)/(f), Art. 32 | Backup role (local expire and the mirror's rules, `docs/operations/backup.md`); pgBackRest | Schedule: all four periods |
 
 The per-organization settings are *Privacy settings* (`GET`/`PUT /api/v1/settings/privacy`, section
 `settings.privacy` of `paddock.yml`: `retired_inventory_days`, `audit_search_recorded`, `inventory_view_recorded`)
@@ -108,9 +112,10 @@ records as evidence for A.8.10 (information deletion).
 
 ## Deletion lag
 
-A purged row survives in backups for up to 30 days (dump and version expiry, `docs/operations/restore.md`) and in the
+A purged row survives in the backup set until its full backups, snapshots and dumps have expired (up to 30 days with
+the default schedule, `docs/operations/backup.md`, "Schedule and retention") and in the
 audit index copy of the event that proves its deletion. State this lag in your privacy notice; it is accepted as
-residual risk RR-94 ([residual-risks.md](residual-risks.md)). If you keep backups longer than 30 days, the lag grows
+residual risk RR-94 ([residual-risks.md](residual-risks.md)). If you lengthen the retention of the schedule, the lag grows
 accordingly; document the value you chose.
 
 ## Erasure requests

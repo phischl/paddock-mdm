@@ -172,3 +172,13 @@ creates missing roles, re-applies every role password from its secret file and k
 `paddock_owner` stays `NOCREATEROLE`; only `db-provision` holds the superuser password, and statement logging is off in
 its session so no role password reaches the server log. The script for `paddock_unsealer`
 (`deploy/compose/scripts/postgres-unsealer-role.sh`) is unaffected. The decision of this ADR is unchanged.
+
+## Amendment 2026-11-06 — the restore reference in the context
+
+The context line "Restore (`docs/operations/restore.md` step 4) relies on the Shamir shares" cites a step that no
+longer exists: plan M15 (ADR 0046) replaced the manual restore runbook with `./paddock restore`, and
+`docs/operations/restore.md` is now organised by scenario. The statement holds unchanged and is found in the section
+*What `./paddock restore` does* of that document: the snapshot is restored into a fresh OpenBao with one temporary
+share, and the restored OpenBao is unsealed by three custodians with `./paddock bao operator unseal`, or
+automatically when `PADDOCK_AUTO_UNSEAL=yes` and the shares file exists (`docs/operations/openbao.md` section 6). The
+decision of this ADR is unchanged.

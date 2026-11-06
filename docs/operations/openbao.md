@@ -126,7 +126,8 @@ expire (8 h at most). Rotate monthly (architecture §9.6).
 
 ## 5. Snapshots after key operations
 
-`paddock-worker` takes an encrypted Raft snapshot every 6 hours (`docs/operations/restore.md`). Key operations are
+The backup role `paddock-backup` takes an encrypted Raft snapshot every 6 hours by default into the backup set
+(`docs/operations/backup.md`, `docs/operations/restore.md`). Key operations are
 manual (`bao` CLI), so after every one of them (a new or rotated Transit key, new policies or AppRoles, rotated session
 keys or secret IDs) take a snapshot at once, so that a restore never brings back an older key state:
 

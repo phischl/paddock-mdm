@@ -15,7 +15,7 @@ public repository has a queue of 20 GitHub runners, which cannot run the accepta
 
 | Job | What it runs | When |
 |---|---|---|
-| `lint` | `make lint`: golangci-lint and `go vet`, the OpenAPI contract test, `make lint-tidy` (every workspace module must be tidy: `go mod tidy -diff`), govulncheck for all modules, the build stages of the server and compiler images (arm64 cross-compiled as well), ESLint and vue-tsc for the portal, the Prometheus and Caddy configuration checks, the license gate, the supervisor's line budget, shellcheck and the changelog fragment check | every pull request, push to `main` and the weekly schedule |
+| `lint` | `make lint`: golangci-lint and `go vet`, the OpenAPI contract test, `make lint-tidy` (every workspace module must be tidy: `go mod tidy -diff`), govulncheck for all modules, the build stages of the server and compiler images (arm64 cross-compiled as well), ESLint and vue-tsc for the portal, the Prometheus and Caddy configuration checks, the license gate, the supervisor's line budget, shellcheck, the changelog fragment check and the frozen-migrations check (`make lint-migrations-frozen`: a migration of the previous release tag that is edited or deleted fails, ADR 0047 decision 2) | every pull request, push to `main` and the weekly schedule |
 | `test` | `make test` (Go unit and integration tests with Docker test containers, the shell script tests, portal unit tests), then `make fuzz` (every fuzz test of `pkg/` for 30 s) | as `lint` |
 | `secrets` | gitleaks: on a pull request over its own commits and, as a second view, over the final content of every changed file and every added blob (`make scan-secrets`, `make scan-secrets-diff`); otherwise over the full history | as `lint` |
 | `trivy` | `make scan-fs` and `make scan-images` (vulnerabilities in dependencies and images) | as `lint`; the weekly schedule catches new CVEs in unchanged dependencies |
@@ -97,6 +97,9 @@ Everything of a cluster, on the release candidate, plus:
   commit. `TestPreviousReleaseFixtures` (`pkg/compat`) and `TestPreviousReleaseAuditInsert`
   (`server/internal/auditwriter`) then prove that every later tree still reads what this release produced. `make lint`
   (`lint-migrations-frozen`) fails when a migration of the previous release tag is edited or deleted;
+- the upgrade of the lab host from the previous release to the release candidate with `./paddock upgrade-check` and
+  `./paddock upgrade`, one `./paddock rollback` and the upgrade again (`docs/operations/upgrade.md`): the CI job runs
+  on one machine with both hosts and cannot show the timing and network of a real installation (residual risk RR-105);
 - an installation of the release bundle on a lab host (`docs/operations/lab-install.md`) with real devices.
 
 ## 2. Flake policy

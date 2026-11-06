@@ -263,7 +263,7 @@ the migration (`depends_on` `paddock-audit-migrate` in `compose.audit.yaml`), bu
 writer keeps running until compose replaces it: its transactions wait for the migration's lock and then fail, and the
 queue redelivers their events. The queue dead-letters an event after 20 deliveries (`dlq.audit.writer`), so a long
 backfill is not guaranteed to be absorbed. The upgrade procedure therefore stops the running audit writer before
-`./paddock up` whenever audit migrations are pending (`docs/operations/upgrade.md`, *Upgrade*, step 4), so that new
+`./paddock up` whenever audit migrations are pending (`docs/operations/upgrade.md`, *Upgrade*, the step `audit-writer-stop`), so that new
 events wait in the queue instead.
 
 A fresh installation, including the move to 0.1.0-alpha.7 (`docs/operations/upgrade.md`), applies the migration to an
