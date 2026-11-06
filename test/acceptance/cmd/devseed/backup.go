@@ -39,11 +39,15 @@ var devTargets = []devTarget{
 	}},
 }
 
-// seedBackupTargets creates the development backup targets once (make dev-seed BACKUP=1) and marks the local one as
-// mounted in the volume backup-local-dev, which compose.backup.dev.yaml mounts as the backup role's targets directory.
+// seedBackupTargets confirms a backup key and creates the development backup targets once (make dev-seed BACKUP=1)
+// and marks the local one as mounted in the volume backup-local-dev, which compose.backup.dev.yaml mounts as the backup
+// role's targets directory.
 func seedBackupTargets(ctx context.Context, admin *env.Portal) error {
 	if back, err := admin.StepUp(ctx, env.PlatformAdmin, "/"); err != nil || strings.Contains(back, "stepup=failed") {
 		return fmt.Errorf("step-up of %s: %v (%s)", env.PlatformAdmin, err, back)
+	}
+	if err := ensureBackupKey(ctx, admin); err != nil {
+		return err
 	}
 	for _, t := range devTargets {
 		id, rev, err := ensureTarget(ctx, admin, t)
@@ -57,6 +61,66 @@ func seedBackupTargets(ctx context.Context, admin *env.Portal) error {
 		}
 		fmt.Printf("backup target %s ready\n", t.name)
 	}
+	return nil
+}
+
+// ensureBackupKey generates and confirms a backup key unless one is active, so that the development stack backs up
+// from the start and the restore drill finds a key (PDK-734). A pending key is discarded first. The key text is used
+// for the confirmation only and never printed: the drill takes the key from the backup role's runtime directory.
+func ensureBackupKey(ctx context.Context, admin *env.Portal) error {
+	const path = "/api/platform/v1/backup/key"
+	res, err := admin.Do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return err
+	}
+	var status struct {
+		Active *struct {
+			KeyID string `json:"key_id"`
+		} `json:"active"`
+		Pending *struct {
+			KeyID string `json:"key_id"`
+		} `json:"pending"`
+	}
+	if res.Status != http.StatusOK || res.JSON(&status) != nil {
+		return fmt.Errorf("backup key status: HTTP %d: %s", res.Status, res.ProblemCode())
+	}
+	if status.Active != nil {
+		fmt.Printf("backup key %s active\n", status.Active.KeyID)
+		return nil
+	}
+	if status.Pending != nil {
+		if res, err = admin.Do(ctx, http.MethodPost, path+"/"+status.Pending.KeyID+"/discard", nil); err != nil {
+			return err
+		}
+		if res.Status != http.StatusOK {
+			return fmt.Errorf("discard backup key %s: HTTP %d: %s", status.Pending.KeyID, res.Status, res.ProblemCode())
+		}
+	}
+	if res, err = admin.Do(ctx, http.MethodPost, path, nil); err != nil {
+		return err
+	}
+	var g struct {
+		KeyID     string `json:"key_id"`
+		Key       string `json:"key"`
+		Positions []int  `json:"positions"`
+	}
+	if res.Status != http.StatusCreated || res.JSON(&g) != nil {
+		return fmt.Errorf("generate backup key: HTTP %d: %s", res.Status, res.ProblemCode())
+	}
+	var answer strings.Builder
+	for _, p := range g.Positions {
+		if p < 1 || p > len(g.Key) {
+			return fmt.Errorf("backup key %s: challenge position %d outside the key", g.KeyID, p)
+		}
+		answer.WriteByte(g.Key[p-1])
+	}
+	if res, err = admin.Do(ctx, http.MethodPost, path+"/"+g.KeyID+"/confirm", map[string]string{"answer": answer.String()}); err != nil {
+		return err
+	}
+	if res.Status != http.StatusOK {
+		return fmt.Errorf("confirm backup key %s: HTTP %d: %s", g.KeyID, res.Status, res.ProblemCode())
+	}
+	fmt.Printf("backup key %s confirmed\n", g.KeyID)
 	return nil
 }
 
