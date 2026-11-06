@@ -988,8 +988,10 @@ var errStalled = errors.New("backup target stalled")
 // e.stall fails (its context is cancelled) and the round goes on. A mirror blocked in a file system call keeps the
 // target busy, and the next rounds skip it until that call returns. After e.budget the mirror ends with the file it
 // is copying (errBudget); a target that trickles cannot stretch that file without bound: the mirror is cancelled at
-// started + budget + size/minRate of the file being copied (plan M15, amendment 2026-11-05, A7). It returns the
-// number of objects the target holds back (mirrorSet).
+// started + budget + size/minRate of the file being copied (plan M15, amendment 2026-11-05, A7). The cap applies
+// only while a file is being copied: a listing that keeps delivering pages is bounded by the stall deadline alone,
+// else a target holding a few hundred thousand objects never reaches its deletions (PDK-865). It returns the number
+// of objects the target holds back (mirrorSet).
 func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex, t TargetRecord,
 	ret retention) (int, error) {
 	e.busyMu.Lock()
@@ -1007,6 +1009,7 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var progress, copying atomic.Int64
+	copying.Store(-1)
 	type result struct {
 		held int
 		err  error
@@ -1020,6 +1023,7 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 			held, err = mirrorSet(ctx, repo, idx, dst, pushed, ret, mirrorHooks{
 				tick:  func() { progress.Add(1) },
 				begin: func(size int64) { copying.Store(size) },
+				end:   func() { copying.Store(-1) },
 				stop:  func() bool { return time.Since(started) >= budget }})
 		}
 		e.busyMu.Lock()
@@ -1040,9 +1044,11 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 			} else if time.Since(since) >= e.stall {
 				return 0, fmt.Errorf("%w: no progress for %s", errStalled, e.stall)
 			}
-			trickle := time.Duration(float64(copying.Load()) / float64(e.minRate) * float64(time.Second))
-			if time.Since(started) >= budget+trickle {
-				return 0, fmt.Errorf("%w: slower than %d bytes/s past the round's budget", errStalled, e.minRate)
+			if size := copying.Load(); size >= 0 {
+				trickle := time.Duration(float64(size) / float64(e.minRate) * float64(time.Second))
+				if time.Since(started) >= budget+trickle {
+					return 0, fmt.Errorf("%w: slower than %d bytes/s past the round's budget", errStalled, e.minRate)
+				}
 			}
 		}
 	}

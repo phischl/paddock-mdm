@@ -43,10 +43,11 @@ type retention struct {
 }
 
 // mirrorHooks connect a mirror to its caller's watchdog: tick on every bit of progress, begin before each file is
-// copied (with its size), stop once the round's budget is used.
+// copied (with its size) and end once its copy returned, stop once the round's budget is used.
 type mirrorHooks struct {
 	tick  func()
 	begin func(size int64)
+	end   func()
 	stop  func() bool
 }
 
@@ -116,6 +117,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		}
 		hooks.begin(idx[p].size)
 		n, err := putFile(ctx, repo, p, dst, hooks.tick)
+		hooks.end()
 		if errors.Is(err, fs.ErrNotExist) {
 			// pgBackRest expired the file after the index was taken.
 			continue

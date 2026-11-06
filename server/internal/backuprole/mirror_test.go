@@ -72,7 +72,7 @@ func testRetention(now time.Time) retention {
 }
 
 func noHooks() mirrorHooks {
-	return mirrorHooks{tick: func() {}, begin: func(int64) {}, stop: func() bool { return false }}
+	return mirrorHooks{tick: func() {}, begin: func(int64) {}, end: func() {}, stop: func() bool { return false }}
 }
 
 func mirror(t *testing.T, repo *os.Root, idx repoIndex, dst Target, pushed map[string]fileInfo) error {
@@ -766,7 +766,7 @@ func TestMirrorBudgetResumesNextRound(t *testing.T) {
 	dst := newMemTarget()
 	for round := 1; round <= 3; round++ {
 		_, err := mirrorSet(context.Background(), repo, idx, dst, map[string]fileInfo{}, testRetention(time.Now()),
-			mirrorHooks{tick: func() {}, begin: func(int64) {}, stop: func() bool { return true }})
+			mirrorHooks{tick: func() {}, begin: func(int64) {}, end: func() {}, stop: func() bool { return true }})
 		if !errors.Is(err, errBudget) || len(dst.files) != round {
 			t.Fatalf("round %d: error %v, files %v", round, err, slices.Sorted(maps.Keys(dst.files)))
 		}

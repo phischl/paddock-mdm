@@ -131,3 +131,21 @@ func TestDirTargetListingTicks(t *testing.T) {
 		t.Errorf("%d ticks while listing %d files, want at least %d", ticks, files, files/listTickEvery)
 	}
 }
+
+// TestListingPastBudgetIsNoTrickle: on a target that already holds the set, listings that keep delivering pages past
+// the round's budget are not cut off by the hard cap on a trickling copy, and the mirror completes. With two listings
+// of a few minutes each on a large S3 target, the cap ended every mirror before step 6 (PDK-865).
+func TestListingPastBudgetIsNoTrickle(t *testing.T) {
+	f := newFixture(t)
+	f.confirmKey()
+	f.engine.stall = 400 * time.Millisecond
+	s3 := &slowListS3{objects: map[string]string{}}
+	rec := f.addTarget(t, backupset.TypeS3, NewS3Target(s3, "site"))
+	f.round(t)
+	f.engine.budget = 100 * time.Millisecond
+	s3.pages, s3.delay = 12, 50*time.Millisecond
+	f.round(t)
+	if st := f.store.status[rec.ID.String()+"/"+KindOpenBao]; st.Error != "" {
+		t.Errorf("target status %+v after listings past the budget, want no error", st)
+	}
+}
