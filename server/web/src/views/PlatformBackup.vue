@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import BackupKeyDialog, { type KeyDialogKey } from '../components/BackupKeyDialog.vue'
+import BackupRestorePlanDialog from '../components/BackupRestorePlanDialog.vue'
 import BackupTargetForm from '../components/BackupTargetForm.vue'
 import DataList from '../components/DataList.vue'
 import StatusChip from '../components/StatusChip.vue'
@@ -11,13 +12,14 @@ import { useConfirm } from '../composables/useConfirm'
 import { useFocusReturn } from '../composables/useFocusReturn'
 import { usePending } from '../composables/usePending'
 import {
-  attemptsLeft, backupKinds, confirmKey, createTarget, deleteTarget, discardKey, generateKey, getTarget, hasSecrets, hostStateStatus,
-  isProblem, keyStatus, kindStatus, loadOverview, needsHostStep, requestRun, runFilters, runLister, saveSchedule, scheduleErrors,
+  abandonRestorePlan, attemptsLeft, backupKinds, cancelRestorePlan, confirmKey, createRestorePlan, createTarget, deleteTarget, discardKey, generateKey, getTarget, hasSecrets, hostStateStatus,
+  isProblem, keyStatus, kindStatus, loadOverview, needsHostStep, planFilters, planLister, planStateStatus, requestRun, runFilters,
+  runLister, saveSchedule, scheduleErrors,
   scheduleFields, scheduleOf, scheduleRanges, setTargetEnabled, stepUpTarget, targetFilters, targetLister, testPollIntervalMs,
   testPollTimeoutMs, testStatus, testTarget, updateTarget, withoutSecrets, type BackupKey, type BackupOverview, type BackupProblem,
-  type BackupRun, type BackupScheduleUpdate, type BackupTarget, type TargetInput,
+  type BackupRestorePlan, type BackupRun, type BackupScheduleUpdate, type BackupTarget, type PlanInput, type TargetInput,
 } from '../lib/backup'
-import { formatGB } from '../lib/format'
+import { formatDateTime, formatGB } from '../lib/format'
 import type { ListColumn, ListParams, Page } from '../lib/listQuery'
 import { pollUntil } from '../lib/notifications'
 import { useProblemText } from '../lib/problems'
@@ -41,8 +43,11 @@ type Operation =
   | { op: 'delete'; id: string; name: string }
   | { op: 'test'; id: string; name: string }
   | { op: 'toggle'; id: string; enable: boolean }
+  | { op: 'plan'; input: PlanInput }
+  | { op: 'cancel-plan'; id: string }
+  | { op: 'abandon-plan'; id: string; confirmation: string }
 
-const tabs = ['overview', 'targets', 'key', 'schedule', 'history'] as const
+const tabs = ['overview', 'targets', 'key', 'schedule', 'history', 'restore'] as const
 type Tab = (typeof tabs)[number]
 const stepUpAction = 'backup'
 
@@ -56,6 +61,7 @@ const focusReturn = useFocusReturn()
 const targetList = ref<{ reload: () => Promise<void> } | null>(null)
 const runList = ref<{ reload: () => Promise<void> } | null>(null)
 const retiredList = ref<{ reload: () => Promise<void> } | null>(null)
+const planList = ref<{ reload: () => Promise<void> } | null>(null)
 
 const tab = computed<Tab>(() => (tabs as readonly string[]).includes(route.query.tab as string) ? (route.query.tab as Tab) : 'overview')
 const overview = ref<BackupOverview | null>(null)
@@ -70,6 +76,10 @@ const targetKey = ref(0)
 const targetProblem = ref<BackupProblem | null>(null)
 const reenterCredentials = ref(false)
 
+// The restore plan dialog: plan is null while the form is asked for, then the approved plan with its host command.
+const planDialog = ref<{ plan: BackupRestorePlan | null } | null>(null)
+const planProblem = ref('')
+
 // The key dialog's state; keyInfo.text is the only place the key text exists in the browser.
 const keyDialog = ref<{ step: 1 | 2 | 3 } | null>(null)
 const keyInfo = ref<KeyDialogKey | null>(null)
@@ -83,6 +93,16 @@ const schedule = reactive<BackupScheduleUpdate>({
 const scheduleTouched = ref(false)
 const invalidSchedule = computed(() => (scheduleTouched.value ? scheduleErrors(schedule) : []))
 
+const planColumns: ListColumn[] = [
+  { key: 'created_at', title: 'common.createdAt', sortable: true },
+  { key: 'kind', title: 'backup.restore.kind' },
+  { key: 'state', title: 'backup.restore.state', sortable: true, role: 'status' },
+  { key: 'source', title: 'backup.restore.source_column' },
+  { key: 'at', title: 'backup.restore.pointInTime' },
+  { key: 'components', title: 'backup.restore.components_column' },
+  { key: 'created_by', title: 'backup.restore.createdBy' },
+  { key: 'actions', title: 'common.actions' },
+]
 const targetColumns: ListColumn[] = [
   { key: 'name', title: 'common.name', sortable: true },
   { key: 'type', title: 'backup.targets.type', sortable: true },
@@ -105,6 +125,7 @@ const retiredColumns: ListColumn[] = [
 ]
 const fetchTargets = targetLister()
 const fetchRuns = runLister()
+const fetchPlans = planLister()
 // The retired keys come with the key state; the list contract is served from memory.
 async function fetchRetired(p: ListParams): Promise<Page<BackupKey>> {
   const all = overview.value?.key.retired ?? []
@@ -211,6 +232,7 @@ async function execute(operation: Operation, stepUp: boolean): Promise<void> {
   }
   if (operation.op === 'create' || operation.op === 'update') targetProblem.value = answer
   else if (operation.op === 'generate' || operation.op === 'discard') keyProblem.value = problemText(answer.code)
+  else if (operation.op === 'plan' && planDialog.value) planProblem.value = problemText(answer.code)
   else if (operation.op === 'toggle' && answer.code === 'invalid_state') pageProblem.value = 'backup_target_state_unchanged'
   else pageProblem.value = answer.code
 }
@@ -271,6 +293,29 @@ async function perform(operation: Operation): Promise<BackupProblem | null> {
       saved.value = t('backup.targets.deleted', { name: operation.name })
       focusReturn.restore(() => document.querySelector<HTMLElement>('[data-testid="backup-target-list"]'))
       await reloadTargets()
+      return null
+    }
+    case 'plan': {
+      const res = await createRestorePlan(operation.input)
+      if (isProblem(res)) return res
+      planProblem.value = ''
+      planDialog.value = { plan: res }
+      saved.value = t('backup.restore.created')
+      void planList.value?.reload()
+      return null
+    }
+    case 'cancel-plan': {
+      const res = await cancelRestorePlan(operation.id)
+      if (isProblem(res)) return res
+      saved.value = t('backup.restore.cancelled')
+      await planList.value?.reload()
+      return null
+    }
+    case 'abandon-plan': {
+      const res = await abandonRestorePlan(operation.id, operation.confirmation)
+      if (isProblem(res)) return res
+      saved.value = t('backup.restore.abandoned')
+      await planList.value?.reload()
       return null
     }
     case 'test':
@@ -392,6 +437,48 @@ async function onRun(event?: Event): Promise<void> {
   await run(() => execute({ op: 'run' }, true))
 }
 
+function openPlan(event?: Event): void {
+  focusReturn.remember(event)
+  planProblem.value = ''
+  planDialog.value = { plan: null }
+}
+
+function showPlan(plan: BackupRestorePlan, event?: Event): void {
+  focusReturn.remember(event)
+  planDialog.value = { plan }
+}
+
+function closePlanDialog(): void {
+  planDialog.value = null
+  planProblem.value = ''
+  focusReturn.restore(() => document.querySelector<HTMLElement>('[data-testid="backup-plan-list"]'))
+}
+
+async function onCancelPlan(plan: BackupRestorePlan, event?: Event): Promise<void> {
+  focusReturn.remember(event)
+  const confirmed = await confirm({
+    title: t('backup.restore.cancelTitle'),
+    message: t('backup.restore.cancelConfirm'),
+    confirmLabel: t('backup.restore.cancelAction'),
+    destructive: true,
+  })
+  if (!confirmed) return
+  await run(() => execute({ op: 'cancel-plan', id: plan.id }, true))
+}
+
+async function onAbandonPlan(plan: BackupRestorePlan, event?: Event): Promise<void> {
+  focusReturn.remember(event)
+  const confirmed = await confirm({
+    title: t('backup.restore.abandonTitle'),
+    message: t('backup.restore.abandonConfirm'),
+    confirmLabel: t('backup.restore.abandonAction'),
+    destructive: true,
+    requireTypedText: 'abandon',
+  })
+  if (!confirmed) return
+  await run(() => execute({ op: 'abandon-plan', id: plan.id, confirmation: 'abandon' }, true))
+}
+
 async function onGenerate(): Promise<void> {
   await run(() => execute({ op: 'generate' }, true))
 }
@@ -445,6 +532,12 @@ async function onSchedule(): Promise<void> {
   scheduleTouched.value = true
   if (scheduleErrors(schedule).length > 0) return
   await run(() => execute({ op: 'schedule', body: { ...schedule } }, true))
+}
+
+function planSource(plan: BackupRestorePlan): string {
+  if (plan.source === 'set') return t('backup.restore.sourceSet')
+  if (plan.source === 'repo') return t('backup.restore.sourceRepo')
+  return plan.source_target_name ?? t('backup.restore.sourceTargetGone')
 }
 
 function sizeText(bytes: number | null | undefined): string {
@@ -558,6 +651,14 @@ const dialogTitle = computed(() => (targetDialog.value?.editing ? t('backup.targ
           @click="onRun"
         >
           {{ t('backup.run.now') }}
+        </v-btn>
+        <v-btn
+          variant="tonal"
+          :disabled="pending"
+          data-testid="backup-plan-restore"
+          @click="openPlan"
+        >
+          {{ t('backup.restore.planAction') }}
         </v-btn>
       </div>
       <h2 class="pd-type-section">
@@ -872,6 +973,105 @@ const dialogTitle = computed(() => (targetDialog.value?.editing ? t('backup.targ
     </div>
 
     <div
+      v-else-if="tab === 'restore'"
+      role="tabpanel"
+      data-testid="backup-panel-restore"
+    >
+      <div class="form-actions">
+        <v-btn
+          color="primary"
+          data-testid="backup-plan-restore-tab"
+          @click="openPlan"
+        >
+          {{ t('backup.restore.planAction') }}
+        </v-btn>
+      </div>
+      <DataList
+        ref="planList"
+        :columns="planColumns"
+        :fetch="fetchPlans"
+        :filters="planFilters"
+        searchable
+        default-sort="-created_at"
+        item-value="id"
+        empty-icon="hard-drive"
+        empty-title="backup.restore.empty.title"
+        empty-description="backup.restore.empty.description"
+        tabindex="-1"
+        data-testid="backup-plan-list"
+      >
+        <template #[`item.created_at`]="{ item }: { item: BackupRestorePlan }">
+          <TimeCell :iso="item.created_at" />
+        </template>
+        <template #[`item.kind`]="{ item }: { item: BackupRestorePlan }">
+          {{ t('backup.restore.kinds.' + item.kind) }}
+        </template>
+        <template #[`item.state`]="{ item }: { item: BackupRestorePlan }">
+          <StatusChip
+            :status="planStateStatus(item.state).status"
+            :label="t(planStateStatus(item.state).label)"
+          />
+          <span
+            v-if="item.outcome_detail"
+            class="mono pd-muted"
+          > {{ item.outcome_detail }}</span>
+        </template>
+        <template #[`item.source`]="{ item }: { item: BackupRestorePlan }">
+          {{ planSource(item) }}
+        </template>
+        <template #[`item.at`]="{ item }: { item: BackupRestorePlan }">
+          <TimeCell
+            v-if="item.at"
+            :iso="item.at"
+          />
+          <span
+            v-else
+            class="pd-muted"
+          >{{ t('backup.restore.newest') }}</span>
+        </template>
+        <template #[`item.components`]="{ item }: { item: BackupRestorePlan }">
+          {{ item.components.map((c) => t('backup.restore.componentNames.' + c)).join(', ') }}
+        </template>
+        <template #[`item.actions`]="{ item }: { item: BackupRestorePlan }">
+          <div
+            v-if="item.state === 'approved'"
+            class="form-actions"
+          >
+            <v-btn
+              :aria-label="t('backup.restore.showLabel', { time: formatDateTime(item.created_at, locale) })"
+              size="small"
+              variant="tonal"
+              @click="showPlan(item, $event)"
+            >
+              {{ t('backup.restore.showCommand') }}
+            </v-btn>
+            <v-btn
+              :aria-label="t('backup.restore.cancelLabel', { time: formatDateTime(item.created_at, locale) })"
+              color="error"
+              size="small"
+              :disabled="pending"
+              :data-testid="'backup-plan-cancel-' + item.id"
+              @click="onCancelPlan(item, $event)"
+            >
+              {{ t('backup.restore.cancelAction') }}
+            </v-btn>
+          </div>
+          <v-btn
+            v-else-if="item.state === 'running'"
+            :aria-label="t('backup.restore.abandonLabel', { time: formatDateTime(item.created_at, locale) })"
+            color="error"
+            size="small"
+            :disabled="pending"
+            :data-testid="'backup-plan-abandon-' + item.id"
+            @click="onAbandonPlan(item, $event)"
+          >
+            {{ t('backup.restore.abandonAction') }}
+          </v-btn>
+        </template>
+      </DataList>
+    </div>
+
+    <div
       v-else
       role="tabpanel"
       data-testid="backup-panel-history"
@@ -959,6 +1159,16 @@ const dialogTitle = computed(() => (targetDialog.value?.editing ? t('backup.targ
         </v-card-text>
       </v-card>
     </v-dialog>
+
+    <BackupRestorePlanDialog
+      v-if="planDialog"
+      :overview="overview"
+      :plan="planDialog.plan"
+      :problem="planProblem"
+      :pending="pending"
+      @submit="(input: PlanInput) => run(() => execute({ op: 'plan', input }, true))"
+      @close="closePlanDialog"
+    />
 
     <BackupKeyDialog
       v-if="keyDialog"

@@ -68,3 +68,40 @@ test('the targets list and the key tab are keyboard reachable and accessible', a
   await expect(page.getByRole('dialog', { name: 'Add a backup target' })).toBeVisible()
   await expectAccessible(page)
 })
+
+// Plan M15 decisions 25 and 27: a restore plan is only sent with the typed word; the created plan shows its host command.
+// Needs a stack without an open restore plan (only one plan is open at a time).
+test('the restore plan dialog requires the typed word, shows the host command and the plan is cancelled', async ({ page }) => {
+  test.setTimeout(120_000)
+  const dialogs: string[] = []
+  page.on('dialog', (d) => { dialogs.push(d.type()); void d.dismiss() })
+  await login(page, ...root.slice(0, 2) as [string, string])
+  await page.goto('/platform/backup?tab=restore')
+  await expect(page.getByTestId('backup-plan-list')).toBeVisible()
+  await page.getByTestId('backup-plan-restore-tab').click()
+  const submit = page.getByTestId('backup-restore-submit')
+  await expect(page.getByTestId('backup-restore-consequence')).toContainText("replaces the control plane's databases")
+  await expect(submit).toBeDisabled()
+  await expectAccessible(page)
+  await page.locator('#backup-restore-word').fill('restor')
+  await expect(submit).toBeDisabled()
+  await page.locator('#backup-restore-word').fill('restore')
+  await expect(submit).toBeEnabled()
+  await withStepUp(page, () => submit.click())
+  await expect(page.getByTestId('backup-restore-command')).toContainText('restore')
+  await expect(page.getByTestId('backup-restore-expiry')).toContainText('expires in')
+  await page.getByRole('button', { name: 'Done' }).click()
+  await expect(page.getByTestId('backup-restore-dialog')).toHaveCount(0)
+
+  // Cancels the plan again so that the one-open-plan rule stays clean for later runs. A running plan, and with it the
+  // Abandon action, cannot be reached from the portal: only the host starts a restore (covered by the component tests).
+  const cancel = page.locator('[data-testid^="backup-plan-cancel-"]').first()
+  await withStepUp(page, async () => {
+    await cancel.click()
+    const dialog = page.getByTestId('confirm-dialog')
+    await expect(dialog.getByRole('heading', { name: 'Cancel the restore plan' })).toBeVisible()
+    await dialog.getByTestId('confirm-accept').click()
+  })
+  await expect(page.getByTestId('backup-plan-list')).toContainText('Expired')
+  expect(dialogs).toEqual([])
+})

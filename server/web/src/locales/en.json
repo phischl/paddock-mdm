@@ -1630,7 +1630,8 @@
       "targets": "Targets",
       "key": "Key",
       "schedule": "Schedule",
-      "history": "History"
+      "history": "History",
+      "restore": "Restore"
     },
     "kinds": {
       "postgres": "Databases",
@@ -1817,6 +1818,74 @@
         "retention_full": "Full backups kept",
         "openbao_keep_days": "OpenBao snapshots kept (days)",
         "fleet_keep_days": "Fleet dumps kept (days)"
+      }
+    },
+    "restore": {
+      "planAction": "Plan a restore",
+      "planTitle": "Plan a restore",
+      "commandTitle": "Run the restore on the host",
+      "consequence": "Restoring replaces the control plane's databases with the backup. Every change after the chosen point is lost. Devices keep working and reconnect; the audit log on the audit host is not touched.",
+      "kind": "What to restore",
+      "kinds": {
+        "components": "The newest backups of the components",
+        "point_in_time": "The state at a point in time",
+        "fresh_install": "Fresh installation"
+      },
+      "source": "Restore from",
+      "sourceRepo": "The local backup repository",
+      "at": "Point in time",
+      "atHint": "The newest successful backups of the source are listed above. The time is in your time zone.",
+      "atInvalid": "Choose a point in the past.",
+      "noSuccess": "no successful backup",
+      "components": "Components",
+      "componentNames": {
+        "postgres": "Databases (Paddock and identity provider)",
+        "openbao": "OpenBao",
+        "fleet": "Fleet",
+        "escrow": "Escrow",
+        "backup-repo": "Backup repository"
+      },
+      "componentsInvalid": "Choose at least one component.",
+      "typeWord": "Type {word} to confirm",
+      "wordInvalid": "Type the word {word} exactly.",
+      "approve": "Approve restore plan",
+      "commandIntro": "The plan is approved. Run this command on the control plane host to execute it.",
+      "commandLabel": "Host command",
+      "expiresIn": "The plan expires in {hours} h {minutes} min, at",
+      "expired": "The plan has expired, it was valid until",
+      "done": "Done",
+      "created": "The restore plan was approved.",
+      "showCommand": "Show command",
+      "cancelAction": "Cancel plan",
+      "cancelTitle": "Cancel the restore plan",
+      "cancelConfirm": "The host will refuse this plan. You can approve a new one afterwards.",
+      "cancelled": "The restore plan was cancelled.",
+      "cancelLabel": "Cancel the restore plan of {time}",
+      "abandonAction": "Abandon plan",
+      "abandonTitle": "Abandon the running restore plan",
+      "abandonConfirm": "Only do this when the host never reported the end of the restore. The plan is marked as abandoned and a later report from the host is refused. The control plane may be left partly restored, so check the host first.",
+      "abandoned": "The restore plan was abandoned.",
+      "abandonLabel": "Abandon the restore plan of {time}",
+      "showLabel": "Show the host command of the plan of {time}",
+      "state": "State",
+      "states": {
+        "approved": "Approved",
+        "running": "Running",
+        "completed": "Completed",
+        "failed": "Failed",
+        "expired": "Expired",
+        "abandoned": "Abandoned"
+      },
+      "source_column": "Source",
+      "createdBy": "Approved by",
+      "pointInTime": "Point in time",
+      "components_column": "Components",
+      "newest": "Newest backups",
+      "sourceSet": "Backup set of the host",
+      "sourceTargetGone": "Deleted target",
+      "empty": {
+        "title": "No restore planned yet",
+        "description": "A restore approved here is executed on the host with the command shown afterwards."
       }
     }
   },
