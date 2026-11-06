@@ -238,7 +238,9 @@ case "$cmd" in
     # revisions are compared with the database's (plan M15 decision 22): the header line only, never the file.
     network=() revisions=()
     if [[ -n "$online" && "$PADDOCK_HOST" != controlplane ]]; then network=(--network "${PADDOCK_PROJECT}_audit-store"); fi
-    if [[ -n "$online" ]] && backup_host; then
+    # PADDOCK_CHECK_SKIP_REVISIONS: set by ./paddock upgrade before up, when the old stack still runs; a compose run of
+    # the new paddock-backup would create its volumes in the old project and compare against a database it predates.
+    if [[ -n "$online" ]] && backup_host && [[ -z "${PADDOCK_CHECK_SKIP_REVISIONS:-}" ]]; then
       rev_file=none
       [[ ! -f "$BACKUP_TARGETS_FILE" ]] || rev_file="$(sed -n 's/^# revisions: //p' "$BACKUP_TARGETS_FILE" | head -1)"
       rev_db="$(backup_role -T paddock-backup admin backup-targets revisions </dev/null 2>/dev/null | tail -1)" || rev_db=""

@@ -106,7 +106,7 @@ both roles and follows the control plane's steps.
    | `migrate-from` | Copies `.env`, `.secrets/` and `compose.backup-targets.yaml` (`cp -a`) from A. A partial copy of an earlier run of this command is removed and copied again. |
    | `secrets` | `./paddock secrets`: generates missing secrets only and prints their names. |
    | `pull` | `./paddock pull`. |
-   | `check` | `./paddock check`: every item PASS, else the run stops, and A still runs. |
+   | `check` | `./paddock check` (`--online` on the audit host and a lab: the audit bucket's Object Lock, read over A's running stack; the backup targets' revisions are compared in the post-checks): every item PASS, else the run stops, and A still runs. |
    | `backup` | On the control plane and on a lab host with backups: `<old dir>/paddock backup now --label pre-upgrade-<B> --wait`. A release without `backup now` (other than 0.1.0-alpha.8, below) is refused before anything changes. |
    | `audit-writer-stop` | Audit host and lab, when B's `Schema:` line names audit migrations (or is missing): `<old dir>/paddock compose stop paddock-audit-writer`. B's writer starts only after the audit migrations, but A's writer would keep running while they hold their table locks; its writes fail and are redelivered until the queue dead-letters them. Stopped, new audit events wait in the queue and `./paddock up` starts B's writer, which writes them. A backfill can take minutes on a large index (`docs/operations/capacity.md`, *Audit index commit sequence backfill*). |
    | `up` | Records the rollback point (below), then `./paddock up`: Compose recreates the containers with B's images and `paddock-migrate` applies the schema migrations. |

@@ -117,6 +117,18 @@ ug_show() {
   "$@"
 }
 
+# ug_prod_check_step: ./paddock check before up. On the audit host and a lab it runs online: offline, the item of the
+# audit bucket's Object Lock is "not checked" and fails, so these hosts could never pass; the old stack still runs and
+# provides the audit-store network the online check reads the bucket over. The comparison of the backup targets' revisions
+# waits for the post-checks: before up it would run the new backup role inside the old project.
+ug_prod_check_step() {
+  if [[ "$UG_HOST" != controlplane ]]; then
+    PADDOCK_CHECK_SKIP_REVISIONS=1 ug_show "$UG_NEW/paddock" check --online </dev/null
+  else
+    ug_show "$UG_NEW/paddock" check </dev/null
+  fi
+}
+
 # ug_check_step: the read-only check of decision 5; --allow-unsupported-agents accepts the server report's agents FAIL
 # and nothing else.
 ug_check_step() {
@@ -319,7 +331,10 @@ ug_plan() {
       migrate-from) what="./paddock migrate-from $UG_OLD" ;;
       secrets) what="./paddock secrets (generates missing secrets only)" ;;
       pull) what="./paddock pull" ;;
-      check) what="./paddock check (every item PASS, else stop: the old stack still runs)" ;;
+      check)
+        what="./paddock check (every item PASS, else stop: the old stack still runs)"
+        [[ "$UG_HOST" == controlplane ]] || what="./paddock check --online (every item PASS, else stop: the old stack still runs)"
+        ;;
       backup)
         if [[ "$UG_BACKUP" != yes ]]; then
           what="no backup: $UG_BACKUP"
@@ -448,7 +463,7 @@ upgrade_main() {
   ug_step migrate-from ug_migrate_from_step
   ug_step secrets ug_show "$UG_NEW/paddock" secrets
   ug_step pull ug_show "$UG_NEW/paddock" pull
-  ug_step check ug_show "$UG_NEW/paddock" check
+  ug_step check ug_prod_check_step
   ug_step backup ug_backup_step
   ug_step audit-writer-stop ug_audit_writer_step
   ug_step up ug_up_step
