@@ -62,24 +62,53 @@ func requireBackupStack(t *testing.T) {
 	}
 }
 
-// backupAdmin is the platform administrator of the backup gates with a step-up that fresh renews when it is about to
-// leave the five-minute window (the gates wait minutes for the backup role between writes).
+// productionStepUpWindow is the step-up window of a production stack; backupAdmin falls back to it when the stack
+// does not report its own.
+const productionStepUpWindow = 5 * time.Minute
+
+// backupAdmin is the platform administrator of the backup gates with a step-up that fresh renews before it leaves the
+// stack's step-up window (the gates wait minutes for the backup role between writes; the dev stacks run 30 s).
 type backupAdmin struct {
 	*env.Portal
 	steppedUp time.Time
+	window    time.Duration
 }
 
 func newBackupAdmin(t *testing.T) *backupAdmin {
 	t.Helper()
 	a := &backupAdmin{Portal: login(t, env.PlatformAdmin)}
+	a.window = stackStepUpWindow(t, a.Portal)
 	a.fresh(t)
 	return a
 }
 
-// fresh steps up again unless the last step-up is younger than four minutes.
+// stackStepUpWindow reads the step-up window the API reports on GET /api/v1/me (development stacks only, it is the
+// value the API enforces) and falls back to the production window when it is not reported.
+func stackStepUpWindow(t *testing.T, p *env.Portal) time.Duration {
+	t.Helper()
+	var me struct {
+		StepUp *struct {
+			WindowSeconds int `json:"window_seconds"`
+		} `json:"step_up"`
+	}
+	res := call(t, p, http.MethodGet, "/api/v1/me", nil)
+	if res.Status != http.StatusOK || res.JSON(&me) != nil || me.StepUp == nil || me.StepUp.WindowSeconds <= 0 {
+		t.Logf("step-up window not reported (HTTP %d), assuming %s", res.Status, productionStepUpWindow)
+		return productionStepUpWindow
+	}
+	return time.Duration(me.StepUp.WindowSeconds) * time.Second
+}
+
+// stepUpDue reports whether a step-up taken age ago must be renewed before the next call: when less than a third of
+// the window (at most a minute) is left, so the call that follows still lands inside it.
+func stepUpDue(age, window time.Duration) bool {
+	return age > window-min(window/3, time.Minute)
+}
+
+// fresh steps up again when the last step-up is about to leave the stack's window.
 func (a *backupAdmin) fresh(t *testing.T) *env.Portal {
 	t.Helper()
-	if time.Since(a.steppedUp) > 4*time.Minute {
+	if a.steppedUp.IsZero() || stepUpDue(time.Since(a.steppedUp), a.window) {
 		stepUp(t, a.Portal, env.PlatformAdmin, true)
 		a.steppedUp = time.Now()
 	}
