@@ -441,3 +441,48 @@ follows this approach:
 Migrations are numbered in landing order, not by plan. The alpha.9 numbers known on 2026-11-04 are 00100 (M15
 backups), 00101 (syslog destinations), 00102 (this plan's grant), 00103 (device diagnostics) and 00104 (access review
 grants); the example in §6.3 follows them. A plan's label for a migration is corrected at the next touch of that plan.
+
+## Amendment 2026-11-06 — `./paddock upgrade` and `./paddock rollback` as implemented (PDK-743, review 1)
+
+Binding refinements of decisions 6 and 7; where they differ, this amendment wins.
+
+1. **Rollback restores a point in time, not the labelled set as such.** `./paddock upgrade` records, in
+   `.upgrade-state`, the timestamp `up-started=<RFC 3339 UTC>` immediately before its first `./paddock up`. A
+   rollback after a schema change restores PostgreSQL with `--at <up-started>` from the local repository; the
+   OpenBao snapshot and the Fleet dump are the newest at or before that time, which the labelled
+   `pre-upgrade-<version>` run guarantees to exist (M15 decision 23 step 1 checks it). Everything written between
+   the labelled backup and the first container change is therefore kept; everything after `up-started` is lost
+   (RR-107 unchanged).
+2. **The old release's `restore.sh` is an interface between releases.** `rollback.sh` of release N+1 sources
+   `<old dir>/scripts/restore.sh` of release N and calls its functions, so a rollback runs the restore logic of
+   the release whose data it restores. The following names are frozen for every guaranteed pair (ADR 0047
+   decision 2 gains this item): functions `restore_trap_set`, `restore_trap_reset`, `set_opts`, `read_set`,
+   `key_fingerprint`, `prompt_key`, `normalize_at`, `preflight`, `confirm`, `flush_wal`, `stop_writers`, `run`,
+   `cleanup`, `die`; variables `RESTORE_SOURCE`, `RESTORE_SOURCE_LABEL`, `RESTORE_AT`, `RESTORE_ONLY`,
+   `RESTORE_SET`, `RESTORE_KEY_FILE`, `RESTORE_KEY_PATH`. A change to a frozen name is a breaking change of the
+   upgrade guarantee and needs this plan's next amendment; `rollback_test.sh` holds the contract test (it sources
+   the shipped `restore.sh` and asserts every name is defined). `make lint-migrations-frozen`'s companion check
+   (`tools/migrationsfrozen --restore-interface`) compares the list against the previous tag's `restore.sh`.
+3. **Checks before `down`.** `./paddock rollback` runs, in this order and before anything stops: the key check
+   (`key_fingerprint` against the set's manifest), the old release's `preflight` (schema versions, stanzas, the
+   oldest backup at or before `up-started`, the OpenBao snapshot and the Fleet dump), and the terminal
+   confirmation `restore`; only then `./paddock down`. `restore_run` repeats its own preflight after `down` and
+   receives `restore` on stdin from the rollback script (no second prompt). A failure before `down` leaves the
+   running stack untouched.
+4. **Additional rules.** `--skip-backup` is refused when `FLEET_IMAGE` differs between the two `versions.env`
+   (a Fleet migration needs the dump). A lab host without backups (`PADDOCK_LAB_BACKUP=no`) must pass
+   `--skip-backup` for an upgrade whose release notes say `Schema: migrations …` or that changes `FLEET_IMAGE`,
+   and the command prints that a rollback will then be `down` + old `up` only, with the data loss that implies.
+   On the audit host and the lab, `rollback` stops `paddock-audit-writer` before `down` when the `Schema:` line
+   names audit migrations or is missing (an unknown schema state is treated as changed).
+5. **One rollback per upgrade attempt.** `./paddock upgrade` writes `.upgrade-rollback` with
+   `attempt=<16 hex>`, `from=<N>`, `to=<N+1>`; `.upgrade-state` carries `attempt=` and `up-started=`. `rollback`
+   uses the record only when both versions match the two directories and either no `.upgrade-state` exists
+   (completed upgrade — the main case) or its `attempt` equals the record's. After a successful rollback the
+   record is renamed `.upgrade-rollback.rolled-back-<attempt>` and the state gains `rolled-back=<RFC 3339>`; a
+   second rollback of the same attempt is refused with the file named. A new `./paddock upgrade` starts a new
+   attempt.
+
+Consequences: §6.1 gains no flag; `docs/operations/upgrade.md` (PDK-746) documents the point-in-time semantics,
+the pre-`down` checks, the lab rule and the one-rollback rule; RR-107 keeps its text (the loss window ends at
+`up-started`).
