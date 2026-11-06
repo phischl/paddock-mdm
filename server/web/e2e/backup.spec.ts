@@ -70,15 +70,17 @@ test('the targets list and the key tab are keyboard reachable and accessible', a
 })
 
 /**
- * Whether the local repository holds a successful newest run of every kind a plan of all components needs. The server
- * refuses any other plan (409 invalid_state); a stack started without BACKUP=1, like CI's, never has one.
+ * Whether the local repository holds a successful run of every kind a plan of all components needs, as the server
+ * checks it. The server refuses any other plan (409 invalid_state); a stack started without BACKUP=1, like CI's, never
+ * has one.
  */
 async function backupsReady(page: Page): Promise<boolean> {
-  const overview = await (await page.request.get('/api/platform/v1/backup')).json() as {
-    last_runs: { kind: string; outcome: string | null }[]
+  for (const kind of ['postgres', 'authentik', 'openbao', 'fleet', 'escrow']) {
+    const res = await page.request.get(`/api/platform/v1/backup/runs?kind=${kind}&outcome=succeeded&page_size=10`)
+    expect(res.status()).toBe(200)
+    if ((await res.json() as { total: number }).total === 0) return false
   }
-  const succeeded = new Set(overview.last_runs.filter((r) => r.outcome === 'succeeded').map((r) => r.kind))
-  return ['postgres', 'authentik', 'openbao', 'fleet', 'escrow'].every((k) => succeeded.has(k))
+  return true
 }
 
 // Plan M15 decisions 25 and 27: a restore plan is only sent with the typed word; the created plan shows its host command.
