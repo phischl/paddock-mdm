@@ -78,8 +78,8 @@ v=0.1.0-alpha.8
 for f in "paddockd_${v}_linux_amd64" "paddock-agent_${v}_amd64.deb" "paddock-supervisor_${v}_amd64.deb" \
   "paddock-revoke_${v}_amd64-unsigned.deb" "paddockd_${v}_linux_amd64.minisig"; do echo "$f" >"$work/prev-artifacts/$f"; done
 staged="$(version=$v lib prev_artifacts_staged "$work/prev-artifacts")"
-got="$(find "$staged" -mindepth 1 -printf '%f\n' | sort | paste -sd' ')"
-if [[ "$got" == "paddock-agent_${v}_amd64-unsigned.deb paddockd_${v}_linux_amd64-unsigned paddock-revoke_${v}_amd64-unsigned.deb paddock-supervisor_${v}_amd64-unsigned.deb" ]]; then
+got="$(find "$staged" -mindepth 1 -printf '%f\n' | LC_ALL=C sort | paste -sd' ')"
+if [[ "$got" == "paddock-agent_${v}_amd64-unsigned.deb paddock-revoke_${v}_amd64-unsigned.deb paddock-supervisor_${v}_amd64-unsigned.deb paddockd_${v}_linux_amd64-unsigned" ]]; then
   pass "the published agent files are staged under the names smoke_agent_release reads"
 else failed "staged: $got"; fi
 
