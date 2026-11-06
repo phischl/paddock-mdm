@@ -104,16 +104,18 @@ if [[ "$(head -c 10 <<<"$out")" == '{"items":[' && "$out" == *',"exit":1}' ]] &&
   fail "--json document: $out"
 fi
 
-# Old .env complete, plus an unknown key: env WARN, no FAIL left except the generated secrets (provided here).
+# Old .env complete, plus an unknown key (env WARN; a key an earlier release retired counts as unknown) and a key
+# this release retired (env INFO), no FAIL left except the generated secrets (provided here).
 old_bundle "$work/old2"
 mkdir -p "$work/old2/.secrets/release-production" "$work/old2/.secrets/approle/paddock-api"
 touch "$work/old2/.secrets/db_password" "$work/old2/.secrets/release-production/minisign.pub" \
   "$work/old2/.secrets/approle/paddock-api/role_id"
-printf 'PADDOCK_SMTP_HOST=mail.example.org\nPADDOCK_REMOVED_SETTING=1\nPADDOCK_AUTO_UNSEAL=yes\n' >>"$work/old2/.env"
+printf 'PADDOCK_SMTP_HOST=mail.example.org\nPADDOCK_REMOVED_SETTING=1\nPADDOCK_RETIRED_SETTING=1\nPADDOCK_AUTO_UNSEAL=yes\n' >>"$work/old2/.env"
 mkdir -p "$work/old2/.secrets/openbao"
 touch "$work/old2/.secrets/openbao/auto-unseal-shares"
 run 0 "complete old installation" "$work/old2"
-has "unknown old key is a WARN" '^WARN +env +settings this bundle does not know .*: PADDOCK_REMOVED_SETTING'
+has "unknown old key is a WARN" '^WARN +env +settings this bundle does not know .*: PADDOCK_REMOVED_SETTING$'
+has "a key this release retired is an INFO" '^INFO +env +retired by this release; kept for the rollback: PADDOCK_RETIRED_SETTING$'
 has "secrets PASS" '^PASS +secrets '
 has "auto-unseal with shares PASS" '^PASS +openbao unseal path'
 has "table ends with no FAIL" 'upgrade check: no FAIL'
