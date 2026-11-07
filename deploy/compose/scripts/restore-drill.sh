@@ -96,6 +96,7 @@ log "control plane ready $((ready - start)) s after the loss"
 
 # --- 4. Acceptance subset --------------------------------------------------------------------------------------------
 log "4. acceptance subset: $SUBSET"
-(cd "$REPO_ROOT" && go test -count=1 -timeout 30m ./test/acceptance/... -run "$SUBSET")
+# Through the make target, so the subset gets the environment of `make acceptance` (bin/paddockctl and its variable).
+make -C "$REPO_ROOT" --no-print-directory acceptance T="$SUBSET" ACCEPTANCE_TIMEOUT=30m
 done_at="$(date +%s)"
 log "restore drill passed: control plane ready after $((ready - start)) s, acceptance subset green after $((done_at - start)) s (RTO)"
