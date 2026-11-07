@@ -26,6 +26,7 @@ cat >"$work/bin/docker" <<'STUB'
 echo "docker $*" >>"$FIXTURE_CALLS"
 case "$1 $*" in
   "compose "*" ps -q") [[ -z "$FIXTURE_RUNNING" ]] || sed 's/.*/c/' <<<"$FIXTURE_RUNNING" ;;
+  "compose "*" exec -T postgres psql "*"max(bundle_seq)"*) [[ -n "${FIXTURE_STACK_MAX:-}" ]] && echo "$FIXTURE_STACK_MAX" ;;
   inspect*) printf '%s\n' "$FIXTURE_RUNNING" ;;
 esac
 exit 0
@@ -87,6 +88,7 @@ restore_run() {
   IFS= read -r confirm || true
   restore_trap_set || true
   echo "restore_run $* key=${RESTORE_KEY_FILE#"$COMPOSE_DIR"/} confirm=$confirm" >>"$FIXTURE_CALLS"
+  echo "restore_high_water=${RESTORE_HIGH_WATER:-}" >>"$FIXTURE_CALLS"
   [[ "${FIXTURE_RESTORE_EXIT_EARLY:-0}" == 0 ]] || exit "$FIXTURE_RESTORE_EXIT_EARLY"
   restore_stop_writers
   [[ "${FIXTURE_RESTORE_EXIT:-0}" == 0 ]] || exit "$FIXTURE_RESTORE_EXIT"
@@ -106,7 +108,7 @@ setup() {
   mkdir -p "$work/t/new/scripts" "$work/t/old/scripts" "$work/t/old/.secrets"
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
-  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
+  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
   sed -i 's/^version=.*/version=0.1.0-alpha.10/' "$work/t/new/VERSION"
   printf '%s\n' "$schema" >"$work/t/new/RELEASE-NOTES"
   echo "FLEET_IMAGE=fleetdm/fleet:v4.94.0" >>"$work/t/new/versions.env"
@@ -181,6 +183,24 @@ if [[ -f "$work/t/old/.secrets/backup_encryption_key" ]]; then pass "the legacy 
 if grep -qx "rolled-back=$ATTEMPT" "$work/t/new/.upgrade-state" && ! grep -q '^done=' "$work/t/new/.upgrade-state"; then
   pass "a later upgrade starts again at the check and copies .env and .secrets/ again"
 else fail ".upgrade-state: $(cat "$work/t/new/.upgrade-state" 2>&1)"; fi
+
+# The bundle sequence (decisions-alpha9 item 68): the highest is read and recorded before down with this release's
+# libraries and handed to the old restore.sh, which runs after down.
+setup controlplane "Schema: migrations 00105–00106"
+FIXTURE_STACK_MAX=1000003 run 0 "rollback with a readable stack" "$work/t/old" --yes
+before "the highest is read before down" '^docker compose .* exec -T postgres psql .*max\(bundle_seq\)' "$DOWN"
+# The record script spans several lines of the log: its first names the container, its last the value.
+before "the high-water file is written through postgres before down" '^docker compose .* exec -T -u postgres postgres sh -c set -eu$' "$DOWN"
+before "the highest is recorded before down" ' bundle-seq /paddock-bundle-seq 1000003$' "$DOWN"
+called "the old restore.sh receives the highest" '^restore_high_water=1000003$'
+setup controlplane "Schema: migrations 00105–00106"
+mkdir -p "$work/t/new/bundle-seq" && echo 1500000 >"$work/t/new/bundle-seq/high-water"
+run 0 "rollback with a stopped stack" "$work/t/old" --yes
+called "a stopped stack hands over the high-water file's value" '^restore_high_water=1500000$'
+setup controlplane "Schema: migrations 00105–00106"
+run 0 "rollback without a source" "$work/t/old" --yes
+called "without a source the old restore.sh decides" '^restore_high_water=$'
+has "the missing source is warned about" 'warning: bundle sequence: neither the running stack nor'
 
 # A changed FLEET_IMAGE adds Fleet's dump.
 setup controlplane "Schema: migrations 00105–00106"
@@ -391,6 +411,7 @@ case "${1:-}" in
       *" la8-fleet check") exit "${FIXTURE_FLEET_CHECK_EXIT:-0}" ;;
       *" exec -T openbao sh -c cat >/tmp/snapshot") cat >/dev/null ;;
       *" psql "*"pg_is_in_recovery()"*) echo f ;;
+      *" psql "*"min(bundle_seq)"*) echo "${FIXTURE_LA8_MIN:-2}" ;;
       *" ps --format "*) echo healthy ;;
       *" pgbackrest restore") exit "${FIXTURE_PG_RESTORE_EXIT:-0}" ;;
     esac
@@ -468,6 +489,16 @@ for f in backup_pgbackrest_access_key backup_pgbackrest_secret_key backup_encryp
     fail "$f appears in a command or the output"
   else pass "$f appears in no command and no output"; fi
 done
+
+# The case of the upgrade job (#488): a restore on alpha.9 after the upgrade raised the sequences to 1000003, which the
+# device applied; alpha.8's restore brings back 2. The raise puts the device above 1000003 without a compile.
+setup_alpha8
+FIXTURE_STACK_MAX=1000003 FIXTURE_LA8_MIN=2 run 0 "rollback to alpha.8 after a restore on alpha.9" "$work/t/old" --yes
+before "the highest is read before down" '^docker compose .* exec -T postgres psql .*max\(bundle_seq\)' "$DOWN"
+called "the lowest is read from alpha.8's restored database" '^old compose exec -T postgres psql -U postgres -d paddock -Atc select coalesce\(min\(bundle_seq\), 0\) from device$'
+called "alpha.8 raises to the highest + 1,000,000" '^old compose run --rm --no-deps -T paddock-worker admin bump-bundle-seq --by 2000001$'
+before "the compiler stops before the raise" '^old compose --profile paddock stop paddock-compiler$' 'admin bump-bundle-seq --by 2000001$'
+if ((2 + 2000001 > 1000003)); then pass "the device's next bundle (2000003) is newer than the one it applied (1000003)"; else fail "arithmetic"; fi
 
 # A changed FLEET_IMAGE: the dump is downloaded and checked before down, Fleet's database replaced, its volume kept.
 setup_alpha8 fleet

@@ -46,6 +46,9 @@ type fakeStore struct {
 	// evidence is the Destroy evidence by "<org>/<device>"; evidenceErr fails the query.
 	evidence    map[string]time.Time
 	evidenceErr error
+	// highWater is the highest device.bundle_seq; highWaterErr fails its read.
+	highWater    int64
+	highWaterErr error
 }
 
 func newFakeStore() *fakeStore {
@@ -77,6 +80,9 @@ func (s *fakeStore) RequestedRuns(context.Context) ([]RequestedRun, error)   { r
 func (s *fakeStore) History(context.Context) (map[string]KindHistory, error) { return s.history, nil }
 func (s *fakeStore) InstallationID(context.Context) (string, error)          { return InstallationID(42), nil }
 func (s *fakeStore) SchemaVersion(context.Context) (int, error)              { return 107, nil }
+func (s *fakeStore) BundleSeqHighWater(context.Context) (int64, error) {
+	return s.highWater, s.highWaterErr
+}
 func (s *fakeStore) SetHostState(_ context.Context, id uuid.UUID, _ int, st string) error {
 	s.hostState[id] = st
 	return nil

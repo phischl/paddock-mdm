@@ -361,6 +361,8 @@ case "$cmd" in
     . "$BUNDLE_DIR/scripts/legacy-alpha8.sh"
     # shellcheck source=../compose/scripts/openbao-restore.sh
     . "$BUNDLE_DIR/scripts/openbao-restore.sh"
+    # shellcheck source=../compose/scripts/bundle-seq.sh
+    . "$BUNDLE_DIR/scripts/bundle-seq.sh"
     rollback_main "$BUNDLE_DIR" "$@"
     ;;
   auto-unseal)

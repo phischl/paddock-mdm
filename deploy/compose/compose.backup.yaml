@@ -34,11 +34,16 @@ services:
       - -c
       - >-
         install -d -o postgres -g postgres -m 700 /pgbackrest-spool/paddock &&
+        install -d -o postgres -g postgres -m 755 /paddock-bundle-seq &&
         exec docker-entrypoint.sh postgres -c archive_mode=on -c archive_timeout=60
         -c 'archive_command=cp %p /pgbackrest-spool/paddock/.%f && mv /pgbackrest-spool/paddock/.%f /pgbackrest-spool/paddock/%f'
     volumes:
       - pgbackrest-spool-paddock:/pgbackrest-spool/paddock
       - postgres-socket:/var/run/postgresql
+      # The bundle sequence's high-water file (decisions-alpha9 item 68, scripts/bundle-seq.sh): Docker creates the
+      # directory as root, so this container, which starts as root, hands it to uid 999 (its postgres user, the backup
+      # role's uid) on every start; the restore and rollback scripts write the file through it.
+      - ./bundle-seq:/paddock-bundle-seq
 
   authentik-postgres:
     logging: *paddock-logging
@@ -152,6 +157,7 @@ services:
       PADDOCK_ESCROW_S3_ENDPOINT: http://rustfs:9000
       PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_backup_access_key
       PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_backup_secret_key
+      PADDOCK_BACKUP_HIGH_WATER_FILE: /bundle-seq/high-water
     secrets:
       - db_paddock_backup_url
       - db_paddock_platform_url
@@ -166,6 +172,8 @@ services:
       - fleet-dumps:/fleet-dumps
       - pgbackrest-state-paddock:/pgbackrest-state/paddock:ro
       - pgbackrest-state-authentik:/pgbackrest-state/authentik:ro
+      # Raised to the highest device.bundle_seq after every successful round (decisions-alpha9 item 68).
+      - ./bundle-seq:/bundle-seq
     networks: [cp]
     depends_on:
       paddock-migrate:

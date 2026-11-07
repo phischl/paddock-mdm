@@ -18,6 +18,7 @@
 #   RESTORE_SET_UID           owner of the staging directory (default 999, the backup role's and pgBackRest's uid)
 #   RESTORE_PROFILES          the Compose profiles the restored stack runs with (default: paddock observability, as
 #                             ./paddock up)
+#   RESTORE_HIGH_WATER        set by ./paddock rollback: the highest bundle sequence it read before its own down
 
 # A failing command inside $(...) stops the run like any other (staging, the manifest, the plan).
 shopt -s inherit_errexit
@@ -25,6 +26,8 @@ shopt -s inherit_errexit
 restore_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=openbao-restore.sh
 . "$restore_here/openbao-restore.sh"
+# shellcheck source=bundle-seq.sh
+. "$restore_here/bundle-seq.sh"
 
 RESTORE_COMPONENTS_ALL=(postgres openbao fleet escrow)
 read -r -a RESTORE_PROFILE_ARGS <<<"$(for p in ${RESTORE_PROFILES:-paddock observability}; do printf -- '--profile %s ' "$p"; done)"
@@ -553,6 +556,31 @@ restore_wait_service_healthy() {
   return 1
 }
 
+# restore_high_water: H of decisions-alpha9 item 68, before anything stops: RESTORE_HIGH_WATER when ./paddock rollback
+# read the running stack before its own down, else the running stack's highest, else the high-water file's.
+restore_high_water() {
+  if [[ "${RESTORE_HIGH_WATER:-}" =~ $BUNDLE_SEQ_RE ]]; then
+    RESTORE_HW="$((10#$RESTORE_HIGH_WATER))"
+    restore_log "bundle sequence: the highest before the rollback took the stack down is $RESTORE_HW"
+  else
+    RESTORE_HW="$(bundle_seq_high_water "$COMPOSE_DIR" compose)"
+  fi
+}
+
+# restore_bump_bundle_seq: raises every device's bundle sequence to RESTORE_HW + 1,000,000 or above (plain 1,000,000
+# without RESTORE_HW) and records the new highest in the high-water file.
+restore_bump_bundle_seq() {
+  local min by h
+  if ! min="$(bundle_seq_stack_min compose)"; then
+    restore_log "bundle sequence: the restored lowest is not readable; counting from 0"
+    min=0
+  fi
+  by="$(bundle_seq_by "$RESTORE_HW" "$min")"
+  restore_log "bundle sequence: raising every device's by $by (restored lowest $min, highest before the restore ${RESTORE_HW:-unknown})"
+  bundle_seq_bump "$by" restore_admin bump-bundle-seq
+  if h="$(bundle_seq_stack_max compose)"; then bundle_seq_record "$h" compose; fi
+}
+
 # restore_paddock: brings the stack back and, after a database restore, runs the restore commands in their binding
 # order (step 5; plan M6c decisions 20–22). The backup role starts last, once the escrow headers are back, so its
 # first escrow listing is not taken from a bucket still being refilled.
@@ -572,7 +600,7 @@ restore_paddock() {
   if restore_has postgres && ! restore_has openbao; then restore_unseal; fi
   if restore_has postgres; then
     restore_log "restore commands: bump-bundle-seq, compiler, rebuild-cache, recompile"
-    restore_admin bump-bundle-seq --by 1000000
+    restore_bump_bundle_seq
     compose --profile paddock up -d --no-deps paddock-compiler
     restore_admin rebuild-cache
     restore_admin recompile --all
@@ -653,6 +681,7 @@ restore_run() {
   RESTORE_SOURCE="$2"
   shift 2
   RESTORE_AT="" RESTORE_PLAN="" RESTORE_COMPONENT="" RESTORE_REPORTED="" RESTORE_WORK="" RESTORE_ESCROW_SKIPPED=""
+  RESTORE_HW=""
   RESTORE_ONLY=()
   case "$mode" in
     fresh) RESTORE_MODE=fresh ;;
@@ -716,6 +745,7 @@ restore_run() {
   fi
   started=$SECONDS
   RESTORE_WORK="$(mktemp -d)"
+  if restore_has postgres; then restore_high_water; fi
   restore_stop_writers
   for c in postgres openbao; do
     if restore_has "$c"; then "restore_$c"; fi

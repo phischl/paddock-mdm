@@ -42,9 +42,10 @@ The backup alerts of `docs/operations/monitoring.md` land here or in `docs/opera
    custodians** unseal with `./paddock bao operator unseal` in other terminals while the command waits up to 15
    minutes. The restored node keeps the original barrier and the original shares.
 6. **Paddock**: on a fresh installation creates the buckets, starts the roles except the compiler and the backup role,
-   runs `admin bump-bundle-seq --by 1000000` (a restored database can hold older bundle sequence numbers than the
-   devices, which would refuse new bundles as downgrades), starts the compiler, then `admin rebuild-cache` and
-   `admin recompile --all` (Valkey's caches and the bundles bucket are rebuilt from PostgreSQL).
+   raises the bundle sequence with `admin bump-bundle-seq --by N` (a restored database can hold older bundle sequence
+   numbers than the devices, which would refuse new bundles as downgrades; *Bundle sequence* below), starts the
+   compiler, then `admin rebuild-cache` and `admin recompile --all` (Valkey's caches and the bundles bucket are rebuilt
+   from PostgreSQL).
 7. **Fleet**: loads the newest dump at or before `--at` into an empty `fleet-mysql`.
 8. **Escrow**: puts the set's escrowed LUKS headers back into the escrow bucket where it lacks them (below).
 9. **Starts the backup role and waits until the stack is healthy**, then records the result (`platform.restore_completed`,
@@ -63,6 +64,25 @@ from the audit index on the audit host, which the restore does not touch. It pri
 line per such device, and `platform.restore_completed` records their number as `escrow_skipped_destroyed`. If the
 audit index cannot be read (audit host down, wrong `db_paddock_audit_reader_url`), the step fails and puts nothing
 back; fix the connection and run `./paddock restore --only escrow --from <set>` again.
+
+### Bundle sequence
+
+A device accepts only a bundle with a higher sequence than the last one it applied. Before anything stops, a database
+restore reads **H**, the highest bundle sequence of the running stack. After the restore it raises every device's
+sequence by `max(1 000 000, H + 1 000 000 − lowest restored sequence)`, so every device lands at H + 1 000 000 or above
+and receives a newer bundle with the recompile, also after an earlier restore had already raised the sequences. Raises
+above 1 000 000 000 run in several steps.
+
+When the stack cannot be read (a disaster restore: the database is gone), H comes from the **high-water file**
+`bundle-seq/high-water` in the bundle directory. It is outside `.secrets/` and holds one number. The backup role raises
+it after every successful round, every restore and rollback raises it too, and nothing lowers it. When both the stack
+and the file can be read, the higher value counts. Without either, the restore raises by the plain 1 000 000 and prints
+`warning: bundle sequence: neither the running stack nor … is readable`. Devices that applied a sequence above the
+restored one plus 1 000 000 then receive nothing until enough compiles pass it. Restore on the host where the file is, or
+copy `bundle-seq/high-water` from the old host's bundle directory before you restore on a new one.
+
+The directory is created by the bundle; `postgres` hands it to uid 999 (the backup role's) on every start. Do not edit
+the file by hand: a lower number is ignored, and a higher one only makes the next raise larger.
 
 ## Scenario 1: fresh installation
 

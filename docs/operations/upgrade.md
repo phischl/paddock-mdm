@@ -175,6 +175,13 @@ restore checks that the key matches the set's manifest and that A's preflight pa
 oldest backup at or before the point, the OpenBao snapshot and the Fleet dump), and asks its own confirmation `restore`
 (`--yes` answers it). A failure before `down` leaves the running stack untouched.
 
+**Bundle sequence after a rollback.** Right before `./paddock down`, the rollback reads the highest bundle sequence of
+B's running stack and records it in B's high-water file (`bundle-seq/high-water`). The restore that follows raises
+every restored device's sequence to that value plus 1 000 000 or above, so devices that applied a bundle of B, also one
+after a restore on B, receive a newer bundle from A without waiting for compiles. When B's stack is already down (a
+repeated rollback), the value comes from B's high-water file. `docs/operations/restore.md`, *Bundle sequence*, has the
+rule.
+
 **One rollback per upgrade attempt.** After a successful rollback `.upgrade-rollback` is renamed
 `.upgrade-rollback.rolled-back-<attempt>` and `.upgrade-state` gains `rolled-back=<time>`; a second rollback of the
 same attempt is refused. A new `./paddock upgrade` starts a new attempt and copies `.env` and `.secrets/` again: A runs
@@ -263,7 +270,9 @@ what is specific to alpha.9. It has no audit migration, so on the audit host `au
    - restores the snapshot into a fresh OpenBao with one temporary share (`openbao-restore.sh`); the custodians or the
      automatic unseal unseal the restored OpenBao;
    - when Fleet changed, drops Fleet's database and loads the dump;
-   - runs the restore commands (`bump-bundle-seq`, `rebuild-cache`, `recompile --all`) in their binding order;
+   - runs the restore commands (`bump-bundle-seq`, `rebuild-cache`, `recompile --all`) in their binding order. The
+     raise is not alpha.8's fixed 1 000 000: it is computed from the highest bundle sequence B's stack held right
+     before `./paddock down` (see *Bundle sequence after a rollback*), with alpha.8's own `bump-bundle-seq --by`;
    - starts pgBackRest, then `<old dir>/paddock up`. pgBackRest starts last: with its fresh state it takes a full
      backup at once, which would make a repeated rollback refuse after a later failure.
 

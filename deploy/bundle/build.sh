@@ -82,7 +82,7 @@ shipped=(
   scripts/lib.sh scripts/gen-prod-secrets.sh scripts/openbao-configure.sh scripts/rustfs-bundles-bootstrap.sh
   scripts/rustfs-audit-bootstrap.sh scripts/fleet-bootstrap.sh scripts/wait-healthy.sh scripts/postgres-unsealer-role.sh
   scripts/upgrade-check.sh scripts/upgrade.sh scripts/rollback.sh scripts/restore.sh
-  scripts/openbao-restore.sh scripts/legacy-alpha8.sh
+  scripts/openbao-restore.sh scripts/legacy-alpha8.sh scripts/bundle-seq.sh
 )
 for f in "$src"/authentik/blueprints/*.yaml; do shipped+=("authentik/blueprints/$(basename "$f")"); done
 
@@ -102,6 +102,9 @@ chmod 0755 "$dir/paddock"
 copy "$src/prod.env.example" "$dir/.env.example"
 copy "$src/lab.env.example" "$dir/.env.lab.example"
 copy "$src/retired-settings" "$dir/RETIRED-SETTINGS"
+# The bundle sequence's high-water file lives here (decisions-alpha9 item 68): compose.backup.yaml bind-mounts the
+# directory, which postgres hands to uid 999 on every start; shipped empty so that Docker does not create it.
+mkdir -m 0755 "$dir/bundle-seq"
 
 # versions.env: the third-party images of the stack (everything above the build and tooling images) and the three
 # Paddock images of this version (decision 12).

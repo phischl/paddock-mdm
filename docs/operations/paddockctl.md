@@ -160,11 +160,15 @@ completed.
 
 After a PostgreSQL restore, devices run bundle versions newer than the restored database knows. The restore commands
 run on the host with the worker's configuration, not through `paddockctl`: they need privileges the admin API does
-not have, and they run while the compiler is stopped (plan M6c decisions 20–23). Run them in this order:
+not have, and they run while the compiler is stopped (plan M6c decisions 20–23). `./paddock restore` and
+`./paddock rollback` run them for you and compute N from the highest sequence the stack held before it went down
+(`docs/operations/restore.md`, *Bundle sequence*). By hand, read that highest value before you stop anything and use
+N = max(1000000, highest + 1000000 − lowest restored sequence): a fixed 1000000 is too small once an earlier restore
+or rollback has raised the sequences after the point you restore. Run them in this order:
 
 ```
 docker compose … stop paddock-compiler
-docker compose … run --rm --no-deps paddock-worker admin bump-bundle-seq --by 1000000
+docker compose … run --rm --no-deps paddock-worker admin bump-bundle-seq --by N
 docker compose … start paddock-compiler
 docker compose … run --rm --no-deps paddock-worker admin rebuild-cache
 docker compose … run --rm --no-deps paddock-worker admin recompile --all

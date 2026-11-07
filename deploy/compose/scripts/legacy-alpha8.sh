@@ -309,11 +309,12 @@ la8_bao() {
 }
 la8_bao_restart() { la8_compose "$LA8_OLD" restart openbao >/dev/null; }
 
-# la8_restore <old dir> <project> <work dir> <with fleet: yes|no>: steps 3 to 6 of alpha.8's restore.md on a stack that
-# is down (step 2), with the files la8_preflight downloaded. The old directory's ./paddock up afterwards starts the
-# rest (step 7 is the operator's check).
+# la8_restore <old dir> <project> <work dir> <with fleet: yes|no> <H>: steps 3 to 6 of alpha.8's restore.md on a stack
+# that is down (step 2), with the files la8_preflight downloaded; H is the highest bundle sequence read before the down
+# (bundle-seq.sh; empty when unknown). The old directory's ./paddock up afterwards starts the rest (step 7 is the
+# operator's check).
 la8_restore() {
-  local old="$1" project="$2" work="$3" fleet="$4" v status
+  local old="$1" project="$2" work="$3" fleet="$4" hw="${5:-}" v status min by
   LA8_OLD="$old"
   # Defined here, not at load time: the upgrade sources this file too and must not gain a function named bao.
   # shellcheck disable=SC2317 # called by openbao-restore.sh
@@ -375,7 +376,15 @@ la8_restore() {
   la8_compose "$old" --profile paddock up -d paddock-api paddock-gateway paddock-worker paddock-outbox-relay \
     paddock-escrow-reader paddock-revocation-issuer
   la8_compose "$old" --profile paddock stop paddock-compiler
-  la8_compose "$old" run --rm --no-deps -T paddock-worker admin bump-bundle-seq --by 1000000 </dev/null
+  # Not alpha.8's fixed 1,000,000: devices may have applied a sequence that a restore on 0.1.0-alpha.9 raised already
+  # (decisions-alpha9 item 68). Its binary has the same --by.
+  if ! min="$(bundle_seq_stack_min la8_compose "$old")"; then
+    la8_log "bundle sequence: the restored lowest is not readable; counting from 0"
+    min=0
+  fi
+  by="$(bundle_seq_by "$hw" "$min")"
+  la8_log "bundle sequence: raising every device's by $by (restored lowest $min, highest before the rollback ${hw:-unknown})"
+  bundle_seq_bump "$by" la8_compose "$old" run --rm --no-deps -T paddock-worker admin bump-bundle-seq
   la8_compose "$old" --profile paddock up -d --no-deps paddock-compiler
   la8_compose "$old" run --rm --no-deps -T paddock-worker admin rebuild-cache </dev/null
   la8_compose "$old" run --rm --no-deps -T paddock-worker admin recompile --all </dev/null

@@ -132,6 +132,11 @@ compose() {
       [[ "$plan_json" == *'"state":"approved"'* ]]
       ;;
     *" backup restore-repo "*) cat >/dev/null && printf 'copied 3 files (9 bytes)\nrepo_path=%s\n' "$set_repo_path" ;;
+    *" exec -T postgres psql "*"bundle_seq"*) fake_bundle_seq "$line" ;;
+    *" exec -T -u postgres postgres sh -c "*)
+      # The record script itself, on the harness's directory instead of the container's mount.
+      sh -c "$BUNDLE_SEQ_RECORD_SCRIPT" bundle-seq "$COMPOSE_DIR/bundle-seq" "${*: -1}"
+      ;;
     *" exec -T postgres psql "* | *" exec -T authentik-postgres psql "*) echo f ;;
     *" openbao bao status "*)
       local n=0
@@ -160,6 +165,19 @@ compose() {
     *" ps --format "*) echo healthy ;;
     *" run "* | *" exec -T openbao sh "* | *" exec -T openbao bao write "*) cat >/dev/null ;;
   esac
+}
+# The paddock database's device.bundle_seq: before the pgBackRest restore the running stack's highest (seq_stack; empty:
+# postgres is not readable), afterwards the restored lowest and highest plus every bump-bundle-seq so far.
+seq_stack="" seq_min=2 seq_max=5
+fake_bundle_seq() {
+  local bumped
+  if ! grep -qF -- "-c set -euo pipefail" "$calls"; then
+    [[ -n "$seq_stack" ]] || return 1
+    echo "$seq_stack"
+    return 0
+  fi
+  bumped="$(sed -n 's/.*admin bump-bundle-seq --by \([0-9]*\)$/\1/p' "$calls" | awk '{ s += $1 } END { print s + 0 }')"
+  if [[ "$1" == *"max(bundle_seq)"* ]]; then echo $((seq_max + bumped)); else echo $((seq_min + bumped)); fi
 }
 docker() {
   echo "docker $*" >>"$calls"
@@ -365,6 +383,94 @@ if ((rc == 0)) && called "backup decrypt /restore-set/openbao/20261104T060000Z.s
 else
   bad "latest: rc $rc, $(grep decrypt "$calls")"
 fi
+
+# --- The bundle sequence after a restore (decisions-alpha9 item 68) ----------------------------------------------------
+mkdir -p "$COMPOSE_DIR/bundle-seq"
+hw_file="$COMPOSE_DIR/bundle-seq/high-water"
+bumps() { sed -n 's/.*admin bump-bundle-seq --by \([0-9]*\)$/\1/p' "$calls" | paste -sd' ' -; }
+
+# The stack still runs: its highest is read before anything stops and recorded in the high-water file.
+rm -f "$hw_file"
+seq_stack=1000003 run_restore restore fresh "$set_dir" --only postgres
+p_read="$(position "exec -T postgres psql -U postgres -d paddock -Atc select coalesce(max(bundle_seq), 0) from device")"
+p_stop="$(position "compose --profile paddock stop")"
+if ((rc == 0)) && [[ "$(bumps)" == 2000001 ]] && ((p_read > 0 && p_read < p_stop)) &&
+  [[ "$(cat "$hw_file")" == 2000006 ]]; then
+  ok "a restore raises the restored lowest to the running stack's highest + 1,000,000 and records the new highest"
+else
+  bad "stack high-water: rc $rc, bumps $(bumps), read $p_read stop $p_stop, file $(cat "$hw_file" 2>&1), out: $out"
+fi
+
+# A disaster restore: the stack is gone, the high-water file a backup round wrote is the source.
+echo 1500000 >"$hw_file"
+seq_stack="" run_restore restore fresh "$set_dir" --only postgres
+if ((rc == 0)) && [[ "$(bumps)" == 2499998 ]] && [[ "$out" == *"the high-water file $hw_file holds 1500000"* ]] &&
+  [[ "$(cat "$hw_file")" == 2500003 ]]; then
+  ok "without a readable stack the high-water file is the source"
+else
+  bad "file high-water: rc $rc, bumps $(bumps), file $(cat "$hw_file"), out: $out"
+fi
+
+# Neither: the plain 1,000,000 with a warning.
+rm -f "$hw_file"
+seq_stack="" run_restore restore fresh "$set_dir" --only postgres
+if ((rc == 0)) && [[ "$(bumps)" == 1000000 ]] && [[ "$out" == *"warning: bundle sequence: neither the running stack nor"* ]]; then
+  ok "without stack and file the restore raises by the plain 1,000,000 and warns"
+else
+  bad "no high-water: rc $rc, bumps $(bumps), out: $out"
+fi
+
+# The file never decreases, and with both sources the higher counts (a stack a failed restore left on older data).
+echo 9000000 >"$hw_file"
+seq_stack=1000003 run_restore restore fresh "$set_dir" --only postgres
+if ((rc == 0)) && [[ "$(bumps)" == 9999998 ]] && [[ "$(cat "$hw_file")" == 10000003 ]]; then
+  ok "with stack and file the higher one counts"
+else
+  bad "both sources: rc $rc, bumps $(bumps), file $(cat "$hw_file"), out: $out"
+fi
+echo 9000000 >"$hw_file"
+seq_stack=10 seq_min=9500000 seq_max=9500001 run_restore restore fresh "$set_dir" --only postgres
+if ((rc == 0)) && [[ "$(bumps)" == 1000000 ]] && [[ "$(cat "$hw_file")" == 10500001 ]]; then
+  ok "the raise is at least 1,000,000 and the file follows the new highest"
+else
+  bad "minimum raise: rc $rc, bumps $(bumps), file $(cat "$hw_file"), out: $out"
+fi
+echo 12000000 >"$hw_file"
+sh -c "$BUNDLE_SEQ_RECORD_SCRIPT" bundle-seq "$COMPOSE_DIR/bundle-seq" 11
+if [[ "$(cat "$hw_file")" == 12000000 ]]; then ok "the record script never lowers the file"; else bad "lowered: $(cat "$hw_file")"; fi
+
+# A raise above paddock-server's bound of 1,000,000,000 goes in steps.
+rm -f "$hw_file"
+seq_stack=2500000000 seq_min=0 run_restore restore fresh "$set_dir" --only postgres
+if ((rc == 0)) && [[ "$(bumps)" == "1000000000 1000000000 501000000" ]]; then
+  ok "a raise above 1,000,000,000 runs in steps of at most 1,000,000,000"
+else
+  bad "steps: rc $rc, bumps $(bumps), out: $out"
+fi
+
+# ./paddock rollback hands over the highest it read before its own down; the stack is stopped then.
+rm -f "$hw_file"
+seq_stack="" RESTORE_HIGH_WATER=3000000 run_restore restore fresh "$set_dir" --only postgres
+if ((rc == 0)) && [[ "$(bumps)" == 3999998 ]] && [[ "$out" == *"highest before the rollback took the stack down is 3000000"* ]]; then
+  ok "RESTORE_HIGH_WATER of ./paddock rollback is the source when set"
+else
+  bad "rollback hand-over: rc $rc, bumps $(bumps), out: $out"
+fi
+
+# The case of the upgrade job (#488): a restore after the upgrade, then a rollback to the pre-upgrade point. The device
+# applied the first restore's newest bundle; after the rollback's restore its sequence is above it without a compile.
+rm -f "$hw_file"
+echo 3 >"$hw_file"
+seq_stack="" run_restore restore fresh "$set_dir" --only postgres
+applied=$((seq_max + $(bumps)))
+seq_stack="$applied" seq_min=2 seq_max=2 run_restore restore fresh "$set_dir" --only postgres
+after=$((2 + $(bumps)))
+if ((rc == 0 && after > applied && after >= applied + 1000000)); then
+  ok "restore, then rollback to an earlier point: the device's next bundle ($after) is newer than the one it applied ($applied)"
+else
+  bad "restore then rollback: rc $rc, applied $applied, after $after, out: $out"
+fi
+rm -f "$hw_file"
 
 # --- Component boundaries ---------------------------------------------------------------------------------------------
 run_restore restore fresh "$set_dir" --only openbao

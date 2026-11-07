@@ -98,7 +98,7 @@ setup() {
   mkdir -p "$work/t/new/scripts" "$work/t/old"
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
-  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
+  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
   for s in gen-prod-secrets.sh wait-healthy.sh openbao-configure.sh; do
     # shellcheck disable=SC2016 # the stub expands its arguments when it runs
     printf '#!/usr/bin/env bash\necho "script %s $*" >>"$FIXTURE_CALLS"\n' "$s" >"$work/t/new/scripts/$s"
@@ -500,7 +500,7 @@ if [[ ! -e "$work/t/old/.upgrade-rollback" && -f "$work/t/old/.upgrade-rollback.
 else fail "the old directory's rollback point stays: $(ls -a "$work/t/old")"; fi
 cp "$here/paddock" "$work/t/old/paddock"
 mkdir -p "$work/t/old/scripts"
-for f in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh; do cp "$scripts/$f" "$work/t/old/scripts/$f"; done
+for f in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$f" "$work/t/old/scripts/$f"; done
 for f in compose.yaml compose.prod.yaml compose.backup.yaml; do cp "$fixtures/new/$f" "$work/t/old/$f"; done
 echo "Schema: unchanged" >"$work/t/old/RELEASE-NOTES"
 : >"$calls"
