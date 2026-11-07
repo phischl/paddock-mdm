@@ -98,7 +98,7 @@ setup() {
   mkdir -p "$work/t/new/scripts" "$work/t/old"
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
-  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
+  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
   for s in gen-prod-secrets.sh wait-healthy.sh openbao-configure.sh; do
     # shellcheck disable=SC2016 # the stub expands its arguments when it runs
     printf '#!/usr/bin/env bash\necho "script %s $*" >>"$FIXTURE_CALLS"\n' "$s" >"$work/t/new/scripts/$s"
@@ -163,7 +163,13 @@ BACKUP='^old backup now --label pre-upgrade-0.1.0-alpha.10 --wait$'
 
 # The whole run on the control plane.
 setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
+mkdir -p "$work/t/old/bundle-seq" && echo 2000003 >"$work/t/old/bundle-seq/high-water"
+chmod 0644 "$work/t/old/bundle-seq/high-water"
 run 0 "upgrade of the control plane" "$work/t/old" --yes
+if [[ "$(cat "$work/t/new/bundle-seq/high-water" 2>&1)" == 2000003 &&
+  "$(stat -c %a "$work/t/new/bundle-seq/high-water")" == 644 ]] && ! compgen -G "$work/t/new/bundle-seq/*.tmp" >/dev/null; then
+  pass "migrate-from carries the bundle sequence's high-water file, with its mode"
+else fail "high-water file after migrate-from: $(ls -l "$work/t/new/bundle-seq" 2>&1)"; fi
 before "migrate-from before secrets" '^script gen-prod-secrets.sh controlplane' '^docker pull '
 before "pull before the configuration check" '^docker pull ' '^docker run .*prod-check'
 before "configuration check before the backup" '^docker run .*prod-check' "$BACKUP"
@@ -500,7 +506,7 @@ if [[ ! -e "$work/t/old/.upgrade-rollback" && -f "$work/t/old/.upgrade-rollback.
 else fail "the old directory's rollback point stays: $(ls -a "$work/t/old")"; fi
 cp "$here/paddock" "$work/t/old/paddock"
 mkdir -p "$work/t/old/scripts"
-for f in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh; do cp "$scripts/$f" "$work/t/old/scripts/$f"; done
+for f in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$f" "$work/t/old/scripts/$f"; done
 for f in compose.yaml compose.prod.yaml compose.backup.yaml; do cp "$fixtures/new/$f" "$work/t/old/$f"; done
 echo "Schema: unchanged" >"$work/t/old/RELEASE-NOTES"
 : >"$calls"

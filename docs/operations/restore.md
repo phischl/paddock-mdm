@@ -42,9 +42,10 @@ The backup alerts of `docs/operations/monitoring.md` land here or in `docs/opera
    custodians** unseal with `./paddock bao operator unseal` in other terminals while the command waits up to 15
    minutes. The restored node keeps the original barrier and the original shares.
 6. **Paddock**: on a fresh installation creates the buckets, starts the roles except the compiler and the backup role,
-   runs `admin bump-bundle-seq --by 1000000` (a restored database can hold older bundle sequence numbers than the
-   devices, which would refuse new bundles as downgrades), starts the compiler, then `admin rebuild-cache` and
-   `admin recompile --all` (Valkey's caches and the bundles bucket are rebuilt from PostgreSQL).
+   raises the bundle sequence with `admin raise-bundle-seq --at-least N` (a restored database can hold older bundle sequence
+   numbers than the devices, which would refuse new bundles as downgrades; *Bundle sequence* below), starts the
+   compiler, then `admin rebuild-cache` and `admin recompile --all` (Valkey's caches and the bundles bucket are rebuilt
+   from PostgreSQL).
 7. **Fleet**: loads the newest dump at or before `--at` into an empty `fleet-mysql`.
 8. **Escrow**: puts the set's escrowed LUKS headers back into the escrow bucket where it lacks them (below).
 9. **Starts the backup role and waits until the stack is healthy**, then records the result (`platform.restore_completed`,
@@ -63,6 +64,31 @@ from the audit index on the audit host, which the restore does not touch. It pri
 line per such device, and `platform.restore_completed` records their number as `escrow_skipped_destroyed`. If the
 audit index cannot be read (audit host down, wrong `db_paddock_audit_reader_url`), the step fails and puts nothing
 back; fix the connection and run `./paddock restore --only escrow --from <set>` again.
+
+### Bundle sequence
+
+A device accepts only a bundle with a higher sequence than the last one it applied. Before anything stops, a database
+restore reads **H**, the highest bundle sequence of the running stack. After the restore it runs
+`admin raise-bundle-seq --at-least H+1000000`, which sets every device to `greatest(sequence + 1, H + 1 000 000)`.
+Every device, also one enrolled after the restored point, then lands above anything any device applied and receives
+a newer bundle with the recompile. The highest sequence grows by about 1 000 000 per restore, however many restores
+and rollbacks follow each other.
+
+When the stack cannot be read (a disaster restore: the database is gone), H comes from the **high-water file**
+`bundle-seq/high-water` in the bundle directory. It is outside `.secrets/` and holds one number. The backup role raises
+it after every successful round, every restore and rollback raises it too, nothing lowers it, and `./paddock upgrade`
+copies it into the new release's directory. When both the stack and the file hold a sequence, the higher one counts.
+Without either (a stack without any compiled device counts as none), the restore raises by the plain 1 000 000 with
+`admin bump-bundle-seq` and prints `warning: bundle sequence: neither the running stack nor … holds a sequence`.
+Devices that applied a sequence above the restored one plus 1 000 000 then receive nothing until enough compiles pass
+it. Restore on the host where the file is, or copy `bundle-seq/high-water` from the old host's bundle directory before
+you restore on a new one.
+
+An H above 999 999 000 000 is more than any fleet reaches by compiling: it is a corrupt or edited file, and the restore
+stops before anything changes and names it. Correct or remove the file, then run the restore again.
+
+The directory is created by the bundle; `postgres` hands it to uid 999 (the backup role's) on every start. Do not edit
+the file by hand: a lower number is ignored, and a higher one raises every device to that number plus 1 000 000.
 
 ## Scenario 1: fresh installation
 
@@ -182,7 +208,7 @@ sudo ./paddock restore --only backup-repo --from <target name|set|tar>   # or --
    point must be issued again**: a role that cannot log in to OpenBao (its log names a login failure) gets a new secret
    ID as `docs/operations/openbao.md` section 3 describes, written to `.secrets/approle/<role>/secret_id`, and its
    containers are restarted. Policies, AppRoles and keys are those of the snapshot.
-3. **Organizations and devices.** Devices keep working, reconnect and receive a new bundle (`bump-bundle-seq`); changes
+3. **Organizations and devices.** Devices keep working, reconnect and receive a new bundle (`raise-bundle-seq`); changes
    made after the chosen point are lost, including devices enrolled and audit rows of the control-plane database; the
    WORM audit trail on the audit host holds the evidence.
 4. **Check the backups run again.** The restore removes pgBackRest's state volumes, so both stanzas take a full backup

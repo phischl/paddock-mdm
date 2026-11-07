@@ -51,10 +51,13 @@ rb_mark_started() {
 # OpenBao snapshot and the Fleet dump at the point) and its confirmation run before anything stops (Agent design
 # contract 8); RB_PHASE records when the stack went down and when the restore started to replace volumes.
 rb_restore() {
-  local old="$1" new="$2" at="$3" yes="$4" fp legacy only=() c
+  local old="$1" new="$2" at="$3" yes="$4" fp legacy only=() c hw
   shift 4
   for c in "$@"; do only+=(--only "$c"); done
   trap - EXIT INT TERM HUP
+  # Read with this release's libraries, before the old ones replace them; the old restore.sh comes after this
+  # rollback's down and finds the stack stopped (decisions-alpha9 item 68).
+  hw="$(bundle_seq_high_water "$new" compose)" || rb_die "the highest bundle sequence is implausible (see above); nothing was changed"
   unset SECRETS_DIR
   # shellcheck source=/dev/null # the old release's library, not this bundle's
   . "$old/scripts/lib.sh"
@@ -62,7 +65,7 @@ rb_restore() {
   . "$old/scripts/restore.sh"
   restore_trap_set
   # shellcheck disable=SC2034 # read by the old release's restore.sh
-  RESTORE_SOURCE=repo RESTORE_SOURCE_LABEL="the local backup repository" RESTORE_ONLY=("$@")
+  RESTORE_SOURCE=repo RESTORE_SOURCE_LABEL="the local backup repository" RESTORE_ONLY=("$@") RESTORE_HIGH_WATER="$hw"
   # shellcheck disable=SC2034 # read by the old release's restore.sh
   RESTORE_AT="$(restore_normalize_at "$at")" || restore_die "the rollback point $at is no RFC 3339 time; nothing was changed"
   restore_set_opts
@@ -110,18 +113,21 @@ rb_restore() {
 # restore procedure (legacy-alpha8.sh), in a subshell. Its preconditions run before anything stops; RB_PHASE as in
 # rb_restore.
 rb_legacy_restore() {
-  local old="$1" new="$2" record="$3" fleet="$4"
+  local old="$1" new="$2" record="$3" fleet="$4" hw
   trap - EXIT INT TERM HUP
   RB_LEGACY_WORK="$(mktemp -d "$new/.rollback-legacy.XXXXXX")"
   # The downloaded sets and the temporary OpenBao root token of the fresh instance live here only.
   trap 'rm -rf "$RB_LEGACY_WORK"' EXIT
   la8_preflight "$old" "$record" "$RB_LEGACY_WORK" "$fleet" "$PADDOCK_PROJECT"
+  hw="$(bundle_seq_high_water "$new" compose)" || rb_die "the highest bundle sequence is implausible (see above); nothing was changed"
+  bundle_seq_by_fits "$hw" ||
+    rb_die "the highest bundle sequence $hw needs more than $BUNDLE_SEQ_MAX_STEPS calls of 0.1.0-alpha.8's bump-bundle-seq; nothing was changed"
   rb_mark_started
   echo down >"$RB_PHASE"
   echo "+ ./paddock down"
   "$new/paddock" down </dev/null
   echo restore >"$RB_PHASE"
-  la8_restore "$old" "$PADDOCK_PROJECT" "$RB_LEGACY_WORK" "$fleet"
+  la8_restore "$old" "$PADDOCK_PROJECT" "$RB_LEGACY_WORK" "$fleet" "$hw"
 }
 
 # rollback_main <new dir> <arguments of ./paddock rollback>

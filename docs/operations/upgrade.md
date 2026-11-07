@@ -175,6 +175,16 @@ restore checks that the key matches the set's manifest and that A's preflight pa
 oldest backup at or before the point, the OpenBao snapshot and the Fleet dump), and asks its own confirmation `restore`
 (`--yes` answers it). A failure before `down` leaves the running stack untouched.
 
+**Bundle sequence after a rollback.** Before `./paddock down`, the rollback reads the highest bundle sequence of B's
+running stack and records it in B's high-water file (`bundle-seq/high-water`). The rollback to 0.1.0-alpha.8 reads it
+right before `down`; any other rollback reads it before A's preflight and confirmation, because A's restore runs with
+A's scripts after the `down`, and hands it to that restore. The restore that follows raises
+every restored device's sequence to that value plus 1 000 000 or above, so devices that applied a bundle of B, also one
+after a restore on B, receive a newer bundle from A without waiting for compiles. When B's stack is already down (a
+repeated rollback), the value comes from B's high-water file. `./paddock upgrade` copies A's high-water file into B's
+directory (`migrate-from`), so the file never starts empty in a new release's directory. `docs/operations/restore.md`, *Bundle sequence*, has the
+rule.
+
 **One rollback per upgrade attempt.** After a successful rollback `.upgrade-rollback` is renamed
 `.upgrade-rollback.rolled-back-<attempt>` and `.upgrade-state` gains `rolled-back=<time>`; a second rollback of the
 same attempt is refused. A new `./paddock upgrade` starts a new attempt and copies `.env` and `.secrets/` again: A runs
@@ -263,7 +273,11 @@ what is specific to alpha.9. It has no audit migration, so on the audit host `au
    - restores the snapshot into a fresh OpenBao with one temporary share (`openbao-restore.sh`); the custodians or the
      automatic unseal unseal the restored OpenBao;
    - when Fleet changed, drops Fleet's database and loads the dump;
-   - runs the restore commands (`bump-bundle-seq`, `rebuild-cache`, `recompile --all`) in their binding order;
+   - runs the restore commands (`bump-bundle-seq`, `rebuild-cache`, `recompile --all`) in their binding order. The
+     raise is not alpha.8's fixed 1 000 000: it is computed from the highest bundle sequence B's stack held right
+     before `./paddock down` (see *Bundle sequence after a rollback*), with alpha.8's own `bump-bundle-seq --by`,
+     `max(1 000 000, highest + 1 000 000 − lowest restored)`. A highest sequence that would need more than ten calls of
+     at most 1 000 000 000 is refused before `down`;
    - starts pgBackRest, then `<old dir>/paddock up`. pgBackRest starts last: with its fresh state it takes a full
      backup at once, which would make a repeated rollback refuse after a later failure.
 

@@ -18,6 +18,7 @@
 #   RESTORE_SET_UID           owner of the staging directory (default 999, the backup role's and pgBackRest's uid)
 #   RESTORE_PROFILES          the Compose profiles the restored stack runs with (default: paddock observability, as
 #                             ./paddock up)
+#   RESTORE_HIGH_WATER        set by ./paddock rollback: the highest bundle sequence it read before its own down
 
 # A failing command inside $(...) stops the run like any other (staging, the manifest, the plan).
 shopt -s inherit_errexit
@@ -25,6 +26,8 @@ shopt -s inherit_errexit
 restore_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=openbao-restore.sh
 . "$restore_here/openbao-restore.sh"
+# shellcheck source=bundle-seq.sh
+. "$restore_here/bundle-seq.sh"
 
 RESTORE_COMPONENTS_ALL=(postgres openbao fleet escrow)
 read -r -a RESTORE_PROFILE_ARGS <<<"$(for p in ${RESTORE_PROFILES:-paddock observability}; do printf -- '--profile %s ' "$p"; done)"
@@ -553,6 +556,34 @@ restore_wait_service_healthy() {
   return 1
 }
 
+# restore_high_water: H of decisions-alpha9 items 68 and 71, before anything stops: RESTORE_HIGH_WATER when
+# ./paddock rollback read the running stack before its own down, else the running stack's highest or the high-water
+# file's. An implausible H stops the restore here, before any change.
+restore_high_water() {
+  if [[ "${RESTORE_HIGH_WATER:-}" =~ $BUNDLE_SEQ_RE ]] && ((10#$RESTORE_HIGH_WATER > 0)); then
+    RESTORE_HW="$((10#$RESTORE_HIGH_WATER))"
+    ((RESTORE_HW <= BUNDLE_SEQ_MAX_H)) ||
+      restore_die "the highest bundle sequence handed over by the rollback, $RESTORE_HW, is above $BUNDLE_SEQ_MAX_H; nothing was changed"
+    restore_log "bundle sequence: the highest before the rollback took the stack down is $RESTORE_HW"
+  else
+    RESTORE_HW="$(bundle_seq_high_water "$COMPOSE_DIR" compose)" ||
+      restore_die "the highest bundle sequence is implausible (see above); nothing was changed"
+  fi
+}
+
+# restore_bump_bundle_seq: raises every device's bundle sequence to greatest(seq + 1, RESTORE_HW + 1,000,000) (the plain
+# 1,000,000 without RESTORE_HW) and records the new highest in the high-water file.
+restore_bump_bundle_seq() {
+  local h
+  if [[ -n "$RESTORE_HW" ]]; then
+    restore_log "bundle sequence: raising every device to at least $(bundle_seq_at_least "$RESTORE_HW") (highest before the restore $RESTORE_HW)"
+    restore_admin raise-bundle-seq --at-least "$(bundle_seq_at_least "$RESTORE_HW")"
+  else
+    restore_admin bump-bundle-seq --by "$BUNDLE_SEQ_STEP"
+  fi
+  if h="$(bundle_seq_stack_max compose)"; then bundle_seq_record "$h" compose; fi
+}
+
 # restore_paddock: brings the stack back and, after a database restore, runs the restore commands in their binding
 # order (step 5; plan M6c decisions 20–22). The backup role starts last, once the escrow headers are back, so its
 # first escrow listing is not taken from a bucket still being refilled.
@@ -571,8 +602,8 @@ restore_paddock() {
   # The postgres step's `compose --profile paddock stop` stopped OpenBao as well; restore_openbao unseals its own.
   if restore_has postgres && ! restore_has openbao; then restore_unseal; fi
   if restore_has postgres; then
-    restore_log "restore commands: bump-bundle-seq, compiler, rebuild-cache, recompile"
-    restore_admin bump-bundle-seq --by 1000000
+    restore_log "restore commands: raise-bundle-seq, compiler, rebuild-cache, recompile"
+    restore_bump_bundle_seq
     compose --profile paddock up -d --no-deps paddock-compiler
     restore_admin rebuild-cache
     restore_admin recompile --all
@@ -653,6 +684,7 @@ restore_run() {
   RESTORE_SOURCE="$2"
   shift 2
   RESTORE_AT="" RESTORE_PLAN="" RESTORE_COMPONENT="" RESTORE_REPORTED="" RESTORE_WORK="" RESTORE_ESCROW_SKIPPED=""
+  RESTORE_HW=""
   RESTORE_ONLY=()
   case "$mode" in
     fresh) RESTORE_MODE=fresh ;;
@@ -716,6 +748,7 @@ restore_run() {
   fi
   started=$SECONDS
   RESTORE_WORK="$(mktemp -d)"
+  if restore_has postgres; then restore_high_water; fi
   restore_stop_writers
   for c in postgres openbao; do
     if restore_has "$c"; then "restore_$c"; fi

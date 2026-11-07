@@ -96,6 +96,8 @@ type Store interface {
 	EscrowEvidence(ctx context.Context) (map[string]time.Time, error)
 	InstallationID(ctx context.Context) (string, error)
 	SchemaVersion(ctx context.Context) (int, error)
+	// BundleSeqHighWater returns the highest device.bundle_seq (decisions-alpha9 item 68).
+	BundleSeqHighWater(ctx context.Context) (int64, error)
 }
 
 // Actor is the system actor of the backup role's audit events.
@@ -374,6 +376,14 @@ func (s *pgStore) SchemaVersion(ctx context.Context) (int, error) {
 		return err
 	})
 	return int(v), err
+}
+
+func (s *pgStore) BundleSeqHighWater(ctx context.Context) (int64, error) {
+	v, err := s.pool.BundleSeqHighWater(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read the bundle sequence high-water: %w", err)
+	}
+	return v, nil
 }
 
 // SystemContext carries the backup role's system principal.

@@ -376,6 +376,14 @@ func (p *BackupPool) SystemIdentifier(ctx context.Context) (int64, error) {
 	return id, err
 }
 
+// BundleSeqHighWater returns the highest device.bundle_seq of every organization (0 without devices) through the
+// SECURITY DEFINER function paddock_backup_bundle_seq_high_water: the role reads no device row itself.
+func (p *BackupPool) BundleSeqHighWater(ctx context.Context) (int64, error) {
+	var v int64
+	err := p.p.QueryRow(ctx, "SELECT paddock_backup_bundle_seq_high_water()").Scan(&v)
+	return v, err
+}
+
 // Listen holds a dedicated connection with LISTEN channel and sends to notify on every notification (non-blocking).
 // It returns when ctx ends or the connection fails.
 func (p *RelayPool) Listen(ctx context.Context, channel string, notify chan<- struct{}) error {

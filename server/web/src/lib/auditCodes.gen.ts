@@ -183,6 +183,7 @@ export const auditCodes = [
   'platform.backup_target_tested',
   'platform.backup_target_updated',
   'platform.bundle_seq_bumped',
+  'platform.bundle_seq_raised',
   'platform.cache_rebuilt',
   'platform.ip_allowlist_changed',
   'platform.ip_allowlist_denied',

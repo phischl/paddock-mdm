@@ -332,6 +332,12 @@ jobs:
           echo "CANDIDATE_VERSION=$v" >> "$GITHUB_ENV"
           images=(IMAGE=paddock-server:upgrade-ci COMPILER_IMAGE=paddock-compiler:upgrade-ci PGBACKREST_IMAGE=paddock-pgbackrest:upgrade-ci)
           make image image-compiler image-pgbackrest "${images[@]}" SERVER_VERSION="$v"
+          # The release build labels its images with vendor and version; ./paddock rollback reads the running release
+          # from those labels and refuses a stack without them, so the candidate images get the same two labels.
+          for img in paddock-server:upgrade-ci paddock-compiler:upgrade-ci paddock-pgbackrest:upgrade-ci; do
+            printf 'FROM %s\n' "$img" | docker build -q --label org.opencontainers.image.vendor=Paddock \
+              --label "org.opencontainers.image.version=$v" -t "$img" - >/dev/null
+          done
           LOCAL_SERVER_IMAGE=paddock-server:upgrade-ci LOCAL_COMPILER_IMAGE=paddock-compiler:upgrade-ci \
             LOCAL_PGBACKREST_IMAGE=paddock-pgbackrest:upgrade-ci \
             deploy/bundle/build.sh --version "$v" --channel stable --images local --out "$RUNNER_TEMP/candidate"

@@ -40,6 +40,7 @@ func loadBackupRole(l *config.Loader, common config.Common) backuprole.Config {
 		StateDir:      l.String("PADDOCK_BACKUP_STATE_DIR", "/pgbackrest-state"),
 		RoundInterval: l.Duration("PADDOCK_BACKUP_ROUND_INTERVAL", time.Minute),
 		ServerVersion: buildinfo.Version,
+		HighWaterFile: l.String("PADDOCK_BACKUP_HIGH_WATER_FILE", ""),
 	}
 	if s := l.Int("PADDOCK_BACKUP_FULL_INTERVAL_S", 0); s != 0 {
 		switch {

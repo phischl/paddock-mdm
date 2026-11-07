@@ -187,6 +187,7 @@ const (
 	// Restore commands of paddock-server admin (plan M6c decision 21).
 	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
 	CodePlatformBundleSeqBumped        Code = "platform.bundle_seq_bumped"
+	CodePlatformBundleSeqRaised        Code = "platform.bundle_seq_raised"
 	CodePlatformCacheRebuilt           Code = "platform.cache_rebuilt"
 
 	// IP allow list of the administrative surfaces (plan M7a decision 14).
@@ -1304,6 +1305,13 @@ var registry = map[Code]Definition{
 		Description: "An operator ran paddock-server admin bump-bundle-seq after a database restore: the bundle sequence of every device was raised (actor: system, platform pseudo-organization).",
 		Params:      []string{"by", "devices"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodePlatformBundleSeqRaised: {
+		Code: CodePlatformBundleSeqRaised, Emitted: true,
+		Description: "An operator ran paddock-server admin raise-bundle-seq after a database restore: every device's bundle sequence was raised to at least at_least and by at least one (actor: system, platform pseudo-organization).",
+		Params:      []string{"at_least", "devices"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "./paddock restore runs it with the highest sequence before the restore plus 1,000,000 (ADR 0046, amendment 2026-11-07).",
 	},
 	CodePlatformCacheRebuilt: {
 		Code: CodePlatformCacheRebuilt, Emitted: true,

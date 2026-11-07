@@ -99,6 +99,9 @@ type Config struct {
 	// is due within minutes).
 	FullInterval  time.Duration
 	ServerVersion string
+	// HighWaterFile is the host-side file the highest device.bundle_seq is recorded in after every successful round
+	// (decisions-alpha9 item 68); empty: none.
+	HighWaterFile string
 }
 
 // LeaderLocker runs fn while holding a cluster-wide advisory lock; false when another replica holds it.
@@ -305,7 +308,11 @@ func (e *Engine) round(ctx context.Context) error {
 		}
 		e.metrics.runs.WithLabelValues(runs[i].Kind, outcome).Inc()
 	}
-	return errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	e.recordHighWater(ctx)
+	return nil
 }
 
 func hours(h int) time.Duration { return time.Duration(h) * time.Hour }
