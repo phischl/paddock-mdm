@@ -127,6 +127,8 @@ would strand more.
       release on; for the first guaranteed pair, alpha.8 → alpha.9, the item runs the new image against the old
       stack's database: `./paddock compose … run --rm --no-deps --entrypoint paddock-server paddock-worker admin
       upgrade-check` with `PADDOCK_IMAGE` of the new `versions.env` — the schema is read-only for the check);
+      *Amendment 2026-11-07 (PDK-856, from PDK-855):* the entrypoint is `--entrypoint /paddock-server`. The binary
+      lies in `/` of the distroless runtime image, which is not on its `PATH`, so the relative form above cannot start;
    9. `openbao unseal path` — `PADDOCK_AUTO_UNSEAL=yes` with the shares file present, or a WARN that three
       custodians must be available during `./paddock up`;
    10. `running stack healthy` — `<old dir>/paddock ps` shows every service healthy (WARN otherwise);
@@ -135,7 +137,10 @@ would strand more.
    stop on FAIL (`--allow-unsupported-agents` turns the agent FAIL into WARN; nothing else is overridable);
    print the plan (the steps below with the versions) and ask for `yes` on the terminal unless `--yes`; then
    `migrate-from <old dir>`; `./paddock secrets` (generates missing secrets only); `pull`; `check` (every item
-   PASS, else stop before anything changed on the running stack — the old stack is still up); on the control
+   PASS, else stop before anything changed on the running stack — the old stack is still up; *amendment 2026-11-07
+   (PDK-856, from PDK-859):* on the audit host and a lab this is `check --online`, because offline the audit bucket's
+   Object Lock item is "not checked" and fails; it reads the bucket over the old stack's audit-store network and leaves
+   the backup targets' revision comparison to the post-checks); on the control
    plane and lab: `<old dir>/paddock backup now --label pre-upgrade-<new version> --wait` (M15; `--skip-backup`
    is refused on the control plane unless the release notes say `Schema: unchanged` — the flag exists for the
    audit host, which has no backup role); `up` (this directory; Compose recreates the containers with the new
