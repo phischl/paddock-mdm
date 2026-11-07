@@ -307,7 +307,8 @@ what is specific to alpha.9. It has no audit migration, so on the audit host `au
     console login of an enrolled device whose Entra ID password has expired. The AWS CLI image of the bucket bootstrap
     scripts (`./paddock bootstrap buckets`, `./paddock bootstrap audit-bucket`, a restore onto a fresh installation)
     moves to 2.39.3. `./paddock pull` does not fetch it, because it is no Compose service: Docker pulls it when one of
-    these commands first runs. On a host without registry access, pull `AWS_CLI_IMAGE` of B's `versions.env` beforehand.
+    these commands first runs. On a host without registry access, load the image `AWS_CLI_IMAGE` of B's `versions.env`
+    beforehand (`docker save` on a connected host, `docker load` here).
 
 ### 0.1.0-alpha.8, from 0.1.0-alpha.7
 
