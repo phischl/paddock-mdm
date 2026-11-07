@@ -274,7 +274,7 @@ development stack; it destroys the development volumes it names and never touche
 | Drill | Control plane ready | Subset green (RTO) |
 | --- | --- | --- |
 | first drill (gate P-3): reference machine (`docs/operations/capacity.md`), 2026-10-09, M6-integration `058e769`, manual runbook | 75 s | 150 s |
-| alpha.9 release regression, `make restore-drill` with `./paddock restore`'s code | _measured in the alpha.9 release regression_ | _measured in the alpha.9 release regression_ |
+| alpha.9 release regression: development host (22 cores, shared with other stacks), 2026-11-07, cluster/alpha9-features `a8095211`, `make restore-drill` with `./paddock restore` | 270 s | 745 s |
 
 The stated RTO of 4 hours covers a rebuilt host, the custodians' arrival and the copy of the set; the drill measures the
 technical part. The release regression for every release that changes the backup runs the `BACKUP=1` gate sequence and
