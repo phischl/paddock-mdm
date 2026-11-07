@@ -26,6 +26,9 @@ const problemText = useProblemText()
 const original = props.initial ? inputOf(props.initial) : null
 const form = reactive<TargetInput>(props.restored ? cloneTarget(props.restored) : (original ? cloneTarget(original) : emptyTarget()))
 const touched = ref(false)
+// A writable computed instead of v-model="form.enabled": vue-tsc 3.3.14 rejects that binding after the type-specific
+// templates (TS2339, `value` on TargetInput) although 3.3.13 accepted it and the runtime behaviour is the same.
+const enabled = computed({ get: () => form.enabled, set: (v: boolean) => { form.enabled = v } })
 const editing = computed(() => props.initial !== null)
 const need = computed(() => credentialsRequired(form, original))
 const clientErrors = computed<TargetErrors>(() => (touched.value ? validateTarget(form, original) : {}))
@@ -247,7 +250,7 @@ function submit(): void {
       />
     </template>
     <v-switch
-      v-model="form.enabled"
+      v-model="enabled"
       :label="t('backup.targets.enabled')"
       color="primary"
       inset

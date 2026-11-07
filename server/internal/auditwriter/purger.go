@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"strings"
 	"time"
 
@@ -118,7 +117,7 @@ func (p *Purger) Run(ctx context.Context, dryRun bool) (PurgeReport, error) {
 		return PurgeReport{}, fmt.Errorf("auditwriter: index retention of %d days is below the WORM retention of %d days",
 			p.retentionDays, p.writer.retentionDays)
 	}
-	if p.retentionDays > math.MaxInt32 {
+	if _, err := toInt32(p.retentionDays); err != nil {
 		return PurgeReport{}, fmt.Errorf("auditwriter: index retention of %d days is out of range", p.retentionDays)
 	}
 	var report PurgeReport
@@ -167,7 +166,11 @@ func (p *Purger) Run(ctx context.Context, dryRun bool) (PurgeReport, error) {
 // ones. In a dry run it also fills the outcome a purge would have from the partition's current events: Dropped then
 // means "would be dropped".
 func (p *Purger) plan(ctx context.Context, q *auditstore.Queries, report *PurgeReport, dryRun bool) error {
-	cutoff, err := q.PurgeCutoff(ctx, int32(p.retentionDays)) //nolint:gosec // range checked in Run
+	days, err := toInt32(p.retentionDays)
+	if err != nil {
+		return fmt.Errorf("auditwriter: index retention: %w", err)
+	}
+	cutoff, err := q.PurgeCutoff(ctx, days)
 	if err != nil {
 		return fmt.Errorf("auditwriter: read the purge cutoff: %w", err)
 	}
@@ -211,14 +214,18 @@ func (p *Purger) plan(ctx context.Context, q *auditstore.Queries, report *PurgeR
 // drop, whose transaction returned no cutoff of its own. It returns an error only for a failed drop or a drop whose
 // evidence could not be recorded.
 func (p *Purger) purge(ctx context.Context, part *PurgedPartition, planned time.Time) error {
+	days, err := toInt32(p.retentionDays)
+	if err != nil {
+		return fmt.Errorf("auditwriter: index retention: %w", err)
+	}
 	var row auditstore.PurgeAuditPartitionRow
-	err := p.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+	err = p.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		if err := q.SetPurgeLockTimeout(ctx); err != nil {
 			return err
 		}
 		var err error
 		row, err = q.PurgeAuditPartition(ctx, auditstore.PurgeAuditPartitionParams{
-			Month: part.Month, Days: int32(p.retentionDays), //nolint:gosec // range checked in Run
+			Month: part.Month, Days: days,
 		})
 		return err
 	})
