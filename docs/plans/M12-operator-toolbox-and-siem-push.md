@@ -879,3 +879,17 @@ Decisions taken by the architect lead on 2026-11-05 for PDK-749 and PDK-779 (rec
    download of an ended bundle answers 409.
 5. **Purge and late uploads.** A purge sets `expires_at` to the end of the upload window; the retention round deletes
    the object of a purged bundle once more then, so a PUT with a presigned URL issued before the purge leaves nothing.
+
+### Note 2026-11-07 — the notice goes to user sessions only (PDK-878; decisions-alpha9 items 75 and 76)
+
+1. **Class user.** `desktop.Notify` notifies only active wayland or x11 sessions of class `user` (decision 11's
+   "or `Class` `user`" made binding). On Ubuntu 24.04 the GDM greeter is an active wayland session of class
+   `greeter`; a device sitting at the login screen has no user to tell, and the notice to the greeter fails.
+2. **Failures are visible.** A session the notice cannot reach is logged at warn level with session, UID and cause
+   (decision 11 said debug); the agent tells "no active graphical session" (info) from "sessions present, none
+   reached" (warn). The collection still proceeds (ADR 0048). The portal's diagnostics list shows "User not notified"
+   when `notified_sessions` is 0.
+3. **No new package dependency.** `libnotify-bin` is a dependency of `ubuntu-desktop-minimal` on 24.04 and 26.04;
+   the agent .deb gains it only if a probe on a supported release shows it missing (decisions-alpha9 item 75).
+4. **DS1** counts only active graphical user sessions, restarts the display manager for the VM image's autologin
+   when there is none, fails loudly when that gives no user session, and asserts that the notice reached it.

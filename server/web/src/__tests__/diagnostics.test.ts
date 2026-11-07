@@ -130,6 +130,18 @@ describe('diagnostics list', () => {
     expect(mocks.startStepUp).not.toHaveBeenCalled()
   })
 
+  it('says when no user was notified of a collection, and only then', async () => {
+    await mountList('org_admin', [
+      { ...bundle('b1', 'stored'), notified_sessions: 0 },
+      { ...bundle('b2', 'stored'), notified_sessions: 1 },
+      bundle('b3', 'requested'),
+    ])
+    const chips = document.querySelectorAll('[data-testid="diagnostics-not-notified"]')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].textContent).toContain('User not notified')
+    expect(chips[0].getAttribute('title')).toContain('transparency notice')
+  })
+
   it('purges after the confirmation dialog only', async () => {
     mocks.purgeDiagnostics.mockResolvedValue(null)
     await mountList('org_admin', [bundle('b1', 'stored')])

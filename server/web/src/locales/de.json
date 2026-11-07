@@ -1413,6 +1413,8 @@
     "downloads": "Downloads",
     "expiresAt": "Gelöscht am",
     "failedReason": "Fehlgeschlagen: {reason}",
+    "notNotified": "Benutzer nicht benachrichtigt",
+    "notNotifiedHint": "Keine grafische Sitzung auf dem Gerät hat den Hinweis angezeigt: Niemand war angemeldet, oder der Hinweis konnte nicht zugestellt werden. Der Benutzer erfährt von dem Bündel nur aus dem Transparenzhinweis der Organisation.",
     "download": "Herunterladen",
     "downloadLabel": "Diagnosepaket von {hostname} herunterladen",
     "states": {
