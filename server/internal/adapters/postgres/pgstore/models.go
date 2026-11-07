@@ -209,6 +209,7 @@ type BackupRun struct {
 	ErrorClass  *string
 	Targets     json.RawMessage
 	CreatedAt   time.Time
+	MirroredAt  *time.Time
 }
 
 type BackupSchedule struct {

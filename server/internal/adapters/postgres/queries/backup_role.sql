@@ -48,7 +48,7 @@ ON CONFLICT (target_id, kind) DO UPDATE SET
   last_success_at = coalesce(EXCLUDED.last_success_at, backup_target_status.last_success_at),
   last_error = EXCLUDED.last_error,
   last_error_at = coalesce(EXCLUDED.last_error_at, backup_target_status.last_error_at),
-  bytes = CASE WHEN EXCLUDED.last_error IS NULL THEN EXCLUDED.bytes ELSE backup_target_status.bytes END;
+  bytes = CASE WHEN EXCLUDED.last_success_at IS NOT NULL THEN EXCLUDED.bytes ELSE backup_target_status.bytes END;
 
 -- name: BackupRoleRequestedRuns :many
 SELECT id, kind, label, created_at FROM backup_run WHERE state = 'requested' ORDER BY created_at, id;
@@ -67,6 +67,15 @@ WHERE id = @id AND state = 'requested';
 -- name: BackupRoleInsertFinishedRun :exec
 INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, bytes, error_class, targets)
 VALUES (@id, @kind, '', 'finished', @outcome, @started_at, @finished_at, @bytes, sqlc.narg(error_class), @targets);
+
+-- The finished runs whose mirror results and audit event are still due (decisions-alpha9 item 79), oldest first.
+-- name: BackupRoleUnmirroredRuns :many
+SELECT id, kind, label, outcome, started_at, finished_at, bytes, error_class FROM backup_run
+WHERE state = 'finished' AND mirrored_at IS NULL
+ORDER BY finished_at, id;
+
+-- name: BackupRoleSetRunMirrored :execrows
+UPDATE backup_run SET targets = @targets, mirrored_at = now() WHERE id = @id AND mirrored_at IS NULL;
 
 -- A repository restore from a target refuses while a restore plan runs (plan M15, amendment 2026-11-05, A5).
 -- name: BackupRoleRunningRestorePlans :one

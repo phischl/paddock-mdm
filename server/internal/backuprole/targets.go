@@ -65,6 +65,9 @@ const (
 	ClassUnknownPath = "unknown_path"
 	// ClassSizeMismatch: a file copied in this round has another size on the target (A3 step 4).
 	ClassSizeMismatch = "size_mismatch"
+	// ClassContinues is no error: the mirror used the round's copy budget and goes on next round (decisions-alpha9
+	// item 79). The run's target is not ok, but the target's status records no last_error and keeps its last success.
+	ClassContinues = "continues"
 )
 
 var (
@@ -72,7 +75,7 @@ var (
 	errSetShrunk    = errors.New("the local backup set lacks what the target holds; nothing is written or deleted")
 	errUnknownPath  = errors.New("backup target holds a repository path no backup key names; nothing is deleted there")
 	errSizeMismatch = errors.New("backup target holds another size than the copied file")
-	// errBudget ends a mirror that used its round's time; the target is not current yet (class io), and the next
+	// errBudget ends a mirror that used its round's time; the target is not current yet (ClassContinues), and the next
 	// round goes on with the files it still lacks.
 	errBudget = errors.New("backup target mirror used its round's budget; it continues next round")
 )

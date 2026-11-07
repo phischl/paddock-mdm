@@ -1765,6 +1765,7 @@
       "size": "Größe",
       "targets": "Ziele",
       "targetsOk": "{ok} von {total} Zielen",
+      "continues": "(wird in der nächsten Runde fortgesetzt)",
       "empty": {
         "title": "Noch keine Sicherung gelaufen",
         "description": "Läufe erscheinen hier nach der ersten Sicherung."

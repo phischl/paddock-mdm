@@ -136,11 +136,28 @@ func TestPGStore(t *testing.T) {
 	}
 	targetsOK := []backupset.RunTarget{{TargetID: s3.String(), OK: true}, {TargetID: smb.String(), ErrorClass: ClassNotMounted}}
 	if err := s.RecordRun(ctx, RunRecord{Kind: KindOpenBao, Requests: reqs, Succeeded: true, StartedAt: at,
-		FinishedAt: at.Add(3 * time.Second), Bytes: 99, Targets: targetsOK}); err != nil {
+		FinishedAt: at.Add(3 * time.Second), Bytes: 99}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordRun(ctx, RunRecord{Kind: KindFleet, ErrorClass: runClassFleet, StartedAt: at, FinishedAt: at,
-		Targets: targetsOK}); err != nil {
+	if err := s.RecordRun(ctx, RunRecord{Kind: KindFleet, ErrorClass: runClassFleet, StartedAt: at, FinishedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	// Phase 1 (decisions-alpha9 item 79): the requested run is finished at once, without targets and without an event.
+	var phase1 string
+	var events int
+	if err := super.QueryRow(ctx, `SELECT outcome FROM backup_run WHERE id = $1 AND state = 'finished' AND mirrored_at IS NULL
+		AND targets = '[]'`, req).Scan(&phase1); err != nil || phase1 != "succeeded" {
+		t.Fatalf("requested run after phase 1: %q %v", phase1, err)
+	}
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE code IN ('platform.backup_completed',
+		'platform.backup_failed')`).Scan(&events); err != nil || events != 0 {
+		t.Fatalf("events after phase 1: %d %v", events, err)
+	}
+	if err := s.MirrorRuns(ctx, targetsOK); err != nil {
+		t.Fatal(err)
+	}
+	// A second phase 2 finds nothing due: exactly one event per run.
+	if err := s.MirrorRuns(ctx, targetsOK); err != nil {
 		t.Fatal(err)
 	}
 	var outcome, rawTargets string
@@ -160,7 +177,8 @@ func TestPGStore(t *testing.T) {
 	}
 	var p map[string]any
 	if err := json.Unmarshal(params, &p); err != nil || p["label"] != "before upgrade" || p["targets_ok"] != 1.0 ||
-		p["targets_failed"] != 1.0 || p["bytes"] != 99.0 || p["duration_s"] != 3.0 {
+		p["targets_failed"] != 1.0 || p["bytes"] != 99.0 || p["duration_s"] != 3.0 ||
+		p["completed_at"] != at.Add(3*time.Second).UTC().Format(time.RFC3339) {
 		t.Errorf("params %s %v", params, err)
 	}
 	if !json.Valid(actor) || !strings.Contains(string(actor), Actor) {

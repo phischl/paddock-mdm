@@ -308,6 +308,23 @@ func (q *Queries) BackupRoleSetHostState(ctx context.Context, arg BackupRoleSetH
 	return err
 }
 
+const backupRoleSetRunMirrored = `-- name: BackupRoleSetRunMirrored :execrows
+UPDATE backup_run SET targets = $1, mirrored_at = now() WHERE id = $2 AND mirrored_at IS NULL
+`
+
+type BackupRoleSetRunMirroredParams struct {
+	Targets json.RawMessage
+	ID      uuid.UUID
+}
+
+func (q *Queries) BackupRoleSetRunMirrored(ctx context.Context, arg BackupRoleSetRunMirroredParams) (int64, error) {
+	result, err := q.db.Exec(ctx, backupRoleSetRunMirrored, arg.Targets, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const backupRoleSetTestResult = `-- name: BackupRoleSetTestResult :exec
 UPDATE backup_target SET test_requested_at = NULL, last_test_at = now(), last_test_ok = $1,
   last_test_error = $2
@@ -372,6 +389,53 @@ func (q *Queries) BackupRoleTargets(ctx context.Context) ([]BackupRoleTargetsRow
 	return items, nil
 }
 
+const backupRoleUnmirroredRuns = `-- name: BackupRoleUnmirroredRuns :many
+SELECT id, kind, label, outcome, started_at, finished_at, bytes, error_class FROM backup_run
+WHERE state = 'finished' AND mirrored_at IS NULL
+ORDER BY finished_at, id
+`
+
+type BackupRoleUnmirroredRunsRow struct {
+	ID         uuid.UUID
+	Kind       string
+	Label      string
+	Outcome    *string
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+	Bytes      int64
+	ErrorClass *string
+}
+
+// The finished runs whose mirror results and audit event are still due (decisions-alpha9 item 79), oldest first.
+func (q *Queries) BackupRoleUnmirroredRuns(ctx context.Context) ([]BackupRoleUnmirroredRunsRow, error) {
+	rows, err := q.db.Query(ctx, backupRoleUnmirroredRuns)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BackupRoleUnmirroredRunsRow{}
+	for rows.Next() {
+		var i BackupRoleUnmirroredRunsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Label,
+			&i.Outcome,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.Bytes,
+			&i.ErrorClass,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const backupRoleUpsertTargetStatus = `-- name: BackupRoleUpsertTargetStatus :exec
 INSERT INTO backup_target_status (target_id, kind, last_success_at, last_error, last_error_at, bytes)
 VALUES ($1, $2, $3, $4,
@@ -380,7 +444,7 @@ ON CONFLICT (target_id, kind) DO UPDATE SET
   last_success_at = coalesce(EXCLUDED.last_success_at, backup_target_status.last_success_at),
   last_error = EXCLUDED.last_error,
   last_error_at = coalesce(EXCLUDED.last_error_at, backup_target_status.last_error_at),
-  bytes = CASE WHEN EXCLUDED.last_error IS NULL THEN EXCLUDED.bytes ELSE backup_target_status.bytes END
+  bytes = CASE WHEN EXCLUDED.last_success_at IS NOT NULL THEN EXCLUDED.bytes ELSE backup_target_status.bytes END
 `
 
 type BackupRoleUpsertTargetStatusParams struct {

@@ -65,7 +65,7 @@ type KindHistory struct {
 	LastSuccess time.Time
 }
 
-// RunRecord is one finished run of one kind with its mirror results (plan M15 decision 16).
+// RunRecord is one finished run of one kind (plan M15 decision 16); its mirror results follow in MirrorRuns.
 type RunRecord struct {
 	Kind string
 	// Requests are the requested rows the run answers; without one the run is recorded as a new row.
@@ -75,7 +75,6 @@ type RunRecord struct {
 	StartedAt  time.Time
 	FinishedAt time.Time
 	Bytes      int64
-	Targets    []backupset.RunTarget
 }
 
 // Store is the database of the backup role.
@@ -90,7 +89,10 @@ type Store interface {
 	SetTargetStatus(ctx context.Context, id uuid.UUID, kind string, s KindStatus) error
 	RequestedRuns(ctx context.Context) ([]RequestedRun, error)
 	History(ctx context.Context) (map[string]KindHistory, error)
+	// RecordRun writes a finished run right after its local step (phase 1); MirrorRuns adds the round's mirror results
+	// and the audit event to every run still without them (phase 2, decisions-alpha9 item 79).
 	RecordRun(ctx context.Context, r RunRecord) error
+	MirrorRuns(ctx context.Context, results []backupset.RunTarget) error
 	// EscrowEvidence returns, by "<org>/<device>", the time of every device's newest successful Destroy
 	// (device.escrow_destroyed): the only audited evidence that lets an escrowed header copy leave the set.
 	EscrowEvidence(ctx context.Context) (map[string]time.Time, error)
@@ -284,61 +286,106 @@ func (s *pgStore) History(ctx context.Context) (map[string]KindHistory, error) {
 
 // RecordRun writes every requested row the run answers, or one new row, each with its own audit event in the same
 // transaction (plan M15 decision 16: one row and one event per run).
+// RecordRun is phase 1 of a run (decisions-alpha9 item 79): it writes the finished run, or answers its requests, right
+// after the local step and without the mirror's results, so that `backup now --wait` and restore plans see it at once.
+// The run's audit event follows in MirrorRuns.
 func (s *pgStore) RecordRun(ctx context.Context, r RunRecord) error {
-	targets, err := json.Marshal(nonNilTargets(r.Targets))
+	outcome := "failed"
+	if r.Succeeded {
+		outcome = "succeeded"
+	}
+	rows := r.Requests
+	if len(rows) == 0 {
+		rows = []RequestedRun{{Kind: r.Kind}}
+	}
+	started, finished := r.StartedAt, r.FinishedAt
+	empty := []byte("[]")
+	return s.pool.InBackup(SystemContext(ctx), func(ctx context.Context, q *pgstore.Queries) error {
+		for _, req := range rows {
+			if req.ID == uuid.Nil {
+				if err := q.BackupRoleInsertFinishedRun(ctx, pgstore.BackupRoleInsertFinishedRunParams{
+					ID: uuid.Must(uuid.NewV7()), Kind: r.Kind, Outcome: &outcome, StartedAt: &started,
+					FinishedAt: &finished, Bytes: r.Bytes, ErrorClass: optional(r.ErrorClass), Targets: empty}); err != nil {
+					return err
+				}
+				continue
+			}
+			n, err := q.BackupRoleFinishRequestedRun(ctx, pgstore.BackupRoleFinishRequestedRunParams{ID: req.ID,
+				Outcome: &outcome, StartedAt: &started, FinishedAt: &finished, Bytes: r.Bytes,
+				ErrorClass: optional(r.ErrorClass), Targets: empty})
+			if err != nil {
+				return err
+			}
+			if n != 1 {
+				return fmt.Errorf("backup run %s is no longer requested", req.ID)
+			}
+		}
+		return nil
+	})
+}
+
+// MirrorRuns is phase 2 (decisions-alpha9 item 79): every finished run whose mirror is still due, this round's and one
+// an earlier round could not finish (the role stopped in between), gets the round's mirror results and its audit
+// event (plan M15 §6.4); a target the set did not reach counts as targets_failed. completed_at is the run's local
+// completion, which the event's own time may follow by the length of the mirror.
+func (s *pgStore) MirrorRuns(ctx context.Context, results []backupset.RunTarget) error {
+	targets, err := json.Marshal(nonNilTargets(results))
 	if err != nil {
 		return err
 	}
 	ok, failed := 0, 0
-	for _, t := range r.Targets {
+	for _, t := range results {
 		if t.OK {
 			ok++
 		} else {
 			failed++
 		}
 	}
-	outcome := "failed"
-	spec := SpecFailed
-	if r.Succeeded {
-		outcome, spec = "succeeded", SpecCompleted
-	}
-	rows := r.Requests
-	if len(rows) == 0 {
-		rows = []RequestedRun{{Kind: r.Kind}}
-	}
 	ctx = SystemContext(ctx)
-	for _, req := range rows {
-		id := req.ID
-		if id == uuid.Nil {
-			id = uuid.Must(uuid.NewV7())
+	var due []pgstore.BackupRoleUnmirroredRunsRow
+	if err := s.pool.InBackup(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		due, err = q.BackupRoleUnmirroredRuns(ctx)
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, r := range due {
+		spec := SpecFailed
+		succeeded := r.Outcome != nil && *r.Outcome == "succeeded"
+		if succeeded {
+			spec = SpecCompleted
 		}
-		sp := spec
-		sp.Target = &audit.Target{Type: "backup_run", ID: id.String(), Display: r.Kind}
-		sp.Params = map[string]any{"run_id": id.String(), "kind": r.Kind, "label": req.Label, "bytes": r.Bytes,
-			"duration_s": int64(r.FinishedAt.Sub(r.StartedAt).Round(time.Second) / time.Second),
-			"targets_ok": ok, "targets_failed": failed, "error_class": r.ErrorClass}
+		var duration int64
+		completed := ""
+		if r.StartedAt != nil && r.FinishedAt != nil {
+			duration = int64(r.FinishedAt.Sub(*r.StartedAt).Round(time.Second) / time.Second)
+		}
+		if r.FinishedAt != nil {
+			completed = r.FinishedAt.UTC().Format(time.RFC3339)
+		}
+		errorClass := ""
+		if r.ErrorClass != nil {
+			errorClass = *r.ErrorClass
+		}
+		spec.Target = &audit.Target{Type: "backup_run", ID: r.ID.String(), Display: r.Kind}
+		spec.Params = map[string]any{"run_id": r.ID.String(), "kind": r.Kind, "label": r.Label, "bytes": r.Bytes,
+			"duration_s": duration, "completed_at": completed, "targets_ok": ok, "targets_failed": failed,
+			"error_class": errorClass}
+		id := r.ID
 		write := func(ctx context.Context, q *pgstore.Queries, _ app.Recorder) error {
-			started, finished := r.StartedAt, r.FinishedAt
-			if req.ID != uuid.Nil {
-				n, err := q.BackupRoleFinishRequestedRun(ctx, pgstore.BackupRoleFinishRequestedRunParams{ID: id,
-					Outcome: &outcome, StartedAt: &started, FinishedAt: &finished, Bytes: r.Bytes,
-					ErrorClass: optional(r.ErrorClass), Targets: targets})
-				if err != nil {
-					return err
-				}
-				if n == 1 {
-					return nil
-				}
-				return fmt.Errorf("backup run %s is no longer requested", id)
+			n, err := q.BackupRoleSetRunMirrored(ctx, pgstore.BackupRoleSetRunMirroredParams{ID: id, Targets: targets})
+			if err != nil {
+				return err
 			}
-			return q.BackupRoleInsertFinishedRun(ctx, pgstore.BackupRoleInsertFinishedRunParams{ID: id, Kind: r.Kind,
-				Outcome: &outcome, StartedAt: &started, FinishedAt: &finished, Bytes: r.Bytes,
-				ErrorClass: optional(r.ErrorClass), Targets: targets})
+			if n != 1 {
+				return fmt.Errorf("backup run %s is mirrored already", id)
+			}
+			return nil
 		}
-		if r.Succeeded {
-			err = s.runner.RunTx(ctx, app.ScopePlatform, sp, write)
+		if succeeded {
+			err = s.runner.RunTx(ctx, app.ScopePlatform, spec, write)
 		} else {
-			err = s.runner.RunTxRefusal(ctx, app.ScopePlatform, sp, errRunFailed, write)
+			err = s.runner.RunTxRefusal(ctx, app.ScopePlatform, spec, errRunFailed, write)
 			if err == errRunFailed {
 				err = nil
 			}

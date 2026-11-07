@@ -349,9 +349,10 @@ var (
 		"escrow_skipped_destroyed"}
 )
 
-// backupRunParams are the params of the run events of the backup role (plan M15 §6.4).
-var backupRunParams = []string{"run_id", "kind", "label", "bytes", "duration_s", "targets_ok", "targets_failed",
-	"error_class"}
+// backupRunParams are the params of the run events of the backup role (plan M15 §6.4); completed_at is the run's local
+// completion, which the event follows after the round's mirror (decisions-alpha9 item 79).
+var backupRunParams = []string{"run_id", "kind", "label", "bytes", "duration_s", "completed_at", "targets_ok",
+	"targets_failed", "error_class"}
 
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
@@ -1921,7 +1922,7 @@ var registry = map[Code]Definition{
 		Description: "The backup role finished one backup of one kind (a pgBackRest full backup, an OpenBao snapshot, a Fleet dump, an escrow mirror pass) and mirrored the backup set to the enabled targets.",
 		Params:      backupRunParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "Actor is the system paddock-backup; target is the run (type backup_run, display the kind). targets_ok and targets_failed count the enabled targets the set reached or missed in that round; a missed target does not fail the run. Never a key, a credential or a path's content. Platform pseudo-organization.",
+		Note:        "Actor is the system paddock-backup; target is the run (type backup_run, display the kind). targets_ok and targets_failed count the enabled targets the set reached or missed in the mirror that followed the run (a target that hit the round's copy budget counts as missed); a missed target does not fail the run. The event is recorded after that mirror, which can take hours on a large target; completed_at is when the backup itself finished, and the run is visible in the API from then on. Never a key, a credential or a path's content. Platform pseudo-organization.",
 	},
 	CodePlatformBackupFailed: {
 		Code: CodePlatformBackupFailed, Emitted: true,

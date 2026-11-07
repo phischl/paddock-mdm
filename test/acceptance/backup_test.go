@@ -359,7 +359,7 @@ func TestBackupRuns(t *testing.T) {
 	for _, k := range kinds {
 		wait = append(wait, ids[k])
 	}
-	done := waitBackupRuns(t, a.Portal, wait, 3*time.Minute)
+	done := waitBackupRunsMirrored(t, a.Portal, wait, 3*time.Minute)
 	for _, k := range kinds {
 		r := done[ids[k]]
 		if r.Outcome == nil || *r.Outcome != "succeeded" || r.Label != label {

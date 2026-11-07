@@ -1123,6 +1123,11 @@ const dialogTitle = computed(() => (targetDialog.value?.editing ? t('backup.targ
         </template>
         <template #[`item.targets`]="{ item }: { item: BackupRun }">
           {{ t('backup.runs.targetsOk', { ok: item.targets.filter((x) => x.ok).length, total: item.targets.length }) }}
+          <span
+            v-if="item.targets.some((x) => x.error_class === 'continues')"
+            class="pd-muted"
+            data-testid="backup-run-continues"
+          > {{ t('backup.runs.continues') }}</span>
         </template>
       </DataList>
     </div>

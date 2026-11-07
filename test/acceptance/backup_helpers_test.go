@@ -376,6 +376,19 @@ func requestBackupRuns(t *testing.T, a *backupAdmin, kinds []string, label strin
 // waitBackupRuns polls the run history every second until every run of ids is finished and returns them by ID.
 func waitBackupRuns(t *testing.T, p *env.Portal, ids []string, timeout time.Duration) map[string]backupRun {
 	t.Helper()
+	return waitBackupRunsWhere(t, p, ids, timeout, func(backupRun) bool { return true })
+}
+
+// waitBackupRunsMirrored waits until the runs are finished and carry their mirror results: a run is recorded right
+// after its local step, its targets once the round's mirror ended (decisions-alpha9 item 79).
+func waitBackupRunsMirrored(t *testing.T, p *env.Portal, ids []string, timeout time.Duration) map[string]backupRun {
+	t.Helper()
+	return waitBackupRunsWhere(t, p, ids, timeout, func(r backupRun) bool { return len(r.Targets) > 0 })
+}
+
+func waitBackupRunsWhere(t *testing.T, p *env.Portal, ids []string, timeout time.Duration,
+	ready func(backupRun) bool) map[string]backupRun {
+	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
 		res := call(t, p, http.MethodGet, backupRunsPath+"?page_size=100&sort=-started_at", nil)
@@ -388,7 +401,7 @@ func waitBackupRuns(t *testing.T, p *env.Portal, ids []string, timeout time.Dura
 		}
 		found := map[string]backupRun{}
 		for _, r := range page.Items {
-			if slices.Contains(ids, r.ID) && r.State == "finished" {
+			if slices.Contains(ids, r.ID) && r.State == "finished" && ready(r) {
 				found[r.ID] = r
 			}
 		}

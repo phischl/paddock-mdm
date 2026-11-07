@@ -84,7 +84,7 @@ func (f *escrowFixture) assertAllKept(t *testing.T) {
 	}
 }
 
-func (f *escrowFixture) escrowRun(t *testing.T) RunRecord {
+func (f *escrowFixture) escrowRun(t *testing.T) fakeRun {
 	t.Helper()
 	r, ok := f.store.run(KindEscrow)
 	if !ok {

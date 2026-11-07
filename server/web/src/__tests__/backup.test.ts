@@ -14,7 +14,7 @@ import { pendingConfirm, settleConfirm } from '../composables/useConfirm'
 import { useSessionStore } from '../stores/session'
 import {
   attemptsLeft, credentialsRequired, emptyPlan, emptyTarget, hostStateStatus, inputOf, keyFileText, newestSuccess, planBody, planErrors,
-  planStateStatus, scheduleErrors, timeLeft, toBody, validateTarget, withoutSecrets, type BackupKey, type BackupRestorePlan, type BackupOverview, type BackupTarget, type TargetInput,
+  planStateStatus, scheduleErrors, timeLeft, toBody, validateTarget, withoutSecrets, type BackupKey, type BackupRestorePlan, type BackupRun, type BackupOverview, type BackupTarget, type TargetInput,
 } from '../lib/backup'
 
 function target(over: Partial<BackupTarget> = {}): BackupTarget {
@@ -248,6 +248,7 @@ const planCreate = vi.fn()
 const planCancel = vi.fn()
 const planAbandon = vi.fn()
 let plans: BackupRestorePlan[] = []
+let runs: BackupRun[] = []
 let targets: BackupTarget[] = []
 vi.mock('../lib/backup', async (importOriginal) => {
   const original = await importOriginal<typeof import('../lib/backup')>()
@@ -269,7 +270,7 @@ vi.mock('../lib/backup', async (importOriginal) => {
     abandonRestorePlan: (...a: unknown[]) => planAbandon(...a),
     planLister: () => () => Promise.resolve({ items: plans, page: 1, page_size: 25, total: plans.length, total_capped: false, sort: '-created_at' }),
     targetLister: () => () => Promise.resolve({ items: targets, page: 1, page_size: 25, total: targets.length, total_capped: false, sort: 'name' }),
-    runLister: () => () => Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_capped: false, sort: '-started_at' }),
+    runLister: () => () => Promise.resolve({ items: runs, page: 1, page_size: 25, total: runs.length, total_capped: false, sort: '-started_at' }),
   }
 })
 
@@ -281,6 +282,7 @@ beforeEach(() => {
   localStorage.clear()
   for (const f of [getOverview, generate, confirmK, discard, remove, create, update, fetchTarget, saveSched, toggle, runNow, planCreate, planCancel, planAbandon, assign]) f.mockReset()
   plans = []
+  runs = []
   getOverview.mockResolvedValue(overviewOf())
   targets = [target()]
   Object.defineProperty(window, 'location', { value: { ...window.location, assign, href: 'https://admin.test/platform/backup', search: '' }, writable: true })
@@ -310,6 +312,20 @@ async function click(selector: string): Promise<void> {
 }
 
 describe('PlatformBackup', () => {
+  it('says when a target continues the mirror next round (decisions-alpha9 item 79)', async () => {
+    const run = (id: string, classes: (string | null)[]): BackupRun => ({
+      id, kind: 'postgres', label: '', state: 'finished', outcome: 'succeeded', started_at: '2026-11-07T10:00:00Z',
+      finished_at: '2026-11-07T10:05:00Z', bytes: 1, error_class: null, requested_by: null, created_at: '2026-11-07T10:00:00Z',
+      targets: classes.map((c, i) => ({ target_id: 't' + i, ok: c === null, error_class: c })),
+    })
+    runs = [run('r1', [null, 'continues']), run('r2', [null, 'io'])]
+    await mountPage('?tab=history')
+    const marks = document.querySelectorAll('[data-testid="backup-run-continues"]')
+    expect(marks).toHaveLength(1)
+    expect(marks[0].textContent).toContain('continues next round')
+    expect(document.body.textContent).toContain('1 of 2 targets')
+  })
+
   it('lists the targets with the host state chip', async () => {
     await mountPage('?tab=targets')
     const list = document.querySelector('[data-testid="backup-target-list"]')
