@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,8 @@ type fakeStore struct {
 	targets   []TargetRecord
 	requests  []RequestedRun
 	history   map[string]KindHistory
+	// runsMu guards runs: a round records the Fleet run from its watcher while the mirror runs.
+	runsMu    sync.Mutex
 	runs      []fakeRun
 	mirrorErr error
 	status    map[string]KindStatus
@@ -103,28 +106,61 @@ func (s *fakeStore) EscrowEvidence(context.Context) (map[string]time.Time, error
 // fakeRun is a recorded run with the mirror results of its phase 2 (mirrored).
 type fakeRun struct {
 	RunRecord
+	id       uuid.UUID
 	Targets  []backupset.RunTarget
 	mirrored bool
 }
 
-func (s *fakeStore) RecordRun(_ context.Context, r RunRecord) error {
-	s.runs = append(s.runs, fakeRun{RunRecord: r})
-	return nil
+func (s *fakeStore) RecordRun(_ context.Context, r RunRecord) ([]uuid.UUID, error) {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
+	id := uuid.New()
+	s.runs = append(s.runs, fakeRun{RunRecord: r, id: id})
+	return []uuid.UUID{id}, nil
 }
 
-func (s *fakeStore) MirrorRuns(_ context.Context, results []backupset.RunTarget) error {
+func (s *fakeStore) MirrorRuns(_ context.Context, results []backupset.RunTarget, skip []uuid.UUID) error {
 	if s.mirrorErr != nil {
 		return s.mirrorErr
 	}
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
 	for i := range s.runs {
-		if !s.runs[i].mirrored {
+		if !s.runs[i].mirrored && !slices.Contains(skip, s.runs[i].id) {
 			s.runs[i].Targets, s.runs[i].mirrored = slices.Clone(results), true
 		}
 	}
 	return nil
 }
 
+func (s *fakeStore) count(kind string) int {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
+	n := 0
+	for _, r := range s.runs {
+		if r.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// answers counts the recorded runs that answer the request id.
+func (s *fakeStore) answers(id uuid.UUID) int {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
+	n := 0
+	for _, r := range s.runs {
+		if slices.ContainsFunc(r.Requests, func(q RequestedRun) bool { return q.ID == id }) {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *fakeStore) run(kind string) (fakeRun, bool) {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
 	for _, r := range s.runs {
 		if r.Kind == kind {
 			return r, true
