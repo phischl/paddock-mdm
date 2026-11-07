@@ -1,0 +1,13 @@
+# The host key file of an installation older than 0.1.0-alpha.9 (decisions-alpha9 item 63): the api imports it once
+# as backup key legacy, which a platform administrator confirms in the portal (plan M15 decision 9). ./paddock adds
+# this file on a host with backups only while .secrets/backup_encryption_key exists; a fresh installation has no such
+# file and starts without a backup key. Once the imported key is confirmed and kept outside the host, moving the file
+# off the host leaves this file out (docs/operations/backup.md).
+services:
+  paddock-api:
+    environment:
+      PADDOCK_BACKUP_LEGACY_KEY_FILE: /run/secrets/backup_encryption_key
+    secrets: [backup_encryption_key]
+
+secrets:
+  backup_encryption_key: { file: ./.secrets/backup_encryption_key }

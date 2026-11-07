@@ -604,6 +604,38 @@ expect 2 "backup-target apply on the audit host" "$work/t" backup-target apply
 expect 2 "backup now on the audit host" "$work/t" backup now
 cp "$work/t/.env.example" "$work/t/.env"
 rm "$targets_file"
+
+# The legacy key import (decisions-alpha9 item 63): a fresh installation has no .secrets/backup_encryption_key and
+# leaves the import out; an installation upgraded from 0.1.0-alpha.8 keeps the file (migrate-from) and gets the import,
+# on a host with backups only. A present file is mounted whatever it is, so a broken one fails the start.
+legacy_key="$work/t/.secrets/backup_encryption_key"
+mkdir -p "$work/t/.secrets"
+[[ "$(files_of "$work/t")" == "$(lib_files "$work/t" PROD_FILES_controlplane)" ]] &&
+  pass "fresh control plane: no legacy key import" || fail "fresh control plane: $(files_of "$work/t")"
+expect 0 "compose on a fresh control plane" "$work/t" compose --profile '*' config
+[[ "$out" != *PADDOCK_BACKUP_LEGACY_KEY_FILE* && "$out" != *backup_encryption_key* ]] &&
+  pass "fresh control plane: the api neither names nor mounts a legacy key" || fail "fresh control plane names the legacy key"
+echo placeholder >"$legacy_key"
+[[ "$(files_of "$work/t")" == "$(lib_files "$work/t" PROD_FILES_controlplane) compose.backup-legacy-key.yaml" ]] &&
+  pass "upgraded control plane: the legacy key import joins the file set" || fail "upgraded control plane: $(files_of "$work/t")"
+expect 0 "compose on an upgraded control plane" "$work/t" compose --profile '*' config
+[[ "$out" == *"PADDOCK_BACKUP_LEGACY_KEY_FILE: /run/secrets/backup_encryption_key"* ]] &&
+  pass "upgraded control plane: the api imports the host file" || fail "upgraded control plane: the api lacks the import"
+rm "$legacy_key"
+ln -s "$work/t/.secrets/missing" "$legacy_key"
+[[ "$(files_of "$work/t")" == *" compose.backup-legacy-key.yaml" ]] &&
+  pass "a dangling key file link still joins the import" || fail "a dangling key file link is skipped: $(files_of "$work/t")"
+sed -i 's/^PADDOCK_HOST=.*/PADDOCK_HOST=audit/' "$work/t/.env"
+[[ "$(files_of "$work/t")" != *legacy-key* ]] && pass "the audit host never imports a legacy key" ||
+  fail "audit host: $(files_of "$work/t")"
+cp "$work/t/.env.lab.example" "$work/t/.env"
+[[ "$(files_of "$work/t")" != *legacy-key* ]] && pass "lab without backups: no legacy key import" ||
+  fail "lab without backups: $(files_of "$work/t")"
+sed -i 's/^PADDOCK_LAB_BACKUP=.*/PADDOCK_LAB_BACKUP=yes/' "$work/t/.env"
+[[ "$(files_of "$work/t")" == *" compose.backup.yaml compose.backup-legacy-key.yaml" ]] &&
+  pass "lab with backups: the legacy key import after compose.backup.yaml" || fail "lab with backups: $(files_of "$work/t")"
+rm -rf "$work/t/.secrets"
+cp "$work/t/.env.example" "$work/t/.env"
 expect 2 "backup-target without apply" "$work/t" backup-target
 expect 2 "backup without a subcommand" "$work/t" backup
 

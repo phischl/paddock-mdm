@@ -115,6 +115,10 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 			[]string{"prod.env.example"}},
 		"lab with automatic unseal and backups": {append(append(prodFiles(t, "lab"), libFiles(t, "AUTO_UNSEAL_FILES")...),
 			libFiles(t, "LAB_BACKUP_FILES")...), []string{"lab.env.example"}},
+		"control plane upgraded with a legacy key file": {append(prodFiles(t, "controlplane"), libFiles(t, "BACKUP_LEGACY_KEY_FILES")...),
+			[]string{"prod.env.example"}},
+		"lab with backups upgraded with a legacy key file": {append(append(prodFiles(t, "lab"), libFiles(t, "LAB_BACKUP_FILES")...),
+			libFiles(t, "BACKUP_LEGACY_KEY_FILES")...), []string{"lab.env.example"}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -175,6 +179,31 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 		}
 		if _, ok := cfg.Services["paddock-backup"].Networks["audit-index"]; ok {
 			t.Error("paddock-backup joins audit-index")
+		}
+	})
+	// decisions-alpha9 item 63: a fresh control plane neither imports nor mounts a legacy key; the overlay ./paddock
+	// adds while the host file exists mounts it into the api alone, and the backup items still pass.
+	t.Run("legacy key import only with the overlay", func(t *testing.T) {
+		fresh := renderConfig(t, prodFiles(t, "controlplane"), "prod.env.example")
+		if _, ok := fresh.Secrets["backup_encryption_key"]; ok {
+			t.Error("a fresh control plane defines the secret backup_encryption_key")
+		}
+		if v := fresh.Services["paddock-api"].Environment["PADDOCK_BACKUP_LEGACY_KEY_FILE"]; v != nil {
+			t.Errorf("a fresh control plane sets PADDOCK_BACKUP_LEGACY_KEY_FILE=%s", *v)
+		}
+		upgraded := renderConfig(t, append(prodFiles(t, "controlplane"), libFiles(t, "BACKUP_LEGACY_KEY_FILES")...), "prod.env.example")
+		for name, s := range upgraded.Services {
+			if mounts := slices.ContainsFunc(s.Secrets, func(m prodcheck.ServiceSecret) bool { return m.Source == "backup_encryption_key" }); mounts != (name == "paddock-api") {
+				t.Errorf("%s mounts backup_encryption_key: %v", name, mounts)
+			}
+		}
+		if v := upgraded.Services["paddock-api"].Environment["PADDOCK_BACKUP_LEGACY_KEY_FILE"]; v == nil || *v != "/run/secrets/backup_encryption_key" {
+			t.Errorf("the upgraded api's PADDOCK_BACKUP_LEGACY_KEY_FILE is %v", v)
+		}
+		for _, r := range prodcheck.Run(context.Background(), upgraded, prodcheck.Options{}) {
+			if strings.HasPrefix(r.Item, "backup:") && !r.OK {
+				t.Errorf("%s:\n%s", r.Item, r.Detail)
+			}
 		}
 	})
 }

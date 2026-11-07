@@ -219,7 +219,8 @@ what is specific to alpha.9. It has no audit migration, so on the audit host `au
    platform administrator has confirmed a backup key, nothing is backed up** (the alert `PaddockBackupKeyUnconfirmed`
    fires after an hour).
 3. **The key is imported once, then confirmed.** The key of 0.1.0-alpha.8 is the file `.secrets/backup_encryption_key`
-   (copied by `migrate-from`); the api imports it at its first start as the key `legacy`, state `unconfirmed`. In the
+   (copied by `migrate-from`); because it exists, `./paddock` adds `compose.backup-legacy-key.yaml`, and the api imports
+   it at its first start as the key `legacy`, state `unconfirmed`. In the
    portal under *Platform* → *Backup* → *Key*, a platform administrator types the characters at the six positions shown
    from that file. Keep this key: the backups of 0.1.0-alpha.8 in the old bucket are encrypted with it, and a rollback
    to 0.1.0-alpha.8 needs them. Alternatively discard the imported key and generate a new one: new backups then use the

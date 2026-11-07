@@ -68,7 +68,7 @@ mkdir -p "$dir"
 # development-only scripts stay out.
 shipped=(
   compose.yaml compose.prod.yaml compose.backup.yaml compose.audit.yaml compose.audit.prod.yaml compose.lab.yaml
-  compose.auto-unseal.yaml
+  compose.auto-unseal.yaml compose.backup-legacy-key.yaml
   caddy/Caddyfile.prod caddy/Caddyfile.lab caddy/guards.caddy caddy/entrypoint.sh
   nginx/paddock.conf.example
   openbao/config.hcl openbao/prod.hcl

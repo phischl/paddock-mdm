@@ -82,13 +82,18 @@ printed copy in a safe.
 The stored key is encrypted with the Transit key `backup-wrap`: the api may only encrypt, the backup role alone
 decrypts. The confirmation proves six characters, not a safe place (residual risk RR-100).
 
-**Existing installations and the host key file.** `./paddock secrets` still writes `.secrets/backup_encryption_key`.
-The api imports that file once at its start, when no key exists, as the key `legacy`, state `unconfirmed`; the *Key*
-tab shows it as imported from the host file and asks for the characters at six positions of the file's text. No backup
-runs until it is confirmed. Alternatively discard it and generate a new key (only one unconfirmed key can exist). The
-host file stays where it is (the shipped `compose.backup.yaml` mounts it into `paddock-api`); after the confirmation it
-is only a second copy of key material on the host, which `./paddock check` lists as the warning `backup: legacy key
-import` and the api logs at its start. Import happens once and only while no key exists.
+**Existing installations and the host key file.** A fresh installation has no host key file: `./paddock secrets` does
+not write one, the control plane starts without a key, and a platform administrator generates it on the *Key* tab. An
+installation upgraded from 0.1.0-alpha.8 keeps its `.secrets/backup_encryption_key` (copied by `migrate-from`). While
+that file exists on a control-plane host or a lab host with backups, `./paddock` adds `compose.backup-legacy-key.yaml`,
+which mounts it into `paddock-api`, and the api imports it once at its start, when no key exists, as the key `legacy`,
+state `unconfirmed`; the *Key* tab shows it as imported from the host file and asks for the characters at six positions
+of the file's text. No backup runs until it is confirmed. Alternatively discard it and generate a new key (only one
+unconfirmed key can exist). A file that is present but unreadable, empty or not a key stops the api. After the
+confirmation the file is only a second copy of key material on the host, which `./paddock check` lists as the warning
+`backup: legacy key import` and the api logs at its start; once a copy of the key is kept outside the host, move the
+file off the host and run `./paddock up`, which then leaves the import out. Import happens once and only while no key
+exists.
 
 ## Targets
 

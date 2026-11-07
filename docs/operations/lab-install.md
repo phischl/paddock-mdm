@@ -305,10 +305,10 @@ To back up, set `PADDOCK_LAB_BACKUP=yes` in `.env`, run `./paddock check` and `.
 backup role and keeps the backup set in the local volume `backup-repo` (`docs/operations/backup.md`). Targets, key and
 schedule are set in the portal, so there are no backup credentials in `.env` or `.secrets/`:
 
-1. In the portal under *Platform* → *Backup* → *Key*, confirm the imported key: type the characters at the six
-   positions shown from `.secrets/backup_encryption_key`, or discard it and generate a new one. Nothing is backed up
-   until a key is confirmed. **Keep a copy of the key outside the lab host**: `./paddock down --volumes` or a lost host
-   takes the local copy with it.
+1. In the portal under *Platform* → *Backup* → *Key*, generate the key, which Paddock shows exactly once, and confirm it
+   by typing the characters at the six positions shown. Nothing is backed up until a key is confirmed. **Keep a copy of
+   the key outside the lab host**: Paddock keeps none on the host. (A lab upgraded from 0.1.0-alpha.8 with
+   `.secrets/backup_encryption_key` shows that file's key as imported instead; `docs/operations/backup.md`.)
 2. Add a target outside the lab host under *Backup* → *Targets* (an S3-compatible bucket, or an SMB or NFS share, or
    a directory below `PADDOCK_BACKUP_LOCAL_ROOT`, default `/srv/paddock-backup`, that is mounted from another disk).
    SMB, NFS and local targets need the host step `./paddock backup-target apply` and `./paddock up`.
