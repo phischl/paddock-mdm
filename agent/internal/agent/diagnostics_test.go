@@ -249,7 +249,7 @@ func TestCollectStatusWorker(t *testing.T) {
 			if d.commandID != id || d.status != protocol.CommandSucceeded || d.result["uploaded"] != true {
 				t.Fatalf("%+v, want %s", d, id)
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(hangGuard):
 			t.Fatal("no result")
 		}
 	}

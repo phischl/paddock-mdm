@@ -187,7 +187,7 @@ func TestKeyslotPassNotParallel(t *testing.T) {
 	}()
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
-	timeout := time.After(10 * time.Second)
+	timeout := time.After(hangGuard)
 	for finished := false; !finished; {
 		select {
 		case fn := <-a.conversionCalls:

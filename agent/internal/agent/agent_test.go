@@ -126,11 +126,16 @@ func checkins(g *testgw.Gateway) int {
 
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for !cond() {
 		if time.Now().After(deadline) {
-			t.Fatal("condition not met within 5 s")
+			t.Fatalf("condition not met within %s", hangGuard)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// hangGuard bounds a wait for something the real run loop does on its own clock (check-ins every second, a worker's
+// collection). It only catches a hang: the conditions are polled, and a 5 s bound failed under a loaded host with a
+// correct agent (PDK-883).
+const hangGuard = time.Minute
