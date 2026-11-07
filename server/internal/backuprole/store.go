@@ -3,6 +3,7 @@ package backuprole
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -288,8 +289,29 @@ func (s *pgStore) History(ctx context.Context) (map[string]KindHistory, error) {
 // transaction (plan M15 decision 16: one row and one event per run).
 // RecordRun is phase 1 of a run (decisions-alpha9 item 79): it writes the finished run, or answers its requests, right
 // after the local step and without the mirror's results, so that `backup now --wait` and restore plans see it at once.
-// The run's audit event follows in MirrorRuns.
+// The run's audit event follows in MirrorRuns. A run that cannot be written gets its one event here instead: a
+// platform.backup_failed with error_class record, since without a row phase 2 never sees it.
 func (s *pgStore) RecordRun(ctx context.Context, r RunRecord) error {
+	err := s.recordRun(ctx, r)
+	if err == nil {
+		return nil
+	}
+	spec := SpecFailed
+	id := uuid.Must(uuid.NewV7())
+	label := ""
+	if len(r.Requests) > 0 {
+		id, label = r.Requests[0].ID, r.Requests[0].Label
+	}
+	spec.Target = &audit.Target{Type: "backup_run", ID: id.String(), Display: r.Kind}
+	spec.Params = map[string]any{"run_id": id.String(), "kind": r.Kind, "label": label, "bytes": r.Bytes,
+		"duration_s":   int64(r.FinishedAt.Sub(r.StartedAt).Round(time.Second) / time.Second),
+		"completed_at": r.FinishedAt.UTC().Format(time.RFC3339), "targets_ok": 0, "targets_failed": 0,
+		"error_class": runClassRecord}
+	_ = s.runner.RecordRefusal(context.WithoutCancel(SystemContext(ctx)), app.ScopePlatform, spec, err)
+	return err
+}
+
+func (s *pgStore) recordRun(ctx context.Context, r RunRecord) error {
 	outcome := "failed"
 	if r.Succeeded {
 		outcome = "succeeded"
@@ -341,7 +363,9 @@ func (s *pgStore) MirrorRuns(ctx context.Context, results []backupset.RunTarget)
 			failed++
 		}
 	}
-	ctx = SystemContext(ctx)
+	// A shutdown must not split a run between a failure event and a retried one: the loop finishes on its own clock.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(SystemContext(ctx)), mirrorRunsTimeout)
+	defer cancel()
 	var due []pgstore.BackupRoleUnmirroredRunsRow
 	if err := s.pool.InBackup(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		due, err = q.BackupRoleUnmirroredRuns(ctx)
@@ -391,11 +415,22 @@ func (s *pgStore) MirrorRuns(ctx context.Context, results []backupset.RunTarget)
 			}
 		}
 		if err != nil {
+			// The runner recorded this attempt's failure event: the run is done, or the next round would record a
+			// second event for it (decisions-alpha9 item 79: exactly one per run).
+			if merr := s.pool.InBackup(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+				_, err := q.BackupRoleSetRunMirrored(ctx, pgstore.BackupRoleSetRunMirroredParams{ID: id, Targets: targets})
+				return err
+			}); merr != nil {
+				err = errors.Join(err, merr)
+			}
 			return err
 		}
 	}
 	return nil
 }
+
+// mirrorRunsTimeout bounds phase 2 of a round, which runs on even when the role shuts down.
+const mirrorRunsTimeout = 2 * time.Minute
 
 // errRunFailed is the refusal that records a failed run's event with outcome failure; the error class is a param.
 var errRunFailed = fmt.Errorf("backup run failed")

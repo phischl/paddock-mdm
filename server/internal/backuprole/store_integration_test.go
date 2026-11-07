@@ -116,6 +116,25 @@ func TestPGStore(t *testing.T) {
 	if err := s.SetTargetStatus(ctx, s3, KindOpenBao, KindStatus{LastSuccess: at, Bytes: 42}); err != nil {
 		t.Fatal(err)
 	}
+	// The end of the copy budget (decisions-alpha9 item 79) writes an empty status: no last_error, the last success
+	// and its size stay.
+	if err := s.SetTargetStatus(ctx, s3, KindPostgres, KindStatus{LastSuccess: at, Bytes: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTargetStatus(ctx, s3, KindPostgres, KindStatus{Error: ClassSizeMismatch}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTargetStatus(ctx, s3, KindPostgres, KindStatus{}); err != nil {
+		t.Fatal(err)
+	}
+	var keptAt time.Time
+	var keptBytes int64
+	var keptErr *string
+	if err := super.QueryRow(ctx, `SELECT last_success_at, bytes, last_error FROM backup_target_status
+		WHERE target_id = $1 AND kind = 'postgres'`, s3).Scan(&keptAt, &keptBytes, &keptErr); err != nil ||
+		!keptAt.Equal(at) || keptBytes != 42 || keptErr != nil {
+		t.Errorf("status after the budget's end %v %d %v %v", keptAt, keptBytes, keptErr, err)
+	}
 	if err := s.SetTargetStatus(ctx, s3, KindOpenBao, KindStatus{Error: ClassDial}); err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +194,11 @@ func TestPGStore(t *testing.T) {
 		audit.PlatformOrganizationID, req.String()).Scan(&params, &actor); err != nil {
 		t.Fatalf("completed event: %v", err)
 	}
+	var completed int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE code = 'platform.backup_completed'
+		AND target->>'id' = $1`, req.String()).Scan(&completed); err != nil || completed != 1 {
+		t.Errorf("completed events of the requested run %d %v, want exactly one", completed, err)
+	}
 	var p map[string]any
 	if err := json.Unmarshal(params, &p); err != nil || p["label"] != "before upgrade" || p["targets_ok"] != 1.0 ||
 		p["targets_failed"] != 1.0 || p["bytes"] != 99.0 || p["duration_s"] != 3.0 ||
@@ -222,6 +246,55 @@ func TestPGStore(t *testing.T) {
 	}
 	if v, err := s.SchemaVersion(ctx); err != nil || v < 107 {
 		t.Errorf("schema version %d %v", v, err)
+	}
+
+	// Phase 1 cannot write the run (its request was answered already): the attempt still gets its one event, a
+	// platform.backup_failed with error_class record (decisions-alpha9 item 79).
+	if err := s.RecordRun(ctx, RunRecord{Kind: KindOpenBao, Requests: reqs, Succeeded: true, StartedAt: at,
+		FinishedAt: at}); err == nil {
+		t.Fatal("phase 1 answered a request twice")
+	}
+	var recordFailed int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE code = 'platform.backup_failed'
+		AND params->>'error_class' = 'record' AND target->>'id' = $1`, req.String()).Scan(&recordFailed); err != nil ||
+		recordFailed != 1 {
+		t.Errorf("record failure events %d %v, want one", recordFailed, err)
+	}
+
+	// Phase 2 fails for one run: the runner records that attempt's failure event, and the run counts as mirrored, so a
+	// later phase 2 records no second event for it.
+	exec(`CREATE SEQUENCE pdk881_fail`)
+	exec(`CREATE FUNCTION pdk881_fail_once() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN
+		IF NEW.label = 'fail phase 2' AND NEW.mirrored_at IS NOT NULL AND nextval('pdk881_fail') = 1 THEN
+			RAISE EXCEPTION 'phase 2 write failed'; END IF; RETURN NEW; END $$`)
+	exec(`CREATE TRIGGER pdk881_fail BEFORE UPDATE ON backup_run FOR EACH ROW EXECUTE FUNCTION pdk881_fail_once()`)
+	failing := uuid.Must(uuid.NewV7())
+	exec(`INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, targets, mirrored_at)
+		VALUES ($1, 'openbao', 'fail phase 2', 'finished', 'succeeded', now(), now(), '[]', NULL)`, failing)
+	// A run an older backup role wrote during an upgrade counts as mirrored: it recorded its event itself.
+	old := uuid.Must(uuid.NewV7())
+	exec(`INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, targets)
+		VALUES ($1, 'openbao', 'older role', 'finished', 'succeeded', now(), now(), '[]')`, old)
+	if err := s.MirrorRuns(ctx, targetsOK); err == nil {
+		t.Fatal("phase 2 hid the failed write")
+	}
+	if err := s.MirrorRuns(ctx, targetsOK); err != nil {
+		t.Fatal(err)
+	}
+	var failingEvents int
+	var mirrored bool
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE target->>'id' = $1`, failing.String()).
+		Scan(&failingEvents); err != nil || failingEvents != 1 {
+		t.Errorf("events of the run whose phase 2 failed %d %v, want exactly one", failingEvents, err)
+	}
+	var oldEvents int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE target->>'id' = $1`, old.String()).
+		Scan(&oldEvents); err != nil || oldEvents != 0 {
+		t.Errorf("events of the older role's run %d %v, want none from this role", oldEvents, err)
+	}
+	if err := super.QueryRow(ctx, `SELECT mirrored_at IS NOT NULL FROM backup_run WHERE id = $1`, failing).
+		Scan(&mirrored); err != nil || !mirrored {
+		t.Errorf("run whose phase 2 failed mirrored %v %v", mirrored, err)
 	}
 }
 

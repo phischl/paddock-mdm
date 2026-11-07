@@ -61,12 +61,13 @@ ORDER BY kind, finished_at DESC, id DESC;
 
 -- name: BackupRoleFinishRequestedRun :execrows
 UPDATE backup_run SET state = 'finished', outcome = @outcome, started_at = @started_at, finished_at = @finished_at,
-  bytes = @bytes, error_class = sqlc.narg(error_class), targets = @targets
+  bytes = @bytes, error_class = sqlc.narg(error_class), targets = @targets, mirrored_at = NULL
 WHERE id = @id AND state = 'requested';
 
 -- name: BackupRoleInsertFinishedRun :exec
-INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, bytes, error_class, targets)
-VALUES (@id, @kind, '', 'finished', @outcome, @started_at, @finished_at, @bytes, sqlc.narg(error_class), @targets);
+INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, bytes, error_class, targets,
+  mirrored_at)
+VALUES (@id, @kind, '', 'finished', @outcome, @started_at, @finished_at, @bytes, sqlc.narg(error_class), @targets, NULL);
 
 -- The finished runs whose mirror results and audit event are still due (decisions-alpha9 item 79), oldest first.
 -- name: BackupRoleUnmirroredRuns :many

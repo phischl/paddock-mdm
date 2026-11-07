@@ -1929,7 +1929,7 @@ var registry = map[Code]Definition{
 		Description: "One backup of one kind failed in the backup role, or a requested run got no result within an hour.",
 		Params:      backupRunParams,
 		Outcomes:    []Outcome{OutcomeFailure},
-		Note:        "error_class names the cause without detail: openbao, fleet, escrow, pgbackrest, repo, timeout. The log of paddock-backup or of the pgbackrest container has the detail. Platform pseudo-organization.",
+		Note:        "error_class names the cause without detail: openbao, fleet, escrow, pgbackrest, repo, timeout, or record (the backup was taken but its run could not be written). The log of paddock-backup or of the pgbackrest container has the detail. Platform pseudo-organization.",
 	},
 	CodePlatformRestorePlanned: {
 		Code: CodePlatformRestorePlanned, Emitted: true,

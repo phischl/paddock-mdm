@@ -57,6 +57,8 @@ const (
 	runClassEscrow     = "escrow"
 	runClassPgBackRest = "pgbackrest"
 	runClassTimeout    = "timeout"
+	// runClassRecord: the backup was taken but its run could not be written (decisions-alpha9 item 79).
+	runClassRecord = "record"
 )
 
 const (

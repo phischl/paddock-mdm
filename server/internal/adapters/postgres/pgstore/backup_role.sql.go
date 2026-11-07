@@ -117,7 +117,7 @@ func (q *Queries) BackupRoleEscrowEvidence(ctx context.Context) ([]BackupRoleEsc
 
 const backupRoleFinishRequestedRun = `-- name: BackupRoleFinishRequestedRun :execrows
 UPDATE backup_run SET state = 'finished', outcome = $1, started_at = $2, finished_at = $3,
-  bytes = $4, error_class = $5, targets = $6
+  bytes = $4, error_class = $5, targets = $6, mirrored_at = NULL
 WHERE id = $7 AND state = 'requested'
 `
 
@@ -148,8 +148,9 @@ func (q *Queries) BackupRoleFinishRequestedRun(ctx context.Context, arg BackupRo
 }
 
 const backupRoleInsertFinishedRun = `-- name: BackupRoleInsertFinishedRun :exec
-INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, bytes, error_class, targets)
-VALUES ($1, $2, '', 'finished', $3, $4, $5, $6, $7, $8)
+INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, bytes, error_class, targets,
+  mirrored_at)
+VALUES ($1, $2, '', 'finished', $3, $4, $5, $6, $7, $8, NULL)
 `
 
 type BackupRoleInsertFinishedRunParams struct {

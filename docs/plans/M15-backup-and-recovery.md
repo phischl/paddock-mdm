@@ -1237,7 +1237,11 @@ doubled. The header records `# revisions:` (for the online check item of decisio
   audit event `platform.backup_completed` / `platform.backup_failed` as before (§6.4; params gain `completed_at`, the
   local completion). That covers this round's runs and any an earlier round could not finish because the role
   stopped between the phases: exactly one event per run; a target the set did not reach counts as `targets_failed`.
-  Migration `00112_backup_run_mirrored` adds `mirrored_at` (existing finished runs count as mirrored).
+  Migration `00112_backup_run_mirrored` adds `mirrored_at` with the default `now()`: existing runs, and runs an older
+  backup role writes during an upgrade (it records their event itself), count as mirrored; phase 1 writes NULL. A
+  phase-2 write that fails leaves the runner's failure event as the run's one event and marks the run mirrored; a run
+  phase 1 cannot write gets a `platform.backup_failed` with `error_class` `record` instead.
 - **Copy budget.** A target whose mirror used the round's copy budget gets `RunTarget{ok: false, error_class:
-  "continues"}`; its `backup_target_status` gets no `last_error` and keeps `last_success_at` and `bytes`; the portal's
-  run history says "continues next round". A3's order of steps is unchanged.
+  "continues"}`; its `backup_target_status` keeps `last_success_at` and `bytes` and has no `last_error` (an error of an
+  earlier round is cleared: the mirror is progressing); the portal's run history says "continues next round". A3's
+  order of steps is unchanged.
