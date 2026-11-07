@@ -891,5 +891,8 @@ Decisions taken by the architect lead on 2026-11-05 for PDK-749 and PDK-779 (rec
    when `notified_sessions` is 0.
 3. **No new package dependency.** `libnotify-bin` is a dependency of `ubuntu-desktop-minimal` on 24.04 and 26.04;
    the agent .deb gains it only if a probe on a supported release shows it missing (decisions-alpha9 item 75).
-4. **DS1** counts only active graphical user sessions, restarts the display manager for the VM image's autologin
-   when there is none, fails loudly when that gives no user session, and asserts that the notice reached it.
+4. **DS1** counts only active graphical user sessions. A fresh test VM sits at the login screen (its image has no
+   autologin), so DS1 configures a GDM autologin of the VM's user for that snapshot, clears GDM's ran-once marker and
+   restarts the display manager; it fails loudly when that gives no user session and asserts that the notice reached
+   it. Before, DS1 passed on 26.04 through its no-session branch (the 26.04 greeter has no session type) and failed
+   on 24.04, whose greeter is an active wayland session.

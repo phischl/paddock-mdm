@@ -107,9 +107,9 @@ const userSessionsScript = `for s in $(loginctl list-sessions --no-legend | awk 
 const sessionsScript = `for s in $(loginctl list-sessions --no-legend | awk '{print $1}'); do ` +
 	`loginctl show-session "$s" -p Id -p Class -p Type -p State -p Name | sort | paste -sd' '; done`
 
-// ensureUserSession returns the number of active graphical user sessions on d, at least one. Without one (the VM
-// sits at the login screen), it restarts the display manager so that the autologin of the VM image runs, and fails
-// loudly when that does not give a user session: DS1 proves that a user is told, which needs a user.
+// ensureUserSession returns the number of active graphical user sessions on d, at least one. A fresh VM sits at the
+// login screen (its image configures no autologin): DS1 then logs the VM's user in by a GDM autologin for this
+// snapshot only, and fails loudly when that gives no user session, since DS1 proves that a user is told.
 func ensureUserSession(t *testing.T, d *Device) int {
 	t.Helper()
 	count := func() int {
@@ -122,12 +122,13 @@ func ensureUserSession(t *testing.T, d *Device) int {
 	if n := count(); n > 0 {
 		return n
 	}
-	t.Logf("%s: no active graphical user session (%s); restarting the display manager for the autologin", d.Name,
-		d.Must(sessionsScript))
-	if d.Must("sudo grep -E '^AutomaticLogin=.+' /etc/gdm3/custom.conf || true") == "" {
-		t.Fatalf("%s: no graphical user session and no autologin configured in /etc/gdm3/custom.conf", d.Name)
-	}
-	d.Must("sudo systemctl restart display-manager.service")
+	user := d.Must("id -un")
+	t.Logf("%s: no active graphical user session (%s); logging %s in by a GDM autologin", d.Name,
+		d.Must(sessionsScript), user)
+	// GDM logs in automatically once per start; its ran-once marker in /run would skip the autologin after a restart.
+	d.Must("printf '[daemon]\\nAutomaticLoginEnable=true\\nAutomaticLogin=%s\\n' '" + user + "'" +
+		" | sudo tee /etc/gdm3/custom.conf >/dev/null && sudo rm -f /run/gdm3/ran-once-marker /run/gdm/ran-once-marker" +
+		" && sudo systemctl restart display-manager.service")
 	n := 0
 	deadline := time.Now().Add(2 * time.Minute)
 	for n = count(); n == 0 && time.Now().Before(deadline); n = count() {
