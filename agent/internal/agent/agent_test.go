@@ -103,11 +103,11 @@ func TestRunChecksInAtStartAndOnTrigger(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
-	waitFor(t, func() bool { return checkins(g) == 1 })
+	waitWithin(t, servedAtOnce, func() bool { return checkins(g) == 1 })
 	// A trigger right after a check-in waits for the one-minute gap; advance the clock past it.
 	offset.Store(int64(TriggerMinGap))
 	trig <- struct{}{}
-	waitFor(t, func() bool { return checkins(g) == 2 })
+	waitWithin(t, servedAtOnce, func() bool { return checkins(g) == 2 })
 	r, err := health.Get(ctx, a.d.Layout.Socket())
 	if err != nil || r.Status != health.StatusOK || r.Version != buildinfo.Version {
 		t.Fatalf("health socket: %+v, %v", r, err)
@@ -124,18 +124,29 @@ func checkins(g *testgw.Gateway) int {
 	return len(g.Checkins)
 }
 
+// waitFor polls cond until it holds; hangGuard only catches a hang.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(hangGuard)
+	waitWithin(t, hangGuard, cond)
+}
+
+// waitWithin polls cond until it holds and fails after bound.
+func waitWithin(t *testing.T, bound time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(bound)
 	for !cond() {
 		if time.Now().After(deadline) {
-			t.Fatalf("condition not met within %s", hangGuard)
+			t.Fatalf("condition not met within %s", bound)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
 // hangGuard bounds a wait for something the real run loop does on its own clock (check-ins every second, a worker's
-// collection). It only catches a hang: the conditions are polled, and a 5 s bound failed under a loaded host with a
-// correct agent (PDK-883).
+// collection) when the time itself is not under test: a 5 s bound failed under a loaded host with a correct agent
+// (PDK-883).
 const hangGuard = time.Minute
+
+// servedAtOnce is the bound a check-in the agent owes at once must meet. Here the bound is the assertion: a check-in
+// delayed by the trigger's jitter (up to TriggerMaxDelay) or gap (TriggerMinGap) would miss it.
+const servedAtOnce = TriggerMaxDelay / 3
