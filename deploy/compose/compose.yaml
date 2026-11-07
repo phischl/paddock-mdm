@@ -193,8 +193,12 @@ services:
       - source: rabbitmq_definitions
         target: /etc/rabbitmq/definitions.json
     networks: [cp]
+    # One CLI call (check_local_alarms fails on a node whose app is not running, as check_running did) in a CLI VM with
+    # one scheduler: each rabbitmq-diagnostics starts an Erlang VM with a scheduler per host core, and the two calls
+    # every 10 s cost about 0.7 to 1 core on a 22-core host (PDK-884; about 0.09 cores now). The interval stays, so
+    # depends_on sees a healthy broker as early as before.
     healthcheck:
-      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_local_alarms"]
+      test: ["CMD-SHELL", "RABBITMQ_CTL_ERL_ARGS='+S 1:1 +SDcpu 1:1 +SDio 1 +A 1 +sbwt none +sbwtdcpu none +sbwtdio none' rabbitmq-diagnostics -q check_local_alarms"]
       interval: 10s
       timeout: 10s
       retries: 20
