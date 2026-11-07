@@ -295,6 +295,17 @@ what is specific to alpha.9. It has no audit migration, so on the audit host `au
     (`docs/operations/agent-releases.md`). Agents of 0.1.0-alpha.7 and 0.1.0-alpha.8 are inside the window and keep
     working against the new server; agents of 0.1.0-alpha.6 and earlier are outside it (above): the check lists them
     and FAILs when they exceed 1 % of the active devices or 5.
+11. **Third-party images.** Fleet moves to v4.94.0, a minor release that migrates Fleet's database; the pre-upgrade
+    backup of the step `backup` includes the Fleet dump, and a rollback restores it because `FLEET_IMAGE` changed.
+    Fleet's own HTTP metric is renamed from `http.server.duration` to `http.server.request.duration` (seconds);
+    Paddock neither scrapes nor alerts on it, so only your own Fleet dashboards need the new name. The new hourly
+    cleanups concern Windows and Apple MDM commands and removed host certificates, which a Linux-only installation does
+    not hold. OpenBao moves to 2.7.2: the step `up` recreates OpenBao and it starts **sealed**, so have three custodians
+    ready (or automatic unseal on). Devices install Himmelblau 4.0.8 with their current agent at the next login drift
+    pass; that release does not contain the upstream fix for the Hello PIN loss (himmelblau-idm/himmelblau#1886), so
+    the agent's `cache_timeout` setting and residual risk RR-40 stay unchanged. It offers the password change at the
+    console login of an enrolled device whose Entra ID password has expired. The AWS CLI image of the bucket bootstrap
+    scripts moves to 2.39.3; `./paddock pull` fetches it.
 
 ### 0.1.0-alpha.8, from 0.1.0-alpha.7
 

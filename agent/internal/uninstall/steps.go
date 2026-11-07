@@ -237,7 +237,7 @@ var himmelblauPaths = []string{"/etc/himmelblau", "/var/cache/himmelblau", "/var
 // himmelblau purges the Himmelblau packages and removes their configuration and caches.
 func (h *Helper) himmelblau(ctx context.Context) string {
 	var errs []string
-	if err := h.run(ctx, "apt-get", append([]string{"remove", "--purge", "-y"}, h.himmelblauPackages(ctx)...)...); err != nil {
+	if err := h.run(ctx, "apt-get", purgeArgs(h.himmelblauPackages(ctx)...)...); err != nil {
 		errs = append(errs, err.Error())
 	}
 	for _, p := range himmelblauPaths {
@@ -274,8 +274,8 @@ func (h *Helper) himmelblauPackages(ctx context.Context) []string {
 // so removing paddock-agent does not remove it.
 func (h *Helper) packages(ctx context.Context) string {
 	var errs []string
-	if err := h.run(ctx, "apt-get", "remove", "--purge", "-y", reconcile.FleetdPackage, "paddock-revoke", "paddock-agent",
-		"paddock-supervisor"); err != nil {
+	if err := h.run(ctx, "apt-get", purgeArgs(reconcile.FleetdPackage, "paddock-revoke", "paddock-agent",
+		"paddock-supervisor")...); err != nil {
 		errs = append(errs, err.Error())
 	}
 	for _, p := range []string{"/opt/orbit", reconcile.FleetdEnv, "/etc/systemd/system/orbit.service.d", "/opt/paddock",

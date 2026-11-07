@@ -410,3 +410,23 @@ func TestDeletedSharesTakeEffect(t *testing.T) {
 		t.Fatalf("reports = %v, want [true false]", h.store.reports)
 	}
 }
+
+// TestTickRecoversAfterUnreadableSetting: a setting read that fails while PostgreSQL and OpenBao start together (a
+// host reboot) only closes the gate for that tick; the next tick that can read the setting unseals.
+func TestTickRecoversAfterUnreadableSetting(t *testing.T) {
+	h := newHarness(t, true, autounseal.StateEnabled, writeShares(t, threeShares()))
+	h.store.stateErr = errors.New("lookup postgres: no such host")
+	h.u.Tick(context.Background())
+	if !h.bao.sealed {
+		t.Fatal("the unseal ran with an unreadable setting")
+	}
+	h.store.stateErr = nil
+	h.now = h.now.Add(Interval)
+	h.u.Tick(context.Background())
+	if h.bao.sealed {
+		t.Fatal("OpenBao stayed sealed after the setting became readable")
+	}
+	if h.store.unseals != 1 {
+		t.Fatalf("%d recorded unseals, want 1", h.store.unseals)
+	}
+}
