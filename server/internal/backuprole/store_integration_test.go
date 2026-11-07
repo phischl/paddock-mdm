@@ -154,11 +154,11 @@ func TestPGStore(t *testing.T) {
 		t.Fatalf("requested %+v %v", reqs, err)
 	}
 	targetsOK := []backupset.RunTarget{{TargetID: s3.String(), OK: true}, {TargetID: smb.String(), ErrorClass: ClassNotMounted}}
-	if err := s.RecordRun(ctx, RunRecord{Kind: KindOpenBao, Requests: reqs, Succeeded: true, StartedAt: at,
+	if _, err := s.RecordRun(ctx, RunRecord{Kind: KindOpenBao, Requests: reqs, Succeeded: true, StartedAt: at,
 		FinishedAt: at.Add(3 * time.Second), Bytes: 99}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordRun(ctx, RunRecord{Kind: KindFleet, ErrorClass: runClassFleet, StartedAt: at, FinishedAt: at}); err != nil {
+	if _, err := s.RecordRun(ctx, RunRecord{Kind: KindFleet, ErrorClass: runClassFleet, StartedAt: at, FinishedAt: at}); err != nil {
 		t.Fatal(err)
 	}
 	// Phase 1 (decisions-alpha9 item 79): the requested run is finished at once, without targets and without an event.
@@ -172,11 +172,11 @@ func TestPGStore(t *testing.T) {
 		'platform.backup_failed')`).Scan(&events); err != nil || events != 0 {
 		t.Fatalf("events after phase 1: %d %v", events, err)
 	}
-	if err := s.MirrorRuns(ctx, targetsOK); err != nil {
+	if err := s.MirrorRuns(ctx, targetsOK, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A second phase 2 finds nothing due: exactly one event per run.
-	if err := s.MirrorRuns(ctx, targetsOK); err != nil {
+	if err := s.MirrorRuns(ctx, targetsOK, nil); err != nil {
 		t.Fatal(err)
 	}
 	var outcome, rawTargets string
@@ -250,7 +250,7 @@ func TestPGStore(t *testing.T) {
 
 	// Phase 1 cannot write the run (its request was answered already): the attempt still gets its one event, a
 	// platform.backup_failed with error_class record (decisions-alpha9 item 79).
-	if err := s.RecordRun(ctx, RunRecord{Kind: KindOpenBao, Requests: reqs, Succeeded: true, StartedAt: at,
+	if _, err := s.RecordRun(ctx, RunRecord{Kind: KindOpenBao, Requests: reqs, Succeeded: true, StartedAt: at,
 		FinishedAt: at}); err == nil {
 		t.Fatal("phase 1 answered a request twice")
 	}
@@ -275,10 +275,10 @@ func TestPGStore(t *testing.T) {
 	old := uuid.Must(uuid.NewV7())
 	exec(`INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, targets)
 		VALUES ($1, 'openbao', 'older role', 'finished', 'succeeded', now(), now(), '[]')`, old)
-	if err := s.MirrorRuns(ctx, targetsOK); err == nil {
+	if err := s.MirrorRuns(ctx, targetsOK, nil); err == nil {
 		t.Fatal("phase 2 hid the failed write")
 	}
-	if err := s.MirrorRuns(ctx, targetsOK); err != nil {
+	if err := s.MirrorRuns(ctx, targetsOK, nil); err != nil {
 		t.Fatal(err)
 	}
 	var failingEvents int

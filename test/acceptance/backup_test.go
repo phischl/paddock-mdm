@@ -443,6 +443,19 @@ func TestBackupRotation(t *testing.T) {
 			!m.lastFull("authentik").IsZero()
 	})
 
+	// A fresh full in the old path right before the switch: a switch that waited for the schedule would then come a
+	// whole full interval (20 min) after it, far outside the bound below, whatever the stack's age (PDK-885 review 1).
+	fresh, _ := requestBackupRuns(t, a, []string{"postgres", "authentik"}, "b4 before the switch")
+	var freshIDs []string
+	for _, r := range fresh {
+		freshIDs = append(freshIDs, r.ID)
+	}
+	for id, r := range waitBackupRuns(t, a.Portal, freshIDs, 5*time.Minute) {
+		if r.Outcome == nil || *r.Outcome != "succeeded" {
+			t.Fatalf("full before the switch %s: outcome %v, error %v", id, r.Outcome, r.ErrorClass)
+		}
+	}
+
 	g, _ := generateBackupKey(t, a)
 	res := confirmBackupKey(t, a, g.KeyID, challengeAnswer(t, g.Key, g.Positions))
 	expectStatus(t, res, http.StatusOK, "")

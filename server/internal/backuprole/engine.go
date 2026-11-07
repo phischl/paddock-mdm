@@ -257,12 +257,20 @@ func (e *Engine) round(ctx context.Context) error {
 	// Phase 1 (decisions-alpha9 item 79): each run is recorded as soon as its local step finished, never after the
 	// mirror, which can take hours on a large target; its mirror results and audit event follow in phase 2.
 	var runs []run
+	// later holds the runs recorded after this round's index: its mirror does not hold their files, so their mirror
+	// results and audit event are the next round's (decisions-alpha9 item 82).
+	var later []uuid.UUID
+	indexed := false
 	record := func(rs ...run) {
 		for _, r := range rs {
 			runs = append(runs, r)
-			if err := e.store.RecordRun(ctx, r); err != nil {
+			ids, err := e.store.RecordRun(ctx, r)
+			if err != nil {
 				errs = append(errs, fmt.Errorf("record %s run: %w", r.Kind, err))
 				continue
+			}
+			if indexed {
+				later = append(later, ids...)
 			}
 			outcome := "succeeded"
 			if !r.Succeeded {
@@ -317,13 +325,14 @@ func (e *Engine) round(ctx context.Context) error {
 	ret.walOK = e.walOK(idx, ret.active)
 	// A Fleet dump this round asked for arrives while the mirror runs, which can take hours: it is sealed and recorded
 	// as soon as it is there, not in the next round (decisions-alpha9 item 82).
+	indexed = true
 	stopFleet := func() {}
 	if fleetRequested {
-		stopFleet = e.watchFleet(ctx, repo, raw, byKind[KindFleet], record)
+		stopFleet = e.watchFleet(ctx, repo, raw, unanswered(byKind[KindFleet], runs), record)
 	}
 	results := e.mirrorAll(ctx, repo, idx, targets, kinds, ret)
 	stopFleet()
-	if err := e.store.MirrorRuns(ctx, results); err != nil {
+	if err := e.store.MirrorRuns(ctx, results, later); err != nil {
 		errs = append(errs, fmt.Errorf("record the mirror of the runs: %w", err))
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -537,12 +546,10 @@ func (e *Engine) copyEscrow(ctx context.Context, repo *os.Root, key, local strin
 // fleetDump matches a complete plaintext dump of fleet-backup (backup.sh writes <ts>.sql.gz through a temporary name).
 var fleetDump = regexp.MustCompile(`^(\d{8}T\d{6}Z)\.sql\.gz$`)
 
-// fleet seals every complete dump fleet-backup left in the dumps volume and deletes the plaintext. A dump whose
-// sealing failed is tried again after retryAfter (one failed run per attempt), and deleted with a failed run once it
-// is older than fleetPlainMaxAge. When a dump is due or requested and none waits, it asks fleet-backup for one; a
-// request fleet-backup did not answer within requestTimeout fails and is withdrawn.
-// fleet seals the dumps fleet-backup left and, when a dump is due and none is waiting, asks for one; requested is true
-// when it asked this round.
+// fleet seals the dumps fleet-backup left (sealFleet). When a dump is due or requested and none waits, it asks
+// fleet-backup for one, or finds its earlier request still open; requested is true then, and the round watches for
+// the dump while it mirrors (watchFleet). A request fleet-backup did not answer within requestTimeout fails and is
+// withdrawn.
 func (e *Engine) fleet(ctx context.Context, repo *os.Root, key []byte, h KindHistory, interval time.Duration,
 	reqs []RequestedRun) (runs []run, requested bool, err error) {
 	dumps, err := e.fleetDumps()
@@ -576,6 +583,16 @@ func (e *Engine) fleet(ctx context.Context, repo *os.Root, key []byte, h KindHis
 	}
 	slog.InfoContext(ctx, "fleet dump requested")
 	return runs, true, nil
+}
+
+// unanswered returns the requests of reqs no run of runs answers: a request the round already answered with a timeout
+// must not be answered again by a dump that arrives later.
+func unanswered(reqs []RequestedRun, runs []run) []RequestedRun {
+	return slices.DeleteFunc(slices.Clone(reqs), func(q RequestedRun) bool {
+		return slices.ContainsFunc(runs, func(r run) bool {
+			return slices.ContainsFunc(r.Requests, func(a RequestedRun) bool { return a.ID == q.ID })
+		})
+	})
 }
 
 // fleetWatchEvery is how often a round looks for the Fleet dump it asked for while its mirror runs.
@@ -612,8 +629,9 @@ func (e *Engine) watchFleet(ctx context.Context, repo *os.Root, key []byte, reqs
 	}
 }
 
-// sealFleet seals the plaintext dumps into the repository and deletes them; the first run answers reqs. A dump that
-// could not be sealed within fleetPlainMaxAge is deleted with a failed run.
+// sealFleet seals the plaintext dumps into the repository and deletes them; the first run answers reqs. A dump whose
+// sealing failed is tried again after retryAfter (one failed run per attempt), and deleted with a failed run once it
+// is older than fleetPlainMaxAge.
 func (e *Engine) sealFleet(repo *os.Root, key []byte, dumps []fleetDumpFile, reqs []RequestedRun) []run {
 	var runs []run
 	now := e.now()

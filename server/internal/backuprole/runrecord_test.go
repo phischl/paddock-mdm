@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
 )
 
@@ -136,7 +138,53 @@ func TestFleetRunRecordedDuringTheMirror(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+	// This round's mirror did not hold the dump: the run's mirror results and event are the next round's.
+	if r, _ := f.store.run(KindFleet); r.mirrored {
+		t.Fatalf("fleet run took the results of a mirror without its file: %+v", r)
+	}
+	f.now = f.now.Add(time.Minute)
+	f.round(t)
 	if r, _ := f.store.run(KindFleet); !r.mirrored {
-		t.Fatalf("fleet run after the round: %+v", r)
+		t.Fatalf("fleet run after the next round: %+v", r)
+	}
+}
+
+// TestLateFleetRequestAnsweredOnce: a Fleet request the round answers with a timeout is not answered a second time by
+// the dump that arrives while the mirror runs (PDK-885 review 1): the dump becomes a scheduled run of its own.
+func TestLateFleetRequestAnsweredOnce(t *testing.T) {
+	f := newFixture(t)
+	f.confirmKey()
+	f.engine.stall = time.Hour
+	f.engine.fleetWatch = 10 * time.Millisecond
+	req := RequestedRun{ID: uuid.New(), Kind: KindFleet, CreatedAt: f.now.Add(-2 * time.Hour)}
+	f.store.requests = []RequestedRun{req}
+	dst := &gatedTarget{memTarget: newMemTarget(), entered: make(chan struct{}), release: make(chan struct{})}
+	f.addTarget(t, backupset.TypeS3, dst)
+	done := make(chan error, 1)
+	go func() { done <- f.engine.Round(context.Background()) }()
+	select {
+	case <-dst.entered:
+	case err := <-done:
+		t.Fatalf("the round ended before its mirror: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the mirror did not start")
+	}
+	name := f.now.UTC().Format("20060102T150405Z") + ".sql.gz"
+	if err := os.WriteFile(filepath.Join(f.cfg.FleetDumpsDir, name), []byte("dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for f.store.count(KindFleet) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("fleet runs %d, want the timeout and the dump", f.store.count(KindFleet))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(dst.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n := f.store.answers(req.ID); n != 1 {
+		t.Fatalf("the request was answered %d times, want once", n)
 	}
 }
