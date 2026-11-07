@@ -204,7 +204,7 @@ older notes are in the *Archive*.
 The release notes of this release carry these lines (the lines of `CHANGELOG.md` are authoritative):
 
 ```text
-Schema: migrations 00100–00109 (control-plane database); audit unchanged
+Schema: migrations 00100–00112 (control-plane database; new tables, columns, functions, policies and grants only); audit unchanged.
 Upgrade: from 0.1.0-alpha.8: steps: BAO_TOKEN for ./paddock upgrade, then ./paddock bootstrap buckets and ./paddock up; confirm the backup key in the portal
 Agents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9
 ```
