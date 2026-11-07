@@ -366,7 +366,7 @@ func importLegacyBackupKey(ctx context.Context, keys *app.BackupKeys, keyText st
 	case app.LegacyImported:
 		slog.InfoContext(ctx, "legacy backup key imported: no backup runs until a platform administrator confirms it in the portal")
 	case app.LegacyKeyConfirmed:
-		slog.WarnContext(ctx, "PADDOCK_BACKUP_LEGACY_KEY_FILE is set while a confirmed backup key exists: remove the variable and the key file from paddock-api")
+		slog.WarnContext(ctx, "PADDOCK_BACKUP_LEGACY_KEY_FILE is set while a confirmed backup key exists: move .secrets/backup_encryption_key off the host and run ./paddock up")
 	case app.LegacyKeyPresent:
 	}
 	return nil

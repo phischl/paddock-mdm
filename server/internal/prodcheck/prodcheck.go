@@ -1111,7 +1111,7 @@ func checkLegacyBackupKey(c Config) Result {
 	var f []string
 	for _, name := range sortedServices(c) {
 		if env(c.Services[name], legacyBackupKeyVar) != "" {
-			f = append(f, name+": "+legacyBackupKeyVar+" is set; remove it and the key file once the imported key is confirmed in the portal")
+			f = append(f, name+": "+legacyBackupKeyVar+" is set; once the imported key is confirmed in the portal and kept outside the host, move .secrets/backup_encryption_key off the host and run ./paddock up")
 		}
 	}
 	return Result{Item: "backup: legacy key import", OK: true, Warn: true, Detail: strings.Join(f, "\n")}

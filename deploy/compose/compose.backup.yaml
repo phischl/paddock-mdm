@@ -225,13 +225,6 @@ services:
     volumes:
       - ./prometheus/scrape/backup.yml:/etc/prometheus/scrape/backup.yml:ro
 
-  # The host key file of an installation older than M15: the api imports it once as backup key legacy, which a
-  # platform administrator confirms in the portal (plan M15 decision 9). Remove both lines after the confirmation.
-  paddock-api:
-    environment:
-      PADDOCK_BACKUP_LEGACY_KEY_FILE: /run/secrets/backup_encryption_key
-    secrets: [backup_encryption_key]
-
 volumes:
   postgres-socket: {}
   authentik-postgres-socket: {}
@@ -247,7 +240,6 @@ volumes:
     driver_opts: {type: tmpfs, device: tmpfs, o: "size=1m,uid=999,gid=999,mode=0750"}
 
 secrets:
-  backup_encryption_key: { file: ./.secrets/backup_encryption_key }
   db_paddock_backup_url: { file: ./.secrets/db_paddock_backup_url }
   approle_backup_role_id: { file: ./.secrets/approle/paddock-backup/role_id }
   approle_backup_secret_id: { file: ./.secrets/approle/paddock-backup/secret_id }

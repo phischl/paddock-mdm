@@ -166,10 +166,9 @@ controlplane_secrets() {
   # The SMTP relay's password (docs/operations/install.md); stays empty for a relay without PADDOCK_SMTP_USERNAME.
   placeholder smtp_password
 
-  # Backups (docs/operations/restore.md): the host key file older installations used; the api imports it once as
-  # backup key legacy, which a platform administrator confirms in the portal (plan M15 decision 9). Keep it offline
-  # with the custodians. The backup targets and their credentials are configured in the portal.
-  secret backup_encryption_key "$(head -c 32 /dev/urandom | base64 -w0)"
+  # Backups: no host key file. A fresh control plane starts without a backup key, and a platform administrator
+  # generates one in the portal (plan M15 decision 9, decisions-alpha9 item 63). The .secrets/backup_encryption_key of an
+  # installation older than 0.1.0-alpha.9 stays and is imported once as key legacy (compose.backup-legacy-key.yaml).
 
   # The audit writer's AppRole is created on this host's OpenBao as well, then copied to the audit host.
   for role in paddock-api paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer paddock-backup \

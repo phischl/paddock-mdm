@@ -353,10 +353,10 @@ recovery. After the first start (section 9):
 1. Before section 8, create `PADDOCK_BACKUP_LOCAL_ROOT` (default `/srv/paddock-backup`) owned by root and not writable
    by group or others if you want local targets; `./paddock check` verifies it.
 2. **Confirm the backup key.** Until a platform administrator has confirmed a key, nothing is backed up and the alert
-   `PaddockBackupKeyUnconfirmed` fires after an hour. `./paddock secrets` wrote `.secrets/backup_encryption_key` and
-   the api imported it as the key `legacy`: in the portal under *Platform* → *Backup* → *Key*, type the characters at the
-   six positions shown from that file, or discard it and generate a key Paddock shows once. Store a copy **outside this
-   host**, with the OpenBao custodians; a lost host takes its copy with it and without the key no backup can be read.
+   `PaddockBackupKeyUnconfirmed` fires after an hour. A fresh installation starts without a key: in the portal under
+   *Platform* → *Backup* → *Key*, generate one, which Paddock shows exactly once, and confirm it by typing the characters
+   at the six positions shown. Store a copy **outside this host**, with the OpenBao custodians; Paddock keeps no copy on
+   the host, and without the key no backup can be read.
 3. **Add at least one target outside this host** under *Backup* → *Targets*: an S3-compatible bucket needs nothing more;
    a local, SMB or NFS target needs the host step `./paddock backup-target apply` and `./paddock up`
    (`docs/operations/backup.md`, "Targets"). The first copy of a large set takes several rounds.

@@ -426,8 +426,9 @@ func revealDisk(t *testing.T, d *Device) (key string, header []byte) {
 	return revealed.RecoveryKey, header
 }
 
-// ensureBackupKey confirms the lab's backup key and returns its text: the legacy key `./paddock secrets` wrote, which
-// the api imported as unconfirmed (plan M15 decision 9), or else a generated one.
+// ensureBackupKey confirms the lab's backup key and returns its text: on a lab upgraded from 0.1.0-alpha.8 the legacy
+// key of its .secrets/backup_encryption_key, which the api imported as unconfirmed (plan M15 decision 9); on a fresh
+// lab, which has no such file, a generated one.
 func ensureBackupKey(t *testing.T, l *Lab) string {
 	t.Helper()
 	type key struct {

@@ -17,6 +17,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
@@ -414,6 +416,20 @@ func TestBackupKeyLegacyImport(t *testing.T) {
 		t.Fatalf("imported %s %s %v by %s, params %v", state, fingerprint, legacy, actor, params)
 	}
 	h.noKeyMaterial(params, text)
+	// The import runs at api start without a request: its event still carries a source, a system actor and a
+	// correlation ID, or the audit writer dead-letters it (decisions-alpha9 item 69).
+	var payload []byte
+	if err := h.super.QueryRow(ctx, `SELECT payload FROM outbox WHERE payload ->> 'code' = 'platform.backup_key_generated'
+		AND payload -> 'params' ->> 'key_id' = 'legacy'`).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	var ev audit.Event
+	if err := json.Unmarshal(payload, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if err := auditwriter.Validate(ev); err != nil || ev.Source != audit.SourceSystem || ev.Actor.Type != audit.ActorSystem {
+		t.Fatalf("legacy import event %+v: %v", ev, err)
+	}
 
 	if res, err := h.uc.ImportLegacy(ctx, text); err != nil || res != app.LegacyKeyPresent {
 		t.Fatalf("second import: %v %v", res, err)

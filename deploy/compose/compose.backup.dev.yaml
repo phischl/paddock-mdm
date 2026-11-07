@@ -43,10 +43,15 @@ services:
       - rustfs_bundles_gateway_access_key
       - rustfs_bundles_gateway_secret_key
 
-  # The legacy key import has its own gate (plan M15 §9 B6); the development stack starts without a key.
+  # The legacy key import has its own gate (plan M15 §9 B6), which sets the variable on a one-off api over this
+  # mount; the development stack starts without a key.
   paddock-api:
     environment:
       PADDOCK_BACKUP_LEGACY_KEY_FILE: ""
+    secrets: [backup_encryption_key]
 
 volumes:
   backup-local-dev: {}
+
+secrets:
+  backup_encryption_key: { file: ./.secrets/backup_encryption_key }
