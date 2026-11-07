@@ -202,6 +202,13 @@ run 0 "rollback without a source" "$work/t/old" --yes
 called "without a source the old restore.sh decides" '^restore_high_water=$'
 has "the missing source is warned about" 'warning: bundle sequence: neither the running stack nor'
 
+# An implausible highest sequence stops the rollback before down (Review 1, Major 2).
+setup controlplane "Schema: migrations 00105–00106"
+FIXTURE_STACK_MAX=999999000001 run 1 "rollback with an implausible highest sequence" "$work/t/old" --yes
+has "the implausible sequence is named" 'is above 999999000000'
+not_called "nothing stops with an implausible sequence" "$DOWN"
+not_called "no restore with an implausible sequence" '^restore_run '
+
 # A changed FLEET_IMAGE adds Fleet's dump.
 setup controlplane "Schema: migrations 00105–00106"
 sed -i 's/^FLEET_IMAGE=.*/FLEET_IMAGE=fleetdm\/fleet:v4.93.2/' "$work/t/old/versions.env"
@@ -499,6 +506,24 @@ called "the lowest is read from alpha.8's restored database" '^old compose exec 
 called "alpha.8 raises to the highest + 1,000,000" '^old compose run --rm --no-deps -T paddock-worker admin bump-bundle-seq --by 2000001$'
 before "the compiler stops before the raise" '^old compose --profile paddock stop paddock-compiler$' 'admin bump-bundle-seq --by 2000001$'
 if ((2 + 2000001 > 1000003)); then pass "the device's next bundle (2000003) is newer than the one it applied (1000003)"; else fail "arithmetic"; fi
+
+# alpha.8 has only --by in steps of 1,000,000,000: a highest sequence that would take more than 10 of them is refused
+# before down; a corrupt high-water file the same way (Review 1, Major 2).
+setup_alpha8
+FIXTURE_STACK_MAX=9999000001 run 1 "rollback to alpha.8 with a sequence beyond 10 bump steps" "$work/t/old" --yes
+has "the step bound is named" 'needs more than 10 calls'
+not_called "nothing stops beyond the step bound" "$DOWN"
+setup_alpha8
+mkdir -p "$work/t/new/bundle-seq" && echo 999999999999999999 >"$work/t/new/bundle-seq/high-water"
+run 1 "rollback to alpha.8 with a corrupt high-water file" "$work/t/old" --yes
+has "the corrupt file is named" 'correct or remove the high-water file'
+not_called "nothing stops with a corrupt file" "$DOWN"
+not_called "no bump with a corrupt file" 'bump-bundle-seq'
+setup_alpha8
+FIXTURE_STACK_MAX=9999000000 FIXTURE_LA8_MIN=0 run 0 "rollback to alpha.8 at the step bound" "$work/t/old" --yes
+if [[ "$(grep -c 'admin bump-bundle-seq --by 1000000000$' "$calls")" == 10 ]]; then pass "the bound takes exactly 10 bump calls"; else
+  fail "bump calls: $(grep -c 'admin bump-bundle-seq' "$calls")"
+fi
 
 # A changed FLEET_IMAGE: the dump is downloaded and checked before down, Fleet's database replaced, its volume kept.
 setup_alpha8 fleet

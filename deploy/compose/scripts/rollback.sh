@@ -57,7 +57,7 @@ rb_restore() {
   trap - EXIT INT TERM HUP
   # Read with this release's libraries, before the old ones replace them; the old restore.sh comes after this
   # rollback's down and finds the stack stopped (decisions-alpha9 item 68).
-  hw="$(bundle_seq_high_water "$new" compose)"
+  hw="$(bundle_seq_high_water "$new" compose)" || rb_die "the highest bundle sequence is implausible (see above); nothing was changed"
   unset SECRETS_DIR
   # shellcheck source=/dev/null # the old release's library, not this bundle's
   . "$old/scripts/lib.sh"
@@ -119,7 +119,9 @@ rb_legacy_restore() {
   # The downloaded sets and the temporary OpenBao root token of the fresh instance live here only.
   trap 'rm -rf "$RB_LEGACY_WORK"' EXIT
   la8_preflight "$old" "$record" "$RB_LEGACY_WORK" "$fleet" "$PADDOCK_PROJECT"
-  hw="$(bundle_seq_high_water "$new" compose)"
+  hw="$(bundle_seq_high_water "$new" compose)" || rb_die "the highest bundle sequence is implausible (see above); nothing was changed"
+  bundle_seq_by_fits "$hw" ||
+    rb_die "the highest bundle sequence $hw needs more than $BUNDLE_SEQ_MAX_STEPS calls of 0.1.0-alpha.8's bump-bundle-seq; nothing was changed"
   rb_mark_started
   echo down >"$RB_PHASE"
   echo "+ ./paddock down"

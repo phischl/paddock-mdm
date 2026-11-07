@@ -556,28 +556,31 @@ restore_wait_service_healthy() {
   return 1
 }
 
-# restore_high_water: H of decisions-alpha9 item 68, before anything stops: RESTORE_HIGH_WATER when ./paddock rollback
-# read the running stack before its own down, else the running stack's highest, else the high-water file's.
+# restore_high_water: H of decisions-alpha9 items 68 and 71, before anything stops: RESTORE_HIGH_WATER when
+# ./paddock rollback read the running stack before its own down, else the running stack's highest or the high-water
+# file's. An implausible H stops the restore here, before any change.
 restore_high_water() {
-  if [[ "${RESTORE_HIGH_WATER:-}" =~ $BUNDLE_SEQ_RE ]]; then
+  if [[ "${RESTORE_HIGH_WATER:-}" =~ $BUNDLE_SEQ_RE ]] && ((10#$RESTORE_HIGH_WATER > 0)); then
     RESTORE_HW="$((10#$RESTORE_HIGH_WATER))"
+    ((RESTORE_HW <= BUNDLE_SEQ_MAX_H)) ||
+      restore_die "the highest bundle sequence handed over by the rollback, $RESTORE_HW, is above $BUNDLE_SEQ_MAX_H; nothing was changed"
     restore_log "bundle sequence: the highest before the rollback took the stack down is $RESTORE_HW"
   else
-    RESTORE_HW="$(bundle_seq_high_water "$COMPOSE_DIR" compose)"
+    RESTORE_HW="$(bundle_seq_high_water "$COMPOSE_DIR" compose)" ||
+      restore_die "the highest bundle sequence is implausible (see above); nothing was changed"
   fi
 }
 
-# restore_bump_bundle_seq: raises every device's bundle sequence to RESTORE_HW + 1,000,000 or above (plain 1,000,000
-# without RESTORE_HW) and records the new highest in the high-water file.
+# restore_bump_bundle_seq: raises every device's bundle sequence to greatest(seq + 1, RESTORE_HW + 1,000,000) (the plain
+# 1,000,000 without RESTORE_HW) and records the new highest in the high-water file.
 restore_bump_bundle_seq() {
-  local min by h
-  if ! min="$(bundle_seq_stack_min compose)"; then
-    restore_log "bundle sequence: the restored lowest is not readable; counting from 0"
-    min=0
+  local h
+  if [[ -n "$RESTORE_HW" ]]; then
+    restore_log "bundle sequence: raising every device to at least $(bundle_seq_at_least "$RESTORE_HW") (highest before the restore $RESTORE_HW)"
+    restore_admin raise-bundle-seq --at-least "$(bundle_seq_at_least "$RESTORE_HW")"
+  else
+    restore_admin bump-bundle-seq --by "$BUNDLE_SEQ_STEP"
   fi
-  by="$(bundle_seq_by "$RESTORE_HW" "$min")"
-  restore_log "bundle sequence: raising every device's by $by (restored lowest $min, highest before the restore ${RESTORE_HW:-unknown})"
-  bundle_seq_bump "$by" restore_admin bump-bundle-seq
   if h="$(bundle_seq_stack_max compose)"; then bundle_seq_record "$h" compose; fi
 }
 
@@ -599,7 +602,7 @@ restore_paddock() {
   # The postgres step's `compose --profile paddock stop` stopped OpenBao as well; restore_openbao unseals its own.
   if restore_has postgres && ! restore_has openbao; then restore_unseal; fi
   if restore_has postgres; then
-    restore_log "restore commands: bump-bundle-seq, compiler, rebuild-cache, recompile"
+    restore_log "restore commands: raise-bundle-seq, compiler, rebuild-cache, recompile"
     restore_bump_bundle_seq
     compose --profile paddock up -d --no-deps paddock-compiler
     restore_admin rebuild-cache

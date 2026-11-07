@@ -2,17 +2,19 @@
 # sourced by restore.sh and, through ./paddock rollback, by rollback.sh and legacy-alpha8.sh.
 #
 # A device accepts only a bundle newer than the last one it applied, and a restore brings back older sequences. Before
-# the stack goes down, a restore or rollback reads H, the running stack's highest device.bundle_seq; afterwards it
-# raises every device's sequence by max(1,000,000, H + 1,000,000 - lowest restored), so that every device lands at
-# H + 1,000,000 or above. When the stack cannot be read (a disaster restore), H is the value of the high-water file
-# bundle-seq/high-water in the bundle directory (when both are readable, the higher one); without either, the raise is
-# the plain 1,000,000 with a warning.
+# the stack goes down, a restore or rollback reads H, the running stack's highest device.bundle_seq. When the stack
+# cannot be read (a disaster restore), H is the value of the high-water file bundle-seq/high-water in the bundle
+# directory; when both are readable, the higher one counts. Afterwards `admin raise-bundle-seq --at-least H + 1,000,000`
+# sets every device to greatest(seq + 1, H + 1,000,000) (decisions-alpha9 item 71), so the highest sequence grows by
+# about 1,000,000 per restore. The rollback to 0.1.0-alpha.8 has only `bump-bundle-seq --by` and raises by
+# max(1,000,000, H + 1,000,000 - lowest restored) instead. Without H the raise is the plain 1,000,000, with a warning.
+# A larger H than any fleet reaches by compiling is refused before anything stops.
 #
 # The file is written by every restore, every rollback and every successful round of the backup role, and never
 # lowered. compose.backup.yaml mounts bundle-seq/ into postgres (at /paddock-bundle-seq, prepared there for uid 999 on
 # every start) and into the backup role (uid 999). These scripts write through the running postgres container as that
-# uid, so an operator who is not root can run a rollback. Only psql as the database superuser (who is not subject to the
-# device table's row-level security) and `admin bump-bundle-seq --by` are used, both of which 0.1.0-alpha.8 has too.
+# uid, so an operator who is not root can run a rollback. The reads use psql as the database superuser, who is not
+# subject to the device table's row-level security, on 0.1.0-alpha.8's schema as well.
 # shellcheck shell=bash
 
 BUNDLE_SEQ_STEP=1000000
@@ -21,6 +23,11 @@ BUNDLE_SEQ_MAX_BY=1000000000
 BUNDLE_SEQ_MOUNT=/paddock-bundle-seq
 # 18 digits: every such number fits a bigint and bash's arithmetic.
 BUNDLE_SEQ_RE='^[0-9]{1,18}$'
+# The highest H a restore accepts: H + 1,000,000 is raise-bundle-seq's bound of 1,000,000,000,000. A higher value is
+# a corrupt or hand-edited high-water file, not a fleet's history.
+BUNDLE_SEQ_MAX_H=999999000000
+# bump-bundle-seq calls a raise may take (the rollback to 0.1.0-alpha.8); more is refused instead of looping.
+BUNDLE_SEQ_MAX_STEPS=10
 
 # Runs in the postgres container (sh, uid 999): $1 the mounted directory, $2 the value. The file is replaced, never
 # lowered; anything that is no number counts as 0.
@@ -63,39 +70,57 @@ bundle_seq_record() {
 }
 
 # bundle_seq_high_water <bundle dir> <compose command…>: prints H, read before the stack goes down: the running stack's
-# highest (recorded in the high-water file), else the file's; prints nothing, with a warning, when neither is readable.
-# With both, the higher counts: a stack that a failed restore or rollback left on partly restored data reads lower than
-# what its devices applied, and the file still holds that.
+# highest (recorded in the high-water file), else the file's; with both, the higher one, since a stack that a failed
+# restore or rollback left on partly restored data reads lower than what its devices applied. Prints nothing, with a
+# warning, when neither holds a sequence (a stack without a compiled device counts as none). Fails, naming the source,
+# for an H above BUNDLE_SEQ_MAX_H.
 bundle_seq_high_water() {
-  local dir="$1" h f=""
+  local dir="$1" h="" s="" f=""
   shift
   f="$(bundle_seq_file_max "$dir")" || f=""
-  if h="$(bundle_seq_stack_max "$@")"; then
-    echo "bundle sequence: the running stack's highest is $h (high-water file: ${f:-none})" >&2
-    bundle_seq_record "$h" "$@"
-    if [[ -n "$f" ]] && ((f > h)); then h="$f"; fi
-  elif [[ -n "$f" ]]; then
-    h="$f"
-    echo "bundle sequence: the stack is not readable; the high-water file $dir/bundle-seq/high-water holds $h" >&2
+  if s="$(bundle_seq_stack_max "$@")"; then
+    echo "bundle sequence: the running stack's highest is $s (high-water file: ${f:-none})" >&2
+    ((s == 0)) || bundle_seq_record "$s" "$@"
   else
-    echo "warning: bundle sequence: neither the running stack nor $dir/bundle-seq/high-water is readable; the restored sequences are raised by the plain $BUNDLE_SEQ_STEP only" >&2
+    s=""
+    [[ -z "$f" ]] || echo "bundle sequence: the stack is not readable; the high-water file $dir/bundle-seq/high-water holds $f" >&2
+  fi
+  h="$s"
+  if [[ -n "$f" ]] && ((f > ${h:-0})); then h="$f"; fi
+  if [[ -z "$h" || "$h" == 0 ]]; then
+    echo "warning: bundle sequence: neither the running stack nor $dir/bundle-seq/high-water holds a sequence; the restored sequences are raised by the plain $BUNDLE_SEQ_STEP only" >&2
     return 0
+  fi
+  if ((h > BUNDLE_SEQ_MAX_H)); then
+    echo "bundle sequence: the highest sequence $h (stack: ${s:-not readable}, $dir/bundle-seq/high-water: ${f:-none}) is above $BUNDLE_SEQ_MAX_H, more than any fleet reaches; correct or remove the high-water file" >&2
+    return 1
   fi
   printf '%s' "$h"
 }
 
-# bundle_seq_by <H, empty when unknown> <lowest restored>: the raise that puts every restored sequence at H + 1,000,000
-# or above, at least 1,000,000.
+# bundle_seq_at_least <H>: N of raise-bundle-seq --at-least.
+bundle_seq_at_least() { printf '%s' "$(($1 + BUNDLE_SEQ_STEP))"; }
+
+# bundle_seq_by <H, empty when unknown> <lowest restored>: the --by of the rollback to 0.1.0-alpha.8, which puts every
+# restored sequence at H + 1,000,000 or above, at least 1,000,000.
 bundle_seq_by() {
   local h="$1" min="$2" by=$BUNDLE_SEQ_STEP
   if [[ -n "$h" ]] && ((h + BUNDLE_SEQ_STEP - min > by)); then by=$((h + BUNDLE_SEQ_STEP - min)); fi
   printf '%s' "$by"
 }
 
-# bundle_seq_bump <by> <admin command…>: runs `<admin command…> --by <n>` in steps of at most 1,000,000,000.
+# bundle_seq_by_fits <H, empty when unknown>: whether every --by the H allows takes at most BUNDLE_SEQ_MAX_STEPS calls.
+bundle_seq_by_fits() { (("${1:-0}" + BUNDLE_SEQ_STEP <= BUNDLE_SEQ_MAX_STEPS * BUNDLE_SEQ_MAX_BY)); }
+
+# bundle_seq_bump <by> <admin command…>: runs `<admin command…> --by <n>` in steps of at most 1,000,000,000; refuses
+# a by that needs more than BUNDLE_SEQ_MAX_STEPS of them.
 bundle_seq_bump() {
   local by="$1" n
   shift
+  if ((by > BUNDLE_SEQ_MAX_STEPS * BUNDLE_SEQ_MAX_BY)); then
+    echo "bundle sequence: a raise by $by needs more than $BUNDLE_SEQ_MAX_STEPS calls of bump-bundle-seq; refused" >&2
+    return 1
+  fi
   while ((by > 0)); do
     n=$((by > BUNDLE_SEQ_MAX_BY ? BUNDLE_SEQ_MAX_BY : by))
     "$@" --by "$n" </dev/null

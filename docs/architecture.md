@@ -2233,7 +2233,7 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 - Idempotency: all POSTs that create commands or revocations require `Idempotency-Key`.
 
 > **Amendment 2026-10-08 (M6c):** the dry run is `PUT /api/v1/config?dry_run=true` (no `:verb` endpoints,
-> root `CLAUDE.md`). The restore commands (`admin recompile --all`, `rebuild-cache`, `bump-bundle-seq`) are
+> root `CLAUDE.md`). The restore commands (`admin recompile --all`, `rebuild-cache`, `raise-bundle-seq`, `bump-bundle-seq`) are
 > `paddock-server admin …` subcommands run on the host in the worker container, not `paddockctl` commands: they
 > run while api and compiler are down and would otherwise need a standing platform-scope token. API tokens are
 > organization-scoped, never exceed the creator's role, expire after at most 365 days and need a step-up to
@@ -2403,9 +2403,15 @@ Strictly separate from the audit log.
 | Audit store | **excluded** from routine restore; protected by WORM + replica | – | – |
 
 **Restore rule:** after a PostgreSQL restore, `device.bundle_seq` could go backwards and devices would
-reject new bundles as downgrades. `./paddock restore` therefore runs `paddock-server admin bump-bundle-seq
---by 1000000` before the compiler starts, then `admin rebuild-cache` and `admin recompile --all`. A restore drill
-(`make restore-drill`) is part of the release checklist (quarterly).
+reject new bundles as downgrades. Before the stack goes down, `./paddock restore` and `./paddock rollback` read H, the
+running stack's highest `bundle_seq`, or, when the stack cannot be read, the host-side high-water file
+`bundle-seq/high-water`, which the backup role raises after every successful round and nothing lowers (the higher of
+both when both can be read). Before the compiler starts, `paddock-server admin raise-bundle-seq --at-least H+1000000`
+sets every device to greatest(seq + 1, H + 1000000), then `admin rebuild-cache` and `admin recompile --all` run.
+Without H the raise is `bump-bundle-seq --by 1000000` with a warning; an implausible H is refused before anything stops.
+The rollback to 0.1.0-alpha.8 uses alpha.8's `bump-bundle-seq --by` with the same lower bound (ADR 0046, amendment
+2026-11-07; decisions-alpha9 items 68, 71, 72). A restore drill (`make restore-drill`) is part of the release checklist
+(quarterly).
 
 **Backup sets, targets and the key (M15, ADR 0046).** The set is one directory tree, `paddock-backup/`
 (`paddock.backup-set.v1`): `manifest.json`, `pgbackrest/<key_id>/`, `openbao/`, `fleet/` and `escrow/`. The role

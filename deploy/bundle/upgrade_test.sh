@@ -163,7 +163,13 @@ BACKUP='^old backup now --label pre-upgrade-0.1.0-alpha.10 --wait$'
 
 # The whole run on the control plane.
 setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
+mkdir -p "$work/t/old/bundle-seq" && echo 2000003 >"$work/t/old/bundle-seq/high-water"
+chmod 0644 "$work/t/old/bundle-seq/high-water"
 run 0 "upgrade of the control plane" "$work/t/old" --yes
+if [[ "$(cat "$work/t/new/bundle-seq/high-water" 2>&1)" == 2000003 &&
+  "$(stat -c %a "$work/t/new/bundle-seq/high-water")" == 644 ]] && ! compgen -G "$work/t/new/bundle-seq/*.tmp" >/dev/null; then
+  pass "migrate-from carries the bundle sequence's high-water file, with its mode"
+else fail "high-water file after migrate-from: $(ls -l "$work/t/new/bundle-seq" 2>&1)"; fi
 before "migrate-from before secrets" '^script gen-prod-secrets.sh controlplane' '^docker pull '
 before "pull before the configuration check" '^docker pull ' '^docker run .*prod-check'
 before "configuration check before the backup" '^docker run .*prod-check' "$BACKUP"

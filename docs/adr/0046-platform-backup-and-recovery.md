@@ -206,17 +206,27 @@ raise:
   `device.bundle_seq` of the running stack (`psql` as the database superuser in the `postgres` container, which works
   on 0.1.0-alpha.8's schema as well). The rollback reads it with its own release's scripts and hands it to the old
   release's `restore.sh` (`RESTORE_HIGH_WATER`), because that restore runs after the rollback's `down`.
-- **The raise.** After the restore, every device is raised by `max(1 000 000, H + 1 000 000 − lowest restored
-  sequence)`, so every device lands at H + 1 000 000 or above. Raises above `bump-bundle-seq`'s bound of
-  1 000 000 000 run in several steps. The legacy rollback to 0.1.0-alpha.8 uses the same rule with alpha.8's binary,
-  which has the same `--by`.
+- **The raise** (decisions-alpha9 item 71, which folds in PDK-876). After the restore, the new admin command
+  `paddock-server admin raise-bundle-seq --at-least H+1000000` sets every device to `greatest(seq + 1, H + 1 000 000)`.
+  It runs through the SECURITY DEFINER function `paddock_admin_raise_bundle_seq` (EXECUTE for `paddock_platform`
+  only), is recorded as `platform.bundle_seq_raised` (`at_least`, `devices`) and is bounded at 10^12. Every device,
+  including one enrolled since the last raise (sequence 0), lands above anything applied, and the highest sequence
+  grows by about 1 000 000 per restore. A `--by` of `max(1 000 000, H + 1 000 000 − lowest restored)` would add H
+  whenever such a device exists, so the highest sequence would double with every restore. The legacy rollback to
+  0.1.0-alpha.8 runs once and keeps that `--by` rule with alpha.8's binary, in steps of at most 1 000 000 000.
+- **Implausible H.** An H above 999 999 000 000 (H + 1 000 000 is the command's bound) is a corrupt or edited
+  high-water file, not a fleet's history. The restore or rollback refuses it before anything stops. The legacy
+  rollback also refuses an H that would need more than ten `bump-bundle-seq` calls. No raise loops without bound.
 - **High-water file.** `bundle-seq/high-water` in the bundle directory, outside `.secrets/`, holds one number and is
   never lowered. Writers: the backup role after every successful round (the highest `bundle_seq`, read through the
   SECURITY DEFINER function `paddock_backup_bundle_seq_high_water`, which only `paddock_backup` may call; the role
   still reads no device row), every restore (H before down and the new highest after the raise), and every rollback (H
   before down). When the stack cannot be read (a disaster restore), H is the file's value. When both can be read, the
   higher one counts: a stack that a failed restore or rollback left on partly restored data reads lower than what
-  devices applied. Without either source the raise is the plain 1 000 000, with a printed warning.
+  devices applied. A stack without any compiled device (H = 0) counts as no source. Without either source the raise is
+  the plain `bump-bundle-seq --by 1000000`, with a printed warning. `./paddock upgrade` (`migrate-from`) copies the
+  file into the new release's directory and never lowers a value already there, so the file survives the A/B
+  directory switch.
 - **Who can write it.** The bundle ships the empty directory, and `compose.backup.yaml` bind-mounts it into
   `postgres` and the backup role. `postgres` starts as root and hands the directory to uid 999 on every start, as it
   does with its WAL spool; uid 999 is both its `postgres` user and the backup role's. The scripts write the file

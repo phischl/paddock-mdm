@@ -32,6 +32,7 @@ commands:
   audit purge [--dry-run]   (drops expired audit index partitions; prints DROP/KEEP lines)
   osv import <file>
   admin bump-bundle-seq --by N
+  admin raise-bundle-seq --at-least N
   admin recompile --all
   admin rebuild-cache
   admin security-review

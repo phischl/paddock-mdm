@@ -36,8 +36,9 @@ import (
 // agent-release: plan M7b decision 31; auto-unseal: plan M8u decision 8; agent-rollout, agent-rollout-halt,
 // agent-rollout-resume: ADR 0034 amendment 2026-10-26; upgrade-check: plan M16 decision 4).
 type adminCommand struct {
-	name    string             // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | security-review | end-sessions | auto-unseal | upgrade-check
+	name    string             // bump-bundle-seq | raise-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | security-review | end-sessions | auto-unseal | upgrade-check
 	by      int64              // bump-bundle-seq only
+	atLeast int64              // raise-bundle-seq only
 	sub     string             // allowlist: show | disable | add; auto-unseal: show | verify | disable
 	cidr    string             // allowlist add
 	label   string             // allowlist add
@@ -66,6 +67,16 @@ func parseAdmin(args []string) (adminCommand, error) {
 			return adminCommand{}, errUsage
 		}
 		cmd.by = n
+	case "raise-bundle-seq":
+		at := fs.String("at-least", "", "")
+		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || *at == "" {
+			return adminCommand{}, errUsage
+		}
+		n, err := strconv.ParseInt(*at, 10, 64)
+		if err != nil || n < app.MinBundleSeqAtLeast || n > app.MaxBundleSeqAtLeast {
+			return adminCommand{}, errUsage
+		}
+		cmd.atLeast = n
 	case "recompile":
 		all := fs.Bool("all", false, "")
 		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || !*all {
@@ -194,6 +205,12 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 			return err
 		}
 		fmt.Fprintf(os.Stdout, "bumped bundle_seq of %d devices by %d\n", n, cmd.by)
+	case "raise-bundle-seq":
+		n, err := admin.RaiseBundleSeq(ctx, cmd.atLeast)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "raised bundle_seq of %d devices to at least %d\n", n, cmd.atLeast)
 	case "recompile":
 		n, err := admin.RecompileAll(ctx)
 		if err != nil {

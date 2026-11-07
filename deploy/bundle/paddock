@@ -93,6 +93,20 @@ case "$cmd" in
       trap 'rm -f "$tmp"' EXIT
       cp -a "$old/$targets" "$tmp" || die "migrate-from: could not copy $old/$targets; nothing changed"
     fi
+    # The bundle sequence's high-water file (decisions-alpha9 item 68) moves too: until the new directory's first
+    # successful backup round it is the only source of a disaster restore. It is uid 999's; as for .secrets/, cp -p
+    # keeps the owner only for root, and the backup role may still replace it in its directory. Never lowered.
+    hw="$old/bundle-seq/high-water"
+    if [[ -f "$hw" ]]; then
+      [[ "$(head -n 1 "$hw")" =~ ^[0-9]{1,18}$ ]] || die "migrate-from: $hw holds no bundle sequence; correct or remove it"
+      mkdir -p "$BUNDLE_DIR/bundle-seq"
+      if [[ ! -f "$BUNDLE_DIR/bundle-seq/high-water" ]] ||
+        (($(head -n 1 "$BUNDLE_DIR/bundle-seq/high-water" 2>/dev/null || echo 0) < $(head -n 1 "$hw"))); then
+        cp -p "$hw" "$BUNDLE_DIR/bundle-seq/high-water.tmp" &&
+          mv -f "$BUNDLE_DIR/bundle-seq/high-water.tmp" "$BUNDLE_DIR/bundle-seq/high-water" ||
+          die "migrate-from: could not copy $hw to $BUNDLE_DIR/bundle-seq/"
+      fi
+    fi
     cp -a "$old/.env" "$BUNDLE_DIR/.env"
     cp -a "$old/.secrets" "$BUNDLE_DIR/.secrets"
     if [[ -n "$tmp" ]]; then
