@@ -195,16 +195,28 @@ func (d *dirTarget) open() (*os.Root, error) {
 	return m.OpenRoot(d.name)
 }
 
-func (d *dirTarget) List(_ context.Context) (map[string]int64, error) {
+func (d *dirTarget) List(ctx context.Context) (map[string]int64, error) {
+	return d.ListProgress(ctx, func() {})
+}
+
+// listTickEvery is the number of directory entries a target's listing walks between two progress ticks.
+const listTickEvery = 1024
+
+// ListProgress is List and calls tick every listTickEvery entries.
+func (d *dirTarget) ListProgress(_ context.Context, tick func()) (map[string]int64, error) {
 	r, err := d.open()
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = r.Close() }()
 	out := map[string]int64{}
+	walked := 0
 	err = fs.WalkDir(r.FS(), ".", func(p string, e fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if walked++; walked%listTickEvery == 0 {
+			tick()
 		}
 		if e.IsDir() || strings.HasPrefix(e.Name(), tmpPrefix) {
 			return nil
@@ -426,10 +438,26 @@ func probeIn(r *os.Root, name string) error {
 	return err
 }
 
+// progressLister is a Target whose listing reports progress: listing a set of a few hundred thousand objects takes
+// minutes on some S3 endpoints and on a slow share, and a mirror's stall watchdog must not take that for a stall
+// (PDK-865).
+type progressLister interface {
+	ListProgress(ctx context.Context, tick func()) (map[string]int64, error)
+}
+
+// listProgress lists dst and reports progress to tick when dst can.
+func listProgress(ctx context.Context, dst Target, tick func()) (map[string]int64, error) {
+	if p, ok := dst.(progressLister); ok {
+		return p.ListProgress(ctx, tick)
+	}
+	return dst.List(ctx)
+}
+
 // S3Store is the part of objectstore.Store an S3 target uses.
 type S3Store interface {
 	Ping(ctx context.Context) error
 	ListSizes(ctx context.Context, prefix string) (map[string]int64, error)
+	ListSizesPaged(ctx context.Context, prefix string, page func()) (map[string]int64, error)
 	Newest(ctx context.Context, prefix string) (newest time.Time, found bool, err error)
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
 	PutReader(ctx context.Context, key string, body io.ReadSeeker, size int64) error
@@ -455,7 +483,12 @@ func NewS3Target(store S3Store, prefix string) Target {
 func (s *s3Target) setPrefix() string { return s.base + backupset.SetRoot + "/" }
 
 func (s *s3Target) List(ctx context.Context) (map[string]int64, error) {
-	all, err := s.store.ListSizes(ctx, s.setPrefix())
+	return s.ListProgress(ctx, func() {})
+}
+
+// ListProgress is List and calls tick after every page of the bucket listing.
+func (s *s3Target) ListProgress(ctx context.Context, tick func()) (map[string]int64, error) {
+	all, err := s.store.ListSizesPaged(ctx, s.setPrefix(), tick)
 	if err != nil {
 		return nil, err
 	}

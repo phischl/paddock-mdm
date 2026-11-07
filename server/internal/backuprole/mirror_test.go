@@ -72,7 +72,8 @@ func testRetention(now time.Time) retention {
 }
 
 func noHooks() mirrorHooks {
-	return mirrorHooks{tick: func() {}, begin: func(int64) {}, stop: func() bool { return false }}
+	return mirrorHooks{tick: func() {}, phase: func(string) {}, begin: func(int64) {}, end: func() {},
+		stop: func() bool { return false }}
 }
 
 func mirror(t *testing.T, repo *os.Root, idx repoIndex, dst Target, pushed map[string]fileInfo) error {
@@ -277,6 +278,13 @@ func (f *fakeS3) ListSizes(_ context.Context, prefix string) (map[string]int64, 
 		}
 	}
 	return out, nil
+}
+func (f *fakeS3) ListSizesPaged(ctx context.Context, prefix string, page func()) (map[string]int64, error) {
+	out, err := f.ListSizes(ctx, prefix)
+	for range out {
+		page()
+	}
+	return out, err
 }
 func (f *fakeS3) Newest(context.Context, string) (time.Time, bool, error) {
 	return time.Time{}, false, nil
@@ -759,7 +767,8 @@ func TestMirrorBudgetResumesNextRound(t *testing.T) {
 	dst := newMemTarget()
 	for round := 1; round <= 3; round++ {
 		_, err := mirrorSet(context.Background(), repo, idx, dst, map[string]fileInfo{}, testRetention(time.Now()),
-			mirrorHooks{tick: func() {}, begin: func(int64) {}, stop: func() bool { return true }})
+			mirrorHooks{tick: func() {}, phase: func(string) {}, begin: func(int64) {}, end: func() {},
+				stop: func() bool { return true }})
 		if !errors.Is(err, errBudget) || len(dst.files) != round {
 			t.Fatalf("round %d: error %v, files %v", round, err, slices.Sorted(maps.Keys(dst.files)))
 		}

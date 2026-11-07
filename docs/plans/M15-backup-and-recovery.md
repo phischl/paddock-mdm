@@ -1211,3 +1211,18 @@ doubled. The header records `# revisions:` (for the online check item of decisio
 - **Plan path.** The plan-based path is covered by the `TestRestorePlan` gates (§9 B5: typed word, point in time,
   approval, expiry, cancel, the host command `./paddock restore --plan <id>`); its execution on a host stays with
   system gate BS4.
+
+### Note 2026-11-07 — the budget and the hard cap count only the copy phase (PDK-865; decisions-alpha9 items 66 and 67)
+
+- A7's round budget (10 min) and its hard cap on a trickling target (`copy start + budget + size/min_rate`) apply only
+  to the copy phase of step 3. The budget starts with the first copied file and is checked after every copied file;
+  the cap applies only while a file is in flight.
+- Listings (step 1 and step 4) are not charged against the budget. Only the stall watchdog guards them: the S3
+  listing reports progress after every page, a mounted target's walk every 1 024 entries, and a listing whose next
+  page does not arrive within the stall window fails the mirror. Once the copies are done, step 6 stays reachable.
+- The watchdog's error names the phase (for example `no progress for 2m0s while listing the target`); a copy-rate
+  error is only ever reported for a copy.
+- Step 6 is not bounded by the budget yet. After a long target outage, the first successful mirror can hold the role
+  for the length of the delete backlog (RR-126). Bounding the deletions by the budget is planned for alpha.10 with an
+  A3/A7 amendment (PDK-869).
+
