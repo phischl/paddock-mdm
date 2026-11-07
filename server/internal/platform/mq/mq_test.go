@@ -168,8 +168,9 @@ func TestProvisionRetry(t *testing.T) {
 	ctx := context.Background()
 	opts := mq.ProvisionOptions{AuditQueueMaxBytes: 1 << 30}
 	broker.StopApp(t)
-	if err := mq.ProvisionRetry(ctx, broker.Config, opts, 2, 10*time.Millisecond); err == nil {
-		t.Fatal("provisioning a stopped broker succeeded")
+	if err := mq.ProvisionRetry(ctx, broker.Config, opts, 2, 10*time.Millisecond); err == nil ||
+		errors.Is(err, context.Canceled) {
+		t.Fatalf("provisioning a stopped broker: %v, want the broker's error", err)
 	}
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
