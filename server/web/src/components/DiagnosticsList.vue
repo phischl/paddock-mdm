@@ -139,6 +139,14 @@ async function purge(item: Diagnostics): Promise<void> {
           :title="item.failed_reason ? t('diagnostics.failedReason', { reason: item.failed_reason }) : undefined"
           :data-testid="'diagnostics-state-' + item.state"
         />
+        <StatusChip
+          v-if="item.notified_sessions === 0"
+          class="ms-1"
+          status="warn"
+          :label="t('diagnostics.notNotified')"
+          :title="t('diagnostics.notNotifiedHint')"
+          data-testid="diagnostics-not-notified"
+        />
       </template>
       <template #[`item.size`]="{ item }: { item: Diagnostics }">
         <template v-if="item.size">

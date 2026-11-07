@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -362,5 +363,37 @@ func TestRunKeepsDiagnosticsResultAtShutdown(t *testing.T) {
 	st, err := state.Load(a.d.Layout.State())
 	if err != nil || len(st.CommandResults) != 1 || st.CommandResults[0].CommandID != diagID {
 		t.Fatalf("state results %+v, %v", st.CommandResults, err)
+	}
+}
+
+// TestCollectStatusReportsAMissedNotice: a user session the notice cannot reach still lets the collection proceed,
+// reports notified_sessions 0 and is logged at warn level; a device without a graphical user session logs the info
+// line instead (PDK-878).
+func TestCollectStatusReportsAMissedNotice(t *testing.T) {
+	for name, tc := range map[string]struct {
+		sessions []fakesys.Session
+		want     string
+	}{
+		"unreachable": {want: `level=WARN msg="no graphical session was notified of the diagnostics collection"`},
+		"no session": {sessions: []fakesys.Session{}, want: `level=INFO msg="no active graphical session to notify of ` +
+			`the diagnostics collection"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+			a, _, sys, _ := diagnosticsAgent(t)
+			if tc.sessions != nil {
+				sys.Sessions = tc.sessions
+			}
+			status, result := collect(t, a, collectCommand(diagID, diagID, "VPN fails since Monday"))
+			if status != protocol.CommandSucceeded || result["uploaded"] != true || result["notified_sessions"] != float64(0) {
+				t.Fatalf("%s %v", status, result)
+			}
+			if !strings.Contains(buf.String(), tc.want) {
+				t.Errorf("log lacks %s:\n%s", tc.want, buf.String())
+			}
+		})
 	}
 }
