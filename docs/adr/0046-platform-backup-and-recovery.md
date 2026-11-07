@@ -193,3 +193,45 @@ restore stopped), and a running plan blocks a new one. Decisions 6 and 7 gain a 
 - **Late host report.** A host report for an abandoned plan is refused (409 `invalid_state`) and still recorded: the
   report's event (`platform.restore_completed` or `platform.restore_failed`) is written with outcome failure, so the
   late end of the run stays in the audit trail.
+
+## Amendment 2026-11-07 — bundle sequence after a restore or rollback (PDK-872)
+
+The fixed `bump-bundle-seq --by 1000000` of the Context is not enough once restores follow each other. A restore after
+an upgrade raises the sequences to about 1 000 000. A rollback that then restores the pre-upgrade point raises its
+much lower sequences by 1 000 000 again, which lands in the same range. Devices that applied the first restore's
+bundles then receive nothing until enough compiles pass them. Decisions-alpha9 item 68 (option a) replaces the fixed
+raise:
+
+- **H before down.** Before anything stops, `./paddock restore` and `./paddock rollback` read H, the highest
+  `device.bundle_seq` of the running stack (`psql` as the database superuser in the `postgres` container, which works
+  on 0.1.0-alpha.8's schema as well). The rollback reads it with its own release's scripts and hands it to the old
+  release's `restore.sh` (`RESTORE_HIGH_WATER`), because that restore runs after the rollback's `down`.
+- **The raise** (decisions-alpha9 item 71, which folds in PDK-876). After the restore, the new admin command
+  `paddock-server admin raise-bundle-seq --at-least H+1000000` sets every device to `greatest(seq + 1, H + 1 000 000)`.
+  It runs through the SECURITY DEFINER function `paddock_admin_raise_bundle_seq` (EXECUTE for `paddock_platform`
+  only), is recorded as `platform.bundle_seq_raised` (`at_least`, `devices`) and is bounded at 10^12. Every device,
+  including one enrolled since the last raise (sequence 0), lands above anything applied, and the highest sequence
+  grows by about 1 000 000 per restore. A `--by` of `max(1 000 000, H + 1 000 000 − lowest restored)` would add H
+  whenever such a device exists, so the highest sequence would double with every restore. The legacy rollback to
+  0.1.0-alpha.8 runs once and keeps that `--by` rule with alpha.8's binary, in steps of at most 1 000 000 000.
+- **Implausible H.** An H above 999 999 000 000 (H + 1 000 000 is the command's bound) is a corrupt or edited
+  high-water file, not a fleet's history. The restore or rollback refuses it before anything stops. The legacy
+  rollback also refuses an H that would need more than ten `bump-bundle-seq` calls. No raise loops without bound.
+- **High-water file.** `bundle-seq/high-water` in the bundle directory, outside `.secrets/`, holds one number and is
+  never lowered. Writers: the backup role after every successful round (the highest `bundle_seq`, read through the
+  SECURITY DEFINER function `paddock_backup_bundle_seq_high_water`, which only `paddock_backup` may call; the role
+  still reads no device row), every restore (H before down and the new highest after the raise), and every rollback (H
+  before down). When the stack cannot be read (a disaster restore), H is the file's value. When both can be read, the
+  higher one counts: a stack that a failed restore or rollback left on partly restored data reads lower than what
+  devices applied. A stack without any compiled device (H = 0) counts as no source. Without either source the raise is
+  the plain `bump-bundle-seq --by 1000000`, with a printed warning. `./paddock upgrade` (`migrate-from`) copies the
+  file into the new release's directory and never lowers a value already there, so the file survives the A/B
+  directory switch.
+- **Who can write it.** The bundle ships the empty directory, and `compose.backup.yaml` bind-mounts it into
+  `postgres` and the backup role. `postgres` starts as root and hands the directory to uid 999 on every start, as it
+  does with its WAL spool; uid 999 is both its `postgres` user and the backup role's. The scripts write the file
+  through `docker compose exec -u postgres postgres`, so an operator who is not root (a rollback needs no root) can
+  write it without a host-side `chown`. This avoids both a new one-shot service and an ownership step in
+  `./paddock up`. The legacy rollback writes only H: alpha.8's `postgres` has no such mount, and alpha.8 never reads
+  the file.
+- Step 10.2 of the CI upgrade job stays strict.

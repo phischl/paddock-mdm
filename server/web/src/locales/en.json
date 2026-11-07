@@ -510,6 +510,7 @@
     "platform": {
       "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",
       "bundle_seq_bumped": "{actor} raised the bundle sequence of {devices} devices by {by} (restore)",
+      "bundle_seq_raised": "{actor} raised the bundle sequence of {devices} devices to at least {at_least} (restore)",
       "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)",
       "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)",
       "ip_allowlist_changed": "{action, select, added {{actor} added {cidr} ({label}) to the IP allow list} updated {{actor} changed the IP allow list entry {previous_cidr} to {cidr} ({label})} other {{actor} removed {cidr} ({label}) from the IP allow list}}",

@@ -160,11 +160,14 @@ completed.
 
 After a PostgreSQL restore, devices run bundle versions newer than the restored database knows. The restore commands
 run on the host with the worker's configuration, not through `paddockctl`: they need privileges the admin API does
-not have, and they run while the compiler is stopped (plan M6c decisions 20–23). Run them in this order:
+not have, and they run while the compiler is stopped (plan M6c decisions 20–23). `./paddock restore` and
+`./paddock rollback` run them for you, with N the highest sequence the stack held before it went down plus 1000000
+(`docs/operations/restore.md`, *Bundle sequence*). By hand, read that highest value before you stop anything. Run
+them in this order:
 
 ```
 docker compose … stop paddock-compiler
-docker compose … run --rm --no-deps paddock-worker admin bump-bundle-seq --by 1000000
+docker compose … run --rm --no-deps paddock-worker admin raise-bundle-seq --at-least N
 docker compose … start paddock-compiler
 docker compose … run --rm --no-deps paddock-worker admin rebuild-cache
 docker compose … run --rm --no-deps paddock-worker admin recompile --all
@@ -172,12 +175,13 @@ docker compose … run --rm --no-deps paddock-worker admin recompile --all
 
 | Command | Does | Audit |
 | --- | --- | --- |
-| `admin bump-bundle-seq --by N` (1 ≤ N ≤ 1 000 000 000) | Raises the bundle sequence of every device by N, so the next bundle is newer than anything a device accepted. | `platform.bundle_seq_bumped` (`by`, `devices`) |
+| `admin raise-bundle-seq --at-least N` (1 ≤ N ≤ 1 000 000 000 000) | Sets the bundle sequence of every device to the greater of its sequence + 1 and N, so the next bundle is newer than anything a device accepted, also for devices enrolled since the restored point, without the highest sequence growing beyond N. | `platform.bundle_seq_raised` (`at_least`, `devices`) |
+| `admin bump-bundle-seq --by N` (1 ≤ N ≤ 1 000 000 000) | Raises the bundle sequence of every device by N. Used by the rollback to 0.1.0-alpha.8 and when no highest sequence is known. | `platform.bundle_seq_bumped` (`by`, `devices`) |
 | `admin rebuild-cache` | Rewrites the gateway's enrollment tokens, device keys and sequence numbers in Valkey from PostgreSQL. The running compiler rewrites bundle pointers and time tickets within 60 s. | `platform.cache_rebuilt` (`organizations`) |
 | `admin recompile --all` | Publishes a new bundle version for every active device, also when its content is unchanged. | `organization.recompile_requested`, one per organization |
 | `admin security-review` | Prints, per organization, the unconfirmed root grants, the unconfirmed files on sensitive paths and the files on denied paths (ADR 0034); run once after the upgrade that introduced them. | `organization.security_review_required`, one per organization with a count above zero |
 
-Each prints one line (`bumped bundle_seq of 42 devices by 1000000`, `cache rebuilt for 2 organizations`,
+Each prints one line (`raised bundle_seq of 42 devices to at least 2000003`, `bumped bundle_seq of 42 devices by 1000000`, `cache rebuilt for 2 organizations`,
 `recompile requested for 2 organizations`) and exits with 0, 1 (failure) or 2 (usage). `paddock-server audit verify`
 stays the command to verify the audit trail. It needs the audit domain's credentials, which stay on the audit host.
 

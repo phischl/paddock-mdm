@@ -37,6 +37,7 @@ var adminActor = audit.Actor{Type: audit.ActorSystem, Display: "paddock-server a
 // Specs of the restore commands.
 var (
 	SpecBundleSeqBump      = ActionSpec{Code: audit.CodePlatformBundleSeqBumped, Actor: &adminActor}
+	SpecBundleSeqRaise     = ActionSpec{Code: audit.CodePlatformBundleSeqRaised, Actor: &adminActor}
 	SpecRecompileRequested = ActionSpec{Code: audit.CodeOrganizationRecompileRequested, Actor: &adminActor}
 	SpecCacheRebuilt       = ActionSpec{Code: audit.CodePlatformCacheRebuilt, Actor: &adminActor}
 	// SpecSecurityReviewRequired records the start of the review of existing data (ADR 0034 decision 7).
@@ -51,6 +52,16 @@ const (
 
 // ErrBumpOutOfRange is returned for a bump outside [MinBundleSeqBump, MaxBundleSeqBump].
 var ErrBumpOutOfRange = errors.New("--by must be between 1 and 1000000000")
+
+// Bounds of RaiseBundleSeq: far above any sequence a fleet reaches by compiling, so a larger value is a misread
+// high-water mark rather than a real one (decisions-alpha9 item 71).
+const (
+	MinBundleSeqAtLeast = 1
+	MaxBundleSeqAtLeast = 1_000_000_000_000
+)
+
+// ErrAtLeastOutOfRange is returned for a raise outside [MinBundleSeqAtLeast, MaxBundleSeqAtLeast].
+var ErrAtLeastOutOfRange = errors.New("--at-least must be between 1 and 1000000000000")
 
 func system(ctx context.Context, org uuid.UUID) context.Context {
 	return principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: adminActor.Display, OrganizationID: org})
@@ -68,6 +79,27 @@ func (a *Admin) BumpBundleSeq(ctx context.Context, by int64) (int64, error) {
 	err := a.runner.RunTx(system(ctx, uuid.Nil), ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		var err error
 		if devices, err = q.BumpBundleSeq(ctx, by); err != nil {
+			return err
+		}
+		rec.SetParam("devices", devices)
+		return nil
+	})
+	return devices, err
+}
+
+// RaiseBundleSeq sets the bundle sequence of every device to greatest(bundle_seq + 1, atLeast) (audited:
+// platform.bundle_seq_raised) and returns the number of devices. Every device, also one enrolled since the last raise,
+// ends at atLeast or above, and the highest sequence does not grow beyond atLeast unless a device already exceeded it.
+func (a *Admin) RaiseBundleSeq(ctx context.Context, atLeast int64) (int64, error) {
+	if atLeast < MinBundleSeqAtLeast || atLeast > MaxBundleSeqAtLeast {
+		return 0, ErrAtLeastOutOfRange
+	}
+	var devices int64
+	spec := SpecBundleSeqRaise
+	spec.Params = map[string]any{"at_least": atLeast}
+	err := a.runner.RunTx(system(ctx, uuid.Nil), ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		var err error
+		if devices, err = q.RaiseBundleSeq(ctx, atLeast); err != nil {
 			return err
 		}
 		rec.SetParam("devices", devices)
