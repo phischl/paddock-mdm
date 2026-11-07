@@ -62,6 +62,8 @@ test('organization admin requests, downloads and purges a diagnostics bundle', a
   await page.reload()
   const list = page.getByTestId('diagnostics-list')
   await expect(list.getByTestId('diagnostics-state-stored')).toBeVisible()
+  // devicesim has no desktop session: the bundle reports notified_sessions 0 (PDK-878).
+  await expect(list.getByTestId('diagnostics-not-notified')).toHaveText('User not notified')
   await expectAccessible(page)
   const download = page.waitForEvent('download')
   await stepUp(page, () => list.getByTestId('diagnostics-download').click(), 'alice@acme.test', 'dev_alice_password', 'dev_alice_totp_key')
