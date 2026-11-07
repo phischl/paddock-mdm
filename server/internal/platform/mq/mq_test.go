@@ -159,3 +159,34 @@ func TestPublisherPool(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// TestProvisionRetry: a broker that cannot take the topology yet (its application is stopped) gets it once it is
+// back within the attempts; exhausted attempts return the last error, and an ended context ends the retries. The
+// outbox relay and the test broker provision through it (PDK-871).
+func TestProvisionRetry(t *testing.T) {
+	broker := mqtest.Start(t)
+	ctx := context.Background()
+	opts := mq.ProvisionOptions{AuditQueueMaxBytes: 1 << 30}
+	broker.StopApp(t)
+	if err := mq.ProvisionRetry(ctx, broker.Config, opts, 2, 10*time.Millisecond); err == nil ||
+		errors.Is(err, context.Canceled) {
+		t.Fatalf("provisioning a stopped broker: %v, want the broker's error", err)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := mq.ProvisionRetry(cctx, broker.Config, opts, 5, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("retry with an ended context: %v, want context.Canceled", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- mq.ProvisionRetry(ctx, broker.Config, opts, 120, 500*time.Millisecond) }()
+	time.Sleep(time.Second)
+	broker.StartApp(t)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("provision after the broker came back: %v", err)
+		}
+	case <-time.After(90 * time.Second):
+		t.Fatal("provision did not complete after the broker came back")
+	}
+}
