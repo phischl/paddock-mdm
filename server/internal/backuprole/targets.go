@@ -202,8 +202,9 @@ func (d *dirTarget) List(ctx context.Context) (map[string]int64, error) {
 // listTickEvery is the number of directory entries a target's listing walks between two progress ticks.
 const listTickEvery = 1024
 
-// ListProgress is List and calls tick every listTickEvery entries.
-func (d *dirTarget) ListProgress(_ context.Context, tick func()) (map[string]int64, error) {
+// ListProgress is List and calls tick every listTickEvery entries. It stops once ctx ends: a mirror given up on a
+// slow share must not keep walking it and hold the target busy (PDK-866).
+func (d *dirTarget) ListProgress(ctx context.Context, tick func()) (map[string]int64, error) {
 	r, err := d.open()
 	if err != nil {
 		return nil, err
@@ -213,6 +214,9 @@ func (d *dirTarget) ListProgress(_ context.Context, tick func()) (map[string]int
 	walked := 0
 	err = fs.WalkDir(r.FS(), ".", func(p string, e fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if walked++; walked%listTickEvery == 0 {
@@ -230,10 +234,13 @@ func (d *dirTarget) ListProgress(_ context.Context, tick func()) (map[string]int
 		}
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
-func (d *dirTarget) Newest(_ context.Context, dir string) (time.Time, error) {
+func (d *dirTarget) Newest(ctx context.Context, dir string) (time.Time, error) {
 	dir = strings.TrimSuffix(dir, "/")
 	if !validPath(dir) {
 		return time.Time{}, fmt.Errorf("backup target: invalid path %q", dir)
@@ -246,6 +253,9 @@ func (d *dirTarget) Newest(_ context.Context, dir string) (time.Time, error) {
 	var newest time.Time
 	err = fs.WalkDir(r.FS(), dir, func(_ string, e fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if e.IsDir() || strings.HasPrefix(e.Name(), tmpPrefix) {
