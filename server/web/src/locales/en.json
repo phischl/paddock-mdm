@@ -1765,6 +1765,7 @@
       "size": "Size",
       "targets": "Targets",
       "targetsOk": "{ok} of {total} targets",
+      "continues": "(continues next round)",
       "empty": {
         "title": "No backup has run yet",
         "description": "Runs appear here after the first backup."

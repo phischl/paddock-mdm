@@ -270,9 +270,11 @@ func TestM15BackupKeyCodes(t *testing.T) {
 	}
 }
 
-// TestBackupRunCodes: the backup role's run events carry the params of plan M15 §6.4 and one outcome each.
+// TestBackupRunCodes: the backup role's run events carry the params of plan M15 §6.4, with completed_at since the
+// event follows the round's mirror (decisions-alpha9 item 79), and one outcome each.
 func TestBackupRunCodes(t *testing.T) {
-	params := []string{"run_id", "kind", "label", "bytes", "duration_s", "targets_ok", "targets_failed", "error_class"}
+	params := []string{"run_id", "kind", "label", "bytes", "duration_s", "completed_at", "targets_ok", "targets_failed",
+		"error_class"}
 	for code, outcome := range map[Code]Outcome{CodePlatformBackupCompleted: OutcomeSuccess, CodePlatformBackupFailed: OutcomeFailure} {
 		d, ok := Lookup(code)
 		if !ok || !d.Emitted || d.Description == "" {

@@ -39,7 +39,8 @@ type fakeStore struct {
 	targets   []TargetRecord
 	requests  []RequestedRun
 	history   map[string]KindHistory
-	runs      []RunRecord
+	runs      []fakeRun
+	mirrorErr error
 	status    map[string]KindStatus
 	hostState map[uuid.UUID]string
 	tests     map[uuid.UUID]string
@@ -98,18 +99,38 @@ func (s *fakeStore) SetTargetStatus(_ context.Context, id uuid.UUID, kind string
 func (s *fakeStore) EscrowEvidence(context.Context) (map[string]time.Time, error) {
 	return maps.Clone(s.evidence), s.evidenceErr
 }
+
+// fakeRun is a recorded run with the mirror results of its phase 2 (mirrored).
+type fakeRun struct {
+	RunRecord
+	Targets  []backupset.RunTarget
+	mirrored bool
+}
+
 func (s *fakeStore) RecordRun(_ context.Context, r RunRecord) error {
-	s.runs = append(s.runs, r)
+	s.runs = append(s.runs, fakeRun{RunRecord: r})
 	return nil
 }
 
-func (s *fakeStore) run(kind string) (RunRecord, bool) {
+func (s *fakeStore) MirrorRuns(_ context.Context, results []backupset.RunTarget) error {
+	if s.mirrorErr != nil {
+		return s.mirrorErr
+	}
+	for i := range s.runs {
+		if !s.runs[i].mirrored {
+			s.runs[i].Targets, s.runs[i].mirrored = slices.Clone(results), true
+		}
+	}
+	return nil
+}
+
+func (s *fakeStore) run(kind string) (fakeRun, bool) {
 	for _, r := range s.runs {
 		if r.Kind == kind {
 			return r, true
 		}
 	}
-	return RunRecord{}, false
+	return fakeRun{}, false
 }
 
 type fakeKeys struct{}

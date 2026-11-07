@@ -1226,3 +1226,22 @@ doubled. The header records `# revisions:` (for the online check item of decisio
   for the length of the delete backlog (RR-126). Bounding the deletions by the budget is planned for alpha.10 with an
   A3/A7 amendment (PDK-869).
 
+
+### Note 2026-11-07 b — runs are recorded in two phases (PDK-881; decisions-alpha9 items 78 and 79)
+
+- **Phase 1.** Each kind's run is written right after its local step (snapshot, dump, escrow pass, pgBackRest
+  marker, timeout), before the round's mirror: the `backup_run` row (or the answered request, which ends
+  `backup now --wait`) with outcome, times, bytes, error class and `targets = []`. Restore plans and the history see
+  the backup at once; before, a mirror of hours (item 67) kept it out of the database for as long.
+- **Phase 2.** After `mirrorAll`, every finished run without `mirrored_at` gets the round's per-target results and its
+  audit event `platform.backup_completed` / `platform.backup_failed` as before (§6.4; params gain `completed_at`, the
+  local completion). That covers this round's runs and any an earlier round could not finish because the role
+  stopped between the phases: exactly one event per run; a target the set did not reach counts as `targets_failed`.
+  Migration `00112_backup_run_mirrored` adds `mirrored_at` with the default `now()`: existing runs, and runs an older
+  backup role writes during an upgrade (it records their event itself), count as mirrored; phase 1 writes NULL. A
+  phase-2 write that fails leaves the runner's failure event as the run's one event and marks the run mirrored; a run
+  phase 1 cannot write gets a `platform.backup_failed` with `error_class` `record` instead.
+- **Copy budget.** A target whose mirror used the round's copy budget gets `RunTarget{ok: false, error_class:
+  "continues"}`; its `backup_target_status` keeps `last_success_at` and `bytes` and has no `last_error` (an error of an
+  earlier round is cleared: the mirror is progressing); the portal's run history says "continues next round". A3's
+  order of steps is unchanged.

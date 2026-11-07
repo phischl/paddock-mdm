@@ -57,6 +57,8 @@ const (
 	runClassEscrow     = "escrow"
 	runClassPgBackRest = "pgbackrest"
 	runClassTimeout    = "timeout"
+	// runClassRecord: the backup was taken but its run could not be written (decisions-alpha9 item 79).
+	runClassRecord = "record"
 )
 
 const (
@@ -251,23 +253,39 @@ func (e *Engine) round(ctx context.Context) error {
 		byKind[r.Kind] = append(byKind[r.Kind], r)
 	}
 
+	// Phase 1 (decisions-alpha9 item 79): each run is recorded as soon as its local step finished, never after the
+	// mirror, which can take hours on a large target; its mirror results and audit event follow in phase 2.
 	var runs []run
+	record := func(rs ...run) {
+		for _, r := range rs {
+			runs = append(runs, r)
+			if err := e.store.RecordRun(ctx, r); err != nil {
+				errs = append(errs, fmt.Errorf("record %s run: %w", r.Kind, err))
+				continue
+			}
+			outcome := "succeeded"
+			if !r.Succeeded {
+				outcome = "failed"
+			}
+			e.metrics.runs.WithLabelValues(r.Kind, outcome).Inc()
+		}
+	}
 	if e.due(history[KindOpenBao], hours(sched.OpenBaoIntervalHours)) || len(byKind[KindOpenBao]) > 0 {
-		runs = append(runs, e.snapshotOpenBao(ctx, repo, raw, byKind[KindOpenBao]))
+		record(e.snapshotOpenBao(ctx, repo, raw, byKind[KindOpenBao]))
 	}
 	var escrow escrowRule
 	if e.due(history[KindEscrow], hours(sched.EscrowIntervalHours)) || len(byKind[KindEscrow]) > 0 {
 		var r run
 		r, escrow = e.mirrorEscrow(ctx, repo, byKind[KindEscrow])
-		runs = append(runs, r)
+		record(r)
 	}
 	fleetRuns, err := e.fleet(ctx, repo, raw, history[KindFleet], hours(sched.FleetIntervalHours), byKind[KindFleet])
 	errs = append(errs, err)
-	runs = append(runs, fleetRuns...)
+	record(fleetRuns...)
 	dbRuns, err := e.pgbackrest(ctx, key.ID, history, byKind)
 	errs = append(errs, err)
-	runs = append(runs, dbRuns...)
-	runs = append(runs, e.timeouts(byKind, runs)...)
+	record(dbRuns...)
+	record(e.timeouts(byKind, runs)...)
 
 	keys, err := e.store.Keys(ctx)
 	if err != nil {
@@ -296,17 +314,8 @@ func (e *Engine) round(ctx context.Context) error {
 
 	ret.walOK = e.walOK(idx, ret.active)
 	results := e.mirrorAll(ctx, repo, idx, targets, kinds, ret)
-	for i := range runs {
-		runs[i].Targets = results
-		if err := e.store.RecordRun(ctx, runs[i]); err != nil {
-			errs = append(errs, fmt.Errorf("record %s run: %w", runs[i].Kind, err))
-			continue
-		}
-		outcome := "succeeded"
-		if !runs[i].Succeeded {
-			outcome = "failed"
-		}
-		e.metrics.runs.WithLabelValues(runs[i].Kind, outcome).Inc()
+	if err := e.store.MirrorRuns(ctx, results); err != nil {
+		errs = append(errs, fmt.Errorf("record the mirror of the runs: %w", err))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return err
@@ -941,7 +950,7 @@ func (e *Engine) mirrorAll(ctx context.Context, repo *os.Root, idx repoIndex, ta
 			held, err = e.mirrorTarget(ctx, repo, idx, t, ret)
 			switch {
 			case errors.Is(err, errBudget):
-				class = ErrorClass(err)
+				class = ClassContinues
 				slog.InfoContext(ctx, "mirror to backup target continues next round", "target", t.Name)
 			case err != nil:
 				class = ErrorClass(err)
@@ -954,18 +963,24 @@ func (e *Engine) mirrorAll(ctx context.Context, repo *os.Root, idx repoIndex, ta
 			e.held[t.ID] = held
 		}
 		e.metrics.held.WithLabelValues(t.Name).Set(float64(e.held[t.ID]))
-		if class == "" {
+		if class == "" || class == ClassContinues {
 			e.metrics.reachable.WithLabelValues(t.Name).Set(1)
+		}
+		if class == "" {
 			held := map[string]time.Time{}
 			for kind, k := range kinds {
 				held[kind] = k.at
 			}
 			e.mirrored[t.Name] = held
-		} else {
+		} else if class != ClassContinues {
 			e.metrics.reachable.WithLabelValues(t.Name).Set(0)
 		}
 		for _, kind := range backupset.Kinds {
 			st := KindStatus{LastSuccess: kinds[kind].at, Bytes: kinds[kind].bytes, Error: class}
+			if class == ClassContinues {
+				// Not an error and not current yet: no last_error, and the last success and its size stay.
+				st = KindStatus{}
+			}
 			if err := e.store.SetTargetStatus(ctx, t.ID, kind, st); err != nil {
 				slog.WarnContext(ctx, "backup target status not written", "target", t.Name, "error", err)
 			}

@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/phischl/paddock-mdm/server/internal/backup"
 	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
@@ -788,11 +790,18 @@ func TestMirrorBudgetResumesNextRound(t *testing.T) {
 	f.round(t)
 	r, ok := f.store.run(KindOpenBao)
 	if !ok || len(r.Targets) != 1 || r.Targets[0].TargetID != rec.ID.String() || r.Targets[0].OK ||
-		r.Targets[0].ErrorClass != ClassIO {
-		t.Fatalf("run targets %+v, want the slow target not ok (io)", r.Targets)
+		r.Targets[0].ErrorClass != ClassContinues {
+		t.Fatalf("run targets %+v, want the slow target not ok (continues)", r.Targets)
 	}
 	if len(slow.ops) != 1 {
 		t.Errorf("ops in a round without budget %v, want one copied file", slow.ops)
+	}
+	// The budget's end is no error (decisions-alpha9 item 79): no last_error, and no last success yet.
+	if st := f.store.status[rec.ID.String()+"/"+KindOpenBao]; st.Error != "" || !st.LastSuccess.IsZero() {
+		t.Errorf("target status %+v after the budget's end, want no error and no success", st)
+	}
+	if got := testutil.ToFloat64(f.metrics.reachable.WithLabelValues(rec.Name)); got != 1 {
+		t.Errorf("reachable %v after the budget's end, want 1", got)
 	}
 }
 
