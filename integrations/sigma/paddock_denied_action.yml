@@ -1,0 +1,20 @@
+title: Paddock denied action
+id: 4c85c97d-4f42-45b5-b4e0-4645bb29c7fb
+status: experimental
+description: A privileged action was denied.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100960
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    outcome: 'denied'
+  condition: selection
+falsepositives:
+  - An operator trying an action their role does not allow.
+level: medium

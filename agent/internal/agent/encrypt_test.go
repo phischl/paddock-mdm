@@ -288,7 +288,7 @@ func runWorker(t *testing.T, a *Agent) {
 				<-done
 				return
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(hangGuard):
 			t.Fatal("the conversion worker hangs")
 		}
 	}

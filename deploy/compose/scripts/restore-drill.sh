@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Restore drill on the development stack (plan M6a decision 7, gate P-3, docs/operations/restore.md): take a backup,
-# lose the control plane's databases and OpenBao, restore them from the backup bucket, run the restore commands of
-# plan M6c decision 22 and the acceptance subset. Prints the measured RTO. Requires the stack started with
-# `make up BACKUP=1` (dev-seeded); the audit store is not touched. Destroys the development databases' volumes.
+# Restore drill on the development stack (plan M15 decision 30 and §9 B8, docs/operations/restore.md): back up every
+# kind, wait until the local development target holds the set, lose PostgreSQL, Authentik's database, OpenBao, Fleet's
+# MySQL and the local backup repository, rebuild the repository from the target and run restore_run of restore.sh
+# (the code ./paddock restore runs), then the acceptance subset. Prints the measured RTO. Requires the stack started
+# with `make up BACKUP=1` and `make dev-seed BACKUP=1` (which confirms a backup key); the audit store is not touched.
+# Destroys the development volumes named above.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BACKUP=1
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
@@ -15,116 +18,85 @@ mapfile -t running_files < <(docker ps -a --filter "label=com.docker.compose.pro
   --format '{{.Label "com.docker.compose.project.config_files"}}' | tr ',' '\n' | sort -u)
 "$here/restore-drill-guard.sh" "$COMPOSE_DIR" "${running_files[@]}"
 REPO_ROOT="$(cd "$COMPOSE_DIR/../.." && pwd)"
-export PADDOCK_BACKUP_S3_ENDPOINT="${PADDOCK_BACKUP_S3_ENDPOINT:-https://backup-s3-tls:9443}"
-BUCKET="${PADDOCK_BACKUP_S3_BUCKET:-paddock-backup}"
 SUBSET='TestDeviceProtocol|TestLoginGate|TestAuditChain|TestOrganizationIsolation'
-# The roles the drill stops; the compiler starts only after bump-bundle-seq (plan M6c decision 22).
-ROLES=(paddock-api paddock-gateway paddock-worker paddock-outbox-relay paddock-escrow-reader paddock-revocation-issuer)
+TARGET=dev-local
 
-dc() { BACKUP=1 compose "$@"; }
+# The development stack: plain HTTP to OpenBao, the stored development shares, the profiles of `make up`.
+export RESTORE_BAO_ADDR=http://127.0.0.1:8200 RESTORE_BAO_CACERT="" RESTORE_PROFILES=paddock
+export RESTORE_UNSEAL_INIT_FILE="$SECRETS_DIR/openbao/init.txt"
+# shellcheck source=restore.sh
+. "$here/restore.sh"
+
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
-psql_in() { dc exec -T "$1" psql -U "$2" -d "$3" -Atc "$4"; }
+psql_in() { compose exec -T "$1" psql -U "$2" -d "$3" -Atc "$4" </dev/null; }
 
-wait_recovered() {
-  local svc="$1" user="$2" db="$3"
-  for _ in $(seq 1 150); do
-    if [[ "$(psql_in "$svc" "$user" "$db" 'select pg_is_in_recovery()' 2>/dev/null)" == f ]]; then return 0; fi
-    sleep 2
-  done
-  echo "restore drill: $svc did not finish recovery" >&2
-  exit 1
-}
-
-wait_spool_empty() {
-  local svc="$1" stanza="$2"
-  for _ in $(seq 1 60); do
-    if [[ -z "$(dc exec -T "$svc" sh -c "ls /pgbackrest-spool/$stanza | grep -v '^restore$'" 2>/dev/null)" ]]; then return 0; fi
-    sleep 2
-  done
-  echo "restore drill: the WAL spool of $stanza does not drain" >&2
-  exit 1
-}
-
-bao() { dc exec -T -e BAO_ADDR=http://127.0.0.1:8200 ${BAO_TOKEN:+-e BAO_TOKEN} openbao bao "$@"; }
-bao_restart() { dc restart openbao >/dev/null; }
-# shellcheck source=openbao-restore.sh
-. "$here/openbao-restore.sh"
+work="$(mktemp -d)"
+# Expanded now: restore_run runs this trap after a failed step, inside functions whose locals may be named work.
+# shellcheck disable=SC2064
+trap "rm -rf '$work'" EXIT
+export RESTORE_KEY_FILE="$work/backup_encryption_key"
 
 # --- 1. Backup -------------------------------------------------------------------------------------------------------
-log "1. full backups and an OpenBao snapshot"
-# --start-fast: a checkpoint now instead of the next regular one, up to checkpoint_timeout (5 min) away.
-dc run --rm --no-deps pgbackrest backup --start-fast
-dc run --rm --no-deps pgbackrest-authentik backup --start-fast
-dc --profile paddock run --rm --no-deps paddock-worker backup openbao
+log "1. the confirmed backup key, every kind backed up, the set on the target $TARGET"
+# The backup role hands the decrypted key to pgBackRest in the runtime tmpfs; the drill takes it from there, as an
+# operator types it from the offline copy.
+# The role writes the file in its next round (15 s on the development stack) after a key was confirmed.
+for _ in $(seq 1 60); do
+  (umask 077 && compose exec -T pgbackrest cat /run/paddock-backup/key >"$RESTORE_KEY_FILE" 2>/dev/null </dev/null) && break
+  rm -f "$RESTORE_KEY_FILE"
+  sleep 1
+done
+[[ -s "$RESTORE_KEY_FILE" ]] || { echo "restore drill: no confirmed backup key; run make dev-seed BACKUP=1 or confirm one" \
+  "in the portal (Platform → Backup)" >&2; exit 1; }
+target_id="$(psql_in postgres postgres paddock "select id from backup_target where name = '$TARGET' and deleted_at is null")"
+[[ "$target_id" =~ ^[0-9a-f-]{36}$ ]] || { echo "restore drill: no backup target $TARGET (make dev-seed BACKUP=1)" >&2; exit 1; }
+target_set="/backup-targets/$target_id/paddock-backup"
 devices_before="$(psql_in postgres postgres paddock 'select count(*) from device')"
+compose --profile paddock run --rm --no-deps -T paddock-backup backup now --wait </dev/null
 # Everything written so far reaches the archive: the restore must bring back the latest point, not the full backup.
 psql_in postgres postgres paddock 'select pg_switch_wal()' >/dev/null
 psql_in authentik-postgres authentik authentik 'select pg_switch_wal()' >/dev/null
-wait_spool_empty postgres paddock
-wait_spool_empty authentik-postgres authentik
+switched="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+for _ in $(seq 1 60); do
+  generated="$(compose --profile paddock run --rm --no-deps -T -e PADDOCK_LOG_LEVEL=error paddock-backup \
+    backup manifest "$target_set" </dev/null 2>/dev/null | sed -n 's/^generated_at=//p' || true)"
+  # Two rounds after the WAL switch: the first may have listed the repository before the segments arrived.
+  if [[ -n "$generated" && "$(date -u -d "$generated" +%s)" -gt "$(($(date -u -d "$switched" +%s) + 30))" ]]; then break; fi
+  sleep 5
+done
+[[ -n "$generated" && "$(date -u -d "$generated" +%s)" -gt "$(($(date -u -d "$switched" +%s) + 30))" ]] ||
+  { echo "restore drill: the target $TARGET did not receive the set within 5 minutes" >&2; exit 1; }
 
 # --- 2. Loss ---------------------------------------------------------------------------------------------------------
 start="$(date +%s)"
-log "2. losing PostgreSQL, Authentik's database and OpenBao (volumes deleted)"
-dc --profile paddock stop "${ROLES[@]}" paddock-compiler authentik-server authentik-worker
-dc stop pgbackrest pgbackrest-authentik postgres authentik-postgres openbao
-dc rm -f pgbackrest pgbackrest-authentik postgres authentik-postgres openbao
+log "2. losing PostgreSQL, Authentik's database, OpenBao, Fleet's MySQL and the local backup repository"
+compose --profile paddock rm -sf postgres authentik-postgres pgbackrest pgbackrest-authentik openbao fleet fleet-mysql \
+  fleet-backup paddock-backup
 for v in postgres-data authentik-postgres-data pgbackrest-spool-paddock pgbackrest-spool-authentik \
-  pgbackrest-state-paddock pgbackrest-state-authentik openbao-data; do
+  pgbackrest-state-paddock pgbackrest-state-authentik openbao-data fleet-mysql-data backup-repo; do
   docker volume rm "${PROJECT}_$v" >/dev/null
 done
 
-# --- 3. PostgreSQL ---------------------------------------------------------------------------------------------------
-log "3. restoring both databases with pgBackRest (latest point)"
-dc run --rm --no-deps pgbackrest restore
-dc run --rm --no-deps pgbackrest-authentik restore
-dc up -d --no-deps postgres authentik-postgres
-wait_recovered postgres postgres paddock
-wait_recovered authentik-postgres authentik authentik
+# --- 3. Restore ------------------------------------------------------------------------------------------------------
+log "3. the local repository rebuilt from $TARGET, then restore_run"
+compose --profile paddock run --rm --no-deps -T paddock-backup backup fetch-set --dir "$target_set" /backup-repo </dev/null
+restore_run fresh repo <<<"restore"
+# PDK-831: the escrow step runs in backup-restore-escrow against the audit index and ends with its summary line; without
+# the count, restore_escrow did not reach the audit index's Destroy evidence and the drill is not a valid one.
+[[ "${RESTORE_ESCROW_SKIPPED:-}" =~ ^[0-9]+$ ]] ||
+  { echo "restore drill: the escrow step printed no summary (backup-restore-escrow, audit index)" >&2; exit 1; }
+log "escrow: $RESTORE_ESCROW_SKIPPED headers of destroyed devices kept out"
+# The decrypted key is not needed for the acceptance subset; restore_run kept this script's trap for the failure paths.
+rm -rf "$work"
+ready="$(date +%s)"
 devices_after="$(psql_in postgres postgres paddock 'select count(*) from device')"
 [[ "$devices_after" == "$devices_before" ]] ||
   { echo "restore drill: $devices_after devices after the restore, $devices_before before" >&2; exit 1; }
-dc up -d --no-deps pgbackrest pgbackrest-authentik
-
-# --- 4. OpenBao ------------------------------------------------------------------------------------------------------
-log "4. restoring the newest OpenBao snapshot into a fresh OpenBao"
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
-chmod 755 "$work"  # the worker image (nonroot) reads the encrypted snapshot
-AWS_ACCESS_KEY_ID="$(cat "$SECRETS_DIR/backup_pgbackrest_access_key")"
-AWS_SECRET_ACCESS_KEY="$(cat "$SECRETS_DIR/backup_pgbackrest_secret_key")"
-export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-aws() {
-  docker run --rm --network "${PROJECT}_audit-store" -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
-    -e AWS_DEFAULT_REGION=us-east-1 -e AWS_PAGER= -v "$work:/drill" "$AWS_CLI_IMAGE" \
-    --endpoint-url http://audit-rustfs:9000 "$@"
-}
-snapshot="$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix openbao/ --query 'max_by(Contents, &LastModified).Key' --output text)"
-aws s3 cp --only-show-errors "s3://$BUCKET/$snapshot" /drill/snapshot.enc
-dc up -d --no-deps openbao
-openbao_wait
-# The decrypted snapshot never touches the host's disk: the worker image decrypts it to stdout.
-dc --profile paddock run --rm --no-deps -T -v "$work:/drill:ro" paddock-worker backup decrypt /drill/snapshot.enc - |
-  dc exec -T openbao sh -c 'cat >/tmp/snapshot'
-# The restored node has the original barrier; the stored development shares unseal it.
-openbao_restore_snapshot "$work" "$SECRETS_DIR/openbao/init.txt"
-dc exec -T openbao rm -f /tmp/snapshot
-
-# --- 5. Paddock ------------------------------------------------------------------------------------------------------
-log "5. starting Authentik and the roles; restore commands (plan M6c decisions 20–22)"
-dc up -d --no-deps authentik-server authentik-worker
-dc --profile paddock start "${ROLES[@]}"
-dc stop paddock-compiler
-dc --profile paddock run --rm --no-deps paddock-worker admin bump-bundle-seq --by 1000000
-dc start paddock-compiler
-dc --profile paddock run --rm --no-deps paddock-worker admin rebuild-cache
-dc --profile paddock run --rm --no-deps paddock-worker admin recompile --all
-"$here/wait-healthy.sh" --profile paddock
-ready="$(date +%s)"
 log "control plane ready $((ready - start)) s after the loss"
 
-# --- 6. Acceptance subset --------------------------------------------------------------------------------------------
-log "6. acceptance subset: $SUBSET"
-(cd "$REPO_ROOT" && go test -count=1 -timeout 30m ./test/acceptance/... -run "$SUBSET")
+# --- 4. Acceptance subset --------------------------------------------------------------------------------------------
+log "4. acceptance subset: $SUBSET"
+# Through the make target, so the subset gets the environment of `make acceptance` (bin/paddockctl and its variable).
+make -C "$REPO_ROOT" --no-print-directory acceptance T="$SUBSET" ACCEPTANCE_TIMEOUT=30m
 done_at="$(date +%s)"
 log "restore drill passed: control plane ready after $((ready - start)) s, acceptance subset green after $((done_at - start)) s (RTO)"

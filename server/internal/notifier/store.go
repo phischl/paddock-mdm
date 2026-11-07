@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
@@ -118,6 +120,7 @@ func toRow(r pgstore.ListNotifierDestinationsRow) Row {
 			Filter: outbound.FilterMode(r.FilterMode), Codes: codes, Pseudonymize: r.PseudonymizeUsers,
 			IncludeParams: r.IncludeParams, HeartbeatInterval: time.Duration(r.HeartbeatIntervalS) * time.Second,
 			Recipients: r.Recipients, EmailMinInterval: time.Duration(r.EmailMinIntervalS) * time.Second,
+			Checkpoints: r.Checkpoints, CreatedAt: r.CreatedAt,
 		},
 		State: State{
 			Cursor: r.CursorCommitSeq, StartAtLatest: r.StartAtLatest, ForwardSeq: r.ForwardSeq, Status: r.Status,
@@ -129,8 +132,27 @@ func toRow(r pgstore.ListNotifierDestinationsRow) Row {
 	if r.PendingDeliveryID.Valid {
 		row.State.Pending = r.PendingDeliveryID.UUID
 	}
+	if r.LastCheckpointDay.Valid {
+		day := r.LastCheckpointDay.Time
+		row.State.LastCheckpointDay = &day
+	}
+	if r.ReplayFrom != nil {
+		row.State.ReplayFrom = *r.ReplayFrom
+	}
 	if r.PendingForwardFrom != nil {
 		row.State.PendingFrom = *r.PendingForwardFrom
+	}
+	if r.SyslogHost != nil {
+		row.Destination.SyslogHost = *r.SyslogHost
+	}
+	if r.SyslogPort != nil {
+		row.Destination.SyslogPort = int(*r.SyslogPort)
+	}
+	if r.SyslogCaPem != nil {
+		row.Destination.SyslogCAPEM = *r.SyslogCaPem
+	}
+	if r.SyslogServerName != nil {
+		row.Destination.SyslogServerName = *r.SyslogServerName
 	}
 	if r.UrlCiphertext != nil {
 		row.URLCiphertext = *r.UrlCiphertext
@@ -216,17 +238,107 @@ func (s *PGStore) Pending(ctx context.Context, sc Scope, delivery uuid.UUID) (Pe
 		if err != nil {
 			return err
 		}
-		refs, err := q.ListNotifierDeliveryEvents(ctx, delivery)
+		p, err = storedBatch(ctx, q, pgstore.ListNotifierReplayDeliveriesRow(d))
+		return err
+	})
+	return p, err
+}
+
+// storedBatch reads the events of a stored delivery; a checkpoint has none.
+func storedBatch(ctx context.Context, q *pgstore.Queries, d pgstore.ListNotifierReplayDeliveriesRow) (PendingBatch, error) {
+	p := PendingBatch{ID: d.ID, Kind: d.Kind, Attempts: int(d.Attempts), EventCount: int(d.EventCount)}
+	if d.ForwardFrom != nil && d.ForwardTo != nil {
+		p.From, p.To = *d.ForwardFrom, *d.ForwardTo
+	}
+	if d.CheckpointDay.Valid {
+		p.Day = d.CheckpointDay.Time
+	}
+	if d.Kind == outbound.KindCheckpoint {
+		return p, nil
+	}
+	refs, err := q.ListNotifierDeliveryEvents(ctx, d.ID)
+	if err != nil {
+		return p, err
+	}
+	for _, r := range refs {
+		p.Refs = append(p.Refs, EventRef{ForwardSeq: r.ForwardSeq, EventID: r.EventID, CommitSeq: r.CommitSeq})
+	}
+	return p, nil
+}
+
+// ReplayDeliveries returns the stored deliveries a replay from the forward sequence number from sends (Store).
+func (s *PGStore) ReplayDeliveries(ctx context.Context, sc Scope, dest uuid.UUID, from int64, max int) ([]PendingBatch, error) {
+	var out []PendingBatch
+	err := s.tx(ctx, sc, func(ctx context.Context, q *pgstore.Queries) error {
+		rows, err := q.ListNotifierReplayDeliveries(ctx, pgstore.ListNotifierReplayDeliveriesParams{
+			DestinationID: dest, FromForwardSeq: from, MaxRows: int32(max), //nolint:gosec // a small engine constant
+		})
 		if err != nil {
 			return err
 		}
-		p = PendingBatch{ID: d.ID, Attempts: int(d.Attempts)}
-		for _, r := range refs {
-			p.Refs = append(p.Refs, EventRef{ForwardSeq: r.ForwardSeq, EventID: r.EventID, CommitSeq: r.CommitSeq})
+		for _, r := range rows {
+			b, err := storedBatch(ctx, q, r)
+			if err != nil {
+				return err
+			}
+			out = append(out, b)
 		}
 		return nil
 	})
-	return p, err
+	return out, err
+}
+
+// CreateCheckpoint inserts a checkpoint delivery and makes it the destination's pending delivery (Store).
+func (s *PGStore) CreateCheckpoint(ctx context.Context, sc Scope, dest uuid.UUID, c NewCheckpoint) error {
+	return s.tx(ctx, sc, func(ctx context.Context, q *pgstore.Queries) error {
+		if err := q.InsertNotifierCheckpoint(ctx, pgstore.InsertNotifierCheckpointParams{
+			ID: c.ID, DestinationID: dest, OrganizationID: sc.Org, ForwardSeq: c.ForwardSeq,
+			EventCount:    int32(min(c.EventCount, math.MaxInt32)), //nolint:gosec // bounded by the min
+			CheckpointDay: pgtype.Date{Time: c.Day, Valid: true},
+		}); err != nil {
+			return err
+		}
+		return setPending(ctx, q, pgstore.SetNotifierPendingParams{
+			ForwardSeq: c.ForwardSeq, DeliveryID: uuid.NullUUID{UUID: c.ID, Valid: true}, DestinationID: dest,
+		})
+	})
+}
+
+// setPending makes a new delivery the pending one; errStale, which rolls the delivery back, while a replay is
+// requested.
+func setPending(ctx context.Context, q *pgstore.Queries, p pgstore.SetNotifierPendingParams) error {
+	n, err := q.SetNotifierPending(ctx, p)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return errStale
+	}
+	return nil
+}
+
+// Replayed records notification.replayed (and notification.destination_resumed) and moves replay_from in the same
+// transaction, exactly once (Store).
+func (s *PGStore) Replayed(ctx context.Context, sc Scope, r ReplayAdvance) (bool, error) {
+	return s.once(ctx, sc, r.Destination, r.Name, r.Delivery, []*Record{r.Record, r.Resume},
+		func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+			var next *int64
+			if r.Next > 0 {
+				next = &r.Next
+			}
+			n, err := q.NotifierReplayAdvanced(ctx, pgstore.NotifierReplayAdvancedParams{
+				NextFrom: next, NextAttemptAt: r.NextAttemptAt, At: &r.At, DestinationID: r.Destination,
+				ExpectedFrom: r.From,
+			})
+			if err != nil || n == 0 {
+				return false, err
+			}
+			if r.Resume == nil {
+				return true, nil
+			}
+			n, err = q.NotifierDestinationResumed(ctx, r.Destination)
+			return n > 0, err
+		})
 }
 
 // CreateBatch inserts the delivery and its events and makes it the destination's pending batch.
@@ -248,7 +360,7 @@ func (s *PGStore) CreateBatch(ctx context.Context, sc Scope, dest uuid.UUID, b N
 		if err := q.InsertNotifierDeliveryEvents(ctx, ev); err != nil {
 			return err
 		}
-		return q.SetNotifierPending(ctx, pgstore.SetNotifierPendingParams{
+		return setPending(ctx, q, pgstore.SetNotifierPendingParams{
 			ForwardSeq: to, DeliveryID: uuid.NullUUID{UUID: b.ID, Valid: true}, DestinationID: dest,
 		})
 	})
@@ -317,10 +429,18 @@ func (s *PGStore) Succeeded(ctx context.Context, sc Scope, r Success) (bool, err
 			if err != nil || n == 0 {
 				return false, err
 			}
-			if n, err = q.NotifierDestinationSucceeded(ctx, pgstore.NotifierDestinationSucceededParams{
-				CursorCommitSeq: r.Cursor, NextAttemptAt: r.NextAttemptAt, At: &r.At, DestinationID: r.Destination,
-				ExpectedPending: nullable(r.Pending),
-			}); err != nil || n == 0 {
+			if r.CheckpointDay != nil {
+				n, err = q.NotifierCheckpointSucceeded(ctx, pgstore.NotifierCheckpointSucceededParams{
+					CheckpointDay: *r.CheckpointDay, NextAttemptAt: r.NextAttemptAt, At: &r.At, DestinationID: r.Destination,
+					ExpectedPending: nullable(r.Pending),
+				})
+			} else {
+				n, err = q.NotifierDestinationSucceeded(ctx, pgstore.NotifierDestinationSucceededParams{
+					CursorCommitSeq: r.Cursor, NextAttemptAt: r.NextAttemptAt, At: &r.At, DestinationID: r.Destination,
+					ExpectedPending: nullable(r.Pending),
+				})
+			}
+			if err != nil || n == 0 {
 				return false, err
 			}
 			if r.Resume == nil {
@@ -457,4 +577,59 @@ func toEvent(r auditstore.AuditEvent) (audit.Event, error) {
 		delete(ev.Params, "error_code")
 	}
 	return ev, nil
+}
+
+// EventAt returns the event with the commit sequence seq (Index).
+func (s *PGStore) EventAt(ctx context.Context, sc Scope, seq int64) (IndexedEvent, bool, error) {
+	var out IndexedEvent
+	found := false
+	err := s.read(ctx, sc, func(ctx context.Context, q *auditstore.Queries) error {
+		r, err := q.GetEventByCommitSeq(ctx, seq)
+		if db.IsNoRows(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		ev, err := toEvent(r)
+		if err != nil {
+			return fmt.Errorf("event %s: %w", r.EventID, err)
+		}
+		out, found = IndexedEvent{CommitSeq: r.CommitSeq, Event: ev}, true
+		return nil
+	})
+	return out, found, err
+}
+
+// CountRecordedOn counts the index events recorded on the UTC day (Index).
+func (s *PGStore) CountRecordedOn(ctx context.Context, sc Scope, day time.Time) (int, error) {
+	var n int64
+	start := utcDay(day)
+	err := s.read(ctx, sc, func(ctx context.Context, q *auditstore.Queries) error {
+		var err error
+		n, err = q.CountEventsRecordedOn(ctx, auditstore.CountEventsRecordedOnParams{DayStart: start, DayEnd: start.AddDate(0, 0, 1)})
+		return err
+	})
+	return int(n), err
+}
+
+// ManifestsAfter returns the sealed days of the scope after the UTC day after (Index).
+func (s *PGStore) ManifestsAfter(ctx context.Context, sc Scope, after time.Time, max int) ([]Manifest, error) {
+	var out []Manifest
+	err := s.read(ctx, sc, func(ctx context.Context, q *auditstore.Queries) error {
+		rows, err := q.ListManifestsAfter(ctx, auditstore.ListManifestsAfterParams{
+			AfterDay: utcDay(after), MaxRows: int32(max), //nolint:gosec // a small engine constant
+		})
+		for _, r := range rows {
+			out = append(out, Manifest{Day: utcDay(r.Day), SHA256: r.Sha256, Signature: r.Signature, KeyVersion: int(r.KeyVersion)})
+		}
+		return err
+	})
+	return out, err
+}
+
+// utcDay is 00:00 UTC of the calendar day of t in UTC.
+func utcDay(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }

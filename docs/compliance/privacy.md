@@ -92,7 +92,7 @@ device's organization (row-level security, `docs/operations/fleet.md`):
 | `inventory_policy_result` | pass or fail per policy, when it last changed |
 
 Hosts that map to no device or to several are never stored. Free disk space, uptime and network addresses stay in
-Fleet. The serial number identifies a person's laptop indirectly; it is shown to and searchable by every member of the
+Fleet; free disk space and uptime are, on request, also in a diagnostics bundle (below). The serial number identifies a person's laptop indirectly; it is shown to and searchable by every member of the
 device's organization (residual risk RR-49). Inventory of a retired device is deleted, in Paddock and in Fleet,
 `retired_inventory_days` after retirement (default 30).
 
@@ -112,14 +112,132 @@ Organization members see the stored inventory of their organization's devices in
 inventory views* on (`/api/v1/settings/privacy`), coalesced per administrator, device and day; the list of devices affected by a CVE is recorded as `vulnerability.devices_viewed` (CVE and device count, once per administrator, CVE and hour). Fleet's own UI and API are not published; only platform operators reach
 them, through a local port forward (`docs/operations/fleet.md`).
 
+## Diagnostics bundle (on request only)
+
+A diagnostics bundle is collected only when an organization administrator or operator asks for it for one device,
+with a reason (ADR 0048). It exists so that an operator can understand a device on which Paddock does not behave
+without asking the user to copy logs by hand. Nothing is collected on a schedule, and nothing outside the closed list
+below ever enters the bundle; extending the list is a change of this document.
+
+**What it holds** (ADR 0048 decision 2, with the correction of its amendment 2026-11-05 for the bundle file):
+Paddock's own state: the health report of the agent socket, `state.json` without `identity`, `managed.json`,
+`probation.json`, `update-result.json`, `updates-result.json`, the supervisor upgrade result,
+`bundle-redacted.json` (the applied configuration bundle with its secrets and managed-file contents replaced by
+`<redacted>`), `trust.json`, `agent.yml`; the journals of `paddock-supervisor`, `paddockd`, `paddock-encrypt`,
+`paddock-uninstall`, `himmelblaud` and `himmelblaud-tasks` of the last 7 days (newest first, cut at 8 MiB per unit);
+`systemctl status` of those units and of `orbit`, `systemctl list-units --failed`; the Paddock-managed configuration:
+`/etc/sudoers`, `/etc/sudoers.d/*`, `/etc/pam.d/common-*`, `/etc/nsswitch.conf`, `/etc/himmelblau/himmelblau.conf`
+with the values of keys matching `(?i)secret|password|key` replaced by `<redacted>`,
+`/etc/apt/sources.list.d/paddock-*`, `/etc/apt/preferences.d/5*paddock*`, `/etc/crypttab`, `/etc/fstab`; the system
+facts `os-release`, `uname -a`, `timedatectl show`, `df -h / /boot /boot/efi`, `uptime -p`,
+`lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT`, `cryptsetup luksDump` of every LUKS volume the agent manages, the
+presence of `/dev/tpm0` and `/dev/tpmrm0`, `dpkg -l 'paddock*' 'himmelblau*' 'fleet*'`, `ip -brief link` (link state,
+no addresses), `resolvectl status` (resolver configuration), `/var/log/apt/history.log` (package operations: names
+and versions, no users), and the result of one `GET <server_url>/healthz`. Never: process lists, `auth.log`, other
+units' journals, home directories, shell history, network connections, addresses, user files. Every entry is a file
+in a tar.gz with a `manifest.json` (entry, bytes, SHA-256, `truncated`), the archive is cut at 32 MiB sealed.
+
+The negative list above applies to the bundle as well. The journals and the managed configuration name people: user
+principal names in Himmelblau's journal, the names of locked users and of sudo rules in the agent's journal and in
+the sudoers files. A bundle is therefore personal data of the device's users ([residual-risks.md](residual-risks.md),
+RR-108).
+
+The agent's list, entry by entry (`agent/internal/diagnostics` `Entries()`; a unit test fails when the first two columns of this table and the
+code differ):
+
+| Archive file | Read from | Content |
+| --- | --- | --- |
+| `paddock/health.json` | `/run/paddock/agent.sock` | the agent's health report, the same that every check-in sends |
+| `paddock/state.json` | `/var/lib/paddock/state/state.json` | the agent's state without identity fields and without the hash of the local administrator's password |
+| `paddock/managed.json` | `/var/lib/paddock/state/managed.json` | the files and units Paddock manages |
+| `paddock/probation.json` | `/var/lib/paddock/state/probation.json` | the probation state of an agent update |
+| `paddock/update-result.json` | `/var/lib/paddock/state/update-result.json` | the result of the last agent update |
+| `paddock/updates-result.json` | `/var/lib/paddock/state/updates-result.json` | the result of the last package update run |
+| `paddock/supervisor-upgrade-result.json` | `/var/lib/paddock/state/supervisor-upgrade-result.json` | the result of the last supervisor upgrade |
+| `paddock/bundle-redacted.json` | `/var/lib/paddock/state/bundle.dsse` | the applied configuration bundle: only fields the agent knows to be public; the Fleet enroll secret, managed-file contents, every unknown field and URL credentials are `<redacted>`; its signatures do not verify against the rendering |
+| `paddock/trust.json` | `/etc/paddock/trust.json` | the agent's trusted signing keys (public keys) |
+| `paddock/agent.yml` | `/etc/paddock/agent.yml` | the agent's configuration; credentials in URLs (a proxy) are `<redacted>` |
+| `systemd/status.txt` | `systemctl show --property=ActiveState,SubState,Result,ExecMainStatus,StateChangeTimestamp,ActiveEnterTimestamp,ActiveExitTimestamp,InactiveEnterTimestamp,ExecMainStartTimestamp,ExecMainExitTimestamp paddock-supervisor.service paddock-supervisor-upgrade.service paddock-encrypt-resume.service paddock-uninstall.service himmelblaud.service himmelblaud-tasks.service orbit.service` | the state of Paddock's, Himmelblau's and Fleet's units, one block per unit in the order of the command, with only the properties `ActiveState`, `SubState`, `Result`, `ExecMainStatus`, `StateChangeTimestamp`, `ActiveEnterTimestamp`, `ActiveExitTimestamp`, `InactiveEnterTimestamp`, `ExecMainStartTimestamp`, `ExecMainExitTimestamp`; no processes, command lines or journal lines (every other line of the output is dropped) |
+| `systemd/failed-units.txt` | `systemctl list-units --failed --no-pager --plain` | the names of failed units |
+| `etc/sudoers` | `/etc/sudoers` | the sudo configuration |
+| `etc/sudoers.d` | `/etc/sudoers.d/*` | every file of the directory (symbolic links are not followed) |
+| `etc/pam.d` | `/etc/pam.d/common-*` | the shared PAM configuration |
+| `etc/nsswitch.conf` | `/etc/nsswitch.conf` | the name service configuration |
+| `etc/himmelblau/himmelblau.conf` | `/etc/himmelblau/himmelblau.conf` | Himmelblau's configuration; every line matching `secret`, `password` or `key` (comments too) keeps its key and gets `<redacted>` as value (a matching line without `=` or `:` becomes `<redacted>` entirely) |
+| `etc/apt/sources.list.d` | `/etc/apt/sources.list.d/paddock-*` | Paddock's package sources |
+| `etc/apt/preferences.d` | `/etc/apt/preferences.d/5*paddock*` | Paddock's package pins |
+| `etc/crypttab` | `/etc/crypttab` | the encrypted volumes; `password=`, `pass=` and `pwd=` options are `<redacted>` |
+| `etc/fstab` | `/etc/fstab` | the mounted file systems; `password=`, `pass=` and `pwd=` options (network shares) are `<redacted>` |
+| `system/os-release` | `/usr/lib/os-release` | the operating system and its version |
+| `system/uname.txt` | `uname -a` | kernel version and architecture |
+| `system/timedatectl.txt` | `timedatectl show` | time zone and time synchronization |
+| `system/df.txt` | `df -h / /boot /boot/efi` | free and total space of the three file systems |
+| `system/uptime.txt` | `uptime -p` | time since boot |
+| `system/lsblk.txt` | `lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT` | disks, partitions and their file systems |
+| `system/luksDump` | `cryptsetup luksDump` | one file `luksDump-<uuid>.txt` per LUKS volume of the agent's health report: the header's keyslots and tokens, never key material |
+| `system/tpm.txt` | `/dev/tpm0 /dev/tpmrm0` | one line per device node: present or not; nothing is read from the devices |
+| `system/dpkg.txt` | `dpkg -l paddock* himmelblau* fleet*` | the installed versions of Paddock's, Himmelblau's and Fleet's packages |
+| `system/ip-link.txt` | `ip -brief link` | network interfaces and their link state; hardware addresses are removed |
+| `system/resolvectl.txt` | `resolvectl status --no-pager` | the resolver configuration (DNS servers and search domains) |
+| `system/apt-history.log` | `/var/log/apt/history.log` | package operations with names and versions; the user in each `Requested-By:` line is `<redacted>` |
+| `system/server-healthz.txt` | `/healthz` | the status line and at most 4 KiB of the answer of the Paddock server's `/healthz` |
+| `journal/paddockd.log` | `paddock-supervisor.service` | the journal of the agent and its supervisor (the agent runs inside this unit) |
+| `journal/paddock-supervisor.log` | `paddock-supervisor-upgrade.service` | the journal of the supervisor's own upgrade |
+| `journal/paddock-encrypt.log` | `paddock-encrypt*` | the journal of the disk encryption units |
+| `journal/paddock-uninstall.log` | `paddock-uninstall.service` | the journal of an uninstallation |
+| `journal/himmelblaud.log` | `himmelblaud.service` | the journal of Himmelblau's daemon |
+| `journal/himmelblaud-tasks.log` | `himmelblaud-tasks.service` | the journal of Himmelblau's task daemon |
+
+Each journal holds the last 7 days, newest first, cut at 8 MiB; the content of all entries together is cut at about
+24 MiB. An entry the device lacks (for example `/etc/crypttab` on an unencrypted device) is listed in `manifest.json`
+with an error instead of a file.
+
+**How it leaves the device.** The agent writes the archive to `/var/lib/paddock/diagnostics` (readable by root only),
+seals it with a random key that only the escrow-reader can unwrap (the same protection as a disk recovery key),
+uploads the sealed object to the escrow bucket and deletes the local file. Nobody with access to the bucket can read
+the content. The api decrypts it only for one download by an organization administrator or operator after a step-up:
+for that download the escrow-reader unwraps the key and the api opens the object, so the api holds the plaintext for
+the duration of that request and does not keep it.
+
+**Who requests and who reads it.** Organization administrators and operators request a bundle in the portal (device
+tab *Diagnostics*) or with an API token, and must give a reason (2 to 500 characters). Only organization
+administrators and operators download a bundle, each time after a fresh identity confirmation (step-up); an API token
+never downloads. Auditors see the audit events of a bundle but never the bundle, the list or the tab; platform
+administrators have no access. Organization administrators can delete (purge) a bundle at any time.
+
+**What the user is told.** Before collecting, the agent shows a desktop notification in every active graphical session
+of the device, in German when the device's locale is German and in English otherwise. The administrator's name is not
+shown:
+
+- English, title *Paddock: diagnostic data collected*, text:
+  `Paddock collected diagnostic data from this device for your administrator. Reason: <reason>. What was collected: Paddock's own logs and configuration, no personal files.`
+- German, title *Paddock: Diagnosedaten erfasst*, text:
+  `Paddock hat für Ihre Administration Diagnosedaten von diesem Gerät erfasst. Grund: <reason>. Erfasst wurden: die eigenen Protokolle und die Konfiguration von Paddock, keine persönlichen Dateien.`
+
+`<reason>` is the administrator's text. The notice is best effort: a device without a graphical session, or one where
+the desktop cannot show notifications, shows nothing; the number of sessions reached is recorded with the bundle
+(RR-109). Name the diagnostics bundle in the organization's information to employees.
+
+**How long it is kept.** The sealed bundle is deleted 7 days after it was stored, together with its key material
+(`retention.purged`, store `device_diagnostics`), or at once when an administrator purges it. What stays is the record
+of the request for the retention of the organization's actions: who asked, when, the reason, the device, the state,
+the size, the SHA-256 and how often and when it was last downloaded; who downloaded it is in the audit trail.
+
+**What the audit trail holds.** Every step is one audit event: `device.diagnostics_requested` (with the reason),
+`device.diagnostics_collected` (the SHA-256, size, file count and the number of sessions notified),
+`device.diagnostics_downloaded` (with the SHA-256) and `device.diagnostics_purged`. The audit trail and the WORM store
+hold the hash of a bundle, never its content.
+
 ## Administrators
 
 Paddock stores of its administrators the account (user name, display name, organization, role, portal language),
 and in every audit event of their actions the actor's name, the client IP address and whether the action had a
 step-up. API tokens (`paddockctl`) are stored only as hashes, with their name, creator and expiry. Audit events are kept for
 the retention of the WORM store (at least 400 days) and cannot be deleted earlier. Searches of the audit log are
-recorded as `audit.searched` when the organization switches it on; evidence exports are always recorded
-(`audit.export_requested`, `audit.export_downloaded`). How long each store is kept: `docs/compliance/retention.md`.
+recorded as `audit.searched` when the organization switches it on; opening the access review report is recorded as `access_review.viewed` (once per actor and day) under the same
+switch; evidence exports are always recorded (`audit.export_requested`, `audit.export_downloaded`), and so is every
+export of the access review (`access_review.exported`, `platform.access_review_exported`; the platform administrators'
+view is `platform.access_review_viewed`, always recorded). How long each store is kept: `docs/compliance/retention.md`.
 
 Paddock snapshots the membership of its portal role groups (`paddock.<slug>.admins`, `.operators`, `.auditors`,
 `paddock.platform.admins`) and the set of Authentik superusers every 5 minutes: user name and Authentik ID per role,

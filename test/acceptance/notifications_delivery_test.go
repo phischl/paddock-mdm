@@ -115,11 +115,12 @@ func verifySignature(t *testing.T, r sink.Request, secret, destination string) {
 
 type destinationState struct {
 	State struct {
-		Status    string  `json:"status"`
-		Cursor    int64   `json:"cursor_commit_seq"`
-		Forward   int64   `json:"forward_seq"`
-		LastError *string `json:"last_error"`
-		LastTest  *struct {
+		Status        string  `json:"status"`
+		Cursor        int64   `json:"cursor_commit_seq"`
+		Forward       int64   `json:"forward_seq"`
+		LastError     *string `json:"last_error"`
+		LastSuccessAt *string `json:"last_success_at"`
+		LastTest      *struct {
 			OK    bool    `json:"ok"`
 			Error *string `json:"error"`
 		} `json:"last_test"`
@@ -395,7 +396,11 @@ func TestNotificationsIsolation(t *testing.T) {
 		waitStarted(t, sc.u.Portal, sc.collection+"/"+sc.dest.ID)
 	}
 	groupA, groupB := namedGroup(t, a.Portal, "n7a"), namedGroup(t, b.Portal, "n7b")
-	second, _ := createDestination(t, root, platformDestinations, webhookBody(destinationName("n7p"), scopes[2].s.URL()))
+	// The second platform destination only produces the platform event; disabled, it never delivers into the
+	// platform scope's sink, which must hold messages of that scope's destination alone.
+	secondBody := webhookBody(destinationName("n7p"), scopes[2].s.URL())
+	secondBody["enabled"] = false
+	second, _ := createDestination(t, root, platformDestinations, secondBody)
 	for _, w := range []struct {
 		sc     *scope
 		target string

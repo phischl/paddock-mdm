@@ -170,6 +170,10 @@ type Agent struct {
 	lastSoftwareDigest string
 	lastSoftwareFullAt time.Time
 	softwarePending    string
+	// diagnosticsJobs feeds the diagnostics worker, one collection at a time; diagnosticsDone returns its results to
+	// the loop (plan M12 decision 10).
+	diagnosticsJobs chan diagnosticsJob
+	diagnosticsDone chan diagnosticsDone
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -232,7 +236,8 @@ func New(d Deps) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{d: d, st: st, installJobs: make(chan installJob, installQueue), installDone: make(chan installDone, installQueue),
-		conversionJobs: make(chan struct{}, 1), conversionCalls: make(chan func())}
+		conversionJobs: make(chan struct{}, 1), conversionCalls: make(chan func()),
+		diagnosticsJobs: make(chan diagnosticsJob, diagnosticsQueue), diagnosticsDone: make(chan diagnosticsDone, diagnosticsQueue)}
 	if d.Inventory != nil {
 		d.Inventory.UpdatesAllowed = a.updatesAllowed
 	}
@@ -252,6 +257,7 @@ func New(d Deps) (*Agent, error) {
 			command.TypeUninstall:           a.uninstallCommand,
 			command.TypeEncryptDisk:         a.encryptDiskCommand,
 			command.TypeEncryptDiskAbort:    a.encryptDiskAbortCommand,
+			command.TypeCollectStatus:       a.collectStatusCommand,
 		}), d.Now)
 	}
 	if a.d.Spool == nil {
@@ -310,9 +316,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	// is staging before its request.json exists (PDK-075) or report the daemon's running install_now as interrupted
 	// and race its state writes (PDK-081).
 	a.sweepStaging()
+	a.sweepDiagnostics()
 	a.reportInterruptedInstalls()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Registered before wg.Wait, so it runs after the diagnostics worker is joined and nothing sends any more.
+	defer a.drainDiagnostics()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -328,6 +337,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.d.Sys != nil {
 		// Not waited for: an installation in progress outlives the run loop (runInstalls).
 		go a.runInstalls(ctx)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.runDiagnostics(ctx)
+		}()
 	}
 	// Before the worker starts: the I2 check of plan M8e §14.10 decides before a preparation is re-queued.
 	a.startConversion(ctx)
@@ -369,6 +383,8 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 			a.reportUpdateRuns(ctx)
 		case d := <-a.installDone:
 			a.finishInstall(d)
+		case d := <-a.diagnosticsDone:
+			a.finishDiagnostics(d)
 		case fn := <-a.conversionCalls:
 			fn()
 		case <-sessionPoll.C:

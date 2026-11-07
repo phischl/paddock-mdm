@@ -67,7 +67,7 @@ func TestValidateDestination(t *testing.T) {
 		"empty name":     {webhook(func(d *outbound.Destination) { d.Name = "" }), outbound.ErrInvalidName},
 		"long name":      {webhook(func(d *outbound.Destination) { d.Name = strings.Repeat("a", 65) }), outbound.ErrInvalidName},
 		"name symbol":    {webhook(func(d *outbound.Destination) { d.Name = "-x" }), outbound.ErrInvalidName},
-		"type":           {webhook(func(d *outbound.Destination) { d.Type = "syslog" }), outbound.ErrInvalidType},
+		"type":           {webhook(func(d *outbound.Destination) { d.Type = "sms" }), outbound.ErrInvalidType},
 		"mode":           {webhook(func(d *outbound.Destination) { d.FilterMode = "some" }), outbound.ErrInvalidFilterMode},
 		"custom empty":   {webhook(func(d *outbound.Destination) { d.FilterMode = outbound.FilterCustom }), outbound.ErrInvalidCodes},
 		"custom 201":     {webhook(func(d *outbound.Destination) { d.FilterMode, d.Codes = outbound.FilterCustom, unregistered }), outbound.ErrInvalidCodes},

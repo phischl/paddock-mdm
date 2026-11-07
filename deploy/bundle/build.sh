@@ -68,19 +68,21 @@ mkdir -p "$dir"
 # development-only scripts stay out.
 shipped=(
   compose.yaml compose.prod.yaml compose.backup.yaml compose.audit.yaml compose.audit.prod.yaml compose.lab.yaml
-  compose.auto-unseal.yaml
+  compose.auto-unseal.yaml compose.backup-legacy-key.yaml
   caddy/Caddyfile.prod caddy/Caddyfile.lab caddy/guards.caddy caddy/entrypoint.sh
   nginx/paddock.conf.example
   openbao/config.hcl openbao/prod.hcl
   rabbitmq/rabbitmq.conf rabbitmq/enabled_plugins rabbitmq/tls.conf rabbitmq/definitions.json.tmpl
   valkey/valkey.conf
-  postgres/init/10-roles.sh audit-postgres/init/10-roles.sh
+  postgres/provision-roles.sh
   authentik/entrypoint.sh
-  fleet/entrypoint.sh fleet/backup.sh fleet/backup-upload.sh
+  fleet/entrypoint.sh fleet/backup.sh
   prometheus/prometheus.yml prometheus/alerts.yml prometheus/scrape/controlplane.yml prometheus/scrape/audit.yml
-  prometheus/scrape/auto-unseal.yml
+  prometheus/scrape/auto-unseal.yml prometheus/scrape/backup.yml
   scripts/lib.sh scripts/gen-prod-secrets.sh scripts/openbao-configure.sh scripts/rustfs-bundles-bootstrap.sh
   scripts/rustfs-audit-bootstrap.sh scripts/fleet-bootstrap.sh scripts/wait-healthy.sh scripts/postgres-unsealer-role.sh
+  scripts/upgrade-check.sh scripts/upgrade.sh scripts/rollback.sh scripts/restore.sh
+  scripts/openbao-restore.sh scripts/legacy-alpha8.sh scripts/bundle-seq.sh
 )
 for f in "$src"/authentik/blueprints/*.yaml; do shipped+=("authentik/blueprints/$(basename "$f")"); done
 
@@ -99,6 +101,10 @@ copy "$here/paddock" "$dir/paddock"
 chmod 0755 "$dir/paddock"
 copy "$src/prod.env.example" "$dir/.env.example"
 copy "$src/lab.env.example" "$dir/.env.lab.example"
+copy "$src/retired-settings" "$dir/RETIRED-SETTINGS"
+# The bundle sequence's high-water file lives here (decisions-alpha9 item 68): compose.backup.yaml bind-mounts the
+# directory, which postgres hands to uid 999 on every start; shipped empty so that Docker does not create it.
+mkdir -m 0755 "$dir/bundle-seq"
 
 # versions.env: the third-party images of the stack (everything above the build and tooling images) and the three
 # Paddock images of this version (decision 12).
@@ -111,6 +117,26 @@ grep -q '^# Build and tooling images$' "$src/versions.env" || fail "deploy/compo
   printf 'PADDOCK_PGBACKREST_IMAGE=%s\n' "$(image pgbackrest)"
 } >"$dir/versions.env"
 chmod 0644 "$dir/versions.env"
+
+# RELEASES and RELEASE-NOTES: what ./paddock upgrade-check needs and an offline host cannot look up (ADR 0047 decision 3).
+# RELEASES lists the release sections of CHANGELOG.md, oldest first, and a stable bundle's own version; a bundle of
+# another channel is no release, so its version stays out and the check says so. RELEASE-NOTES holds the Schema,
+# Upgrade and Agents lines of this version's section.
+changelog="$here/../../CHANGELOG.md"
+if [[ -f "$changelog" ]]; then
+  # A bundle built from a tree whose changelog already has newer sections (a rebuild of an older release) must not
+  # list releases newer than itself, or the upgrade check would treat them as installed history. awk reads to the end
+  # because an early exit would kill tac with SIGPIPE under pipefail.
+  sed -n 's/^## \[\([^]]*\)\] - [0-9-]*$/\1/p' "$changelog" | tac |
+    awk -v v="$version" 'done { next } { print } $0 == v { done = 1 }' >"$dir/RELEASES"
+  awk -v h="## [$version] - " 'index($0, h) == 1 { on = 1; next } /^## / { on = 0 } on && /^(Schema|Upgrade|Agents): /' \
+    "$changelog" >"$dir/RELEASE-NOTES"
+else
+  : >"$dir/RELEASES"
+  : >"$dir/RELEASE-NOTES"
+fi
+if [[ "$channel" == stable ]] && ! grep -qxF "$version" "$dir/RELEASES"; then echo "$version" >>"$dir/RELEASES"; fi
+chmod 0644 "$dir/RELEASES" "$dir/RELEASE-NOTES"
 
 printf 'version=%s\nchannel=%s\ncommit=%s\nbuilt=%s\n' "$version" "$channel" "$commit" "$built" >"$dir/VERSION"
 chmod 0644 "$dir/VERSION"
@@ -158,7 +184,6 @@ for host in controlplane audit lab; do
   args=()
   for f in $files; do args+=(-f "$dir/$f"); done
   if ! rendered="$(env -u PADDOCK_IMAGE -u PADDOCK_COMPILER_IMAGE -u PADDOCK_PGBACKREST_IMAGE \
-    PADDOCK_BACKUP_S3_ENDPOINT=https://backup-s3.example.org \
     docker compose --project-directory "$dir" -p paddock-bundle-check --env-file "$dir/versions.env" \
     --env-file "$dir/$settings" "${args[@]}" --profile '*' config 2>&1)"; then
     printf '%s\n' "$rendered" >&2

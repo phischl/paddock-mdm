@@ -13,7 +13,10 @@ type Sort = components['parameters']['NotificationDestinationSort']
 /** Where a destination page works: the organization's destinations or the platform's (plan M9 decision 36). */
 export type NotificationScope = 'organization' | 'platform'
 
-/** What the form edits; the URL is write-only and empty unless the administrator types a new one. */
+/**
+ * What the form edits; the URL and the syslog CA bundle are write-only and empty unless the administrator types a new
+ * one. syslogPort 0 means the default port 6514.
+ */
 export interface NotificationInput {
   type: NotificationDestinationType
   name: string
@@ -26,6 +29,11 @@ export interface NotificationInput {
   heartbeatIntervalS: number
   recipients: string[]
   emailMinIntervalS: number
+  syslogHost: string
+  syslogPort: number
+  syslogCaPem: string
+  syslogServerName: string
+  checkpoints: boolean
 }
 
 /** The answer of an operation: the problem code with the server's detail when it sent one. */
@@ -37,6 +45,11 @@ export interface NotificationProblem {
 export const namePattern = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/
 export const maxCodes = 200
 export const maxRecipients = 20
+export const defaultSyslogPort = 6514
+/** The size limit of a syslog destination's CA bundle (plan M12 decision 17). */
+export const maxSyslogCaPem = 16 * 1024
+const dnsNamePattern = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/
+const ipPattern = /^(\d{1,3}(\.\d{1,3}){3}|[0-9A-Fa-f:]*:[0-9A-Fa-f:.]*)$/
 /** How long and how often the portal asks for the result of a test or a pseudonym lookup (plan M9 decision 36). */
 export const pollIntervalMs = 2000
 export const pollTimeoutMs = 30_000
@@ -47,7 +60,7 @@ export const pseudonymStepUpAction = 'notification-resolve'
 export const pseudonymPattern = /^u_[0-9a-f]{24}$/
 
 const csrf = { 'X-Paddock-CSRF': '1' } as const
-const types: NotificationDestinationType[] = ['webhook', 'email']
+const types: NotificationDestinationType[] = ['webhook', 'email', 'syslog']
 
 /** Filters of the destination list. */
 export const notificationFilters: ListFilter[] = [
@@ -63,33 +76,63 @@ export function emptyInput(): NotificationInput {
   return {
     type: 'webhook', name: '', enabled: true, filterMode: 'security', codes: [], pseudonymizeUsers: false,
     includeParams: false, url: '', heartbeatIntervalS: 0, recipients: [], emailMinIntervalS: 300,
+    syslogHost: '', syslogPort: defaultSyslogPort, syslogCaPem: '', syslogServerName: '', checkpoints: false,
   }
 }
 
-/** The form of a stored destination; the URL stays empty (it is never returned). */
+/** The form of a stored destination; the URL and the CA bundle stay empty (they are never returned). */
 export function inputOf(d: NotificationDestination): NotificationInput {
   return {
     type: d.type, name: d.name, enabled: d.enabled, filterMode: d.filter_mode, codes: [...d.codes],
     pseudonymizeUsers: d.pseudonymize_users, includeParams: d.include_params, url: '',
     heartbeatIntervalS: d.heartbeat_interval_s, recipients: [...d.recipients], emailMinIntervalS: d.email_min_interval_s,
+    syslogHost: d.syslog_host ?? '', syslogPort: d.syslog_port ?? defaultSyslogPort, syslogCaPem: '',
+    syslogServerName: d.syslog_server_name ?? '', checkpoints: d.checkpoints,
   }
 }
 
 /** The fields validation and server problems are shown at. */
-export type NotificationField = 'name' | 'type' | 'url' | 'codes' | 'recipients' | 'heartbeat' | 'interval'
+export type NotificationField =
+  'name' | 'type' | 'url' | 'codes' | 'recipients' | 'heartbeat' | 'interval' | 'syslogHost' | 'syslogPort' | 'syslogCaPem'
+  | 'syslogServerName'
 
 export type NotificationErrors = Partial<Record<NotificationField, string>>
 
-/** Validates an input like the server (plan M9 decision 9); returns message keys by field. */
+/** Whether a heartbeat interval is 0 (off) or 60–3600 seconds. */
+function validHeartbeat(s: number): boolean {
+  return s === 0 || (s >= 60 && s <= 3600)
+}
+
+/** The PEM blocks of a CA bundle; the server parses each certificate, the form checks the shape and the size. */
+function validCaPem(pem: string): boolean {
+  const blocks = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? []
+  const rest = blocks.reduce((text, b) => text.replace(b, ''), pem).trim()
+  return blocks.length > 0 && rest === '' && new TextEncoder().encode(pem).length <= maxSyslogCaPem
+}
+
+/**
+ * Validates an input like the server (plan M9 decision 9, plan M12 decision 17); returns message keys by field. Whether
+ * a syslog host is a public address is decided by the server, which resolves it.
+ */
 export function validateNotification(input: NotificationInput, editing: boolean, knownCodes: readonly string[]): NotificationErrors {
   const errors: NotificationErrors = {}
   if (!namePattern.test(input.name)) errors.name = 'notifications.nameInvalid'
   if (input.type === 'webhook') {
     if (!editing && input.url.trim() === '') errors.url = 'notifications.urlRequired'
     else if (input.url.trim() !== '' && !input.url.trim().startsWith('https://')) errors.url = 'notifications.urlHttps'
-    if (input.heartbeatIntervalS !== 0 && (input.heartbeatIntervalS < 60 || input.heartbeatIntervalS > 3600)) {
-      errors.heartbeat = 'notifications.heartbeatInvalid'
+    if (!validHeartbeat(input.heartbeatIntervalS)) errors.heartbeat = 'notifications.heartbeatInvalid'
+  } else if (input.type === 'syslog') {
+    const host = input.syslogHost.trim()
+    if (host === '' || host.length > 253 || !(dnsNamePattern.test(host) || ipPattern.test(host))) {
+      errors.syslogHost = 'notifications.syslogHostInvalid'
     }
+    if (!Number.isInteger(input.syslogPort) || input.syslogPort < 1 || input.syslogPort > 65535) {
+      errors.syslogPort = 'notifications.syslogPortInvalid'
+    }
+    if (input.syslogCaPem.trim() !== '' && !validCaPem(input.syslogCaPem.trim())) errors.syslogCaPem = 'notifications.syslogCaInvalid'
+    const sn = input.syslogServerName.trim()
+    if (sn !== '' && (sn.length > 253 || !dnsNamePattern.test(sn))) errors.syslogServerName = 'notifications.syslogServerNameInvalid'
+    if (!validHeartbeat(input.heartbeatIntervalS)) errors.heartbeat = 'notifications.heartbeatInvalid'
   } else {
     if (input.recipients.length < 1 || input.recipients.length > maxRecipients) errors.recipients = 'notifications.recipientsCount'
     else if (input.recipients.some((r) => !/^[^\s@,;<>]+@[^\s@,;<>]+$/.test(r))) errors.recipients = 'notifications.recipientsInvalid'
@@ -120,6 +163,10 @@ export function fieldOfProblem(p: NotificationProblem): NotificationField | null
     case 'invalid_request': {
       const d = p.detail ?? ''
       if (/^(invalid webhook URL|webhook host|a webhook destination requires url|an e-mail destination has no url)/.test(d)) return 'url'
+      if (d.startsWith('syslog_host') || d === 'a syslog destination has no url') return 'syslogHost'
+      if (d.startsWith('syslog_port')) return 'syslogPort'
+      if (d.startsWith('syslog_ca_pem')) return 'syslogCaPem'
+      if (d.startsWith('syslog_server_name')) return 'syslogServerName'
       if (d.startsWith('heartbeat_interval_s')) return 'heartbeat'
       if (d.startsWith('recipients')) return 'recipients'
       if (d.startsWith('email_min_interval_s')) return 'interval'
@@ -147,15 +194,32 @@ function problemOf(error: unknown): NotificationProblem {
   return { code: problemCode(error), detail }
 }
 
+/** The type-specific fields of a body: the URL is sent only when typed, the CA bundle likewise (absent keeps it). */
+function typeFields(i: NotificationInput): Partial<CreateBody> {
+  switch (i.type) {
+    case 'webhook':
+      return i.url.trim() !== '' ? { url: i.url.trim() } : {}
+    case 'syslog':
+      return {
+        syslog_host: i.syslogHost.trim(), syslog_port: i.syslogPort,
+        ...(i.syslogServerName.trim() !== '' ? { syslog_server_name: i.syslogServerName.trim() } : {}),
+        ...(i.syslogCaPem.trim() !== '' ? { syslog_ca_pem: i.syslogCaPem.trim() + '\n' } : {}),
+      }
+    default:
+      return { recipients: i.recipients }
+  }
+}
+
 function createBody(i: NotificationInput, scope: NotificationScope): CreateBody {
-  const webhook = i.type === 'webhook'
+  const email = i.type === 'email'
   return {
     type: i.type, name: i.name, enabled: i.enabled, filter_mode: i.filterMode,
     codes: i.filterMode === 'custom' ? i.codes : [],
     pseudonymize_users: scope === 'organization' && i.pseudonymizeUsers, include_params: i.includeParams,
-    heartbeat_interval_s: webhook ? i.heartbeatIntervalS : 0,
-    email_min_interval_s: webhook ? emptyInput().emailMinIntervalS : i.emailMinIntervalS,
-    ...(webhook ? (i.url.trim() !== '' ? { url: i.url.trim() } : {}) : { recipients: i.recipients }),
+    heartbeat_interval_s: email ? 0 : i.heartbeatIntervalS,
+    email_min_interval_s: email ? i.emailMinIntervalS : emptyInput().emailMinIntervalS,
+    checkpoints: !email && i.checkpoints,
+    ...typeFields(i),
   }
 }
 
@@ -252,6 +316,27 @@ export async function requestTest(scope: NotificationScope, id: string): Promise
   const { error } = scope === 'platform'
     ? await api.POST('/api/platform/v1/notification-destinations/{id}/test', { params })
     : await api.POST('/api/v1/notification-destinations/{id}/test', { params })
+  return error ? problemOf(error) : null
+}
+
+/**
+ * The first forward sequence number of a replay as typed (plan M12 decision 21): a whole number from 1 to the last
+ * number sent, otherwise null.
+ */
+export function replayFrom(value: string, last: number): number | null {
+  const text = value.trim()
+  if (!/^[0-9]+$/.test(text)) return null
+  const n = Number(text)
+  return Number.isSafeInteger(n) && n >= 1 && n <= last ? n : null
+}
+
+/** Asks the notifier to resend the stored batches from the forward sequence number from on; null when requested. */
+export async function requestReplay(scope: NotificationScope, id: string, from: number): Promise<NotificationProblem | null> {
+  const params = { path: { id }, header: csrf }
+  const body = { from_forward_seq: from }
+  const { error } = scope === 'platform'
+    ? await api.POST('/api/platform/v1/notification-destinations/{id}/replay', { params, body })
+    : await api.POST('/api/v1/notification-destinations/{id}/replay', { params, body })
   return error ? problemOf(error) : null
 }
 

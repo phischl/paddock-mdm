@@ -1,6 +1,6 @@
 // Package device is the device API of the gateway role (api/openapi/device.yaml, plan M2a §6.2): request signature
-// verification in the order of architecture §6.3, rate limits, and the enrollment, check-in, event, command result
-// and escrow endpoints.
+// verification in the order of architecture §6.3, rate limits, and the enrollment, check-in, event, command result,
+// escrow and diagnostics endpoints.
 // The gateway reads only Valkey and writes only to RabbitMQ (and nonces, sequence numbers and enrollment requests to
 // Valkey); it has no database credentials.
 package device
@@ -90,6 +90,9 @@ type Deps struct {
 	CheckinDelay func() int // seconds until the next check-in; default 300 × U(0.8, 1.2)
 	// TrustedProxies may name the client through X-Paddock-Client-IP (plan M7a decision 5).
 	TrustedProxies []netip.Prefix
+	// AgentOutsideWindow reports whether an agent version is outside the server's support window (ADR 0013
+	// amendment 2026-11-04); nil judges no version outside.
+	AgentOutsideWindow func(agentVersion string) bool
 }
 
 type gateway struct{ d Deps }
@@ -117,6 +120,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("POST /v1/commands/{command_id}/result", g.commandResult)
 	mux.HandleFunc("POST /v1/escrow", g.escrowUpload)
 	mux.HandleFunc("GET /v1/escrow/{escrow_id}", g.escrowStatus)
+	mux.HandleFunc("POST /v1/diagnostics", g.diagnosticsUpload)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, errNotFound)
 	})

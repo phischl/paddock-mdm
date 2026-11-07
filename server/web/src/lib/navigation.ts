@@ -49,6 +49,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
     items: [
       { to: '/devices', label: 'nav.devices', icon: 'laptop', shortcut: 'g d', visible: orgReader },
       { to: '/device-groups', label: 'nav.deviceGroups', icon: 'folder', visible: orgReader },
+      { to: '/diagnostics', label: 'nav.diagnostics', icon: 'file-check', visible: (a) => a.canWrite, testid: 'nav-diagnostics' },
       { to: '/enrollment-tokens', label: 'nav.enrollmentTokens', icon: 'ticket', visible: (a) => a.canWrite },
     ],
   },
@@ -73,6 +74,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
     label: 'nav.groups.security',
     items: [
       { to: '/security-review', label: 'nav.securityReview', icon: 'triangle-alert', visible: orgReader },
+      { to: '/access-review', label: 'nav.accessReview', icon: 'users', visible: (a) => a.canReadAudit, testid: 'nav-access-review' },
       { to: '/revocations', label: 'nav.revocations', icon: 'lock', visible: (a) => a.canDelete },
       { to: '/settings/dms', label: 'nav.dms', icon: 'timer', visible: orgReader },
       { to: '/settings/watched-units', label: 'nav.watchedUnits', icon: 'shield-check', visible: orgReader },
@@ -113,7 +115,9 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/platform/ip-allowlist', label: 'nav.ipAllowlist', icon: 'globe-lock', visible: (a) => a.isPlatform },
       { to: '/platform/sessions', label: 'nav.sessions', icon: 'log-in', visible: (a) => a.isPlatform },
       { to: '/platform/openbao', label: 'nav.openbao', icon: 'shield-check', visible: (a) => a.isPlatform },
+      { to: '/platform/backup', label: 'nav.backup', icon: 'hard-drive', visible: (a) => a.isPlatform, testid: 'nav-platform-backup' },
       { to: '/platform/notifications', label: 'nav.platformNotifications', icon: 'bell', visible: (a) => a.isPlatform, testid: 'nav-platform-notifications' },
+      { to: '/platform/access-review', label: 'nav.platformAccessReview', icon: 'users', visible: (a) => a.isPlatform, testid: 'nav-platform-access-review' },
       { to: '/platform/mcp', label: 'nav.platformMcp', icon: 'cog', visible: (a) => a.isPlatform },
     ],
   },

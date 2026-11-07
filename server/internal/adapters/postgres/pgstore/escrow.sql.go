@@ -88,6 +88,23 @@ func (q *Queries) DeviceHeaderVolumeKnown(ctx context.Context, arg DeviceHeaderV
 	return i, err
 }
 
+const escrowRefusedAfterDestroy = `-- name: EscrowRefusedAfterDestroy :one
+SELECT EXISTS (SELECT 1 FROM escrow_refusal WHERE id = $1 AND device_id = $2)
+`
+
+type EscrowRefusedAfterDestroyParams struct {
+	ID       uuid.UUID
+	DeviceID uuid.UUID
+}
+
+// Whether the device's upload was refused for an issued Destroy (PDK-794): a redelivered message is refused again.
+func (q *Queries) EscrowRefusedAfterDestroy(ctx context.Context, arg EscrowRefusedAfterDestroyParams) (bool, error) {
+	row := q.db.QueryRow(ctx, escrowRefusedAfterDestroy, arg.ID, arg.DeviceID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const finishEscrowHeader = `-- name: FinishEscrowHeader :execrows
 UPDATE escrow_secret SET status = $1 WHERE id = $2 AND status = 'pending'
 `
@@ -103,6 +120,48 @@ func (q *Queries) FinishEscrowHeader(ctx context.Context, arg FinishEscrowHeader
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getDiagnosticsKeys = `-- name: GetDiagnosticsKeys :many
+SELECT id, organization_id, device_id, state, wrapped_dek, key_version FROM device_diagnostics WHERE id = ANY($1::uuid[])
+`
+
+type GetDiagnosticsKeysRow struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	State          string
+	WrappedDek     []byte
+	KeyVersion     *int32
+}
+
+// The escrow-reader's view of diagnostics bundles (purpose diagnostics, PDK-749): only what unwrapping a bundle's key
+// needs (the column grant of migration 00106).
+func (q *Queries) GetDiagnosticsKeys(ctx context.Context, ids []uuid.UUID) ([]GetDiagnosticsKeysRow, error) {
+	rows, err := q.db.Query(ctx, getDiagnosticsKeys, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetDiagnosticsKeysRow{}
+	for rows.Next() {
+		var i GetDiagnosticsKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.DeviceID,
+			&i.State,
+			&i.WrappedDek,
+			&i.KeyVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getEscrowSecret = `-- name: GetEscrowSecret :one
@@ -216,6 +275,37 @@ func (q *Queries) InsertEscrowHeader(ctx context.Context, arg InsertEscrowHeader
 		arg.Size,
 		arg.CreatedAt,
 		arg.Volume,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertEscrowRefusal = `-- name: InsertEscrowRefusal :execrows
+INSERT INTO escrow_refusal (id, organization_id, device_id, kind, generation, reason, created_at)
+VALUES ($1, $2, $3, $4, $5, 'destroy_issued', $6)
+ON CONFLICT (organization_id, id) DO NOTHING
+`
+
+type InsertEscrowRefusalParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Kind           string
+	Generation     int32
+	CreatedAt      time.Time
+}
+
+// The natural key of a refusal for an issued Destroy, without key material; a redelivered message is not audited again.
+func (q *Queries) InsertEscrowRefusal(ctx context.Context, arg InsertEscrowRefusalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertEscrowRefusal,
+		arg.ID,
+		arg.OrganizationID,
+		arg.DeviceID,
+		arg.Kind,
+		arg.Generation,
+		arg.CreatedAt,
 	)
 	if err != nil {
 		return 0, err

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -848,5 +849,19 @@ func TestEnsurePartitionIsIdempotent(t *testing.T) {
 	}
 	if !s.partitionExists(t, "public.audit_event_2001_10") {
 		t.Error("audit_event_2001_10 not created")
+	}
+}
+
+// TestPurgerRejectsRetentionOutOfRange: an index retention the database parameter cannot hold stops the run before
+// the database is read, instead of being truncated into a different cutoff.
+func TestPurgerRejectsRetentionOutOfRange(t *testing.T) {
+	writer, err := auditwriter.NewWriter(nil, nil, 400)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	tooLong := int(int64(math.MaxInt32) + 1)
+	_, err = auditwriter.NewPurger(nil, writer, tooLong).Run(context.Background(), false)
+	if err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("Run with %d days = %v, want an out-of-range error", tooLong, err)
 	}
 }

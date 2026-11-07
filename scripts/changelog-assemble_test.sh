@@ -54,6 +54,8 @@ EOF
   printf -- '- Dependency bump.\n' >"$1/changelog.d/deps-go.added.md"
   printf -- '- Changed one.\n- Changed two.\n' >"$1/changelog.d/PDK-100.changed.md"
   printf -- '- Security fix.\n' >"$1/changelog.d/PDK-3.security.md"
+  printf 'Upgrade: from 0.1.0-alpha.8: automatic\nAgents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9\n' \
+    >"$1/changelog.d/_release.md"
   git -C "$1" init -q
   git -C "$1" add -A
   git -C "$1" -c user.name=t -c user.email=t@example.org commit -qm init
@@ -97,6 +99,8 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 ## [1.2.0-rc.1] - 2026-10-29
 
 Schema: migrations 00072–00073.
+Upgrade: from 0.1.0-alpha.8: automatic
+Agents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9
 
 ### Added
 
@@ -147,7 +151,7 @@ bash "$script" --version 1.2.0-rc.1 --schema 'migrations 00072–00073.' --date 
   --changelog "$repo/CHANGELOG.md" --dir "$repo/changelog.d" 2>/dev/null
 same "release assembles the section" "$work/expected-changelog" "$repo/CHANGELOG.md"
 removed="$(printf 'D  changelog.d/%s\n' PDK-100.changed.md PDK-12.added.md PDK-3.security.md PDK-9.added.md \
-  deps-go.added.md | sort)"
+  deps-go.added.md _release.md | sort)"
 if [[ "$(git -C "$repo" status --porcelain -- changelog.d | sort)" == "$removed" && -f "$repo/changelog.d/README.md" ]]
 then
   pass "release git rm's every fragment and keeps README.md"
@@ -175,11 +179,40 @@ for bad in "--version 1.2.0" "--schema unchanged" "--version v1.2.0 --schema unc
 done
 same "refusals leave CHANGELOG.md untouched" "$work/refuse.before" "$repo/CHANGELOG.md"
 
+# _release.md (PDK-740): the release refuses a missing or malformed file and leaves CHANGELOG.md untouched.
+# release_refused <name> <_release.md content or "-" for none> <expected message>
+release_refused() {
+  local d="$work/relref-$1"
+  setup "$d"
+  if [[ "$2" == - ]]; then rm "$d/changelog.d/_release.md"; else printf '%b' "$2" >"$d/changelog.d/_release.md"; fi
+  cp "$d/CHANGELOG.md" "$work/relref.before"
+  if bash "$script" --version 1.2.0 --schema unchanged --changelog "$d/CHANGELOG.md" --dir "$d/changelog.d" \
+    2>"$work/err"; then
+    fail "release accepted $1"
+  elif grep -qF -- "$3" "$work/err" && cmp -s "$work/relref.before" "$d/CHANGELOG.md"; then
+    pass "release refuses $1"
+  else
+    fail "release $1: $(cat "$work/err")"
+  fi
+}
+release_refused "a missing _release.md" - 'missing'
+release_refused "a missing Agents line" 'Upgrade: from 0.1.0-alpha.8: automatic\n' "'Agents: supports"
+release_refused "a missing Upgrade line" 'Agents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9\n' "'Upgrade: from"
+release_refused "an Upgrade line without automatic or steps" \
+  'Upgrade: from 0.1.0-alpha.8: maybe\nAgents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9\n' "'Upgrade: from"
+release_refused "an Agents line with two versions" \
+  'Upgrade: from 0.1.0-alpha.8: automatic\nAgents: supports 0.1.0-alpha.8, 0.1.0-alpha.9\n' "'Agents: supports"
+release_refused "other text" \
+  'Upgrade: from 0.1.0-alpha.8: steps: run ./paddock upgrade\nAgents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9\nnote\n' \
+  'only the Upgrade'
+
 # Regression (review 1): [Unreleased] followed directly by a version heading, and [Unreleased] as the last section.
 repo="$work/adjacent"
 mkdir -p "$repo/changelog.d"
 printf '# Changelog\n\n## [Unreleased]\n## [0.1.0] - 2026-01-01\n\n- Old.\n' >"$repo/CHANGELOG.md"
 printf -- '- New.\n' >"$repo/changelog.d/PDK-1.added.md"
+printf '%s\n' 'Upgrade: from 0.1.0-alpha.8: automatic' \
+  'Agents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9' >"$repo/changelog.d/_release.md"
 adjacent=(--changelog "$repo/CHANGELOG.md" --dir "$repo/changelog.d")
 printf '## [Unreleased]\n\n### Added\n\n- New.\n' >"$work/expected-adjacent-preview"
 bash "$script" --preview "${adjacent[@]}" >"$work/adjacent-preview.out"
@@ -196,6 +229,8 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 ## [0.2.0] - 2026-10-29
 
 Schema: unchanged.
+Upgrade: from 0.1.0-alpha.8: automatic
+Agents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9
 
 ### Added
 
@@ -211,6 +246,8 @@ repo="$work/last"
 mkdir -p "$repo/changelog.d"
 printf '# Changelog\n\n## [Unreleased]\n' >"$repo/CHANGELOG.md"
 printf -- '- New.\n' >"$repo/changelog.d/PDK-1.fixed.md"
+printf '%s\n' 'Upgrade: from 0.1.0-alpha.8: automatic' \
+  'Agents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9' >"$repo/changelog.d/_release.md"
 bash "$script" --version 0.1.0 --schema unchanged --date 2026-10-29 --changelog "$repo/CHANGELOG.md" \
   --dir "$repo/changelog.d" 2>/dev/null
 cat >"$work/expected-last" <<'EOF'
@@ -223,6 +260,8 @@ Entries of merged changes that are not released yet are in `changelog.d/`.
 ## [0.1.0] - 2026-10-29
 
 Schema: unchanged.
+Upgrade: from 0.1.0-alpha.8: automatic
+Agents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9
 
 ### Fixed
 
@@ -260,6 +299,16 @@ reject "a non-bullet start" PDK-1.added.md '  indented only\n' "does not start w
 reject "CRLF line endings" PDK-1.added.md '- Entry.\r\n' 'carriage returns'
 reject "a bad file name" 'PDK 1.added.md' '- Entry.\n' 'name is not'
 reject "a missing section" PDK-1.md '- Entry.\n' 'name is not'
+
+# Check: a malformed _release.md fails the lint too.
+d="$work/check-release"
+rm -rf "$d" && mkdir -p "$d"
+printf 'Upgrade: from 0.1.0-alpha.8: maybe\n' >"$d/_release.md"
+if bash "$script" --check --changelog "$repo/CHANGELOG.md" --dir "$d" 2>"$work/err"; then
+  fail "check accepted a malformed _release.md"
+else
+  pass "check refuses a malformed _release.md"
+fi
 
 if ((failures)); then
   echo "changelog-assemble_test: $failures failure(s)" >&2

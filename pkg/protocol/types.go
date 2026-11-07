@@ -19,6 +19,8 @@ const (
 	CodeBackpressure     = "backpressure"
 	CodePayloadTooLarge  = "payload_too_large"
 	CodeConflict         = "conflict"
+	// CodeAlreadyUploaded refuses a second announcement of a diagnostics bundle (plan M12 decision 2).
+	CodeAlreadyUploaded = "already_uploaded"
 )
 
 // Problem is the RFC 9457 body of device API errors. 401 responses carry ServerTime.
@@ -150,6 +152,29 @@ const MaxCommandResult = 4 << 10
 type CommandResult struct {
 	Status string          `json:"status"`
 	Result json.RawMessage `json:"result,omitempty"`
+}
+
+// MaxDiagnosticsObject bounds the sealed diagnostics bundle of POST /v1/diagnostics (ADR 0048 decision 2).
+const MaxDiagnosticsObject = 32 << 20
+
+// DiagnosticsRequest is the body of POST /v1/diagnostics (plan M12 decision 2): the delivered collect_status command
+// and the facts of the sealed bundle the device uploads next — hex SHA-256 and size of the sealed object, and the
+// standard base64 AES-GCM nonce and the data key wrapped to the bundle's escrow_wrap key.
+type DiagnosticsRequest struct {
+	CommandID  string `json:"command_id"`
+	SHA256     string `json:"sha256"`
+	Size       int64  `json:"size"`
+	Nonce      string `json:"nonce"`
+	WrappedDEK string `json:"wrapped_dek"`
+	// KeyVersion is the version of escrow-wrap the data key is wrapped with (PDK-749, additive under ADR 0013): an
+	// agent before it omits the field.
+	KeyVersion int `json:"key_version,omitempty"`
+}
+
+// DiagnosticsResponse answers POST /v1/diagnostics with the presigned PUT of the bundle's object.
+type DiagnosticsResponse struct {
+	DiagnosticsID string `json:"diagnostics_id"`
+	UploadURL     string `json:"upload_url"`
 }
 
 // Device event types accepted by POST /v1/events (closed set, plan M2a decision 14, M2b decision 23, M3a decision

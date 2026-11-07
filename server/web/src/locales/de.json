@@ -108,6 +108,7 @@
   },
   "nav": {
     "deviceGroups": "Gerätegruppen",
+    "diagnostics": "Diagnose",
     "audit": "Audit-Protokoll",
     "auditIntegrity": "Nachweisintegrität",
     "auditExports": "Nachweis-Exporte",
@@ -120,6 +121,7 @@
     "ipAllowlist": "IP-Freigabeliste",
     "sessions": "Sitzungen",
     "openbao": "OpenBao",
+    "backup": "Backup",
     "platformMcp": "MCP-Richtlinie",
     "users": "Benutzer",
     "userGroups": "Gruppen",
@@ -160,7 +162,9 @@
     "platformNotifications": "Plattform-Benachrichtigungen",
     "configRollouts": "Konfigurations-Rollouts",
     "softwareSources": "Paketquellen",
-    "softwareCatalog": "Softwarekatalog"
+    "softwareCatalog": "Softwarekatalog",
+    "accessReview": "Zugriffsprüfung",
+    "platformAccessReview": "Plattform-Zugriffsprüfung"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -315,9 +319,13 @@
     "email_not_configured": "Diese Installation hat kein E-Mail-Relay, daher können E-Mail-Ziele nicht aktiviert werden.",
     "unknown_code": "Einer der Audit-Codes ist nicht registriert.",
     "notification_test_pending": "Ein früherer Test dieses Ziels wartet noch auf sein Ergebnis. Versuchen Sie es gleich noch einmal.",
+    "notification_replay_pending": "Das Ziel wiederholt gerade einen Stapel, oder ein früheres erneutes Senden läuft noch. Warten Sie, bis es abgeschlossen ist, oder deaktivieren Sie das Ziel, und senden Sie dann erneut.",
     "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal.",
     "rollout_conflict": "Ein laufender oder angehaltener Rollout staffelt diesen Eintrag. Schließen Sie den Rollout ab oder machen Sie seinen Änderungssatz zuerst rückgängig.",
-    "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend."
+    "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend.",
+    "backup_key_mismatch": "Die Zeichen passen nicht zum Schlüssel.",
+    "backup_target_state_unchanged": "Das Ziel hat diesen Zustand bereits.",
+    "backup_key_discarded_after_mismatches": "Der Schlüssel wurde nach drei falschen Bestätigungen verworfen. Erzeugen Sie einen neuen."
   },
   "audit": {
     "vulnerability": {
@@ -438,10 +446,15 @@
       "tamper_agent_not_running": "fleetd meldet, dass der Paddock-Agent auf {target} nicht läuft",
       "revocation_trust_pinned_tofu": "Das Gerät {target} hat die Widerrufsschlüssel seines ersten Bundles, das sie enthielt, festgeschrieben (Trust on First Use)",
       "escrow_destroyed": "Die in der Treuhand-Ablage hinterlegten Festplattenschlüssel von {hostname} wurden vernichtet und die Vernichtung des Geräts wurde ausgestellt",
+      "escrow_refused_destroyed": "Ein Festplattenschlüssel von {target} wurde nicht hinterlegt: Die Vernichtung des Geräts ist ausgestellt",
       "revocation_confirmed": "Das Gerät {target} hat bestätigt, dass seine Keyslots gelöscht sind",
       "revocation_refused": "Das Gerät {target} hat einen Widerruf abgelehnt ({reason})",
       "presumed_self_locked": "Das Gerät {target} hat Paddock länger als die Frist des Totmannschalters nicht erreicht und hat sich vermutlich selbst gesperrt",
       "install_now_requested": "{actor} hat {target} beauftragt, {packages} sofort zu installieren",
+      "diagnostics_requested": "{actor} hat {target} um ein Diagnosepaket gebeten",
+      "diagnostics_collected": "Das Gerät {target} hat ein Diagnosepaket hochgeladen ({files, number} Dateien)",
+      "diagnostics_downloaded": "{actor} hat das Diagnosepaket von {hostname} heruntergeladen",
+      "diagnostics_purged": "{actor} hat das Diagnosepaket von {hostname} gelöscht",
       "updates_run": "Das Gerät {target} hat seine {kind, select, security {Sicherheitsupdates} regular {regulären Updates} other {Updates ({kind})}} abgeschlossen: {result, select, ok {{upgraded, number} Pakete aktualisiert} timeout {Zeitüberschreitung} other {fehlgeschlagen}}",
       "software_installed": "Das Gerät {target} hat {package} {version} installiert",
       "software_reinstalled": "Das Gerät {target} hat festgestellt, dass {package} lokal entfernt wurde, und es erneut installiert ({version})",
@@ -497,6 +510,7 @@
     "platform": {
       "osv_stale": "Die Schwachstellendaten von Ubuntu wurden seit 3 Tagen nicht aktualisiert",
       "bundle_seq_bumped": "{actor} hat die Bundle-Sequenz von {devices} Geräten um {by} erhöht (Wiederherstellung)",
+      "bundle_seq_raised": "{actor} hat die Bundle-Sequenz von {devices} Geräten auf mindestens {at_least} angehoben (Wiederherstellung)",
       "cache_rebuilt": "{actor} hat den Geräte-Cache von {organizations} Organisationen neu aufgebaut (Wiederherstellung)",
       "osv_imported": "Die Schwachstellendaten von Ubuntu wurden aus einer Datei importiert ({entries, number} Einträge)",
       "ip_allowlist_changed": "{action, select, added {{actor} hat {cidr} ({label}) zur IP-Freigabeliste hinzugefügt} updated {{actor} hat den Eintrag {previous_cidr} der IP-Freigabeliste zu {cidr} ({label}) geändert} other {{actor} hat {cidr} ({label}) aus der IP-Freigabeliste entfernt}}",
@@ -506,7 +520,26 @@
       "auto_unseal_enabled": "{actor} hat das automatische Entsiegeln von OpenBao aktiviert und den Hinweis {disclaimer_version} bestätigt",
       "auto_unseal_disabled": "{method, select, cli {Das automatische Entsiegeln von OpenBao wurde auf dem Host deaktiviert} other {{actor} hat das automatische Entsiegeln von OpenBao deaktiviert}}",
       "openbao_auto_unsealed": "{failures, plural, =0 {Der Unsealer hat OpenBao automatisch entsiegelt ({unseals, number} Mal seit dem letzten Bericht)} other {Der Unsealer konnte OpenBao nicht entsiegeln ({failures, number} Fehlversuche, letzter Grund {last_failure_reason})}}",
-      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Plattform geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}"
+      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Plattform geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}",
+      "backup_key_generated": "{legacy, select, true {Der Sicherungsschlüssel aus der Host-Datei wurde importiert und wartet auf seine Bestätigung} other {{actor} hat den Sicherungsschlüssel {key_id} erzeugt (Fingerabdruck {fingerprint})}}",
+      "backup_key_confirmed": "{actor} hat den Sicherungsschlüssel {key_id} bestätigt (Fingerabdruck {fingerprint})",
+      "backup_key_discarded": "{actor} hat den Sicherungsschlüssel {key_id} verworfen",
+      "access_review_viewed": "{actor} hat den Plattform-Zugriffsreview geöffnet",
+      "access_review_exported": "{actor} hat den Plattform-Zugriffsreview vom {from} bis {to} als {format} exportiert",
+      "backup_target_created": "{actor} hat das Sicherungsziel {name} ({type}) hinzugefügt",
+      "backup_target_updated": "{change, select, enabled {{actor} hat das Sicherungsziel {name} aktiviert} disabled {{actor} hat das Sicherungsziel {name} deaktiviert} other {{actor} hat das Sicherungsziel {name} geändert (Host-Revision {host_revision})}}",
+      "backup_target_deleted": "{actor} hat das Sicherungsziel {name} ({type}) gelöscht",
+      "backup_target_tested": "{actor} hat einen Verbindungstest des Sicherungsziels {name} angefordert",
+      "backup_schedule_changed": "{actor} hat den Sicherungsplan geändert: Vollsicherung alle {full_interval_hours} h, {retention_full} Vollsicherungen aufbewahrt",
+      "backup_run_requested": "{actor} hat eine sofortige Sicherung angefordert",
+      "backup_completed": "Die Sicherung {kind} ist abgeschlossen und hat {targets_ok} Ziele erreicht",
+      "backup_failed": "Die Sicherung {kind} ist fehlgeschlagen ({error_class})",
+      "restore_planned": "Wiederherstellungsplan freigegeben ({kind}, aus {source})",
+      "restore_cancelled": "Wiederherstellungsplan abgebrochen",
+      "restore_started": "Wiederherstellung auf dem Host gestartet (aus {source})",
+      "restore_completed": "Wiederherstellung auf dem Host abgeschlossen",
+      "restore_failed": "Wiederherstellung auf dem Host fehlgeschlagen ({detail})",
+      "restore_abandoned": "Laufender Wiederherstellungsplan aufgegeben"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
@@ -626,7 +659,14 @@
       "pseudonym_resolved": "{actor} hat das Pseudonym {pseudonym} aufgelöst",
       "delivered": "{count} Ereignisse an {destination} zugestellt",
       "destination_stalled": "Zustellungen an {destination} stocken ({last_error})",
+      "replay_requested": "{actor} hat erneutes Senden an {name} ab Sequenznummer {from_forward_seq} angefordert",
+      "replayed": "Stapel {forward_from}–{forward_to} erneut an {target} gesendet",
+      "checkpoint_sent": "Prüfpunkt für {day} ({event_count} Ereignisse) an {target} gesendet",
       "destination_resumed": "Zustellungen an {destination} laufen nach {stalled_for_s} s wieder"
+    },
+    "access_review": {
+      "viewed": "{actor} hat den Zugriffsreview geöffnet",
+      "exported": "{actor} hat den Zugriffsreview vom {from} bis {to} als {format} exportiert"
     }
   },
   "organizations": {
@@ -1221,6 +1261,7 @@
       "access": "Anmeldung & sudo",
       "configuration": "Konfiguration",
       "applyStatus": "Anwendungsstatus",
+      "diagnostics": "Diagnose",
       "commands": "Befehle",
       "audit": "Audit",
       "managedSoftware": "Verwaltete Software"
@@ -1357,6 +1398,51 @@
         "enforce": "Durchgesetzt",
         "report_only": "Berichtsmodus"
       }
+    }
+  },
+  "diagnostics": {
+    "title": "Diagnosepakete",
+    "summary": "Paddocks eigene Protokolle und Konfiguration dieses Geräts, auf Anforderung gesammelt. Ein Paket wird 7 Tage aufbewahrt; jeder Download erfordert eine neue Identitätsbestätigung und wird im Audit-Log festgehalten.",
+    "fleetSummary": "Alle Diagnosepakete der Organisation. Ein Paket fordern Sie im Reiter Diagnose eines Geräts an. Ein Paket wird 7 Tage aufbewahrt; jeder Download erfordert eine neue Identitätsbestätigung und wird im Audit-Log festgehalten.",
+    "hostname": "Gerät",
+    "requestedAt": "Angefordert",
+    "requestedBy": "Angefordert von",
+    "reason": "Grund",
+    "state": "Status",
+    "size": "Größe",
+    "downloads": "Downloads",
+    "expiresAt": "Gelöscht am",
+    "failedReason": "Fehlgeschlagen: {reason}",
+    "notNotified": "Benutzer nicht benachrichtigt",
+    "notNotifiedHint": "Keine grafische Sitzung auf dem Gerät hat den Hinweis angezeigt: Niemand war angemeldet, oder der Hinweis konnte nicht zugestellt werden. Der Benutzer erfährt von dem Bündel nur aus dem Transparenzhinweis der Organisation.",
+    "download": "Herunterladen",
+    "downloadLabel": "Diagnosepaket von {hostname} herunterladen",
+    "states": {
+      "requested": "Angefordert",
+      "uploaded": "Hochgeladen",
+      "stored": "Gespeichert",
+      "failed": "Fehlgeschlagen",
+      "expired": "Abgelaufen",
+      "purged": "Gelöscht"
+    },
+    "empty": {
+      "title": "Keine Diagnosepakete",
+      "description": "Ein Paket wird nur gesammelt, wenn ein Administrator oder Operator es für ein Gerät anfordert."
+    },
+    "request": {
+      "open": "Diagnose anfordern",
+      "title": "Diagnose anfordern",
+      "explanation": "Paddock sammelt seine eigenen Protokolle und seine Konfiguration von diesem Gerät – sonst nichts. Der Benutzer wird auf dem Gerät informiert. Geben Sie einen Grund an; er wird dem Benutzer angezeigt und festgehalten.",
+      "contentList": "Was ein Paket enthält",
+      "reasonInvalid": "Geben Sie einen Grund mit 2 bis {max} Zeichen an.",
+      "submit": "Anfordern",
+      "done": "Das Gerät sammelt das Paket bei seiner nächsten Meldung."
+    },
+    "purge": {
+      "label": "Löschen",
+      "title": "Diagnosepaket löschen",
+      "confirm": "Das Diagnosepaket von {hostname} jetzt löschen? Archiv und Schlüssel werden gelöscht und lassen sich nicht wiederherstellen; wer es angefordert und heruntergeladen hat, bleibt festgehalten.",
+      "ariaLabel": "Diagnosepaket von {hostname} löschen"
     }
   },
   "tokens": {
@@ -1535,6 +1621,276 @@
       "typePrompt": "Geben Sie zur Bestätigung diesen Satz ein:",
       "typeLabel": "Bestätigungssatz",
       "sentence": "Ich verstehe und akzeptiere das Risiko"
+    }
+  },
+  "backup": {
+    "title": "Backup",
+    "summary": "Sicherungen der Datenbanken der Kontrollebene, des OpenBao-Snapshots und des Escrows, gespiegelt auf die Ziele unten und mit einem Schlüssel geschützt.",
+    "on": "An",
+    "off": "Aus",
+    "tabs": {
+      "overview": "Übersicht",
+      "targets": "Ziele",
+      "key": "Schlüssel",
+      "schedule": "Zeitplan",
+      "history": "Verlauf",
+      "restore": "Wiederherstellung"
+    },
+    "kinds": {
+      "postgres": "Datenbanken",
+      "authentik": "Identitätsanbieter",
+      "openbao": "OpenBao",
+      "fleet": "Fleet",
+      "escrow": "Escrow"
+    },
+    "outcomes": {
+      "succeeded": "Erfolgreich",
+      "failed": "Fehlgeschlagen"
+    },
+    "states": {
+      "requested": "Angefordert",
+      "running": "Läuft",
+      "finished": "Beendet"
+    },
+    "hostStates": {
+      "n/a": "Nicht zutreffend",
+      "pending_host": "Wartet auf den Host",
+      "mounted": "Eingehängt",
+      "unreachable": "Nicht erreichbar"
+    },
+    "tests": {
+      "waiting": "Test angefordert",
+      "never": "Nicht getestet",
+      "ok": "Test bestanden",
+      "failed": "Test fehlgeschlagen"
+    },
+    "kindStates": {
+      "ok": "Gesichert",
+      "failed": "Fehlgeschlagen",
+      "never": "Nie"
+    },
+    "run": {
+      "title": "Jetzt sichern",
+      "confirm": "Das startet eine Sicherung aller Arten. Der Backup-Dienst führt sie in seiner nächsten Runde aus.",
+      "now": "Jetzt sichern",
+      "requested": "Die Sicherung wurde angefordert."
+    },
+    "overview": {
+      "grid": "Letzte erfolgreiche Sicherung je Ziel",
+      "noTargets": "Noch kein Ziel. Legen Sie eines im Reiter Ziele an.",
+      "repo": "Lokales Repository",
+      "repoUnknown": "Der Backup-Dienst hat das Repository noch nicht gemeldet.",
+      "repoUsage": "{used} belegt, {free} frei",
+      "lastRuns": "Letzte Läufe"
+    },
+    "targets": {
+      "type": "Typ",
+      "types": {
+        "local": "Lokales Verzeichnis",
+        "smb": "SMB-Freigabe",
+        "nfs": "NFS-Export",
+        "s3": "S3-Bucket"
+      },
+      "enabled": "Aktiv",
+      "hostState": "Host-Status",
+      "test": "Testen",
+      "nameInvalid": "Der Name muss mit einem Buchstaben oder einer Ziffer beginnen und darf Buchstaben, Ziffern, Leerzeichen und . _ - enthalten (bis 64 Zeichen).",
+      "nameHint": "Buchstaben, Ziffern, Leerzeichen und . _ -",
+      "nameTaken": "Ein Ziel mit diesem Namen gibt es schon.",
+      "pathInvalid": "Geben Sie einen relativen Unterpfad des lokalen Backup-Verzeichnisses ohne \"..\" und ohne führendes \"/\" an.",
+      "required": "Dieses Feld ist erforderlich.",
+      "passwordAgain": "Das Ziel hat sich geändert: Geben Sie das Passwort erneut ein.",
+      "passwordChars": "Das Passwort darf kein Komma und kein Leerzeichen enthalten: Beides lässt sich nicht an die Einbindung der Freigabe übergeben. Wählen Sie ein anderes Passwort für die Freigabe.",
+      "keysAgain": "Das Ziel oder die Schlüssel haben sich geändert: Geben Sie beide Schlüssel erneut ein.",
+      "exportInvalid": "Geben Sie einen absoluten Export-Pfad an.",
+      "endpointInvalid": "Geben Sie eine https-URL an.",
+      "localPath": "Verzeichnis auf dem Host",
+      "localPathHint": "Ein Unterpfad des lokalen Backup-Verzeichnisses des Hosts der Kontrollebene (PADDOCK_BACKUP_LOCAL_ROOT, Standard /srv/paddock-backup), zum Beispiel nas/weekly.",
+      "host": "Host",
+      "share": "Freigabe",
+      "subPath": "Pfad darunter (optional)",
+      "domain": "Domäne (optional)",
+      "username": "Benutzername",
+      "password": "Passwort",
+      "unchanged": "unverändert",
+      "secretHint": "Verschlüsselt gespeichert, nie wieder angezeigt.",
+      "smbPasswordHint": "Kein Komma und keine Leerzeichen. Verschlüsselt gespeichert, nie wieder angezeigt.",
+      "options": "Mount-Optionen (optional)",
+      "smbOptionsHint": "Kommagetrennt: vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N.",
+      "nfsOptionsHint": "Kommagetrennt: vers=4|4.1|4.2, hard, timeo=N, retrans=N, nconnect=N.",
+      "export": "Export",
+      "endpoint": "Endpunkt",
+      "bucket": "Bucket",
+      "region": "Region (optional)",
+      "regionHint": "Standard us-east-1.",
+      "prefix": "Präfix (optional)",
+      "caPem": "CA-Zertifikate (optional)",
+      "caPemHint": "PEM-Zertifikate einer privaten CA, auf die der Endpunkt verweist.",
+      "accessKey": "Zugriffsschlüssel",
+      "secretKey": "Geheimer Schlüssel",
+      "saved": "Das Ziel wurde gespeichert.",
+      "deleted": "Das Ziel {name} wurde gelöscht.",
+      "enabledDone": "Das Ziel {name} ist aktiv.",
+      "disabledDone": "Das Ziel {name} ist deaktiviert.",
+      "deleteTitle": "Dieses Ziel löschen?",
+      "deleteConfirm": "Die Sicherungssätze auf {name} bleiben bestehen, es wird aber keine weitere Sicherung dorthin geschrieben.",
+      "disableTitle": "Dieses Ziel deaktivieren?",
+      "disableConfirm": "Auf {name} wird keine Sicherung mehr geschrieben, bis es wieder aktiviert wird.",
+      "disable": "Deaktivieren",
+      "enable": "Aktivieren",
+      "create": "Ziel hinzufügen",
+      "createTitle": "Backup-Ziel hinzufügen",
+      "editTitle": "Backup-Ziel bearbeiten",
+      "testLabel": "{name} testen",
+      "disableLabel": "{name} deaktivieren",
+      "enableLabel": "{name} aktivieren",
+      "editLabel": "{name} bearbeiten",
+      "deleteLabel": "{name} löschen",
+      "hostStep": "Das Einhängen einer Freigabe braucht den Host: Führen Sie {apply} und danach {up} auf der Kontrollebene aus. Das Ziel zeigt \"Eingehängt\", sobald der Backup-Dienst es sieht.",
+      "reenter": "Ihre Identität wurde bestätigt. Geben Sie die Zugangsdaten erneut ein; sie bleiben nie im Browser.",
+      "testWaiting": "{name} wird getestet. Der Backup-Dienst antwortet in seiner nächsten Runde.",
+      "testOk": "Der Verbindungstest von {name} war erfolgreich.",
+      "testError": "Der Verbindungstest von {name} ist fehlgeschlagen: {error}",
+      "testUnknown": "unbekannter Fehler",
+      "testTimeout": "Der Backup-Dienst hat den Test von {name} noch nicht beantwortet. Prüfen Sie die Liste später.",
+      "empty": {
+        "title": "Kein Backup-Ziel",
+        "description": "Legen Sie ein lokales Verzeichnis, eine Freigabe oder einen S3-Bucket an, um Sicherungen außerhalb des Repositorys aufzubewahren."
+      }
+    },
+    "runs": {
+      "kind": "Art",
+      "outcome": "Ergebnis",
+      "startedAt": "Gestartet",
+      "size": "Größe",
+      "targets": "Ziele",
+      "targetsOk": "{ok} von {total} Zielen",
+      "continues": "(wird in der nächsten Runde fortgesetzt)",
+      "empty": {
+        "title": "Noch keine Sicherung gelaufen",
+        "description": "Läufe erscheinen hier nach der ersten Sicherung."
+      }
+    },
+    "key": {
+      "dialog": {
+        "title1": "Backup-Schlüssel",
+        "title2": "Backup-Schlüssel aufbewahren",
+        "title3": "Backup-Schlüssel bestätigen"
+      },
+      "explain": "Paddock schützt jede Sicherung mit einem Schlüssel. Sie sehen ihn genau einmal. Bewahren Sie ihn dort auf, wo ein verlorener Server ihn nicht mitnimmt — in einem Passwortmanager, als Ausdruck im Tresor — und zusammen mit den OpenBao-Entsiegelungsanteilen. Ohne den Schlüssel lässt sich keine Sicherung je lesen.",
+      "shownOnce": "Nur jetzt zeigt Paddock den Schlüssel.",
+      "keyText": "Backup-Schlüssel",
+      "fingerprint": "Fingerabdruck: {fingerprint}",
+      "download": "Herunterladen",
+      "fileSentence": "Dies ist die einzige Kopie, die Paddock je zeigt. Bewahren Sie sie außerhalb des Servers auf.",
+      "confirmText": "Geben Sie die Zeichen an den angezeigten Positionen ein. Das beweist, dass der Schlüssel Ihren sicheren Ort erreicht hat. Nach drei Fehlern wird der Schlüssel verworfen und ein neuer erzeugt.",
+      "positionsGroup": "Zeichen des Schlüssels",
+      "position": "Position {n}",
+      "attemptsLeft": "{count, plural, =0 {Kein Versuch übrig.} one {Das passt nicht. Noch # Versuch.} other {Das passt nicht. Noch # Versuche.}}",
+      "generate": "Schlüssel erzeugen",
+      "discardTitle": "Backup-Schlüssel verwerfen?",
+      "discardConfirm": "Der Schlüssel wird vernichtet und kann nicht erneut angezeigt werden. Bis Sie einen neuen Schlüssel erzeugen und bestätigen, ist kein Backup möglich. Haben Sie ihn noch nicht gesichert, ist das die richtige Wahl.",
+      "discardAction": "Schlüssel verwerfen",
+      "discard": "Ich habe den Schlüssel nicht gesichert — verwerfen",
+      "stored": "Ich habe den Schlüssel gesichert",
+      "confirm": "Bestätigen",
+      "discarded": "Der Schlüssel wurde verworfen. Erzeugen Sie einen neuen.",
+      "confirmed": "Der Schlüssel ist bestätigt und aktiv.",
+      "statePending": "Ein Backup-Schlüssel wartet auf seine Bestätigung. Vorher läuft keine Sicherung.",
+      "stateActive": "Ein Backup-Schlüssel ist aktiv.",
+      "stateNone": "Noch kein Backup-Schlüssel. Keine Sicherung läuft, bevor einer erzeugt und bestätigt ist.",
+      "fingerprintColumn": "Fingerabdruck",
+      "retiredAt": "Außer Dienst",
+      "pendingText": "Der Schlüssel {fingerprint} wartet auf seine Bestätigung.",
+      "confirmNow": "Schlüssel bestätigen",
+      "active": "Aktiver Schlüssel",
+      "activeSince": "Bestätigt von {by}",
+      "rotate": "Schlüssel wechseln",
+      "create": "Schlüssel erzeugen",
+      "retired": "Ausgemusterte Schlüssel",
+      "noRetired": "Kein ausgemusterter Schlüssel"
+    },
+    "schedule": {
+      "saved": "Der Zeitplan wurde gespeichert.",
+      "range": "{min}–{max}",
+      "invalid": "Geben Sie eine ganze Zahl von {min} bis {max} ein.",
+      "fields": {
+        "full_interval_hours": "Vollsicherung alle (Stunden)",
+        "openbao_interval_hours": "OpenBao-Snapshot alle (Stunden)",
+        "fleet_interval_hours": "Fleet-Dump alle (Stunden)",
+        "escrow_interval_hours": "Escrow-Spiegelung alle (Stunden)",
+        "retention_full": "Aufbewahrte Vollsicherungen",
+        "openbao_keep_days": "Aufbewahrte OpenBao-Snapshots (Tage)",
+        "fleet_keep_days": "Aufbewahrte Fleet-Dumps (Tage)"
+      }
+    },
+    "restore": {
+      "planAction": "Wiederherstellung planen",
+      "planTitle": "Wiederherstellung planen",
+      "commandTitle": "Wiederherstellung auf dem Host ausführen",
+      "consequence": "Die Wiederherstellung ersetzt die Datenbanken der Kontrollebene durch das Backup. Jede Änderung nach dem gewählten Zeitpunkt geht verloren. Geräte arbeiten weiter und verbinden sich neu; das Audit-Log auf dem Audit-Host bleibt unberührt.",
+      "kind": "Was wiederhergestellt wird",
+      "kinds": {
+        "components": "Die neuesten Backups der Komponenten",
+        "point_in_time": "Der Stand zu einem Zeitpunkt",
+        "fresh_install": "Neuinstallation"
+      },
+      "source": "Wiederherstellen aus",
+      "sourceRepo": "Dem lokalen Backup-Repository",
+      "at": "Zeitpunkt",
+      "atHint": "Oben stehen die neuesten erfolgreichen Backups der Quelle. Die Zeit gilt in Ihrer Zeitzone.",
+      "atInvalid": "Wählen Sie einen Zeitpunkt in der Vergangenheit.",
+      "noSuccess": "kein erfolgreiches Backup",
+      "components": "Komponenten",
+      "componentNames": {
+        "postgres": "Datenbanken (Paddock und Identitätsanbieter)",
+        "openbao": "OpenBao",
+        "fleet": "Fleet",
+        "escrow": "Escrow",
+        "backup-repo": "Backup-Repository"
+      },
+      "componentsInvalid": "Wählen Sie mindestens eine Komponente.",
+      "typeWord": "Zur Bestätigung {word} eingeben",
+      "wordInvalid": "Geben Sie das Wort {word} genau so ein.",
+      "approve": "Wiederherstellungsplan freigeben",
+      "commandIntro": "Der Plan ist freigegeben. Führen Sie diesen Befehl auf dem Host der Kontrollebene aus.",
+      "commandLabel": "Host-Befehl",
+      "expiresIn": "Der Plan läuft in {hours} h {minutes} min ab, am",
+      "expired": "Der Plan ist abgelaufen, er galt bis",
+      "done": "Fertig",
+      "created": "Der Wiederherstellungsplan wurde freigegeben.",
+      "showCommand": "Befehl anzeigen",
+      "cancelAction": "Plan abbrechen",
+      "cancelTitle": "Wiederherstellungsplan abbrechen",
+      "cancelConfirm": "Der Host lehnt diesen Plan dann ab. Sie können danach einen neuen freigeben.",
+      "cancelled": "Der Wiederherstellungsplan wurde abgebrochen.",
+      "cancelLabel": "Wiederherstellungsplan vom {time} abbrechen",
+      "abandonAction": "Plan aufgeben",
+      "abandonTitle": "Laufenden Wiederherstellungsplan aufgeben",
+      "abandonConfirm": "Nur wenn der Host das Ende der Wiederherstellung nie gemeldet hat. Der Plan gilt als aufgegeben, eine spätere Meldung des Hosts wird abgelehnt. Die Kontrollebene kann teilweise wiederhergestellt sein, prüfen Sie daher zuerst den Host.",
+      "abandoned": "Der Wiederherstellungsplan wurde aufgegeben.",
+      "abandonLabel": "Wiederherstellungsplan vom {time} aufgeben",
+      "showLabel": "Host-Befehl des Plans vom {time} anzeigen",
+      "state": "Zustand",
+      "states": {
+        "approved": "Freigegeben",
+        "running": "Läuft",
+        "completed": "Abgeschlossen",
+        "failed": "Fehlgeschlagen",
+        "expired": "Abgelaufen",
+        "abandoned": "Aufgegeben"
+      },
+      "source_column": "Quelle",
+      "createdBy": "Freigegeben von",
+      "pointInTime": "Zeitpunkt",
+      "components_column": "Komponenten",
+      "newest": "Neueste Backups",
+      "sourceSet": "Backup-Satz des Hosts",
+      "sourceTargetGone": "Gelöschtes Ziel",
+      "empty": {
+        "title": "Noch keine Wiederherstellung geplant",
+        "description": "Eine hier freigegebene Wiederherstellung wird auf dem Host mit dem danach angezeigten Befehl ausgeführt."
+      }
     }
   },
   "changeSets": {
@@ -2590,6 +2946,77 @@
     "deniedIntro": "Paddock verwaltet diese Pfade nicht mehr. Agents dieses Releases oder neuer lassen die Dateien auf den Geräten unverändert; ein älterer Agent löscht eine unveränderte Datei, sobald sie nicht mehr verteilt wird. Löschen Sie die Definitionen, die Sie nicht mehr brauchen.",
     "deleteDefinition": "Definition löschen"
   },
+  "accessReview": {
+    "title": "Zugriffsprüfung",
+    "platformTitle": "Plattform-Zugriffsprüfung",
+    "intro": "Wer in dieser Organisation in einem Zeitraum was durfte: Rollenmitglieder und -änderungen, Administratorkonten, API-Token, Offenlegungen von Geheimnissen, Step-ups, beendete Sitzungen und zerstörende Aktionen. Jede Liste zeigt höchstens die Zeilen des Berichts und nennt ihre Gesamtzahl.",
+    "platformIntro": "Wer die Plattform in einem Zeitraum verwalten durfte: Mitglieder und Änderungen der Plattformrolle, Administratoren, privilegierte Plattformereignisse und angelegte Organisationen.",
+    "generatedAt": "Bericht erstellt",
+    "exportJson": "JSON exportieren",
+    "exportCsv": "CSV exportieren",
+    "stepUp": "Step-ups im Zeitraum: {succeeded, plural, one {# erfolgreiche Aktion} other {# erfolgreiche Aktionen}} von Step-up-Sitzungen, {failed, plural, one {# Ablehnung} other {# Ablehnungen}} wegen fehlendem Step-up.",
+    "tokenDenials": "{count, plural, one {# Anfrage wurde} other {# Anfragen wurden}} wegen eines widerrufenen oder abgelaufenen Tokens oder eines inaktiven Erstellers abgelehnt.",
+    "capNotice": "{shown, number} von {total, number} Zeilen angezeigt. Verkürzen Sie den Zeitraum, um den Rest zu sehen; der Export enthält dieselben Zeilen.",
+    "yes": "Ja",
+    "no": "Nein",
+    "period": {
+      "label": "Zeitraum",
+      "days": "Letzte {days, number} Tage",
+      "from": "Von",
+      "to": "Bis",
+      "apply": "Eigener Zeitraum"
+    },
+    "errors": {
+      "dates": "Geben Sie den ersten und den letzten Tag ein.",
+      "order": "Der letzte Tag darf nicht vor dem ersten liegen.",
+      "tooLong": "Der Zeitraum darf höchstens 400 Tage umfassen."
+    },
+    "forbidden": {
+      "title": "Kein Zugriff auf die Zugriffsprüfung",
+      "description": "Nur Administratoren und Auditoren können die Zugriffsprüfung sehen."
+    },
+    "empty": {
+      "title": "Nichts in diesem Zeitraum",
+      "description": "Keine Zeilen passen zum Zeitraum oder zur Suche."
+    },
+    "sections": {
+      "roles": "Rollenmitglieder",
+      "roleChanges": "Rollenänderungen",
+      "accounts": "Administratorkonten",
+      "tokens": "API-Token",
+      "reveals": "Offenlegungen und Downloads von Geheimnissen",
+      "sessionsRevoked": "Beendete Sitzungen",
+      "destructive": "Zerstörende und sperrende Aktionen",
+      "breakGlass": "Break-Glass-Konten",
+      "administrators": "Plattform-Administratoren",
+      "platformEvents": "Privilegierte Plattformereignisse",
+      "organizationsCreated": "Angelegte Organisationen"
+    },
+    "columns": {
+      "role": "Rolle",
+      "username": "Benutzer",
+      "firstSeen": "Erstmals gesehen",
+      "at": "Zeit",
+      "code": "Aktion",
+      "actor": "Akteur",
+      "displayName": "Name",
+      "lastLogin": "Letzte Anmeldung",
+      "disabled": "Deaktiviert",
+      "name": "Name",
+      "prefix": "Präfix",
+      "createdBy": "Erstellt von",
+      "createdAt": "Erstellt",
+      "expiresAt": "Läuft ab",
+      "lastUsed": "Zuletzt benutzt",
+      "revokedAt": "Widerrufen",
+      "revokedBy": "Widerrufen von",
+      "device": "Gerät",
+      "params": "Details",
+      "reason": "Grund",
+      "target": "Ziel",
+      "slug": "Slug"
+    }
+  },
   "mcp": {
     "title": "KI-Assistenten (MCP)",
     "intro": "Administratoren melden sich mit ihrem Paddock-Konto beim MCP an (paddockctl mcp login) und handeln mit ihrer eigenen Rolle. Diese Richtlinie begrenzt, was jede MCP-Sitzung dieser {scope} tun darf. Änderungen brauchen zusätzlich den eigenen Schreibzugriff des Administrators.",
@@ -2652,6 +3079,24 @@
       }
     }
   },
+  "upgradeCard": {
+    "title": "Upgrade",
+    "version": "Release {version}",
+    "window": "Unterstützte Agents",
+    "agents": "Agents außerhalb des Fensters",
+    "noneOutside": "Kein aktives Gerät nutzt einen Agent außerhalb des Fensters.",
+    "outside": "{count, plural, one {# aktives Gerät nutzt einen Agent außerhalb des Fensters:} other {# aktive Geräte nutzen einen Agent außerhalb des Fensters:}}",
+    "more": "und {count} weitere",
+    "backups": "Backups",
+    "loading": "Der Upgrade-Bericht wird gelesen …",
+    "unknownVersion": "Kein Upgrade-Bericht für diese Server-Version: sie ist kein bekanntes Release.",
+    "status": {
+      "PASS": "In Ordnung",
+      "WARN": "Warnung",
+      "FAIL": "Fehlgeschlagen",
+      "INFO": "Info"
+    }
+  },
   "setup": {
     "title": "Paddock einrichten",
     "progress": "{done} von {total} Schritten erledigt",
@@ -2667,6 +3112,7 @@
       "organization": "Erste Organisation anlegen",
       "orgAdmin": "Ersten Organisationsadministrator im Identity Provider zuweisen",
       "release": "Agent-Release veröffentlichen",
+      "backup": "Plattform sichern (Schlüssel bestätigen, Ziel aktivieren)",
       "allowlist": "Plattform auf eine IP-Allowlist beschränken (optional)",
       "breakGlass": "Break-Glass-Konten benennen",
       "users": "Identitätsquelle anbinden, die Benutzer liefert",
@@ -2690,7 +3136,8 @@
     "type": "Typ",
     "types": {
       "webhook": "Webhook",
-      "email": "E-Mail"
+      "email": "E-Mail",
+      "syslog": "Syslog (TLS)"
     },
     "enabled": "Aktiv",
     "on": "An",
@@ -2765,6 +3212,17 @@
     "testError": "Die Testzustellung an {name} ist fehlgeschlagen: {error}",
     "testUnknown": "unbekannter Fehler",
     "testTimeout": "Noch kein Ergebnis für den Test an {name}. Prüfen Sie den Zustand des Ziels gleich noch einmal.",
+    "replayLabel": "Erneut senden ab…: {name}",
+    "replayAction": "Erneut senden ab…",
+    "replay": {
+      "title": "Ab einer Sequenznummer erneut senden",
+      "message": "Jeden Stapel ab Sequenznummer {from} erneut senden. Der Empfänger sieht dieselben Nummern noch einmal; er muss Duplikate erkennen.",
+      "number": "Sequenznummer",
+      "hint": "1 bis {last}, die letzte an {name} gesendete Nummer.",
+      "invalid": "Geben Sie eine ganze Zahl von 1 bis {last} ein.",
+      "confirm": "Erneut senden",
+      "requested": "Erneutes Senden an {name} ab Sequenznummer {from} angefordert. Der Notifier sendet die Stapel in seinen nächsten Runden erneut."
+    },
     "cursor": {
       "title": "Ziel aktivieren",
       "message": "{name} war deaktiviert. Wo soll die Zustellung fortgesetzt werden?",
@@ -2793,7 +3251,23 @@
       "description": "Fügen Sie einen Webhook oder eine E-Mail-Liste hinzu, um Sicherheitsereignisse außerhalb des Portals zu erhalten."
     },
     "urlRejected": "Der Server hat die URL abgelehnt: Sie muss eine https-Adresse auf Port 443 oder 1024 bis 65535 mit öffentlichem Host sein.",
-    "nameTaken": "Ein Ziel mit diesem Namen existiert bereits."
+    "nameTaken": "Ein Ziel mit diesem Namen existiert bereits.",
+    "syslogHost": "Syslog-Host",
+    "syslogHostHint": "DNS-Name oder öffentliche IP-Adresse des Empfängers. Paddock verbindet sich nur über TLS.",
+    "syslogHostInvalid": "Geben Sie einen DNS-Namen oder eine IP-Adresse ohne Schema und Port ein.",
+    "syslogHostRejected": "Der Host wurde abgelehnt: Er muss auf eine öffentliche Adresse auflösen.",
+    "syslogPort": "Port",
+    "syslogPortHint": "6514 ist der Port für Syslog über TLS.",
+    "syslogPortInvalid": "Geben Sie einen Port von 1 bis 65535 ein.",
+    "syslogCa": "CA-Zertifikat (PEM, optional)",
+    "syslogCaHint": "Das Zertifikat einer privaten CA, auf die das Zertifikat des Empfängers zurückgeht; dann wird nur dieser CA vertraut. Leer bedeutet: öffentliche CAs.",
+    "syslogCaCurrent": "Ein CA-Zertifikat ist gespeichert. Leer lassen, um es zu behalten, oder ein neues einfügen, um es zu ersetzen.",
+    "syslogCaInvalid": "Fügen Sie ein oder mehrere PEM-Zertifikate ein (-----BEGIN CERTIFICATE-----), höchstens 16 KiB.",
+    "syslogServerName": "TLS-Servername (optional)",
+    "syslogServerNameHint": "Der Name im Zertifikat des Empfängers, wenn er vom Host abweicht.",
+    "syslogServerNameInvalid": "Geben Sie einen DNS-Namen ein.",
+    "checkpoints": "Tägliche Checkpoints senden",
+    "checkpointsHint": "Nach jedem versiegelten Tag belegt eine Nachricht mit der Zahl der Ereignisse und dem signierten Manifest-Hash, dass der Empfänger jedes Ereignis hat."
   },
   "rollout": {
     "urgent": {

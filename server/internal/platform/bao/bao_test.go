@@ -190,6 +190,44 @@ func TestNotificationWrap(t *testing.T) {
 	refuse("the api obtaining a plaintext data key", err)
 }
 
+// TestBackupWrap checks plan M15 decision 5: the api AppRole encrypts target credentials with the platform key
+// backup-wrap and cannot decrypt them; only the backup AppRole decrypts.
+func TestBackupWrap(t *testing.T) {
+	b := baotest.Start(t)
+	ctx := context.Background()
+	client := func(name string) *bao.Client {
+		role := b.AppRole(t, name)
+		c, err := bao.New(b.Addr, role.RoleID, role.SecretID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	api, backup, notifier := client("paddock-api"), client("paddock-backup"), client("paddock-notifier")
+	const wrap = "backup-wrap"
+	creds := []byte(`{"username":"svc","password":"pw"}`)
+	ct, err := api.EncryptPlatform(ctx, wrap, creds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(ct, "vault:v1:") || strings.Contains(ct, "svc") {
+		t.Fatalf("ciphertext %q", ct)
+	}
+	plain, err := backup.DecryptPlatform(ctx, wrap, ct)
+	if err != nil || string(plain) != string(creds) {
+		t.Fatalf("decrypt: %q %v", plain, err)
+	}
+	if _, err := api.DecryptPlatform(ctx, wrap, ct); err == nil {
+		t.Fatal("the api decrypted backup credentials")
+	}
+	if _, err := notifier.DecryptPlatform(ctx, wrap, ct); err == nil {
+		t.Fatal("the notifier decrypted backup credentials")
+	}
+	if _, err := backup.EncryptPlatform(ctx, wrap, creds); err == nil {
+		t.Fatal("the backup role encrypted")
+	}
+}
+
 // TestOrganizationContext: the context is the lowercase canonical organization ID, ":" and the field, base64-encoded,
 // whatever form the ID was parsed from.
 func TestOrganizationContext(t *testing.T) {

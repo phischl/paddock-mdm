@@ -227,6 +227,12 @@ supervisors order the versions by SemVer precedence (`0.1.0-alpha.1 < 0.1.0-alph
 NNNNN–NNNNN` (the migrations of both databases since the previous release). The release manager checks it before
 tagging; `docs/operations/upgrade.md` decides the rollback by it.
 
+**Upgrade and Agents lines.** Next to `Schema:` the section states `Upgrade: from <previous release>: automatic` (or
+`Upgrade: from <previous release>: steps: <text>`) and `Agents: supports <N-2>, <N-1>, <N>` (ADR 0047). The maintainer
+writes both lines into `changelog.d/_release.md` before `make changelog`; the target copies them under the Schema line
+and removes the file. `make release-check` fails for a stable release whose `CHANGELOG.md` section lacks one of the
+three lines.
+
 **Changelog.** Merged changes keep their entries as fragment files in `changelog.d/` (`changelog.d/README.md`), not in
 `CHANGELOG.md`. Before tagging, the release manager assembles them in a release commit:
 
@@ -236,9 +242,15 @@ tagging; `docs/operations/upgrade.md` decides the rollback by it.
    `migrations NNNNN–NNNNN …`: merges the fragments and the entries already under `[Unreleased]` into the
    sections `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`, renames the heading to
    `## [<version>] - <today>` with the line `Schema: <text>.`, adds a new empty `## [Unreleased]` and removes the
-   fragments with `git rm`. It refuses a missing `RELEASE_VERSION` or `SCHEMA` and a version that already has a section.
-3. Write the release summary under the new heading (upgrade order, Fleet version, the schema details), review the
-   section and commit it together with the removed fragments; then tag the commit.
+   fragments with `git rm`. It refuses a missing `RELEASE_VERSION` or `SCHEMA`, a version that already has a section
+   and a missing or malformed `changelog.d/_release.md`.
+3. Move the release under development to the next one in the same commit: set `-current` in `server/gen.go` to N+1
+   (the release after the one being cut) and run `make gen`, so that `releases.gen.go` ends with N, then N+1. The
+   `upgrade` job of `ci.yml` builds its candidate with the last entry of that list as its version. If the entry
+   still named N after the tag, every pull request's candidate would equal the newest tag, and the job's
+   `upgrade-check` would fail "versions adjacent" (decisions-alpha9 item 55).
+4. Write the release summary under the new heading (upgrade order, Fleet version, the schema details), review the
+   section and commit it together with the removed fragments and the regenerated release list; then tag the commit.
 
 The images are pushed before `release-sign` runs, so a run that fails between the two leaves unsigned images under the
 release tag. This is accepted (architect decision 2026-10-08): cosign signs digests, and consumers verify the
@@ -463,7 +475,12 @@ A device group can override the organization's policy; a device in several group
 so, and `automatic` when a group says so on a `manual` organization. The bundle carries the result
 (`agent.update_policy`, absent for automatic). An agent on `manual` logs `agent update offer ignored by the
 organization's policy` once per offered version. Devices left on an old agent appear on the attention page as
-`agent_outdated` and leave the support window after N-2 minor releases (426 `agent_unsupported`, residual risk RR-51).
+`agent_outdated` and leave the support window after N-2 minor releases (residual risk RR-51). A device outside the
+window keeps checking in but receives only the agent update offer; no configuration bundle and no commands reach it,
+except Lock, Destroy and dead man's switch tokens and the command that disarms the dead man's switch (ADR 0013
+amendment 2026-11-04 (2)). A Lock or Destroy takes effect there only if the last configuration the device applied
+enabled revocation; otherwise the device refuses it (`revocation.refused`, reason `disabled`). An old agent therefore
+stays lockable only if revocation was enabled before it left the window.
 
 ## Update now
 

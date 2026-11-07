@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
@@ -35,7 +37,36 @@ const (
 	// TypeEncryptDiskAbort cancels a conversion the device has received but not executed at a restart (plan M8e
 	// decision 27).
 	TypeEncryptDiskAbort = "encrypt_disk_abort"
+	// TypeCollectStatus collects Paddock's own diagnostics of the device, seals and uploads them (ADR 0048 decision 1).
+	TypeCollectStatus = "collect_status"
 )
+
+// CollectStatusParams are the params of collect_status: the diagnostics request (its ID equals the command ID) and the
+// administrator's reason, which the device shows to the user (ADR 0048 decisions 1 and 6).
+type CollectStatusParams struct {
+	RequestID string `json:"request_id"`
+	Reason    string `json:"reason"`
+}
+
+// Refusal reasons of CollectStatusResult.
+const (
+	CollectStatusInvalidParams = "invalid_params"
+	CollectStatusUploadRefused = "upload_refused"
+	CollectStatusUploadFailed  = "upload_failed"
+	CollectStatusCollectFailed = "collect_failed"
+	CollectStatusTooLarge      = "too_large"
+)
+
+// CollectStatusResult is the command result of collect_status: the facts of the uploaded bundle, or the reason it was
+// not uploaded.
+type CollectStatusResult struct {
+	Uploaded         bool     `json:"uploaded"`
+	Files            int      `json:"files,omitempty"`
+	Bytes            int64    `json:"bytes,omitempty"`
+	TruncatedEntries []string `json:"truncated_entries,omitempty"`
+	NotifiedSessions int      `json:"notified_sessions"`
+	Reason           string   `json:"reason,omitempty"`
+}
 
 // EncryptDiskParams are the params of encrypt_disk (ADR 0039 decision 1). The device takes the unlock mode and the
 // boot PIN length from its bundle, never from the command.
@@ -104,12 +135,18 @@ var lifetimes = map[string]time.Duration{
 	TypeUninstall:           7 * 24 * time.Hour,
 	TypeEncryptDisk:         7 * 24 * time.Hour,
 	TypeEncryptDiskAbort:    7 * 24 * time.Hour,
+	TypeCollectStatus:       time.Hour,
 }
 
 // Lifetime returns the default lifetime of a registered type; ok is false for any other type.
 func Lifetime(typ string) (d time.Duration, ok bool) {
 	d, ok = lifetimes[typ]
 	return d, ok
+}
+
+// Types returns the registered command types in sorted order.
+func Types() []string {
+	return slices.Sorted(maps.Keys(lifetimes))
 }
 
 // ClockTolerance is the device clock skew Verify accepts around issued_at and expires_at.

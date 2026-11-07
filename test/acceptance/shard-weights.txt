@@ -14,6 +14,10 @@
 # reports ~400 s but costs ~1730 s that way.
 1733 TestAuditExactlyOnce
 381 TestRoleMembership
+# Estimate, not yet measured (PDK-756): the syslog gates wait for a 60 s heartbeat interval, the 1-minute stall of the
+# development notifier and several 5 s rounds.
+300 TestNotificationsSyslog
+240 TestNotificationsReplay
 235 TestStalenessGate
 209 TestDiskConversionUninstall
 196 TestSupervisorPackage
@@ -39,6 +43,8 @@
 104 TestDiskConversion
 103 TestEventGap
 103 TestIPAllowlist
+# Estimate, not yet measured (PDK-756): one sealed day and two notifier rounds.
+90 TestNotificationsCheckpoints
 # Estimate, not yet measured (PDK-158): gate organization, two devicesims, a temporary auditor.
 90 TestConfigRolloutActions
 90 TestDeclarativeConfig
@@ -145,3 +151,13 @@
 0 TestEveryTestRunsInExactlyOneShard
 0 TestVerifyMode
 0 TestParseWeightsRejectsMalformedLines
+# Estimate, not yet measured (PDK-737): the backup gates skip on a stack without BACKUP=1, as CI's stacks are; on
+# `make up BACKUP=1` B1 ~2 min, B2 ~2 min, B3 ~4 min, B4 ~5 min, B5 ~2 min. B6 is disruptive. B7 runs everywhere:
+# an administrator with a step-up, an API token and 2 × 22 refused calls.
+0 TestBackupKeyConfirmation
+0 TestBackupTargets
+0 TestBackupRuns
+0 TestBackupRotation
+0 TestRestorePlan
+0 TestBackupLegacyKey
+40 TestBackupIsolation

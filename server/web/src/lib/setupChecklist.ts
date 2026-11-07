@@ -42,17 +42,30 @@ export function dismissKey(accountId: string): string {
   return `paddock.setup.dismissed.${accountId}`
 }
 
+/** Backups are set up when a key is confirmed and at least one target is enabled (plan M15 decision 28). */
+async function backupConfigured(): Promise<StepState> {
+  try {
+    const { data } = await api.GET('/api/platform/v1/backup')
+    if (!data) return 'unknown'
+    return data.key.active && data.targets.some((t) => t.enabled) ? 'done' : 'open'
+  } catch {
+    return 'unknown'
+  }
+}
+
 /** Platform steps from the existing platform endpoints. */
 async function platformSteps(): Promise<SetupStep[]> {
-  const [organization, release, allowlist] = await Promise.all([
+  const [organization, release, allowlist, backup] = await Promise.all([
     exists(async () => (await api.GET('/api/platform/v1/organizations', { params: { query: { page_size: 10 } } })).data),
     exists(async () => (await api.GET('/api/platform/v1/agent-releases', { params: { query: { page_size: 10, status: ['published'] } } })).data),
     exists(async () => (await api.GET('/api/platform/v1/ip-allowlist', { params: { query: { page_size: 10 } } })).data),
+    backupConfigured(),
   ])
   return [
     { key: 'organization', label: 'setup.steps.organization', state: organization, to: { name: 'organizations' } },
     { key: 'orgAdmin', label: 'setup.steps.orgAdmin', state: 'manual' },
     { key: 'release', label: 'setup.steps.release', state: release, to: { name: 'agent-releases' } },
+    { key: 'backup', label: 'setup.steps.backup', state: backup, to: { name: 'platform-backup' } },
     { key: 'allowlist', label: 'setup.steps.allowlist', state: allowlist, to: { name: 'ip-allowlist' }, optional: true },
   ]
 }

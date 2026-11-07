@@ -6,6 +6,7 @@ import DataList from './DataList.vue'
 import NotificationCursorDialog from './NotificationCursorDialog.vue'
 import NotificationDestinationForm from './NotificationDestinationForm.vue'
 import NotificationPseudonymDialog from './NotificationPseudonymDialog.vue'
+import NotificationReplayDialog from './NotificationReplayDialog.vue'
 import StatusChip from './StatusChip.vue'
 import TimeCell from './TimeCell.vue'
 import { useConfirm } from '../composables/useConfirm'
@@ -14,8 +15,9 @@ import { usePending } from '../composables/usePending'
 import type { ListColumn } from '../lib/listQuery'
 import {
   backlogOf, createDestination, deleteDestination, destinationLister, getDestination, isProblem, lagParts,
-  loadEmailCapability, loadLatestSeq, notificationFilters, pollUntil, pseudonymStepUpAction, requestTest, rotateSecret, stateStatus,
-  updateDestination, type NotificationDestination, type NotificationInput, type NotificationProblem, type NotificationScope,
+  loadEmailCapability, loadLatestSeq, notificationFilters, pollUntil, pseudonymStepUpAction, requestReplay, requestTest,
+  rotateSecret, stateStatus, updateDestination, type NotificationDestination, type NotificationInput,
+  type NotificationProblem, type NotificationScope,
 } from '../lib/notifications'
 import { useProblemText } from '../lib/problems'
 import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam, type Resumed } from '../lib/stepUp'
@@ -23,7 +25,8 @@ import { useSessionStore } from '../stores/session'
 
 /**
  * The notification destinations of the organization or the platform (plan M9 decision 36, ADR 0031): a list with the
- * delivery state, a form dialog, the signing secret shown once, and delete, rotate and test behind a confirmation.
+ * delivery state, a form dialog, the signing secret shown once, delete, rotate and test behind a confirmation, and a
+ * replay from a sequence number (plan M12 decision 21).
  * Every change needs a step-up; the refused action is repeated once when the browser comes back. A webhook URL is
  * a secret and never waits in the browser's storage, so a step-up that interrupts a typed URL asks for it again.
  */
@@ -35,6 +38,7 @@ type Operation =
   | { op: 'delete'; id: string; name: string }
   | { op: 'rotate'; id: string; name: string }
   | { op: 'test'; id: string; name: string }
+  | { op: 'replay'; id: string; name: string; from: number }
 
 const { t } = useI18n()
 const { pending, run } = usePending()
@@ -62,6 +66,7 @@ const copied = ref(false)
 const cursorAsk = ref<{ destination: NotificationDestination; input: NotificationInput; backlog: number | null } | null>(null)
 const pseudonymOpen = ref(false)
 const pseudonymResumed = ref<Resumed<{ id: string; pseudonym: string }> | null>(null)
+const replayAsk = ref<{ id: string; name: string; last: number } | null>(null)
 const testing = ref<{ name: string; phase: 'waiting' | 'ok' | 'error' | 'timeout'; error: string } | null>(null)
 let cancelled = false
 
@@ -164,6 +169,7 @@ async function execute(operation: Operation, stepUp: boolean): Promise<void> {
   }
   if (operation.op === 'create' || operation.op === 'update') formProblem.value = answer
   else if (operation.op === 'test' && answer.code === 'invalid_state') pageProblem.value = 'notification_test_pending'
+  else if (operation.op === 'replay' && answer.code === 'invalid_state') pageProblem.value = 'notification_replay_pending'
   else pageProblem.value = answer.code
 }
 
@@ -205,6 +211,14 @@ async function perform(operation: Operation): Promise<NotificationProblem | null
     }
     case 'test':
       return startTest(operation)
+    case 'replay': {
+      const refused = await requestReplay(props.scope, operation.id, operation.from)
+      if (refused) return refused
+      saved.value = t('notifications.replay.requested', { name: operation.name, from: operation.from })
+      focusReturn.restore()
+      await list.value?.reload()
+      return null
+    }
   }
 }
 
@@ -282,6 +296,23 @@ async function onTest(d: NotificationDestination, event?: Event): Promise<void> 
   })
   if (!confirmed) return
   await run(() => execute({ op: 'test', id: d.id, name: d.name }, true))
+}
+
+function openReplay(d: NotificationDestination, event?: Event): void {
+  focusReturn.remember(event)
+  replayAsk.value = { id: d.id, name: d.name, last: d.state.forward_seq }
+}
+
+async function onReplay(from: number): Promise<void> {
+  const ask = replayAsk.value
+  replayAsk.value = null
+  if (!ask) return
+  await run(() => execute({ op: 'replay', id: ask.id, name: ask.name, from }, true))
+}
+
+function cancelReplay(): void {
+  replayAsk.value = null
+  focusReturn.restore()
 }
 
 function openPseudonym(event?: Event): void {
@@ -397,6 +428,11 @@ const dialogTitle = computed(() => (dialog.value?.editing ? t('notifications.edi
           class="mono pd-muted"
           data-testid="notification-url-display"
         >{{ item.url_display }}</span>
+        <span
+          v-if="item.syslog_host"
+          class="mono pd-muted"
+          data-testid="notification-syslog-display"
+        >{{ item.syslog_host }}:{{ item.syslog_port }}</span>
       </template>
       <template #[`item.filter_mode`]="{ item }: { item: NotificationDestination }">
         {{ t('notifications.modes.' + item.filter_mode) }}
@@ -449,6 +485,16 @@ const dialogTitle = computed(() => (dialog.value?.editing ? t('notifications.edi
             @click="onTest(item, $event)"
           >
             {{ t('notifications.test') }}
+          </v-btn>
+          <v-btn
+            v-if="item.state.forward_seq > 0"
+            :aria-label="t('notifications.replayLabel', { name: item.name })"
+            size="small"
+            variant="tonal"
+            :disabled="pending"
+            @click="openReplay(item, $event)"
+          >
+            {{ t('notifications.replayAction') }}
           </v-btn>
           <v-btn
             v-if="item.type === 'webhook'"
@@ -560,6 +606,13 @@ const dialogTitle = computed(() => (dialog.value?.editing ? t('notifications.edi
       :backlog="cursorAsk?.backlog ?? null"
       @choose="onCursor"
       @cancel="cursorAsk = null"
+    />
+    <NotificationReplayDialog
+      :model-value="replayAsk !== null"
+      :name="replayAsk?.name ?? ''"
+      :last="replayAsk?.last ?? 0"
+      @replay="onReplay"
+      @cancel="cancelReplay"
     />
     <NotificationPseudonymDialog
       v-if="pseudonymOpen"

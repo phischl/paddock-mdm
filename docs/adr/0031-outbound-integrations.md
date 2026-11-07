@@ -237,3 +237,51 @@ scope; field `url`, `secret` or `pseudonym`), base64-encoded as Transit requires
 organization and field only. Every key-wrapping interface (Paddock's OpenBao client, the use cases, the notifier) takes
 the organization and forms the context in one helper. Row IDs of the notification tables are server-generated
 (UUIDv7) and never caller input; the keys a caller names include the organization.
+
+## Amendment 2026-11-04 — syslog transport, checkpoints and replay (plan M12)
+
+Decisions 1, 4, 6 and 11 are implemented by plan M12 with these details:
+
+1. **Syslog destination.** `notification_destination.type` gains `syslog`; settings `syslog_host` (name or public
+   IP, the deny list of decision 12 applies), `syslog_port` (1–65535, default 6514), `syslog_ca_pem` (optional PEM
+   bundle of a private CA; without it the system roots apply), `syslog_server_name` (optional SNI override). TLS is
+   mandatory (RFC 5425, TLS 1.2 minimum); plain TCP and UDP do not exist. The notifier holds no client
+   certificate (mutual TLS is a later option).
+2. **Message format.** One RFC 5424 message per event with octet-counting framing (RFC 6587): `PRI` facility
+   `local0` with severity `warning` for outcome `failure` and `denied`, `notice` otherwise; `TIMESTAMP` =
+   `occurred_at`; `HOSTNAME` = the portal host of `PADDOCK_PUBLIC_ADMIN_URL`; `APP-NAME` `paddock`; `PROCID` = the
+   organization slug (`platform` for the platform scope); `MSGID` = the audit code; `STRUCTURED-DATA` `-`; `MSG` =
+   the JSON object `{schema: "paddock.audit.v1", forward_seq, commit_seq, delivery_id, event: {…}}` in UTF-8 with
+   the BOM RFC 5424 prescribes. Heartbeat and checkpoint messages use `MSGID` `paddock.heartbeat` and
+   `paddock.checkpoint` with the message of plan M9 §6.4 as `MSG`. A batch is one connection; a failure before the
+   last message fails the whole batch, which is retried under the same `forward_seq` numbers (at-least-once;
+   receivers deduplicate by `event_id` or `forward_seq`).
+3. **Checkpoints.** A push destination (webhook or syslog) with `checkpoints = true` receives one `kind:
+   checkpoint` message per sealed recording day of its scope that it has not received yet, in day order, after
+   the day's events were forwarded; `notification_destination_state.last_checkpoint_day` is the cursor. The
+   notifier reads `audit_manifest` through `db.AuditReader` (the `SELECT` grant of plan M10). Checkpoints count in
+   `forward_seq`.
+4. **Replay.** `POST /api/v1/notification-destinations/{id}/replay` (and the platform twin), body
+   `{from_forward_seq}`, `org_admin` or `platform_admin` with step-up, audited `notification.replay_requested`:
+   the engine re-sends the stored batches from `notification_delivery_event` with their original `forward_seq`
+   numbers before it continues at the cursor. The administrative CLI command named in plan M9 §6.9 is not built;
+   the API verb replaces it.
+5. **Detection content.** Wazuh decoders and rules and Sigma rules for `paddock.audit.v1` ship in
+   `integrations/` and are tested against the sample events of `docs/compliance/audit-codes.md`.
+
+## Amendment 2026-11-04 — syslog MSGID aliases (PDK-751)
+
+Item 2 of the amendment above set `MSGID` = the audit code. RFC 5424 limits `MSGID` to 32 characters, and nine
+registered codes are longer; cutting them maps `device.disk_conversion_completed_after_cancel` onto the registered
+code `device.disk_conversion_completed`, so a SIEM rule on `MSGID` would match the wrong event. This replaces
+"`MSGID` = the audit code":
+
+1. A code of 32 characters or fewer is its own `MSGID`, unchanged.
+2. A longer code has a fixed alias, a short stable English identifier, in a table next to the code registry
+   (`server/internal/domain/audit/msgid.go`, published in `docs/compliance/audit-codes.md`). The table is
+   add-only: an alias never changes and is never reused.
+3. `MSG` always carries the full code in `event.code`.
+4. Tests guard the rule: every registered code's `MSGID` is at most 32 printable US-ASCII characters, all are
+   unique, no alias equals a registered code, a code longer than 32 characters without an alias fails the tests,
+   the published aliases are frozen, and no `MSGID` collides with `paddock.test`, `paddock.heartbeat` or
+   `paddock.checkpoint`.

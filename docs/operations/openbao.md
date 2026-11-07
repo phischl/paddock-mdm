@@ -11,6 +11,7 @@ OpenBao holds Paddock's keys (ADR 0006):
 | `transit/keys/time-ticket` | Ed25519 key that signs the time tickets of the dead man's switch (non-exportable); its public keys reach devices in their bundles | `compiler` (AppRole `paddock-compiler`, sign and read) |
 | `transit/keys/escrow-wrap` | RSA-4096 key (non-exportable) devices encrypt escrowed secrets to (RSA-OAEP with SHA-256); its latest public key reaches devices in their bundles | encrypt: devices; decrypt: the `escrow-reader` role only (AppRole `paddock-escrow-reader`, `docs/operations/escrow-reader.md`); `compiler` reads the public key |
 | `transit/keys/notification-wrap` | AES-256-GCM key (non-exportable, derived: every ciphertext is bound to `<organization ID>:<field>` as context) that encrypts the webhook URL (it may carry the credential) and the signing secret of notification destinations (ADR 0031 decision 11 and amendment 2026-10-31) | encrypt: `api` (AppRole `paddock-api`, `transit/encrypt/notification-wrap` only); decrypt: the `notifier` role only (AppRole `paddock-notifier`) |
+| `transit/keys/backup-wrap` | AES-256-GCM key (non-exportable, no plaintext backup) that encrypts the backup key and the credentials of backup targets (ADR 0046) | encrypt: `api` (policy `paddock-api`, `transit/encrypt/backup-wrap`); decrypt: the backup role only (AppRole `paddock-backup`, `transit/decrypt/backup-wrap`; the same AppRole may read Raft snapshots) |
 | `transit/keys/notification-pseudonym` | AES-256-GCM key (non-exportable, derived like `notification-wrap`) that wraps the per-organization pseudonym keys: data keys whose plaintext the api never sees (ADR 0031 decision 8 and amendment 2026-10-31) | wrapped data keys: `api` (`transit/datakey/wrapped/notification-pseudonym` only); decrypt: the `notifier` role only. A notification key created without derivation cannot be converted: the configuration stops with the commands to delete and re-create it, which is safe only before any destination exists |
 | `secret/paddock/session` (KV v2) | AES-256 keys `current` / `previous` of the portal session cookie | `api` (AppRole `paddock-api`) |
 
@@ -53,14 +54,16 @@ read -rs BAO_TOKEN && export BAO_TOKEN   # the decrypted root token, typed witho
 
 It enables `transit`, `secret` (kv-v2) and `approle`, creates the transit keys `audit-chain`, `bundle-signing`,
 `command-signing`, `revocation-signing`, `time-ticket` (Ed25519), `escrow-wrap` (RSA-4096), `notification-wrap` and
-`notification-pseudonym` (AES-256-GCM, derived), the KV secret `secret/paddock/session`, the eight policies and
-AppRoles of `deploy/compose/scripts/openbao-configure.sh` (the same as in development: each role reads or signs only
-with its own keys; `paddock-revocation-issuer` is the only role that signs revocations, `paddock-backup` may only read
-Raft snapshots, `paddock-notifier` may only decrypt with the two notification keys, with which `paddock-api` may only
-encrypt and obtain wrapped data keys), and writes each AppRole's role ID and secret ID to `.secrets/approle/<role>/`.
+`notification-pseudonym` (AES-256-GCM, derived), `backup-wrap` (AES-256-GCM, not exportable, no plaintext backup; the
+backup encryption key and the backup targets' credentials, ADR 0046), the KV secret `secret/paddock/session`, the eight
+policies and AppRoles of `deploy/compose/scripts/openbao-configure.sh` (the same as in development: each role reads or
+signs only with its own keys; `paddock-revocation-issuer` is the only role that signs revocations, `paddock-backup` may
+only read Raft snapshots and decrypt with `backup-wrap` (`transit/decrypt/backup-wrap`), with which `paddock-api` may
+only encrypt (`transit/encrypt/backup-wrap`), `paddock-notifier` may only decrypt with the two notification keys, with
+which `paddock-api` may only encrypt and obtain wrapped data keys), and writes each AppRole's role ID and secret ID to `.secrets/approle/<role>/`.
 It is idempotent: a stored secret ID is kept. The roles read them as files referenced by
 `PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`: `paddock-escrow-reader` reaches the escrow-reader
-and never the api, `paddock-revocation-issuer` the revocation-issuer and no other role, `paddock-backup` the worker,
+and never the api, `paddock-revocation-issuer` the revocation-issuer and no other role, `paddock-backup` the backup role (`paddock-backup`, `docs/operations/backup.md`),
 `paddock-notifier` the notifier and no other role.
 Copy `.secrets/approle/paddock-audit-writer/` to the audit host (`docs/operations/install.md` section 4).
 
@@ -123,12 +126,13 @@ expire (8 h at most). Rotate monthly (architecture §9.6).
 
 ## 5. Snapshots after key operations
 
-`paddock-worker` takes an encrypted Raft snapshot every 6 hours (`docs/operations/restore.md`). Key operations are
+The backup role `paddock-backup` takes an encrypted Raft snapshot every 6 hours by default into the backup set
+(`docs/operations/backup.md`, `docs/operations/restore.md`). Key operations are
 manual (`bao` CLI), so after every one of them (a new or rotated Transit key, new policies or AppRoles, rotated session
 keys or secret IDs) take a snapshot at once, so that a restore never brings back an older key state:
 
 ```sh
-docker compose … run --rm --no-deps paddock-worker backup openbao
+docker compose … run --rm --no-deps paddock-backup backup now --kind openbao --wait
 ```
 
 ## 6. Automatic unseal
@@ -221,7 +225,7 @@ copy of the shares file:
 ```sh
 bao operator rekey -key-shares=5 -key-threshold=3   # three custodians each enter their current share
 # hand the five new shares to the custodians, then take a snapshot at once:
-./paddock compose run --rm --no-deps paddock-worker backup openbao
+./paddock compose run --rm --no-deps paddock-backup backup now --kind openbao --wait
 ```
 
 ### Monitoring
@@ -237,6 +241,6 @@ Metrics: the worker exports `paddock_auto_unseal_enabled`, `paddock_auto_unseal_
 
 ### Restore
 
-During restore step 4 (`docs/operations/restore.md`) the temporary single-share OpenBao refuses the unsealer's
+During the OpenBao step of `./paddock restore` (`docs/operations/restore.md`) the temporary single-share OpenBao refuses the unsealer's
 shares: the unsealer records `invalid_share` failures and backs off. Once the restored node restarts with its own
 barrier, the unsealer unseals it automatically; no manual step is needed.

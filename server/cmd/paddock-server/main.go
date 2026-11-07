@@ -22,8 +22,9 @@ import (
 const usage = `usage: paddock-server <command> [arguments] [+ <command> [arguments] ...]
 
 commands:
-  serve api|gateway|worker|compiler|outbox-relay|audit-writer|escrow-reader|revocation-issuer|unsealer|notifier
+  serve api|gateway|worker|compiler|outbox-relay|audit-writer|escrow-reader|revocation-issuer|unsealer|notifier|backup
   migrate paddock|audit
+  migrate --version          (prints the newest embedded migration of each database: paddock <n>, audit <n>)
   provision rabbitmq
   audit seal [--day YYYY-MM-DD]
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD   (recorded as a verification run; prints run <id>)
@@ -31,6 +32,7 @@ commands:
   audit purge [--dry-run]   (drops expired audit index partitions; prints DROP/KEEP lines)
   osv import <file>
   admin bump-bundle-seq --by N
+  admin raise-bundle-seq --at-least N
   admin recompile --all
   admin rebuild-cache
   admin security-review
@@ -43,9 +45,26 @@ commands:
         [--failure-threshold-percent P] [--failure-threshold-min M]
   admin agent-rollout-halt --version <x.y.z>
   admin agent-rollout-resume --version <x.y.z>
-  backup openbao
+  admin upgrade-check --target-version <x.y.z> [--json]
+  admin backup-targets render [--local-root <dir>]   (for ./paddock backup-target apply; prints share passwords)
+  admin backup-targets revisions
+  admin backup-targets purge <id>...
+  backup now [--kind postgres|authentik|openbao|fleet|escrow]... [--label <text>] [--wait]
+  backup status
+  backup plan <id>           (prints the restore plan as JSON; exit 1 unless it is approved and unexpired)
+  backup restore-report --outcome running|completed|failed --operator <name> --source set|repo|target
+        --components a,b [--plan <id>] [--at <RFC 3339>] [--component <step> --detail <text>]
+        [--escrow-skipped-destroyed <count>]
   backup decrypt <in> <out|->
-  prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
+  backup mark-mount <id> <revision>...
+  backup resolve-local [--root <dir>] <path>...
+  backup manifest <set dir> [--at <RFC 3339 time>]
+  backup fetch-set --dir <set dir>|--target <name|id>|--target-file - [--path <prefix>] [--no-clobber] <dest dir>
+  backup restore-repo --dir <set dir>|--target <name|id>|--target-file - | --check
+  backup restore-escrow <set dir>
+  backup target-export <name|id>   (prints the S3 target with its credentials; ./paddock backup-target export)
+  prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online]
+        [--backup-revisions-file <list> --backup-revisions-db <list>] < config.json
   healthcheck
   version
 
@@ -160,6 +179,8 @@ func runServe(ctx context.Context, l *config.Loader, common config.Common, args 
 		return serveUnsealer(ctx, l, common)
 	case "notifier":
 		return serveNotifier(ctx, l, common)
+	case "backup":
+		return serveBackup(ctx, l, common)
 	default:
 		return errUsage
 	}
@@ -173,7 +194,7 @@ func exitCode(err error) int {
 	case errors.Is(err, errUsage):
 		fmt.Fprint(os.Stderr, usage)
 		return 2
-	case errors.Is(err, errProdCheckFailed), errors.Is(err, errAutoUnsealNotEnabled):
+	case errors.Is(err, errProdCheckFailed), errors.Is(err, errAutoUnsealNotEnabled), errors.Is(err, errUpgradeCheckFailed):
 		return 1
 	case errors.As(err, &missing):
 		slog.Error("configuration incomplete", "missing", missing.Names)
@@ -197,6 +218,8 @@ func runMigrate(ctx context.Context, l *config.Loader, args []string) error {
 		return errUsage
 	}
 	switch args[0] {
+	case "--version":
+		return printSchemaVersions(os.Stdout)
 	case "paddock":
 		dsn := l.SecretFile("PADDOCK_DB_OWNER_URL_FILE")
 		if err := l.Err(); err != nil {
@@ -212,6 +235,21 @@ func runMigrate(ctx context.Context, l *config.Loader, args []string) error {
 	default:
 		return errUsage
 	}
+}
+
+// printSchemaVersions prints the newest embedded migration of each database, the schema this binary brings: a restore
+// refuses a backup set whose schema is newer (plan M15 decision 23).
+func printSchemaVersions(out io.Writer) error {
+	paddock, err := migrate.LatestPaddock()
+	if err != nil {
+		return err
+	}
+	audit, err := migrate.LatestAudit()
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "paddock %d\naudit %d\n", paddock, audit)
+	return err
 }
 
 // runHealthcheck is the container health check: GET /readyz on the ops listener.

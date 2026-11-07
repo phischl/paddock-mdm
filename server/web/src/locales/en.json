@@ -108,6 +108,7 @@
   },
   "nav": {
     "deviceGroups": "Device groups",
+    "diagnostics": "Diagnostics",
     "audit": "Audit log",
     "auditIntegrity": "Evidence integrity",
     "auditExports": "Evidence exports",
@@ -120,6 +121,7 @@
     "ipAllowlist": "IP allow list",
     "sessions": "Sessions",
     "openbao": "OpenBao",
+    "backup": "Backup",
     "platformMcp": "MCP policy",
     "users": "Users",
     "userGroups": "Groups",
@@ -160,7 +162,9 @@
     "platformNotifications": "Platform notifications",
     "configRollouts": "Configuration rollouts",
     "softwareSources": "Package sources",
-    "softwareCatalog": "Software catalog"
+    "softwareCatalog": "Software catalog",
+    "accessReview": "Access review",
+    "platformAccessReview": "Platform access review"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -315,9 +319,13 @@
     "email_not_configured": "This installation has no e-mail relay, so e-mail destinations cannot be enabled.",
     "unknown_code": "One of the audit codes is not registered.",
     "notification_test_pending": "An earlier test of this destination is still waiting for its result. Try again in a moment.",
+    "notification_replay_pending": "The destination is retrying a batch, or an earlier replay is still running. Wait until it is complete, or disable the destination, then replay.",
     "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment.",
     "rollout_conflict": "A running or halted rollout stages this item. Complete the rollout or revert its change set first.",
-    "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent."
+    "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent.",
+    "backup_key_mismatch": "The characters do not match the key.",
+    "backup_target_state_unchanged": "The target is already in this state.",
+    "backup_key_discarded_after_mismatches": "The key was discarded after three wrong confirmations. Generate a new key."
   },
   "audit": {
     "vulnerability": {
@@ -438,10 +446,15 @@
       "tamper_agent_not_running": "fleetd reports that the Paddock agent does not run on {target}",
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
       "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
+      "escrow_refused_destroyed": "A disk key of {target} was not escrowed: a Destroy of the device is issued",
       "revocation_confirmed": "The device {target} confirmed that its disk keyslots are erased",
       "revocation_refused": "The device {target} refused a revocation ({reason})",
       "presumed_self_locked": "The device {target} has not reached Paddock for longer than the dead man's switch period and presumably locked itself",
       "install_now_requested": "{actor} asked {target} to install {packages} now",
+      "diagnostics_requested": "{actor} asked {target} for a diagnostics bundle",
+      "diagnostics_collected": "The device {target} uploaded a diagnostics bundle ({files, number} files)",
+      "diagnostics_downloaded": "{actor} downloaded the diagnostics bundle of {hostname}",
+      "diagnostics_purged": "{actor} deleted the diagnostics bundle of {hostname}",
       "updates_run": "The device {target} finished its {kind} updates: {result, select, ok {{upgraded, number} packages upgraded} timeout {timed out} other {failed}}",
       "software_installed": "The device {target} installed {package} {version}",
       "software_reinstalled": "The device {target} found {package} removed locally and installed it again ({version})",
@@ -497,6 +510,7 @@
     "platform": {
       "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",
       "bundle_seq_bumped": "{actor} raised the bundle sequence of {devices} devices by {by} (restore)",
+      "bundle_seq_raised": "{actor} raised the bundle sequence of {devices} devices to at least {at_least} (restore)",
       "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)",
       "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)",
       "ip_allowlist_changed": "{action, select, added {{actor} added {cidr} ({label}) to the IP allow list} updated {{actor} changed the IP allow list entry {previous_cidr} to {cidr} ({label})} other {{actor} removed {cidr} ({label}) from the IP allow list}}",
@@ -506,7 +520,26 @@
       "auto_unseal_enabled": "{actor} enabled automatic unseal of OpenBao and acknowledged the disclaimer {disclaimer_version}",
       "auto_unseal_disabled": "{method, select, cli {Automatic unseal of OpenBao was disabled on the host} other {{actor} disabled automatic unseal of OpenBao}}",
       "openbao_auto_unsealed": "{failures, plural, =0 {The unsealer unsealed OpenBao automatically ({unseals, number} times since the last report)} other {The unsealer failed to unseal OpenBao ({failures, number} failures, last reason {last_failure_reason})}}",
-      "mcp_policy_changed": "{actor} changed the MCP policy of the platform: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}"
+      "mcp_policy_changed": "{actor} changed the MCP policy of the platform: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}",
+      "backup_key_generated": "{legacy, select, true {The backup key of the host file was imported and waits for its confirmation} other {{actor} generated the backup key {key_id} (fingerprint {fingerprint})}}",
+      "backup_key_confirmed": "{actor} confirmed the backup key {key_id} (fingerprint {fingerprint})",
+      "backup_key_discarded": "{actor} discarded the backup key {key_id}",
+      "access_review_viewed": "{actor} opened the platform access review",
+      "access_review_exported": "{actor} exported the platform access review of {from} to {to} as {format}",
+      "backup_target_created": "{actor} added the backup target {name} ({type})",
+      "backup_target_updated": "{change, select, enabled {{actor} enabled the backup target {name}} disabled {{actor} disabled the backup target {name}} other {{actor} changed the backup target {name} (host revision {host_revision})}}",
+      "backup_target_deleted": "{actor} deleted the backup target {name} ({type})",
+      "backup_target_tested": "{actor} requested a connection test of the backup target {name}",
+      "backup_schedule_changed": "{actor} changed the backup schedule: full backup every {full_interval_hours} h, {retention_full} full backups kept",
+      "backup_run_requested": "{actor} requested a backup now",
+      "backup_completed": "The {kind} backup completed and reached {targets_ok} targets",
+      "backup_failed": "The {kind} backup failed ({error_class})",
+      "restore_planned": "Restore plan approved ({kind}, from {source})",
+      "restore_cancelled": "Restore plan cancelled",
+      "restore_started": "Restore started on the host (from {source})",
+      "restore_completed": "Restore completed on the host",
+      "restore_failed": "Restore failed on the host ({detail})",
+      "restore_abandoned": "Running restore plan abandoned"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -626,7 +659,14 @@
       "pseudonym_resolved": "{actor} resolved the pseudonym {pseudonym}",
       "delivered": "{count} events delivered to {destination}",
       "destination_stalled": "Deliveries to {destination} are stalled ({last_error})",
+      "replay_requested": "{actor} requested a replay of {name} from sequence number {from_forward_seq}",
+      "replayed": "Batch {forward_from}–{forward_to} replayed to {target}",
+      "checkpoint_sent": "Checkpoint of {day} ({event_count} events) sent to {target}",
       "destination_resumed": "Deliveries to {destination} resumed after {stalled_for_s} s"
+    },
+    "access_review": {
+      "viewed": "{actor} opened the access review",
+      "exported": "{actor} exported the access review of {from} to {to} as {format}"
     }
   },
   "organizations": {
@@ -1221,6 +1261,7 @@
       "access": "Login & sudo",
       "configuration": "Configuration",
       "applyStatus": "Apply status",
+      "diagnostics": "Diagnostics",
       "commands": "Commands",
       "audit": "Audit",
       "managedSoftware": "Managed software"
@@ -1357,6 +1398,51 @@
         "enforce": "Enforced",
         "report_only": "Report-only"
       }
+    }
+  },
+  "diagnostics": {
+    "title": "Diagnostics bundles",
+    "summary": "Paddock's own logs and configuration from this device, collected on request. A bundle is kept for 7 days; every download needs a fresh identity confirmation and is recorded in the audit log.",
+    "fleetSummary": "Every diagnostics bundle of the organization. Request a bundle on the Diagnostics tab of a device. A bundle is kept for 7 days; every download needs a fresh identity confirmation and is recorded in the audit log.",
+    "hostname": "Device",
+    "requestedAt": "Requested",
+    "requestedBy": "Requested by",
+    "reason": "Reason",
+    "state": "State",
+    "size": "Size",
+    "downloads": "Downloads",
+    "expiresAt": "Deleted on",
+    "failedReason": "Failed: {reason}",
+    "notNotified": "User not notified",
+    "notNotifiedHint": "No graphical session on the device showed the notice: nobody was logged in, or the notice could not be delivered. The user learns of the bundle from the organization's transparency notice only.",
+    "download": "Download",
+    "downloadLabel": "Download the diagnostics bundle of {hostname}",
+    "states": {
+      "requested": "Requested",
+      "uploaded": "Uploaded",
+      "stored": "Stored",
+      "failed": "Failed",
+      "expired": "Expired",
+      "purged": "Purged"
+    },
+    "empty": {
+      "title": "No diagnostics bundles",
+      "description": "A bundle is collected only when an administrator or operator requests it for a device."
+    },
+    "request": {
+      "open": "Request diagnostics",
+      "title": "Request diagnostics",
+      "explanation": "Paddock will collect its own logs and configuration from this device — nothing else. The user is told on the device. Give a reason; it is shown to the user and recorded.",
+      "contentList": "What a bundle contains",
+      "reasonInvalid": "Give a reason of 2 to {max} characters.",
+      "submit": "Request",
+      "done": "The device collects the bundle at its next check-in."
+    },
+    "purge": {
+      "label": "Purge",
+      "title": "Purge diagnostics bundle",
+      "confirm": "Delete the diagnostics bundle of {hostname} now? The archive and its key are deleted and cannot be restored; who requested and downloaded it stays recorded.",
+      "ariaLabel": "Purge the diagnostics bundle of {hostname}"
     }
   },
   "tokens": {
@@ -1535,6 +1621,276 @@
       "typePrompt": "Type this sentence to confirm:",
       "typeLabel": "Sentence to confirm",
       "sentence": "I understand and accept the risk"
+    }
+  },
+  "backup": {
+    "title": "Backup",
+    "summary": "Backups of the control plane's databases, the OpenBao snapshot and the escrow, mirrored to the targets below and protected by one key.",
+    "on": "On",
+    "off": "Off",
+    "tabs": {
+      "overview": "Overview",
+      "targets": "Targets",
+      "key": "Key",
+      "schedule": "Schedule",
+      "history": "History",
+      "restore": "Restore"
+    },
+    "kinds": {
+      "postgres": "Databases",
+      "authentik": "Identity provider",
+      "openbao": "OpenBao",
+      "fleet": "Fleet",
+      "escrow": "Escrow"
+    },
+    "outcomes": {
+      "succeeded": "Succeeded",
+      "failed": "Failed"
+    },
+    "states": {
+      "requested": "Requested",
+      "running": "Running",
+      "finished": "Finished"
+    },
+    "hostStates": {
+      "n/a": "Not applicable",
+      "pending_host": "Waiting for the host",
+      "mounted": "Mounted",
+      "unreachable": "Unreachable"
+    },
+    "tests": {
+      "waiting": "Test requested",
+      "never": "Not tested",
+      "ok": "Test passed",
+      "failed": "Test failed"
+    },
+    "kindStates": {
+      "ok": "Backed up",
+      "failed": "Failed",
+      "never": "Never"
+    },
+    "run": {
+      "title": "Back up now",
+      "confirm": "This starts a backup of every kind. The backup service runs it in its next round.",
+      "now": "Back up now",
+      "requested": "The backup was requested."
+    },
+    "overview": {
+      "grid": "Last successful backup per target",
+      "noTargets": "No target yet. Add one on the Targets tab.",
+      "repo": "Local repository",
+      "repoUnknown": "The backup service has not reported the repository yet.",
+      "repoUsage": "{used} used, {free} free",
+      "lastRuns": "Latest runs"
+    },
+    "targets": {
+      "type": "Type",
+      "types": {
+        "local": "Local directory",
+        "smb": "SMB share",
+        "nfs": "NFS export",
+        "s3": "S3 bucket"
+      },
+      "enabled": "Enabled",
+      "hostState": "Host state",
+      "test": "Test",
+      "nameInvalid": "The name must start with a letter or digit and may use letters, digits, spaces and . _ - (up to 64 characters).",
+      "nameHint": "Letters, digits, spaces and . _ -",
+      "nameTaken": "A target with this name already exists.",
+      "pathInvalid": "Enter a relative subpath of the local backup root, without \"..\" and without a leading \"/\".",
+      "required": "This field is required.",
+      "passwordAgain": "The destination changed: enter the password again.",
+      "passwordChars": "The password must not contain a comma or a space: they cannot be passed to the share's mount. Choose another password for the share.",
+      "keysAgain": "The destination or the keys changed: enter both keys again.",
+      "exportInvalid": "Enter an absolute export path.",
+      "endpointInvalid": "Enter an https URL.",
+      "localPath": "Directory on the host",
+      "localPathHint": "A subpath of the local backup root of the control-plane host (PADDOCK_BACKUP_LOCAL_ROOT, default /srv/paddock-backup), for example nas/weekly.",
+      "host": "Host",
+      "share": "Share",
+      "subPath": "Path below it (optional)",
+      "domain": "Domain (optional)",
+      "username": "User name",
+      "password": "Password",
+      "unchanged": "unchanged",
+      "secretHint": "Stored encrypted, never shown again.",
+      "smbPasswordHint": "No comma and no spaces. Stored encrypted, never shown again.",
+      "options": "Mount options (optional)",
+      "smbOptionsHint": "Comma-separated: vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N.",
+      "nfsOptionsHint": "Comma-separated: vers=4|4.1|4.2, hard, timeo=N, retrans=N, nconnect=N.",
+      "export": "Export",
+      "endpoint": "Endpoint",
+      "bucket": "Bucket",
+      "region": "Region (optional)",
+      "regionHint": "Default us-east-1.",
+      "prefix": "Prefix (optional)",
+      "caPem": "CA certificates (optional)",
+      "caPemHint": "PEM certificates of a private CA the endpoint chains to.",
+      "accessKey": "Access key",
+      "secretKey": "Secret key",
+      "saved": "The target was saved.",
+      "deleted": "The target {name} was deleted.",
+      "enabledDone": "The target {name} is enabled.",
+      "disabledDone": "The target {name} is disabled.",
+      "deleteTitle": "Delete this target?",
+      "deleteConfirm": "The backup sets already on {name} stay, but no further backup is written to it.",
+      "disableTitle": "Disable this target?",
+      "disableConfirm": "No further backup is written to {name} until it is enabled again.",
+      "disable": "Disable",
+      "enable": "Enable",
+      "create": "Add target",
+      "createTitle": "Add a backup target",
+      "editTitle": "Edit the backup target",
+      "testLabel": "Test {name}",
+      "disableLabel": "Disable {name}",
+      "enableLabel": "Enable {name}",
+      "editLabel": "Edit {name}",
+      "deleteLabel": "Delete {name}",
+      "hostStep": "Mounting a share needs the host: run {apply} and then {up} on the control plane. The target shows \"Mounted\" when the backup service sees it.",
+      "reenter": "Your identity was confirmed. Enter the credentials again; they are never kept in the browser.",
+      "testWaiting": "Testing {name}. The backup service answers in its next round.",
+      "testOk": "The connection test of {name} passed.",
+      "testError": "The connection test of {name} failed: {error}",
+      "testUnknown": "unknown error",
+      "testTimeout": "The backup service has not answered the test of {name} yet. Check the list later.",
+      "empty": {
+        "title": "No backup target",
+        "description": "Add a local directory, a share or an S3 bucket to keep backups outside the repository."
+      }
+    },
+    "runs": {
+      "kind": "Kind",
+      "outcome": "Outcome",
+      "startedAt": "Started",
+      "size": "Size",
+      "targets": "Targets",
+      "targetsOk": "{ok} of {total} targets",
+      "continues": "(continues next round)",
+      "empty": {
+        "title": "No backup has run yet",
+        "description": "Runs appear here after the first backup."
+      }
+    },
+    "key": {
+      "dialog": {
+        "title1": "Backup key",
+        "title2": "Store the backup key",
+        "title3": "Confirm the backup key"
+      },
+      "explain": "Paddock protects every backup with one key. You will see it exactly once. Store it where a lost server cannot take it with it — a password manager, a printed copy in a safe — and keep it with the OpenBao unseal shares. Without the key no backup can ever be read.",
+      "shownOnce": "This is the only time Paddock shows the key.",
+      "keyText": "Backup key",
+      "fingerprint": "Fingerprint: {fingerprint}",
+      "download": "Download",
+      "fileSentence": "This is the only copy Paddock will ever show. Keep it outside the server.",
+      "confirmText": "Type the characters at the positions shown. This proves the key reached your safe place. After three mistakes the key is discarded and a new one is generated.",
+      "positionsGroup": "Characters of the key",
+      "position": "Position {n}",
+      "attemptsLeft": "{count, plural, =0 {No attempt left.} one {That did not match. # attempt left.} other {That did not match. # attempts left.}}",
+      "generate": "Generate the key",
+      "discardTitle": "Discard the backup key?",
+      "discardConfirm": "The key is destroyed and cannot be shown again. A backup stays impossible until you generate and confirm a new key. If you have not stored it yet, this is the right choice.",
+      "discardAction": "Discard the key",
+      "discard": "I did not store the key — discard it",
+      "stored": "I stored the key",
+      "confirm": "Confirm",
+      "discarded": "The key was discarded. Generate a new one.",
+      "confirmed": "The key is confirmed and active.",
+      "statePending": "A backup key waits for its confirmation. No backup runs before it is confirmed.",
+      "stateActive": "A backup key is active.",
+      "stateNone": "No backup key yet. No backup runs before one is generated and confirmed.",
+      "fingerprintColumn": "Fingerprint",
+      "retiredAt": "Retired",
+      "pendingText": "The key {fingerprint} waits for its confirmation.",
+      "confirmNow": "Confirm the key",
+      "active": "Active key",
+      "activeSince": "Confirmed by {by}",
+      "rotate": "Rotate the key",
+      "create": "Generate a key",
+      "retired": "Retired keys",
+      "noRetired": "No retired key"
+    },
+    "schedule": {
+      "saved": "The schedule was saved.",
+      "range": "{min}–{max}",
+      "invalid": "Enter a whole number from {min} to {max}.",
+      "fields": {
+        "full_interval_hours": "Full backup every (hours)",
+        "openbao_interval_hours": "OpenBao snapshot every (hours)",
+        "fleet_interval_hours": "Fleet dump every (hours)",
+        "escrow_interval_hours": "Escrow mirror every (hours)",
+        "retention_full": "Full backups kept",
+        "openbao_keep_days": "OpenBao snapshots kept (days)",
+        "fleet_keep_days": "Fleet dumps kept (days)"
+      }
+    },
+    "restore": {
+      "planAction": "Plan a restore",
+      "planTitle": "Plan a restore",
+      "commandTitle": "Run the restore on the host",
+      "consequence": "Restoring replaces the control plane's databases with the backup. Every change after the chosen point is lost. Devices keep working and reconnect; the audit log on the audit host is not touched.",
+      "kind": "What to restore",
+      "kinds": {
+        "components": "The newest backups of the components",
+        "point_in_time": "The state at a point in time",
+        "fresh_install": "Fresh installation"
+      },
+      "source": "Restore from",
+      "sourceRepo": "The local backup repository",
+      "at": "Point in time",
+      "atHint": "The newest successful backups of the source are listed above. The time is in your time zone.",
+      "atInvalid": "Choose a point in the past.",
+      "noSuccess": "no successful backup",
+      "components": "Components",
+      "componentNames": {
+        "postgres": "Databases (Paddock and identity provider)",
+        "openbao": "OpenBao",
+        "fleet": "Fleet",
+        "escrow": "Escrow",
+        "backup-repo": "Backup repository"
+      },
+      "componentsInvalid": "Choose at least one component.",
+      "typeWord": "Type {word} to confirm",
+      "wordInvalid": "Type the word {word} exactly.",
+      "approve": "Approve restore plan",
+      "commandIntro": "The plan is approved. Run this command on the control plane host to execute it.",
+      "commandLabel": "Host command",
+      "expiresIn": "The plan expires in {hours} h {minutes} min, at",
+      "expired": "The plan has expired, it was valid until",
+      "done": "Done",
+      "created": "The restore plan was approved.",
+      "showCommand": "Show command",
+      "cancelAction": "Cancel plan",
+      "cancelTitle": "Cancel the restore plan",
+      "cancelConfirm": "The host will refuse this plan. You can approve a new one afterwards.",
+      "cancelled": "The restore plan was cancelled.",
+      "cancelLabel": "Cancel the restore plan of {time}",
+      "abandonAction": "Abandon plan",
+      "abandonTitle": "Abandon the running restore plan",
+      "abandonConfirm": "Only do this when the host never reported the end of the restore. The plan is marked as abandoned and a later report from the host is refused. The control plane may be left partly restored, so check the host first.",
+      "abandoned": "The restore plan was abandoned.",
+      "abandonLabel": "Abandon the restore plan of {time}",
+      "showLabel": "Show the host command of the plan of {time}",
+      "state": "State",
+      "states": {
+        "approved": "Approved",
+        "running": "Running",
+        "completed": "Completed",
+        "failed": "Failed",
+        "expired": "Expired",
+        "abandoned": "Abandoned"
+      },
+      "source_column": "Source",
+      "createdBy": "Approved by",
+      "pointInTime": "Point in time",
+      "components_column": "Components",
+      "newest": "Newest backups",
+      "sourceSet": "Backup set of the host",
+      "sourceTargetGone": "Deleted target",
+      "empty": {
+        "title": "No restore planned yet",
+        "description": "A restore approved here is executed on the host with the command shown afterwards."
+      }
     }
   },
   "changeSets": {
@@ -2590,6 +2946,77 @@
     "deniedIntro": "Paddock no longer manages these paths. Agents of this release or newer keep the files on the devices unchanged; an older agent deletes an unchanged file once it is no longer shipped. Delete the definitions you no longer need.",
     "deleteDefinition": "Delete definition"
   },
+  "accessReview": {
+    "title": "Access review",
+    "platformTitle": "Platform access review",
+    "intro": "Who may do what in this organization during a period: role members and changes, administrator accounts, API tokens, reveals of secrets, step-ups, ended sessions and destructive actions. Every list shows at most the rows the report holds and its total.",
+    "platformIntro": "Who may administer the platform during a period: platform role members and changes, administrators, privileged platform events and organizations created.",
+    "generatedAt": "Report generated",
+    "exportJson": "Export JSON",
+    "exportCsv": "Export CSV",
+    "stepUp": "Step-ups in the period: {succeeded, plural, one {# successful action} other {# successful actions}} of step-up sessions, {failed, plural, one {# refusal} other {# refusals}} for a missing step-up.",
+    "tokenDenials": "{count, plural, one {# request was} other {# requests were}} refused for a revoked or expired token or an inactive creator.",
+    "capNotice": "Showing {shown, number} of {total, number} rows. Narrow the period to see the rest; the export holds the same rows.",
+    "yes": "Yes",
+    "no": "No",
+    "period": {
+      "label": "Period",
+      "days": "Last {days, number} days",
+      "from": "From",
+      "to": "To",
+      "apply": "Custom range"
+    },
+    "errors": {
+      "dates": "Enter the first and the last day.",
+      "order": "The last day must not be before the first day.",
+      "tooLong": "The period may span at most 400 days."
+    },
+    "forbidden": {
+      "title": "No access to the access review",
+      "description": "Only administrators and auditors can see the access review."
+    },
+    "empty": {
+      "title": "Nothing in this period",
+      "description": "No rows match the period or the search."
+    },
+    "sections": {
+      "roles": "Role members",
+      "roleChanges": "Role changes",
+      "accounts": "Administrator accounts",
+      "tokens": "API tokens",
+      "reveals": "Reveals and downloads of secrets",
+      "sessionsRevoked": "Ended sessions",
+      "destructive": "Destructive and locking actions",
+      "breakGlass": "Break-glass accounts",
+      "administrators": "Platform administrators",
+      "platformEvents": "Privileged platform events",
+      "organizationsCreated": "Organizations created"
+    },
+    "columns": {
+      "role": "Role",
+      "username": "User",
+      "firstSeen": "First seen",
+      "at": "Time",
+      "code": "Action",
+      "actor": "Actor",
+      "displayName": "Name",
+      "lastLogin": "Last sign-in",
+      "disabled": "Disabled",
+      "name": "Name",
+      "prefix": "Prefix",
+      "createdBy": "Created by",
+      "createdAt": "Created",
+      "expiresAt": "Expires",
+      "lastUsed": "Last used",
+      "revokedAt": "Revoked",
+      "revokedBy": "Revoked by",
+      "device": "Device",
+      "params": "Details",
+      "reason": "Reason",
+      "target": "Target",
+      "slug": "Slug"
+    }
+  },
   "mcp": {
     "title": "AI assistants (MCP)",
     "intro": "Administrators sign in to the MCP with their Paddock account (paddockctl mcp login) and act with their own role. This policy limits what every MCP session of this {scope} may do. Changes additionally need the administrator's own write access.",
@@ -2652,6 +3079,24 @@
       }
     }
   },
+  "upgradeCard": {
+    "title": "Upgrade",
+    "version": "Release {version}",
+    "window": "Agents supported",
+    "agents": "Agents outside the window",
+    "noneOutside": "No active device runs an agent outside the window.",
+    "outside": "{count, plural, one {# active device runs an agent outside the window:} other {# active devices run an agent outside the window:}}",
+    "more": "and {count} more",
+    "backups": "Backups",
+    "loading": "Reading the upgrade report…",
+    "unknownVersion": "No upgrade report for this server version: it is not a known release.",
+    "status": {
+      "PASS": "OK",
+      "WARN": "Warning",
+      "FAIL": "Failed",
+      "INFO": "Info"
+    }
+  },
   "setup": {
     "title": "Set up Paddock",
     "progress": "{done} of {total} steps done",
@@ -2667,6 +3112,7 @@
       "organization": "Create the first organization",
       "orgAdmin": "Assign the first organization administrator in the identity provider",
       "release": "Publish an agent release",
+      "backup": "Back up the platform (confirm a key, enable a target)",
       "allowlist": "Restrict the platform to an IP allow list (optional)",
       "breakGlass": "Name the break-glass accounts",
       "users": "Connect an identity source that delivers users",
@@ -2690,7 +3136,8 @@
     "type": "Type",
     "types": {
       "webhook": "Webhook",
-      "email": "E-mail"
+      "email": "E-mail",
+      "syslog": "Syslog (TLS)"
     },
     "enabled": "Enabled",
     "on": "On",
@@ -2765,6 +3212,17 @@
     "testError": "The test delivery to {name} failed: {error}",
     "testUnknown": "unknown error",
     "testTimeout": "No result for the test to {name} yet. Check the state of the destination in a moment.",
+    "replayLabel": "Replay from…: {name}",
+    "replayAction": "Replay from…",
+    "replay": {
+      "title": "Replay from a sequence number",
+      "message": "Resend every batch from sequence number {from} on. The receiver sees the same numbers again; it must deduplicate.",
+      "number": "Sequence number",
+      "hint": "1 to {last}, the last number sent to {name}.",
+      "invalid": "Enter a whole number from 1 to {last}.",
+      "confirm": "Replay",
+      "requested": "Replay of {name} from sequence number {from} requested. The notifier resends the batches in its next rounds."
+    },
     "cursor": {
       "title": "Enable destination",
       "message": "{name} has been disabled. Where should delivery resume?",
@@ -2793,7 +3251,23 @@
       "description": "Add a webhook or an e-mail list to receive security events outside the portal."
     },
     "urlRejected": "The server refused the URL: it must be an https address on port 443 or 1024 to 65535 whose host is public.",
-    "nameTaken": "A destination with this name already exists."
+    "nameTaken": "A destination with this name already exists.",
+    "syslogHost": "Syslog host",
+    "syslogHostHint": "The receiver's DNS name or public IP address. Paddock connects over TLS only.",
+    "syslogHostInvalid": "Enter a DNS name or an IP address without scheme or port.",
+    "syslogHostRejected": "The host was refused: it must resolve to a public address.",
+    "syslogPort": "Port",
+    "syslogPortHint": "6514 is the port of syslog over TLS.",
+    "syslogPortInvalid": "Enter a port from 1 to 65535.",
+    "syslogCa": "CA certificate (PEM, optional)",
+    "syslogCaHint": "The certificate of a private CA the receiver's certificate chains to; then only this CA is trusted. Empty uses the public CAs.",
+    "syslogCaCurrent": "A CA certificate is stored. Leave empty to keep it, or paste a new one to replace it.",
+    "syslogCaInvalid": "Paste one or more PEM certificates (-----BEGIN CERTIFICATE-----), at most 16 KiB.",
+    "syslogServerName": "TLS server name (optional)",
+    "syslogServerNameHint": "The name in the receiver's certificate when it differs from the host.",
+    "syslogServerNameInvalid": "Enter a DNS name.",
+    "checkpoints": "Send daily checkpoints",
+    "checkpointsHint": "After each sealed day, a message with the day's event count and the signed manifest hash lets the receiver prove it has every event."
   },
   "rollout": {
     "urgent": {

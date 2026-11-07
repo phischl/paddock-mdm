@@ -2,10 +2,12 @@
 # Bootstrap of the control-plane buckets on the bundled RustFS (plan M7b decision 19): paddock-bundles (plan M2a
 # decision 3) and paddock-agent-artifacts (plan M2b decision 19; public-read below packages/, plan M4b decision 1), both
 # without versioning and without Object Lock, and paddock-escrow (plan M4b decision 13, versioning on, no Object Lock); a
-# user for the compiler with read/write on bundles, a user for the api with read/write on artifacts and read on
-# escrow, a user for the worker with read on escrow, and a user for the gateway with read-only access to bundles and
-# artifacts and write access to escrowed headers only (the gateway only computes presigned URLs with it), and a user
-# for the revocation-issuer that may list and delete header versions only (plan M4c decision 9). Idempotent.
+# user for the compiler with read/write on bundles, a user for the api with read/write on artifacts and, on escrow, read
+# on headers and diagnostics bundles and list and delete on diagnostics bundles only (ADR 0048), a user for the worker
+# with read on escrow and delete on diagnostics bundles (ADR 0048), a user for the gateway with read-only access to
+# bundles and artifacts and write access to escrowed headers and diagnostics bundles only (the gateway only computes
+# presigned URLs with it), and a user for the revocation-issuer that may list and delete header versions only (plan
+# M4c decision 9). Idempotent.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,9 +34,12 @@ ESCROW_API_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_api_access_key")"
 ESCROW_API_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_api_secret_key")"
 ESCROW_REVOCATION_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_revocation_access_key")"
 ESCROW_REVOCATION_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_revocation_secret_key")"
+ESCROW_BACKUP_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_backup_access_key")"
+ESCROW_BACKUP_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_backup_secret_key")"
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY COMPILER_ACCESS_KEY COMPILER_SECRET_KEY GATEWAY_ACCESS_KEY GATEWAY_SECRET_KEY \
   ARTIFACTS_ACCESS_KEY ARTIFACTS_SECRET_KEY ESCROW_WORKER_ACCESS_KEY ESCROW_WORKER_SECRET_KEY ESCROW_API_ACCESS_KEY \
-  ESCROW_API_SECRET_KEY ESCROW_REVOCATION_ACCESS_KEY ESCROW_REVOCATION_SECRET_KEY
+  ESCROW_API_SECRET_KEY ESCROW_REVOCATION_ACCESS_KEY ESCROW_REVOCATION_SECRET_KEY ESCROW_BACKUP_ACCESS_KEY \
+  ESCROW_BACKUP_SECRET_KEY
 export_rc_host bundles "$ENDPOINT" AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 
 # Credentials travel as inherited environment variables, never as command-line arguments.
@@ -47,7 +52,7 @@ rc() {
     -e COMPILER_ACCESS_KEY -e COMPILER_SECRET_KEY -e GATEWAY_ACCESS_KEY -e GATEWAY_SECRET_KEY \
     -e ARTIFACTS_ACCESS_KEY -e ARTIFACTS_SECRET_KEY -e ESCROW_WORKER_ACCESS_KEY -e ESCROW_WORKER_SECRET_KEY \
     -e ESCROW_API_ACCESS_KEY -e ESCROW_API_SECRET_KEY -e ESCROW_REVOCATION_ACCESS_KEY -e ESCROW_REVOCATION_SECRET_KEY \
-    --entrypoint sh "$RC_IMAGE" -c "$1"
+    -e ESCROW_BACKUP_ACCESS_KEY -e ESCROW_BACKUP_SECRET_KEY --entrypoint sh "$RC_IMAGE" -c "$1"
 }
 
 for _ in $(seq 1 30); do
@@ -87,7 +92,7 @@ policy paddock-bundles-compiler "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::$BUCKET\"]}]"
 policy paddock-bundles-gateway "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$BUCKET/*\",\"arn:aws:s3:::$ARTIFACTS_BUCKET/*\"]},
-  {\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\"]}]"
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\",\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]}]"
 policy paddock-artifacts-api "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\",\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ARTIFACTS_BUCKET/*\"]}]"
 # Escrowed headers keep every version (an overwritten generation stays recoverable); no Object Lock, so a Destroy can
@@ -103,14 +108,34 @@ echo "packages/ of $ARTIFACTS_BUCKET is public-read"
 
 user COMPILER_ACCESS_KEY paddock-bundles-compiler
 user GATEWAY_ACCESS_KEY paddock-bundles-gateway
-policy paddock-escrow-read "[
-  {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/*\"]}]"
 user ARTIFACTS_ACCESS_KEY paddock-artifacts-api
-user ESCROW_WORKER_ACCESS_KEY paddock-escrow-read
-user ESCROW_API_ACCESS_KEY paddock-escrow-read
+# The worker verifies headers and diagnostics bundles and deletes every version of a diagnostics bundle whose retention
+# ended (ADR 0048 decision 5); it deletes nothing else.
+policy paddock-escrow-worker "[
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/*\"]},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]}]"
+user ESCROW_WORKER_ACCESS_KEY paddock-escrow-worker
+# The api reads headers for a header recovery (plan M4b decision 14) and diagnostics bundles for their download, lists
+# and deletes every version of a diagnostics bundle an administrator purges (ADR 0048 decision 5, amendment 2026-11-05);
+# it deletes nothing else and lists no other prefix (RustFS evaluates s3:prefix on ListBucket and ListBucketVersions).
+policy paddock-escrow-api "[
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\",\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"],\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"org/*/devices/*/diagnostics/*\"]}}},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]}]"
+user ESCROW_API_ACCESS_KEY paddock-escrow-api
+# Installations bootstrapped before carry the former policy paddock-escrow-read (GetObject on the whole bucket); left
+# attached, it would void the scope above.
+rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY
 # The revocation-issuer deletes every version of the headers of a destroyed device (plan M4c decision 9).
 policy paddock-escrow-destroy "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},
   {\"Effect\":\"Allow\",\"Action\":[\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\"]}]"
 user ESCROW_REVOCATION_ACCESS_KEY paddock-escrow-destroy
+# The backup role copies the escrowed LUKS headers into the backup set (plan M15 decision 15): list and read them,
+# nothing else; diagnostics bundles are not part of a backup.
+policy paddock-escrow-backup "[
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\"]}]"
+user ESCROW_BACKUP_ACCESS_KEY paddock-escrow-backup
 echo "bundles, agent artifacts and escrow bucket bootstrap complete"

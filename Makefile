@@ -30,11 +30,8 @@ LIB_SH    := $(COMPOSE_DIR)/scripts/lib.sh
 lib_files  = $(shell sed -n 's/^$(1)="\(.*\)"$$/\1/p' $(LIB_SH))
 unexport SECRETS_DIR
 
-# BACKUP=1 adds the backups (plan M6a; compose.backup.yaml with the development wiring of compose.backup.dev.yaml).
+# BACKUP=1 adds the backups (plan M15; compose.backup.yaml with the development wiring of compose.backup.dev.yaml).
 BACKUP_FILES := $(if $(BACKUP),$(call lib_files,DEV_BACKUP_FILES),)
-ifneq ($(BACKUP),)
-export PADDOCK_BACKUP_S3_ENDPOINT ?= https://backup-s3-tls:9443
-endif
 
 # CI only (PDK-540): the workflow sets PADDOCK_CI_GOMODCACHE to the runner's module download cache, which the image
 # builds read instead of the module proxy; unset, as locally, the Compose files are unchanged.
@@ -83,13 +80,30 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run gen'; fi
 
 .PHONY: lint
-lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
 .PHONY: lint-supervisor-budget
 lint-supervisor-budget:
 	bash test/supervisor-budget.sh
+
+# A migration of an earlier release never changes (ADR 0047 decision 2, plan M16 decision 1): the lint compares
+# server/migrations/ with the nearest `v*` tag before HEAD (PADDOCK_PREVIOUS_TAG overrides it) and fails with the
+# names of the files that differ or are gone. New migrations pass. CI checks out with fetch-depth: 0 so the tags exist (without them the lint fails there).
+# The baseline is the nearest tag reachable from HEAD: a branch forked before the latest release commit keeps the older
+# baseline until main is merged in.
+.PHONY: lint-migrations-frozen
+lint-migrations-frozen:
+	go run ./tools/migrationsfrozen
+
+# Regenerates pkg/compat/testdata/<RELEASE>/ (bundles, check-in, events, commands, the audit insert) from the current
+# tree and removes the directories older than two releases (plan M16 decision 2). Run at release time on the release
+# candidate; the release checklist is in docs/operations/testing-strategy.md.
+.PHONY: compat-fixtures
+compat-fixtures:
+	@if [ -z "$(RELEASE)" ]; then echo 'usage: make compat-fixtures RELEASE=<version without v>' >&2; exit 2; fi
+	go run ./pkg/compat/cmd/compatfixtures --release '$(RELEASE)'
 
 # The dracut module of the in-place encryption (plan M8e PDK-244): the init script runs in the initrd under whatever
 # /bin/sh dracut installs, so it is checked as POSIX sh; module-setup.sh is sourced by dracut's bash. shellcheck comes
@@ -101,7 +115,14 @@ lint-shell:
 	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
 	shellcheck -s bash test/stack-preflight.sh test/stack-preflight_test.sh
 	shellcheck -s bash scripts/changelog-assemble.sh scripts/changelog-assemble_test.sh
+	shellcheck -s bash scripts/release-notes-check.sh scripts/release-notes-check_test.sh
 	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
+	shellcheck -s bash deploy/compose/scripts/upgrade-check.sh deploy/bundle/upgrade-check_test.sh
+	shellcheck -s bash deploy/compose/scripts/upgrade.sh deploy/compose/scripts/rollback.sh deploy/bundle/upgrade_test.sh \
+		deploy/bundle/rollback_test.sh deploy/compose/scripts/legacy-alpha8.sh
+	shellcheck -x -s bash deploy/bundle/ci/lib-smoke.sh deploy/bundle/ci/upgrade.sh deploy/bundle/ci/upgrade_test.sh \
+		deploy/bundle/ci/seed.sh deploy/bundle/ci/fetch-previous.sh deploy/bundle/ci/fetch-previous_test.sh \
+		deploy/bundle/ci/smoke.sh
 
 # Changelog fragments (PDK-518): every change adds changelog.d/<ticket-id>.<section>.md instead of editing the
 # [Unreleased] section of CHANGELOG.md, so parallel pull requests do not conflict; the release manager assembles them
@@ -222,21 +243,31 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/wait-healthy_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
+	bash $(COMPOSE_DIR)/scripts/restore_test.sh
+	bash $(COMPOSE_DIR)/scripts/openbao-configure_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
+	bash $(COMPOSE_DIR)/scripts/rustfs-policy-removal_test.sh
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
+	bash $(COMPOSE_DIR)/scripts/provision-roles_test.sh
 	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh
 	bash $(COMPOSE_DIR)/scripts/dev-instance_test.sh
 	bash test/vms/virtualbox/lib_test.sh
 	bash packaging/release_test.sh
 	bash deploy/bundle/bundle_test.sh
+	bash deploy/bundle/upgrade-check_test.sh
+	bash deploy/bundle/upgrade_test.sh
+	bash deploy/bundle/rollback_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
 	bash deploy/bundle/ci/assert-hardening_test.sh
+	bash deploy/bundle/ci/upgrade_test.sh
+	bash deploy/bundle/ci/fetch-previous_test.sh
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
 	bash test/require-tests_test.sh
 	bash test/stack-preflight_test.sh
 	bash test/skill_test.sh
 	bash scripts/changelog-assemble_test.sh
+	bash scripts/release-notes-check_test.sh
 	bash scripts/acceptance-scope_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
@@ -296,6 +327,9 @@ bundle: ## Build a local operator bundle of the local images (IMAGE, COMPILER_IM
 .PHONY: bundle-test
 bundle-test: ## Drift test of the operator bundle against deploy/compose/ (part of make test)
 	bash deploy/bundle/bundle_test.sh
+	bash deploy/bundle/upgrade-check_test.sh
+	bash deploy/bundle/upgrade_test.sh
+	bash deploy/bundle/rollback_test.sh
 
 .PHONY: bundle-smoke-lab
 bundle-smoke-lab: ## Smoke test of the lab profile of the local bundle behind Nginx (plan M8a decision 18; binds 80, 443, 8080)
@@ -409,8 +443,8 @@ fleet-bootstrap: ## Set up Fleet: admin user, API-only user paddock (token), glo
 	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
 
 .PHONY: dev-seed
-dev-seed: ## Create organizations acme and globex and assign the dev users
-	go run ./test/acceptance/cmd/devseed
+dev-seed: ## Create organizations acme and globex and assign the dev users (BACKUP=1: and a confirmed backup key and the development backup targets)
+	BACKUP=$(BACKUP) go run ./test/acceptance/cmd/devseed
 
 # Guard against hangs; the whole suite took ~85 min on a development machine and ~82 min on a GitHub runner since M8x
 # (measured 2026-10-18) and 101 min on a GitHub runner on 2026-10-21 (PR #118). CI therefore runs it in shards
@@ -566,6 +600,7 @@ logs-dump: ## Write the full logs of every service to LOGS_DIR/<service>.log (to
 # Everything lands in dist/release/<version>/. DRY_RUN=1 prints the docker, syft and cosign commands instead.
 RELEASE_VERSION         ?=
 RELEASE_CHANNEL         ?= stable
+RELEASE_CHANGELOG       ?= CHANGELOG.md
 RELEASE_PLATFORMS       ?= linux/amd64,linux/arm64
 RELEASE_REGISTRY        ?= ghcr.io/phischl
 RELEASE_SERVER_REPO     ?= $(RELEASE_REGISTRY)/paddock-server
@@ -616,6 +651,7 @@ release-check:
 			{ echo "usage: RELEASE_VERSION=edge-YYYYMMDD-sha7 RELEASE_CHANNEL=edge"; exit 2; } ;; \
 		*) echo "usage: RELEASE_CHANNEL=stable|edge"; exit 2 ;; \
 	esac
+	@if [ "$(RELEASE_CHANNEL)" = stable ]; then bash scripts/release-notes-check.sh '$(RELEASE_VERSION)' --changelog '$(RELEASE_CHANGELOG)'; fi
 
 # The supervisor compiles in the release public key (line 2 of the minisign file): a release must name the production
 # key explicitly, line 2 must be a minisign Ed25519 public key (42 bytes, "Ed"), and it must not be the development

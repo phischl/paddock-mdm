@@ -1,0 +1,26 @@
+title: Paddock identity or account change
+id: 73af5f42-6bc3-46bb-be87-ffb3925af7c4
+status: experimental
+description: Sign-ins, role changes, session revocations and changes of users, groups and device logins.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100922
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code|startswith:
+      - 'admin.'
+      - 'local_admin.login'
+      - 'user.'
+      - 'user_group.'
+      - 'device.login_'
+      - 'device.logins_'
+  condition: selection
+falsepositives:
+  - Routine account administration.
+level: low

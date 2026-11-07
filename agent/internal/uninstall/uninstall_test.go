@@ -81,6 +81,7 @@ func newWorld(t *testing.T) *world {
 		"/etc/apt/apt.conf.d/52paddock-unattended": "u", "/etc/systemd/system/paddock-updates.timer": "t",
 		"/var/lib/paddock/state/held-packages": "curl\nvim\n", "/var/lib/paddock/state/managed.json": string(managedJSON),
 		"/var/lib/paddock/quarantine/paddock-q-1": "quarantined\n", "/var/lib/paddock/identity/sign.key": "key",
+		"/var/lib/paddock/diagnostics/0190f000-0000-7000-8000-0000000000c1.tar.gz": "bundle",
 		"/etc/motd": managed, "/etc/changed.conf": "changed by hand", "/etc/sudoers.d/denied": managed,
 		"/etc/himmelblau/himmelblau.conf": "c", "/var/cache/himmelblau/cache": "c", "/var/lib/himmelblau/db": "d",
 		"/opt/paddock/agent/A/paddockd": "bin", "/opt/orbit/secret.txt": "s",
@@ -195,12 +196,12 @@ func TestLeave(t *testing.T) {
 	w.userDataIntact()
 	for _, call := range []string{"systemctl stop paddock-supervisor.service", "systemctl disable paddock-supervisor.service",
 		"apt-mark unhold curl vim", "visudo -c", "systemctl try-reload-or-restart ssh.service", "dconf update",
-		"apt-get remove --purge -y fleet-osquery paddock-revoke paddock-agent paddock-supervisor"} {
+		"apt-get remove --purge -y -o DPkg::Lock::Timeout=600 fleet-osquery paddock-revoke paddock-agent paddock-supervisor"} {
 		if !w.called(call) {
 			t.Fatalf("no %q in %v", call, w.calls)
 		}
 	}
-	if w.called("userdel") || w.called("apt-get remove --purge -y himmelblau") {
+	if w.called("userdel") || w.called("apt-get remove --purge -y -o DPkg::Lock::Timeout=600 himmelblau") {
 		t.Fatalf("leave touched the account or Himmelblau: %v", w.calls)
 	}
 	if len(w.sent) != 1 || len(w.sent[0]) != 1 || w.sent[0][0].Type != protocol.EventAgentUninstalled || w.sent[0][0].EventSeq != 10 {
@@ -243,7 +244,7 @@ func TestReset(t *testing.T) {
 	}
 	w.userDataIntact()
 	if !w.called("userdel -- paddock-admin") || w.called("userdel --remove") ||
-		!w.called("apt-get remove --purge -y himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config") {
+		!w.called("apt-get remove --purge -y -o DPkg::Lock::Timeout=600 himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config") {
 		t.Fatalf("calls %v", w.calls)
 	}
 	if w.tpm.cleared {
@@ -364,7 +365,7 @@ func TestResetPurgesHimmelblauDependencies(t *testing.T) {
 	w.out = map[string]string{"dpkg-query -W": "himmelblau ii \nhimmelblau-apparmor ii \nhimmelblau-old rc \n" +
 		"himmelblau-qr-greeter ii \nhimmelblau-unused un \n"}
 	s := w.helper().Execute(context.Background(), Plan{CommandID: "c9", Mode: "reset", DeviceID: "d1"})
-	want := "apt-get remove --purge -y himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config " +
+	want := "apt-get remove --purge -y -o DPkg::Lock::Timeout=600 himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config " +
 		"himmelblau-apparmor himmelblau-old"
 	if s.Steps[StepHimmelblau] != "done" || !slices.Contains(w.calls, want) {
 		t.Fatalf("step %s, calls %v", s.Steps[StepHimmelblau], w.calls)
@@ -458,5 +459,37 @@ func TestUnholdOnlyExactNames(t *testing.T) {
 	}
 	if !strings.HasPrefix(s.Steps[StepUpdates], "failed:") || !strings.Contains(s.Steps[StepUpdates], "paddock-agen++t") {
 		t.Fatalf("step %q", s.Steps[StepUpdates])
+	}
+}
+
+// TestPackagesRemovesDiagnostics (plan M12 decision 12): the packages step of both modes removes a diagnostics bundle
+// left by an interrupted collection, before Paddock's directories go at the end.
+func TestPackagesRemovesDiagnostics(t *testing.T) {
+	w := newWorld(t)
+	if got := w.helper().packages(context.Background()); got != stepDone {
+		t.Fatalf("step %q", got)
+	}
+	if w.exists("/var/lib/paddock/diagnostics") || !w.exists("/var/lib/paddock/state/managed.json") {
+		t.Fatal("the diagnostics directory is left, or the state went with it")
+	}
+}
+
+// TestPurgeWaitsForDpkgLock: both package removals wait for a dpkg lock that another process holds (an unattended
+// upgrade, a user's apt) instead of failing at once and ending the uninstall as partial.
+func TestPurgeWaitsForDpkgLock(t *testing.T) {
+	w := newWorld(t)
+	w.helper().Execute(context.Background(), Plan{CommandID: "c10", Mode: "reset", DeviceID: "d1"})
+	removals := 0
+	for _, call := range w.calls {
+		if !strings.HasPrefix(call, "apt-get remove --purge") {
+			continue
+		}
+		removals++
+		if !strings.Contains(call, " -o DPkg::Lock::Timeout=600 ") {
+			t.Fatalf("removal without a dpkg lock wait: %q", call)
+		}
+	}
+	if removals != 2 {
+		t.Fatalf("%d purge removals, want the Himmelblau and the Paddock packages: %v", removals, w.calls)
 	}
 }

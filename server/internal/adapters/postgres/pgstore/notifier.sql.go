@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const advanceNotifierCursor = `-- name: AdvanceNotifierCursor :exec
@@ -54,16 +55,17 @@ func (q *Queries) FinishNotifierTestDelivery(ctx context.Context, arg FinishNoti
 }
 
 const getNotifierDelivery = `-- name: GetNotifierDelivery :one
-SELECT id, kind, forward_from, forward_to, event_count, attempts FROM notification_delivery WHERE id = $1
+SELECT id, kind, forward_from, forward_to, event_count, attempts, checkpoint_day FROM notification_delivery WHERE id = $1
 `
 
 type GetNotifierDeliveryRow struct {
-	ID          uuid.UUID
-	Kind        string
-	ForwardFrom *int64
-	ForwardTo   *int64
-	EventCount  int32
-	Attempts    int32
+	ID            uuid.UUID
+	Kind          string
+	ForwardFrom   *int64
+	ForwardTo     *int64
+	EventCount    int32
+	Attempts      int32
+	CheckpointDay pgtype.Date
 }
 
 func (q *Queries) GetNotifierDelivery(ctx context.Context, id uuid.UUID) (GetNotifierDeliveryRow, error) {
@@ -76,6 +78,7 @@ func (q *Queries) GetNotifierDelivery(ctx context.Context, id uuid.UUID) (GetNot
 		&i.ForwardTo,
 		&i.EventCount,
 		&i.Attempts,
+		&i.CheckpointDay,
 	)
 	return i, err
 }
@@ -89,6 +92,35 @@ func (q *Queries) GetNotifierPseudonymKey(ctx context.Context) (string, error) {
 	var key_ciphertext string
 	err := row.Scan(&key_ciphertext)
 	return key_ciphertext, err
+}
+
+const insertNotifierCheckpoint = `-- name: InsertNotifierCheckpoint :exec
+INSERT INTO notification_delivery (id, destination_id, organization_id, kind, forward_from, forward_to, event_count,
+                                   checkpoint_day)
+VALUES ($1, $2, $3, 'checkpoint', $4::bigint, $4::bigint, $5,
+        $6)
+`
+
+type InsertNotifierCheckpointParams struct {
+	ID             uuid.UUID
+	DestinationID  uuid.UUID
+	OrganizationID uuid.UUID
+	ForwardSeq     int64
+	EventCount     int32
+	CheckpointDay  pgtype.Date
+}
+
+// A checkpoint takes the next forward sequence number and becomes the pending delivery (plan M12 decision 20).
+func (q *Queries) InsertNotifierCheckpoint(ctx context.Context, arg InsertNotifierCheckpointParams) error {
+	_, err := q.db.Exec(ctx, insertNotifierCheckpoint,
+		arg.ID,
+		arg.DestinationID,
+		arg.OrganizationID,
+		arg.ForwardSeq,
+		arg.EventCount,
+		arg.CheckpointDay,
+	)
+	return err
 }
 
 const insertNotifierDelivery = `-- name: InsertNotifierDelivery :exec
@@ -182,9 +214,10 @@ const listNotifierDestinations = `-- name: ListNotifierDestinations :many
 
 SELECT d.id, d.organization_id, d.type, d.name, d.filter_mode, d.codes, d.pseudonymize_users, d.include_params,
        d.url_ciphertext, d.secret_ciphertext, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s,
+       d.syslog_host, d.syslog_port, d.syslog_ca_pem, d.syslog_server_name, d.checkpoints, d.created_at,
        s.cursor_commit_seq, s.start_at_latest, s.forward_seq, s.status, s.pending_delivery_id,
        s.consecutive_failures, s.first_failure_at, s.stalled_since, s.last_success_at, s.next_attempt_at,
-       s.last_heartbeat_at, p.forward_from AS pending_forward_from
+       s.last_heartbeat_at, s.last_checkpoint_day, s.replay_from, p.forward_from AS pending_forward_from
 FROM notification_destination d
 JOIN notification_destination_state s ON s.destination_id = d.id AND s.organization_id = d.organization_id
 LEFT JOIN notification_delivery p ON p.id = s.pending_delivery_id AND p.organization_id = s.organization_id
@@ -206,6 +239,12 @@ type ListNotifierDestinationsRow struct {
 	HeartbeatIntervalS  int32
 	Recipients          []string
 	EmailMinIntervalS   int32
+	SyslogHost          *string
+	SyslogPort          *int32
+	SyslogCaPem         *string
+	SyslogServerName    *string
+	Checkpoints         bool
+	CreatedAt           time.Time
 	CursorCommitSeq     int64
 	StartAtLatest       bool
 	ForwardSeq          int64
@@ -217,6 +256,8 @@ type ListNotifierDestinationsRow struct {
 	LastSuccessAt       *time.Time
 	NextAttemptAt       *time.Time
 	LastHeartbeatAt     *time.Time
+	LastCheckpointDay   pgtype.Date
+	ReplayFrom          *int64
 	PendingForwardFrom  *int64
 }
 
@@ -246,6 +287,12 @@ func (q *Queries) ListNotifierDestinations(ctx context.Context) ([]ListNotifierD
 			&i.HeartbeatIntervalS,
 			&i.Recipients,
 			&i.EmailMinIntervalS,
+			&i.SyslogHost,
+			&i.SyslogPort,
+			&i.SyslogCaPem,
+			&i.SyslogServerName,
+			&i.Checkpoints,
+			&i.CreatedAt,
 			&i.CursorCommitSeq,
 			&i.StartAtLatest,
 			&i.ForwardSeq,
@@ -257,6 +304,8 @@ func (q *Queries) ListNotifierDestinations(ctx context.Context) ([]ListNotifierD
 			&i.LastSuccessAt,
 			&i.NextAttemptAt,
 			&i.LastHeartbeatAt,
+			&i.LastCheckpointDay,
+			&i.ReplayFrom,
 			&i.PendingForwardFrom,
 		); err != nil {
 			return nil, err
@@ -288,6 +337,60 @@ func (q *Queries) ListNotifierPseudonymLookups(ctx context.Context) ([]ListNotif
 	for rows.Next() {
 		var i ListNotifierPseudonymLookupsRow
 		if err := rows.Scan(&i.ID, &i.Pseudonym); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotifierReplayDeliveries = `-- name: ListNotifierReplayDeliveries :many
+SELECT id, kind, forward_from, forward_to, event_count, attempts, checkpoint_day FROM notification_delivery
+WHERE destination_id = $1 AND kind IN ('events','checkpoint') AND delivered_at IS NOT NULL
+  AND forward_to >= $2::bigint
+ORDER BY forward_from
+LIMIT $3
+`
+
+type ListNotifierReplayDeliveriesParams struct {
+	DestinationID  uuid.UUID
+	FromForwardSeq int64
+	MaxRows        int32
+}
+
+type ListNotifierReplayDeliveriesRow struct {
+	ID            uuid.UUID
+	Kind          string
+	ForwardFrom   *int64
+	ForwardTo     *int64
+	EventCount    int32
+	Attempts      int32
+	CheckpointDay pgtype.Date
+}
+
+// The delivered numbered deliveries of a replay (plan M12 decision 21) in forward order: event batches and checkpoints
+// whose numbers reach from_forward_seq. A batch dropped by a skip request was never delivered and is not replayed.
+func (q *Queries) ListNotifierReplayDeliveries(ctx context.Context, arg ListNotifierReplayDeliveriesParams) ([]ListNotifierReplayDeliveriesRow, error) {
+	rows, err := q.db.Query(ctx, listNotifierReplayDeliveries, arg.DestinationID, arg.FromForwardSeq, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNotifierReplayDeliveriesRow{}
+	for rows.Next() {
+		var i ListNotifierReplayDeliveriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.ForwardFrom,
+			&i.ForwardTo,
+			&i.EventCount,
+			&i.Attempts,
+			&i.CheckpointDay,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -342,6 +445,39 @@ func (q *Queries) NextNotifierTestDelivery(ctx context.Context, destinationID uu
 	var i NextNotifierTestDeliveryRow
 	err := row.Scan(&i.ID, &i.RequestedBy)
 	return i, err
+}
+
+const notifierCheckpointSucceeded = `-- name: NotifierCheckpointSucceeded :execrows
+UPDATE notification_destination_state SET
+  pending_delivery_id = NULL, last_checkpoint_day = greatest(last_checkpoint_day, $1::date),
+  consecutive_failures = 0, first_failure_at = NULL, last_error = NULL,
+  next_attempt_at = $2::timestamptz,
+  last_attempt_at = $3, last_success_at = $3
+WHERE destination_id = $4 AND pending_delivery_id IS NOT DISTINCT FROM $5::uuid
+`
+
+type NotifierCheckpointSucceededParams struct {
+	CheckpointDay   time.Time
+	NextAttemptAt   *time.Time
+	At              *time.Time
+	DestinationID   uuid.UUID
+	ExpectedPending uuid.NullUUID
+}
+
+// A delivered checkpoint ends the pending delivery and moves last_checkpoint_day; the cursor stays. Guarded like
+// NotifierDestinationSucceeded; next_attempt_at is the e-mail digest's earliest next delivery, NULL otherwise.
+func (q *Queries) NotifierCheckpointSucceeded(ctx context.Context, arg NotifierCheckpointSucceededParams) (int64, error) {
+	result, err := q.db.Exec(ctx, notifierCheckpointSucceeded,
+		arg.CheckpointDay,
+		arg.NextAttemptAt,
+		arg.At,
+		arg.DestinationID,
+		arg.ExpectedPending,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const notifierDeliveryFailed = `-- name: NotifierDeliveryFailed :exec
@@ -469,6 +605,40 @@ func (q *Queries) NotifierDestinationSucceeded(ctx context.Context, arg Notifier
 	return result.RowsAffected(), nil
 }
 
+const notifierReplayAdvanced = `-- name: NotifierReplayAdvanced :execrows
+UPDATE notification_destination_state SET
+  replay_from = $1::bigint,
+  consecutive_failures = 0, first_failure_at = NULL, last_error = NULL,
+  next_attempt_at = $2::timestamptz,
+  last_attempt_at = $3, last_success_at = $3
+WHERE destination_id = $4 AND pending_delivery_id IS NULL AND replay_from = $5::bigint
+`
+
+type NotifierReplayAdvancedParams struct {
+	NextFrom      *int64
+	NextAttemptAt *time.Time
+	At            *time.Time
+	DestinationID uuid.UUID
+	ExpectedFrom  int64
+}
+
+// A replayed delivery moves replay_from to the next stored delivery, NULL when the replay is complete. Only while no
+// batch is pending and replay_from is still the number the engine replayed from. next_attempt_at is the e-mail
+// digest's earliest next delivery (plan M9 decision 28), NULL otherwise.
+func (q *Queries) NotifierReplayAdvanced(ctx context.Context, arg NotifierReplayAdvancedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, notifierReplayAdvanced,
+		arg.NextFrom,
+		arg.NextAttemptAt,
+		arg.At,
+		arg.DestinationID,
+		arg.ExpectedFrom,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const resolveNotifierPseudonymLookup = `-- name: ResolveNotifierPseudonymLookup :exec
 UPDATE notification_pseudonym_lookup SET resolved_username = $1, resolved_at = $2
 WHERE id = $3 AND resolved_at IS NULL
@@ -485,9 +655,9 @@ func (q *Queries) ResolveNotifierPseudonymLookup(ctx context.Context, arg Resolv
 	return err
 }
 
-const setNotifierPending = `-- name: SetNotifierPending :exec
+const setNotifierPending = `-- name: SetNotifierPending :execrows
 UPDATE notification_destination_state SET forward_seq = $1, pending_delivery_id = $2
-WHERE destination_id = $3
+WHERE destination_id = $3 AND replay_from IS NULL
 `
 
 type SetNotifierPendingParams struct {
@@ -496,10 +666,14 @@ type SetNotifierPendingParams struct {
 	DestinationID uuid.UUID
 }
 
-// The batch's forward sequence numbers are taken when it is created, so they never change on a retry.
-func (q *Queries) SetNotifierPending(ctx context.Context, arg SetNotifierPendingParams) error {
-	_, err := q.db.Exec(ctx, setNotifierPending, arg.ForwardSeq, arg.DeliveryID, arg.DestinationID)
-	return err
+// The batch's forward sequence numbers are taken when it is created, so they never change on a retry. Not while a
+// replay is requested: a request after the engine read the state wins, so the replay ends before new numbers are cut.
+func (q *Queries) SetNotifierPending(ctx context.Context, arg SetNotifierPendingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setNotifierPending, arg.ForwardSeq, arg.DeliveryID, arg.DestinationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setNotifierTestResult = `-- name: SetNotifierTestResult :exec
@@ -538,7 +712,7 @@ func (q *Queries) SkipNotifierDelivery(ctx context.Context, id uuid.UUID) error 
 const startNotifierCursorAtLatest = `-- name: StartNotifierCursorAtLatest :one
 UPDATE notification_destination_state SET
   cursor_commit_seq = greatest(cursor_commit_seq, $1::bigint), start_at_latest = false,
-  pending_delivery_id = NULL, next_attempt_at = NULL
+  pending_delivery_id = NULL, next_attempt_at = NULL, replay_from = NULL
 WHERE destination_id = $2 AND start_at_latest
 RETURNING cursor_commit_seq
 `
@@ -550,7 +724,9 @@ type StartNotifierCursorAtLatestParams struct {
 
 // Resolves a skip request: the cursor jumps to the scope's latest commit sequence (never back, the trigger refuses a
 // decrease anyway) and a pending batch, whose events lie at or below it, is dropped. Only while the flag is set, so a
-// request that arrived after the read is resolved in the next round.
+// request that arrived after the read is resolved in the next round. It also ends a running replay (plan M12
+// decision 21): a replay whose re-send never succeeds would otherwise hold back every new event, and the skip is the
+// operator's audited way out that keeps the destination's numbering.
 func (q *Queries) StartNotifierCursorAtLatest(ctx context.Context, arg StartNotifierCursorAtLatestParams) (int64, error) {
 	row := q.db.QueryRow(ctx, startNotifierCursorAtLatest, arg.Latest, arg.DestinationID)
 	var cursor_commit_seq int64

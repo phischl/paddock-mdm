@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
@@ -42,6 +43,7 @@ func serveGateway(ctx context.Context, l *config.Loader, common config.Common) e
 	defer vk.Close()
 	pub := mq.NewPublisherPool(mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}, gatewayPublishers)
 	defer pub.Close()
+	window := buildinfo.Window(buildinfo.Current())
 	handler := device.NewHandler(device.Deps{
 		Cache:     devicecache.New(vk),
 		Publisher: pub,
@@ -49,8 +51,9 @@ func serveGateway(ctx context.Context, l *config.Loader, common config.Common) e
 		// Agent artifacts are served through the same public host with the gateway's read-only credential.
 		Artifacts: objectstore.NewPresigner(bundlesURL, accessKey, secretKey, artifactsBucket),
 		// Header uploads too; the credential may write below org/*/devices/*/luks-header/ only (plan M4b decision 13).
-		Escrow:         objectstore.NewPresigner(bundlesURL, accessKey, secretKey, escrowBucket),
-		TrustedProxies: common.TrustedProxies,
+		Escrow:             objectstore.NewPresigner(bundlesURL, accessKey, secretKey, escrowBucket),
+		TrustedProxies:     common.TrustedProxies,
+		AgentOutsideWindow: func(v string) bool { return buildinfo.Outside(window, v) },
 	})
 	srv := newHTTPServer(httpAddr, handler)
 	slog.InfoContext(ctx, "gateway starting", "addr", httpAddr, "bundles_url", bundlesURL)

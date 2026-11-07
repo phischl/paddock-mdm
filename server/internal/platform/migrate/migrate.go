@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,6 +26,37 @@ func Paddock(ctx context.Context, dsn string) error {
 // Audit migrates database paddock_audit. dsn must belong to audit_owner.
 func Audit(ctx context.Context, dsn string) error {
 	return run(ctx, dsn, migrations.Audit, "audit")
+}
+
+// LatestPaddock returns the version of the newest embedded migration of database paddock: the schema this binary
+// expects (the upgrade check, plan M16 decision 4).
+func LatestPaddock() (int64, error) {
+	return latest(migrations.Paddock, "paddock")
+}
+
+// LatestAudit returns the version of the newest embedded migration of database paddock_audit.
+func LatestAudit() (int64, error) {
+	return latest(migrations.Audit, "audit")
+}
+
+func latest(fsys fs.FS, dir string) (int64, error) {
+	entries, err := fs.ReadDir(fsys, dir)
+	if err != nil {
+		return 0, fmt.Errorf("migrate: %w", err)
+	}
+	var out int64
+	for _, e := range entries {
+		prefix, _, ok := strings.Cut(e.Name(), "_")
+		if !ok || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		v, err := strconv.ParseInt(prefix, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("migrate: %s has no version prefix", e.Name())
+		}
+		out = max(out, v)
+	}
+	return out, nil
 }
 
 func run(ctx context.Context, dsn string, fsys fs.FS, dir string) error {

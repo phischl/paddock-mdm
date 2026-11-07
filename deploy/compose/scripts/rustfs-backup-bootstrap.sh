@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# Development bootstrap of the backup bucket (plan M6a decision 4): bucket paddock-backup on the audit host's RustFS,
-# versioned without Object Lock, and one credential per writer (the same policies docs/operations/restore.md gives for
-# production):
-#   pgbackrest  everything below pgbackrest/ (pgBackRest expires old backups itself), read below openbao/ and fleet/
-#               (the restore uses this credential), list
-#   worker      write below openbao/, list (backup age of every kind)
-#   fleet       write below fleet/
+# Development bootstrap of the bucket of the development S3 backup target (plan M15 decision 18): bucket paddock-backup
+# on the audit host's RustFS, versioned without Object Lock, and the target's credential
+# (.secrets/backup_dev_target_*): the backup role mirrors the backup set there, so it reads, writes, lists and
+# deletes (an expired file leaves the set).
 # Idempotent. Usage: rustfs-backup-bootstrap.sh [Compose project] (default PADDOCK_PROJECT, else paddock).
 set -euo pipefail
 
@@ -56,24 +53,19 @@ policy() {
     rc "cat >/tmp/policy.json && rc admin policy create backup $name /tmp/policy.json >/dev/null"
 }
 objects() { printf '{"Effect":"Allow","Action":%s,"Resource":["arn:aws:s3:::%s/%s*"]}' "$1" "$BUCKET" "$2"; }
-policy paddock-backup-pgbackrest "$(objects '["s3:PutObject","s3:GetObject","s3:DeleteObject"]' pgbackrest/)" \
-  "$(objects '["s3:GetObject"]' openbao/)" "$(objects '["s3:GetObject"]' fleet/)" "$LIST"
-policy paddock-backup-worker "$(objects '["s3:PutObject"]' openbao/)" "$LIST"
-policy paddock-backup-fleet "$(objects '["s3:PutObject"]' fleet/)"
+policy paddock-backup-target "$(objects '["s3:PutObject","s3:GetObject","s3:DeleteObject"]' '')" "$LIST"
 
-for role in pgbackrest worker fleet; do
-  USER_ACCESS_KEY="$(cat "$SECRETS_DIR/backup_${role}_access_key")"
-  USER_SECRET_KEY="$(cat "$SECRETS_DIR/backup_${role}_secret_key")"
-  export USER_ACCESS_KEY USER_SECRET_KEY
-  # Generated keys may start with "-", hence "--" before positional arguments and "--user=". rc admin user add takes
-  # the secret only as an argument, so the user is created with a throwaway one and holds no policy until passwd has
-  # set the real secret from the environment; passwd runs on every pass, so an interrupted earlier run cannot leave
-  # the throwaway secret in place.
-  if rc_user_absent rc 'rc admin user info -- backup "$USER_ACCESS_KEY"'; then
-    rc 'rc admin user add -- backup "$USER_ACCESS_KEY" "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d " \n")" >/dev/null'
-    echo "created backup user $role"
-  fi
-  rc 'rc admin user passwd --password-from-env USER_SECRET_KEY -- backup "$USER_ACCESS_KEY" >/dev/null'
-  rc "rc admin policy attach backup paddock-backup-$role --user=\"\$USER_ACCESS_KEY\" >/dev/null"
-done
+USER_ACCESS_KEY="$(cat "$SECRETS_DIR/backup_dev_target_access_key")"
+USER_SECRET_KEY="$(cat "$SECRETS_DIR/backup_dev_target_secret_key")"
+export USER_ACCESS_KEY USER_SECRET_KEY
+# Generated keys may start with "-", hence "--" before positional arguments and "--user=". rc admin user add takes
+# the secret only as an argument, so the user is created with a throwaway one and holds no policy until passwd has
+# set the real secret from the environment; passwd runs on every pass, so an interrupted earlier run cannot leave
+# the throwaway secret in place.
+if rc_user_absent rc 'rc admin user info -- backup "$USER_ACCESS_KEY"'; then
+  rc 'rc admin user add -- backup "$USER_ACCESS_KEY" "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d " \n")" >/dev/null'
+  echo "created the backup target user"
+fi
+rc 'rc admin user passwd --password-from-env USER_SECRET_KEY -- backup "$USER_ACCESS_KEY" >/dev/null'
+rc "rc admin policy attach backup paddock-backup-target --user=\"\$USER_ACCESS_KEY\" >/dev/null"
 echo "backup bucket bootstrap complete"

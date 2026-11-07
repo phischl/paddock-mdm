@@ -67,6 +67,30 @@ type isolationWorld struct {
 	globexFinding string
 	// globexExport is an evidence export of globex (seedGlobexExport).
 	globexExport string
+	// globexDiagnostics is a diagnostics bundle of globexDevice (seedGlobexDiagnostics).
+	globexDiagnostics string
+}
+
+// seedGlobexDiagnostics requests a diagnostics bundle of globexDevice as carol once and adds its ID to the globex IDs.
+// The bundle stays requested: the simulated agent never answers it, and a requested bundle ends with its command
+// after an hour, not with the development retention.
+func seedGlobexDiagnostics(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	if w.globexDiagnostics != "" {
+		return
+	}
+	res := requestDiagnostics(t, w.carol, w.globexDevice, "globex-iso diagnostics")
+	expectStatus(t, res, http.StatusAccepted, "")
+	w.globexDiagnostics = responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, w.globexDiagnostics)
+}
+
+// diagnosticsFixture is an item fixture of globex's diagnostics bundle below /api/v1/diagnostics/{id}.
+func diagnosticsFixture(suffix string) isolationFixture {
+	return isolationFixture{kind: isoItem, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		seedGlobexDiagnostics(t, w)
+		return "/api/v1/diagnostics/" + w.globexDiagnostics + suffix, nil
+	}}
 }
 
 // seedGlobexFinding reports an unexpected sudoers file of globexDevice as event 1 (seedGlobexConfigStatus continues with 2, seedGlobexLogin with 3) and
@@ -421,6 +445,12 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/security-review": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/security-review", nil
 	}},
+	"GET /api/v1/access-review": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/access-review", nil
+	}},
+	"GET /api/v1/access-review/export": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/access-review/export?format=json", nil
+	}},
 	"GET /api/v1/attention/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/attention/devices?page_size=100", nil
 	}},
@@ -495,6 +525,9 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/notification-destinations/{id}/test": itemFixture(func(w *isolationWorld) string {
 		return "/api/v1/notification-destinations/" + w.globexDestination + "/test"
 	}, nil),
+	"POST /api/v1/notification-destinations/{id}/replay": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/notification-destinations/" + w.globexDestination + "/replay"
+	}, map[string]any{"from_forward_seq": 1}),
 	"POST /api/v1/notification-destinations/{id}/resolve-pseudonym": itemFixture(func(w *isolationWorld) string {
 		return "/api/v1/notification-destinations/" + w.globexDestination + "/resolve-pseudonym"
 	},
@@ -786,6 +819,15 @@ var isolationFixtures = map[string]isolationFixture{
 	}, map[string]any{"confirm_hostname": "x"}),
 	"POST /api/v1/devices/{id}/disk/header": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/disk/header" },
 		map[string]any{"confirm_hostname": "x"}),
+	"POST /api/v1/devices/{id}/diagnostics": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/diagnostics" },
+		map[string]string{"reason": "acme isolation"}),
+	"GET /api/v1/devices/{id}/diagnostics": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/diagnostics" }, nil),
+	"GET /api/v1/diagnostics": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/diagnostics?page_size=100", nil
+	}},
+	"GET /api/v1/diagnostics/{id}":          diagnosticsFixture(""),
+	"GET /api/v1/diagnostics/{id}/download": diagnosticsFixture("/download"),
+	"POST /api/v1/diagnostics/{id}/purge":   diagnosticsFixture("/purge"),
 	"POST /api/v1/autoinstall": {kind: isoItem, request: func(_ *testing.T, w *isolationWorld) (string, any) {
 		return "/api/v1/autoinstall", autoinstallBody(w.globexEnrollment, "26.04")
 	}},
@@ -908,6 +950,7 @@ var listParents = map[string]func(w *isolationWorld) string{
 	"/api/v1/vulnerabilities/{cve}/devices": func(w *isolationWorld) string { return w.globexCVE },
 	"/api/v1/users/{id}/devices":            func(w *isolationWorld) string { return w.globexUser },
 	"/api/v1/devices/{id}/logins":           func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/devices/{id}/diagnostics":      func(w *isolationWorld) string { return w.globexDevice },
 }
 
 func fixtureKey(method, path string) string { return strings.ToUpper(method) + " " + path }
@@ -1018,6 +1061,12 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"globex-iso"}, "page_size": {"100"}},
 		{"status": {"pending", "running", "ready", "failed", "expired"}, "sort": {"-requested_at"}, "page_size": {"100"}},
 	},
+	// globex's requested diagnostics bundle (seedGlobexDiagnostics): its host name and carol as the requester.
+	"/api/v1/diagnostics": {
+		{"q": {"globex-iso"}, "page_size": {"100"}},
+		{"q": {"carol"}, "state": {"requested"}, "sort": {"-requested_at"}, "page_size": {"100"}},
+	},
+	"/api/v1/devices/{id}/diagnostics": {{"state": {"requested"}, "sort": {"state"}, "page_size": {"100"}}},
 	// globex's sealed current day (seedGlobexManifest); the manifest's object key carries the globex ID.
 	"/api/v1/audit/manifests": {
 		{"q": {"manifests"}, "page_size": {"100"}},
@@ -1087,11 +1136,13 @@ func currentPrivacySettings(t *testing.T, p *env.Portal) map[string]any {
 // listSeeds seed globex data of a collection GET right before the gate checks it: data the development stack's
 // retention purges within minutes.
 var listSeeds = map[string]func(t *testing.T, w *isolationWorld){
-	"/api/v1/devices/{id}/logins":     seedGlobexLogin,
-	"/api/v1/devices/{id}/bundles":    seedGlobexBundleVersion,
-	"/api/v1/audit/verification-runs": seedGlobexVerificationRun,
-	"/api/v1/audit/manifests":         seedGlobexManifest,
-	"/api/v1/audit/exports":           seedGlobexExport,
+	"/api/v1/devices/{id}/logins":      seedGlobexLogin,
+	"/api/v1/devices/{id}/bundles":     seedGlobexBundleVersion,
+	"/api/v1/audit/verification-runs":  seedGlobexVerificationRun,
+	"/api/v1/audit/manifests":          seedGlobexManifest,
+	"/api/v1/audit/exports":            seedGlobexExport,
+	"/api/v1/diagnostics":              seedGlobexDiagnostics,
+	"/api/v1/devices/{id}/diagnostics": seedGlobexDiagnostics,
 }
 
 // bundleVersionJump is how far seedGlobexBundleVersion raises the bundle sequence of globexDevice.

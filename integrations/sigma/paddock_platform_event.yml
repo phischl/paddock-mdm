@@ -1,0 +1,20 @@
+title: Paddock platform event
+id: 0c50926d-ae82-4d68-9352-318d3bbb7b49
+status: experimental
+description: Any platform-level event.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100931
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code|startswith: 'platform.'
+  condition: selection
+falsepositives:
+  - Routine platform operation.
+level: low

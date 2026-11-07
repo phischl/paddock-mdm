@@ -93,7 +93,8 @@ tar -xzf paddock-deploy-<version>.tar.gz && cd paddock-deploy-<version>   # afte
 ```
 
 The full procedure, including OpenBao, the buckets and the first agent release, is
-[docs/operations/install.md](docs/operations/install.md); upgrades: [docs/operations/upgrade.md](docs/operations/upgrade.md).
+[docs/operations/install.md](docs/operations/install.md); upgrades are `./paddock upgrade-check <old dir>`, then `./paddock upgrade <old dir>`, and `./paddock rollback <old dir>` to go
+back ([docs/operations/upgrade.md](docs/operations/upgrade.md)).
 
 ## Quick start (local development)
 

@@ -609,3 +609,22 @@ func TestEmailMessageOnTheWire(t *testing.T) {
 		t.Fatalf("received %v:\n%s", h, body)
 	}
 }
+
+// TestEmailRenderingMissing: a replayed event the index no longer holds is named by its ID and number, in detail and
+// in the summary.
+func TestEmailRenderingMissing(t *testing.T) {
+	from := mail.Address{Name: "Paddock", Address: "paddock@example.com"}
+	m := emailMessage(MaxDetailedEvents + 2)
+	id := uuid.MustParse("0193a1b2-0000-7000-8000-0000000000bb")
+	m.Events[0] = outbound.MessageEvent{ForwardSeq: 7, EventID: id, Missing: true}
+	m.Events[MaxDetailedEvents+1] = outbound.MessageEvent{ForwardSeq: 58, EventID: id, Missing: true}
+	_, body := decoded(t, renderEmail(from, emailDestination(), m))
+	for _, want := range []string{
+		"event " + id.String() + " (forward_seq 7) is no longer in the audit index\n",
+		"  (no longer in the audit index): 1\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
+	}
+}

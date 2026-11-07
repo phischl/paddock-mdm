@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
+	"io"
 	"testing"
 )
 
@@ -137,4 +139,70 @@ func TestHasHeaderFields(t *testing.T) {
 			t.Errorf("%s is not a header field", name)
 		}
 	}
+}
+
+// TestSealObjectRoundTrip: an object opens with its key, nonce and ID only, and never as a header of the same ID (ADR
+// 0048 decision 3).
+func TestSealObjectRoundTrip(t *testing.T) {
+	dek := make([]byte, 32)
+	if _, err := rand.Read(dek); err != nil {
+		t.Fatal(err)
+	}
+	plain := make([]byte, 1<<20)
+	if _, err := rand.Read(plain); err != nil {
+		t.Fatal(err)
+	}
+	const id = "0190f000-0000-7000-8000-0000000000c1"
+	sealed, nonce, err := SealObject(dek, id, bytes.NewReader(plain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nonce) != HeaderNonceSize || len(sealed) != len(plain)+16 {
+		t.Fatalf("nonce %d bytes, sealed %d bytes", len(nonce), len(sealed))
+	}
+	got, err := OpenObject(dek, nonce, id, sealed)
+	if err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := OpenObject(dek, nonce, "0190f000-0000-7000-8000-0000000000c2", sealed); err == nil {
+		t.Fatal("opened with another ID")
+	}
+	if _, err := OpenHeader(dek, nonce, id, sealed); err == nil {
+		t.Fatal("an object opened as a header")
+	}
+	tampered := bytes.Clone(sealed)
+	tampered[3] ^= 1
+	if _, err := OpenObject(dek, nonce, id, tampered); err == nil {
+		t.Fatal("opened a changed object")
+	}
+	if _, err := OpenObject(make([]byte, 32), nonce, id, sealed); err == nil {
+		t.Fatal("opened with a wrong key")
+	}
+	if _, err := OpenObject(dek, nonce[:8], id, sealed); err == nil {
+		t.Fatal("opened with a short nonce")
+	}
+	if _, _, err := SealObject(dek[:16], id, bytes.NewReader(plain)); err == nil {
+		t.Fatal("sealed with a short key")
+	}
+	_, other, err := SealObject(dek, id, bytes.NewReader(plain))
+	if err != nil || bytes.Equal(other, nonce) {
+		t.Fatal("two seals share the nonce")
+	}
+}
+
+func TestSealObjectTooLarge(t *testing.T) {
+	dek := make([]byte, 32)
+	if _, _, err := SealObject(dek, "x", io.LimitReader(zeros{}, MaxObject+1)); !errors.Is(err, ErrObjectTooLarge) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, _, err := SealObject(dek, "x", io.LimitReader(zeros{}, MaxObject)); err != nil {
+		t.Fatalf("at the bound: %v", err)
+	}
+}
+
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }

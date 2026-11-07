@@ -1,11 +1,16 @@
-# Backups of the control plane (plan M6a decisions 4–6, architecture §20, docs/operations/restore.md). Used on the
-# control-plane host together with compose.yaml and compose.prod.yaml (production; this file comes last, so that its
-# secrets of paddock-worker add to the `!override` list of compose.prod.yaml) or with the development files and
-# compose.backup.dev.yaml (`make up BACKUP=1`, restore drill). Everything goes to one S3 bucket outside the
-# control-plane host (PADDOCK_BACKUP_S3_*), encrypted with the backup encryption key before it leaves the host:
-#   pgbackrest/   pgBackRest repository of the stanzas paddock and authentik (WAL archive + daily full, 14 kept)
-#   openbao/      Raft snapshots of OpenBao, every 6 h (paddock-worker)
-#   fleet/        daily dumps of Fleet's MySQL
+# Backups of the control plane (plan M6a decisions 4–6, plan M15 decisions 15–19, ADR 0046, architecture §20,
+# docs/operations/restore.md). Used on the control-plane host together with compose.yaml and compose.prod.yaml
+# (production and lab; this file comes last) or with the development files and compose.backup.dev.yaml
+# (`make up BACKUP=1`). Every backup lands in the local repository (volume backup-repo), the backup set of ADR 0046
+# decision 1:
+#   pgbackrest/<key_id>/  pgBackRest repository of the stanzas paddock and authentik (WAL archive + full backups)
+#   openbao/              sealed Raft snapshots of OpenBao
+#   fleet/                sealed dumps of Fleet's MySQL
+#   escrow/               the escrow bucket's LUKS header objects, unchanged
+#   manifest.json
+# paddock-backup is the only process that decrypts the backup key: it hands it to pgBackRest through the tmpfs volume
+# backup-runtime and mirrors the set to every backup target configured in the portal. A target outage never touches
+# the control plane.
 #
 # PostgreSQL runs in its own image without pgBackRest: archive_command copies every WAL file into a spool volume that
 # the pgbackrest service pushes to the repository within seconds. The path contains "pgbackrest", which pgBackRest's
@@ -13,11 +18,6 @@
 #
 # The data volumes follow the PostgreSQL 18 image layout (plan M6d decision 4): each is mounted at /var/lib/postgresql
 # and the cluster lives in /var/lib/postgresql/18/docker, the path run.sh gives pgBackRest.
-
-x-backup-s3: &backup-s3
-  PADDOCK_BACKUP_S3_ENDPOINT: ${PADDOCK_BACKUP_S3_ENDPOINT:?set PADDOCK_BACKUP_S3_ENDPOINT (https URL of the backup S3 endpoint)}
-  PADDOCK_BACKUP_S3_BUCKET: ${PADDOCK_BACKUP_S3_BUCKET:-paddock-backup}
-  PADDOCK_BACKUP_S3_REGION: ${PADDOCK_BACKUP_S3_REGION:-us-east-1}
 
 # YAML anchors do not cross files: the same log rotation as x-paddock-logging of compose.yaml (plan M10 decision 40).
 x-paddock-logging: &paddock-logging
@@ -34,11 +34,16 @@ services:
       - -c
       - >-
         install -d -o postgres -g postgres -m 700 /pgbackrest-spool/paddock &&
+        install -d -o postgres -g postgres -m 755 /paddock-bundle-seq &&
         exec docker-entrypoint.sh postgres -c archive_mode=on -c archive_timeout=60
         -c 'archive_command=cp %p /pgbackrest-spool/paddock/.%f && mv /pgbackrest-spool/paddock/.%f /pgbackrest-spool/paddock/%f'
     volumes:
       - pgbackrest-spool-paddock:/pgbackrest-spool/paddock
       - postgres-socket:/var/run/postgresql
+      # The bundle sequence's high-water file (decisions-alpha9 item 68, scripts/bundle-seq.sh): Docker creates the
+      # directory as root, so this container, which starts as root, hands it to uid 999 (its postgres user, the backup
+      # role's uid) on every start; the restore and rollback scripts write the file through it.
+      - ./bundle-seq:/paddock-bundle-seq
 
   authentik-postgres:
     logging: *paddock-logging
@@ -53,7 +58,8 @@ services:
       - pgbackrest-spool-authentik:/pgbackrest-spool/authentik
       - authentik-postgres-socket:/var/run/postgresql
 
-  # One pgBackRest container per database: pgBackRest needs the data directory at the path the server reports.
+  # One pgBackRest container per database: pgBackRest needs the data directory at the path the server reports. It
+  # needs no network: the database is reached through its socket, the repository is a volume.
   pgbackrest: &pgbackrest
     logging: *paddock-logging
     image: ${PADDOCK_PGBACKREST_IMAGE:-paddock-pgbackrest:dev}
@@ -62,20 +68,16 @@ services:
     command: ["serve"]
     read_only: true
     tmpfs: [/tmp]
+    network_mode: none
     environment: &pgbackrest-env
-      <<: *backup-s3
       PADDOCK_BACKUP_STANZA: paddock
-      PADDOCK_BACKUP_S3_CA_FILE: ${PADDOCK_BACKUP_S3_CA_FILE:-}
-      PADDOCK_BACKUP_S3_ACCESS_KEY_FILE: /run/secrets/backup_pgbackrest_access_key
-      PADDOCK_BACKUP_S3_SECRET_KEY_FILE: /run/secrets/backup_pgbackrest_secret_key
-      PADDOCK_BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
-    secrets: [backup_pgbackrest_access_key, backup_pgbackrest_secret_key, backup_encryption_key]
     volumes:
       - postgres-data:/var/lib/postgresql
       - postgres-socket:/var/run/postgresql
       - pgbackrest-spool-paddock:/pgbackrest-spool/paddock
       - pgbackrest-state-paddock:/var/lib/pgbackrest
-    networks: [cp]
+      - backup-repo:/backup-repo
+      - backup-runtime:/run/paddock-backup:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,10 +95,13 @@ services:
       - authentik-postgres-socket:/var/run/postgresql
       - pgbackrest-spool-authentik:/pgbackrest-spool/authentik
       - pgbackrest-state-authentik:/var/lib/pgbackrest
+      - backup-repo:/backup-repo
+      - backup-runtime:/run/paddock-backup:ro
     depends_on:
       authentik-postgres:
         condition: service_healthy
 
+  # Writes plaintext dumps into fleet-dumps when paddock-backup asks for one; the role seals and deletes them.
   fleet-backup:
     logging: *paddock-logging
     image: ${FLEET_MYSQL_IMAGE}
@@ -107,9 +112,8 @@ services:
     read_only: true
     tmpfs: [/tmp]
     environment:
-      PADDOCK_BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
       FLEET_MYSQL_ROOT_PASSWORD_FILE: /run/secrets/fleet_mysql_root_password
-    secrets: [backup_encryption_key, fleet_mysql_root_password]
+    secrets: [fleet_mysql_root_password]
     volumes:
       - ./fleet/backup.sh:/paddock/backup.sh:ro
       - fleet-dumps:/dumps
@@ -118,43 +122,108 @@ services:
       fleet-mysql:
         condition: service_healthy
 
-  fleet-backup-upload:
+  # The backup role (plan M15 decisions 15–19): the AppRole paddock-backup (decrypt backup-wrap, OpenBao snapshot),
+  # the database role paddock_backup, a read-only credential of the escrow bucket. It runs as uid 999 like pgBackRest,
+  # whose repository and runtime files it shares.
+  paddock-backup:
     logging: *paddock-logging
-    image: ${AWS_CLI_IMAGE}
+    image: ${PADDOCK_IMAGE:-paddock-server:dev}
+    profiles: [paddock]
     restart: unless-stopped
-    pids_limit: 128
-    entrypoint: ["/bin/bash", "/paddock/backup-upload.sh"]
-    command: ["serve"]
+    user: "999:999"
     read_only: true
     tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    command: ["serve", "backup"]
+    healthcheck:
+      test: ["CMD", "/paddock-server", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     environment:
-      <<: *backup-s3
-      HOME: /tmp
-      PADDOCK_BACKUP_S3_CA_FILE: ${PADDOCK_BACKUP_S3_CA_FILE:-}
-      PADDOCK_BACKUP_S3_ACCESS_KEY_FILE: /run/secrets/backup_fleet_access_key
-      PADDOCK_BACKUP_S3_SECRET_KEY_FILE: /run/secrets/backup_fleet_secret_key
-    secrets: [backup_fleet_access_key, backup_fleet_secret_key]
-    volumes:
-      - ./fleet/backup-upload.sh:/paddock/backup-upload.sh:ro
-      - fleet-dumps:/dumps
-    networks: [cp]
-
-  # OpenBao snapshots every 6 h and the backup age of every kind (paddock_backup_last_success_timestamp_seconds).
-  paddock-worker:
-    logging: *paddock-logging
-    environment:
-      <<: *backup-s3
-      PADDOCK_BACKUP_S3_ACCESS_KEY_FILE: /run/secrets/backup_worker_access_key
-      PADDOCK_BACKUP_S3_SECRET_KEY_FILE: /run/secrets/backup_worker_secret_key
-      PADDOCK_BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
-      PADDOCK_BACKUP_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_backup_role_id
-      PADDOCK_BACKUP_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_backup_secret_id
+      PADDOCK_ENV: ${PADDOCK_ENV:-production}
+      PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
+      PADDOCK_OPS_ADDR: ":9090"
+      PADDOCK_DB_BACKUP_URL_FILE: /run/secrets/db_paddock_backup_url
+      PADDOCK_DB_PLATFORM_URL_FILE: /run/secrets/db_paddock_platform_url
+      PADDOCK_OPENBAO_ADDR: https://openbao:8200
+      PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_backup_role_id
+      PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_backup_secret_id
+      BAO_CACERT: /run/secrets/internal_ca_bundle
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      PADDOCK_ESCROW_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_backup_access_key
+      PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_backup_secret_key
+      PADDOCK_BACKUP_HIGH_WATER_FILE: /bundle-seq/high-water
     secrets:
-      - backup_worker_access_key
-      - backup_worker_secret_key
-      - backup_encryption_key
+      - db_paddock_backup_url
+      - db_paddock_platform_url
       - approle_backup_role_id
       - approle_backup_secret_id
+      - rustfs_escrow_backup_access_key
+      - rustfs_escrow_backup_secret_key
+      - internal_ca_bundle
+    volumes:
+      - backup-repo:/backup-repo
+      - backup-runtime:/run/paddock-backup
+      - fleet-dumps:/fleet-dumps
+      - pgbackrest-state-paddock:/pgbackrest-state/paddock:ro
+      - pgbackrest-state-authentik:/pgbackrest-state/authentik:ro
+      # Raised to the highest device.bundle_seq after every successful round (decisions-alpha9 item 68).
+      - ./bundle-seq:/bundle-seq
+    networks: [cp]
+    depends_on:
+      paddock-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+
+  # The escrow step of ./paddock restore (decisions-alpha9 item 44): restore.sh runs it once with `run`, `up` never
+  # starts it (profile restore). It reads the Destroy evidence from the audit index, which a restore does not touch, so
+  # it alone joins audit-index and holds the reader credential; the long-running backup role reaches neither. It
+  # lists with the backup role's read-only escrow credential and writes with the gateway's, the only one that may put
+  # headers. It holds no control-plane database credential: the restored database is no source of evidence
+  # (decisions-alpha9 item 45). internal_ca_bundle is the public CA of the reader's verify-full DSN.
+  backup-restore-escrow:
+    logging: *paddock-logging
+    image: ${PADDOCK_IMAGE:-paddock-server:dev}
+    profiles: [restore]
+    user: "999:999"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    command: ["backup", "restore-escrow", "/backup-repo"]
+    environment:
+      PADDOCK_ENV: ${PADDOCK_ENV:-production}
+      PADDOCK_LOG_LEVEL: error
+      # postgres://…@<audit host>:5432/paddock_audit?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca_bundle
+      PADDOCK_AUDIT_DB_READER_URL_FILE: /run/secrets/db_paddock_audit_reader_url
+      PADDOCK_ESCROW_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_backup_access_key
+      PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_backup_secret_key
+      PADDOCK_ESCROW_RESTORE_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_gateway_access_key
+      PADDOCK_ESCROW_RESTORE_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_gateway_secret_key
+    secrets:
+      - db_paddock_audit_reader_url
+      - rustfs_escrow_backup_access_key
+      - rustfs_escrow_backup_secret_key
+      - rustfs_bundles_gateway_access_key
+      - rustfs_bundles_gateway_secret_key
+      - internal_ca_bundle
+    volumes:
+      - backup-repo:/backup-repo:ro
+    networks: [cp, audit-index]
+
+  prometheus:
+    volumes:
+      - ./prometheus/scrape/backup.yml:/etc/prometheus/scrape/backup.yml:ro
 
 volumes:
   postgres-socket: {}
@@ -164,14 +233,15 @@ volumes:
   pgbackrest-state-paddock: {}
   pgbackrest-state-authentik: {}
   fleet-dumps: {}
+  # The local repository: every target is a mirror of it (ADR 0046 decision 1).
+  backup-repo: {}
+  # The decrypted key and schedule.env for pgBackRest live in memory only.
+  backup-runtime:
+    driver_opts: {type: tmpfs, device: tmpfs, o: "size=1m,uid=999,gid=999,mode=0750"}
 
 secrets:
-  backup_encryption_key: { file: ./.secrets/backup_encryption_key }
-  backup_pgbackrest_access_key: { file: ./.secrets/backup_pgbackrest_access_key }
-  backup_pgbackrest_secret_key: { file: ./.secrets/backup_pgbackrest_secret_key }
-  backup_worker_access_key: { file: ./.secrets/backup_worker_access_key }
-  backup_worker_secret_key: { file: ./.secrets/backup_worker_secret_key }
-  backup_fleet_access_key: { file: ./.secrets/backup_fleet_access_key }
-  backup_fleet_secret_key: { file: ./.secrets/backup_fleet_secret_key }
+  db_paddock_backup_url: { file: ./.secrets/db_paddock_backup_url }
   approle_backup_role_id: { file: ./.secrets/approle/paddock-backup/role_id }
   approle_backup_secret_id: { file: ./.secrets/approle/paddock-backup/secret_id }
+  rustfs_escrow_backup_access_key: { file: ./.secrets/rustfs_escrow_backup_access_key }
+  rustfs_escrow_backup_secret_key: { file: ./.secrets/rustfs_escrow_backup_secret_key }

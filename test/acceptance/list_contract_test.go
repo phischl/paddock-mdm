@@ -25,12 +25,16 @@ import (
 // listParams are the parameters every collection GET must declare (ADR 0018).
 var listParams = []string{"page", "page_size", "sort", "q"}
 
+// reports are GETs whose object has an items array without being a collection: the upgrade check's six report lines
+// (field name fixed by plan M16 §6.2), exempt like the unit listspec gate (listspec_test.go).
+var reports = map[string]bool{"/api/platform/v1/upgrade-check": true}
+
 // collectionGETs returns the paths of every collection GET in the contract: a GET whose 200 response is an object
-// with an items array.
+// with an items array, except the reports.
 func collectionGETs(doc *openapi3.T) map[string]*openapi3.Operation {
 	out := map[string]*openapi3.Operation{}
 	for path, item := range doc.Paths.Map() {
-		if item.Get == nil {
+		if item.Get == nil || reports[path] {
 			continue
 		}
 		ok := item.Get.Responses.Status(http.StatusOK)
@@ -100,6 +104,7 @@ func TestListContract(t *testing.T) {
 		"/api/v1/devices/{id}/vulnerabilities": member.DeviceID,
 		"/api/v1/devices/{id}/config-status":   member.DeviceID, "/api/v1/devices/{id}/bundles": member.DeviceID, "/api/v1/vulnerabilities/{cve}/devices": cve}
 	parents["/api/v1/devices/{id}/managed-software"] = member.DeviceID
+	parents["/api/v1/devices/{id}/diagnostics"] = member.DeviceID
 	parents["/api/v1/software-catalog/{id}/devices"] = listSoftwareEntry(t, sessions[false], parentGroup)
 	// A rollout stages a section for its whole organization: it runs in a gate organization of its own, listed by its
 	// administrator.

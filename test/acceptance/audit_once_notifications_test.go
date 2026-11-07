@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/sink"
 )
 
 const (
@@ -175,6 +176,17 @@ var notificationAuditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "notification.pseudonym_resolved", "failure")
 		}}),
 
+	"POST /api/v1/notification-destinations/{id}/replay": append(
+		replaceSuccess(orgDestinationCases("notification.replay_requested", "/replay", http.MethodPost, http.StatusAccepted, replayBody), orgReplaySuccess),
+		auditCase{"validation failure", func(t *testing.T, w *auditWorld) {
+			s := adminStepper(adminUser(t, "a3-notif"))
+			path := auditDestination(t, s, orgDestinations, false) + "/replay"
+			s.stepUp(t)
+			res := call(t, s.Portal, http.MethodPost, path, map[string]any{"from_forward_seq": 1 << 40})
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "notification.replay_requested", "failure")
+		}}),
+
 	"POST /api/platform/v1/notification-destinations": createDestinationCases(platformDestinations, true),
 	"PUT /api/platform/v1/notification-destinations/{id}": platformDestinationCases("notification.destination_updated", "",
 		http.MethodPut, http.StatusOK, func() any { return destinationUpdate(0) }),
@@ -184,6 +196,70 @@ var notificationAuditCases = map[string][]auditCase{
 		"notification.destination_secret_rotated", "/rotate-secret", http.MethodPost, http.StatusOK, noBody),
 	"POST /api/platform/v1/notification-destinations/{id}/test": platformDestinationCases("notification.test_requested", "/test",
 		http.MethodPost, http.StatusAccepted, noBody),
+	"POST /api/platform/v1/notification-destinations/{id}/replay": append(
+		replaceSuccess(platformDestinationCases("notification.replay_requested", "/replay", http.MethodPost, http.StatusAccepted, replayBody), platformReplaySuccess),
+		auditCase{"validation failure", func(t *testing.T, w *auditWorld) {
+			s := rootStepper(t)
+			path := auditDestination(t, s, platformDestinations, false) + "/replay"
+			s.stepUp(t)
+			res := call(t, s.Portal, http.MethodPost, path, map[string]any{"from_forward_seq": 1 << 40})
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "notification.replay_requested", "failure", auditPollTimeout)
+		}}),
+}
+
+func replayBody() any { return map[string]any{"from_forward_seq": 1} }
+
+// replaceSuccess swaps the success case of cases for one that first waits for a delivered batch: a replay needs
+// forward_seq >= 1, which a fresh destination does not have.
+func replaceSuccess(cases []auditCase, success func(*testing.T, *auditWorld)) []auditCase {
+	out := make([]auditCase, 0, len(cases))
+	for _, c := range cases {
+		if c.name == "success" {
+			c.run = success
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// waitDelivered waits until the notifier delivered a batch to the destination, so that a replay from 1 is valid.
+// forward_seq is set when a batch is cut, before delivery; only last_success_at shows that no batch is pending any
+// more, and a replay answers 409 while one is.
+func waitDelivered(t *testing.T, p *env.Portal, path string) {
+	t.Helper()
+	waitDestinationState(t, p, path, deliveryTimeout, "a delivered batch", func(d destinationState) bool {
+		return d.State.Forward >= 1 && d.State.LastSuccessAt != nil && d.State.LastError == nil
+	})
+}
+
+func orgReplaySuccess(t *testing.T, w *auditWorld) {
+	admin := adminUser(t, "a3-notif")
+	s := adminStepper(admin)
+	device := activeDevice(t, admin.Portal, "", "a3-replay-"+uniqueSuffix())
+	_, path := tamperDestination(t, s, sink.Start(t).URL())
+	sendSudoersEvent(t, device, 1, "a3-replay")
+	waitDelivered(t, admin.Portal, path)
+	s.stepUp(t)
+	res := call(t, s.Portal, http.MethodPost, path+"/replay", replayBody())
+	expectStatus(t, res, http.StatusAccepted, "")
+	expectOneEvent(t, w.alice, res.RequestID, "notification.replay_requested", "success")
+}
+
+func platformReplaySuccess(t *testing.T, w *auditWorld) {
+	s := rootStepper(t)
+	body := webhookBody(destinationName("a3"), sink.Start(t).URL())
+	// platform.cache_rebuilt is emitted by no parallel A3 case, so only this test's own trigger reaches the destination.
+	body["filter_mode"], body["codes"] = "custom", []string{"platform.cache_rebuilt"}
+	d, _ := createDestination(t, s, platformDestinations, body)
+	path := platformDestinations + "/" + d.ID
+	waitStarted(t, s.Portal, path)
+	runAdmin(t, "rebuild-cache")
+	waitDelivered(t, s.Portal, path)
+	s.stepUp(t)
+	res := call(t, s.Portal, http.MethodPost, path+"/replay", replayBody())
+	expectStatus(t, res, http.StatusAccepted, "")
+	expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "notification.replay_requested", "success", auditPollTimeout)
 }
 
 func responseLookupID(t *testing.T, res env.Response) string {

@@ -1,0 +1,23 @@
+title: Paddock platform protection reduced
+id: 169f8411-f6d3-4f65-8521-a173d4500930
+status: experimental
+description: The IP allow list was disabled or refused a request, or the automatic unseal was disabled.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100930
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code:
+      - 'platform.ip_allowlist_denied'
+      - 'platform.ip_allowlist_disabled'
+      - 'platform.auto_unseal_disabled'
+  condition: selection
+falsepositives:
+  - Planned platform maintenance.
+level: medium

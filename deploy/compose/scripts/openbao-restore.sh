@@ -31,11 +31,11 @@ openbao_unsealed() {
   return 1
 }
 
-# openbao_restore_snapshot <workdir> <init file>: initializes the fresh OpenBao with one temporary share, restores
-# /tmp/snapshot, restarts it and unseals it with the first three shares of the original init file ("Unseal Key <n>:
-# <share>" lines, as `bao operator init` prints them).
-openbao_restore_snapshot() {
-  local work="$1" init_file="$2" tmp_key i
+# openbao_restore_sealed <workdir>: initializes the fresh OpenBao with one temporary share, restores /tmp/snapshot and
+# restarts it, which leaves it sealed with the snapshot's barrier and seal configuration (restore.sh, step openbao). The
+# temporary share and root token stay in <workdir>/init.json and lose their meaning with the restore.
+openbao_restore_sealed() {
+  local work="$1" tmp_key
   # Exported, because the caller's bao passes it to the container by name only (never on a command line).
   local -x BAO_TOKEN
   # A fresh OpenBao takes a snapshot only after its own initialization; the snapshot brings back the original
@@ -52,6 +52,13 @@ openbao_restore_snapshot() {
   # original shares are refused ("invalid key size 33"); a restart reads the restored configuration (OpenBao 2.7.1).
   bao_restart
   openbao_wait
+}
+
+# openbao_restore_snapshot <workdir> <init file>: openbao_restore_sealed, then unseals with the first three shares of
+# the original init file ("Unseal Key <n>: <share>" lines, as `bao operator init` prints them; development only).
+openbao_restore_snapshot() {
+  local work="$1" init_file="$2" i
+  openbao_restore_sealed "$work"
   for i in 1 2 3; do
     openbao_unseal "$(sed -n "s/^Unseal Key $i: //p" "$init_file")"
   done
