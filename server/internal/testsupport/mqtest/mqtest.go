@@ -53,7 +53,9 @@ func Start(t testing.TB) *Broker {
 		Config:    mq.Config{URL: fmt.Sprintf("amqp://%s:%s/paddock", host, port.Port()), User: "test", Password: "test"},
 		container: c,
 	}
-	if err := mq.Provision(ctx, b.Config, mq.ProvisionOptions{AuditQueueMaxBytes: 1 << 30}); err != nil {
+	// The outbox relay provisions with the same retries; "Server startup complete" does not mean that a quorum queue's
+	// Raft group can elect a leader in time on a loaded host (PDK-871).
+	if err := mq.ProvisionRetry(ctx, b.Config, mq.ProvisionOptions{AuditQueueMaxBytes: 1 << 30}, 30, 2*time.Second); err != nil {
 		t.Fatalf("mqtest: provision: %v", err)
 	}
 	return b
