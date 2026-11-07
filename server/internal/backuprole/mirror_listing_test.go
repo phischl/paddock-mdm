@@ -2,6 +2,7 @@ package backuprole
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -132,20 +133,62 @@ func TestDirTargetListingTicks(t *testing.T) {
 	}
 }
 
-// TestListingPastBudgetIsNoTrickle: on a target that already holds the set, listings that keep delivering pages past
-// the round's budget are not cut off by the hard cap on a trickling copy, and the mirror completes. With two listings
-// of a few minutes each on a large S3 target, the cap ended every mirror before step 6 (PDK-865).
-func TestListingPastBudgetIsNoTrickle(t *testing.T) {
+// TestSlowListingReachesDeletions: listings that keep delivering pages and, with the copies, take longer than the
+// round's budget neither end the copy phase early nor trip the cap on a trickling copy: the mirror copies the set and
+// reaches step 6, which deletes the snapshot the local expire would have removed. Charged against the budget, the two
+// listings of a large S3 target ended every mirror before step 6 (PDK-865, decisions-alpha9 item 66).
+func TestSlowListingReachesDeletions(t *testing.T) {
 	f := newFixture(t)
-	f.confirmKey()
 	f.engine.stall = 400 * time.Millisecond
-	s3 := &slowListS3{objects: map[string]string{}}
+	f.engine.budget = 200 * time.Millisecond
+	repo, idx := openSet(t, map[string]string{backupset.ManifestPath: string(testManifest(t, InstallationID(42), nil)),
+		"openbao/20261105T060000Z.snap.enc": "a", "openbao/20261105T070000Z.snap.enc": "b"})
+	set := "site/" + backupset.SetRoot + "/"
+	s3 := &slowListS3{objects: map[string]string{set + "openbao/20200101T000000Z.snap.enc": "old",
+		set + "openbao/20200102T000000Z.snap.enc": "old"}, pages: 8, delay: 50 * time.Millisecond}
 	rec := f.addTarget(t, backupset.TypeS3, NewS3Target(s3, "site"))
-	f.round(t)
-	f.engine.budget = 100 * time.Millisecond
-	s3.pages, s3.delay = 12, 50*time.Millisecond
-	f.round(t)
-	if st := f.store.status[rec.ID.String()+"/"+KindOpenBao]; st.Error != "" {
-		t.Errorf("target status %+v after listings past the budget, want no error", st)
+	start := time.Now()
+	if _, err := f.engine.mirrorTarget(context.Background(), repo, idx, rec, testRetention(time.Now())); err != nil {
+		t.Fatalf("mirror: %v", err)
+	}
+	if took := time.Since(start); took < 2*f.engine.budget {
+		t.Fatalf("the mirror took %s; the listings must outlast the budget for this test to mean anything", took)
+	}
+	s3.mu.Lock()
+	defer s3.mu.Unlock()
+	if _, ok := s3.objects[set+"openbao/20200101T000000Z.snap.enc"]; ok {
+		t.Error("step 6 did not delete the expired snapshot")
+	}
+	if _, ok := s3.objects[set+backupset.ManifestPath]; !ok {
+		t.Error("the target got no manifest")
+	}
+}
+
+// hangingListS3 is an S3 endpoint whose listing delivers one page and then never another, until the request is
+// cancelled.
+type hangingListS3 struct{ *slowListS3 }
+
+func (h *hangingListS3) ListSizesPaged(ctx context.Context, _ string, page func()) (map[string]int64, error) {
+	page()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestHangingListingTripsTheWatchdog: a listing whose next page never arrives fails the mirror after the stall
+// deadline, and the error names the listing, not a copy rate (PDK-865, decisions-alpha9 item 66).
+func TestHangingListingTripsTheWatchdog(t *testing.T) {
+	f := newFixture(t)
+	f.engine.stall = 200 * time.Millisecond
+	repo, idx := openSet(t, map[string]string{backupset.ManifestPath: string(testManifest(t, InstallationID(42), nil)),
+		"openbao/20261105T060000Z.snap.enc": "a"})
+	s3 := &hangingListS3{&slowListS3{objects: map[string]string{}}}
+	rec := f.addTarget(t, backupset.TypeS3, NewS3Target(s3, "site"))
+	start := time.Now()
+	_, err := f.engine.mirrorTarget(context.Background(), repo, idx, rec, testRetention(time.Now()))
+	if !errors.Is(err, errStalled) || !strings.Contains(err.Error(), "while "+phaseList) {
+		t.Errorf("error %v, want a stall while %s", err, phaseList)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the watchdog took %s", took)
 	}
 }

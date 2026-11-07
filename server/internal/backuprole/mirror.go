@@ -42,14 +42,26 @@ type retention struct {
 	now        time.Time
 }
 
-// mirrorHooks connect a mirror to its caller's watchdog: tick on every bit of progress, begin before each file is
-// copied (with its size) and end once its copy returned, stop once the round's budget is used.
+// mirrorHooks connect a mirror to its caller's watchdog: tick on every bit of progress, phase when the mirror enters
+// a step (for the watchdog's error), begin before each file is copied (with its size) and end once its copy
+// returned, stop once the copy phase used the round's budget.
 type mirrorHooks struct {
 	tick  func()
+	phase func(name string)
 	begin func(size int64)
 	end   func()
 	stop  func() bool
 }
+
+// Phases of a mirror, named in the stall watchdog's error.
+const (
+	phaseManifestRead = "reading the target's manifest"
+	phaseList         = "listing the target"
+	phaseCopy         = "copying"
+	phaseVerify       = "listing the target to verify the copy"
+	phaseManifest     = "writing the target's manifest"
+	phaseDelete       = "deleting from the target"
+)
 
 // guardPlan is what the guard decided for the repository paths the local set lacks entirely (A3 G3).
 type guardPlan struct {
@@ -81,6 +93,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 	if err != nil {
 		return 0, fmt.Errorf("backup set: %w", err)
 	}
+	hooks.phase(phaseManifestRead)
 	remote, found, err := dst.Read(ctx, backupset.ManifestPath)
 	if err != nil {
 		return 0, err
@@ -95,6 +108,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 			return 0, fmt.Errorf("%w: %s", errForeignSet, theirs.InstallationID)
 		}
 	}
+	hooks.phase(phaseList)
 	have, err := listProgress(ctx, dst, hooks.tick)
 	if err != nil {
 		return 0, err
@@ -107,6 +121,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 	}
 	hooks.tick()
 
+	hooks.phase(phaseCopy)
 	written := map[string]int64{}
 	for _, p := range putOrder(idx) {
 		if err := ctx.Err(); err != nil {
@@ -137,6 +152,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		return 0, err
 	}
 
+	hooks.phase(phaseVerify)
 	after, err := listProgress(ctx, dst, hooks.tick)
 	if err != nil {
 		return 0, err
@@ -164,6 +180,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
+		hooks.phase(phaseManifest)
 		if err := dst.Put(ctx, backupset.ManifestPath, bytes.NewReader(local), int64(len(local))); err != nil {
 			return 0, err
 		}
@@ -180,6 +197,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 	if plan.unknown {
 		return held, errUnknownPath
 	}
+	hooks.phase(phaseDelete)
 	for _, p := range drop {
 		if err := ctx.Err(); err != nil {
 			return held, err

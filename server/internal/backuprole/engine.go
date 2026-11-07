@@ -988,10 +988,11 @@ var errStalled = errors.New("backup target stalled")
 // e.stall fails (its context is cancelled) and the round goes on. A mirror blocked in a file system call keeps the
 // target busy, and the next rounds skip it until that call returns. After e.budget the mirror ends with the file it
 // is copying (errBudget); a target that trickles cannot stretch that file without bound: the mirror is cancelled at
-// started + budget + size/minRate of the file being copied (plan M15, amendment 2026-11-05, A7). The cap applies
-// only while a file is being copied: a listing that keeps delivering pages is bounded by the stall deadline alone,
-// else a target holding a few hundred thousand objects never reaches its deletions (PDK-865). It returns the number
-// of objects the target holds back (mirrorSet).
+// copy start + budget + size/minRate of the file being copied (plan M15, amendment 2026-11-05, A7). The budget and
+// the cap count only the copy phase, from the first copied file, and the cap applies only while a file is in
+// flight: listings that keep delivering pages are bounded by the stall deadline alone, so a target holding a few
+// hundred thousand objects still reaches its deletions (PDK-865, note 2026-11-07 to A7). The stall error names the
+// phase. It returns the number of objects the target holds back (mirrorSet).
 func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex, t TargetRecord,
 	ret retention) (int, error) {
 	e.busyMu.Lock()
@@ -1008,23 +1009,34 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var progress, copying atomic.Int64
+	var progress, copying, copyStart atomic.Int64
 	copying.Store(-1)
+	var phase atomic.Pointer[string]
+	inCopy := func() time.Duration {
+		if s := copyStart.Load(); s != 0 {
+			return time.Since(time.Unix(0, s))
+		}
+		return 0
+	}
 	type result struct {
 		held int
 		err  error
 	}
 	done := make(chan result, 1)
-	started, budget := time.Now(), e.budget
+	budget := e.budget
 	go func() {
 		dst, err := e.targets.Open(ctx, t)
 		held := 0
 		if err == nil {
 			held, err = mirrorSet(ctx, repo, idx, dst, pushed, ret, mirrorHooks{
 				tick:  func() { progress.Add(1) },
-				begin: func(size int64) { copying.Store(size) },
-				end:   func() { copying.Store(-1) },
-				stop:  func() bool { return time.Since(started) >= budget }})
+				phase: func(name string) { phase.Store(&name) },
+				begin: func(size int64) {
+					copyStart.CompareAndSwap(0, time.Now().UnixNano())
+					copying.Store(size)
+				},
+				end:  func() { copying.Store(-1) },
+				stop: func() bool { return inCopy() >= budget }})
 		}
 		e.busyMu.Lock()
 		delete(e.busy, t.ID)
@@ -1042,12 +1054,17 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 			if n := progress.Load(); n != last {
 				last, since = n, time.Now()
 			} else if time.Since(since) >= e.stall {
-				return 0, fmt.Errorf("%w: no progress for %s", errStalled, e.stall)
+				name := "opening the target"
+				if p := phase.Load(); p != nil {
+					name = *p
+				}
+				return 0, fmt.Errorf("%w: no progress for %s while %s", errStalled, e.stall, name)
 			}
 			if size := copying.Load(); size >= 0 {
 				trickle := time.Duration(float64(size) / float64(e.minRate) * float64(time.Second))
-				if time.Since(started) >= budget+trickle {
-					return 0, fmt.Errorf("%w: slower than %d bytes/s past the round's budget", errStalled, e.minRate)
+				if inCopy() >= budget+trickle {
+					return 0, fmt.Errorf("%w: copying slower than %d bytes/s past the round's budget", errStalled,
+						e.minRate)
 				}
 			}
 		}
