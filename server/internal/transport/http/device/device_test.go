@@ -29,7 +29,12 @@ import (
 	"github.com/google/uuid"
 	vk "github.com/valkey-io/valkey-go"
 
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/revocation"
+	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
@@ -112,17 +117,21 @@ func newEnv(t *testing.T, perKey, perIP int) *env {
 	return newEnvTrusting(t, perKey, perIP, nil)
 }
 
-// newEnvTrusting is newEnv with trusted proxies (plan M7a decision 5).
-func newEnvTrusting(t *testing.T, perKey, perIP int, trusted []netip.Prefix) *env {
+// newEnvTrusting is newEnv with trusted proxies (plan M7a decision 5); opts change the dependencies further.
+func newEnvTrusting(t *testing.T, perKey, perIP int, trusted []netip.Prefix, opts ...func(*device.Deps)) *env {
 	t.Helper()
 	vc := valkeytest.Start(t).Client(t)
 	e := &env{t: t, cache: devicecache.New(vc), valkey: vc, pub: &fakePublisher{},
 		now: time.Now().Truncate(time.Second), org: uuid.New()}
-	e.handler = device.NewHandler(device.Deps{
+	deps := device.Deps{
 		Cache: e.cache, Publisher: e.pub, Presigner: fakePresigner{}, Artifacts: fakePresigner{}, Escrow: fakePresigner{},
 		PerKeyLimit: perKey, PerIPLimit: perIP,
 		Now: func() time.Time { return e.now }, CheckinDelay: func() int { return 300 }, TrustedProxies: trusted,
-	})
+	}
+	for _, opt := range opts {
+		opt(&deps)
+	}
+	e.handler = device.NewHandler(deps)
 	_, file, _, _ := runtime.Caller(0)
 	doc, err := openapi3.NewLoader().LoadFromFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "..", "api", "openapi", "device.yaml"))
 	if err != nil {
@@ -973,6 +982,89 @@ func TestCheckinAgentUpdate(t *testing.T) {
 	}
 }
 
+// TestCheckinOutsideWindow (ADR 0013 amendment 2026-11-04, plan M16 decision 4a): an agent outside the support window
+// gets the agent update of the current rollout regardless of its wave, unmarked, and no bundle; of its commands only the
+// safety commands, revocation tokens and delete_self_lock (PDK-765), reported as delivered, even behind more withheld
+// commands than one response carries. Its heartbeat is still published. Inside the window nothing changes.
+func TestCheckinOutsideWindow(t *testing.T) {
+	const maxCommandsPerCheckin = 20 // the gateway's cap per check-in response
+	window := []string{"0.1.0-alpha.7", "0.1.0-alpha.8", "0.1.0-alpha.9"}
+	e := newEnvTrusting(t, 0, 0, nil, func(d *device.Deps) {
+		d.AgentOutsideWindow = func(v string) bool { return buildinfo.Outside(window, v) }
+	})
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	commandEnvelope := func(typ string) json.RawMessage {
+		return json.RawMessage(`{"payloadType":"` + command.PayloadType + `","payload":"` +
+			base64.StdEncoding.EncodeToString([]byte(`{"type":"`+typ+`"}`)) + `","signatures":[{"keyid":"command-signing:v1","sig":"AA=="}]}`)
+	}
+	// More withheld commands than one response carries, all older than the safety commands: the filter must run before
+	// the cap, or they would push a Lock out (Review 3 minor 3).
+	for i := range maxCommandsPerCheckin {
+		cmd := uuid.Must(uuid.NewV7())
+		env := envelope(cmd)
+		if i%2 == 0 {
+			env = commandEnvelope(command.TypeRotateAdminPassword)
+		}
+		if err := e.cache.PutCommand(ctx, id, cmd, devicecache.Command{ExpiresAt: e.now.Add(time.Hour), Envelope: env}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lock, disarm := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	disarmEnvelope := commandEnvelope(command.TypeDeleteSelfLock)
+	if err := e.cache.PutCommand(ctx, id, disarm, devicecache.Command{ExpiresAt: e.now.Add(time.Hour), Envelope: disarmEnvelope}); err != nil {
+		t.Fatal(err)
+	}
+	lockEnvelope := json.RawMessage(`{"payloadType":"` + revocation.PayloadType + `","payload":"` +
+		base64.StdEncoding.EncodeToString([]byte(lock.String())) + `","signatures":[{"keyid":"revocation-signing:v1","sig":"AA=="}]}`)
+	if err := e.cache.PutCommand(ctx, id, lock, devicecache.Command{ExpiresAt: e.now.Add(time.Hour), Envelope: lockEnvelope}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cache.PutBundlePointer(ctx, id, devicecache.BundlePointer{Version: 3, SHA256: "abc", ObjectKey: "org/o/devices/d/bundles/3.dsse"}); err != nil {
+		t.Fatal(err)
+	}
+	// The device's bucket is outside the only wave but the last: the out-of-window answer ignores waves.
+	offer := agentrelease.Offer{Version: "0.1.0-alpha.9", Status: agentrelease.RolloutRunning, Waves: []int{agentrelease.Bucket(id), 100},
+		Artifacts: map[string]agentrelease.Artifact{"amd64": {SHA256: "ab12", Size: 42, Minisig: "c2ln", ObjectKey: "releases/a9/amd64/paddockd"}}}
+	if err := e.cache.PutOffer(ctx, &offer); err != nil {
+		t.Fatal(err)
+	}
+	seq := int64(0)
+	checkin := func(version string) protocol.CheckinResponse {
+		t.Helper()
+		body := checkinBody(0)
+		body.Arch, body.AgentVersion = "amd64", version
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: body, seq: seq})
+		var out protocol.CheckinResponse
+		if err := json.Unmarshal(r.body, &out); err != nil || r.status != http.StatusOK {
+			t.Fatalf("checkin %s: %d %s", version, r.status, r.body)
+		}
+		seq = out.Seq
+		return out
+	}
+	out := checkin("0.1.0-alpha.6")
+	if u := out.AgentUpdate; u == nil || u.Version != "0.1.0-alpha.9" || u.Requested || u.RequestedAt != nil {
+		t.Fatalf("outside the window: agent update %+v", u)
+	}
+	// The revocation token and delete_self_lock still reach the device; the other commands and the bundle stay
+	// withheld (PDK-765).
+	if out.Bundle != nil || len(out.Commands) != 2 || !bytes.Equal(out.Commands[0], lockEnvelope) || !bytes.Equal(out.Commands[1], disarmEnvelope) {
+		t.Fatalf("outside the window: bundle %+v commands %s", out.Bundle, out.Commands)
+	}
+	var hb ingest.Heartbeat
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if hb.DeviceID != id || hb.AgentVersion != "0.1.0-alpha.6" || !slices.Equal(hb.DeliveredCommands, []uuid.UUID{lock, disarm}) {
+		t.Fatalf("outside the window: heartbeat %+v", hb)
+	}
+	for _, version := range []string{"0.1.0-alpha.7", "0.0.0-devicesim"} {
+		out = checkin(version)
+		if out.AgentUpdate != nil || out.Bundle == nil || out.Bundle.Version != 3 || len(out.Commands) != maxCommandsPerCheckin {
+			t.Fatalf("inside the window (%s): %+v", version, out)
+		}
+	}
+}
+
 func TestEvents(t *testing.T) {
 	e := newEnv(t, 0, 0)
 	c := newClient(t)
@@ -1163,6 +1255,85 @@ func TestEscrowHeaderVolume(t *testing.T) {
 		"ciphertext": base64.StdEncoding.EncodeToString([]byte("x")), "volume": volume}
 	e.expectProblem(e.send(c, request{method: "POST", path: "/v1/escrow", device: id.String(), body: secret, skipReqCheck: true}),
 		http.StatusBadRequest, "invalid_request")
+}
+
+// revocationEnvelope is a revocation token of device as the revocation-issuer puts it into cmd:<device_id>.
+func revocationEnvelope(t *testing.T, id, device uuid.UUID, action string, now time.Time) json.RawMessage {
+	t.Helper()
+	payload, err := revocation.Encode(revocation.Token{CommandID: id.String(), DeviceID: device.String(), OrganizationID: uuid.NewString(),
+		RequestID: id.String(), Action: action, IssuedAt: now, ExpiresAt: now.Add(revocation.Lifetime)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := dsse.New(revocation.PayloadType, payload, dsse.Signature{KeyID: "revocation-signing:v1", Sig: "AA=="}).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+// TestEscrowRefusedAfterDestroy (PDK-794): while cmd:<device_id> holds an unexpired Destroy token of the device, a
+// LUKS header gets no presigned PUT and a recovery key or header is published flagged and without key material, so
+// that the worker refuses it; an administrator password, a Lock, an expired Destroy and another device's Destroy
+// change nothing.
+func TestEscrowRefusedAfterDestroy(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c, other := newClient(t), newClient(t)
+	id, otherID := e.enrolled(c, "active"), e.enrolled(other, "active")
+	ctx := context.Background()
+	put := func(device uuid.UUID, action string, expiresAt time.Time) {
+		t.Helper()
+		cmd := uuid.Must(uuid.NewV7())
+		if err := e.cache.PutCommand(ctx, device, cmd, devicecache.Command{ExpiresAt: expiresAt,
+			Envelope: revocationEnvelope(t, cmd, device, action, e.now)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	header := func() map[string]any {
+		return map[string]any{"escrow_id": uuid.Must(uuid.NewV7()).String(), "kind": "luks_header", "generation": 3, "key_version": 1,
+			"wrapped_dek": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 512)),
+			"nonce":       base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{2}, 12)),
+			"sha256":      strings.Repeat("ab", 32), "size": 100}
+	}
+	secret := func(kind string) map[string]any {
+		return map[string]any{"escrow_id": uuid.Must(uuid.NewV7()).String(), "kind": kind, "generation": 2, "key_version": 1,
+			"ciphertext": base64.StdEncoding.EncodeToString([]byte("x"))}
+	}
+	upload := func(c client, device uuid.UUID, body map[string]any) (escrow.Accepted, ingest.Escrow) {
+		t.Helper()
+		r := e.send(c, request{method: "POST", path: "/v1/escrow", device: device.String(), body: body})
+		var accepted escrow.Accepted
+		if err := json.Unmarshal(r.body, &accepted); err != nil || r.status != http.StatusAccepted || accepted.EscrowID != body["escrow_id"] {
+			t.Fatalf("upload: %d %s", r.status, r.body)
+		}
+		var in ingest.Escrow
+		if err := json.Unmarshal(e.pub.last(t).Body, &in); err != nil || in.EscrowID.String() != body["escrow_id"] {
+			t.Fatalf("published %+v: %v", in, err)
+		}
+		return accepted, in
+	}
+
+	put(id, revocation.ActionLock, e.now.Add(time.Hour))
+	put(id, revocation.ActionDestroy, e.now)
+	put(otherID, revocation.ActionDestroy, e.now.Add(time.Hour))
+	if accepted, in := upload(c, id, header()); accepted.UploadURL == "" || in.DestroyIssued || in.ObjectKey == "" {
+		t.Fatalf("header under a Lock and an expired Destroy: %+v %+v", accepted, in)
+	}
+
+	put(id, revocation.ActionDestroy, e.now.Add(time.Hour))
+	if accepted, in := upload(c, id, header()); accepted.UploadURL != "" || !in.DestroyIssued || in.ObjectKey != "" ||
+		in.WrappedDEK != nil || in.Nonce != nil || in.Generation != 3 || in.Kind != "luks_header" {
+		t.Fatalf("header under a Destroy: %+v %+v", accepted, in)
+	}
+	if _, in := upload(c, id, secret("luks_recovery_key")); !in.DestroyIssued || in.Ciphertext != nil {
+		t.Fatalf("recovery key under a Destroy: %+v", in)
+	}
+	if _, in := upload(c, id, secret("admin_password")); in.DestroyIssued || len(in.Ciphertext) != 1 {
+		t.Fatalf("administrator password under a Destroy: %+v", in)
+	}
+	if accepted, in := upload(other, otherID, header()); accepted.UploadURL != "" || !in.DestroyIssued {
+		t.Fatalf("the other device's own Destroy: %+v %+v", accepted, in)
+	}
 }
 
 // TestCheckinRetryWhileStalledKeepsSeq (PDK-590): a check-in stalls after the gateway drew its number (an AMQP write

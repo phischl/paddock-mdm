@@ -15,6 +15,9 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
     # The data directory of the PostgreSQL 18 image layout (plan M6d decision 4): Docker copies it into an empty
     # volume mounted at /var/lib/postgresql, so a restore into a fresh volume finds it owned by postgres. The mount
     # point gets the 18 image's 1777, so that a later pg_upgrade in the volume can create the next major's directory.
+    # /backup-repo is the mount point of the local repository (plan M15 decision 17): Docker copies its owner into the
+    # empty volume backup-repo, which the backup role (uid 999 too) shares.
+    && install -d -o 999 -g 999 -m 750 /backup-repo \
     && install -d -o 999 -g 999 -m 700 /var/log/pgbackrest /var/lib/pgbackrest /tmp/pgbackrest \
        /var/lib/postgresql/18/docker /pgbackrest-spool/paddock /pgbackrest-spool/authentik \
     && install -d -o 999 -g 999 -m 1777 /var/lib/postgresql \

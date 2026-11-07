@@ -3605,6 +3605,56 @@ paths:
               schema: { $ref: "#/components/schemas/SecurityReview" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/access-review:
+    get:
+      operationId: getAccessReview
+      x-paddock-mcp: { expose: false }
+      tags: [overview]
+      description: |
+        Roles: org_admin, org_auditor. The access review of the organization: role members, role changes, accounts, API tokens, reveals of secrets, step-ups, ended sessions and destructive actions in the period. One report object, not a collection: every list holds at most 1000
+        items and states its total. from and to are RFC 3339; to defaults to now and from to 90 days before to; the
+        period spans at most 400 days (400 invalid_request beyond or when from is not before to). Role members are the
+        worker's snapshot of the identity provider (at most one 5-minute round old). The view is recorded as access_review.viewed once per actor and UTC day, only while the organization's audit_search_recorded privacy setting is on.
+      parameters:
+        - $ref: "#/components/parameters/AccessReviewFrom"
+        - $ref: "#/components/parameters/AccessReviewTo"
+      responses:
+        "200":
+          description: The access review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccessReviewReport" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/access-review/export:
+    get:
+      operationId: exportAccessReview
+      x-paddock-mcp: { expose: false }
+      tags: [overview]
+      description: |
+        Roles: org_admin, org_auditor. The access review as a download: format json (the same object as the view) or csv (one file for
+        every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a
+        leading apostrophe). Content-Disposition names the file paddock-access-review-<organization slug>-<from>-<to>.<json|csv>. Period as for the view.
+        Every export is recorded as access_review.exported, whatever the privacy settings.
+      x-paddock-audit: access_review.exported
+      parameters:
+        - $ref: "#/components/parameters/AccessReviewFrom"
+        - $ref: "#/components/parameters/AccessReviewTo"
+        - $ref: "#/components/parameters/AccessReviewFormat"
+      responses:
+        "200":
+          description: The exported report.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccessReviewReport" }
+            text/csv:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/attention/devices:
     get:
       operationId: listAttentionDevices
@@ -3733,7 +3783,11 @@ paths:
         20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
         GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
         unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
-        duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history.
+        duplicate name is 409 already_exists. A syslog destination needs syslog_host, a DNS name or public IP address
+        (the webhook address rules apply), and takes syslog_port (default 6514), syslog_ca_pem (one or more PEM
+        certificates, at most 16 KiB) and syslog_server_name (the TLS server name); it is delivered over TLS 1.2 or
+        newer, one RFC 5424 message per event. checkpoints is allowed for webhook and syslog destinations (400 for
+        e-mail). A new destination starts at the newest event; it never replays history.
         Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
       x-paddock-audit: notification.destination_created
       parameters:
@@ -3778,6 +3832,7 @@ paths:
       description: |
         Roles: org_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
         secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+        syslog_ca_pem works alike: absent keeps the stored CA bundle, an empty string removes it.
         Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
         resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
         is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
@@ -3864,6 +3919,38 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/NotificationTestRequested" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/notification-destinations/{id}/replay:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: replayNotificationDestination
+      x-paddock-step-up: true
+      tags: [notifications]
+      description: |
+        Roles: org_admin. Asks the notifier to send the destination's stored batches and checkpoints again from
+        from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the
+        cursor; the receiver sees the same numbers again and must deduplicate. An event the index retention purged
+        meanwhile is sent as {forward_seq, event_id, missing: true}. Each re-sent delivery is recorded as
+        notification.replayed. 400 invalid_request when from_forward_seq is below 1 or above state.forward_seq; 409
+        invalid_state while a batch is being retried, a replay is still running (state.replay_from is set) or a skip
+        request from enabling with cursor skip awaits the next delivery round. Needs a step-up within the last 5
+        minutes (403 step_up_required).
+      x-paddock-audit: notification.replay_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationReplayRequest" }
+      responses:
+        "202":
+          description: Requested; state.replay_from shows it until the replay is complete.
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
@@ -4723,6 +4810,156 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/diagnostics:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: requestDeviceDiagnostics
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator (ADR 0048 decision 4). Asks an active device for a diagnostics bundle: Paddock's
+        own logs and configuration of the closed content list, sealed to escrow-wrap. The device tells its user before
+        it collects. reason (2 to 500 characters) is shown to the user and recorded. 409 invalid_state when the device
+        is not active or a collection of it is pending.
+      x-paddock-audit: device.diagnostics_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DiagnosticsRequest" }
+      responses:
+        "202":
+          description: The bundle in state requested; its ID is the collect_status command's.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Diagnostics" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    get:
+      operationId: listDeviceDiagnostics
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. The diagnostics bundles of the device (ADR 0048 decision 4); org_auditor: 403."
+      x-paddock-list:
+        sort: [requested_at, state]
+        default_sort: -requested_at
+        search: [requested_by, reason]
+        filters: [state]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceDiagnosticsSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/DiagnosticsStateFilter"
+      responses:
+        "200":
+          description: One page of bundles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticsPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/diagnostics:
+    get:
+      operationId: listDiagnostics
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. Every diagnostics bundle of the organization (ADR 0048 decision 4); org_auditor: 403."
+      x-paddock-list:
+        sort: [requested_at, hostname, state]
+        default_sort: -requested_at
+        search: [hostname, requested_by]
+        filters: [state]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DiagnosticsSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/DiagnosticsStateFilter"
+      responses:
+        "200":
+          description: One page of bundles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticsPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/diagnostics/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getDiagnostics
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. One diagnostics bundle; org_auditor: 403."
+      responses:
+        "200":
+          description: The bundle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Diagnostics" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/diagnostics/{id}/download:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: downloadDiagnostics
+      x-paddock-step-up: true
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, with a step-up within the last 300 s (403 step_up_required); every download
+        needs its own step-up, because the archive may name the device's users. The escrow-reader unwraps the bundle's
+        key for purpose diagnostics; the response is the decrypted archive
+        (paddock-diagnostics-<hostname>-<id>.tar.gz). Before anything is decrypted the whole sealed object is read and
+        its size and SHA-256 are checked against the bundle: an object that does not match (replaced after it was
+        stored) or is missing is refused with 409 invalid_state, nothing is served and the download is recorded as a
+        failure. 409 invalid_state as well unless the bundle is stored. HEAD is refused with 405 (Allow: GET).
+      x-paddock-audit: device.diagnostics_downloaded
+      responses:
+        "200":
+          description: The diagnostics archive.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/diagnostics/{id}/purge:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: purgeDiagnostics
+      tags: [devices]
+      description: |
+        Roles: org_admin. Deletes the stored bundle's object (every version) and its key material at once (ADR 0048
+        decision 5); the metadata (who, when, hash, downloads) stays. 409 invalid_state unless the bundle is stored.
+      x-paddock-audit: device.diagnostics_purged
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The purged bundle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Diagnostics" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/effective-sudo:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -5506,6 +5743,31 @@ paths:
                     items: { $ref: "#/components/schemas/ComponentTarget" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/upgrade-check:
+    get:
+      operationId: getUpgradeCheck
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The read-only report before an upgrade to target_version (ADR 0047 decision 2, plan
+        M16 decision 4), the same as paddock-server admin upgrade-check: migrations (FAIL when the database is ahead
+        of this release), agents (active devices whose agent is a release older than the target's support window:
+        FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending
+        (running agent rollout, halted configuration rollouts: WARN) and sessions. Changes nothing and is not
+        audited. 400 invalid_request when target_version is missing or no release this server knows.
+      parameters:
+        - name: target_version
+          in: query
+          description: The release to upgrade to, without the leading v (e.g. 0.1.0-alpha.9). Required in effect, but checked after the role, so that other roles get 403 and not 400.
+          schema: { type: string, maxLength: 64 }
+      responses:
+        "200":
+          description: The report.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpgradeCheck" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/agent-releases:
     get:
       operationId: listAgentReleases
@@ -5845,6 +6107,61 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "502": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/access-review:
+    get:
+      operationId: getPlatformAccessReview
+      x-paddock-mcp: { expose: false }
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin. The access review of the platform: platform role members, platform administrators, privileged platform events and the organizations created in the period. One report object, not a collection: every list holds at most 1000
+        items and states its total. from and to are RFC 3339; to defaults to now and from to 90 days before to; the
+        period spans at most 400 days (400 invalid_request beyond or when from is not before to). Role members are the
+        worker's snapshot of the identity provider (at most one 5-minute round old). Every view is recorded as platform.access_review_viewed (platform reads are not under an organization's privacy switch).
+      x-paddock-audit: platform.access_review_viewed
+      parameters:
+        - $ref: "#/components/parameters/AccessReviewFrom"
+        - $ref: "#/components/parameters/AccessReviewTo"
+      responses:
+        "200":
+          description: The access review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformAccessReviewReport" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/access-review/export:
+    get:
+      operationId: exportPlatformAccessReview
+      x-paddock-mcp: { expose: false }
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin. The access review as a download: format json (the same object as the view) or csv (one file for
+        every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a
+        leading apostrophe). Content-Disposition names the file paddock-access-review-platform-<from>-<to>.<json|csv>. Period as for the view.
+        Every export is recorded as platform.access_review_exported, whatever the privacy settings.
+      x-paddock-audit: platform.access_review_exported
+      parameters:
+        - $ref: "#/components/parameters/AccessReviewFrom"
+        - $ref: "#/components/parameters/AccessReviewTo"
+        - $ref: "#/components/parameters/AccessReviewFormat"
+      responses:
+        "200":
+          description: The exported report.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformAccessReviewReport" }
+            text/csv:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/openbao/auto-unseal:
     get:
       operationId: getAutoUnseal
@@ -5915,6 +6232,105 @@ paths:
               schema: { $ref: "#/components/schemas/AutoUnsealStatus" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/key:
+    get:
+      operationId: getBackupKey
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The backup key state (plan M15 decision 7): the active key, the key waiting for its
+        confirmation and the retired keys. Never the key text, its ciphertext or the challenge hash; the challenge
+        positions only for the key waiting for its confirmation (amendment 2026-11-04).
+      responses:
+        "200":
+          description: The key state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupKeyStatus" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: generateBackupKey
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required; API tokens never have
+        one). Generates a new backup key (32 random bytes, standard base64) and returns its text exactly once, with
+        six 1-based positions whose characters confirm it (POST /api/platform/v1/backup/key/{id}/confirm). The
+        response is not cached; the key is never shown again. No backup runs until a key is confirmed; a key
+        generated while one is active replaces it on confirmation. 409 invalid_state while another key waits for its
+        confirmation. Every attempt is audited; the key text never is.
+      x-paddock-audit: platform.backup_key_generated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "201":
+          description: The new key, shown once.
+          headers:
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupKeyGenerated" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/key/{id}/confirm:
+    parameters:
+      - $ref: "#/components/parameters/BackupKeyId"
+    post:
+      operationId: confirmBackupKey
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Confirms a key with
+        the characters of its text at the six positions of the generating response (or of pending.positions in GET
+        /api/platform/v1/backup/key), in that order. The key becomes
+        active; a previously active key is retired. 400 invalid_request when the answer is not six characters; 409
+        backup_key_mismatch for wrong characters, with attempts_left=<n> in the detail; the third mismatch discards
+        the key; 409 invalid_state for a key that is not unconfirmed; 404 not_found. Every attempt is audited; the
+        answer never is.
+      x-paddock-audit: platform.backup_key_confirmed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupKeyConfirm" }
+      responses:
+        "200":
+          description: The confirmed key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupKey" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/key/{id}/discard:
+    parameters:
+      - $ref: "#/components/parameters/BackupKeyId"
+    post:
+      operationId: discardBackupKey
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Discards a key that
+        is not confirmed, e.g. one whose text was not stored safely. 409 invalid_state for a key that is not
+        unconfirmed; 404 not_found. Every attempt is audited.
+      x-paddock-audit: platform.backup_key_discarded
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The discarded key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupKey" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/settings/mcp:
     get:
       operationId: getPlatformMcpSettings
@@ -6030,7 +6446,11 @@ paths:
         20 plain addresses and is 409 email_not_configured while the installation has no SMTP relay (see
         GET /api/v1/notification-capabilities). filter_mode custom takes 1 to 200 registered audit codes (400
         unknown_code for an unregistered one). heartbeat_interval_s is 0 or 60–3600, email_min_interval_s 60–3600. A
-        duplicate name is 409 already_exists. A new destination starts at the newest event; it never replays history. pseudonymize_users must be false: platform events carry no user names.
+        duplicate name is 409 already_exists. A syslog destination needs syslog_host, a DNS name or public IP address
+        (the webhook address rules apply), and takes syslog_port (default 6514), syslog_ca_pem (one or more PEM
+        certificates, at most 16 KiB) and syslog_server_name (the TLS server name); it is delivered over TLS 1.2 or
+        newer, one RFC 5424 message per event. checkpoints is allowed for webhook and syslog destinations (400 for
+        e-mail). A new destination starts at the newest event; it never replays history. pseudonymize_users must be false: platform events carry no user names.
         Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy it).
       x-paddock-audit: notification.destination_created
       parameters:
@@ -6075,6 +6495,7 @@ paths:
       description: |
         Roles: platform_admin. Replaces every setting except the type (400 invalid_request when it differs) and the signing
         secret. url is optional: absent keeps the stored URL, present is validated like on creation and replaces it.
+        syslog_ca_pem works alike: absent keeps the stored CA bundle, an empty string removes it.
         Enabling a disabled destination requires cursor: continue delivers the events since it was disabled, skip
         resumes at the newest event and never delivers the ones in between (400 invalid_request without cursor; cursor
         is refused otherwise). Enabling an e-mail destination is 409 email_not_configured without an SMTP relay;
@@ -6166,6 +6587,527 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup:
+    get:
+      operationId: getBackupOverview
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The backup overview (plan M15 decision 13): the key state, the schedule, every target
+        with its mirror state per kind, the local repository and the newest run per kind. Never a key, a password or an
+        access key. The repository sizes and the WAL time are null until the backup role reports them.
+      responses:
+        "200":
+          description: The overview.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupOverview" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/schedule:
+    get:
+      operationId: getBackupSchedule
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The backup schedule and retention; without a stored schedule the defaults (full backup
+        every 24 h, OpenBao every 6 h, Fleet every 24 h, escrow every hour, 14 full backups, 30 days of snapshots and
+        dumps) with updated_by and updated_at null.
+      responses:
+        "200":
+          description: The schedule.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupSchedule" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: putBackupSchedule
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Replaces the schedule; every field is required and checked against its range (400
+        invalid_request naming the field). The backup role applies it in its next round. Needs a step-up within the
+        last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.backup_schedule_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupScheduleUpdate" }
+      responses:
+        "200":
+          description: The new schedule.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupSchedule" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/targets:
+    get:
+      operationId: listBackupTargets
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The backup targets: local directories of the host, SMB and NFS shares the host mounts,
+        S3-compatible buckets. Never a password, an access key or a secret key; has_credentials says whether some are
+        stored. A deleted local, SMB or NFS target is no longer listed while it waits for the host to remove its volume.
+      x-paddock-list:
+        sort: [name, type, created_at]
+        default_sort: name
+        search: [name]
+        filters: [type, enabled, host_state]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/BackupTargetSort"
+        - $ref: "#/components/parameters/Search"
+        - name: type
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/BackupTargetType" }
+        - name: enabled
+          in: query
+          schema: { type: boolean }
+        - name: host_state
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/BackupTargetHostState" }
+      responses:
+        "200":
+          description: One page of targets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupTargetPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createBackupTarget
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Adds a target. The object named by type (local, smb, nfs or s3) holds its settings and
+        is required; the rules of every field are in plan M15 §6.1 (400 invalid_request naming the field). The SMB
+        password and the S3 access and secret keys are stored encrypted and never returned. A local, SMB or NFS target
+        starts with host_state pending_host and host_revision 1 and is used after ./paddock backup-target apply and
+        ./paddock up on the host; an S3 target has host_state n/a. A duplicate name is 409 already_exists. Needs a
+        step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.backup_target_created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupTargetInput" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupTarget" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/targets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getBackupTarget
+      tags: [platform]
+      description: "Roles: platform_admin. One target with its last test and its mirror state per kind; 404 not_found for a missing or deleted one."
+      responses:
+        "200":
+          description: The target.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupTarget" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updateBackupTarget
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Replaces the settings; the type cannot change (400 invalid_request). Without smb.password,
+        or without both s3.access_key and s3.secret_key, the stored credentials stay, but only for the same destination:
+        a change of smb.host, smb.share, smb.domain, smb.username or smb.options needs the password again, a change of
+        s3.endpoint, s3.bucket, s3.region or s3.ca_pem needs both keys again, and the S3 keys are replaced together
+        (400 invalid_request naming the fields). smb.path and s3.prefix change without credentials. A change of a local,
+        SMB or NFS target's settings or credentials raises host_revision and resets host_state to pending_host until the
+        host step ran again. Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.backup_target_updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupTargetInput" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupTarget" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteBackupTarget
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Deletes the target; the backup sets already on it stay. An S3 target is removed at once;
+        a local, SMB or NFS target is disabled and removed by the next ./paddock backup-target apply, which unmounts
+        its volume (its name stays taken until then). Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.backup_target_deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204": { description: Deleted. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/targets/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: testBackupTarget
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Requests a connection test. The backup role, the only service that can decrypt the
+        credentials, runs it in its next round (S3: the bucket, a write and a delete under the prefix; a mounted target:
+        a write and a delete in the volume) and stores last_test_at, last_test_ok and last_test_error (an error class:
+        dns, dial, tls, auth, forbidden, not_mounted, read_only, io); test_requested_at is set until then. Needs a
+        step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.backup_target_tested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "202":
+          description: Requested.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupTarget" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/targets/{id}/enable:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: enableBackupTarget
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Enables a disabled target; 409 invalid_state when it is enabled. Needs a step-up within
+        the last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.backup_target_updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupTarget" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/targets/{id}/disable:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: disableBackupTarget
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Disables an enabled target: the backup role no longer writes to it. 409 invalid_state
+        when it is disabled. Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.backup_target_updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupTarget" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/run:
+    post:
+      operationId: requestBackupRun
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Backs up now: one run in state requested per kind (kinds absent, null or empty: every
+        kind), which the backup role runs in its next round. 409 invalid_state while no backup key is confirmed; 400
+        invalid_request for an unknown kind or a label of more than 64 characters. Needs a step-up within the last 5
+        minutes (403 step_up_required).
+      x-paddock-audit: platform.backup_run_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupRunRequest" }
+      responses:
+        "202":
+          description: The requested runs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BackupRun" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/runs:
+    get:
+      operationId: listBackupRuns
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The backup runs, one per kind and attempt, with the mirror result per target. Requested
+        runs have no started_at yet and come first in the default order.
+      x-paddock-list:
+        sort: [started_at, kind, outcome]
+        default_sort: -started_at
+        search: [kind, label]
+        filters: [kind, outcome, target_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/BackupRunSort"
+        - $ref: "#/components/parameters/Search"
+        - name: kind
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/BackupKind" }
+        - name: outcome
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, enum: [succeeded, failed] }
+        - name: target_id
+          in: query
+          description: Runs that mirrored to this target.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: One page of runs.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRunPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/restore-plans:
+    get:
+      operationId: listBackupRestorePlans
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The restore plans: approved in the portal, executed on the host with host_command,
+        and the restores the host ran without a plan (kind fresh_install). An approved plan reads as expired 24 hours
+        after its approval.
+      x-paddock-list:
+        sort: [created_at, state]
+        default_sort: -created_at
+        search: [created_by, kind]
+        filters: [state]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/BackupRestorePlanSort"
+        - $ref: "#/components/parameters/Search"
+        - name: state
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/BackupRestorePlanState" }
+      responses:
+        "200":
+          description: One page of restore plans.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRestorePlanPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createBackupRestorePlan
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Approves a restore plan, which the host executes within 24 hours with
+        ./paddock restore --plan <id> (host_command). confirmation must be the typed word restore (400
+        invalid_request otherwise); 400 invalid_request also for a point_in_time plan without at, a point in the
+        future, an unknown component or a source_target_id that names no target. 409 invalid_state while another
+        plan is approved or running, or when the source (the local backup repository without source_target_id) has
+        no successful backup of a chosen component at or before at; the detail names the missing kind. Needs a
+        step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.restore_planned
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupRestorePlanInput" }
+      responses:
+        "201":
+          description: The approved plan.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRestorePlan" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/restore-plans/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getBackupRestorePlan
+      tags: [platform]
+      description: "Roles: platform_admin. One restore plan."
+      responses:
+        "200":
+          description: The plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRestorePlan" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/backup/restore-plans/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: cancelBackupRestorePlan
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Cancels an approved plan: it is expired and the host refuses it. 409 invalid_state for
+        a plan that is not approved. Needs a step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: platform.restore_cancelled
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Cancelled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRestorePlan" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/platform/v1/backup/restore-plans/{id}/abandon:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: abandonBackupRestorePlan
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Marks a running plan as abandoned when the host never reported its end (the host
+        crashed, or the database was unreachable when the restore stopped): the plan no longer blocks a new one, its
+        outcome_detail names the administrator, and the host's later report for it is refused (409).
+        confirmation must be the typed word abandon (400 invalid_request otherwise). 409 invalid_state for a plan that
+        is not running; cancel an approved plan instead. Needs a step-up within the last 5 minutes (403
+        step_up_required).
+      x-paddock-audit: platform.restore_abandoned
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupRestorePlanAbandonInput" }
+      responses:
+        "200":
+          description: Abandoned; the plan's state is abandoned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupRestorePlan" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/platform/v1/notification-destinations/{id}/replay:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: replayPlatformNotificationDestination
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Asks the notifier to send the destination's stored batches and checkpoints again from
+        from_forward_seq on, with their original delivery IDs and forward sequence numbers, before it continues at the
+        cursor; the receiver sees the same numbers again and must deduplicate. An event the index retention purged
+        meanwhile is sent as {forward_seq, event_id, missing: true}. Each re-sent delivery is recorded as
+        notification.replayed. 400 invalid_request when from_forward_seq is below 1 or above state.forward_seq; 409
+        invalid_state while a batch is being retried, a replay is still running (state.replay_from is set) or a skip
+        request from enabling with cursor skip awaits the next delivery round. Needs a step-up within the last 5
+        minutes (403 step_up_required).
+      x-paddock-audit: notification.replay_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationReplayRequest" }
+      responses:
+        "202":
+          description: Requested; state.replay_from shows it until the replay is complete.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
 components:
   securitySchemes:
@@ -6190,6 +7132,45 @@ components:
         Name and version of the MCP client (for example claude-code/2.1), sent by paddockctl mcp. Characters outside
         printable ASCII (0x20 to 0x7E) are dropped and the value is cut to 64 characters; an empty result is ignored.
       schema: { type: string }
+    AccessReviewFrom:
+      name: from
+      in: query
+      description: RFC 3339; the start of the period, default 90 days before to.
+      schema: { type: string, format: date-time }
+    AccessReviewTo:
+      name: to
+      in: query
+      description: RFC 3339; the end of the period, default now.
+      schema: { type: string, format: date-time }
+    AccessReviewFormat:
+      name: format
+      in: query
+      required: true
+      schema: { type: string, enum: [json, csv] }
+    BackupTargetSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name, type, -type, created_at, -created_at]
+        default: name
+    BackupRunSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [started_at, -started_at, kind, -kind, outcome, -outcome]
+        default: -started_at
+    BackupRestorePlanSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [created_at, -created_at, state, -state]
+        default: -created_at
     NotificationDestinationSort:
       name: sort
       in: query
@@ -6237,6 +7218,12 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    BackupKeyId:
+      name: id
+      in: path
+      required: true
+      description: The key ID (bk-<YYYYMMDD>-<8 hex> or legacy).
+      schema: { type: string, maxLength: 32 }
     Page:
       name: page
       in: query
@@ -6500,6 +7487,31 @@ components:
         type: string
         enum: [issued_at, -issued_at, expires_at, -expires_at, type, -type, status, -status]
         default: -issued_at
+    DeviceDiagnosticsSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [requested_at, -requested_at, state, -state]
+        default: -requested_at
+    DiagnosticsSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [requested_at, -requested_at, hostname, -hostname, state, -state]
+        default: -requested_at
+    DiagnosticsStateFilter:
+      name: state
+      in: query
+      description: Repeatable.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { $ref: "#/components/schemas/DiagnosticsState" }
     RevocationRequestSort:
       name: sort
       in: query
@@ -7927,6 +8939,38 @@ components:
         version: { type: string }
         source: { type: string, description: "agent_release (the current release) or PADDOCK_HIMMELBLAU_VERSION (the compiler's setting)." }
         updated_at: { type: string, format: date-time }
+    UpgradeCheck:
+      type: object
+      required: [generated_at, target_version, window, items, agents_outside]
+      properties:
+        generated_at: { type: string, format: date-time }
+        target_version: { type: string }
+        window:
+          type: array
+          description: The releases whose agents target_version supports, oldest first (its own and the two previous).
+          items: { type: string }
+        items:
+          type: array
+          description: "In this order: migrations, agents, backups, openbao, pending, sessions."
+          items: { $ref: "#/components/schemas/UpgradeCheckItem" }
+        agents_outside:
+          type: array
+          description: The active devices whose agent is outside the window, at most 100; the agents item counts all.
+          items: { $ref: "#/components/schemas/UpgradeCheckAgent" }
+    UpgradeCheckItem:
+      type: object
+      required: [name, status, detail]
+      properties:
+        name: { type: string, enum: [migrations, agents, backups, openbao, pending, sessions] }
+        status: { type: string, enum: [PASS, WARN, FAIL, INFO] }
+        detail: { type: string }
+    UpgradeCheckAgent:
+      type: object
+      required: [device_id, hostname, agent_version]
+      properties:
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        agent_version: { type: string }
     DeviceUninstall:
       type: object
       required: [mode, requested_at, command_id, command_status, uninstalled_at, local_admin, tpm, report_overdue, refused_reason]
@@ -8440,7 +9484,7 @@ components:
       enum: [pending, delivered, succeeded, failed, expired, cancelled]
     DeviceCommandType:
       type: string
-      enum: [rotate_admin_password, delete_self_lock, install_now, uninstall, encrypt_disk, encrypt_disk_abort]
+      enum: [rotate_admin_password, delete_self_lock, install_now, uninstall, encrypt_disk, encrypt_disk_abort, collect_status]
     DeviceCommand:
       type: object
       required: [id, device_id, type, status, issued_at, expires_at]
@@ -9055,7 +10099,7 @@ components:
         cleared_at: { type: string, format: date-time, nullable: true, description: When the condition of an attention finding was gone. }
     NotificationDestinationType:
       type: string
-      enum: [webhook, email]
+      enum: [webhook, email, syslog]
     NotificationFilterMode:
       type: string
       enum: [security, all, custom]
@@ -9063,7 +10107,8 @@ components:
     NotificationDestination:
       type: object
       required: [id, type, name, enabled, filter_mode, codes, pseudonymize_users, include_params, url_display,
-        heartbeat_interval_s, recipients, email_min_interval_s, created_by, created_at, updated_at, state]
+        heartbeat_interval_s, recipients, email_min_interval_s, syslog_host, syslog_port, syslog_server_name,
+        syslog_ca_pem_set, checkpoints, created_by, created_at, updated_at, state]
       properties:
         id: { type: string, format: uuid }
         type: { $ref: "#/components/schemas/NotificationDestinationType" }
@@ -9073,10 +10118,15 @@ components:
         codes: { type: array, items: { type: string }, description: The codes of filter_mode custom; empty otherwise. }
         pseudonymize_users: { type: boolean }
         include_params: { type: boolean }
-        url_display: { type: string, nullable: true, description: "Webhook: scheme, host and /… for any path; never the stored URL. null for e-mail." }
+        url_display: { type: string, nullable: true, description: "Webhook: scheme, host and /… for any path; never the stored URL. null for e-mail and syslog." }
         heartbeat_interval_s: { type: integer }
         recipients: { type: array, items: { type: string } }
         email_min_interval_s: { type: integer }
+        syslog_host: { type: string, nullable: true, description: Syslog only; null otherwise. }
+        syslog_port: { type: integer, nullable: true, description: Syslog only; null otherwise. }
+        syslog_server_name: { type: string, nullable: true, description: "Syslog only: the TLS server name when it differs from syslog_host." }
+        syslog_ca_pem_set: { type: boolean, description: "Syslog: whether a CA bundle is stored; the bundle itself is never returned." }
+        checkpoints: { type: boolean, description: Whether the destination receives the daily checkpoints of ADR 0031 (webhook and syslog). }
         created_by: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -9084,7 +10134,7 @@ components:
     NotificationDestinationState:
       type: object
       required: [status, cursor_commit_seq, forward_seq, last_success_at, last_attempt_at, next_attempt_at, stalled_since,
-        last_error, lag_seconds, last_test]
+        last_error, lag_seconds, last_test, last_checkpoint_day, replay_from]
       properties:
         status: { type: string, enum: [active, stalled] }
         cursor_commit_seq: { type: integer, format: int64, description: The commit sequence of the last delivered event position. }
@@ -9103,6 +10153,14 @@ components:
             at: { type: string, format: date-time }
             ok: { type: boolean }
             error: { type: string, nullable: true }
+        last_checkpoint_day: { type: string, format: date, nullable: true, description: The last sealed recording day whose checkpoint was delivered (checkpoints on). }
+        replay_from: { type: integer, format: int64, nullable: true, description: The forward sequence number a requested replay continues at; null without a replay. }
+    NotificationReplayRequest:
+      type: object
+      additionalProperties: false
+      required: [from_forward_seq]
+      properties:
+        from_forward_seq: { type: integer, format: int64, minimum: 1, description: The first forward sequence number to send again. }
     NotificationDestinationCreate:
       type: object
       additionalProperties: false
@@ -9116,9 +10174,14 @@ components:
         pseudonymize_users: { type: boolean, default: false }
         include_params: { type: boolean, default: false }
         url: { type: string, writeOnly: true, description: "Webhook only; required for a webhook. Stored encrypted, never returned." }
-        heartbeat_interval_s: { type: integer, default: 0, description: Webhook; 0 (off) or 60–3600. }
+        heartbeat_interval_s: { type: integer, default: 0, description: Webhook and syslog; 0 (off) or 60–3600. }
         recipients: { type: array, maxItems: 20, items: { type: string }, description: E-mail only; 1–20 plain addresses. }
         email_min_interval_s: { type: integer, default: 300, description: E-mail only; 60–3600. }
+        syslog_host: { type: string, maxLength: 253, description: "Syslog only; required for syslog. A DNS name or a public IP address." }
+        syslog_port: { type: integer, minimum: 1, maximum: 65535, description: Syslog only; default 6514. }
+        syslog_ca_pem: { type: string, writeOnly: true, maxLength: 16384, description: "Syslog only: PEM certificates of a private CA the receiver's certificate chains to; without it the system roots apply." }
+        syslog_server_name: { type: string, maxLength: 253, description: "Syslog only: the TLS server name (SNI and verification) when it differs from syslog_host." }
+        checkpoints: { type: boolean, default: false, description: Webhook and syslog only. }
     NotificationDestinationUpdate:
       type: object
       additionalProperties: false
@@ -9135,6 +10198,11 @@ components:
         heartbeat_interval_s: { type: integer, default: 0 }
         recipients: { type: array, maxItems: 20, items: { type: string } }
         email_min_interval_s: { type: integer, default: 300 }
+        syslog_host: { type: string, maxLength: 253, description: "Syslog only; required for syslog. A DNS name or a public IP address." }
+        syslog_port: { type: integer, minimum: 1, maximum: 65535, description: Syslog only; default 6514. }
+        syslog_ca_pem: { type: string, writeOnly: true, maxLength: 16384, description: "Syslog only: PEM certificates of a private CA the receiver's certificate chains to; without it the system roots apply. Absent keeps the stored bundle; an empty string removes it." }
+        syslog_server_name: { type: string, maxLength: 253, description: "Syslog only: the TLS server name (SNI and verification) when it differs from syslog_host." }
+        checkpoints: { type: boolean, default: false, description: Webhook and syslog only. }
         cursor: { type: string, enum: [continue, skip], description: Required when the update enables a disabled destination. }
     NotificationDestinationCreated:
       allOf:
@@ -9175,6 +10243,376 @@ components:
       required: [email]
       properties:
         email: { type: boolean }
+    BackupKind:
+      type: string
+      enum: [postgres, authentik, openbao, fleet, escrow]
+    BackupTargetType:
+      type: string
+      enum: [local, smb, nfs, s3]
+    BackupTargetHostState:
+      type: string
+      enum: [n/a, pending_host, mounted, unreachable]
+      description: n/a for S3; pending_host until the host mounted the current revision; mounted; unreachable when a write into the mounted volume fails.
+    BackupTargetInput:
+      type: object
+      additionalProperties: false
+      required: [name, type, enabled]
+      description: The object named by type is required; the others are ignored.
+      properties:
+        name: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$' }
+        type: { $ref: "#/components/schemas/BackupTargetType" }
+        enabled: { type: boolean }
+        local: { $ref: "#/components/schemas/BackupTargetLocalInput" }
+        smb: { $ref: "#/components/schemas/BackupTargetSmbInput" }
+        nfs: { $ref: "#/components/schemas/BackupTargetNfsInput" }
+        s3: { $ref: "#/components/schemas/BackupTargetS3Input" }
+    BackupTargetSettings:
+      type: object
+      description: The settings of the target's type; never a credential.
+      properties:
+        local: { $ref: "#/components/schemas/BackupTargetLocalSettings" }
+        smb: { $ref: "#/components/schemas/BackupTargetSmbSettings" }
+        nfs: { $ref: "#/components/schemas/BackupTargetNfsSettings" }
+        s3: { $ref: "#/components/schemas/BackupTargetS3Settings" }
+    BackupTargetLocalInput:
+      type: object
+      additionalProperties: false
+      required: [path]
+      properties:
+        path:
+          type: string
+          maxLength: 256
+          description: >-
+            A relative subpath of the host's local backup root (PADDOCK_BACKUP_LOCAL_ROOT, default
+            /srv/paddock-backup) without "..", "." or empty elements (400 invalid_request local.path). The host step
+            refuses a symlink component.
+    BackupTargetLocalSettings:
+      type: object
+      required: [path]
+      properties:
+        path: { type: string }
+    BackupTargetSmbInput:
+      type: object
+      additionalProperties: false
+      required: [host, share, username]
+      properties:
+        host: { type: string, maxLength: 253, description: A DNS name or an IP address. }
+        share: { type: string, maxLength: 80 }
+        path: { type: string, maxLength: 256, description: Relative path below the share; optional. }
+        username: { type: string, maxLength: 104 }
+        password: { type: string, maxLength: 256, writeOnly: true, description: "No comma and no whitespace (they cannot be passed to the share's mount). Required on creation and when host, share, domain, username or options change; otherwise absent on an update keeps the stored one. Stored encrypted, never returned." }
+        domain: { type: string, maxLength: 64 }
+        options: { type: string, maxLength: 256, description: "Comma-separated: vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N." }
+    BackupTargetSmbSettings:
+      type: object
+      required: [host, share, path, username, domain, options]
+      properties:
+        host: { type: string }
+        share: { type: string }
+        path: { type: string }
+        username: { type: string }
+        domain: { type: string }
+        options: { type: string }
+    BackupTargetNfsInput:
+      type: object
+      additionalProperties: false
+      required: [host, export]
+      properties:
+        host: { type: string, maxLength: 253 }
+        export: { type: string, maxLength: 256, description: An absolute export path. }
+        path: { type: string, maxLength: 256, description: Relative path below the export; optional. }
+        options: { type: string, maxLength: 256, description: "Comma-separated: vers=4|4.1|4.2, hard, timeo=N, retrans=N, nconnect=N." }
+    BackupTargetNfsSettings:
+      type: object
+      required: [host, export, path, options]
+      properties:
+        host: { type: string }
+        export: { type: string }
+        path: { type: string }
+        options: { type: string }
+    BackupTargetS3Input:
+      type: object
+      additionalProperties: false
+      required: [endpoint, bucket]
+      properties:
+        endpoint: { type: string, description: "An https URL without user information, query or fragment; the host must be a public address." }
+        bucket: { type: string, maxLength: 63 }
+        region: { type: string, maxLength: 64, description: Default us-east-1. }
+        prefix: { type: string, maxLength: 128, description: Optional; no leading "/". }
+        access_key: { type: string, maxLength: 128, writeOnly: true, description: "Required on creation and when endpoint, bucket, region or ca_pem change; otherwise absent together with secret_key on an update keeps the stored keys. Stored encrypted, never returned." }
+        secret_key: { type: string, maxLength: 256, writeOnly: true, description: "Required on creation; replaced together with access_key. Stored encrypted, never returned." }
+        ca_pem: { type: string, maxLength: 16384, description: Optional PEM certificates of a private CA. }
+    BackupTargetS3Settings:
+      type: object
+      required: [endpoint, bucket, region, prefix, ca_pem]
+      properties:
+        endpoint: { type: string }
+        bucket: { type: string }
+        region: { type: string }
+        prefix: { type: string }
+        ca_pem: { type: string }
+    BackupTargetKindStatus:
+      type: object
+      required: [kind, last_success_at, last_error, bytes]
+      properties:
+        kind: { $ref: "#/components/schemas/BackupKind" }
+        last_success_at: { type: string, format: date-time, nullable: true }
+        last_error: { type: string, nullable: true, description: An error class. }
+        bytes: { type: integer, format: int64 }
+    BackupTarget:
+      type: object
+      required: [id, name, type, enabled, host_state, host_revision, settings, has_credentials, test_requested_at,
+        last_test_at, last_test_ok, last_test_error, status, created_by, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type: { $ref: "#/components/schemas/BackupTargetType" }
+        enabled: { type: boolean }
+        host_state: { $ref: "#/components/schemas/BackupTargetHostState" }
+        host_revision: { type: integer, description: Raised by every change the host must apply; 1 for S3. }
+        settings: { $ref: "#/components/schemas/BackupTargetSettings" }
+        has_credentials: { type: boolean, description: An SMB password or S3 keys are stored (never shown). }
+        test_requested_at: { type: string, format: date-time, nullable: true, description: Set while a requested test waits for the backup role. }
+        last_test_at: { type: string, format: date-time, nullable: true }
+        last_test_ok: { type: boolean, nullable: true }
+        last_test_error: { type: string, nullable: true, description: "An error class: dns, dial, tls, auth, forbidden, not_mounted, read_only, io." }
+        status:
+          type: array
+          items: { $ref: "#/components/schemas/BackupTargetKindStatus" }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    BackupTargetPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BackupTarget" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    BackupSchedule:
+      type: object
+      required: [full_interval_hours, openbao_interval_hours, fleet_interval_hours, escrow_interval_hours,
+        retention_full, openbao_keep_days, fleet_keep_days, updated_by, updated_at]
+      properties:
+        full_interval_hours: { type: integer }
+        openbao_interval_hours: { type: integer }
+        fleet_interval_hours: { type: integer }
+        escrow_interval_hours: { type: integer }
+        retention_full: { type: integer }
+        openbao_keep_days: { type: integer }
+        fleet_keep_days: { type: integer }
+        updated_by: { type: string, nullable: true, description: null while the defaults apply. }
+        updated_at: { type: string, format: date-time, nullable: true }
+    BackupScheduleUpdate:
+      type: object
+      additionalProperties: false
+      required: [full_interval_hours, openbao_interval_hours, fleet_interval_hours, escrow_interval_hours,
+        retention_full, openbao_keep_days, fleet_keep_days]
+      properties:
+        full_interval_hours: { type: integer, description: "6–168, default 24." }
+        openbao_interval_hours: { type: integer, description: "1–24, default 6." }
+        fleet_interval_hours: { type: integer, description: "6–168, default 24." }
+        escrow_interval_hours: { type: integer, description: "1–24, default 1." }
+        retention_full: { type: integer, description: "Full backups kept, 2–60, default 14." }
+        openbao_keep_days: { type: integer, description: "7–365, default 30." }
+        fleet_keep_days: { type: integer, description: "7–365, default 30." }
+    BackupRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        kinds:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/BackupKind" }
+          description: Absent, null or empty for every kind.
+        label: { type: string, maxLength: 64, default: "" }
+    BackupRunTarget:
+      type: object
+      required: [target_id, ok, error_class]
+      properties:
+        target_id: { type: string, format: uuid }
+        ok: { type: boolean }
+        error_class: { type: string, nullable: true }
+    BackupRun:
+      type: object
+      required: [id, kind, label, state, outcome, started_at, finished_at, bytes, error_class, targets, requested_by, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/BackupKind" }
+        label: { type: string }
+        state: { type: string, enum: [requested, running, finished] }
+        outcome: { type: string, enum: [succeeded, failed], nullable: true }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        bytes: { type: integer, format: int64 }
+        error_class: { type: string, nullable: true }
+        targets:
+          type: array
+          items: { $ref: "#/components/schemas/BackupRunTarget" }
+        requested_by: { type: string, nullable: true, description: The administrator or operator who requested the run; null for a scheduled run. }
+        created_at: { type: string, format: date-time }
+    BackupRunPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BackupRun" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    BackupRestorePlanState:
+      type: string
+      enum: [approved, running, completed, failed, expired, abandoned]
+    BackupRestorePlanInput:
+      type: object
+      additionalProperties: false
+      required: [kind, components, confirmation]
+      properties:
+        kind: { type: string, enum: [point_in_time, components], description: "point_in_time needs at." }
+        source_target_id: { type: string, format: uuid, nullable: true, description: The target to restore from; absent or null for the local backup repository. }
+        at: { type: string, format: date-time, nullable: true, description: "The point in time; required for kind point_in_time, absent or null for kind components (the newest backups)." }
+        components:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [postgres, openbao, fleet, escrow] }
+        confirmation: { type: string, description: The typed word restore. }
+    BackupRestorePlanAbandonInput:
+      type: object
+      additionalProperties: false
+      required: [confirmation]
+      properties:
+        confirmation: { type: string, description: The typed word abandon. }
+    BackupRestorePlan:
+      type: object
+      required: [id, kind, source, source_target_id, source_target_name, at, components, state, created_by, created_at, expires_at, started_at, finished_at, outcome_detail, host_command]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [point_in_time, components, fresh_install] }
+        source: { type: string, enum: [repo, target, set], description: "repo: the local backup repository; target: source_target_id; set: a backup set the host was given." }
+        source_target_id: { type: string, format: uuid, nullable: true }
+        source_target_name: { type: string, nullable: true, description: Null when the target is gone or the source is not a target. }
+        at: { type: string, format: date-time, nullable: true }
+        components:
+          type: array
+          items: { type: string, enum: [postgres, openbao, fleet, escrow, backup-repo] }
+        state: { $ref: "#/components/schemas/BackupRestorePlanState" }
+        created_by: { type: string, description: "The administrator who approved the plan, or the host operator of a restore without a plan." }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, nullable: true, description: 24 hours after the approval; null for a restore without a plan. }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        outcome_detail: { type: string, nullable: true, description: "The failed step and what happened, as <step>: <text>; abandoned by <administrator> for a plan in state abandoned." }
+        host_command: { type: string, description: "The command that executes the plan on the host: ./paddock restore --plan <id>." }
+    BackupRestorePlanPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BackupRestorePlan" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    BackupKey:
+      type: object
+      required: [key_id, fingerprint, state, created_at, created_by, confirmed_at, confirmed_by, retired_at, attempts, legacy, positions]
+      description: A backup key without its text, ciphertext or challenge hash.
+      properties:
+        key_id: { type: string }
+        fingerprint: { type: string, description: The first 16 hexadecimal characters of the key's SHA-256. }
+        state: { type: string, enum: [unconfirmed, confirmed, retired, discarded] }
+        created_at: { type: string, format: date-time }
+        created_by: { type: string }
+        confirmed_at: { type: string, format: date-time, nullable: true }
+        confirmed_by: { type: string, nullable: true }
+        retired_at: { type: string, format: date-time, nullable: true }
+        attempts: { type: integer }
+        legacy: { type: boolean }
+        positions:
+          type: array
+          nullable: true
+          minItems: 6
+          maxItems: 6
+          description: |
+            The six 1-based challenge positions in ascending order while the key is unconfirmed (also for the
+            imported key legacy, whose administrator never saw a generating response); null in every other state.
+            Indices only, never characters of the key.
+          items: { type: integer }
+    BackupKeyStatus:
+      type: object
+      required: [active, pending, retired]
+      properties:
+        active:
+          nullable: true
+          allOf: [{ $ref: "#/components/schemas/BackupKey" }]
+        pending:
+          nullable: true
+          allOf: [{ $ref: "#/components/schemas/BackupKey" }]
+        retired:
+          type: array
+          items: { $ref: "#/components/schemas/BackupKey" }
+    BackupKeyGenerated:
+      type: object
+      required: [key_id, key, fingerprint, positions, download_name]
+      description: The only response that holds a backup key's text.
+      properties:
+        key_id: { type: string }
+        key: { type: string, description: "The key: 32 bytes in standard base64 (44 characters)." }
+        fingerprint: { type: string }
+        positions:
+          type: array
+          minItems: 6
+          maxItems: 6
+          description: Six distinct 1-based positions of key in ascending order; their characters confirm the key.
+          items: { type: integer }
+        download_name: { type: string, description: The file name the portal offers the key text under. }
+    BackupKeyConfirm:
+      type: object
+      required: [answer]
+      additionalProperties: false
+      properties:
+        answer: { type: string, maxLength: 64, description: "The characters of the key at the six positions, in order." }
+    BackupRepo:
+      type: object
+      required: [path, bytes_used, bytes_free, stanzas]
+      properties:
+        path: { type: string, nullable: true, description: The pgBackRest repository path of the active key; null without one. }
+        bytes_used: { type: integer, format: int64, nullable: true }
+        bytes_free: { type: integer, format: int64, nullable: true }
+        stanzas:
+          type: array
+          items: { $ref: "#/components/schemas/BackupStanza" }
+    BackupStanza:
+      type: object
+      required: [name, last_full_at, wal_archived_at]
+      properties:
+        name: { type: string }
+        last_full_at: { type: string, format: date-time, nullable: true, description: The last successful full backup the runs recorded. }
+        wal_archived_at: { type: string, format: date-time, nullable: true }
+    BackupOverview:
+      type: object
+      required: [key, schedule, targets, repo, last_runs]
+      properties:
+        key: { $ref: "#/components/schemas/BackupKeyStatus" }
+        schedule: { $ref: "#/components/schemas/BackupSchedule" }
+        targets:
+          type: array
+          items: { $ref: "#/components/schemas/BackupTarget" }
+        repo: { $ref: "#/components/schemas/BackupRepo" }
+        last_runs:
+          type: array
+          items: { $ref: "#/components/schemas/BackupRun" }
+          description: The newest run per kind.
     NotificationDestinationPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -9335,6 +10773,250 @@ components:
           items: { type: integer }
         current_wave_index: { type: integer }
         started_at: { type: string, format: date-time }
+    AccessReviewPeriod:
+      type: object
+      required: [from, to]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+    AccessReviewRoleMembers:
+      type: object
+      description: The members of one role as of the worker's last snapshot.
+      required: [role, total, members]
+      properties:
+        role: { type: string }
+        snapshot_taken_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the role's first comparison was taken; null while it had none.
+        total: { type: integer }
+        members:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewRoleMember" }
+    AccessReviewRoleMember:
+      type: object
+      required: [username, authentik_pk, first_seen_at]
+      properties:
+        username: { type: string }
+        authentik_pk: { type: string }
+        first_seen_at: { type: string, format: date-time }
+    AccessReviewRoleChange:
+      type: object
+      required: [at, code, username, role, actor]
+      properties:
+        at: { type: string, format: date-time }
+        code: { type: string, description: admin.role_granted or admin.role_revoked. }
+        username: { type: string }
+        role: { type: string }
+        actor: { type: string }
+    AccessReviewAccount:
+      type: object
+      required: [username, display_name, role, last_login_at, disabled]
+      properties:
+        username: { type: string }
+        display_name: { type: string }
+        role: { type: string }
+        last_login_at: { type: string, format: date-time, nullable: true }
+        disabled: { type: boolean }
+    AccessReviewToken:
+      type: object
+      description: An API token that existed at some time in the period; never its secret.
+      required: [name, role, prefix, created_by, created_at, expires_at, last_used_at, revoked_at, revoked_by]
+      properties:
+        name: { type: string }
+        role: { type: string }
+        prefix: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        revoked_by: { type: string, nullable: true }
+    AccessReviewReveal:
+      type: object
+      required: [at, code, actor, device_hostname, params]
+      properties:
+        at: { type: string, format: date-time }
+        code: { type: string }
+        actor: { type: string }
+        device_hostname: { type: string }
+        params:
+          type: object
+          description: The identifying parameters of the event (generation, volume); never a secret.
+          additionalProperties: true
+    AccessReviewStepUp:
+      type: object
+      description: Successful actions of step-up sessions and refusals for a missing step-up in the period.
+      required: [succeeded, failed]
+      properties:
+        succeeded: { type: integer }
+        failed: { type: integer }
+    AccessReviewSessionRevocation:
+      type: object
+      required: [at, username, reason]
+      properties:
+        at: { type: string, format: date-time }
+        username: { type: string }
+        reason: { type: string }
+    AccessReviewDestructiveAction:
+      type: object
+      required: [at, code, actor, target]
+      properties:
+        at: { type: string, format: date-time }
+        code: { type: string }
+        actor: { type: string }
+        target: { type: string }
+    AccessReviewRoleChanges:
+      type: object
+      description: Role changes in the period, baseline members excluded.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewRoleChange" }
+    AccessReviewAccounts:
+      type: object
+      description: Administrator accounts of the organization.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewAccount" }
+    AccessReviewTokens:
+      type: object
+      description: API tokens that existed in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewToken" }
+    AccessReviewReveals:
+      type: object
+      description: Reveals and downloads of secrets in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewReveal" }
+    AccessReviewSessionRevocations:
+      type: object
+      description: Sessions the server ended in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewSessionRevocation" }
+    AccessReviewDestructiveActions:
+      type: object
+      description: Destructive and locking actions in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewDestructiveAction" }
+    AccessReviewReport:
+      type: object
+      description: The access review of an organization; every list holds at most row_cap items and states its total.
+      required: [generated_at, period, row_cap, roles, role_changes, accounts, api_tokens, token_denials, reveals, step_up, sessions_revoked, break_glass_accounts, destructive]
+      properties:
+        generated_at: { type: string, format: date-time }
+        period: { $ref: "#/components/schemas/AccessReviewPeriod" }
+        row_cap: { type: integer }
+        roles:
+          type: array
+          items: { $ref: "#/components/schemas/AccessReviewRoleMembers" }
+        role_changes: { $ref: "#/components/schemas/AccessReviewRoleChanges" }
+        accounts: { $ref: "#/components/schemas/AccessReviewAccounts" }
+        api_tokens: { $ref: "#/components/schemas/AccessReviewTokens" }
+        token_denials: { type: integer, description: Requests refused for a revoked or expired token or an inactive creator in the period. }
+        reveals: { $ref: "#/components/schemas/AccessReviewReveals" }
+        step_up: { $ref: "#/components/schemas/AccessReviewStepUp" }
+        sessions_revoked: { $ref: "#/components/schemas/AccessReviewSessionRevocations" }
+        break_glass_accounts:
+          type: array
+          items: { type: string }
+        destructive: { $ref: "#/components/schemas/AccessReviewDestructiveActions" }
+    AccessReviewPlatformAdministrator:
+      type: object
+      required: [username, display_name, last_login_at]
+      properties:
+        username: { type: string }
+        display_name: { type: string }
+        last_login_at: { type: string, format: date-time, nullable: true }
+    AccessReviewPlatformEvent:
+      type: object
+      required: [at, code, actor, target]
+      properties:
+        at: { type: string, format: date-time }
+        code: { type: string }
+        actor: { type: string }
+        target: { type: string }
+    AccessReviewCreatedOrganization:
+      type: object
+      required: [slug, name, created_at]
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+    AccessReviewPlatformAdministrators:
+      type: object
+      description: Platform administrators that signed in at least once.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewPlatformAdministrator" }
+    AccessReviewPlatformEvents:
+      type: object
+      description: Privileged platform events in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewPlatformEvent" }
+    AccessReviewCreatedOrganizations:
+      type: object
+      description: Organizations created in the period.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AccessReviewCreatedOrganization" }
+    PlatformAccessReviewReport:
+      type: object
+      description: The access review of the platform; every list holds at most row_cap items and states its total.
+      required: [generated_at, period, row_cap, roles, administrators, role_changes, events, organizations_created]
+      properties:
+        generated_at: { type: string, format: date-time }
+        period: { $ref: "#/components/schemas/AccessReviewPeriod" }
+        row_cap: { type: integer }
+        roles:
+          type: array
+          items: { $ref: "#/components/schemas/AccessReviewRoleMembers" }
+        administrators: { $ref: "#/components/schemas/AccessReviewPlatformAdministrators" }
+        role_changes: { $ref: "#/components/schemas/AccessReviewRoleChanges" }
+        events: { $ref: "#/components/schemas/AccessReviewPlatformEvents" }
+        organizations_created: { $ref: "#/components/schemas/AccessReviewCreatedOrganizations" }
     OverviewSecurityReview:
       type: object
       description: The totals of GET /api/v1/security-review.
@@ -9551,6 +11233,47 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/RevocationRequest" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    DiagnosticsState:
+      type: string
+      enum: [requested, uploaded, stored, failed, expired, purged]
+    DiagnosticsRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 2, maxLength: 500, description: "Why the bundle is needed; shown to the device's user and recorded." }
+    Diagnostics:
+      type: object
+      required: [id, device_id, hostname, requested_by, requested_at, reason, state, truncated_entries, download_count]
+      properties:
+        id: { type: string, format: uuid, description: "Equals the collect_status command's ID." }
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        requested_by: { type: string }
+        requested_at: { type: string, format: date-time }
+        reason: { type: string }
+        state: { $ref: "#/components/schemas/DiagnosticsState" }
+        size: { type: integer, format: int64, description: Bytes of the sealed object. }
+        sha256: { type: string, description: Hex SHA-256 of the sealed object. }
+        files: { type: integer }
+        truncated_entries: { type: array, items: { type: string } }
+        notified_sessions: { type: integer, description: The graphical sessions on the device that were told. }
+        stored_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: When the object is deleted. }
+        failed_reason: { type: string }
+        download_count: { type: integer }
+        last_downloaded_at: { type: string, format: date-time }
+    DiagnosticsPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Diagnostics" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }

@@ -1,7 +1,9 @@
 version: "2"
 sql:
   - engine: postgresql
-    schema: migrations/paddock
+    schema:
+      - migrations/paddock
+      - internal/adapters/postgres/schema/goose_db_version.sql
     queries: internal/adapters/postgres/queries
     gen:
       go:

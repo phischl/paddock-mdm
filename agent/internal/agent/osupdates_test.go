@@ -45,7 +45,7 @@ func TestInstallNow(t *testing.T) {
 	select {
 	case d := <-a.installDone:
 		a.finishInstall(d)
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("install worker did not finish")
 	}
 	a.Cycle(ctx)

@@ -41,7 +41,7 @@ A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST
   - audit host → control plane: PostgreSQL 5432 (the api's read-only audit view, `sslmode=verify-full`).
 - The control plane is reachable from the internet on 80 (ACME HTTP-01, redirect) and 443. Nothing else is published;
   `./paddock check` refuses any other published port that is not bound to the interconnect address.
-- An S3 bucket for backups **outside the control-plane host** (section 11).
+- A place for backups **outside the control-plane host**: an SMB or NFS share or an S3-compatible bucket (section 11).
 - **Proxies or a CDN in front of Caddy** (optional): declare them with `PADDOCK_EDGE_TRUSTED_PROXIES` and
   `PADDOCK_EDGE_CLIENT_IP_HEADER` (`X-Forwarded-For` or `CF-Connecting-IP`), so that the allow lists, rate limits
   and audit log see the real client; without them Caddy treats its peer as the client and ignores every such header.
@@ -101,8 +101,8 @@ cp .env.example .env
 ```
 
 Set `PADDOCK_HOST` (`controlplane` or `audit`), the domain, the ACME e-mail, `PADDOCK_INTERCONNECT_ADDR` (this host's
-own interconnect address), `PADDOCK_CONTROLPLANE_ADDR`, `PADDOCK_AUDIT_ADDR` and, on the control plane, the backup
-bucket (`PADDOCK_BACKUP_S3_*`). Keep the default project name (`PADDOCK_PROJECT`, `paddock`) unless two installations
+own interconnect address), `PADDOCK_CONTROLPLANE_ADDR`, `PADDOCK_AUDIT_ADDR` and, on the control plane, the base
+directory of local backup targets (`PADDOCK_BACKUP_LOCAL_ROOT`, section 11). Keep the default project name (`PADDOCK_PROJECT`, `paddock`) unless two installations
 share a host. Then:
 
 ```sh
@@ -345,12 +345,26 @@ control-plane host", residual risk RR-90).
 ## 11. Backups
 
 The control plane's configuration includes `compose.backup.yaml`: pgBackRest for both PostgreSQL databases, OpenBao
-snapshots and Fleet dumps, all encrypted, to the backup bucket of `PADDOCK_BACKUP_S3_*` outside this host. Before
-section 8, create the bucket and its three credentials as `docs/operations/restore.md` "Backup bucket" describes,
-write them to `.secrets/backup_{pgbackrest,worker,fleet}_{access,secret}_key`, and store a copy of
-`.secrets/backup_encryption_key` offline with the custodians. After the start check that
-`./paddock compose run --rm --no-deps pgbackrest info` lists a full backup. The restore runbook and the quarterly
-restore drill are in the same document.
+snapshots, Fleet dumps and the escrowed LUKS headers, all encrypted with one key, into the local volume `backup-repo`
+and from there to the backup targets. Targets, key and schedule are set in the portal; no backup credentials go into
+`.env` or `.secrets/`. `docs/operations/backup.md` describes the whole story, `docs/operations/restore.md` the
+recovery. After the first start (section 9):
+
+1. Before section 8, create `PADDOCK_BACKUP_LOCAL_ROOT` (default `/srv/paddock-backup`) owned by root and not writable
+   by group or others if you want local targets; `./paddock check` verifies it.
+2. **Confirm the backup key.** Until a platform administrator has confirmed a key, nothing is backed up and the alert
+   `PaddockBackupKeyUnconfirmed` fires after an hour. A fresh installation starts without a key: in the portal under
+   *Platform* → *Backup* → *Key*, generate one, which Paddock shows exactly once, and confirm it by typing the characters
+   at the six positions shown. Store a copy **outside this host**, with the OpenBao custodians; Paddock keeps no copy on
+   the host, and without the key no backup can be read.
+3. **Add at least one target outside this host** under *Backup* → *Targets*: an S3-compatible bucket needs nothing more;
+   a local, SMB or NFS target needs the host step `./paddock backup-target apply` and `./paddock up`
+   (`docs/operations/backup.md`, "Targets"). The first copy of a large set takes several rounds.
+4. Check that *Overview* shows the key confirmed, a successful run per kind and the target mounted (or
+   `./paddock backup status`), and that `./paddock compose run --rm --no-deps pgbackrest info` lists a full backup.
+5. Keep with the key a copy of `.secrets/` and `.env` and, for an S3 target, the file of
+   `./paddock backup-target export <name> <file>`: a restore onto a rebuilt host needs them
+   (`docs/operations/restore.md`, "Scenario 1: fresh installation"). The quarterly restore drill is in the same document.
 
 ## 12. Upgrade
 

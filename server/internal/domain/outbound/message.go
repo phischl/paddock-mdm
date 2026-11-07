@@ -1,7 +1,10 @@
 package outbound
 
 import (
+	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 )
@@ -47,12 +50,31 @@ type SeqRange struct {
 	Last *int64 `json:"last,omitempty"`
 }
 
-// MessageEvent is one forwarded audit event.
+// MessageEvent is one forwarded audit event. A replayed event that the index retention purged meanwhile is Missing:
+// it carries only its number and EventID and encodes as {forward_seq, event_id, missing: true} (plan M12 decision 21).
 type MessageEvent struct {
 	ForwardSeq int64       `json:"forward_seq"`
 	CommitSeq  int64       `json:"commit_seq"`
 	Links      *Links      `json:"links,omitempty"`
 	Event      audit.Event `json:"event"`
+	Missing    bool        `json:"-"`
+	EventID    uuid.UUID   `json:"-"`
+}
+
+// missingEvent is the encoding of a Missing MessageEvent.
+type missingEvent struct {
+	ForwardSeq int64     `json:"forward_seq"`
+	EventID    uuid.UUID `json:"event_id"`
+	Missing    bool      `json:"missing"`
+}
+
+// MarshalJSON encodes a Missing event as {forward_seq, event_id, missing: true}, every other one with its event.
+func (e MessageEvent) MarshalJSON() ([]byte, error) {
+	if e.Missing {
+		return json.Marshal(missingEvent{ForwardSeq: e.ForwardSeq, EventID: e.EventID, Missing: true})
+	}
+	type plain MessageEvent
+	return json.Marshal(plain(e))
 }
 
 // Links point into the portal; Device only for events whose target is a device.

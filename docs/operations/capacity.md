@@ -263,7 +263,7 @@ the migration (`depends_on` `paddock-audit-migrate` in `compose.audit.yaml`), bu
 writer keeps running until compose replaces it: its transactions wait for the migration's lock and then fail, and the
 queue redelivers their events. The queue dead-letters an event after 20 deliveries (`dlq.audit.writer`), so a long
 backfill is not guaranteed to be absorbed. The upgrade procedure therefore stops the running audit writer before
-`./paddock up` whenever audit migrations are pending (`docs/operations/upgrade.md`, *Upgrade*, step 4), so that new
+`./paddock up` whenever audit migrations are pending (`docs/operations/upgrade.md`, *Upgrade*, the step `audit-writer-stop`), so that new
 events wait in the queue instead.
 
 A fresh installation, including the move to 0.1.0-alpha.7 (`docs/operations/upgrade.md`), applies the migration to an
@@ -275,6 +275,23 @@ empty index and needs none of this.
   and migrations, while the host ran other test suites (load average 16–39 on 22 cores); an idle host is faster.
 - **Planning figure:** about 1.5 min per million events in the index. Count the events before an upgrade with
   `SELECT count(*) FROM audit_event` on `paddock_audit`.
+
+## Backup repository
+
+The local backup repository (volume `backup-repo` of the control-plane host, `docs/operations/backup.md`) is the one
+backup storage that lives on the host itself, so size its disk (plan M15 §12 decision 7; accepted: the reference host
+has about 260 GB free). A full set is roughly:
+
+- `retention_full` (default 14) full backups of both PostgreSQL databases, plus the WAL they need;
+- the OpenBao snapshots and Fleet dumps of their keep days (default 30 days each, at the default intervals about 120
+  snapshots and 30 dumps);
+- the escrowed LUKS headers (small objects, one per device generation);
+- during and after a key rotation, the previous key's repository until its retention has passed: a second full set.
+
+Measure the size of one full backup with `./paddock compose run --rm --no-deps pgbackrest info` and multiply it by
+`retention_full`. `PaddockBackupRepoFull` fires below 10 % free space; a full volume stops pgBackRest and the backup
+role. Every backup target holds another copy of the same set, so size those disks the same way. The figures of
+`docs/operations/backup.md` ("What is backed up") are the defaults the sizing assumes.
 
 ## Method
 

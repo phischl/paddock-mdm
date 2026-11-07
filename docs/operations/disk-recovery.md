@@ -144,8 +144,9 @@ device asks for the recovery key. Re-enroll TPM2+PIN as in step 3.
   the volumes of `/etc/crypttab` change. A volume with the LUKS UUID of another volume or of the root volume (a cloned
   header) is shown as sharing its UUID: it is not escrowed, and the device is not `compliant`.
 - The bucket keeps every version and has no Object Lock, so a Destroy can delete it. Credentials: the gateway's
-  bundles credential may only `s3:PutObject` below `org/*/devices/*/luks-header/*`; the worker and the api have
-  read-only credentials (`PADDOCK_ESCROW_S3_*`). Only the `paddock-escrow-reader` role can unwrap the header key,
+  bundles credential may only `s3:PutObject` below `org/*/devices/*/luks-header/*` and `org/*/devices/*/diagnostics/*`;
+  the api has a read-only credential; the worker's credential reads every object, lists the bucket and deletes object
+  versions below `org/*/devices/*/diagnostics/*` only, never a header (`PADDOCK_ESCROW_S3_*`, ADR 0048). Only the `paddock-escrow-reader` role can unwrap the header key,
   after it verified the administrator's step-up itself (`docs/operations/escrow-reader.md`).
 
 ### Header object of another size

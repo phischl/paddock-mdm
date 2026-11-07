@@ -93,6 +93,34 @@ func (q *Queries) CountAuditEvents(ctx context.Context, arg CountAuditEventsPara
 	return count, err
 }
 
+const countAuditEventsForReview = `-- name: CountAuditEventsForReview :one
+SELECT count(*) FROM audit_event
+WHERE occurred_at >= $1 AND occurred_at < $2
+  AND code = ANY($3::text[]) AND outcome = ANY($4::text[])
+  AND NOT ($5::boolean AND params->>'baseline' = 'true')
+`
+
+type CountAuditEventsForReviewParams struct {
+	FromTime        time.Time
+	ToTime          time.Time
+	Codes           []string
+	Outcomes        []string
+	ExcludeBaseline bool
+}
+
+func (q *Queries) CountAuditEventsForReview(ctx context.Context, arg CountAuditEventsForReviewParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditEventsForReview,
+		arg.FromTime,
+		arg.ToTime,
+		arg.Codes,
+		arg.Outcomes,
+		arg.ExcludeBaseline,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countAuditManifests = `-- name: CountAuditManifests :one
 SELECT count(*) FROM audit_manifest
 `
@@ -198,6 +226,50 @@ func (q *Queries) CountAuditVerificationRunsFiltered(ctx context.Context, arg Co
 	return count, err
 }
 
+const countEventsRecordedOn = `-- name: CountEventsRecordedOn :one
+SELECT count(*)::bigint AS events FROM audit_event
+WHERE recorded_at >= $1::timestamptz AND recorded_at < $2::timestamptz
+`
+
+type CountEventsRecordedOnParams struct {
+	DayStart time.Time
+	DayEnd   time.Time
+}
+
+// The index rows recorded on a day, the event_count of its checkpoint (plan M12 decision 20): day_start is 00:00 UTC of
+// the day, day_end of the next.
+func (q *Queries) CountEventsRecordedOn(ctx context.Context, arg CountEventsRecordedOnParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countEventsRecordedOn, arg.DayStart, arg.DayEnd)
+	var events int64
+	err := row.Scan(&events)
+	return events, err
+}
+
+const countStepUpEventsForReview = `-- name: CountStepUpEventsForReview :one
+SELECT (count(*) FILTER (WHERE outcome = 'success' AND (actor->>'step_up')::boolean))::bigint AS succeeded,
+       (count(*) FILTER (WHERE outcome = 'denied' AND params->>'error_code' = 'step_up_required'))::bigint AS refused
+FROM audit_event
+WHERE occurred_at >= $1 AND occurred_at < $2
+`
+
+type CountStepUpEventsForReviewParams struct {
+	FromTime time.Time
+	ToTime   time.Time
+}
+
+type CountStepUpEventsForReviewRow struct {
+	Succeeded int64
+	Refused   int64
+}
+
+// Successful actions of a step-up session and the refusals for a missing step-up, in [from, to).
+func (q *Queries) CountStepUpEventsForReview(ctx context.Context, arg CountStepUpEventsForReviewParams) (CountStepUpEventsForReviewRow, error) {
+	row := q.db.QueryRow(ctx, countStepUpEventsForReview, arg.FromTime, arg.ToTime)
+	var i CountStepUpEventsForReviewRow
+	err := row.Scan(&i.Succeeded, &i.Refused)
+	return i, err
+}
+
 const ensureAuditPartition = `-- name: EnsureAuditPartition :exec
 SELECT audit_ensure_partition($1::date)
 `
@@ -205,6 +277,42 @@ SELECT audit_ensure_partition($1::date)
 func (q *Queries) EnsureAuditPartition(ctx context.Context, month time.Time) error {
 	_, err := q.db.Exec(ctx, ensureAuditPartition, month)
 	return err
+}
+
+const escrowDestroyEvidence = `-- name: EscrowDestroyEvidence :many
+SELECT (target->>'id')::text AS device_id, max(occurred_at)::timestamptz AS destroyed_at
+FROM audit_event
+WHERE organization_id = $1 AND code = 'device.escrow_destroyed' AND outcome = 'success'
+  AND target->>'type' = 'device'
+GROUP BY target->>'id'
+`
+
+type EscrowDestroyEvidenceRow struct {
+	DeviceID    string
+	DestroyedAt time.Time
+}
+
+// The newest successful Destroy per device of one organization (device.escrow_destroyed). The escrow step of a restore
+// reads it here because the audit index survives the restore and the restored database may predate the Destroy
+// (decisions-alpha9 items 39 and 44). Only the device and the time are read.
+func (q *Queries) EscrowDestroyEvidence(ctx context.Context, organizationID uuid.UUID) ([]EscrowDestroyEvidenceRow, error) {
+	rows, err := q.db.Query(ctx, escrowDestroyEvidence, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EscrowDestroyEvidenceRow{}
+	for rows.Next() {
+		var i EscrowDestroyEvidenceRow
+		if err := rows.Scan(&i.DeviceID, &i.DestroyedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const firstAuditDay = `-- name: FirstAuditDay :one
@@ -252,6 +360,32 @@ func (q *Queries) GetAuditManifest(ctx context.Context, arg GetAuditManifestPara
 		&i.Signature,
 		&i.KeyVersion,
 		&i.ObjectKey,
+	)
+	return i, err
+}
+
+const getEventByCommitSeq = `-- name: GetEventByCommitSeq :one
+SELECT event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, object_key, commit_seq FROM audit_event WHERE commit_seq = $1 LIMIT 1
+`
+
+// The event at a notification destination's cursor (plan M12 decision 20); RLS supplies the organization.
+func (q *Queries) GetEventByCommitSeq(ctx context.Context, commitSeq int64) (AuditEvent, error) {
+	row := q.db.QueryRow(ctx, getEventByCommitSeq, commitSeq)
+	var i AuditEvent
+	err := row.Scan(
+		&i.EventID,
+		&i.OrganizationID,
+		&i.OccurredAt,
+		&i.RecordedAt,
+		&i.Code,
+		&i.Outcome,
+		&i.Source,
+		&i.Actor,
+		&i.Target,
+		&i.Params,
+		&i.CorrelationID,
+		&i.ObjectKey,
+		&i.CommitSeq,
 	)
 	return i, err
 }
@@ -592,6 +726,69 @@ type ListAuditEventsAfterParams struct {
 // Commit-order read of the index (plan M9 decision 4); RLS supplies the organization.
 func (q *Queries) ListAuditEventsAfter(ctx context.Context, arg ListAuditEventsAfterParams) ([]AuditEvent, error) {
 	rows, err := q.db.Query(ctx, listAuditEventsAfter, arg.After, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditEvent{}
+	for rows.Next() {
+		var i AuditEvent
+		if err := rows.Scan(
+			&i.EventID,
+			&i.OrganizationID,
+			&i.OccurredAt,
+			&i.RecordedAt,
+			&i.Code,
+			&i.Outcome,
+			&i.Source,
+			&i.Actor,
+			&i.Target,
+			&i.Params,
+			&i.CorrelationID,
+			&i.ObjectKey,
+			&i.CommitSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEventsForReview = `-- name: ListAuditEventsForReview :many
+
+SELECT event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, object_key, commit_seq FROM audit_event
+WHERE occurred_at >= $1 AND occurred_at < $2
+  AND code = ANY($3::text[]) AND outcome = ANY($4::text[])
+  AND NOT ($5::boolean AND params->>'baseline' = 'true')
+ORDER BY occurred_at, event_id
+LIMIT $6
+`
+
+type ListAuditEventsForReviewParams struct {
+	FromTime        time.Time
+	ToTime          time.Time
+	Codes           []string
+	Outcomes        []string
+	ExcludeBaseline bool
+	MaxRows         int32
+}
+
+// Access review (plan M12 decision 25): the events of the given codes and outcomes in [from, to), oldest first, and
+// their number; the baseline members of a role's first comparison are left out on request. RLS supplies the
+// organization.
+func (q *Queries) ListAuditEventsForReview(ctx context.Context, arg ListAuditEventsForReviewParams) ([]AuditEvent, error) {
+	rows, err := q.db.Query(ctx, listAuditEventsForReview,
+		arg.FromTime,
+		arg.ToTime,
+		arg.Codes,
+		arg.Outcomes,
+		arg.ExcludeBaseline,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1014,6 +1211,51 @@ func (q *Queries) ListLatestNightlyFailedOrganizations(ctx context.Context) ([]u
 			return nil, err
 		}
 		items = append(items, organization_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listManifestsAfter = `-- name: ListManifestsAfter :many
+SELECT day, sha256, signature, key_version FROM audit_manifest
+WHERE day > $1::date
+ORDER BY day
+LIMIT $2
+`
+
+type ListManifestsAfterParams struct {
+	AfterDay time.Time
+	MaxRows  int32
+}
+
+type ListManifestsAfterRow struct {
+	Day        time.Time
+	Sha256     []byte
+	Signature  string
+	KeyVersion int32
+}
+
+// The sealed days of the scope after a day, in day order (plan M12 decision 20); RLS supplies the organization.
+func (q *Queries) ListManifestsAfter(ctx context.Context, arg ListManifestsAfterParams) ([]ListManifestsAfterRow, error) {
+	rows, err := q.db.Query(ctx, listManifestsAfter, arg.AfterDay, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListManifestsAfterRow{}
+	for rows.Next() {
+		var i ListManifestsAfterRow
+		if err := rows.Scan(
+			&i.Day,
+			&i.Sha256,
+			&i.Signature,
+			&i.KeyVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

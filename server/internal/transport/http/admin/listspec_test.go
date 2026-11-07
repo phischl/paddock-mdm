@@ -35,6 +35,8 @@ var lists = map[string]struct {
 	"listDevices":            {deviceList, "postgres/queries/device.sql", "ListDevices", `device\.id`},
 	"listDeviceGroupDevices": {deviceList, "postgres/queries/device.sql", "ListDevices", `device\.id`},
 	"listDeviceCommands":     {deviceCommandList, "postgres/queries/command.sql", "ListDeviceCommands", "id"},
+	"listDeviceDiagnostics":  {deviceDiagnosticsList, "postgres/queries/diagnostics.sql", "ListDeviceDiagnostics", `dd\.id`},
+	"listDiagnostics":        {diagnosticsList, "postgres/queries/diagnostics.sql", "ListAllDeviceDiagnostics", `dd\.id`},
 	"listManagedFiles":       {managedFileList, "postgres/queries/managed_config.sql", "ListManagedFiles", "id"},
 	"listManagedUnits":       {managedUnitList, "postgres/queries/managed_config.sql", "ListManagedUnits", "id"},
 	"listAttention":          {attentionList, "postgres/queries/attention.sql", "ListAttention", "id"},
@@ -61,8 +63,11 @@ var lists = map[string]struct {
 	"listDeviceManagedSoftware":  {deviceManagedSoftwareList, "", "", ""},
 	"listSoftwareCatalogDevices": {softwareCatalogDeviceList, "", "", ""},
 
-	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
-	"listIpAllowlist":   {ipAllowlistList, "postgres/queries/ip_allowlist.sql", "ListIPAllowlistEntries", "id"},
+	"listAgentReleases":      {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
+	"listIpAllowlist":        {ipAllowlistList, "postgres/queries/ip_allowlist.sql", "ListIPAllowlistEntries", "id"},
+	"listBackupTargets":      {backupTargetList, "postgres/queries/backup.sql", "ListBackupTargets", "id"},
+	"listBackupRuns":         {backupRunList, "postgres/queries/backup.sql", "ListBackupRuns", "id"},
+	"listBackupRestorePlans": {backupRestorePlanList, "postgres/queries/backup_restore.sql", "ListBackupRestorePlans", "id"},
 
 	"listDeviceSoftware":        {deviceSoftwareList, "postgres/queries/inventory.sql", "ListDeviceSoftware", "name, version, source"},
 	"listDeviceVulnerabilities": {findingList, "postgres/queries/inventory.sql", "ListDeviceVulnerabilities", "cve, software_name, software_version"},
@@ -92,6 +97,8 @@ var sortColumns = map[string]map[string]string{
 		"name": "e.name", "category": "e.category", "created_at": "e.created_at", "updated_at": "e.updated_at",
 	},
 	"listSoftwareAssignments": {"created_at": "a.created_at", "updated_at": "a.updated_at", "intent": "a.intent"},
+	"listDeviceDiagnostics":   {"requested_at": "dd.requested_at", "state": "dd.state"},
+	"listDiagnostics":         {"requested_at": "dd.requested_at", "hostname": "d.hostname", "state": "dd.state"},
 	"listFindings": {
 		"last_seen_at": "f.last_seen_at", "opened_at": "f.opened_at", "status": "f.status", "hostname": "d.hostname",
 		"code": "f.code",
@@ -155,8 +162,13 @@ func TestListSpecsMatchContract(t *testing.T) {
 }
 
 // isCollection reports whether op is a collection GET: its 200 response is an object with an items array.
+// reports are objects whose items are a fixed set of report lines, not a collection.
+var reports = map[string]bool{
+	"getUpgradeCheck": true, // the six items of the upgrade check (plan M16 §6.2)
+}
+
 func isCollection(op *openapi3.Operation) bool {
-	if op == nil {
+	if op == nil || reports[op.OperationID] {
 		return false
 	}
 	ok := op.Responses.Status(http.StatusOK)

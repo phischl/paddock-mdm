@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	openapi_types "github.com/oapi-codegen/runtime/types"
+
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/outbound"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -19,14 +21,18 @@ func toNotificationDestination(d app.NotificationDestination) adminapi.Notificat
 		Id: d.ID, Type: adminapi.NotificationDestinationType(d.Type), Name: d.Name, Enabled: d.Enabled,
 		FilterMode: adminapi.NotificationFilterMode(d.FilterMode), Codes: d.Codes, PseudonymizeUsers: d.PseudonymizeUsers,
 		IncludeParams: d.IncludeParams, UrlDisplay: d.URLDisplay, HeartbeatIntervalS: d.HeartbeatIntervalS,
-		Recipients: d.Recipients, EmailMinIntervalS: d.EmailMinIntervalS, CreatedBy: d.CreatedBy,
-		CreatedAt: d.CreatedAt.UTC(), UpdatedAt: d.UpdatedAt.UTC(),
+		Recipients: d.Recipients, EmailMinIntervalS: d.EmailMinIntervalS, SyslogHost: d.SyslogHost,
+		SyslogPort: d.SyslogPort, SyslogServerName: d.SyslogServerName, SyslogCaPemSet: d.SyslogCAPEMSet,
+		Checkpoints: d.Checkpoints, CreatedBy: d.CreatedBy, CreatedAt: d.CreatedAt.UTC(), UpdatedAt: d.UpdatedAt.UTC(),
 		State: adminapi.NotificationDestinationState{
 			Status: adminapi.NotificationDestinationStateStatus(s.Status), CursorCommitSeq: s.CursorCommitSeq,
 			ForwardSeq: s.ForwardSeq, LastSuccessAt: utcPtr(s.LastSuccessAt), LastAttemptAt: utcPtr(s.LastAttemptAt),
 			NextAttemptAt: utcPtr(s.NextAttemptAt), StalledSince: utcPtr(s.StalledSince), LastError: s.LastError,
-			LagSeconds: s.LagSeconds,
+			LagSeconds: s.LagSeconds, ReplayFrom: s.ReplayFrom,
 		},
+	}
+	if s.LastCheckpointDay != nil {
+		out.State.LastCheckpointDay = &openapi_types.Date{Time: *s.LastCheckpointDay}
 	}
 	if t := s.LastTest; t != nil {
 		out.State.LastTest = &struct {
@@ -44,7 +50,8 @@ func toNotificationCreated(d app.NotificationDestination, secret string) adminap
 		Id: v.Id, Type: v.Type, Name: v.Name, Enabled: v.Enabled, FilterMode: v.FilterMode, Codes: v.Codes,
 		PseudonymizeUsers: v.PseudonymizeUsers, IncludeParams: v.IncludeParams, UrlDisplay: v.UrlDisplay,
 		HeartbeatIntervalS: v.HeartbeatIntervalS, Recipients: v.Recipients, EmailMinIntervalS: v.EmailMinIntervalS,
-		CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, State: v.State,
+		SyslogHost: v.SyslogHost, SyslogPort: v.SyslogPort, SyslogServerName: v.SyslogServerName,
+		SyslogCaPemSet: v.SyslogCaPemSet, Checkpoints: v.Checkpoints, CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, State: v.State,
 	}
 	if secret != "" {
 		out.Secret = &secret
@@ -57,7 +64,9 @@ func notificationCreateInput(b *adminapi.NotificationDestinationCreate) app.Noti
 		Type: outbound.Type(b.Type), Name: b.Name, Enabled: b.Enabled, FilterMode: outbound.FilterMode(b.FilterMode),
 		Codes: deref(b.Codes, nil), PseudonymizeUsers: deref(b.PseudonymizeUsers, false), IncludeParams: deref(b.IncludeParams, false),
 		URL: b.Url, HeartbeatIntervalS: deref(b.HeartbeatIntervalS, 0), Recipients: deref(b.Recipients, nil),
-		EmailMinIntervalS: deref(b.EmailMinIntervalS, 0),
+		EmailMinIntervalS: deref(b.EmailMinIntervalS, 0), SyslogHost: deref(b.SyslogHost, ""),
+		SyslogPort: deref(b.SyslogPort, 0), SyslogCAPEM: b.SyslogCaPem, SyslogServerName: deref(b.SyslogServerName, ""),
+		Checkpoints: deref(b.Checkpoints, false),
 	}
 }
 
@@ -66,7 +75,9 @@ func notificationUpdateInput(b *adminapi.NotificationDestinationUpdate) app.Noti
 		Name: b.Name, Enabled: b.Enabled, FilterMode: outbound.FilterMode(b.FilterMode), Codes: deref(b.Codes, nil),
 		PseudonymizeUsers: deref(b.PseudonymizeUsers, false), IncludeParams: deref(b.IncludeParams, false), URL: b.Url,
 		HeartbeatIntervalS: deref(b.HeartbeatIntervalS, 0), Recipients: deref(b.Recipients, nil),
-		EmailMinIntervalS: deref(b.EmailMinIntervalS, 0),
+		EmailMinIntervalS: deref(b.EmailMinIntervalS, 0), SyslogHost: deref(b.SyslogHost, ""),
+		SyslogPort: deref(b.SyslogPort, 0), SyslogCAPEM: b.SyslogCaPem, SyslogServerName: deref(b.SyslogServerName, ""),
+		Checkpoints: deref(b.Checkpoints, false),
 	}
 	if b.Type != nil {
 		in.Type = outbound.Type(*b.Type)
@@ -168,6 +179,13 @@ func (h *handlers) TestNotificationDestination(ctx context.Context, req adminapi
 	return adminapi.TestNotificationDestination202JSONResponse{DeliveryId: id}, nil
 }
 
+func (h *handlers) ReplayNotificationDestination(ctx context.Context, req adminapi.ReplayNotificationDestinationRequestObject) (adminapi.ReplayNotificationDestinationResponseObject, error) {
+	if err := h.notifications.Replay(ctx, app.ScopeOrg, req.Id, req.Body.FromForwardSeq); err != nil {
+		return nil, err
+	}
+	return adminapi.ReplayNotificationDestination202Response{}, nil
+}
+
 func (h *handlers) ResolveNotificationPseudonym(ctx context.Context, req adminapi.ResolveNotificationPseudonymRequestObject) (adminapi.ResolveNotificationPseudonymResponseObject, error) {
 	id, err := h.notifications.ResolvePseudonym(ctx, req.Id, req.Body.Pseudonym)
 	if err != nil {
@@ -251,4 +269,11 @@ func (h *handlers) TestPlatformNotificationDestination(ctx context.Context, req 
 		return nil, err
 	}
 	return adminapi.TestPlatformNotificationDestination202JSONResponse{DeliveryId: id}, nil
+}
+
+func (h *handlers) ReplayPlatformNotificationDestination(ctx context.Context, req adminapi.ReplayPlatformNotificationDestinationRequestObject) (adminapi.ReplayPlatformNotificationDestinationResponseObject, error) {
+	if err := h.notifications.Replay(ctx, app.ScopePlatform, req.Id, req.Body.FromForwardSeq); err != nil {
+		return nil, err
+	}
+	return adminapi.ReplayPlatformNotificationDestination202Response{}, nil
 }

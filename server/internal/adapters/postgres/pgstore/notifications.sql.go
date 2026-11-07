@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const countNotificationDestinations = `-- name: CountNotificationDestinations :one
@@ -55,10 +56,12 @@ func (q *Queries) DeleteNotificationDestination(ctx context.Context, id uuid.UUI
 
 const getNotificationDestination = `-- name: GetNotificationDestination :one
 SELECT d.id, d.organization_id, d.type, d.name, d.enabled, d.filter_mode, d.codes, d.pseudonymize_users,
-       d.include_params, d.url_display, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s, d.created_by,
-       d.created_at, d.updated_at,
+       d.include_params, d.url_display, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s, d.syslog_host,
+       d.syslog_port, d.syslog_server_name, (d.syslog_ca_pem IS NOT NULL)::boolean AS syslog_ca_pem_set,
+       d.checkpoints, d.created_by, d.created_at, d.updated_at,
        s.status, s.cursor_commit_seq, s.forward_seq, s.last_success_at, s.last_attempt_at, s.next_attempt_at,
-       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error
+       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error,
+       s.last_checkpoint_day, s.replay_from
 FROM notification_destination d
 LEFT JOIN notification_destination_state s ON s.destination_id = d.id AND s.organization_id = d.organization_id
 WHERE d.id = $1
@@ -78,6 +81,11 @@ type GetNotificationDestinationRow struct {
 	HeartbeatIntervalS int32
 	Recipients         []string
 	EmailMinIntervalS  int32
+	SyslogHost         *string
+	SyslogPort         *int32
+	SyslogServerName   *string
+	SyslogCaPemSet     bool
+	Checkpoints        bool
 	CreatedBy          string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
@@ -93,6 +101,8 @@ type GetNotificationDestinationRow struct {
 	LastTestAt         *time.Time
 	LastTestOk         *bool
 	LastTestError      *string
+	LastCheckpointDay  pgtype.Date
+	ReplayFrom         *int64
 }
 
 func (q *Queries) GetNotificationDestination(ctx context.Context, id uuid.UUID) (GetNotificationDestinationRow, error) {
@@ -112,6 +122,11 @@ func (q *Queries) GetNotificationDestination(ctx context.Context, id uuid.UUID) 
 		&i.HeartbeatIntervalS,
 		&i.Recipients,
 		&i.EmailMinIntervalS,
+		&i.SyslogHost,
+		&i.SyslogPort,
+		&i.SyslogServerName,
+		&i.SyslogCaPemSet,
+		&i.Checkpoints,
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -127,6 +142,33 @@ func (q *Queries) GetNotificationDestination(ctx context.Context, id uuid.UUID) 
 		&i.LastTestAt,
 		&i.LastTestOk,
 		&i.LastTestError,
+		&i.LastCheckpointDay,
+		&i.ReplayFrom,
+	)
+	return i, err
+}
+
+const getNotificationDestinationReplayState = `-- name: GetNotificationDestinationReplayState :one
+SELECT forward_seq, pending_delivery_id, replay_from, start_at_latest FROM notification_destination_state
+WHERE destination_id = $1
+`
+
+type GetNotificationDestinationReplayStateRow struct {
+	ForwardSeq        int64
+	PendingDeliveryID uuid.NullUUID
+	ReplayFrom        *int64
+	StartAtLatest     bool
+}
+
+// What a replay request checks before it is set (plan M12 decision 21).
+func (q *Queries) GetNotificationDestinationReplayState(ctx context.Context, destinationID uuid.UUID) (GetNotificationDestinationReplayStateRow, error) {
+	row := q.db.QueryRow(ctx, getNotificationDestinationReplayState, destinationID)
+	var i GetNotificationDestinationReplayStateRow
+	err := row.Scan(
+		&i.ForwardSeq,
+		&i.PendingDeliveryID,
+		&i.ReplayFrom,
+		&i.StartAtLatest,
 	)
 	return i, err
 }
@@ -158,11 +200,13 @@ const insertNotificationDestination = `-- name: InsertNotificationDestination :e
 
 INSERT INTO notification_destination (
   id, organization_id, type, name, enabled, filter_mode, codes, pseudonymize_users, include_params, url_ciphertext,
-  url_display, secret_ciphertext, heartbeat_interval_s, recipients, email_min_interval_s, created_by
+  url_display, secret_ciphertext, heartbeat_interval_s, recipients, email_min_interval_s, syslog_host, syslog_port,
+  syslog_ca_pem, syslog_server_name, checkpoints, created_by
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8, $9,
   $10, $11, $12, $13, $14,
-  $15, $16
+  $15, $16, $17, $18,
+  $19, $20, $21
 )
 `
 
@@ -182,13 +226,18 @@ type InsertNotificationDestinationParams struct {
 	HeartbeatIntervalS int32
 	Recipients         []string
 	EmailMinIntervalS  int32
+	SyslogHost         *string
+	SyslogPort         *int32
+	SyslogCaPem        *string
+	SyslogServerName   *string
+	Checkpoints        bool
 	CreatedBy          string
 }
 
 // Notification destinations (plan M9 decisions 14–18). The same queries serve the organization scope (paddock_api)
 // and the platform scope (paddock_platform, nil organization): row level security selects the rows. The api never
-// writes a state column (migration 00085): it inserts the state row with its key and requests a cursor skip through
-// the SECURITY DEFINER functions.
+// writes a state column except replay_from (migration 00105): it inserts the state row with its key and requests a
+// cursor skip through the SECURITY DEFINER functions.
 func (q *Queries) InsertNotificationDestination(ctx context.Context, arg InsertNotificationDestinationParams) error {
 	_, err := q.db.Exec(ctx, insertNotificationDestination,
 		arg.ID,
@@ -206,6 +255,11 @@ func (q *Queries) InsertNotificationDestination(ctx context.Context, arg InsertN
 		arg.HeartbeatIntervalS,
 		arg.Recipients,
 		arg.EmailMinIntervalS,
+		arg.SyslogHost,
+		arg.SyslogPort,
+		arg.SyslogCaPem,
+		arg.SyslogServerName,
+		arg.Checkpoints,
 		arg.CreatedBy,
 	)
 	return err
@@ -288,10 +342,12 @@ func (q *Queries) InsertNotificationTestDelivery(ctx context.Context, arg Insert
 const listNotificationDestinations = `-- name: ListNotificationDestinations :many
 
 SELECT d.id, d.organization_id, d.type, d.name, d.enabled, d.filter_mode, d.codes, d.pseudonymize_users,
-       d.include_params, d.url_display, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s, d.created_by,
-       d.created_at, d.updated_at,
+       d.include_params, d.url_display, d.heartbeat_interval_s, d.recipients, d.email_min_interval_s, d.syslog_host,
+       d.syslog_port, d.syslog_server_name, (d.syslog_ca_pem IS NOT NULL)::boolean AS syslog_ca_pem_set,
+       d.checkpoints, d.created_by, d.created_at, d.updated_at,
        s.status, s.cursor_commit_seq, s.forward_seq, s.last_success_at, s.last_attempt_at, s.next_attempt_at,
-       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error
+       s.stalled_since, s.first_failure_at, s.last_error, s.last_test_at, s.last_test_ok, s.last_test_error,
+       s.last_checkpoint_day, s.replay_from
 FROM notification_destination d
 LEFT JOIN notification_destination_state s ON s.destination_id = d.id AND s.organization_id = d.organization_id
 WHERE ($1::text IS NULL OR d.name ILIKE $1::text ESCAPE '\')
@@ -331,6 +387,11 @@ type ListNotificationDestinationsRow struct {
 	HeartbeatIntervalS int32
 	Recipients         []string
 	EmailMinIntervalS  int32
+	SyslogHost         *string
+	SyslogPort         *int32
+	SyslogServerName   *string
+	SyslogCaPemSet     bool
+	Checkpoints        bool
 	CreatedBy          string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
@@ -346,6 +407,8 @@ type ListNotificationDestinationsRow struct {
 	LastTestAt         *time.Time
 	LastTestOk         *bool
 	LastTestError      *string
+	LastCheckpointDay  pgtype.Date
+	ReplayFrom         *int64
 }
 
 // List queries (ADR 0018): see device_group.sql.
@@ -379,6 +442,11 @@ func (q *Queries) ListNotificationDestinations(ctx context.Context, arg ListNoti
 			&i.HeartbeatIntervalS,
 			&i.Recipients,
 			&i.EmailMinIntervalS,
+			&i.SyslogHost,
+			&i.SyslogPort,
+			&i.SyslogServerName,
+			&i.SyslogCaPemSet,
+			&i.Checkpoints,
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -394,6 +462,8 @@ func (q *Queries) ListNotificationDestinations(ctx context.Context, arg ListNoti
 			&i.LastTestAt,
 			&i.LastTestOk,
 			&i.LastTestError,
+			&i.LastCheckpointDay,
+			&i.ReplayFrom,
 		); err != nil {
 			return nil, err
 		}
@@ -480,6 +550,28 @@ func (q *Queries) PendingNotificationTestExists(ctx context.Context, destination
 	return pending, err
 }
 
+const replayNotificationDestination = `-- name: ReplayNotificationDestination :execrows
+UPDATE notification_destination_state SET replay_from = $1::bigint
+WHERE destination_id = $2 AND pending_delivery_id IS NULL AND replay_from IS NULL AND NOT start_at_latest
+  AND $1::bigint >= 1 AND $1::bigint <= forward_seq
+`
+
+type ReplayNotificationDestinationParams struct {
+	FromForwardSeq int64
+	DestinationID  uuid.UUID
+}
+
+// Both scopes; 0 rows when the request does not apply (plan M12 decision 21, migration 00105): the guard closes the
+// race with the notifier, which may have taken a batch or started a replay since the api read the state. A pending skip
+// request refuses it, because resolving the skip would end the replay before it sent anything.
+func (q *Queries) ReplayNotificationDestination(ctx context.Context, arg ReplayNotificationDestinationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replayNotificationDestination, arg.FromForwardSeq, arg.DestinationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const startNotificationDestinationAtLatest = `-- name: StartNotificationDestinationAtLatest :one
 SELECT coalesce(paddock_destination_start_at_latest($1), false)::boolean AS started
 `
@@ -529,8 +621,11 @@ UPDATE notification_destination SET
   url_ciphertext = coalesce($7, url_ciphertext),
   url_display = coalesce($8, url_display),
   heartbeat_interval_s = $9, recipients = $10,
-  email_min_interval_s = $11, updated_at = now()
-WHERE id = $12
+  email_min_interval_s = $11, syslog_host = $12,
+  syslog_port = $13, syslog_server_name = $14,
+  syslog_ca_pem = CASE WHEN $15::boolean THEN syslog_ca_pem ELSE $16 END,
+  checkpoints = $17, updated_at = now()
+WHERE id = $18
 `
 
 type UpdateNotificationDestinationParams struct {
@@ -545,10 +640,17 @@ type UpdateNotificationDestinationParams struct {
 	HeartbeatIntervalS int32
 	Recipients         []string
 	EmailMinIntervalS  int32
+	SyslogHost         *string
+	SyslogPort         *int32
+	SyslogServerName   *string
+	KeepSyslogCaPem    bool
+	SyslogCaPem        *string
+	Checkpoints        bool
 	ID                 uuid.UUID
 }
 
-// A NULL url_ciphertext keeps the stored URL and its display (an update without url).
+// A NULL url_ciphertext keeps the stored URL and its display (an update without url); keep_syslog_ca_pem keeps the
+// stored CA bundle (an update without syslog_ca_pem).
 func (q *Queries) UpdateNotificationDestination(ctx context.Context, arg UpdateNotificationDestinationParams) error {
 	_, err := q.db.Exec(ctx, updateNotificationDestination,
 		arg.Name,
@@ -562,6 +664,12 @@ func (q *Queries) UpdateNotificationDestination(ctx context.Context, arg UpdateN
 		arg.HeartbeatIntervalS,
 		arg.Recipients,
 		arg.EmailMinIntervalS,
+		arg.SyslogHost,
+		arg.SyslogPort,
+		arg.SyslogServerName,
+		arg.KeepSyslogCaPem,
+		arg.SyslogCaPem,
+		arg.Checkpoints,
 		arg.ID,
 	)
 	return err

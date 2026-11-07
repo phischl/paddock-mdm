@@ -1,0 +1,3 @@
+Schema: migrations 00089–00104
+Upgrade: from 0.1.0-alpha.8: automatic
+Agents: supports 0.1.0-alpha.7, 0.1.0-alpha.8, 0.1.0-alpha.9

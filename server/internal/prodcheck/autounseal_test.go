@@ -235,3 +235,20 @@ func TestAutoUnsealSharesWorldReadable(t *testing.T) {
 	_, out := run(t, f.cfg, prodcheck.Options{})
 	failItem(t, out, "secret files present, not empty and not world-readable", "openbao_auto_unseal_shares: readable by every user of the host")
 }
+
+// TestLegacyBackupKeyCheck covers plan M15 decision 9: the legacy key file on the api is a warning that never fails
+// the check; without the variable the item is absent.
+func TestLegacyBackupKeyCheck(t *testing.T) {
+	f := newFixture(t)
+	_, out := run(t, f.cfg, prodcheck.Options{})
+	if strings.Contains(out, "backup: legacy key import") {
+		t.Fatalf("item without the variable:\n%s", out)
+	}
+	f.setEnv("paddock-api", "PADDOCK_BACKUP_LEGACY_KEY_FILE", "/run/secrets/backup_encryption_key")
+	_, out = run(t, f.cfg, prodcheck.Options{})
+	status, detail := itemBlock(t, out, "backup: legacy key import")
+	if status != "WARN" || !strings.Contains(detail, "paddock-api: PADDOCK_BACKUP_LEGACY_KEY_FILE is set") ||
+		!strings.Contains(detail, "move .secrets/backup_encryption_key off the host and run ./paddock up") {
+		t.Fatalf("legacy key file: %s %q\n%s", status, detail, out)
+	}
+}

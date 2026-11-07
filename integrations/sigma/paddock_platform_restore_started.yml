@@ -1,0 +1,20 @@
+title: Paddock restore started
+id: 5b0e3c1a-7d42-4f8e-9a61-2c8d4e500932
+status: experimental
+description: The host started an approved restore plan; from here it stops the stack and overwrites the data of the control plane. A failure is a refused start.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-05
+tags:
+  - paddock.wazuh_100932
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code: 'platform.restore_started'
+  condition: selection
+falsepositives:
+  - A restore planned and approved in the portal.
+level: high

@@ -966,7 +966,7 @@ func TestRevocationCancelsRegeneration(t *testing.T) {
 				}
 				return
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(hangGuard):
 			t.Fatal("the worker hangs")
 		}
 	}

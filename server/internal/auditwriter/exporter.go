@@ -350,8 +350,15 @@ func (e *Exporter) markReady(ctx context.Context, export auditstore.AuditExport,
 	}
 	readyAt := e.now().UTC()
 	expiresAt := readyAt.Add(ExportTTL)
-	events, objects, size, ok := int64(res.events), int32(res.objects), res.size, res.verifyOK //nolint:gosec // bounded by 400 days of objects
-	version := int32(res.keyVersion)                                                           //nolint:gosec // checked against the published keys
+	objects, err := toInt32(res.objects)
+	if err != nil {
+		return fmt.Errorf("object count of the export: %w", err)
+	}
+	version, err := toInt32(res.keyVersion)
+	if err != nil {
+		return fmt.Errorf("signing key version of the export: %w", err)
+	}
+	events, size, ok := int64(res.events), res.size, res.verifyOK
 	var updated int64
 	wctx, cancel := context.WithTimeout(ctx, e.writeTimeout)
 	defer cancel()

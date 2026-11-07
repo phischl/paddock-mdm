@@ -36,6 +36,15 @@ expect 1 "running stack with compose.prod.yaml" 'printf "PADDOCK_ENV=development
 expect 1 "running stack with compose.audit.prod.yaml" 'printf "PADDOCK_ENV=development\n" >.env' \
   /x/compose.audit.yaml /x/compose.audit.prod.yaml
 
+# The drill's subset must run through the make target (PDK-874): a bare go test lacks PADDOCK_ACCEPTANCE_PADDOCKCTL.
+drill="$(dirname "$guard")/restore-drill.sh"
+if grep -Eq '^[^#]*go test' "$drill" || ! grep -Eq '^make .* acceptance T=' "$drill"; then
+  echo "FAIL restore-drill.sh runs its subset without the make acceptance environment"
+  failures=$((failures + 1))
+else
+  echo "ok   restore-drill.sh runs its subset through make acceptance"
+fi
+
 if ((failures > 0)); then
   echo "restore-drill-guard: $failures failure(s)"
   exit 1

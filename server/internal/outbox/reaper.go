@@ -106,10 +106,16 @@ func (r *Reaper) finalize(ctx context.Context, q *pgstore.Queries, a pgstore.Act
 	if a.Source != nil {
 		source = *a.Source
 	}
+	// A system action started outside a request before 0.1.0-alpha.9 stored an empty correlation ID; the audit writer
+	// dead-letters an event without one, so the reaped attempt would go unrecorded (decisions-alpha9 item 69).
+	correlation := a.CorrelationID
+	if correlation == "" {
+		correlation = "reaper-" + a.ID.String()
+	}
 	payload, err := json.Marshal(audit.Event{
 		Schema: audit.Schema, EventID: a.ID, OrganizationID: a.OrganizationID, OccurredAt: finished,
 		Code: audit.Code(a.Code), Outcome: audit.OutcomeUnknown, Actor: actor, Target: target, Source: source,
-		Params: params, ErrorCode: errorCode, CorrelationID: a.CorrelationID,
+		Params: params, ErrorCode: errorCode, CorrelationID: correlation,
 	})
 	if err != nil {
 		return err

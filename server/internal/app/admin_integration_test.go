@@ -93,6 +93,62 @@ func TestAdminBumpFunctionIsPlatformOnly(t *testing.T) {
 	}
 }
 
+// TestAdminRaiseBundleSeq: every device ends at greatest(bundle_seq + 1, --at-least) (decisions-alpha9 item 71): a
+// device enrolled since the last raise (0) and one below the bound reach it, one above it moves by one only, so the
+// highest sequence does not double.
+func TestAdminRaiseBundleSeq(t *testing.T) {
+	admin, super, org := adminHarness(t)
+	ctx := context.Background()
+	fresh, low, high := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	const atLeast = int64(900_000_000_000)
+	if _, err := super.Exec(ctx, `INSERT INTO device (id, organization_id, hostname, state, bundle_seq) VALUES
+		($1, $4, 'fresh', 'active', 0), ($2, $4, 'low', 'active', 7), ($3, $4, 'high', 'active', $5)`,
+		fresh, low, high, org, atLeast+10); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []int64{0, -1, app.MaxBundleSeqAtLeast + 1} {
+		if _, err := admin.RaiseBundleSeq(ctx, n); !errors.Is(err, app.ErrAtLeastOutOfRange) {
+			t.Errorf("--at-least %d: %v", n, err)
+		}
+	}
+	devices, err := admin.RaiseBundleSeq(ctx, atLeast)
+	if err != nil || devices < 3 {
+		t.Fatalf("RaiseBundleSeq = %d, %v", devices, err)
+	}
+	for _, c := range []struct {
+		id   uuid.UUID
+		want int64
+	}{{fresh, atLeast}, {low, atLeast}, {high, atLeast + 11}} {
+		if n := countRows(t, super, "SELECT bundle_seq FROM device WHERE id = $1", c.id); n != int(c.want) {
+			t.Errorf("device %s: bundle_seq %d, want %d", c.id, n, c.want)
+		}
+	}
+	if n := countRows(t, super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'platform.bundle_seq_raised'
+		AND outcome = 'success' AND organization_id = $2 AND (params->>'at_least')::bigint = $3
+		AND (params->>'devices')::bigint = $4`, "corr-"+t.Name(), uuid.Nil, atLeast, devices); n != 1 {
+		t.Fatalf("%d platform.bundle_seq_raised events", n)
+	}
+}
+
+// TestAdminRaiseFunctionIsPlatformOnly: only paddock_platform may execute paddock_admin_raise_bundle_seq.
+func TestAdminRaiseFunctionIsPlatformOnly(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	for name, dsn := range map[string]string{"api": env.API, "worker": env.Worker, "compiler": env.Compiler,
+		"relay": env.Relay, "notifier": env.Notifier, "escrow_reader": env.EscrowReader, "revocation": env.Revocation,
+		"backup": env.Backup} {
+		conn, err := pgx.Connect(context.Background(), dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n int64
+		err = conn.QueryRow(context.Background(), "SELECT paddock_admin_raise_bundle_seq(1)").Scan(&n)
+		_ = conn.Close(context.Background())
+		if err == nil {
+			t.Errorf("%s executed paddock_admin_raise_bundle_seq", name)
+		}
+	}
+}
+
 func TestAdminRecompileAll(t *testing.T) {
 	admin, super, org := adminHarness(t)
 	total, err := admin.RecompileAll(context.Background())

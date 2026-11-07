@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Action struct {
@@ -163,6 +164,95 @@ type AttentionCondition struct {
 	ID       string
 }
 
+type BackupKey struct {
+	KeyID              string
+	State              string
+	Ciphertext         string
+	Fingerprint        string
+	ChallengePositions []int32
+	ChallengeSha256    []byte
+	Attempts           int32
+	Legacy             bool
+	CreatedBy          string
+	CreatedAt          time.Time
+	ConfirmedBy        *string
+	ConfirmedAt        *time.Time
+	RetiredAt          *time.Time
+}
+
+type BackupRestorePlan struct {
+	ID             uuid.UUID
+	Kind           string
+	SourceTargetID uuid.NullUUID
+	Source         string
+	At             *time.Time
+	Components     []string
+	State          string
+	CreatedBy      string
+	CreatedAt      time.Time
+	ExpiresAt      *time.Time
+	StartedAt      *time.Time
+	FinishedAt     *time.Time
+	OutcomeDetail  *string
+}
+
+type BackupRun struct {
+	ID          uuid.UUID
+	Kind        string
+	Label       string
+	State       string
+	Outcome     *string
+	RequestedBy *string
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
+	Bytes       int64
+	ErrorClass  *string
+	Targets     json.RawMessage
+	CreatedAt   time.Time
+	MirroredAt  *time.Time
+}
+
+type BackupSchedule struct {
+	Singleton            bool
+	FullIntervalHours    int32
+	OpenbaoIntervalHours int32
+	FleetIntervalHours   int32
+	EscrowIntervalHours  int32
+	RetentionFull        int32
+	OpenbaoKeepDays      int32
+	FleetKeepDays        int32
+	UpdatedBy            *string
+	UpdatedAt            time.Time
+}
+
+type BackupTarget struct {
+	ID                    uuid.UUID
+	Name                  string
+	Type                  string
+	Enabled               bool
+	Settings              json.RawMessage
+	CredentialsCiphertext *string
+	HostState             string
+	HostRevision          int32
+	TestRequestedAt       *time.Time
+	LastTestAt            *time.Time
+	LastTestOk            *bool
+	LastTestError         *string
+	CreatedBy             string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	DeletedAt             *time.Time
+}
+
+type BackupTargetStatus struct {
+	TargetID      uuid.UUID
+	Kind          string
+	LastSuccessAt *time.Time
+	LastError     *string
+	LastErrorAt   *time.Time
+	Bytes         int64
+}
+
 type Bundle struct {
 	DeviceID        uuid.UUID
 	Version         int64
@@ -287,6 +377,32 @@ type DeviceCommand struct {
 	DeliveredAt    *time.Time
 	FinishedAt     *time.Time
 	Result         json.RawMessage
+}
+
+type DeviceDiagnostic struct {
+	ID               uuid.UUID
+	OrganizationID   uuid.UUID
+	DeviceID         uuid.UUID
+	RequestedBy      string
+	RequestedAt      time.Time
+	Reason           string
+	State            string
+	ObjectKey        *string
+	Size             *int64
+	Sha256           *string
+	Nonce            []byte
+	WrappedDek       []byte
+	Files            *int32
+	TruncatedEntries []string
+	NotifiedSessions *int32
+	UploadedAt       *time.Time
+	StoredAt         *time.Time
+	ExpiresAt        *time.Time
+	FailedReason     *string
+	DownloadCount    int32
+	LastDownloadedAt *time.Time
+	PurgedAt         *time.Time
+	KeyVersion       *int32
 }
 
 type DeviceDiskConversion struct {
@@ -474,6 +590,16 @@ type EnrollmentToken struct {
 	CreatedAt      time.Time
 }
 
+type EscrowRefusal struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Kind           string
+	Generation     int32
+	Reason         string
+	CreatedAt      time.Time
+}
+
 type EscrowSecret struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
@@ -515,6 +641,13 @@ type Finding struct {
 	ExternalRef       *string
 	ClearedAt         *time.Time
 	UpdatedAt         time.Time
+}
+
+type GooseDbVersion struct {
+	ID        int32
+	VersionID int64
+	IsApplied bool
+	Tstamp    pgtype.Timestamp
 }
 
 type InstalledSoftware struct {
@@ -582,6 +715,7 @@ type NotificationDelivery struct {
 	Attempts       int32
 	LastError      *string
 	RequestedBy    *string
+	CheckpointDay  pgtype.Date
 }
 
 type NotificationDeliveryEvent struct {
@@ -612,6 +746,11 @@ type NotificationDestination struct {
 	CreatedBy          string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	SyslogHost         *string
+	SyslogPort         *int32
+	SyslogCaPem        *string
+	SyslogServerName   *string
+	Checkpoints        bool
 }
 
 type NotificationDestinationState struct {
@@ -633,6 +772,8 @@ type NotificationDestinationState struct {
 	LastTestAt          *time.Time
 	LastTestOk          *bool
 	LastTestError       *string
+	LastCheckpointDay   pgtype.Date
+	ReplayFrom          *int64
 }
 
 type NotificationPseudonymKey struct {

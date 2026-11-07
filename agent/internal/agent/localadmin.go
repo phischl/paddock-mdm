@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"slices"
 
@@ -25,14 +24,13 @@ func (e escrowClient) Upload(ctx context.Context, req escrow.Request) error {
 	return err
 }
 
-// UploadHeader announces a sealed LUKS header and PUTs it to the presigned URL of the answer.
+// UploadHeader announces a sealed LUKS header and PUTs it to the presigned URL of the answer. An answer without an
+// upload URL is a header the server refuses (an issued Destroy, PDK-794): nothing is uploaded, and the escrow's status
+// reports the refusal.
 func (e escrowClient) UploadHeader(ctx context.Context, req escrow.Request, object []byte) error {
 	accepted, err := e.a.d.Client.EscrowUpload(ctx, e.a.st.DeviceID, e.a.st.Seq, req)
-	if err != nil {
+	if err != nil || accepted.UploadURL == "" {
 		return err
-	}
-	if accepted.UploadURL == "" {
-		return errors.New("the server answered the header escrow without an upload URL")
 	}
 	return e.a.d.Client.Upload(ctx, accepted.UploadURL, object)
 }

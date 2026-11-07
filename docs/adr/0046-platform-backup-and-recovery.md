@@ -1,0 +1,237 @@
+# 0046 — Platform backup and recovery: targets, one key, backup sets, restore plans
+Status: Accepted (2026-11-04 — architect lead for the design options 1–7 of plan M15 §12; the maintainer's
+binding decisions of 2026-10-28 in PDK-474 stand)
+
+## Context
+
+ADR 0016 and plan M6a built one backup path: pgBackRest writes the two PostgreSQL databases to one S3 bucket,
+the worker uploads encrypted OpenBao Raft snapshots and an aws-cli sidecar uploads Fleet dumps to the same bucket.
+Everything is configured in host files (`.env`, `.secrets/backup_*`), the encryption key is a host file written by
+`./paddock secrets`, and a restore is a runbook of several commands (`docs/operations/restore.md`). The escrow
+bucket (LUKS headers, sealed to `escrow-wrap`) relies on "bucket versioning and replication" that an operator has to
+configure on the object store and that the lab does not have.
+
+The maintainer decided (PDK-474, 2026-10-28): backups are operated in the portal by the platform administrator with
+step-up and audit, the host command stays the emergency path; targets are local directories, SMB and NFS shares and
+S3-compatible endpoints; encryption is mandatory with a key Paddock generates, shows once and only trusts after a
+real confirmation check; three recovery scenarios (fresh installation from an uploaded set or a connected target,
+rollback of a running system, partial restore); pgBackRest, the OpenBao snapshot and the Fleet dump stay the core.
+
+Facts about the code that bound the design (checked on `main` 80984bde):
+
+- A container of the stack has no `CAP_SYS_ADMIN` (plan M8s, `cap_drop: ALL`) and never gets the Docker socket;
+  nothing inside the stack can mount a share or stop and recreate the stack. pgBackRest runs as uid 999 in its own
+  containers because it needs each database's data directory and socket.
+- pgBackRest encrypts a repository with one `repo-cipher-pass` that cannot change for an existing repository;
+  it supports several repositories (`repo1` … `repoN`) and the repository types `posix`, `s3`, `sftp`, `azure`, `gcs`.
+- OpenBao Transit keys exist for exactly this shape: the api may encrypt, one role may decrypt (`escrow-wrap`,
+  `notification-wrap`). The AppRole `paddock-backup` already exists with `read` on `sys/storage/raft/snapshot`.
+- A restore of PostgreSQL brings back older `bundle_seq` values; `paddock-server admin bump-bundle-seq --by 1000000`
+  is the documented guard (plan M6c decision 22).
+- The audit store is WORM on the audit host and stays outside the backup (ADR 0016); the control-plane audit index
+  is a derived copy of it (ADR 0010).
+
+## Options
+
+### Where a non-S3 target is written
+- **pgBackRest with one repository per target** (posix on a mounted share, s3 for S3). + No copy step. − Every
+  pgBackRest container would have to mount every share; a share that is down at container start stops the
+  container, and with it the WAL archive of the control plane; multi-repository `backup` runs once per repository.
+- **One local pgBackRest repository on the control-plane host, mirrored to every target by a new role (chosen).**
+  + pgBackRest's configuration is static and always available; a target outage never touches the WAL archive or the
+  control plane; every target holds the same directory tree (the *backup set*); OpenBao snapshots, Fleet dumps and
+  the escrow objects join the same tree. − A full set lives on the control-plane host too (disk); a mirror is a
+  copy step with its own state and metrics.
+- **A userspace SMB client library in the backup role.** + No host step for SMB. − A new Go dependency; NFS has no
+  usable userspace client; two code paths for one target class. Rejected for M15 (architect lead, 2026-11-04);
+  a candidate for alpha.10 only if operators object to the host step.
+
+### How a share reaches the backup role
+- **The operator mounts on the host and points a local target at the path.** − Not a portal flow; mount units are
+  outside the bundle.
+- **Docker named volumes with the `local` driver's `cifs` and `nfs` options, rendered into a host-local Compose
+  file by one host command (chosen).** + The kernel's CIFS and NFS clients, the most reliable there are; no
+  capability in any container; the credentials file stays a root-owned host file and never enters a container; the
+  volume is mounted into the backup role only. − Adding or changing a local, SMB or NFS target needs one host
+  command after the portal step (`./paddock backup-target apply`), because a container cannot mount; the portal
+  shows the target as *waiting for the host* until the role sees the mount.
+- **A privileged mounter container.** − Breaks the hardening contract.
+
+### Where the key lives
+- **Only in OpenBao / the database.** − Circular: the key decrypts the OpenBao snapshot that holds it.
+- **Only in a host file (today).** − Nothing in the portal can confirm that the administrator holds a copy; a lost
+  host takes the only other copy with it.
+- **Generated by the api, wrapped to Transit `backup-wrap` in the database, shown once, confirmed by a typed check
+  whose answer hash the api stored at generation; the backup role decrypts it at run time and hands it to the
+  pgBackRest containers through a tmpfs volume; a restore of a lost host takes the key from the administrator's
+  copy (chosen).** + The api never holds a decryption capability after the response; the check proves possession;
+  rotation keeps old backups readable. − One more Transit key and policy line; a key rotation opens a new pgBackRest
+  repository path (the cipher pass is fixed per repository).
+
+### Who executes a restore
+- **The api, from the portal.** − It would have to stop itself and recreate the stack: Docker socket in a container.
+- **The portal plans and approves, the host command executes the plan (chosen).** + Step-up, typed confirmation and
+  one audit event per attempt in the portal; the destructive part runs where it can run; the host command refuses a
+  plan that is not approved, expired or already executed. − Two steps. A fresh installation after the loss of the
+  host has no portal at all: that restore is the host command alone, planned by the runbook.
+
+### Partial restore per organization
+- Rows of one organization span `paddock` (RLS tables with cross-references and `bundle_seq`), Authentik (users,
+  groups), the escrow bucket (object keys) and the devices' own sequence numbers; a row-level restore into a
+  running installation has no consistent cut. **Rejected for M15**; partial restore means per component (OpenBao,
+  PostgreSQL `paddock`, Authentik, Fleet, escrow objects).
+
+## Decision
+
+1. **Backup set.** Every target holds the same directory tree, the *backup set* (format `paddock.backup-set.v1`,
+   plan M15 §6.5): `manifest.json`, `pgbackrest/<key_id>/` (the pgBackRest repository, `aes-256-cbc`),
+   `openbao/<UTC>.snap.enc` (AES-256-GCM, `backup.Seal`), `fleet/<UTC>.sql.gz.enc` (AES-256-GCM, `backup.Seal`;
+   replaces the `openssl enc` of plan M6a), `escrow/<object key>` (the escrow bucket's objects, already sealed to
+   `escrow-wrap`, copied as they are). One directory or one tarball of it is enough for a restore.
+2. **One local repository, mirrored.** pgBackRest writes to one posix repository on the Docker volume
+   `backup-repo` of the control-plane host (`repo1-path=/backup-repo/pgbackrest/<key_id>`), verified as today. The
+   new role `paddock-server serve backup` (service `paddock-backup`, database role `paddock_backup`, AppRole
+   `paddock-backup`) takes the OpenBao snapshots, seals the Fleet dumps, copies the escrow objects into the set, and
+   mirrors the whole set to every enabled target: S3-compatible targets through the S3 API, local, SMB and NFS
+   targets through a Docker volume mounted at `/backup-targets/<target_id>`. The worker's backup job and the
+   `fleet-backup-upload` sidecar are removed; the worker loses every backup secret.
+3. **Targets.** Platform-scoped table `backup_target` with the types `local`, `smb`, `nfs`, `s3`. Non-secret
+   settings are columns; credentials (S3 keys, SMB username and password) are Transit-encrypted with `backup-wrap`
+   (api encrypts, backup role decrypts) and never appear in lists, logs or audit params. Local, SMB and NFS targets
+   become Docker volumes in the host-local file `compose.backup-targets.yaml`, rendered by `./paddock backup-target
+   apply` from the database; the SMB credentials file is written by the same command to
+   `.secrets/backup-targets/<id>.cifs` (0600, root) and referenced with mount.cifs's `credentials=`. A target has a
+   `host_state` (`pending_host`, `mounted`, `unreachable`) that the backup role reports.
+4. **Key.** Platform-scoped table `backup_key`: generated by the api (32 random bytes, standard base64, the format
+   of today's key file), wrapped to Transit `backup-wrap`, shown exactly once in the generating response (text and a
+   download). The response names six positions (1-based, within the base64 text); the api stores
+   `challenge_sha256 = SHA-256(key_id || ":" || the six characters)`. `confirm` compares; after three failed
+   attempts the key is `discarded`. Backups run only while a `confirmed` key exists (`active`). A new key while one
+   is active is a rotation: on confirmation the old key becomes `retired` (still decryptable by the backup role for
+   old sets), pgBackRest gets a new repository path `pgbackrest/<new key_id>` with a new stanza and a full backup at
+   once; the old path is deleted after its retention. Re-display is impossible; the portal offers rotation only.
+   Today's host file `.secrets/backup_encryption_key` is imported once by the backup role as key `legacy` in state
+   `unconfirmed` when the database holds no key; backups pause until a platform administrator confirms it in the
+   portal (the challenge is computed at import).
+5. **Schedule and retention.** Platform-scoped singleton `backup_schedule` (full-backup interval, OpenBao snapshot
+   interval, Fleet dump interval, pgBackRest full retention, days to keep OpenBao snapshots and Fleet dumps,
+   escrow mirror interval); defaults equal today's RPO table. The backup role renders the values pgBackRest needs
+   into the shared tmpfs volume next to the key; the pgBackRest containers read both.
+6. **Restore plans.** Platform-scoped table `backup_restore_plan` (`kind ∈ {point_in_time, components}`, source
+   target or uploaded set path, the point in time, the components, status `approved → running → completed |
+   failed | expired`). A platform administrator creates a plan in the portal with step-up and the typed word
+   `restore`; the host command `./paddock restore --plan <id>` executes it (`deploy/compose/scripts/restore.sh`:
+   stop the writers, restore PostgreSQL from the set to the point, restore the OpenBao snapshot, bump the bundle
+   sequence, rebuild the cache, recompile, restore Fleet, put the escrow objects back) and reports completion to the
+   database through a one-off `paddock-server backup restore-report`. A fresh installation runs `./paddock restore
+   --from <target or set> [--at <time>]` without a plan (there is no database to hold one); `--from` accepts a
+   local path (an uploaded or copied set) or a target definition file.
+7. **Audit.** Every portal action is one `ActionRunner` action with `RequiresStepUp` for the platform
+   administrator (codes in plan M15 §6.4); every backup run and mirror of the role records one system event per kind
+   and target per run (`platform.backup_completed` / `platform.backup_failed`); a restore records
+   `platform.restore_planned`, `platform.restore_completed`, `platform.restore_failed`. Keys, credentials and
+   share passwords are never params.
+8. **Monitoring.** `paddock_backup_last_success_timestamp_seconds{kind,target}` replaces the per-kind gauge;
+   `PaddockBackupStale` and `PaddockBackupAgeMissing` are rewritten per target; new alerts
+   `PaddockBackupKeyUnconfirmed`, `PaddockBackupTargetUnreachable`.
+9. **Emergency path.** `./paddock backup now`, `./paddock backup status`, `./paddock backup-target apply`,
+   `./paddock restore` are host commands that work without the portal; `paddock-server backup decrypt` stays.
+
+## Consequences
+
+- + One format everywhere; a NAS outage never touches the control plane; the escrow objects are in every set; the
+  key is proven to be in the administrator's hands before the first backup; the worker holds no backup secret.
+- + No new Go module, npm package or container image (the aws-cli sidecar disappears).
+- − A full set on the control-plane host (`backup-repo`, `PADDOCK_BACKUP_REPO_VOLUME_MIN_GB` checked by
+  `./paddock check`); one more role, database role and Transit key; local, SMB and NFS targets need the host step
+  `./paddock backup-target apply` after the portal step.
+- − A key rotation costs a new full backup at once.
+- Follow-ups: plan M16 uses `./paddock backup now --label pre-upgrade-<version>` and `./paddock restore` in the
+  upgrade and rollback commands and the CI restore drill; ADR 0032 gains the rows `backup_run`, `backup_restore_plan`
+  (plan M15 §7).
+
+## Amendment 2026-11-06 — the SMB login is in the volume's options (PDK-733)
+
+Decision 3 said the SMB credentials file is written to `.secrets/backup-targets/<id>.cifs` and referenced with
+mount.cifs's `credentials=`. That cannot work: Docker's `local` volume driver mounts with the `mount(2)` system call,
+not with the `mount.cifs` helper, and `credentials=` is an option of that userspace helper. The kernel's cifs client
+accepts it and ignores it, so the file is never read and the share is mounted without a login (probed on Docker 29.9.2,
+kernel 7.0: a missing credentials file fails at the network, an unknown option fails as `invalid argument`).
+
+Decision (architect lead, `decisions-alpha9` item 35):
+
+- `./paddock backup-target apply` puts `username=`, `password=` and `domain=` into the `o` option of the target's
+  Docker volume. The password comes last. A comma in the username, the domain or the password is refused: doubled
+  commas are the kernel's escape inside `password=`, but Docker splits `o` on every comma first and takes a segment
+  that names a mount flag (`bind`, `ro`, `remount`, …) as a flag of the mount (PDK-733 review 1). The password may
+  hold no comma or whitespace: saving such a password in the portal or API is refused with a message to choose
+  another one, and `apply` refuses one saved earlier (whitespace: Compose folds the long `o` line at a space onto a
+  continuation line, PDK-733 review 3). A comma in the username or domain is refused at save by PDK-835; until then
+  `apply` refuses it.
+- The rendered `compose.backup-targets.yaml` is host-local, mode 0600, owned by the operator who ran the command and
+  never committed or shipped. There is no `.cifs` file.
+- The password stays Transit-encrypted (`backup-wrap`) in the database and is decrypted only into that file, by the
+  one-off render at `backup-target apply`.
+- `./paddock` never prints the overlay's configuration: `./paddock compose config` (and `convert`) refuses while the
+  overlay is part of the file set, because no line-based redaction survives Compose's line folding (PDK-733 review 3,
+  `decisions-alpha9` item 43); its own commands cut every line of a mount error after `password=` (defence in depth:
+  Docker's mount errors mask the password up to its first comma, and the password has none), `./paddock check` reads
+  the configuration without the overlay, and `bundle_test.sh` tests all three.
+- Residual risk RR-122: members of the `docker` group can read the password with `docker volume inspect`.
+- No cifs-utils on the host and no SMB client library.
+
+## Amendment 2026-11-06 — restore plan abandoned (PDK-832)
+
+A plan stays `running` when the host never reports its end (the host crashed, or PostgreSQL was unreachable when the
+restore stopped), and a running plan blocks a new one. Decisions 6 and 7 gain a way out (decisions-alpha9 item 41):
+
+- **State.** The restore plan state machine gains `abandoned`, reached only from `running`:
+  `approved → running → completed | failed | abandoned`. A platform administrator abandons a running plan through the
+  audited verb `POST /api/platform/v1/backup/restore-plans/{id}/abandon`, with step-up and the typed word `abandon`;
+  an approved plan is cancelled instead. The plan's outcome detail names the administrator.
+- **Audit.** The code `platform.restore_abandoned` joins the restore codes of decision 7.
+- **Late host report.** A host report for an abandoned plan is refused (409 `invalid_state`) and still recorded: the
+  report's event (`platform.restore_completed` or `platform.restore_failed`) is written with outcome failure, so the
+  late end of the run stays in the audit trail.
+
+## Amendment 2026-11-07 — bundle sequence after a restore or rollback (PDK-872)
+
+The fixed `bump-bundle-seq --by 1000000` of the Context is not enough once restores follow each other. A restore after
+an upgrade raises the sequences to about 1 000 000. A rollback that then restores the pre-upgrade point raises its
+much lower sequences by 1 000 000 again, which lands in the same range. Devices that applied the first restore's
+bundles then receive nothing until enough compiles pass them. Decisions-alpha9 item 68 (option a) replaces the fixed
+raise:
+
+- **H before down.** Before anything stops, `./paddock restore` and `./paddock rollback` read H, the highest
+  `device.bundle_seq` of the running stack (`psql` as the database superuser in the `postgres` container, which works
+  on 0.1.0-alpha.8's schema as well). The rollback reads it with its own release's scripts and hands it to the old
+  release's `restore.sh` (`RESTORE_HIGH_WATER`), because that restore runs after the rollback's `down`.
+- **The raise** (decisions-alpha9 item 71, which folds in PDK-876). After the restore, the new admin command
+  `paddock-server admin raise-bundle-seq --at-least H+1000000` sets every device to `greatest(seq + 1, H + 1 000 000)`.
+  It runs through the SECURITY DEFINER function `paddock_admin_raise_bundle_seq` (EXECUTE for `paddock_platform`
+  only), is recorded as `platform.bundle_seq_raised` (`at_least`, `devices`) and is bounded at 10^12. Every device,
+  including one enrolled since the last raise (sequence 0), lands above anything applied, and the highest sequence
+  grows by about 1 000 000 per restore. A `--by` of `max(1 000 000, H + 1 000 000 − lowest restored)` would add H
+  whenever such a device exists, so the highest sequence would double with every restore. The legacy rollback to
+  0.1.0-alpha.8 runs once and keeps that `--by` rule with alpha.8's binary, in steps of at most 1 000 000 000.
+- **Implausible H.** An H above 999 999 000 000 (H + 1 000 000 is the command's bound) is a corrupt or edited
+  high-water file, not a fleet's history. The restore or rollback refuses it before anything stops. The legacy
+  rollback also refuses an H that would need more than ten `bump-bundle-seq` calls. No raise loops without bound.
+- **High-water file.** `bundle-seq/high-water` in the bundle directory, outside `.secrets/`, holds one number and is
+  never lowered. Writers: the backup role after every successful round (the highest `bundle_seq`, read through the
+  SECURITY DEFINER function `paddock_backup_bundle_seq_high_water`, which only `paddock_backup` may call; the role
+  still reads no device row), every restore (H before down and the new highest after the raise), and every rollback (H
+  before down). When the stack cannot be read (a disaster restore), H is the file's value. When both can be read, the
+  higher one counts: a stack that a failed restore or rollback left on partly restored data reads lower than what
+  devices applied. A stack without any compiled device (H = 0) counts as no source. Without either source the raise is
+  the plain `bump-bundle-seq --by 1000000`, with a printed warning. `./paddock upgrade` (`migrate-from`) copies the
+  file into the new release's directory and never lowers a value already there, so the file survives the A/B
+  directory switch.
+- **Who can write it.** The bundle ships the empty directory, and `compose.backup.yaml` bind-mounts it into
+  `postgres` and the backup role. `postgres` starts as root and hands the directory to uid 999 on every start, as it
+  does with its WAL spool; uid 999 is both its `postgres` user and the backup role's. The scripts write the file
+  through `docker compose exec -u postgres postgres`, so an operator who is not root (a rollback needs no root) can
+  write it without a host-side `chown`. This avoids both a new one-shot service and an ownership step in
+  `./paddock up`. The legacy rollback writes only H: alpha.8's `postgres` has no such mount, and alpha.8 never reads
+  the file.
+- Step 10.2 of the CI upgrade job stays strict.

@@ -312,6 +312,58 @@ func TestIssueDestroy(t *testing.T) {
 	}
 }
 
+// TestIssueDestroyWaitsForEscrowStore (PDK-794 review round 1): a Destroy issued while a worker's transaction stores
+// a recovery key under the device's escrow_destroy lock waits for that transaction and then deletes the key. Under
+// READ COMMITTED the DELETE would otherwise miss the uncommitted row, which would survive the Destroy.
+func TestIssueDestroyWaitsForEscrowStore(t *testing.T) {
+	w := newWorld(t, true)
+	ctx := context.Background()
+	dev := w.device()
+	id := w.request("destroy", dev, w.alice, w.approval("requester", w.alice), w.approval("approver", w.bob))
+	worker, err := w.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.Rollback(ctx) }()
+	if _, err := worker.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended('escrow_destroy:' || $1::text, 0))", dev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worker.Exec(ctx, `INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, ciphertext, key_version)
+		VALUES ($1, $2, $3, 'luks_recovery_key', 1, 'stored', '\x01', 1)`, uuid.New(), w.org, dev); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- w.issuer.Issue(ctx, w.org, id) }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		select {
+		case err := <-done:
+			t.Fatalf("the Destroy was issued while a worker's escrow store was open: %v", err)
+		default:
+		}
+		var waiting bool
+		if err := worker.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+			AND ((classid::bigint << 32) | objid::bigint) = hashtextextended('escrow_destroy:' || $1::text, 0))`, dev).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the Destroy neither waited for the escrow lock nor finished")
+		}
+	}
+	if err := worker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	var left int
+	if err := w.super.QueryRow(ctx, "SELECT count(*) FROM escrow_secret WHERE device_id = $1", dev).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("%d escrows survived the Destroy (%v)", left, err)
+	}
+}
+
 // TestIssuerRefusesForgedApprovals (gate R3): an invalid token, a token of another subject, a token that proved
 // another request, the same administrator or subject twice, a missing approval and an operator are refused; the
 // request is rejected and audited as denied, nothing is signed.

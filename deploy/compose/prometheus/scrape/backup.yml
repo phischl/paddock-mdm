@@ -1,0 +1,7 @@
+# Scrape target of the backup role (plan M15 decision 19), mounted by compose.backup.yaml only: the target exists
+# exactly where the backup role runs.
+scrape_configs:
+  - job_name: paddock-backup
+    static_configs:
+      - targets: ["paddock-backup:9090"]
+        labels: { role: paddock-backup }

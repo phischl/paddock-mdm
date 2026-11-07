@@ -134,6 +134,12 @@ const (
 	CodeDiskRecoveryKeyRevealed    Code = "disk.recovery_key_revealed"
 	CodeDiskHeaderDownloaded       Code = "disk.header_downloaded"
 
+	// Diagnostics bundle (ADR 0048, plan M12 §6.4).
+	CodeDeviceDiagnosticsRequested  Code = "device.diagnostics_requested"
+	CodeDeviceDiagnosticsCollected  Code = "device.diagnostics_collected"
+	CodeDeviceDiagnosticsDownloaded Code = "device.diagnostics_downloaded"
+	CodeDeviceDiagnosticsPurged     Code = "device.diagnostics_purged"
+
 	CodeDeviceRevocationTrustPinnedTOFU Code = "device.revocation_trust_pinned_tofu"
 	CodeRevocationRequested             Code = "revocation.requested"
 	CodeRevocationApproved              Code = "revocation.approved"
@@ -143,6 +149,7 @@ const (
 	CodeRevocationIssueRefused          Code = "revocation.issue_refused"
 	CodeRevocationLimitExceeded         Code = "revocation.limit_exceeded"
 	CodeDeviceEscrowDestroyed           Code = "device.escrow_destroyed"
+	CodeDeviceEscrowRefusedDestroyed    Code = "device.escrow_refused_destroyed"
 	CodeDeviceRevocationConfirmed       Code = "device.revocation_confirmed"
 	CodeDeviceRevocationRefused         Code = "device.revocation_refused"
 	CodeSettingsDMSChanged              Code = "settings.dms_changed"
@@ -180,6 +187,7 @@ const (
 	// Restore commands of paddock-server admin (plan M6c decision 21).
 	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
 	CodePlatformBundleSeqBumped        Code = "platform.bundle_seq_bumped"
+	CodePlatformBundleSeqRaised        Code = "platform.bundle_seq_raised"
 	CodePlatformCacheRebuilt           Code = "platform.cache_rebuilt"
 
 	// IP allow list of the administrative surfaces (plan M7a decision 14).
@@ -235,6 +243,8 @@ const (
 	CodeNotificationTestRequested            Code = "notification.test_requested"
 	CodeNotificationTestSent                 Code = "notification.test_sent"
 	CodeNotificationPseudonymResolved        Code = "notification.pseudonym_resolved"
+	// Replay of a push destination (plan M12 decision 21, §6.4).
+	CodeNotificationReplayRequested Code = "notification.replay_requested"
 
 	// Privacy settings per organization (ADR 0032 §2, plan M10 §6.4).
 	CodeSettingsPrivacyChanged Code = "settings.privacy_changed"
@@ -255,6 +265,13 @@ const (
 
 	CodeVulnerabilityDevicesViewed Code = "vulnerability.devices_viewed"
 
+	// Access review report (plan M12 decision 26): the view is a read recorded once per actor and UTC day, the export
+	// is always recorded.
+	CodeAccessReviewViewed           Code = "access_review.viewed"
+	CodeAccessReviewExported         Code = "access_review.exported"
+	CodePlatformAccessReviewViewed   Code = "platform.access_review_viewed"
+	CodePlatformAccessReviewExported Code = "platform.access_review_exported"
+
 	// Evidence export (ADR 0032 §5, plan M10 §6.4).
 	CodeAuditExportRequested  Code = "audit.export_requested"
 	CodeAuditExportCompleted  Code = "audit.export_completed"
@@ -263,6 +280,9 @@ const (
 	CodeNotificationDelivered          Code = "notification.delivered"
 	CodeNotificationDestinationStalled Code = "notification.destination_stalled"
 	CodeNotificationDestinationResumed Code = "notification.destination_resumed"
+	// Checkpoints and replayed batches (plan M12 decisions 20 and 21, §6.4).
+	CodeNotificationReplayed       Code = "notification.replayed"
+	CodeNotificationCheckpointSent Code = "notification.checkpoint_sent"
 
 	// Software sources (plan M13a §6.3).
 	CodeSoftwareSourceCreated Code = "software_source.created"
@@ -281,6 +301,28 @@ const (
 	CodeDeviceSoftwareReinstalled Code = "device.software_reinstalled"
 	CodeDeviceSoftwareRemoved     Code = "device.software_removed"
 	CodeDeviceSoftwareApplyFailed Code = "device.software_apply_failed"
+
+	// The backup key (plan M15 §6.4).
+	CodePlatformBackupKeyGenerated Code = "platform.backup_key_generated"
+	CodePlatformBackupKeyConfirmed Code = "platform.backup_key_confirmed"
+	CodePlatformBackupKeyDiscarded Code = "platform.backup_key_discarded"
+	// Backup targets, schedule and runs (plan M15 §6.4).
+	CodePlatformBackupTargetCreated   Code = "platform.backup_target_created"
+	CodePlatformBackupTargetUpdated   Code = "platform.backup_target_updated"
+	CodePlatformBackupTargetDeleted   Code = "platform.backup_target_deleted"
+	CodePlatformBackupTargetTested    Code = "platform.backup_target_tested"
+	CodePlatformBackupScheduleChanged Code = "platform.backup_schedule_changed"
+	CodePlatformBackupRunRequested    Code = "platform.backup_run_requested"
+	// Runs of the backup role (plan M15 decision 16).
+	CodePlatformBackupCompleted Code = "platform.backup_completed"
+	CodePlatformBackupFailed    Code = "platform.backup_failed"
+	// Restore plans: approved in the portal, executed and reported by the host (plan M15 decisions 23–26).
+	CodePlatformRestorePlanned   Code = "platform.restore_planned"
+	CodePlatformRestoreCancelled Code = "platform.restore_cancelled"
+	CodePlatformRestoreStarted   Code = "platform.restore_started"
+	CodePlatformRestoreCompleted Code = "platform.restore_completed"
+	CodePlatformRestoreFailed    Code = "platform.restore_failed"
+	CodePlatformRestoreAbandoned Code = "platform.restore_abandoned"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -292,6 +334,25 @@ type Definition struct {
 	Emitted     bool // false for registry entries that are never emitted as events
 	Note        string
 }
+
+// backupTargetParams are the params of the backup target events (plan M15 §6.4): never a credential.
+var backupTargetParams = []string{"target_id", "name", "type", "enabled", "host_revision"}
+
+// restorePlanParams are the params of a restore plan's portal events, restoreStartParams those of the host's start and
+// restoreRunParams those of the host's final report (plan M15 §6.4); a completed run also counts the escrowed headers
+// it kept out because their device's escrow was destroyed (decisions-alpha9 item 44).
+var (
+	restorePlanParams      = []string{"plan_id", "kind", "source", "source_target_id", "at", "components"}
+	restoreStartParams     = []string{"plan_id", "source", "source_target_id", "components"}
+	restoreRunParams       = []string{"plan_id", "source", "source_target_id", "at", "components", "duration_s", "detail"}
+	restoreCompletedParams = []string{"plan_id", "source", "source_target_id", "at", "components", "duration_s", "detail",
+		"escrow_skipped_destroyed"}
+)
+
+// backupRunParams are the params of the run events of the backup role (plan M15 §6.4); completed_at is the run's local
+// completion, which the event follows after the round's mirror (decisions-alpha9 item 79).
+var backupRunParams = []string{"run_id", "kind", "label", "bytes", "duration_s", "completed_at", "targets_ok",
+	"targets_failed", "error_class"}
 
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
@@ -848,7 +909,7 @@ var registry = map[Code]Definition{
 	},
 	CodeRetentionPurged: {
 		Code: CodeRetentionPurged, Emitted: true,
-		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), device_command (finished commands no disk conversion or uninstall still references), device_alert (cleared alerts), device_event_gap (filled event gaps) or action (finished actions), each recorded in the organization only when rows were deleted (action also once per round in the platform pseudo-organization), with index_days the audit index retention their cutoff follows, audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
+		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), device_command (finished commands no disk conversion or uninstall still references), device_alert (cleared alerts), device_event_gap (filled event gaps), device_diagnostics (with cutoff the round's time: stored diagnostics bundles whose 7-day retention ended, their objects deleted and their key material cleared, counted in deleted; with index_days: the rows of ended bundles) or action (finished actions), each recorded in the organization only when rows were deleted (action also once per round in the platform pseudo-organization), with index_days the audit index retention their cutoff follows, audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
 		Params:      []string{"store", "deleted", "cutoff", "index_days", "partition", "export_id"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
@@ -1004,6 +1065,32 @@ var registry = map[Code]Definition{
 		Note:        "volume is the LUKS UUID of the header's volume; absent for a root volume header escrowed before PDK-009 whose UUID the device has not reported yet.",
 		Outcomes:    adminOutcomes,
 	},
+	CodeDeviceDiagnosticsRequested: {
+		Code: CodeDeviceDiagnosticsRequested, Emitted: true,
+		Description: "An administrator or operator asked a device for a diagnostics bundle of Paddock's own logs and configuration (ADR 0048).",
+		Params:      []string{"request_id", "reason", "command_id", "hostname"},
+		Outcomes:    adminOutcomes,
+		Note:        "reason is the administrator's text the device shows to the user; failure with invalid_state when the device is not active or a collection is pending.",
+	},
+	CodeDeviceDiagnosticsCollected: {
+		Code: CodeDeviceDiagnosticsCollected, Emitted: true,
+		Description: "A device uploaded a diagnostics bundle and the worker verified its size and SHA-256 (actor: the device).",
+		Params:      []string{"request_id", "files", "bytes", "sha256", "truncated_entries", "notified_sessions", "reason"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Only the hash of the sealed bundle is recorded, never its content. bytes is the size of the sealed object. failure when the bundle failed: reason is the device's refusal (invalid_params, upload_refused, upload_failed, collect_failed, too_large) or the worker's finding (size_mismatch, sha256_mismatch, missing).",
+	},
+	CodeDeviceDiagnosticsDownloaded: {
+		Code: CodeDeviceDiagnosticsDownloaded, Emitted: true,
+		Description: "An administrator or operator downloaded a device's diagnostics bundle after a step-up.",
+		Params:      []string{"request_id", "sha256", "bytes", "files", "hostname"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceDiagnosticsPurged: {
+		Code: CodeDeviceDiagnosticsPurged, Emitted: true,
+		Description: "An organization administrator deleted a device's diagnostics bundle before its retention ended.",
+		Params:      []string{"request_id", "hostname"},
+		Outcomes:    adminOutcomes,
+	},
 	CodeDeviceRevocationTrustPinnedTOFU: {
 		Code: CodeDeviceRevocationTrustPinnedTOFU, Emitted: true,
 		Description: "A device enrolled before revocation existed pinned the revocation-signing keys of the first bundle that carried them (trust on first use); re-enrolling the device replaces them with the keys of its enrollment configuration (actor: the device).",
@@ -1049,6 +1136,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"action", "hostname", "request_id", "requested_by", "approved_by", "expires_at", "objects", "escrows"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeUnknown},
 		Note:        "failure leaves the request approved; the issuer retries it.",
+	},
+	CodeDeviceEscrowRefusedDestroyed: {
+		Code: CodeDeviceEscrowRefusedDestroyed, Emitted: true,
+		Description: "The worker refused a LUKS recovery key or header escrow of a device with an issued, unexpired Destroy: the crypto-shredding was decided, so the key is not escrowed again (actor: the device).",
+		Params:      []string{"kind", "generation", "volume"},
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "error_code invalid_state; recorded once per escrow ID. kind is luks_recovery_key or luks_header, volume the header's LUKS UUID (empty for the root volume of an older agent and for a recovery key). No key material is kept; the device sees the escrow as refused.",
 	},
 	CodeRevocationLimitExceeded: {
 		Code: CodeRevocationLimitExceeded, Emitted: true,
@@ -1212,6 +1306,13 @@ var registry = map[Code]Definition{
 		Description: "An operator ran paddock-server admin bump-bundle-seq after a database restore: the bundle sequence of every device was raised (actor: system, platform pseudo-organization).",
 		Params:      []string{"by", "devices"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodePlatformBundleSeqRaised: {
+		Code: CodePlatformBundleSeqRaised, Emitted: true,
+		Description: "An operator ran paddock-server admin raise-bundle-seq after a database restore: every device's bundle sequence was raised to at least at_least and by at least one (actor: system, platform pseudo-organization).",
+		Params:      []string{"at_least", "devices"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "./paddock restore runs it with the highest sequence before the restore plus 1,000,000 (ADR 0046, amendment 2026-11-07).",
 	},
 	CodePlatformCacheRebuilt: {
 		Code: CodePlatformCacheRebuilt, Emitted: true,
@@ -1578,6 +1679,34 @@ var registry = map[Code]Definition{
 		Outcomes:    adminOutcomes,
 		Note:        "While the setting is on, failure with the reason of a refused view (not_found for a CVE without finding in the organization, invalid_request, page_out_of_range), canceled for a view the client gave up after the setting was read, or internal for a count or window claim that failed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails.",
 	},
+	CodeAccessReviewViewed: {
+		Code: CodeAccessReviewViewed, Emitted: true,
+		Description: "An administrator, auditor or API token opened the access review report of the organization; recorded once per actor and UTC day and only while audit_search_recorded is on. from and to are the effective period of the first view of the day.",
+		Params:      []string{"from", "to", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for operators whatever the setting. While the setting is on, failure with the reason of a refused view (invalid_request for a period that is empty, reversed or longer than 400 days), or internal for a window that could not be claimed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails. Target is the organization.",
+	},
+	CodeAccessReviewExported: {
+		Code: CodeAccessReviewExported, Emitted: true,
+		Description: "An administrator, auditor or API token exported the access review report of the organization as JSON or CSV; every export is recorded, whatever the privacy settings.",
+		Params:      []string{"from", "to", "format"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for operators. failure with invalid_request for an unknown format or a period that is empty, reversed or longer than 400 days. Target is the organization.",
+	},
+	CodePlatformAccessReviewViewed: {
+		Code: CodePlatformAccessReviewViewed, Emitted: true,
+		Description: "A platform administrator opened the platform access review report; every view is recorded, because platform reads are not under an organization's privacy settings.",
+		Params:      []string{"from", "to"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for a principal that is not a platform administrator. failure with invalid_request for a period that is empty, reversed or longer than 400 days. Platform pseudo-organization.",
+	},
+	CodePlatformAccessReviewExported: {
+		Code: CodePlatformAccessReviewExported, Emitted: true,
+		Description: "A platform administrator exported the platform access review report as JSON or CSV.",
+		Params:      []string{"from", "to", "format"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for a principal that is not a platform administrator. failure with invalid_request for an unknown format or a period that is empty, reversed or longer than 400 days. Platform pseudo-organization.",
+	},
 	CodeAuditExportRequested: {
 		Code: CodeAuditExportRequested, Emitted: true,
 		Description: "An organization administrator or auditor requested a signed evidence package for a range of sealed recording days after a step-up; denied with step_up_required without one.",
@@ -1616,6 +1745,27 @@ var registry = map[Code]Definition{
 		Params:      []string{"destination", "destination_id", "stalled_for_s", "forward_from", "forward_to"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per stall. forward_from and forward_to name the batch that arrived (absent when a heartbeat ended the stall).",
+	},
+	CodeNotificationReplayRequested: {
+		Code: CodeNotificationReplayRequested, Emitted: true,
+		Description: "An administrator asked, after a step-up, that a push destination receive its stored batches again from a forward sequence number on; the notifier re-sends them with their original delivery IDs and numbers before it continues at the cursor.",
+		Params:      []string{"destination", "destination_id", "from_forward_seq", "to_forward_seq"},
+		Outcomes:    adminOutcomes,
+		Note:        "to_forward_seq is the destination's last forward sequence number at the request. Denied with step_up_required without a fresh step-up (API tokens never have one); failure with invalid_request when from_forward_seq is below 1 or above to_forward_seq, invalid_state while a batch is being retried or a replay of the destination runs.",
+	},
+	CodeNotificationReplayed: {
+		Code: CodeNotificationReplayed, Emitted: true,
+		Description: "The notifier re-sent a stored batch or checkpoint of a push destination after a replay request, with its original delivery ID (original_delivery_id) and forward sequence numbers.",
+		Params:      []string{"destination_id", "forward_from", "forward_to", "original_delivery_id", "missing"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "One event per replayed delivery. missing counts the events the index retention purged meanwhile, sent as {forward_seq, event_id, missing: true}. A failed attempt is retried with backoff like a batch and shows in notification.destination_stalled.",
+	},
+	CodeNotificationCheckpointSent: {
+		Code: CodeNotificationCheckpointSent, Emitted: true,
+		Description: "The notifier sent the daily checkpoint of a sealed recording day to a push destination: the day's event count and the SHA-256, signature and key version of its WORM manifest, numbered in the destination's forward sequence.",
+		Params:      []string{"destination_id", "day", "event_count", "forward_seq"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Once per destination and sealed day, after the day's events were forwarded; days sealed before the destination was created are not sent. A failed attempt is retried with backoff under the same number and shows in notification.destination_stalled.",
 	},
 	CodeSoftwareSourceCreated: {
 		Code: CodeSoftwareSourceCreated, Emitted: true,
@@ -1702,6 +1852,126 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "reason is fingerprint_mismatch, would_remove_dependents, protected_package_affected, no_candidate, source_unreachable, conflicting_source, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
+	},
+	CodePlatformBackupKeyGenerated: {
+		Code: CodePlatformBackupKeyGenerated, Emitted: true,
+		Description: "A platform administrator generated a new backup key after a step-up, or the api imported the host's key file of an older installation (legacy); the key is shown once and waits for its confirmation. The key text is never recorded.",
+		Params:      []string{"key_id", "fingerprint", "rotation", "legacy"},
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the backup key (type backup_key). rotation is true when a confirmed key existed. A legacy import is recorded with the system actor paddock-api. Failure with invalid_state while another key waits for its confirmation. Platform pseudo-organization.",
+	},
+	CodePlatformBackupKeyConfirmed: {
+		Code: CodePlatformBackupKeyConfirmed, Emitted: true,
+		Description: "A platform administrator confirmed a backup key after a step-up by typing back its characters at six positions the server chose; the key becomes active and a previously active key is retired.",
+		Params:      []string{"key_id", "fingerprint", "rotated_from", "attempts"},
+		Outcomes:    adminOutcomes,
+		Note:        "rotated_from is the retired key's ID or null. attempts counts the failed confirmations. Failure with backup_key_mismatch for wrong characters (the third discards the key), invalid_request for an answer that is not six characters, invalid_state for a key that is not unconfirmed, not_found. The typed characters are never recorded. Platform pseudo-organization.",
+	},
+	CodePlatformBackupKeyDiscarded: {
+		Code: CodePlatformBackupKeyDiscarded, Emitted: true,
+		Description: "A platform administrator discarded a backup key that was not confirmed, after a step-up.",
+		Params:      []string{"key_id", "attempts"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_state for a key that is not unconfirmed, not_found. A key discarded by the third failed confirmation is recorded as that platform.backup_key_confirmed failure, not as this event. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetCreated: {
+		Code: CodePlatformBackupTargetCreated, Emitted: true,
+		Description: "A platform administrator added a backup target (local directory, SMB or NFS share, S3 bucket) after a step-up; its credentials are stored encrypted and never recorded.",
+		Params:      backupTargetParams,
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the backup target (type backup_target, display the name). A local, SMB or NFS target waits for ./paddock backup-target apply on the host (host_revision 1). Failure with invalid_request naming the field, already_exists for a duplicate name. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetUpdated: {
+		Code: CodePlatformBackupTargetUpdated, Emitted: true,
+		Description: "A platform administrator changed, enabled or disabled a backup target after a step-up.",
+		Params:      append(slices.Clone(backupTargetParams), "change"),
+		Outcomes:    adminOutcomes,
+		Note:        "change is updated, enabled or disabled. A change of a local, SMB or NFS target's settings or credentials raises host_revision and needs the host step again. Failure with invalid_request naming the field, already_exists for a duplicate name, invalid_state when the target already is enabled or disabled, not_found. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetDeleted: {
+		Code: CodePlatformBackupTargetDeleted, Emitted: true,
+		Description: "A platform administrator deleted a backup target after a step-up; a local, SMB or NFS target is removed from the host by the next ./paddock backup-target apply.",
+		Params:      backupTargetParams,
+		Outcomes:    adminOutcomes,
+		Note:        "The backup sets already written to the target are not deleted. Platform pseudo-organization.",
+	},
+	CodePlatformBackupTargetTested: {
+		Code: CodePlatformBackupTargetTested, Emitted: true,
+		Description: "A platform administrator requested a connection test of a backup target after a step-up; the backup role runs it in its next round and stores the result on the target.",
+		Params:      backupTargetParams,
+		Outcomes:    adminOutcomes,
+		Note:        "Success means requested, not that the test passed: the result is state of the target (last_test_ok, last_test_error), not an audit event. Platform pseudo-organization.",
+	},
+	CodePlatformBackupScheduleChanged: {
+		Code: CodePlatformBackupScheduleChanged, Emitted: true,
+		Description: "A platform administrator changed the backup schedule and retention after a step-up.",
+		Params: []string{"full_interval_hours", "openbao_interval_hours", "fleet_interval_hours", "escrow_interval_hours",
+			"retention_full", "openbao_keep_days", "fleet_keep_days"},
+		Outcomes: adminOutcomes,
+		Note:     "The params are the new values. Target is the setting backup_schedule. Failure with invalid_request naming the field out of range. Platform pseudo-organization.",
+	},
+	CodePlatformBackupRunRequested: {
+		Code: CodePlatformBackupRunRequested, Emitted: true,
+		Description: "A platform administrator requested a backup now after a step-up; the backup role runs the requested kinds in its next round.",
+		Params:      []string{"kinds", "label"},
+		Outcomes:    adminOutcomes,
+		Note:        "kinds lists postgres, authentik, openbao, fleet and escrow, or the requested subset. Failure with invalid_state while no backup key is confirmed, invalid_request for an unknown kind or a label longer than 64 characters. Platform pseudo-organization.",
+	},
+	CodePlatformBackupCompleted: {
+		Code: CodePlatformBackupCompleted, Emitted: true,
+		Description: "The backup role finished one backup of one kind (a pgBackRest full backup, an OpenBao snapshot, a Fleet dump, an escrow mirror pass) and mirrored the backup set to the enabled targets.",
+		Params:      backupRunParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Actor is the system paddock-backup; target is the run (type backup_run, display the kind). targets_ok and targets_failed count the enabled targets the set reached or missed in the mirror that followed the run (a target that hit the round's copy budget counts as missed); a missed target does not fail the run. The event is recorded after that mirror, which can take hours on a large target; completed_at is when the backup itself finished, and the run is visible in the API from then on. Never a key, a credential or a path's content. Platform pseudo-organization.",
+	},
+	CodePlatformBackupFailed: {
+		Code: CodePlatformBackupFailed, Emitted: true,
+		Description: "One backup of one kind failed in the backup role, or a requested run got no result within an hour.",
+		Params:      backupRunParams,
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "error_class names the cause without detail: openbao, fleet, escrow, pgbackrest, repo, timeout, or record (the backup was taken but its run could not be written). The log of paddock-backup or of the pgbackrest container has the detail. Platform pseudo-organization.",
+	},
+	CodePlatformRestorePlanned: {
+		Code: CodePlatformRestorePlanned, Emitted: true,
+		Description: "A platform administrator approved a restore plan after a step-up and the typed word restore; the host executes it within 24 hours with ./paddock restore --plan <id>.",
+		Params:      restorePlanParams,
+		Outcomes:    adminOutcomes,
+		Note:        "kind is point_in_time or components; source is repo (the local backup repository) or target, with source_target_id; at is the point in time or empty for the newest backups; components lists postgres, openbao, fleet and escrow, or a subset. Failure with invalid_request without the typed word or for an invalid kind, component or point in time, invalid_state while another plan is approved or running or when the source has no successful backup of a chosen component at or before the point (the detail names the kind). Platform pseudo-organization.",
+	},
+	CodePlatformRestoreCancelled: {
+		Code: CodePlatformRestoreCancelled, Emitted: true,
+		Description: "A platform administrator cancelled an approved restore plan after a step-up; the plan is expired and the host refuses it.",
+		Params:      restorePlanParams,
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with not_found, or invalid_state for a plan that is not approved (running, finished or expired). Platform pseudo-organization.",
+	},
+	CodePlatformRestoreStarted: {
+		Code: CodePlatformRestoreStarted, Emitted: true,
+		Description: "The host started an approved restore plan (paddock-server backup restore-report --outcome running); from here it stops the stack and overwrites data (actor: the operator on the host).",
+		Params:      restoreStartParams,
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Recorded once per attempt, a refused one included. Actor is system with the operator's login name ($SUDO_USER or $USER) as display, or host when the name is not a login name. source, source_target_id and components are the stored plan's. Failure with invalid_request for a report without a plan or with invalid input, not_found for an unknown plan, invalid_state for a plan that is expired, cancelled, already running, finished or abandoned, or whose backup target was deleted. Platform pseudo-organization.",
+	},
+	CodePlatformRestoreCompleted: {
+		Code: CodePlatformRestoreCompleted, Emitted: true,
+		Description: "The host finished a restore (paddock-server backup restore-report): a planned restore, a fresh installation from a backup set, or the repository alone (actor: the operator on the host).",
+		Params:      restoreCompletedParams,
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Actor is system with the operator's login name ($SUDO_USER or $USER) as display. plan_id is empty for a restore without a plan, which is recorded as a plan of kind fresh_install; source is set, repo or target. A plan the restored database no longer holds is recorded again under its ID. Failure with invalid_state when the plan is already finished or a platform administrator abandoned it (platform.restore_abandoned). escrow_skipped_destroyed, set when the escrow step ran, counts the escrowed headers not put back because the audit trail holds a successful device.escrow_destroyed of their device; a count only, never a device ID. Never the backup key. Platform pseudo-organization.",
+	},
+	CodePlatformRestoreFailed: {
+		Code: CodePlatformRestoreFailed, Emitted: true,
+		Description: "A restore on the host stopped at a failed step (paddock-server backup restore-report); the step is named in detail (actor: the operator on the host).",
+		Params:      restoreRunParams,
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "detail is <step>: <text> with the step stop, postgres, openbao, paddock, fleet, escrow or backup-repo; the terminal and the container logs have the cause. Platform pseudo-organization.",
+	},
+	CodePlatformRestoreAbandoned: {
+		Code: CodePlatformRestoreAbandoned, Emitted: true,
+		Description: "A platform administrator marked a running restore plan as abandoned after a step-up and the typed word abandon, because the host never reported its end; the slot for a new plan is free and the host's later report for the plan is refused.",
+		Params:      restorePlanParams,
+		Outcomes:    adminOutcomes,
+		Note:        "The plan's state becomes abandoned and its outcome_detail reads abandoned by <administrator>. Failure with invalid_request without the typed word, not_found, or invalid_state for a plan that is not running (cancel an approved plan instead). Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

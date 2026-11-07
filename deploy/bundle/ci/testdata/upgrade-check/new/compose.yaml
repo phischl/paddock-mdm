@@ -1,0 +1,14 @@
+services:
+  paddock-api:
+    image: ${PADDOCK_IMAGE}
+    environment:
+      PADDOCK_DOMAIN: ${PADDOCK_DOMAIN:?set PADDOCK_DOMAIN}
+      PADDOCK_SMTP_HOST: ${PADDOCK_SMTP_HOST:?set PADDOCK_SMTP_HOST}
+      PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
+    secrets: [db_password, release_public_key, approle_role_id]
+  postgres:
+    image: ${POSTGRES_IMAGE}
+secrets:
+  db_password: { file: ./.secrets/db_password }
+  release_public_key: { file: ./.secrets/release/minisign.pub }
+  approle_role_id: { file: ./.secrets/approle/paddock-api/role_id }

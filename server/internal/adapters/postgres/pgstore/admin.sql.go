@@ -22,3 +22,15 @@ func (q *Queries) BumpBundleSeq(ctx context.Context, by int64) (int64, error) {
 	err := row.Scan(&devices)
 	return devices, err
 }
+
+const raiseBundleSeq = `-- name: RaiseBundleSeq :one
+SELECT paddock_admin_raise_bundle_seq($1::bigint)::bigint AS devices
+`
+
+// Raises the bundle sequence of every device to greatest(bundle_seq + 1, @at_least) and returns the number of devices.
+func (q *Queries) RaiseBundleSeq(ctx context.Context, atLeast int64) (int64, error) {
+	row := q.db.QueryRow(ctx, raiseBundleSeq, atLeast)
+	var devices int64
+	err := row.Scan(&devices)
+	return devices, err
+}

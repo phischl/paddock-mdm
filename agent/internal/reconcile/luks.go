@@ -676,7 +676,8 @@ func (m *LUKS) start(e luksEscrow) {
 }
 
 // poll checks the pending escrow and reports whether it finished; one the server refused or did not store in time is
-// dropped, and the next pass starts over with a new generation.
+// dropped, and the next pass starts over with a new generation. A refused recovery key or root volume header (an
+// issued Destroy, PDK-794) waits out LUKSEscrowWait like one never stored, so that the agent retries at that pace.
 func (m *LUKS) poll(ctx context.Context) bool {
 	p, now := m.pending, m.Now()
 	if now.Before(p.nextPoll) {
@@ -696,11 +697,11 @@ func (m *LUKS) poll(ctx context.Context) bool {
 			st.HeaderStored, st.HeaderDigest, st.RefusedAt, st.RefusedSet = p.generation, p.digest, nil, ""
 		}
 		slog.InfoContext(ctx, "LUKS escrow stored", "kind", p.kind, "volume", p.volume, "generation", p.generation)
-	case err == nil && status == escrow.StatusRefused && !p.root:
+	case err == nil && status == escrow.StatusRefused && p.kind == escrow.KindLUKSHeader && !p.root:
 		st := m.volumeState(p.volume)
 		at := now
 		st.RefusedAt, st.RefusedSet = &at, m.volumeSet
-		slog.WarnContext(ctx, "the server refused the LUKS header: the device escrows the most volumes a revocation token carries; not retried for a day",
+		slog.WarnContext(ctx, "the server refused the LUKS header (too many volumes, or a Destroy of the device is issued); not retried for a day",
 			"volume", p.volume, "generation", p.generation)
 	case err == nil && status == escrow.StatusFailed, !now.Before(p.deadline):
 		slog.WarnContext(ctx, "LUKS escrow not stored; starting over", "kind", p.kind, "generation", p.generation, "status", status)

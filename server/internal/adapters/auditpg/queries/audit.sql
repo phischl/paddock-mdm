@@ -27,6 +27,23 @@ UPDATE audit_org_seq SET last_seq = @last_seq WHERE organization_id = @organizat
 -- Commit-order read of the index (plan M9 decision 4); RLS supplies the organization.
 SELECT * FROM audit_event WHERE commit_seq > @after ORDER BY commit_seq LIMIT @max_rows;
 
+-- name: GetEventByCommitSeq :one
+-- The event at a notification destination's cursor (plan M12 decision 20); RLS supplies the organization.
+SELECT * FROM audit_event WHERE commit_seq = @commit_seq LIMIT 1;
+
+-- name: CountEventsRecordedOn :one
+-- The index rows recorded on a day, the event_count of its checkpoint (plan M12 decision 20): day_start is 00:00 UTC of
+-- the day, day_end of the next.
+SELECT count(*)::bigint AS events FROM audit_event
+WHERE recorded_at >= @day_start::timestamptz AND recorded_at < @day_end::timestamptz;
+
+-- name: ListManifestsAfter :many
+-- The sealed days of the scope after a day, in day order (plan M12 decision 20); RLS supplies the organization.
+SELECT day, sha256, signature, key_version FROM audit_manifest
+WHERE day > @after_day::date
+ORDER BY day
+LIMIT @max_rows;
+
 -- name: LatestCommitSeq :one
 -- max(commit_seq), not audit_org_seq: the reader has no grant on it, and the maximum stays valid after the index
 -- retention dropped old partitions (amendment B1.3).
@@ -272,3 +289,38 @@ WHERE occurred_at >= @month_start::timestamptz AND occurred_at < @month_end::tim
 SELECT * FROM audit_verification_run
 WHERE organization_id = @organization_id AND from_day <= @to_day AND to_day >= @from_day
 ORDER BY started_at DESC LIMIT 100;
+
+-- Access review (plan M12 decision 25): the events of the given codes and outcomes in [from, to), oldest first, and
+-- their number; the baseline members of a role's first comparison are left out on request. RLS supplies the
+-- organization.
+
+-- name: ListAuditEventsForReview :many
+SELECT * FROM audit_event
+WHERE occurred_at >= @from_time AND occurred_at < @to_time
+  AND code = ANY(@codes::text[]) AND outcome = ANY(@outcomes::text[])
+  AND NOT (@exclude_baseline::boolean AND params->>'baseline' = 'true')
+ORDER BY occurred_at, event_id
+LIMIT @max_rows;
+
+-- name: CountAuditEventsForReview :one
+SELECT count(*) FROM audit_event
+WHERE occurred_at >= @from_time AND occurred_at < @to_time
+  AND code = ANY(@codes::text[]) AND outcome = ANY(@outcomes::text[])
+  AND NOT (@exclude_baseline::boolean AND params->>'baseline' = 'true');
+
+-- name: CountStepUpEventsForReview :one
+-- Successful actions of a step-up session and the refusals for a missing step-up, in [from, to).
+SELECT (count(*) FILTER (WHERE outcome = 'success' AND (actor->>'step_up')::boolean))::bigint AS succeeded,
+       (count(*) FILTER (WHERE outcome = 'denied' AND params->>'error_code' = 'step_up_required'))::bigint AS refused
+FROM audit_event
+WHERE occurred_at >= @from_time AND occurred_at < @to_time;
+
+-- name: EscrowDestroyEvidence :many
+-- The newest successful Destroy per device of one organization (device.escrow_destroyed). The escrow step of a restore
+-- reads it here because the audit index survives the restore and the restored database may predate the Destroy
+-- (decisions-alpha9 items 39 and 44). Only the device and the time are read.
+SELECT (target->>'id')::text AS device_id, max(occurred_at)::timestamptz AS destroyed_at
+FROM audit_event
+WHERE organization_id = @organization_id AND code = 'device.escrow_destroyed' AND outcome = 'success'
+  AND target->>'type' = 'device'
+GROUP BY target->>'id';
