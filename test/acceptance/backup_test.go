@@ -428,7 +428,8 @@ func newestFull(t *testing.T, service string) (time.Time, string, bool) {
 }
 
 // TestBackupRotation is gate B4: a second confirmed key retires the first, pgBackRest takes a full backup in the new
-// key's repository path within one full interval (120 s on the development stack), and the old path stays.
+// key's repository path at once (a new path makes a full due, whatever the schedule's interval), and the old path
+// stays.
 func TestBackupRotation(t *testing.T) {
 	requireBackupStack(t)
 	a := newBackupAdmin(t)
@@ -460,16 +461,17 @@ func TestBackupRotation(t *testing.T) {
 	newPath := "pgbackrest/" + g.KeyID
 	// A full backup started a little before the confirmation's response is still the rotation's (clock skew).
 	after := confirmed.Add(-30 * time.Second)
-	// Plan §9 B4 bounds the switch by one full interval (120 s on the development stack). On top of it: one backup-role
-	// round (15 s) until the runtime names the new path, one pgbackrest loop pause (10 s) until switch_repo_path takes
-	// the full at once, and the full plus its verify of the development databases (90 s). Both services switch in
-	// parallel, so one deadline from the confirmation covers both.
+	// The switch does not wait for the schedule (run.sh switch_repo_path drops last-full, so a full is due at once):
+	// the bound is one backup-role round (15 s) until the runtime names the new path, one pgbackrest loop pause (10 s),
+	// a full and verify that may have been running in the old path at the confirmation, and the new path's full plus
+	// its verify of the development databases (90 s each). It no longer contains the development full interval
+	// (decisions-alpha9 item 82), so a switch that waited for the schedule fails B4. Both services switch in parallel,
+	// so one deadline from the confirmation covers both.
 	const (
-		fullInterval = 120 * time.Second
-		roleRound    = 15 * time.Second
-		loopPause    = 10 * time.Second
-		fullVerify   = 90 * time.Second
-		bound        = fullInterval + roleRound + loopPause + fullVerify
+		roleRound  = 15 * time.Second
+		loopPause  = 10 * time.Second
+		fullVerify = 90 * time.Second
+		bound      = roleRound + loopPause + 2*fullVerify
 	)
 	deadline := confirmed.Add(bound)
 	pending := map[string]bool{"pgbackrest": true, "pgbackrest-authentik": true}

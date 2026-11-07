@@ -141,6 +141,7 @@ type Engine struct {
 	// fleetFailed is the time of the last failed sealing of a waiting dump, by file name.
 	fleetFailed map[string]time.Time
 	stall       time.Duration
+	fleetWatch  time.Duration
 	budget      time.Duration
 	// minRate is the throughput a target must reach on the file it copies when the budget ends (bytes per second).
 	minRate int64
@@ -165,7 +166,7 @@ func NewEngine(cfg Config, lock LeaderLocker, store Store, keys Decrypter, snap 
 	targets TargetFactory, metrics *Metrics, now func() time.Time) *Engine {
 	return &Engine{cfg: cfg, lock: lock, store: store, keys: keys, snap: snap, escrow: escrow, targets: targets,
 		metrics: metrics, now: now, hashes: map[string]hashEntry{}, mirrored: map[string]map[string]time.Time{},
-		pushed: map[uuid.UUID]map[string]fileInfo{}, fleetFailed: map[string]time.Time{}, stall: mirrorStall,
+		pushed: map[uuid.UUID]map[string]fileInfo{}, fleetFailed: map[string]time.Time{}, stall: mirrorStall, fleetWatch: fleetWatchEvery,
 		budget: mirrorBudget, minRate: mirrorMinRate, busy: map[uuid.UUID]bool{}, checking: map[uuid.UUID]bool{}, testing: map[uuid.UUID]bool{},
 		held: map[uuid.UUID]int{}}
 }
@@ -279,7 +280,8 @@ func (e *Engine) round(ctx context.Context) error {
 		r, escrow = e.mirrorEscrow(ctx, repo, byKind[KindEscrow])
 		record(r)
 	}
-	fleetRuns, err := e.fleet(ctx, repo, raw, history[KindFleet], hours(sched.FleetIntervalHours), byKind[KindFleet])
+	fleetRuns, fleetRequested, err := e.fleet(ctx, repo, raw, history[KindFleet], hours(sched.FleetIntervalHours),
+		byKind[KindFleet])
 	errs = append(errs, err)
 	record(fleetRuns...)
 	dbRuns, err := e.pgbackrest(ctx, key.ID, history, byKind)
@@ -313,7 +315,14 @@ func (e *Engine) round(ctx context.Context) error {
 	e.repoMetrics(idx, key.ID, kinds)
 
 	ret.walOK = e.walOK(idx, ret.active)
+	// A Fleet dump this round asked for arrives while the mirror runs, which can take hours: it is sealed and recorded
+	// as soon as it is there, not in the next round (decisions-alpha9 item 82).
+	stopFleet := func() {}
+	if fleetRequested {
+		stopFleet = e.watchFleet(ctx, repo, raw, byKind[KindFleet], record)
+	}
 	results := e.mirrorAll(ctx, repo, idx, targets, kinds, ret)
+	stopFleet()
 	if err := e.store.MirrorRuns(ctx, results); err != nil {
 		errs = append(errs, fmt.Errorf("record the mirror of the runs: %w", err))
 	}
@@ -532,12 +541,80 @@ var fleetDump = regexp.MustCompile(`^(\d{8}T\d{6}Z)\.sql\.gz$`)
 // sealing failed is tried again after retryAfter (one failed run per attempt), and deleted with a failed run once it
 // is older than fleetPlainMaxAge. When a dump is due or requested and none waits, it asks fleet-backup for one; a
 // request fleet-backup did not answer within requestTimeout fails and is withdrawn.
+// fleet seals the dumps fleet-backup left and, when a dump is due and none is waiting, asks for one; requested is true
+// when it asked this round.
 func (e *Engine) fleet(ctx context.Context, repo *os.Root, key []byte, h KindHistory, interval time.Duration,
-	reqs []RequestedRun) ([]run, error) {
+	reqs []RequestedRun) (runs []run, requested bool, err error) {
 	dumps, err := e.fleetDumps()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	runs = e.sealFleet(repo, key, dumps, reqs)
+	if len(dumps) > 0 {
+		return runs, false, nil
+	}
+	if !e.due(h, interval) && len(reqs) == 0 {
+		return runs, false, nil
+	}
+	now := e.now()
+	req := filepath.Join(e.cfg.FleetDumpsDir, fleetRequestFile)
+	if _, err := os.Stat(req); err == nil {
+		at := readEpochFile(req)
+		if now.Sub(at) < requestTimeout {
+			return runs, true, nil
+		}
+		if err := os.Remove(req); err != nil {
+			return runs, false, fmt.Errorf("withdraw fleet dump request: %w", err)
+		}
+		answered := slices.DeleteFunc(slices.Clone(reqs), func(q RequestedRun) bool { return q.CreatedAt.After(at) })
+		slog.WarnContext(ctx, "fleet-backup did not answer the dump request", "requested_at", at)
+		return append(runs, run{Kind: KindFleet, Requests: answered, StartedAt: at, FinishedAt: now,
+			ErrorClass: runClassTimeout}), false, nil
+	}
+	if err := os.WriteFile(req, []byte(strconv.FormatInt(e.now().Unix(), 10)), 0o640); err != nil { //nolint:gosec // fixed name in the dumps volume
+		return runs, false, fmt.Errorf("request fleet dump: %w", err)
+	}
+	slog.InfoContext(ctx, "fleet dump requested")
+	return runs, true, nil
+}
+
+// fleetWatchEvery is how often a round looks for the Fleet dump it asked for while its mirror runs.
+const fleetWatchEvery = 5 * time.Second
+
+// watchFleet seals and records the Fleet dump this round asked for as soon as fleet-backup left it, while the round's
+// mirror runs; the returned stop ends the watch and waits for it, so that the round's runs and errors are its own
+// again (decisions-alpha9 item 82).
+func (e *Engine) watchFleet(ctx context.Context, repo *os.Root, key []byte, reqs []RequestedRun,
+	record func(...run)) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(e.fleetWatch)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			dumps, err := e.fleetDumps()
+			if err != nil || len(dumps) == 0 {
+				continue
+			}
+			record(e.sealFleet(repo, key, dumps, reqs)...)
+			return
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+// sealFleet seals the plaintext dumps into the repository and deletes them; the first run answers reqs. A dump that
+// could not be sealed within fleetPlainMaxAge is deleted with a failed run.
+func (e *Engine) sealFleet(repo *os.Root, key []byte, dumps []fleetDumpFile, reqs []RequestedRun) []run {
 	var runs []run
 	now := e.now()
 	for _, d := range dumps {
@@ -575,28 +652,7 @@ func (e *Engine) fleet(ctx context.Context, repo *os.Root, key []byte, h KindHis
 		}
 		runs = append(runs, e.finish(r, int64(len(sealed)), err, runClassFleet))
 	}
-	if len(dumps) > 0 || (!e.due(h, interval) && len(reqs) == 0) {
-		return runs, nil
-	}
-	req := filepath.Join(e.cfg.FleetDumpsDir, fleetRequestFile)
-	if _, err := os.Stat(req); err == nil {
-		at := readEpochFile(req)
-		if now.Sub(at) < requestTimeout {
-			return runs, nil
-		}
-		if err := os.Remove(req); err != nil {
-			return runs, fmt.Errorf("withdraw fleet dump request: %w", err)
-		}
-		answered := slices.DeleteFunc(slices.Clone(reqs), func(q RequestedRun) bool { return q.CreatedAt.After(at) })
-		slog.WarnContext(ctx, "fleet-backup did not answer the dump request", "requested_at", at)
-		return append(runs, run{Kind: KindFleet, Requests: answered, StartedAt: at, FinishedAt: now,
-			ErrorClass: runClassTimeout}), nil
-	}
-	if err := os.WriteFile(req, []byte(strconv.FormatInt(e.now().Unix(), 10)), 0o640); err != nil { //nolint:gosec // fixed name in the dumps volume
-		return runs, fmt.Errorf("request fleet dump: %w", err)
-	}
-	slog.InfoContext(ctx, "fleet dump requested")
-	return runs, nil
+	return runs
 }
 
 // fleetDumpFile is a complete plaintext dump in the dumps volume.

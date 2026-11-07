@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,8 @@ type fakeStore struct {
 	targets   []TargetRecord
 	requests  []RequestedRun
 	history   map[string]KindHistory
+	// runsMu guards runs: a round records the Fleet run from its watcher while the mirror runs.
+	runsMu    sync.Mutex
 	runs      []fakeRun
 	mirrorErr error
 	status    map[string]KindStatus
@@ -108,6 +111,8 @@ type fakeRun struct {
 }
 
 func (s *fakeStore) RecordRun(_ context.Context, r RunRecord) error {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
 	s.runs = append(s.runs, fakeRun{RunRecord: r})
 	return nil
 }
@@ -116,6 +121,8 @@ func (s *fakeStore) MirrorRuns(_ context.Context, results []backupset.RunTarget)
 	if s.mirrorErr != nil {
 		return s.mirrorErr
 	}
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
 	for i := range s.runs {
 		if !s.runs[i].mirrored {
 			s.runs[i].Targets, s.runs[i].mirrored = slices.Clone(results), true
@@ -125,6 +132,8 @@ func (s *fakeStore) MirrorRuns(_ context.Context, results []backupset.RunTarget)
 }
 
 func (s *fakeStore) run(kind string) (fakeRun, bool) {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
 	for _, r := range s.runs {
 		if r.Kind == kind {
 			return r, true

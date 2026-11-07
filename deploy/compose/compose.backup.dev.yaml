@@ -2,8 +2,9 @@
 # The development stack has no internal TLS, so the backup role reaches OpenBao over plain HTTP. `make dev-seed
 # BACKUP=1` creates two backup targets (plan M15 decision 18): an S3 target on the audit host's RustFS (bucket
 # paddock-backup, rustfs-backup-bootstrap.sh) and a local target on the volume backup-local-dev, which stands in for
-# the volumes ./paddock backup-target apply renders on a host. A full backup is due every 120 seconds instead of the
-# schedule's hours, so the gates see one within minutes.
+# the volumes ./paddock backup-target apply renders on a host. A full backup is due every 20 minutes instead of the
+# schedule's hours: often enough to see the schedule work, rare enough that a long-lived development stack's set and its
+# targets stay at a realistic size (decisions-alpha9 item 82); the gates take their fulls by request or key switch.
 services:
   pgbackrest: &pgbackrest-dev
     build:
@@ -20,7 +21,7 @@ services:
       PADDOCK_OPENBAO_ADDR: http://openbao:8200
       BAO_CACERT: ""
       SSL_CERT_FILE: ""
-      PADDOCK_BACKUP_FULL_INTERVAL_S: "120"
+      PADDOCK_BACKUP_FULL_INTERVAL_S: "1200"
       PADDOCK_BACKUP_ROUND_INTERVAL: 15s
     secrets: !override
       - db_paddock_backup_url

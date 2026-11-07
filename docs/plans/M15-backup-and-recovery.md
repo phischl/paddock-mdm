@@ -1245,3 +1245,13 @@ doubled. The header records `# revisions:` (for the online check item of decisio
   "continues"}`; its `backup_target_status` keeps `last_success_at` and `bytes` and has no `last_error` (an error of an
   earlier round is cleared: the mirror is progressing); the portal's run history says "continues next round". A3's
   order of steps is unchanged.
+
+### Note 2026-11-07 c — the Fleet run is recorded while the mirror runs (PDK-885; decisions-alpha9 item 82)
+
+- The Fleet kind is asynchronous: a round writes the dump request, fleet-backup answers some seconds later. Phase 1 of
+  note "2026-11-07 b" could only record it in the next round, i.e. after the round's mirror, which can take hours. A
+  round that asked for a dump now watches the dumps volume while its mirror runs (every 5 s) and seals and records the
+  dump as soon as it is there; the run's mirror results and audit event follow in phase 2 as for every kind. When the
+  mirror ends first, the next round seals the dump as before.
+- The development stack's full interval is 20 minutes (was 120 s); gate B4 bounds the key switch without it, since a
+  new repository path makes a full due at once.
