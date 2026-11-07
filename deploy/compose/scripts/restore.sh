@@ -32,7 +32,7 @@ RESTORE_STAGING="$COMPOSE_DIR/restore-staging"
 RESTORE_REPO_PATH_RE='^pgbackrest/(bk-[0-9]{8}-[0-9a-f]{8}|legacy)$'
 RESTORE_UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # The key ./paddock restore asks for: a path of its own, never the legacy Compose secret backup_encryption_key that
-# compose.backup.yaml mounts into paddock-api.
+# compose.backup-legacy-key.yaml mounts into paddock-api on an upgraded installation.
 RESTORE_KEY_PATH=restore/backup_key
 
 restore_usage() {
