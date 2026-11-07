@@ -192,3 +192,35 @@ func TestHangingListingTripsTheWatchdog(t *testing.T) {
 		t.Errorf("the watchdog took %s", took)
 	}
 }
+
+// TestDirTargetWalksStopWithTheirContext: a mounted target's listing and its newest-file walk return the context's
+// error once it ended, instead of walking a slow share to its end while the target stays busy (PDK-866).
+func TestDirTargetWalksStopWithTheirContext(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "target")
+	dir := filepath.Join(root, "fleet")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	const files = 3 * listTickEvery
+	for i := range files {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%05d.enc", i)), []byte("x"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dst := NewDirTarget(root)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticks := 0
+	got, err := listProgress(ctx, dst, func() {
+		if ticks++; ticks == 1 {
+			cancel()
+		}
+	})
+	if !errors.Is(err, context.Canceled) || got != nil || ticks != 1 {
+		t.Errorf("listing after the cancel: %d files, %d ticks, %v; want context.Canceled after the first tick",
+			len(got), ticks, err)
+	}
+	if _, err := dst.Newest(ctx, "fleet/"); !errors.Is(err, context.Canceled) {
+		t.Errorf("newest after the cancel: %v, want context.Canceled", err)
+	}
+}
