@@ -12,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -174,6 +175,24 @@ func TestPGStore(t *testing.T) {
 	if err := super.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE organization_id = $1`, audit.PlatformOrganizationID).
 		Scan(&outbox); err != nil || outbox < 2 {
 		t.Errorf("outbox rows %d %v", outbox, err)
+	}
+	// A backup round runs without a request: its events still pass the audit writer (decisions-alpha9 item 69).
+	rows, err := super.Query(ctx, `SELECT payload FROM outbox WHERE payload ->> 'code' IN ('platform.backup_completed', 'platform.backup_failed')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var ev audit.Event
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil || json.Unmarshal(payload, &ev) != nil {
+			t.Fatalf("outbox payload %s: %v", payload, err)
+		}
+		if err := auditwriter.Validate(ev); err != nil || ev.Source != audit.SourceSystem || ev.Actor.Type != audit.ActorSystem {
+			t.Errorf("backup event %s %+v: %v", ev.Code, ev, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 	hist, err := s.History(ctx)
 	if err != nil || !hist[KindOpenBao].LastSuccess.Equal(at.Add(3*time.Second)) || !hist[KindFleet].LastSuccess.IsZero() ||
