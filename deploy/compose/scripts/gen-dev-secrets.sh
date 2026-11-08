@@ -150,10 +150,11 @@ done
 # make dev-secrets up to rotate it.
 secret escrow_reader_token
 
-# Valkey: one password; the server reads it through an included config file.
-secret valkey_password
-mkdir -p "$SECRETS_DIR/valkey"
-secret valkey/auth.conf "requirepass $(read_secret valkey_password)"
+# Valkey: one ACL user per role (plan M12h §14.6.3); the container stores only the SHA-256 of each password. The
+# user acceptance exists in the development and CI stack only (compose.dev.yaml).
+for user in api gateway worker compiler escrow_reader revocation_issuer healthcheck acceptance; do
+  secret "valkey_${user}_password"
+done
 
 # RabbitMQ. The definitions file is derived from the passwords and the template, so it is rewritten whenever the
 # template gains users; RabbitMQ imports it again on the next start (definitions.skip_if_unchanged).

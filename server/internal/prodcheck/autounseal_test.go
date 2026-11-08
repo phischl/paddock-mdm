@@ -140,6 +140,11 @@ func TestAutoUnsealCheckFindings(t *testing.T) {
 			"paddock-unsealer: mounts db_paddock_platform_url"},
 		{"Valkey in the unsealer", prodcheck.HostControlPlane, func(f *fixture) { f.setEnv("paddock-unsealer", "PADDOCK_VALKEY_ADDR", "valkey:6379") },
 			"paddock-unsealer: PADDOCK_VALKEY_ADDR is set"},
+		{"a Valkey user in the unsealer", prodcheck.HostControlPlane, func(f *fixture) { f.setEnv("paddock-unsealer", "PADDOCK_VALKEY_USER", "worker") },
+			"paddock-unsealer: PADDOCK_VALKEY_USER is set"},
+		{"a Valkey password in the unsealer", prodcheck.HostControlPlane, func(f *fixture) {
+			f.setEnv("paddock-unsealer", "PADDOCK_VALKEY_PASSWORD_FILE", "/run/secrets/valkey_worker_password")
+		}, "paddock-unsealer: PADDOCK_VALKEY_PASSWORD_FILE is set"},
 		{"an AppRole variable in the unsealer", prodcheck.HostControlPlane, func(f *fixture) {
 			f.setEnv("paddock-unsealer", "PADDOCK_OPENBAO_ROLE_ID_FILE", "/run/secrets/approle_worker_role_id")
 		}, "paddock-unsealer: PADDOCK_OPENBAO_ROLE_ID_FILE is set"},

@@ -37,6 +37,11 @@ services:
   valkey:
     ports:
       - "127.0.0.1:${PADDOCK_DEV_VALKEY_PORT:-6379}:6379"
+    # Development and CI user `acceptance` (plan M12h §14.6.4): the acceptance helpers enumerate keys (SCAN), which
+    # no production user may. prod-check fails when a production file set mounts either file.
+    volumes:
+      - ./valkey/users.acl.dev.tmpl:/etc/valkey/users.acl.dev.tmpl:ro
+    secrets: [valkey_acceptance_password]
 
   audit-rustfs:
     ports:
@@ -233,6 +238,7 @@ services:
 
 secrets:
   dev_platform_admin_password: { file: ./.secrets/dev_platform_admin_password }
+  valkey_acceptance_password: { file: ./.secrets/valkey_acceptance_password }
   dev_alice_password: { file: ./.secrets/dev_alice_password }
   dev_bob_password: { file: ./.secrets/dev_bob_password }
   dev_carol_password: { file: ./.secrets/dev_carol_password }

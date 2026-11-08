@@ -111,6 +111,7 @@ compat-fixtures:
 .PHONY: lint-shell
 lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
+	shellcheck -s sh deploy/compose/valkey/entrypoint.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
 	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
 	shellcheck -s bash test/stack-preflight.sh test/stack-preflight_test.sh

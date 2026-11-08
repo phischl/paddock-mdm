@@ -73,7 +73,7 @@ shipped=(
   nginx/paddock.conf.example
   openbao/config.hcl openbao/prod.hcl
   rabbitmq/rabbitmq.conf rabbitmq/enabled_plugins rabbitmq/tls.conf rabbitmq/management-loopback.conf rabbitmq/definitions.json.tmpl
-  valkey/valkey.conf
+  valkey/valkey.conf valkey/fleet-redis.conf valkey/users.acl.tmpl valkey/entrypoint.sh
   postgres/provision-roles.sh
   authentik/entrypoint.sh
   fleet/entrypoint.sh fleet/backup.sh

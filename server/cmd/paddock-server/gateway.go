@@ -38,7 +38,7 @@ func serveGateway(ctx context.Context, l *config.Loader, common config.Common) e
 	if err := l.Err(); err != nil {
 		return err
 	}
-	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password})
+	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Username: vkCfg.Username, Password: vkCfg.Password})
 	if err != nil {
 		return err
 	}

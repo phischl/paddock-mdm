@@ -13,6 +13,7 @@ import (
 // Config locates Valkey.
 type Config struct {
 	Addr     string // host:port
+	Username string // ACL user of the role (PADDOCK_VALKEY_USER)
 	Password string
 }
 
@@ -20,6 +21,7 @@ type Config struct {
 func New(cfg Config) (valkey.Client, error) {
 	c, err := valkey.NewClient(valkey.ClientOption{
 		InitAddress:      []string{cfg.Addr},
+		Username:         cfg.Username,
 		Password:         cfg.Password,
 		DisableCache:     true,
 		ConnWriteTimeout: 5 * time.Second,

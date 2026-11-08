@@ -215,14 +215,26 @@ services:
     image: ${VALKEY_IMAGE}
     restart: unless-stopped
     pids_limit: 256
+    # One ACL user per role (plan M12h §14): the entrypoint renders /run/valkey/users.acl with hashed passwords.
+    entrypoint: ["/usr/local/bin/paddock-entrypoint.sh"]
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
     volumes:
+      - ./valkey/entrypoint.sh:/usr/local/bin/paddock-entrypoint.sh:ro
       - ./valkey/valkey.conf:/etc/valkey/valkey.conf:ro
+      - ./valkey/users.acl.tmpl:/etc/valkey/users.acl.tmpl:ro
       - valkey-data:/data
-    secrets: [valkey_auth_conf, valkey_password]
+    tmpfs: [/run/valkey]
+    secrets:
+      - valkey_api_password
+      - valkey_gateway_password
+      - valkey_worker_password
+      - valkey_compiler_password
+      - valkey_escrow_reader_password
+      - valkey_revocation_issuer_password
+      - valkey_healthcheck_password
     networks: [data]
     healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/valkey_password)\" valkey-cli ping | grep -q PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/valkey_healthcheck_password)\" valkey-cli --no-auth-warning --user healthcheck ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -382,7 +394,7 @@ services:
     pids_limit: 256
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
     volumes:
-      - ./valkey/valkey.conf:/etc/valkey/valkey.conf:ro
+      - ./valkey/fleet-redis.conf:/etc/valkey/valkey.conf:ro
       - fleet-redis-data:/data
     secrets:
       - source: fleet_redis_auth_conf
@@ -505,7 +517,8 @@ services:
       PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_api_secret_key
       # Publishes new and revoked enrollment tokens to the gateway's cache at once.
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: api
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_api_password
       # Break-glass of a locked-out platform (plan M7a decision 22): true ignores the application IP allow list;
       # prod-check fails while it is set.
       PADDOCK_IP_ALLOWLIST_BYPASS: ${PADDOCK_IP_ALLOWLIST_BYPASS:-false}
@@ -529,7 +542,7 @@ services:
       NO_PROXY: ${NO_PROXY:-}
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
-      - valkey_password
+      - valkey_api_password
       - release_public_key
       - revoke_release_public_key
       - rustfs_artifacts_api_access_key
@@ -576,7 +589,8 @@ services:
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_escrow_reader_role_id
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_escrow_reader_secret_id
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: escrow_reader
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_escrow_reader_password
       PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal-stepup/
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
@@ -584,7 +598,7 @@ services:
       - db_paddock_escrow_reader_url
       - approle_escrow_reader_role_id
       - approle_escrow_reader_secret_id
-      - valkey_password
+      - valkey_escrow_reader_password
       - caddy_root_crt
     # edge: the step-up issuer's discovery through Caddy's alias auth.<domain>.
     networks:
@@ -620,7 +634,8 @@ services:
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_revocation_issuer_role_id
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_revocation_issuer_secret_id
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: revocation_issuer
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_revocation_issuer_password
       PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal-stepup/
       # Deletes every header version of a destroyed device (plan M4c decision 9).
       PADDOCK_ESCROW_S3_ENDPOINT: http://rustfs:9000
@@ -636,7 +651,7 @@ services:
       - rabbitmq_revocation_issuer_password
       - approle_revocation_issuer_role_id
       - approle_revocation_issuer_secret_id
-      - valkey_password
+      - valkey_revocation_issuer_password
       - rustfs_escrow_revocation_access_key
       - rustfs_escrow_revocation_secret_key
       - caddy_root_crt
@@ -686,7 +701,8 @@ services:
       PADDOCK_AMQP_USER: gateway
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_gateway_password
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: gateway
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_gateway_password
       PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
       PADDOCK_ARTIFACTS_S3_BUCKET: paddock-agent-artifacts
@@ -696,7 +712,7 @@ services:
       PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_gateway_secret_key
     secrets:
       - rabbitmq_gateway_password
-      - valkey_password
+      - valkey_gateway_password
       - rustfs_bundles_gateway_access_key
       - rustfs_bundles_gateway_secret_key
     networks: [edge, data]
@@ -721,7 +737,8 @@ services:
       PADDOCK_AMQP_USER: compiler
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_compiler_password
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: compiler
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_compiler_password
       PADDOCK_OPENBAO_ADDR: http://openbao:8200
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_compiler_role_id
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_compiler_secret_id
@@ -738,7 +755,7 @@ services:
       - db_paddock_compiler_url
       - fleet_enroll_secret
       - rabbitmq_compiler_password
-      - valkey_password
+      - valkey_compiler_password
       - approle_compiler_role_id
       - approle_compiler_secret_id
       - rustfs_bundles_compiler_access_key
@@ -766,7 +783,8 @@ services:
       PADDOCK_AMQP_USER: worker
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_worker_password
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: worker
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_worker_password
       # Signs device commands with command-signing (plan M4a decision 2).
       PADDOCK_OPENBAO_ADDR: http://openbao:8200
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_worker_role_id
@@ -801,7 +819,7 @@ services:
       - db_paddock_worker_url
       - db_paddock_platform_url
       - rabbitmq_worker_password
-      - valkey_password
+      - valkey_worker_password
       - approle_worker_role_id
       - approle_worker_secret_id
       - authentik_service_token
@@ -970,8 +988,13 @@ secrets:
   authentik_bootstrap_token: { file: ./.secrets/authentik_bootstrap_token }
   authentik_service_token: { file: ./.secrets/authentik_service_token }
   oidc_client_secret: { file: ./.secrets/oidc_client_secret }
-  valkey_auth_conf: { file: ./.secrets/valkey/auth.conf }
-  valkey_password: { file: ./.secrets/valkey_password }
+  valkey_api_password: { file: ./.secrets/valkey_api_password }
+  valkey_gateway_password: { file: ./.secrets/valkey_gateway_password }
+  valkey_worker_password: { file: ./.secrets/valkey_worker_password }
+  valkey_compiler_password: { file: ./.secrets/valkey_compiler_password }
+  valkey_escrow_reader_password: { file: ./.secrets/valkey_escrow_reader_password }
+  valkey_revocation_issuer_password: { file: ./.secrets/valkey_revocation_issuer_password }
+  valkey_healthcheck_password: { file: ./.secrets/valkey_healthcheck_password }
   rustfs_root_user: { file: ./.secrets/rustfs_root_user }
   rustfs_root_password: { file: ./.secrets/rustfs_root_password }
   approle_api_role_id: { file: ./.secrets/approle/paddock-api/role_id }

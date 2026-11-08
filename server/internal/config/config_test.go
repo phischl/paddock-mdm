@@ -28,6 +28,26 @@ func TestLoadOpenBaoAddr(t *testing.T) {
 	}
 }
 
+func TestLoadValkeyRequiresUser(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "valkey_gateway_password")
+	if err := os.WriteFile(path, []byte("pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"PADDOCK_VALKEY_ADDR": "valkey:6379", "PADDOCK_VALKEY_USER": "gateway",
+		"PADDOCK_VALKEY_PASSWORD_FILE": path}
+	l := NewLoaderFrom(env)
+	if got := LoadValkey(l); got != (Valkey{Addr: "valkey:6379", Username: "gateway", Password: "pw"}) || l.Err() != nil {
+		t.Fatalf("LoadValkey = %+v, err %v", got, l.Err())
+	}
+	delete(env, "PADDOCK_VALKEY_USER")
+	l = NewLoaderFrom(env)
+	_ = LoadValkey(l)
+	var missing *MissingError
+	if !errors.As(l.Err(), &missing) || !reflect.DeepEqual(missing.Names, []string{"PADDOCK_VALKEY_USER"}) {
+		t.Fatalf("Err() = %v, want PADDOCK_VALKEY_USER missing", l.Err())
+	}
+}
+
 func TestMissingVariablesAreReportedTogether(t *testing.T) {
 	l := NewLoaderFrom(map[string]string{"PADDOCK_AMQP_URL": "amqp://x"})
 	_ = LoadAMQP(l)

@@ -1,0 +1,8 @@
+user default off
+user api on #{{api}} ~sess:* ~acct-sess:* ~sess-gen ~mcp-bind:* ~acct-mcp-bind:* ~mcp-chain:* ~mcp-used:* ~stepup:* ~ipal:ver ~et:* ~cmd:* ~cres:* ~rl:* %R~ar:current -@all +hello +ping +client|setinfo +get +mget +set +del +exists +incr +expire +pexpire +pexpireat +multi +exec +hset +hdel +sadd +srem +smembers +sismember +eval +evalsha
+user gateway on #{{gateway}} %R~dk:* %R~bp:* %R~et:* %R~cmd:* %R~tt:* %R~ar:current %R~au:* %R~esc:* ~nonce:* ~seq:* ~sd:* ~rl:* ~enr:* ~cres:* ~diag:* -@all +hello +ping +client|setinfo +get +set +del +exists +incr +decr +expire +multi +exec +hset +hgetall +hexists +pexpireat +eval +evalsha
+user worker on #{{worker}} ~dk:* ~seq:* ~enr:* ~et:* ~au:* ~esc:* ~cmd:* ~hb:* ~sd:* ~ar:current ~sess:* ~acct-sess:* ~acct-mcp-bind:* ~mcp-bind:* ~mcp-chain:* ~ipal:ver ~sess-gen -@all +hello +ping +client|setinfo +get +set +del +exists +incr +multi +exec +hset +hdel +hexists +pexpireat +smembers +eval +evalsha
+user compiler on #{{compiler}} ~bp:* ~tt:* -@all +hello +ping +client|setinfo +set +del +multi +exec +hset +hgetall
+user escrow_reader on #{{escrow_reader}} ~stepup-uses:* -@all +hello +ping +client|setinfo +incr +expireat
+user revocation_issuer on #{{revocation_issuer}} ~revocation-jti:* ~cmd:* -@all +hello +ping +client|setinfo +get +set +hset +hexists +hdel
+user healthcheck on #{{healthcheck}} -@all +hello +ping +client|setinfo
