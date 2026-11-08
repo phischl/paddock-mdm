@@ -6,7 +6,7 @@
 # waits without the key file, refuses a repository that holds the stanza for another cluster until its
 # `stanza-upgrade` runs, verifies the whole stanza after a full backup and writes verify-ok (the new backup alone when
 # the whole verify does not finish in time, then verify-ok stays), starts a new stanza with a full backup at once
-# when schedule.env names a new key's path, `restore` passes --at and --repo-path to pgBackRest, and `verify` writes
+# (with --start-fast, a scheduled full without) when schedule.env names a new key's path, `restore` passes --at and --repo-path to pgBackRest, and `verify` writes
 # verify-ok only when the whole stanza verifies, after a running backup's lock and never older than the one there. Throwaway PostgreSQL and encrypted posix repositories in
 # volumes.
 set -euo pipefail
@@ -20,7 +20,7 @@ cleanup() {
   kill "${pusher_pid:-}" 2>/dev/null || true
   docker rm -f "$id-pg" "$id-pg2" "$id-serve" "$id-lock" >/dev/null 2>&1 || true
   docker volume rm "$id-data" "$id-sock" "$id-repo" "$id-state" "$id-data2" "$id-sock2" "$id-spool2" "$id-state2" \
-    "$id-bin" "$id-brepo" "$id-runtime" "$id-empty" >/dev/null 2>&1 || true
+    "$id-bin" "$id-brepo" "$id-runtime" "$id-empty" "$id-rec" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 # The cipher pass the backup role would write into the runtime tmpfs (any text; pgBackRest derives the key from it).
@@ -173,16 +173,42 @@ check "past the verify time the backup alone is verified (exit $rc)" \
 check "past the verify time verify-ok stays" "$([[ "$(verify_ok)" == "$first_ok" ]] && echo 0 || echo 1)"
 
 # A key rotation: schedule.env names a new path, and serve starts a stanza there with a full backup at once although
-# the interval has not passed.
+# the interval has not passed. A pgbackrest earlier in PATH records the arguments of every backup: the path switch's
+# full forces the checkpoint (--start-fast), a scheduled full does not (decisions-alpha9 item 87).
+docker volume create "$id-rec" >/dev/null
+docker run --rm -i -u 0 --entrypoint sh -v "$id-rec:/rec" "$image" \
+  -c 'cat >/rec/pgbackrest && chmod 755 /rec/pgbackrest && chown 999:999 /rec' <<'RECORDER'
+#!/bin/sh
+case " $* " in *" backup "*) echo "$*" >>/rec/backup-args ;; esac
+exec /usr/bin/pgbackrest "$@"
+RECORDER
+rec_args=(-v "$id-rec:/rec" -e PATH=/rec:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "${run_sh_args[@]}")
 runtime "$new_path" 86400
-docker run -d --name "$id-serve" "${run_sh_args[@]}" serve >/dev/null
+docker run -d --name "$id-serve" "${rec_args[@]}" serve >/dev/null
 switched=1
 wait_log "$id-serve" "repository of test is now $new_path" 30 && switched=0
 verified=1
 wait_log "$id-serve" "pgbackrest: backup .* of test verified" 240 && verified=0
-docker rm -f "$id-serve" >/dev/null
 check "serve switches to the new key's repository path" "$switched"
 check "serve takes a verified full backup in the new path at once" "$verified"
+# The same path with a short interval: the next full is a scheduled one.
+runtime "$new_path" 1
+scheduled=1
+for _ in $(seq 1 240); do
+  if (($(docker logs "$id-serve" 2>&1 | grep -c "pgbackrest: backup .* of test verified") >= 2)); then
+    scheduled=0
+    break
+  fi
+  sleep 1
+done
+docker rm -f "$id-serve" >/dev/null
+runtime "$new_path" 86400
+backups="$(docker run --rm --entrypoint cat -v "$id-rec:/rec" "$image" /rec/backup-args 2>/dev/null || true)"
+check "serve takes a scheduled full after the switch" "$scheduled"
+check "the path switch's full passes --start-fast" \
+  "$(sed -n 1p <<<"$backups" | grep -q -- '--type=full --start-fast' && echo 0 || echo 1)"
+check "a scheduled full does not pass --start-fast" \
+  "$(sed -n 2p <<<"$backups" | grep -q -- '--type=full' && ! sed -n 2p <<<"$backups" | grep -q -- '--start-fast' && echo 0 || echo 1)"
 rc=0
 docker run --rm --entrypoint sh -v "$id-brepo:/backup-repo" "$image" -c \
   "ls -d /backup-repo/$new_path/backup/test/*F >/dev/null && test -s /backup-repo/$new_path/archive/test/archive.info" || rc=$?
