@@ -458,7 +458,9 @@ restore_postgres() {
   local svc pg_at=()
   RESTORE_COMPONENT=postgres
   restore_log "PostgreSQL: emptying the databases' volumes"
-  compose --profile paddock rm -sf postgres authentik-postgres pgbackrest pgbackrest-authentik
+  # The backup role mounts the pgBackRest state volumes read-only: its stopped container still holds them, and Docker
+  # refuses to delete a volume any container uses (gate BS4; decisions-alpha9 item 89). The run's final up recreates it.
+  compose --profile paddock rm -sf postgres authentik-postgres pgbackrest pgbackrest-authentik paddock-backup
   for v in postgres-data authentik-postgres-data pgbackrest-spool-paddock pgbackrest-spool-authentik \
     pgbackrest-state-paddock pgbackrest-state-authentik; do
     restore_volume_rm "$v"

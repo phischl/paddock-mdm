@@ -542,6 +542,17 @@ else
   bad "--only fleet: rc $rc, $(cat "$calls")"
 fi
 
+# Gate BS4 (decisions-alpha9 item 89): the backup role's container holds the pgBackRest state volumes read-only, so
+# the postgres step removes it before it deletes them; Docker refuses to delete a volume a container still uses.
+run_restore restore fresh "$set_dir" --only postgres
+rm_line="$(grep -n -- "rm -sf postgres authentik-postgres pgbackrest pgbackrest-authentik paddock-backup" "$calls" | head -1 | cut -d: -f1)"
+vol_line="$(grep -n -- "docker volume rm ${PADDOCK_PROJECT}_pgbackrest-state-paddock" "$calls" | head -1 | cut -d: -f1)"
+if ((rc == 0)) && [[ -n "$rm_line" && -n "$vol_line" ]] && ((rm_line < vol_line)); then
+  ok "the postgres step removes the backup role's container before it deletes the pgBackRest state volumes"
+else
+  bad "postgres step: rc $rc, role removed at line ${rm_line:-never}, state volume deleted at line ${vol_line:-never}"
+fi
+
 # Review 2 (R2-M2): the postgres step stops OpenBao too, so a restore without openbao states the unseal path and waits.
 echo 1 >"$sealed_polls"
 run_restore restore fresh "$set_dir" --only postgres
