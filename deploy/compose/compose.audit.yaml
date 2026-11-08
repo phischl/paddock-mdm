@@ -35,6 +35,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+      # initdb counts against the TCP probe, which a socket probe skipped (PDK-893).
+      start_period: 120s
 
   # Counterpart of db-provision of compose.yaml for the audit database (plan M16 decision 8): a role a release adds
   # exists before paddock-audit-migrate runs, whose owner stays NOCREATEROLE.

@@ -141,6 +141,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+      # initdb counts against the TCP probe, which a socket probe skipped (PDK-893).
+      start_period: 120s
 
   # Creates the roles a release adds and sets every password again from the secrets, on every up (plan M16 decision 8):
   # the initdb hook runs only on a new cluster. The superuser password is mounted here and nowhere else a migration
@@ -281,6 +283,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+      # initdb counts against the TCP probe, which a socket probe skipped (PDK-893).
+      start_period: 120s
 
   authentik-server: &authentik
     logging: *paddock-logging
