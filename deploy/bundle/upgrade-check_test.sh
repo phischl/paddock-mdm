@@ -51,7 +51,7 @@ tree_sum() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sh
 
 # uc_manifest_ref asks the registry by digest when the reference pins one, as docker pull does.
 (
-  # shellcheck source=../compose/scripts/upgrade-check.sh
+  # shellcheck source=/dev/null # linted as an input of its own (Makefile lint)
   . "$here/../compose/scripts/upgrade-check.sh"
   d=sha256:1111111111111111111111111111111111111111111111111111111111111111
   for c in "caddy:2.11.7@$d|caddy@$d" "ghcr.io/o/paddock-server:0.1.0@$d|ghcr.io/o/paddock-server@$d" \
