@@ -115,3 +115,64 @@ Plan M8s delivered CR-1 (the Paddock roles and Caddy run with `cap_drop: ALL`, `
   (AU-3–AU-6), portal Trusted Types and isolation headers (PO-1, PO-2), parsers and runtime OpenAPI validation
   (IV-1, IV-2, IV-5), SECURITY DEFINER inventory and role-matrix gate (AZ-2, AZ-3), log redaction and key rotation
   (SE-1, CK-1, CK-3), supply chain (SC-1, SC-2, SC-4, CI-1; SC-5, SC-6 need the maintainer's tool decision).
+
+## Amendment 2026-11-08 (PDK-820, A10-2) — Valkey users derived from the code; step-up goal narrowed
+
+### Context
+
+The Valkey option above and decision 2 were written from the roadmap's examples, not from the code. PDK-820's
+implementer inventoried the clients on `cluster/alpha10-features` (`2a4e061b`) and stopped: 18 keys in use were
+missing from the plan's ACL, three listed prefixes do not exist, the unsealer (listed) uses no Valkey, the
+revocation-issuer (not listed) does, the escrow-reader never reads `stepup:*` — the api reads the raw token and
+sends it in `EscrowDecryptRequest.StepUpIDToken`, the escrow-reader only counts uses in `stepup-uses:*` — and the
+proposed command lists would have broken the gateway's Lua scripts, hashes and transactions. Fleet's Redis mounts
+the same `valkey.conf`, so `aclfile` there would have changed Fleet.
+
+### Options
+
+- **Step-up as decided (only the escrow-reader reads `stepup:*`).** Requires the escrow-reader to fetch the token
+  by `jti` itself: a change of the api↔escrow-reader contract, of the revocation approval (`app/revocations.go`)
+  and of the issuer's verification — the revocation path, two-person rule, real-hardware test. − Not deliverable
+  inside PDK-820 without widening it into the revocation path. Deferred to M12h-2 as a candidate.
+- **Step-up narrowed (chosen):** the api keeps read and write on `stepup:*`; the escrow-reader gets
+  `stepup-uses:*` only; the contract and the revocation flow stay. − The api can replay a live step-up token
+  (residual risk RR-129); + the escrow-reader's use counter and the issuer's `jti` claim live in keys the api
+  cannot touch, so the blast radius of a compromised api is bounded by `MaxUses` and one approval per token.
+- **Host tooling with its own Valkey user(s).** + Separates the worker *container* from `ipal:ver` and
+  `sess-gen`. − One to four more secrets mounted into the worker container at run time (where a compromised worker
+  reads them anyway), rotation, `prod-check`, upgrade; the tooling is run by a host root who reads every secret.
+- **Host tooling as the worker (chosen):** the admin commands run in `paddock-worker` by design and authenticate
+  as `worker`; the worker gains two integrity-only keys.
+- **Fleet's Redis on the same configuration file.** Rejected: Fleet is out of scope; a separate
+  `fleet-redis.conf` with today's content keeps it byte-for-byte unchanged.
+
+### Decision (replaces decision 2)
+
+2. **Valkey ACLs.** Paddock's Valkey has the users `api`, `gateway`, `worker`, `compiler`, `escrow_reader`,
+   `revocation_issuer`, `healthcheck` and `default` (off); the development and CI stack adds `acceptance`
+   (`compose.dev.yaml` only; `prod-check` fails on it in production). No user exists for a role without a Valkey
+   client (unsealer, notifier, backup, audit-writer, outbox-relay). Key permissions follow the direction of the
+   code: `~` on keys a role writes, `%R~` on keys it only reads; command grants are the exact commands the role's
+   code issues plus the client's connection set (`HELLO`, `PING`, `CLIENT SETINFO`); no category, no admin or
+   dangerous command for any user. The binding table of keys, directions and commands is plan M12h §14.3–§14.5;
+   it is derived from the code and complete for `2a4e061b`; any new key or command is a stop condition for the
+   implementer, never a wildcard. Passwords are rendered into `/run/valkey/users.acl` as SHA-256 hashes by the
+   container's entrypoint from one secret per user (`valkey_<user>_password`); `valkey_password` and
+   `valkey_auth_conf` are removed. `fleet-redis` keeps its configuration in a separate file. Host tooling
+   authenticates as `worker`. Step-up: the api writes and reads `stepup:*`, the escrow-reader counts
+   `stepup-uses:*`; RR-129 records the residual. ADR 0003 amendment.
+
+The context bullet "every role can read raw step-up tokens (AZ-4, SE-2)" is corrected to: after this decision only
+the api can; SE-2's wording "only the escrow-reader path reads them" is narrowed to "only the api reads them and
+only the escrow-reader counts their uses" (recorded with this date in the appsec roadmap's SE-2 row).
+
+### Consequences
+
+- + The AZ-4 goal holds for every device-facing key: the gateway cannot write `dk:*`, `bp:*`, `cmd:*`, `et:*`,
+  `tt:*`, `ar:current`, `au:*`, `esc:*`; the compiler, escrow-reader and revocation-issuer see only their own keys.
+- + A rendering or permission mistake fails in the role-matrix test (real entrypoint, real template, every
+  role's code paths under its own user) and in the acceptance gate `TestValkeyACL`, not on an operator's host.
+- − RR-129 (api reads step-up tokens) and RR-130 (the worker holds delete rights on session records) are
+  accepted for alpha.10; the M12h-2 plan re-evaluates the escrow-reader fetching tokens by `jti`.
+- − Seven secrets instead of one; one development-only user, guarded by `prod-check`.
+- Follow-up: `docs/architecture.md` §8.3's key table is replaced by the real inventory (PDK-820).
