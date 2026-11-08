@@ -275,6 +275,31 @@ func TestCaddyfilesEdge(t *testing.T) {
 	if limited != 17 {
 		t.Errorf("found %d proxies to roles and upstreams, want 17 (2 in the guards, 5 in each Caddyfile)", limited)
 	}
+	// Plan M12h decision 16: every site imports the hardening headers, and the snippet sets all four.
+	g := read("guards.caddy")
+	for _, want := range []string{"(hardening_headers) {", "\t\tdefer\n", "X-Content-Type-Options nosniff",
+		`Strict-Transport-Security "max-age=31536000; includeSubDomains"`, "X-Frame-Options DENY",
+		"header ?Referrer-Policy strict-origin-when-cross-origin"} {
+		if !strings.Contains(g, want) {
+			t.Errorf("guards.caddy: hardening_headers lacks %q", want)
+		}
+	}
+	for _, name := range []string{"Caddyfile", "Caddyfile.prod", "Caddyfile.lab"} {
+		lines := strings.Split(read(name), "\n")
+		sites := 0
+		for i, line := range lines {
+			if !strings.HasSuffix(line, " {") || strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "{") {
+				continue
+			}
+			sites++
+			if i+1 >= len(lines) || lines[i+1] != "\timport hardening_headers" {
+				t.Errorf("%s:%d: site %q does not import hardening_headers first", name, i+1, line)
+			}
+		}
+		if sites < 5 {
+			t.Errorf("%s: found %d sites, want at least 5", name, sites)
+		}
+	}
 }
 
 // upstreamProxy matches a reverse_proxy to a Paddock role or an upstream the edge publishes.

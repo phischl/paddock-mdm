@@ -236,6 +236,21 @@ no longer used; keep them while a rollback to 0.1.0-alpha.9 is possible, then th
 unchanged (its configuration moved to `valkey/fleet-redis.conf` with the same content). The administration commands
 `paddock-server admin …` authenticate to Valkey as `worker`.
 
+**Rate limits, edge limits and headers (ADR 0051 decisions 3 and 6).** Nothing to do for a default installation; check
+these when something in front of or behind Caddy depends on the old behaviour:
+
+- The api and the gateway answer 429 `rate_limited` above the new per-minute limits (`PADDOCK_RATELIMIT_*`,
+  `PADDOCK_DEVICE_PER_IP_LIMIT`; `docs/operations/install.md` section 4). Many administrators behind one NAT: raise
+  `PADDOCK_RATELIMIT_AUTH` before the upgrade.
+- Caddy now refuses smaller bodies: `auth.` above 1 MiB (was 16 MiB) and `device.` above 1 MiB (was 2 MiB); the
+  admin platform uploads may be up to 256 MiB (was 130 MiB). Uploads in Authentik's administrative UI above 1 MiB, such
+  as application icons or flow backgrounds, are refused on `auth.`; keep such files smaller. A reverse proxy in front of Caddy needs a body limit of
+  at least 256 MiB for `admin.` (`deploy/compose/nginx/paddock.conf.example` sets `client_max_body_size`).
+- Every site sends `Strict-Transport-Security: max-age=31536000; includeSubDomains`, `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff` and a `Referrer-Policy`. `includeSubDomains` binds browsers to HTTPS for every name
+  below each Paddock host name (for example `*.admin.<domain>`) for a year; a page that framed Authentik or Fleet no
+  longer works.
+
 ### 0.1.0-alpha.9, from 0.1.0-alpha.8
 
 The release notes of this release carry these lines (the lines of `CHANGELOG.md` are authoritative):

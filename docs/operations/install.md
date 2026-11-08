@@ -46,6 +46,9 @@ A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST
   `PADDOCK_EDGE_CLIENT_IP_HEADER` (`X-Forwarded-For` or `CF-Connecting-IP`), so that the allow lists, rate limits
   and audit log see the real client; without them Caddy treats its peer as the client and ignores every such header.
   Firewall the origin to the proxy's ranges. Details and the Cloudflare example: `docs/operations/ip-allowlist.md`.
+  Such a proxy must pass request bodies of up to 256 MiB to `admin.` (platform uploads) and must not strip or weaken
+  the security headers Caddy sets on every site (HSTS with `includeSubDomains`, `X-Frame-Options: DENY`, `nosniff`,
+  `Referrer-Policy`; architecture §4.1).
 - Outbound HTTPS from the control plane (allow it in the host's firewall): `ghcr.io` and Docker Hub (images), the ACME
   CA (Caddy), Ubuntu's OSV feed `https://osv-vulnerabilities.storage.googleapis.com` (`paddock-worker`, daily;
   without it the alert `PaddockOSVStale` fires after 3 days, and `docs/operations/vulnerability-data.md` describes the
