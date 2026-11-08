@@ -130,7 +130,7 @@ controlplane_secrets() {
   done
   secret rustfs_artifacts_api_access_key
   secret rustfs_artifacts_api_secret_key
-  for role in worker api revocation; do
+  for role in worker api revocation backup; do
     secret "rustfs_escrow_${role}_access_key"
     secret "rustfs_escrow_${role}_secret_key"
   done
@@ -166,13 +166,9 @@ controlplane_secrets() {
   # The SMTP relay's password (docs/operations/install.md); stays empty for a relay without PADDOCK_SMTP_USERNAME.
   placeholder smtp_password
 
-  # Backups (docs/operations/restore.md): the encryption key MUST also be kept offline with the custodians, else a
-  # lost host takes the means to read its backups with it. The bucket credentials come from the backup S3 provider.
-  secret backup_encryption_key "$(head -c 32 /dev/urandom | base64 -w0)"
-  for role in pgbackrest worker fleet; do
-    placeholder "backup_${role}_access_key"
-    placeholder "backup_${role}_secret_key"
-  done
+  # Backups: no host key file. A fresh control plane starts without a backup key, and a platform administrator
+  # generates one in the portal (plan M15 decision 9, decisions-alpha9 item 63). The .secrets/backup_encryption_key of an
+  # installation older than 0.1.0-alpha.9 stays and is imported once as key legacy (compose.backup-legacy-key.yaml).
 
   # The audit writer's AppRole is created on this host's OpenBao as well, then copied to the audit host.
   for role in paddock-api paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer paddock-backup \

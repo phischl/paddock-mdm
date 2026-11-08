@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -103,16 +104,49 @@ func (p Policy) ValidateTarget(t Target) error {
 	}
 }
 
+// validateLocal accepts a subpath of the host's local backup root (PADDOCK_BACKUP_LOCAL_ROOT, plan M15 decision 36). The
+// root is host configuration the server does not know, so the host step resolves the subpath below it and refuses a
+// symlink component; here only what can never be right is refused, so no portal input names another directory.
 func validateLocal(l Local) error {
-	if err := absolutePath("local.path", l.Path); err != nil {
-		return err
-	}
-	// The root would hand the backup role the whole host file system.
-	if strings.Trim(l.Path, "/") == "" {
-		return invalidTarget("local.path", "must not be the root directory")
+	if err := LocalSubpath(l.Path); err != nil {
+		return invalidTarget("local.path", err.Error())
 	}
 	return nil
 }
+
+// LocalSubpath checks a local target's path: a relative subpath of at most 256 bytes whose elements are neither empty,
+// '.' nor '..'. It is shared with the host step that joins the path to the local root.
+func LocalSubpath(p string) error {
+	if p == "" || strings.HasPrefix(p, "/") || len(p) > 256 || hasControl(p) || strings.Contains(p, "\\") {
+		return errLocalSubpath
+	}
+	for el := range strings.SplitSeq(p, "/") {
+		if el == "" || el == "." || el == ".." {
+			return errLocalSubpath
+		}
+	}
+	return nil
+}
+
+// DefaultLocalRoot is the base directory of local targets when PADDOCK_BACKUP_LOCAL_ROOT is not set (plan M15
+// decision 36).
+const DefaultLocalRoot = "/srv/paddock-backup"
+
+// ErrLocalRoot marks a configured local root that cannot confine local targets.
+var ErrLocalRoot = errors.New("PADDOCK_BACKUP_LOCAL_ROOT must be a clean absolute path of at least two elements")
+
+// LocalRoot checks the configured base directory of local targets. It is shared by the host step and ./paddock check,
+// so both refuse the same roots: a relative or unclean path, "/" (every host directory would be a subpath) and a
+// first-level directory (./paddock check reads the root through a read-only mount of its parent, which "/" cannot be).
+func LocalRoot(root string) error {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root || filepath.Dir(root) == "/" {
+		return ErrLocalRoot
+	}
+	return nil
+}
+
+var errLocalSubpath = errors.New("must be a relative subpath of the local backup root without '..', '.' or empty " +
+	"elements and with at most 256 bytes")
 
 func validateSMB(s SMB) error {
 	if err := host("smb.host", s.Host); err != nil {
@@ -130,11 +164,23 @@ func validateSMB(s SMB) error {
 	if err := text("smb.password", s.Password, 1, 256); err != nil {
 		return err
 	}
+	if !SMBPasswordPassable(s.Password) {
+		return invalidTarget("smb.password", "must not contain a comma or whitespace, which cannot be passed to the "+
+			"share's mount; choose another password")
+	}
 	if err := text("smb.domain", s.Domain, 0, 64); err != nil {
 		return err
 	}
 	return options("smb.options", s.Options, smbOptionAllow,
 		"vers=3.0|3.1.1, seal, noperm, cache=none|strict and actimeo=N")
+}
+
+// SMBPasswordPassable reports whether pw can travel in the comma-separated mount options of the target's Docker volume
+// (ADR 0046 amendment 2026-11-06): Docker splits them on every comma and takes a segment that names a mount flag as a
+// flag of the mount, and Compose folds a long value at a space onto a continuation line, which no line-based redaction
+// of its output catches (PDK-733 review 3).
+func SMBPasswordPassable(pw string) bool {
+	return !strings.ContainsFunc(pw, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
 }
 
 func validateNFS(n NFS) error {

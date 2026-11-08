@@ -103,7 +103,7 @@ func TestBackupTargetEndpoints(t *testing.T) {
 	}
 
 	for _, body := range []map[string]any{
-		{"name": "local", "type": "local", "enabled": true, "local": map[string]any{"path": "/srv/backup"}},
+		{"name": "local", "type": "local", "enabled": true, "local": map[string]any{"path": "nas/backup"}},
 		{"name": "nfs", "type": "nfs", "enabled": true, "nfs": map[string]any{"host": "nas.example.org", "export": "/export/backup"}},
 		{"name": "smb", "type": "smb", "enabled": true, "smb": map[string]any{"host": "nas.example.org", "share": "backup$",
 			"username": "svc", "password": apiSMBPass}},

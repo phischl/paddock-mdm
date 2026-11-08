@@ -141,12 +141,16 @@ func (a *Agent) finishDiagnostics(d diagnosticsDone) {
 // command status and result with the facts of the bundle.
 func (a *Agent) collectStatus(ctx context.Context, job diagnosticsJob) (string, map[string]any) {
 	summary, body := diagnostics.Notice(desktop.Language(a.d.Sys), job.reason)
-	notified, err := desktop.Notify(ctx, a.d.Sys, summary, body)
+	note, err := desktop.Notify(ctx, a.d.Sys, summary, body)
+	notified := note.Reached
 	switch {
 	case err != nil:
 		slog.WarnContext(ctx, "the users were not notified of the diagnostics collection", "command_id", job.commandID, "error", err)
-	case notified == 0:
+	case note.Sessions == 0:
 		slog.InfoContext(ctx, "no active graphical session to notify of the diagnostics collection", "command_id", job.commandID)
+	case notified == 0:
+		slog.WarnContext(ctx, "no graphical session was notified of the diagnostics collection", "command_id", job.commandID,
+			"sessions", note.Sessions)
 	}
 	res, err := a.collectAndUpload(ctx, job)
 	res.NotifiedSessions = notified

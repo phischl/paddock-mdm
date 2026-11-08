@@ -137,10 +137,12 @@ services:
       - postgres-data:/var/lib/postgresql
     networks: [cp]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d paddock"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d paddock"]
       interval: 5s
       timeout: 5s
       retries: 20
+      # initdb counts against the TCP probe, which a socket probe skipped (PDK-893).
+      start_period: 120s
 
   # Creates the roles a release adds and sets every password again from the secrets, on every up (plan M16 decision 8):
   # the initdb hook runs only on a new cluster. The superuser password is mounted here and nowhere else a migration
@@ -193,8 +195,12 @@ services:
       - source: rabbitmq_definitions
         target: /etc/rabbitmq/definitions.json
     networks: [cp]
+    # One CLI call (check_local_alarms fails on a node whose app is not running, as check_running did) in a CLI VM with
+    # one scheduler: each rabbitmq-diagnostics starts an Erlang VM with a scheduler per host core, and the two calls
+    # every 10 s cost about 0.7 to 1 core on a 22-core host (PDK-884; about 0.09 cores now). The interval stays, so
+    # depends_on sees a healthy broker as early as before.
     healthcheck:
-      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_local_alarms"]
+      test: ["CMD-SHELL", "RABBITMQ_CTL_ERL_ARGS='+S 1:1 +SDcpu 1:1 +SDio 1 +A 1 +sbwt none +sbwtdcpu none +sbwtdio none' rabbitmq-diagnostics -q check_local_alarms"]
       interval: 10s
       timeout: 10s
       retries: 20
@@ -273,10 +279,12 @@ services:
       - authentik-postgres-data:/var/lib/postgresql
     networks: [cp]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U authentik -d authentik"]
       interval: 5s
       timeout: 5s
       retries: 20
+      # initdb counts against the TCP probe, which a socket probe skipped (PDK-893).
+      start_period: 120s
 
   authentik-server: &authentik
     logging: *paddock-logging

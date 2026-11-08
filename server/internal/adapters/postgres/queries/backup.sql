@@ -69,6 +69,12 @@ UPDATE backup_target SET deleted_at = now(), enabled = false, updated_at = now()
 -- name: DeleteBackupTarget :exec
 DELETE FROM backup_target WHERE id = @id;
 
+-- The host removed the volume of a deleted target (./paddock backup-target apply); an open restore plan that reads
+-- from it keeps the row, so its source never turns into NULL under it.
+-- name: PurgeDeletedBackupTarget :execrows
+DELETE FROM backup_target t WHERE t.id = @id AND t.deleted_at IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM backup_restore_plan p WHERE p.source_target_id = t.id AND p.state IN ('approved', 'running'));
+
 -- name: RequestBackupTargetTest :exec
 UPDATE backup_target SET test_requested_at = now() WHERE id = @id;
 
@@ -132,6 +138,10 @@ SELECT count(*) FROM (
          OR targets @> jsonb_build_array(jsonb_build_object('target_id', sqlc.narg(target_id)::text)))
   LIMIT @count_limit
 ) matching;
+
+-- `paddock-server backup now --wait` follows its runs.
+-- name: GetBackupRun :one
+SELECT * FROM backup_run WHERE id = @id;
 
 -- name: LatestBackupRuns :many
 SELECT DISTINCT ON (kind) * FROM backup_run

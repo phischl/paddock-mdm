@@ -68,6 +68,10 @@ ENTRYPOINT ["/paddock-server"]
 FROM ${RUNTIME_IMAGE}
 COPY --from=build /out/paddock-server /paddock-server
 COPY --from=build --chown=nonroot:nonroot /out/export-tmp /var/lib/paddock/export-tmp
+# Mount points of the backup role (plan M15 decision 15, uid 999 like pgBackRest): Docker copies their owner into the
+# empty named volumes mounted there.
+COPY --from=build --chown=999:999 /out/export-tmp /backup-repo
+COPY --from=build --chown=999:999 /out/export-tmp /backup-targets
 USER nonroot:nonroot
 EXPOSE 8080 9090
 ENTRYPOINT ["/paddock-server"]

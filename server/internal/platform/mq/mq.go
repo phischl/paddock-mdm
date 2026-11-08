@@ -348,6 +348,28 @@ func Provision(ctx context.Context, cfg Config, o ProvisionOptions) error {
 	return nil
 }
 
+// ProvisionRetry calls Provision up to attempts times, pause apart, and returns the last error. A broker that has just
+// started, or one starved of CPU, can refuse a quorum queue with cluster_not_formed when its Raft group elects no
+// leader in time; the declaration is idempotent, so the next attempt completes the topology (PDK-871).
+func ProvisionRetry(ctx context.Context, cfg Config, o ProvisionOptions, attempts int, pause time.Duration) error {
+	var err error
+	for attempt := range attempts {
+		if err = Provision(ctx, cfg, o); err == nil {
+			return nil
+		}
+		if attempt == attempts-1 {
+			break
+		}
+		slog.WarnContext(ctx, "provision rabbitmq failed; retrying", "error", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pause):
+		}
+	}
+	return err
+}
+
 func topology(o ProvisionOptions) []queueSpec {
 	qs := []queueSpec{{
 		name: QueueAudit, exchange: ExchangeAudit, keys: []string{AuditBindingKey},

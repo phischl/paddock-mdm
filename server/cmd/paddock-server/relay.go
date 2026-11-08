@@ -61,19 +61,7 @@ func provisionRabbitMQ(ctx context.Context, l *config.Loader) error {
 		return err
 	}
 	cfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
-	var err error
-	for attempt := 0; attempt < 30; attempt++ {
-		if err = mq.Provision(ctx, cfg, mq.ProvisionOptions{
-			AuditQueueMaxBytes: int64(maxBytes), IngestQueueMaxBytes: int64(ingestMaxBytes),
-		}); err == nil {
-			return nil
-		}
-		slog.WarnContext(ctx, "provision rabbitmq failed; retrying", "error", err)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
-	return err
+	return mq.ProvisionRetry(ctx, cfg, mq.ProvisionOptions{
+		AuditQueueMaxBytes: int64(maxBytes), IngestQueueMaxBytes: int64(ingestMaxBytes),
+	}, 30, 2*time.Second)
 }

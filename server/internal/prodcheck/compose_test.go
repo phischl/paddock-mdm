@@ -3,6 +3,7 @@ package prodcheck_test
 import (
 	"bytes"
 	"context"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,6 +115,10 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 			[]string{"prod.env.example"}},
 		"lab with automatic unseal and backups": {append(append(prodFiles(t, "lab"), libFiles(t, "AUTO_UNSEAL_FILES")...),
 			libFiles(t, "LAB_BACKUP_FILES")...), []string{"lab.env.example"}},
+		"control plane upgraded with a legacy key file": {append(prodFiles(t, "controlplane"), libFiles(t, "BACKUP_LEGACY_KEY_FILES")...),
+			[]string{"prod.env.example"}},
+		"lab with backups upgraded with a legacy key file": {append(append(prodFiles(t, "lab"), libFiles(t, "LAB_BACKUP_FILES")...),
+			libFiles(t, "BACKUP_LEGACY_KEY_FILES")...), []string{"lab.env.example"}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -123,16 +128,81 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 			}
 		})
 	}
-	t.Run("backup secrets reach the production worker", func(t *testing.T) {
+	// Plan M15 decisions 15 and 18: the backup secrets moved from the worker to the backup role.
+	t.Run("backup secrets reach the backup role, not the worker", func(t *testing.T) {
 		cfg := renderConfig(t, prodFiles(t, "controlplane"), "prod.env.example")
-		mounted := map[string]bool{}
-		for _, s := range cfg.Services["paddock-worker"].Secrets {
-			mounted[s.Source] = true
+		mounted := func(service string) map[string]bool {
+			m := map[string]bool{}
+			for _, s := range cfg.Services[service].Secrets {
+				m[s.Source] = true
+			}
+			return m
 		}
-		for _, want := range []string{"backup_worker_access_key", "backup_worker_secret_key", "backup_encryption_key",
-			"approle_backup_role_id", "approle_backup_secret_id", "internal_ca_bundle", "db_paddock_worker_url"} {
-			if !mounted[want] {
-				t.Errorf("paddock-worker does not mount %s", want)
+		backup, worker := mounted("paddock-backup"), mounted("paddock-worker")
+		for _, want := range []string{"db_paddock_backup_url", "db_paddock_platform_url", "approle_backup_role_id",
+			"approle_backup_secret_id", "rustfs_escrow_backup_access_key", "rustfs_escrow_backup_secret_key",
+			"internal_ca_bundle"} {
+			if !backup[want] {
+				t.Errorf("paddock-backup does not mount %s", want)
+			}
+		}
+		for name := range worker {
+			if strings.Contains(name, "backup") {
+				t.Errorf("paddock-worker mounts %s", name)
+			}
+		}
+		for _, name := range []string{"fleet-backup-upload", "backup-s3-tls"} {
+			if _, ok := cfg.Services[name]; ok {
+				t.Errorf("service %s is still configured", name)
+			}
+		}
+		for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{}) {
+			if strings.HasPrefix(r.Item, "backup:") && !r.OK {
+				t.Errorf("%s:\n%s", r.Item, r.Detail)
+			}
+		}
+		// decisions-alpha9 item 44: the restore's escrow step alone reaches the audit index with the reader credential.
+		restore := mounted("backup-restore-escrow")
+		for _, want := range []string{"db_paddock_audit_reader_url", "rustfs_escrow_backup_access_key",
+			"rustfs_escrow_backup_secret_key", "rustfs_bundles_gateway_access_key", "rustfs_bundles_gateway_secret_key",
+			"internal_ca_bundle"} {
+			if !restore[want] {
+				t.Errorf("backup-restore-escrow does not mount %s", want)
+			}
+		}
+		if restore["approle_backup_secret_id"] || restore["db_paddock_backup_url"] || backup["db_paddock_audit_reader_url"] {
+			t.Error("the AppRole or the backup database credential reaches the escrow step, or the audit reader the backup role")
+		}
+		networks := slices.Sorted(maps.Keys(cfg.Services["backup-restore-escrow"].Networks))
+		if !slices.Equal(networks, []string{"audit-index", "cp"}) {
+			t.Errorf("backup-restore-escrow networks %v, want [audit-index cp]", networks)
+		}
+		if _, ok := cfg.Services["paddock-backup"].Networks["audit-index"]; ok {
+			t.Error("paddock-backup joins audit-index")
+		}
+	})
+	// decisions-alpha9 item 63: a fresh control plane neither imports nor mounts a legacy key; the overlay ./paddock
+	// adds while the host file exists mounts it into the api alone, and the backup items still pass.
+	t.Run("legacy key import only with the overlay", func(t *testing.T) {
+		fresh := renderConfig(t, prodFiles(t, "controlplane"), "prod.env.example")
+		if _, ok := fresh.Secrets["backup_encryption_key"]; ok {
+			t.Error("a fresh control plane defines the secret backup_encryption_key")
+		}
+		if v := fresh.Services["paddock-api"].Environment["PADDOCK_BACKUP_LEGACY_KEY_FILE"]; v != nil {
+			t.Errorf("a fresh control plane sets PADDOCK_BACKUP_LEGACY_KEY_FILE=%s", *v)
+		}
+		upgraded := renderConfig(t, append(prodFiles(t, "controlplane"), libFiles(t, "BACKUP_LEGACY_KEY_FILES")...), "prod.env.example")
+		for name, s := range upgraded.Services {
+			if mounts := slices.ContainsFunc(s.Secrets, func(m prodcheck.ServiceSecret) bool { return m.Source == "backup_encryption_key" }); mounts != (name == "paddock-api") {
+				t.Errorf("%s mounts backup_encryption_key: %v", name, mounts)
+			}
+		}
+		if v := upgraded.Services["paddock-api"].Environment["PADDOCK_BACKUP_LEGACY_KEY_FILE"]; v == nil || *v != "/run/secrets/backup_encryption_key" {
+			t.Errorf("the upgraded api's PADDOCK_BACKUP_LEGACY_KEY_FILE is %v", v)
+		}
+		for _, r := range prodcheck.Run(context.Background(), upgraded, prodcheck.Options{}) {
+			if strings.HasPrefix(r.Item, "backup:") && !r.OK {
+				t.Errorf("%s:\n%s", r.Item, r.Detail)
 			}
 		}
 	})

@@ -123,6 +123,24 @@ WHERE r.id = a.request_id AND a.stepup_id_token IS NOT NULL AND r.finished_at < 
 SELECT EXISTS (SELECT 1 FROM revocation_request
                WHERE device_id = @device_id AND action = 'destroy' AND status IN ('issued','delivered','confirmed','expired'));
 
+-- name: DeviceDestroyIssued :one
+-- Whether a LUKS escrow upload received at received_at falls under a Destroy of the device (PDK-794 review round 2):
+-- any issued Destroy that had not ended by then, whatever its status now. The issuer deleted the device's escrows at
+-- issuance, so an upload received before the end but processed later would otherwise bring the shredded key back.
+-- The end is expires_at while the Destroy is open, else finished_at (expires_at for rows without one); an upload
+-- received before issuance is covered too, because it may carry the same key.
+SELECT EXISTS (SELECT 1 FROM revocation_request
+               WHERE device_id = @device_id AND action = 'destroy' AND issued_at IS NOT NULL
+                 AND CASE WHEN status IN ('issued','delivered') THEN expires_at
+                          ELSE coalesce(finished_at, expires_at) END > @received_at::timestamptz);
+
+-- name: LockDeviceEscrowDestroy :exec
+-- Serializes a LUKS escrow store of the worker with the crypto-shredding of a Destroy (PDK-794 review round 1): under
+-- READ COMMITTED a worker insert could otherwise commit between the issuer's DELETE and its commit and survive the
+-- Destroy. Both take this lock before they check or change the device's LUKS escrows; released at the end of the
+-- transaction.
+SELECT pg_advisory_xact_lock(hashtextextended('escrow_destroy:' || CAST(@device_id::uuid AS text), 0));
+
 -- name: DeleteDeviceLUKSEscrows :many
 -- Crypto-shredding of a Destroy (plan M4c decision 9): every recovery key and header generation of the device.
 DELETE FROM escrow_secret WHERE device_id = @device_id AND kind IN ('luks_recovery_key','luks_header')

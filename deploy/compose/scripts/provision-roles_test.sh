@@ -102,6 +102,16 @@ secret SUPER "pw-super-1"
 run POSTGRES_DB=paddock PGHOST=postgres POSTGRES_PASSWORD_FILE="$work/secrets/SUPER" "${cp_env[@]}"
 check "service mode: the superuser password goes through PGPASSWORD only" "grep -q 'PGPASSWORD=pw-super-1' '$work/env' && ! grep -q 'pw-super-1' '$work/args' '$work/out'"
 
+# The one-shot provision services connect over TCP once their database is healthy. The image's initdb runs a temporary
+# server that answers on the socket only, so a socket probe can report healthy before the server listens on TCP, and
+# the provision fails with "connection refused" (gate BS3 on a loaded host; decisions-alpha9 item 89). Every
+# PostgreSQL healthcheck probes TCP.
+for f in "$here/../compose.yaml" "$here/../compose.audit.yaml"; do
+  probes="$(grep -E 'pg_isready' "$f")"
+  check "$(basename "$f"): every pg_isready healthcheck probes TCP" \
+    "[[ -n '$probes' ]] && ! grep -v -- '-h 127.0.0.1' <<<'$probes' | grep -q ."
+done
+
 if ((failures > 0)); then
   echo "$failures check(s) failed"
   exit 1

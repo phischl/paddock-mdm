@@ -163,6 +163,32 @@ func (q *Queries) DeleteBackupTarget(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const getBackupRun = `-- name: GetBackupRun :one
+SELECT id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at, mirrored_at FROM backup_run WHERE id = $1
+`
+
+// `paddock-server backup now --wait` follows its runs.
+func (q *Queries) GetBackupRun(ctx context.Context, id uuid.UUID) (BackupRun, error) {
+	row := q.db.QueryRow(ctx, getBackupRun, id)
+	var i BackupRun
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Label,
+		&i.State,
+		&i.Outcome,
+		&i.RequestedBy,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.Bytes,
+		&i.ErrorClass,
+		&i.Targets,
+		&i.CreatedAt,
+		&i.MirroredAt,
+	)
+	return i, err
+}
+
 const getBackupSchedule = `-- name: GetBackupSchedule :one
 SELECT singleton, full_interval_hours, openbao_interval_hours, fleet_interval_hours, escrow_interval_hours, retention_full, openbao_keep_days, fleet_keep_days, updated_by, updated_at FROM backup_schedule WHERE singleton
 `
@@ -235,7 +261,7 @@ func (q *Queries) GetBackupTarget(ctx context.Context, id uuid.UUID) (GetBackupT
 
 const insertBackupRun = `-- name: InsertBackupRun :one
 INSERT INTO backup_run (id, kind, label, state, requested_by) VALUES ($1, $2, $3, 'requested', $4)
-RETURNING id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at
+RETURNING id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at, mirrored_at
 `
 
 type InsertBackupRunParams struct {
@@ -266,6 +292,7 @@ func (q *Queries) InsertBackupRun(ctx context.Context, arg InsertBackupRunParams
 		&i.ErrorClass,
 		&i.Targets,
 		&i.CreatedAt,
+		&i.MirroredAt,
 	)
 	return i, err
 }
@@ -301,7 +328,7 @@ func (q *Queries) InsertBackupTarget(ctx context.Context, arg InsertBackupTarget
 }
 
 const lastSucceededBackupRuns = `-- name: LastSucceededBackupRuns :many
-SELECT DISTINCT ON (kind) id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at FROM backup_run WHERE outcome = 'succeeded'
+SELECT DISTINCT ON (kind) id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at, mirrored_at FROM backup_run WHERE outcome = 'succeeded'
 ORDER BY kind, finished_at DESC NULLS LAST, id DESC
 `
 
@@ -327,6 +354,7 @@ func (q *Queries) LastSucceededBackupRuns(ctx context.Context) ([]BackupRun, err
 			&i.ErrorClass,
 			&i.Targets,
 			&i.CreatedAt,
+			&i.MirroredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -339,7 +367,7 @@ func (q *Queries) LastSucceededBackupRuns(ctx context.Context) ([]BackupRun, err
 }
 
 const latestBackupRuns = `-- name: LatestBackupRuns :many
-SELECT DISTINCT ON (kind) id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at FROM backup_run
+SELECT DISTINCT ON (kind) id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at, mirrored_at FROM backup_run
 ORDER BY kind, coalesce(started_at, created_at) DESC, id DESC
 `
 
@@ -365,6 +393,7 @@ func (q *Queries) LatestBackupRuns(ctx context.Context) ([]BackupRun, error) {
 			&i.ErrorClass,
 			&i.Targets,
 			&i.CreatedAt,
+			&i.MirroredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -430,7 +459,7 @@ func (q *Queries) ListBackupKeyStates(ctx context.Context) ([]ListBackupKeyState
 }
 
 const listBackupRuns = `-- name: ListBackupRuns :many
-SELECT id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at FROM backup_run
+SELECT id, kind, label, state, outcome, requested_by, started_at, finished_at, bytes, error_class, targets, created_at, mirrored_at FROM backup_run
 WHERE ($1::text IS NULL OR kind ILIKE $1::text ESCAPE '\'
        OR label ILIKE $1::text ESCAPE '\')
   AND ($2::text[] IS NULL OR kind = ANY($2::text[]))
@@ -489,6 +518,7 @@ func (q *Queries) ListBackupRuns(ctx context.Context, arg ListBackupRunsParams) 
 			&i.ErrorClass,
 			&i.Targets,
 			&i.CreatedAt,
+			&i.MirroredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -674,6 +704,21 @@ UPDATE backup_target SET deleted_at = now(), enabled = false, updated_at = now()
 func (q *Queries) MarkBackupTargetDeleted(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markBackupTargetDeleted, id)
 	return err
+}
+
+const purgeDeletedBackupTarget = `-- name: PurgeDeletedBackupTarget :execrows
+DELETE FROM backup_target t WHERE t.id = $1 AND t.deleted_at IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM backup_restore_plan p WHERE p.source_target_id = t.id AND p.state IN ('approved', 'running'))
+`
+
+// The host removed the volume of a deleted target (./paddock backup-target apply); an open restore plan that reads
+// from it keeps the row, so its source never turns into NULL under it.
+func (q *Queries) PurgeDeletedBackupTarget(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeDeletedBackupTarget, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const requestBackupTargetTest = `-- name: RequestBackupTargetTest :exec

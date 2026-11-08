@@ -247,7 +247,8 @@ func TestLegacyBackupKeyCheck(t *testing.T) {
 	f.setEnv("paddock-api", "PADDOCK_BACKUP_LEGACY_KEY_FILE", "/run/secrets/backup_encryption_key")
 	_, out = run(t, f.cfg, prodcheck.Options{})
 	status, detail := itemBlock(t, out, "backup: legacy key import")
-	if status != "WARN" || !strings.Contains(detail, "paddock-api: PADDOCK_BACKUP_LEGACY_KEY_FILE is set") {
+	if status != "WARN" || !strings.Contains(detail, "paddock-api: PADDOCK_BACKUP_LEGACY_KEY_FILE is set") ||
+		!strings.Contains(detail, "move .secrets/backup_encryption_key off the host and run ./paddock up") {
 		t.Fatalf("legacy key file: %s %q\n%s", status, detail, out)
 	}
 }

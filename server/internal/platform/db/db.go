@@ -345,6 +345,45 @@ func (p *UnsealerPool) InUnsealer(ctx context.Context, fn func(ctx context.Conte
 	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }
 
+// BackupPool is the pool of role paddock_backup (plan M15 decision 15): it reads the backup key, targets and schedule,
+// writes runs, target status and the targets' host and test columns, and records audit actions in the platform
+// pseudo-organization only (migration 00100).
+type BackupPool struct{ pool }
+
+// NewBackupPool opens the paddock_backup pool.
+func NewBackupPool(ctx context.Context, dsn string, o Options) (*BackupPool, error) {
+	p, err := newPool(ctx, dsn, o)
+	if err != nil {
+		return nil, err
+	}
+	return &BackupPool{pool{p}}, nil
+}
+
+// InBackup runs fn in a transaction of role paddock_backup scoped to the platform pseudo-organization
+// (audit.PlatformOrganizationID): the role's audit policies accept no other organization, and without the setting the
+// policy fails closed.
+func (p *BackupPool) InBackup(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	return inTx(ctx, p.p,
+		func(tx pgx.Tx) error { return setOrg(ctx, tx, audit.PlatformOrganizationID) },
+		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// SystemIdentifier returns the PostgreSQL cluster's system identifier: it is fixed at initdb and kept by a physical
+// restore, so it identifies the installation a backup set belongs to.
+func (p *BackupPool) SystemIdentifier(ctx context.Context) (int64, error) {
+	var id int64
+	err := p.p.QueryRow(ctx, "SELECT system_identifier FROM pg_control_system()").Scan(&id)
+	return id, err
+}
+
+// BundleSeqHighWater returns the highest device.bundle_seq of every organization (0 without devices) through the
+// SECURITY DEFINER function paddock_backup_bundle_seq_high_water: the role reads no device row itself.
+func (p *BackupPool) BundleSeqHighWater(ctx context.Context) (int64, error) {
+	var v int64
+	err := p.p.QueryRow(ctx, "SELECT paddock_backup_bundle_seq_high_water()").Scan(&v)
+	return v, err
+}
+
 // Listen holds a dedicated connection with LISTEN channel and sends to notify on every notification (non-blocking).
 // It returns when ctx ends or the connection fails.
 func (p *RelayPool) Listen(ctx context.Context, channel string, notify chan<- struct{}) error {

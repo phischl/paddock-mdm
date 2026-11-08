@@ -24,6 +24,8 @@ const { t } = useI18n()
 const problemText = useProblemText()
 const form = reactive<NotificationInput>(props.restored ? { ...props.restored } : props.initial ? inputOf(props.initial) : emptyInput())
 const recipientsText = ref(form.recipients.join('\n'))
+// vue-tsc 3.3.14 mis-generates template code for a `//` inside an attribute value (vuejs/language-tools#6322).
+const urlPlaceholder = 'https://'
 const touched = ref(false)
 const editing = computed(() => props.initial !== null)
 const clientErrors = computed<NotificationErrors>(() => {
@@ -109,7 +111,7 @@ function submit(): void {
       id="notification-url"
       v-model="form.url"
       :label="t('notifications.url')"
-      :placeholder="editing ? t('notifications.urlUnchanged') : 'https://'"
+      :placeholder="editing ? t('notifications.urlUnchanged') : urlPlaceholder"
       :hint="editing && initial?.url_display ? t('notifications.urlCurrent', { url: initial.url_display }) : t('notifications.urlHint')"
       persistent-hint
       type="url"

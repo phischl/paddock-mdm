@@ -1,0 +1,3 @@
+# Fixture: one setting this release retired, one an earlier release retired (not this bundle's, so still unknown).
+0.1.0-alpha.9 PADDOCK_RETIRED_SETTING
+0.1.0-alpha.8 PADDOCK_REMOVED_SETTING

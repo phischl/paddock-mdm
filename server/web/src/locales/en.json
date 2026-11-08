@@ -446,6 +446,7 @@
       "tamper_agent_not_running": "fleetd reports that the Paddock agent does not run on {target}",
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
       "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
+      "escrow_refused_destroyed": "A disk key of {target} was not escrowed: a Destroy of the device is issued",
       "revocation_confirmed": "The device {target} confirmed that its disk keyslots are erased",
       "revocation_refused": "The device {target} refused a revocation ({reason})",
       "presumed_self_locked": "The device {target} has not reached Paddock for longer than the dead man's switch period and presumably locked itself",
@@ -509,6 +510,7 @@
     "platform": {
       "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",
       "bundle_seq_bumped": "{actor} raised the bundle sequence of {devices} devices by {by} (restore)",
+      "bundle_seq_raised": "{actor} raised the bundle sequence of {devices} devices to at least {at_least} (restore)",
       "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)",
       "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)",
       "ip_allowlist_changed": "{action, select, added {{actor} added {cidr} ({label}) to the IP allow list} updated {{actor} changed the IP allow list entry {previous_cidr} to {cidr} ({label})} other {{actor} removed {cidr} ({label}) from the IP allow list}}",
@@ -529,7 +531,15 @@
       "backup_target_deleted": "{actor} deleted the backup target {name} ({type})",
       "backup_target_tested": "{actor} requested a connection test of the backup target {name}",
       "backup_schedule_changed": "{actor} changed the backup schedule: full backup every {full_interval_hours} h, {retention_full} full backups kept",
-      "backup_run_requested": "{actor} requested a backup now"
+      "backup_run_requested": "{actor} requested a backup now",
+      "backup_completed": "The {kind} backup completed and reached {targets_ok} targets",
+      "backup_failed": "The {kind} backup failed ({error_class})",
+      "restore_planned": "Restore plan approved ({kind}, from {source})",
+      "restore_cancelled": "Restore plan cancelled",
+      "restore_started": "Restore started on the host (from {source})",
+      "restore_completed": "Restore completed on the host",
+      "restore_failed": "Restore failed on the host ({detail})",
+      "restore_abandoned": "Running restore plan abandoned"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -1403,6 +1413,8 @@
     "downloads": "Downloads",
     "expiresAt": "Deleted on",
     "failedReason": "Failed: {reason}",
+    "notNotified": "User not notified",
+    "notNotifiedHint": "No graphical session on the device showed the notice: nobody was logged in, or the notice could not be delivered. The user learns of the bundle from the organization's transparency notice only.",
     "download": "Download",
     "downloadLabel": "Download the diagnostics bundle of {hostname}",
     "states": {
@@ -1621,7 +1633,8 @@
       "targets": "Targets",
       "key": "Key",
       "schedule": "Schedule",
-      "history": "History"
+      "history": "History",
+      "restore": "Restore"
     },
     "kinds": {
       "postgres": "Databases",
@@ -1684,14 +1697,15 @@
       "nameInvalid": "The name must start with a letter or digit and may use letters, digits, spaces and . _ - (up to 64 characters).",
       "nameHint": "Letters, digits, spaces and . _ -",
       "nameTaken": "A target with this name already exists.",
-      "pathInvalid": "Enter an absolute directory without \"..\".",
+      "pathInvalid": "Enter a relative subpath of the local backup root, without \"..\" and without a leading \"/\".",
       "required": "This field is required.",
       "passwordAgain": "The destination changed: enter the password again.",
+      "passwordChars": "The password must not contain a comma or a space: they cannot be passed to the share's mount. Choose another password for the share.",
       "keysAgain": "The destination or the keys changed: enter both keys again.",
       "exportInvalid": "Enter an absolute export path.",
       "endpointInvalid": "Enter an https URL.",
       "localPath": "Directory on the host",
-      "localPathHint": "An absolute directory of the control-plane host.",
+      "localPathHint": "A subpath of the local backup root of the control-plane host (PADDOCK_BACKUP_LOCAL_ROOT, default /srv/paddock-backup), for example nas/weekly.",
       "host": "Host",
       "share": "Share",
       "subPath": "Path below it (optional)",
@@ -1700,6 +1714,7 @@
       "password": "Password",
       "unchanged": "unchanged",
       "secretHint": "Stored encrypted, never shown again.",
+      "smbPasswordHint": "No comma and no spaces. Stored encrypted, never shown again.",
       "options": "Mount options (optional)",
       "smbOptionsHint": "Comma-separated: vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N.",
       "nfsOptionsHint": "Comma-separated: vers=4|4.1|4.2, hard, timeo=N, retrans=N, nconnect=N.",
@@ -1750,6 +1765,7 @@
       "size": "Size",
       "targets": "Targets",
       "targetsOk": "{ok} of {total} targets",
+      "continues": "(continues next round)",
       "empty": {
         "title": "No backup has run yet",
         "description": "Runs appear here after the first backup."
@@ -1806,6 +1822,74 @@
         "retention_full": "Full backups kept",
         "openbao_keep_days": "OpenBao snapshots kept (days)",
         "fleet_keep_days": "Fleet dumps kept (days)"
+      }
+    },
+    "restore": {
+      "planAction": "Plan a restore",
+      "planTitle": "Plan a restore",
+      "commandTitle": "Run the restore on the host",
+      "consequence": "Restoring replaces the control plane's databases with the backup. Every change after the chosen point is lost. Devices keep working and reconnect; the audit log on the audit host is not touched.",
+      "kind": "What to restore",
+      "kinds": {
+        "components": "The newest backups of the components",
+        "point_in_time": "The state at a point in time",
+        "fresh_install": "Fresh installation"
+      },
+      "source": "Restore from",
+      "sourceRepo": "The local backup repository",
+      "at": "Point in time",
+      "atHint": "The newest successful backups of the source are listed above. The time is in your time zone.",
+      "atInvalid": "Choose a point in the past.",
+      "noSuccess": "no successful backup",
+      "components": "Components",
+      "componentNames": {
+        "postgres": "Databases (Paddock and identity provider)",
+        "openbao": "OpenBao",
+        "fleet": "Fleet",
+        "escrow": "Escrow",
+        "backup-repo": "Backup repository"
+      },
+      "componentsInvalid": "Choose at least one component.",
+      "typeWord": "Type {word} to confirm",
+      "wordInvalid": "Type the word {word} exactly.",
+      "approve": "Approve restore plan",
+      "commandIntro": "The plan is approved. Run this command on the control plane host to execute it.",
+      "commandLabel": "Host command",
+      "expiresIn": "The plan expires in {hours} h {minutes} min, at",
+      "expired": "The plan has expired, it was valid until",
+      "done": "Done",
+      "created": "The restore plan was approved.",
+      "showCommand": "Show command",
+      "cancelAction": "Cancel plan",
+      "cancelTitle": "Cancel the restore plan",
+      "cancelConfirm": "The host will refuse this plan. You can approve a new one afterwards.",
+      "cancelled": "The restore plan was cancelled.",
+      "cancelLabel": "Cancel the restore plan of {time}",
+      "abandonAction": "Abandon plan",
+      "abandonTitle": "Abandon the running restore plan",
+      "abandonConfirm": "Only do this when the host never reported the end of the restore. The plan is marked as abandoned and a later report from the host is refused. The control plane may be left partly restored, so check the host first.",
+      "abandoned": "The restore plan was abandoned.",
+      "abandonLabel": "Abandon the restore plan of {time}",
+      "showLabel": "Show the host command of the plan of {time}",
+      "state": "State",
+      "states": {
+        "approved": "Approved",
+        "running": "Running",
+        "completed": "Completed",
+        "failed": "Failed",
+        "expired": "Expired",
+        "abandoned": "Abandoned"
+      },
+      "source_column": "Source",
+      "createdBy": "Approved by",
+      "pointInTime": "Point in time",
+      "components_column": "Components",
+      "newest": "Newest backups",
+      "sourceSet": "Backup set of the host",
+      "sourceTargetGone": "Deleted target",
+      "empty": {
+        "title": "No restore planned yet",
+        "description": "A restore approved here is executed on the host with the command shown afterwards."
       }
     }
   },
@@ -2993,6 +3077,24 @@
         "organization": "organization",
         "platform": "platform"
       }
+    }
+  },
+  "upgradeCard": {
+    "title": "Upgrade",
+    "version": "Release {version}",
+    "window": "Agents supported",
+    "agents": "Agents outside the window",
+    "noneOutside": "No active device runs an agent outside the window.",
+    "outside": "{count, plural, one {# active device runs an agent outside the window:} other {# active devices run an agent outside the window:}}",
+    "more": "and {count} more",
+    "backups": "Backups",
+    "loading": "Reading the upgrade report…",
+    "unknownVersion": "No upgrade report for this server version: it is not a known release.",
+    "status": {
+      "PASS": "OK",
+      "WARN": "Warning",
+      "FAIL": "Failed",
+      "INFO": "Info"
     }
   },
   "setup": {

@@ -90,12 +90,12 @@ func (d *Diagnostics) List(ctx context.Context, deviceID uuid.UUID, query Diagno
 			return notFound(err)
 		}
 		states := nilIfEmpty(query.States)
-		n, err := q.CountDeviceDiagnostics(ctx, pgstore.CountDeviceDiagnosticsParams{DeviceID: deviceID, States: states, CountLimit: countLimit})
+		n, err := q.CountDeviceDiagnostics(ctx, pgstore.CountDeviceDiagnosticsParams{DeviceID: deviceID, QPattern: query.Page.QPattern, States: states, CountLimit: countLimit})
 		if err != nil {
 			return fmt.Errorf("count diagnostics: %w", err)
 		}
 		out.Count = int(n)
-		rows, err := q.ListDeviceDiagnostics(ctx, pgstore.ListDeviceDiagnosticsParams{DeviceID: deviceID, States: states,
+		rows, err := q.ListDeviceDiagnostics(ctx, pgstore.ListDeviceDiagnosticsParams{DeviceID: deviceID, QPattern: query.Page.QPattern, States: states,
 			Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit})
 		if err != nil {
 			return fmt.Errorf("list diagnostics: %w", err)

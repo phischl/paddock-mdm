@@ -244,8 +244,13 @@ three lines.
    `## [<version>] - <today>` with the line `Schema: <text>.`, adds a new empty `## [Unreleased]` and removes the
    fragments with `git rm`. It refuses a missing `RELEASE_VERSION` or `SCHEMA`, a version that already has a section
    and a missing or malformed `changelog.d/_release.md`.
-3. Write the release summary under the new heading (upgrade order, Fleet version, the schema details), review the
-   section and commit it together with the removed fragments; then tag the commit.
+3. Move the release under development to the next one in the same commit: set `-current` in `server/gen.go` to N+1
+   (the release after the one being cut) and run `make gen`, so that `releases.gen.go` ends with N, then N+1. The
+   `upgrade` job of `ci.yml` builds its candidate with the last entry of that list as its version. If the entry
+   still named N after the tag, every pull request's candidate would equal the newest tag, and the job's
+   `upgrade-check` would fail "versions adjacent" (decisions-alpha9 item 55).
+4. Write the release summary under the new heading (upgrade order, Fleet version, the schema details), review the
+   section and commit it together with the removed fragments and the regenerated release list; then tag the commit.
 
 The images are pushed before `release-sign` runs, so a run that fails between the two leaves unsigned images under the
 release tag. This is accepted (architect decision 2026-10-08): cosign signs digests, and consumers verify the

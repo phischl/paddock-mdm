@@ -92,7 +92,7 @@ func TestUpgradeCheckReport(t *testing.T) {
 	for i := range 3 {
 		device(a, "a-current-"+string(rune('0'+i)), "active", ptr(target))
 	}
-	device(a, "a-window", "active", ptr("0.1.0-alpha.7"))
+	device(a, "a-window", "active", ptr(buildinfo.Window(target)[0]))
 	device(a, "a-dev", "active", ptr("0.0.0-dev"))
 	device(a, "a-silent", "active", nil)
 	device(a, "a-old", "active", ptr("0.0.1"))

@@ -117,7 +117,8 @@ uc_comment_of() {
 
 # uc_item_env <new dir> <old dir> <files>
 uc_item_env() {
-  local new="$1" old="$2" files="$3" example env="$2/.env" f key compose_paths missing=() unknown=() known
+  local new="$1" old="$2" files="$3" example env="$2/.env" f key compose_paths missing=() unknown=() retired=() known
+  local newv retiredset=""
   if [[ ! -f "$env" ]]; then
     uc_add env FAIL "$old has no .env"
     return
@@ -146,15 +147,23 @@ uc_item_env() {
       sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$new/versions.env" 2>/dev/null
     } | sort -u
   )"
+  newv="$(uc_version "$new")"
+  if [[ -n "$newv" && -f "$new/RETIRED-SETTINGS" ]]; then
+    retiredset="$(awk -v v="$newv" '$1 == v && NF == 2 { print $2 }' "$new/RETIRED-SETTINGS")"
+  fi
   while read -r key; do
     [[ -n "$key" ]] || continue
-    grep -qx "$key" <<<"$known" || unknown+=("$key")
+    grep -qx "$key" <<<"$known" && continue
+    if grep -qxF "$key" <<<"$retiredset"; then retired+=("$key"); else unknown+=("$key"); fi
   done < <(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$env")
   if ((${#missing[@]} > 0)); then
     uc_add env FAIL "add to .env before the upgrade: $(printf '%s; ' "${missing[@]}" | sed 's/; $//')"
   fi
   if ((${#unknown[@]} > 0)); then
     uc_add env WARN "settings this bundle does not know (remove them or check the release notes): ${unknown[*]}"
+  fi
+  if ((${#retired[@]} > 0)); then
+    uc_add env INFO "retired by this release; kept for the rollback: ${retired[*]}"
   fi
   if ((${#missing[@]} == 0 && ${#unknown[@]} == 0)); then
     uc_add env PASS "every required setting of $(basename "$example") is in the old .env"
@@ -285,10 +294,11 @@ uc_item_server() {
   fi
   # alpha.8 predates the command, so the new image runs it against the old stack's database; the old ./paddock exports
   # its own versions.env after the process environment, hence the override file instead of PADDOCK_IMAGE.
+  # The entrypoint is absolute: the binary lies in / of a distroless image, which is not on its PATH.
   if [[ "$oldv" == 0.1.0-alpha.8 ]]; then
     override="$(mktemp)"
     printf 'services:\n  paddock-worker:\n    image: %s\n' "$(uc_versions_ref "$new" PADDOCK_IMAGE)" >"$override"
-    out="$("$old/paddock" compose -f "$override" run --rm --no-deps -T --entrypoint paddock-server paddock-worker \
+    out="$("$old/paddock" compose -f "$override" run --rm --no-deps -T --entrypoint /paddock-server paddock-worker \
       admin upgrade-check --target-version "$newv" 2>&1 </dev/null)" || status=$?
     rm -f "$override"
   else

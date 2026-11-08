@@ -62,3 +62,26 @@ func TestListPage(t *testing.T) {
 		t.Fatalf("segments %+v, %v", page, err)
 	}
 }
+
+// TestListInfo lists size and LastModified per object, which the backup role records as an escrowed header's own time
+// (plan M15, A2 note 2026-11-05 c).
+func TestListInfo(t *testing.T) {
+	ctx := context.Background()
+	r := s3test.StartPlain(t, "paddock-escrow")
+	store := objectstore.New(r.Endpoint, s3test.RootUser, s3test.RootPassword, r.Bucket)
+	before := time.Now().Add(-time.Minute)
+	for _, key := range []string{"org/o1/devices/d1/luks-header/1.bin", "other/x"} {
+		if err := store.Put(ctx, key, "application/octet-stream", "no-store", []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.ListInfo(ctx, "org/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, ok := got["org/o1/devices/d1/luks-header/1.bin"]
+	if len(got) != 1 || !ok || o.Size != int64(len("org/o1/devices/d1/luks-header/1.bin")) || o.Modified.Before(before) ||
+		o.Modified.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("listing %+v", got)
+	}
+}

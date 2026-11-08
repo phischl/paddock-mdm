@@ -1,5 +1,7 @@
 # Secrets generated for local development
 deploy/compose/.secrets/
+deploy/compose/restore-staging/
+deploy/compose/bundle-seq/
 deploy/compose/.env
 
 # Build output
@@ -19,3 +21,7 @@ server/web/test-results/
 server/web/playwright-report/
 # A link to the VM secrets of another worktree (a directory pattern does not match a symlink).
 test/vms/virtualbox/.secrets
+
+# Rendered by ./paddock backup-target apply on a host (plan M15 decision 20): holds share passwords.
+deploy/compose/compose.backup-targets.yaml
+deploy/compose/.compose.backup-targets.*
