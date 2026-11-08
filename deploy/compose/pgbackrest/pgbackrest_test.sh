@@ -244,7 +244,8 @@ docker run --rm -i -u 0 --entrypoint sh -v "$id-bin:/bin-vol" "$image" \
   -c 'cat >/bin-vol/pgbackrest && chmod 755 /bin-vol/pgbackrest && chown 999:999 /bin-vol' <<'WRAPPER'
 #!/bin/sh
 case " $* " in
-  *" restore "*) echo "$PGBACKREST_REPO1_PATH $*" >/opt/test-bin/restore-args ;;
+  *" restore "*) echo "$PGBACKREST_REPO1_PATH $*" >/opt/test-bin/restore-args
+    echo "P00   INFO: repo1: restore backup set 20261104-100000F, recovery will start at 2026-11-04 10:00:00" ;;
   *" info "*) echo '[{"backup":[{"label":"20261104-100000F","archive":{"start":"000000010000000000000003"}}],"archive":[{"max":"000000020000000000000001"}]}]' ;;
   *" archive-get "*) exit 1 ;;
 esac

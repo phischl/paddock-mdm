@@ -350,6 +350,11 @@ case "${1:-serve}" in
     # (gate BS4; decisions-alpha9 item 89). Without pgBackRest's line the newest backup is the default it restores.
     label="$({ grep -oE 'restore backup set [0-9]{8}-[0-9]{6}F(_[0-9]{8}-[0-9]{6}[DI])?' <<<"$out" || true; } |
       tail -1 | awk '{print $4}')"
+    if [[ -z "$label" && -n "$at" ]]; then
+      # The newest backup may lie after the point: staging from it would end recovery early.
+      echo "pgbackrest: cannot tell which backup pgBackRest restored for --at; the restore is incomplete" >&2
+      exit 1
+    fi
     [[ -n "$label" ]] || label="$(pgb info --output=json | grep -o '"label":"[^"]*"' | tail -1 | cut -d'"' -f4)"
     start="$(pgb info --set="$label" --output=json | grep -o '"start":"[0-9A-F]\{24\}"' | head -1 | cut -d'"' -f4)"
     [[ -n "$start" ]] || { echo "pgbackrest: cannot read the WAL start of backup $label" >&2; exit 1; }
