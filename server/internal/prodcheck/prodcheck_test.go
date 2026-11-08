@@ -1365,7 +1365,7 @@ func TestEdgeSubnetFree(t *testing.T) {
 	if r := itemResult(t, f.cfg, prodcheck.Options{DockerNetworks: free}, item); !r.OK || r.Warn {
 		t.Fatalf("free subnet: %+v, want PASS", r)
 	}
-	taken := append(free, prodcheck.DockerNetwork{Name: "paddock_cp", Subnets: []string{"172.28.0.0/16"}},
+	taken := append(append([]prodcheck.DockerNetwork{}, free...), prodcheck.DockerNetwork{Name: "paddock_cp", Subnets: []string{"172.28.0.0/16"}},
 		prodcheck.DockerNetwork{Name: "vpn", Subnets: []string{"fd00::/64", "172.28.0.64/26"}})
 	r := itemResult(t, f.cfg, prodcheck.Options{DockerNetworks: taken}, item)
 	if !r.OK || !r.Warn {
