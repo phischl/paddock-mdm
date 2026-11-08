@@ -166,14 +166,19 @@ var errPlanted = errors.New("backup target: unexpected file type")
 
 // openMount opens a target's volume as an os.Root. The volume's directory is the role's own mount point; everything
 // below it belongs to whoever can write to the share.
+// mountErr is the error of a mount point that could not be read: not mounted while it is absent, the error itself
+// (class io) when the share's server is gone, since that share is mounted but unreachable (decisions-alpha9 item 89).
+func mountErr(err error) error {
+	if absentOr(err) == HostUnreachable {
+		return err
+	}
+	return fmt.Errorf("%w: %w", errNotMounted, err)
+}
+
 func openMount(mount string) (*os.Root, error) {
 	info, err := os.Lstat(mount) //nolint:gosec // the role's own mount point below the configured targets directory
 	if err != nil {
-		if absentOr(err) == HostUnreachable {
-			// A share whose server is gone is mounted but unreachable: its mirror fails as io, not not_mounted.
-			return nil, err
-		}
-		return nil, fmt.Errorf("%w: %w", errNotMounted, err)
+		return nil, mountErr(err)
 	}
 	if !info.IsDir() {
 		return nil, fmt.Errorf("%w: %s", errPlanted, mount)

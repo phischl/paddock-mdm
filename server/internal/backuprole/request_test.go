@@ -67,14 +67,18 @@ func TestShareGoneIsUnreachable(t *testing.T) {
 	}
 }
 
-// TestShareGoneMirrorIsIO: a mirror to a share whose server is gone fails as io, not as not_mounted, so its run and
-// status match the target's unreachable host state (decisions-alpha9 item 89).
+// TestShareGoneMirrorIsIO: a mount point a gone share's server cannot answer is not "not mounted": its mirror fails as
+// io, matching the target's unreachable host state; an absent mount point stays not_mounted (decisions-alpha9 item 89).
 func TestShareGoneMirrorIsIO(t *testing.T) {
 	gone := &fs.PathError{Op: "lstat", Path: "/backup-targets/x", Err: syscall.EHOSTDOWN}
-	if !errors.Is(gone, syscall.EHOSTDOWN) || ErrorClass(fmt.Errorf("open: %w", gone)) != ClassIO {
-		t.Errorf("share gone: %s, want %s", ErrorClass(gone), ClassIO)
+	if got := ErrorClass(fmt.Errorf("open: %w", mountErr(gone))); got != ClassIO {
+		t.Errorf("share gone: %s, want %s", got, ClassIO)
 	}
-	if _, err := openMount(filepath.Join(t.TempDir(), "absent")); ErrorClass(err) != ClassNotMounted {
-		t.Errorf("absent mount: %s, want %s", ErrorClass(err), ClassNotMounted)
+	absent := &fs.PathError{Op: "lstat", Path: "/backup-targets/x", Err: syscall.ENOENT}
+	if got := ErrorClass(mountErr(absent)); got != ClassNotMounted {
+		t.Errorf("absent mount: %s, want %s", got, ClassNotMounted)
+	}
+	if _, err := openMount(filepath.Join(t.TempDir(), "absent")); !errors.Is(err, errNotMounted) {
+		t.Errorf("absent mount point: %v, want not mounted", err)
 	}
 }
