@@ -29,6 +29,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/migrate"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/revocationsign"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
@@ -107,6 +108,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		denialWindow = l.Duration("PADDOCK_TEST_IP_ALLOWLIST_WINDOW", ipDenialWindow)
 	}
 	allowlistBypass := l.Bool("PADDOCK_IP_ALLOWLIST_BYPASS", false)
+	rateLimits := config.LoadRateLimits(l, common)
 	// Notification destinations (plan M9 decisions 9 and 28): e-mail only with an SMTP relay; webhook URLs on private
 	// addresses only on the development stack, whose acceptance sinks run on the host.
 	smtpEnabled := l.Bool("PADDOCK_SMTP_ENABLED", false)
@@ -287,6 +289,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		ExposeStepUp:     common.Development(),
 		LoginMFAOptional: loginMFAOptional,
 		TrustedProxies:   common.TrustedProxies,
+		RateLimiter:      ratelimit.New(ratelimit.NewValkeyStore(vk), nil, rateLimits.Limits),
+		RateLimitExempt:  rateLimits.Exempt,
 	})
 	srv := newHTTPServer(httpAddr, handler)
 	slog.InfoContext(ctx, "api starting", "addr", httpAddr, "public_url", publicURL)

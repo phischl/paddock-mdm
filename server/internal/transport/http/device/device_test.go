@@ -40,6 +40,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/valkeytest"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/device"
 )
@@ -125,7 +126,7 @@ func newEnvTrusting(t *testing.T, perKey, perIP int, trusted []netip.Prefix, opt
 		now: time.Now().Truncate(time.Second), org: uuid.New()}
 	deps := device.Deps{
 		Cache: e.cache, Publisher: e.pub, Presigner: fakePresigner{}, Artifacts: fakePresigner{}, Escrow: fakePresigner{},
-		PerKeyLimit: perKey, PerIPLimit: perIP,
+		RateLimits: ratelimit.NewValkeyStore(vc), PerKeyLimit: perKey, PerIPLimit: perIP,
 		Now: func() time.Time { return e.now }, CheckinDelay: func() int { return 300 }, TrustedProxies: trusted,
 	}
 	for _, opt := range opts {
@@ -1175,6 +1176,25 @@ func TestRateLimitClientAddress(t *testing.T) {
 	}
 	for _, h := range []string{"X-Paddock-Client-IP", "X-Forwarded-For", "CF-Connecting-IP"} {
 		untrusted.expectProblem(checkin(untrusted, map[string]string{h: "198.51.100.9"}), http.StatusTooManyRequests, "rate_limited")
+	}
+}
+
+// TestRateLimitIPv6Prefix: IPv6 clients are keyed by their /64 (plan M12h decision 7): a second address of the same
+// /64 shares the budget, an address of another /64 does not.
+func TestRateLimitIPv6Prefix(t *testing.T) {
+	e := newEnvTrusting(t, 10, 1, []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
+	checkin := func(ip string) result {
+		c := newClient(t)
+		id := e.enrolled(c, "active")
+		return e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0),
+			mutate: func(r *http.Request, _ *[]byte) { r.Header.Set("X-Paddock-Client-IP", ip) }})
+	}
+	if r := checkin("2001:db8:1:2::1"); r.status != http.StatusOK {
+		t.Fatalf("first: %d %s", r.status, r.body)
+	}
+	e.expectProblem(checkin("2001:db8:1:2:ffff::9"), http.StatusTooManyRequests, "rate_limited")
+	if r := checkin("2001:db8:1:3::1"); r.status != http.StatusOK {
+		t.Fatalf("other /64: %d %s", r.status, r.body)
 	}
 }
 

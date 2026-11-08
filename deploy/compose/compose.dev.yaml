@@ -116,6 +116,10 @@ services:
       # Shorter denial window of the IP allow list so that gate A1 sees the summary event (plan M7a decision 20;
       # development only, refused in production).
       PADDOCK_TEST_IP_ALLOWLIST_WINDOW: ${PADDOCK_TEST_IP_ALLOWLIST_WINDOW:-20s}
+      # The acceptance gates sign in and call the API from the host far more often than an administrator: the rate
+      # limiter does not count private clients; gate TestRateLimit sends from documentation addresses through the
+      # trusted edge listener and gets the production limits (development only, refused in production).
+      PADDOCK_TEST_RATELIMIT_EXEMPT_CIDRS: ${PADDOCK_TEST_RATELIMIT_EXEMPT_CIDRS:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 fc00::/7 ::1/128}
       # Agent releases are imported from the GitHub fixture that gate TestAgentReleaseImport starts on the network cp,
       # never from GitHub (ADR 0043 decision 9); without the gate running, the check fails with
       # release_source_unavailable.

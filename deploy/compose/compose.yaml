@@ -503,6 +503,14 @@ services:
       # Break-glass of a locked-out platform (plan M7a decision 22): true ignores the application IP allow list;
       # prod-check fails while it is set.
       PADDOCK_IP_ALLOWLIST_BYPASS: ${PADDOCK_IP_ALLOWLIST_BYPASS:-false}
+      # Application rate limits per minute (ADR 0051 decision 3): /api/auth/* per client address, reads, writes and
+      # agent uploads per session or API token, the bundles host's /apt/* per address (route added with M13c); 0
+      # switches a class off, which prod-check refuses in production. Raise PADDOCK_RATELIMIT_AUTH for many administrators behind one NAT.
+      PADDOCK_RATELIMIT_AUTH: ${PADDOCK_RATELIMIT_AUTH:-20}
+      PADDOCK_RATELIMIT_ADMIN_READ: ${PADDOCK_RATELIMIT_ADMIN_READ:-600}
+      PADDOCK_RATELIMIT_ADMIN_WRITE: ${PADDOCK_RATELIMIT_ADMIN_WRITE:-120}
+      PADDOCK_RATELIMIT_PLATFORM_UPLOAD: ${PADDOCK_RATELIMIT_PLATFORM_UPLOAD:-10}
+      PADDOCK_RATELIMIT_BUNDLES_APT: ${PADDOCK_RATELIMIT_BUNDLES_APT:-60}
       # Whether paddock-notifier has an SMTP relay (plan M9 decision 27): e-mail destinations are offered only then.
       # A non-secret presence flag set in .env next to PADDOCK_SMTP_HOST; ./paddock check fails when the two disagree.
       PADDOCK_SMTP_ENABLED: ${PADDOCK_SMTP_ENABLED:-false}
@@ -653,6 +661,9 @@ services:
     environment:
       <<: *paddock-env
       PADDOCK_HTTP_ADDR: ":8081"
+      # Device requests per client address and minute; IPv6 clients are keyed by this prefix (ADR 0051 decision 3).
+      PADDOCK_DEVICE_PER_IP_LIMIT: ${PADDOCK_DEVICE_PER_IP_LIMIT:-300}
+      PADDOCK_DEVICE_PER_IP_V6_PREFIX: ${PADDOCK_DEVICE_PER_IP_V6_PREFIX:-64}
       PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
       PADDOCK_AMQP_USER: gateway
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_gateway_password

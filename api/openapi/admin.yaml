@@ -27,6 +27,11 @@ info:
       Any operation may refuse a request of an MCP session before its use case runs: 403 `mcp_disabled`,
       `mcp_tool_not_allowed` or `mcp_write_not_enabled`, or 429 `rate_limited` with `Retry-After` (120 reads and 30
       writes per account and minute); a refused audited operation records one denied event.
+    - Every operation, and every `/api/auth/*` route, may answer 429 `rate_limited` with `Retry-After` (seconds)
+      from the application rate limiter (ADR 0051 decision 3): `/api/auth/*` per client address (default 20 per
+      minute), reads per session or API token (600), writes per session or API token (120), agent artifact and
+      package uploads per session or API token (10); the limits are `PADDOCK_RATELIMIT_*`. A refusal happens before
+      the use case runs and records no audit event.
     - Every collection `GET` implements the list contract (ADR 0018): `page`, `page_size` (10, 25, 50, 100),
       `sort` (allow list, `-` prefix = descending, the primary key is appended as tie-breaker), `q`
       (case-insensitive substring search, 2–100 characters) and the documented filters; enum filters are

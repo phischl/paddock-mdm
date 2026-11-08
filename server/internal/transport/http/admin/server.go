@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/apitoken"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -126,6 +127,11 @@ type Deps struct {
 	LoginMFAOptional bool
 	// TrustedProxies may name the client through X-Paddock-Client-IP (plan M7a decision 5).
 	TrustedProxies []netip.Prefix
+	// RateLimiter limits /api/auth/* per client address and the admin API per principal (plan M12h decision 7); nil
+	// limits nothing. RateLimitExempt are client ranges it never counts (PADDOCK_TEST_RATELIMIT_EXEMPT_CIDRS,
+	// development only: the acceptance gates sign in far more often than an administrator).
+	RateLimiter     *ratelimit.Limiter
+	RateLimitExempt []netip.Prefix
 
 	// BackupKeys is the platform backup key (plan M15 decision 7).
 	BackupKeys *app.BackupKeys
@@ -348,10 +354,10 @@ func NewHandler(d Deps) http.Handler {
 		ErrorHandlerFunc: s.rejected,
 	})
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { httpx.WriteProblem(w, r, problem.NotFound) })
-	authenticated := s.session(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	authenticated := s.session(s.limitPrincipal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		api.ServeHTTP(w, r)
 		httpx.NoteRoute(r)
-	}))
+	})))
 
 	root := http.NewServeMux()
 	root.HandleFunc("GET /api/auth/login", s.bff.login)
@@ -368,11 +374,11 @@ func NewHandler(d Deps) http.Handler {
 	root.Handle("/api/", noStore(authenticated))
 	root.Handle("/", d.Static)
 
-	var guarded http.Handler = root
+	var guarded = s.limitAuth(root)
 	if d.IPGuard != nil {
 		// Before the static handler, /api/auth/* and the session middleware: a denied request never touches a
 		// session, a token or a use case (plan M7a decision 17).
-		guarded = d.IPGuard.Middleware(root)
+		guarded = d.IPGuard.Middleware(guarded)
 	}
 	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(securityHeaders(guarded)))))
 }

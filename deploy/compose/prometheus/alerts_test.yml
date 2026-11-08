@@ -118,6 +118,28 @@ tests:
               summary: "IP allow list bypassed on the api"
               description: "paddock-api runs with PADDOCK_IP_ALLOWLIST_BYPASS=true (break-glass): the application IP allow list is not enforced. Remove the variable once access is restored (docs/operations/ip-allowlist.md)."
 
+  - name: a rate limit storm warns after 5 minutes, refusals of a single client stay silent
+    interval: 1m
+    input_series:
+      # 6000 refusals per minute (100/s) in auth, from two replicas; 600 per minute (10/s) in admin_read.
+      - series: 'paddock_ratelimit_rejected_total{job="paddock", role="paddock-api", instance="paddock-api:9090", class="auth"}'
+        values: "0+3000x20"
+      - series: 'paddock_ratelimit_rejected_total{job="paddock", role="paddock-api", instance="paddock-api-2:9090", class="auth"}'
+        values: "0+3000x20"
+      - series: 'paddock_ratelimit_rejected_total{job="paddock", role="paddock-api", instance="paddock-api:9090", class="admin_read"}'
+        values: "0+600x20"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PaddockRateLimitStorm
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: PaddockRateLimitStorm
+        exp_alerts:
+          - exp_labels: { severity: warning, class: auth }
+            exp_annotations:
+              summary: "Rate limit storm in class auth"
+              description: "The api or gateway refuses more than 50 requests per second with 429 in class auth; check the access log for the client addresses (an attack, or many users behind one NAT: raise PADDOCK_RATELIMIT_AUTH, docs/operations/monitoring.md)."
+
   - name: an audit backlog that does not drain for 10 minutes is lag
     interval: 1m
     input_series:

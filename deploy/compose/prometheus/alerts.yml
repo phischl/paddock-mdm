@@ -189,6 +189,16 @@ groups:
         annotations:
           summary: "IP allow list bypassed on the api"
           description: "paddock-api runs with PADDOCK_IP_ALLOWLIST_BYPASS=true (break-glass): the application IP allow list is not enforced. Remove the variable once access is restored (docs/operations/ip-allowlist.md)."
+      # More than 50 refusals per second in a class for 5 minutes (ADR 0051 decision 3): an abusive client or a
+      # large NAT; a single client hitting its limit stays far below.
+      - alert: PaddockRateLimitStorm
+        expr: sum by (class) (rate(paddock_ratelimit_rejected_total[5m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rate limit storm in class {{ $labels.class }}"
+          description: "The api or gateway refuses more than 50 requests per second with 429 in class {{ $labels.class }}; check the access log for the client addresses (an attack, or many users behind one NAT: raise PADDOCK_RATELIMIT_AUTH, docs/operations/monitoring.md)."
       # The admin-accounts round runs every 5 minutes; the 6-minute window sees each refused round with a minute of
       # slack, so the expression stays true only while every round is refused. A refusal in every round for 15 minutes
       # fires it; two refusals five minutes apart keep it true for about 10 minutes and do not (PDK-424). The counter

@@ -127,6 +127,24 @@ Copy the production release public keys (`docs/operations/agent-releases.md`, "P
 plane and make them readable by the services (they run as uid 65532; `./paddock check` names a file they cannot
 read): `chmod 644 .secrets/release-production/*.pub`. Their secret keys never come to a server.
 
+### Rate limits and NAT sizing
+
+The api limits requests per minute (ADR 0051 decision 3; 429 `rate_limited` with `Retry-After` above the limit):
+`PADDOCK_RATELIMIT_AUTH` (default 20) sign-in requests under `/api/auth/*` per client address,
+`PADDOCK_RATELIMIT_ADMIN_READ` (600) reads and `PADDOCK_RATELIMIT_ADMIN_WRITE` (120) writes per portal session or API
+token, `PADDOCK_RATELIMIT_PLATFORM_UPLOAD` (10) agent artifact and package uploads per session or token, and
+`PADDOCK_RATELIMIT_BUNDLES_APT` (60) per address on the bundles host's package repository (once M13c adds it). The
+gateway limits devices to `PADDOCK_DEVICE_PER_IP_LIMIT` (300) requests per address; an IPv6 client counts as its
+`PADDOCK_DEVICE_PER_IP_V6_PREFIX` (64) prefix, the api's per-address classes always use the /64.
+
+The per-address limits count a NAT as one client. A sign-in takes two requests (start and callback, two more for a
+step-up), so the default lets about ten administrators behind one office address sign in within the same minute.
+For more, raise `PADDOCK_RATELIMIT_AUTH` in `.env` (for example 100 for fifty administrators); raise
+`PADDOCK_DEVICE_PER_IP_LIMIT` when many devices share one address (a device checks in every 5 minutes and sends
+events, so the default carries roughly 1000 devices per address). `0` switches a class off and
+`./paddock check` fails on it (item `rate limits are on`). The limiter never applies to `/healthz`, `/readyz` or
+`/metrics`; the alert `PaddockRateLimitStorm` (`docs/operations/monitoring.md`) reports sustained refusals.
+
 ### E-mail relay
 
 Security notifications (`paddock-notifier`) go to webhooks and, with an SMTP relay of yours, to e-mail. Without a relay
@@ -235,6 +253,7 @@ or may gain privileges, or a service without `pids_limit` (item `container harde
 a service whose container log is not rotated (log driver other than `json-file` or no `max-size`, item
 `container logs are rotated`);
 `PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`);
+a `PADDOCK_RATELIMIT_*` of `0` or below (item `rate limits are on`);
 on the control plane, a `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` that is missing, not a number, below 400 days or below
 `PADDOCK_AUDIT_RETENTION_DAYS`, with which the worker does not start (item `audit index retention of the retention
 round`);

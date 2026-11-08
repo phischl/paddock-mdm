@@ -14,6 +14,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/device"
 )
@@ -27,6 +28,7 @@ func serveGateway(ctx context.Context, l *config.Loader, common config.Common) e
 	httpAddr := l.String("PADDOCK_HTTP_ADDR", ":8081")
 	amqpCfg := config.LoadAMQP(l)
 	vkCfg := config.LoadValkey(l)
+	deviceLimits := config.LoadDeviceRateLimits(l)
 	bundlesURL := strings.TrimRight(l.Required("PADDOCK_BUNDLES_PUBLIC_URL"), "/")
 	bucket := l.String("PADDOCK_BUNDLES_S3_BUCKET", "paddock-bundles")
 	artifactsBucket := l.String("PADDOCK_ARTIFACTS_S3_BUCKET", "paddock-agent-artifacts")
@@ -45,9 +47,12 @@ func serveGateway(ctx context.Context, l *config.Loader, common config.Common) e
 	defer pub.Close()
 	window := buildinfo.Window(buildinfo.Current())
 	handler := device.NewHandler(device.Deps{
-		Cache:     devicecache.New(vk),
-		Publisher: pub,
-		Presigner: objectstore.NewPresigner(bundlesURL, accessKey, secretKey, bucket),
+		Cache:         devicecache.New(vk),
+		RateLimits:    ratelimit.NewValkeyStore(vk),
+		PerIPLimit:    deviceLimits.PerIP,
+		PerIPV6Prefix: deviceLimits.V6Prefix,
+		Publisher:     pub,
+		Presigner:     objectstore.NewPresigner(bundlesURL, accessKey, secretKey, bucket),
 		// Agent artifacts are served through the same public host with the gateway's read-only credential.
 		Artifacts: objectstore.NewPresigner(bundlesURL, accessKey, secretKey, artifactsBucket),
 		// Header uploads too; the credential may write below org/*/devices/*/luks-header/ only (plan M4b decision 13).
