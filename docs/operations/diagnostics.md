@@ -25,9 +25,12 @@ API token). A device that is not active, or that has a collection `requested` al
 
 On the device the agent then:
 
-1. shows the notice in every active graphical session (the text is in
-   [privacy.md](../compliance/privacy.md#diagnostics-bundle-on-request-only)); without such a session it logs
-   `no active graphical session to notify of the diagnostics collection`;
+1. shows the notice in every active graphical session of a logged-in user, never on the login screen (the text is in
+   [privacy.md](../compliance/privacy.md#diagnostics-bundle-on-request-only)). Without such a session it logs
+   `no active graphical session to notify of the diagnostics collection` (info). A session the notice cannot reach is
+   logged at warn level as `desktop notification not shown` with the session, the UID and the cause, and when no
+   session was reached at all, as `no graphical session was notified of the diagnostics collection`. The collection
+   proceeds either way; the portal's diagnostics list then shows "User not notified";
 2. collects the closed list into `/var/lib/paddock/diagnostics/<id>.tar.gz` (root only), seals it to the
    organization's escrow key, uploads it to the escrow bucket and deletes the local file;
 3. reports the result with the next check-in.

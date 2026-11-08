@@ -127,6 +127,8 @@ would strand more.
       release on; for the first guaranteed pair, alpha.8 → alpha.9, the item runs the new image against the old
       stack's database: `./paddock compose … run --rm --no-deps --entrypoint paddock-server paddock-worker admin
       upgrade-check` with `PADDOCK_IMAGE` of the new `versions.env` — the schema is read-only for the check);
+      *Amendment 2026-11-07 (PDK-856, from PDK-855):* the entrypoint is `--entrypoint /paddock-server`. The binary
+      lies in `/` of the distroless runtime image, which is not on its `PATH`, so the relative form above cannot start;
    9. `openbao unseal path` — `PADDOCK_AUTO_UNSEAL=yes` with the shares file present, or a WARN that three
       custodians must be available during `./paddock up`;
    10. `running stack healthy` — `<old dir>/paddock ps` shows every service healthy (WARN otherwise);
@@ -135,7 +137,10 @@ would strand more.
    stop on FAIL (`--allow-unsupported-agents` turns the agent FAIL into WARN; nothing else is overridable);
    print the plan (the steps below with the versions) and ask for `yes` on the terminal unless `--yes`; then
    `migrate-from <old dir>`; `./paddock secrets` (generates missing secrets only); `pull`; `check` (every item
-   PASS, else stop before anything changed on the running stack — the old stack is still up); on the control
+   PASS, else stop before anything changed on the running stack — the old stack is still up; *amendment 2026-11-07
+   (PDK-856, from PDK-859):* on the audit host and a lab this is `check --online`, because offline the audit bucket's
+   Object Lock item is "not checked" and fails; it reads the bucket over the old stack's audit-store network and leaves
+   the backup targets' revision comparison to the post-checks); on the control
    plane and lab: `<old dir>/paddock backup now --label pre-upgrade-<new version> --wait` (M15; `--skip-backup`
    is refused on the control plane unless the release notes say `Schema: unchanged` — the flag exists for the
    audit host, which has no backup role); `up` (this directory; Compose recreates the containers with the new
@@ -441,3 +446,172 @@ follows this approach:
 Migrations are numbered in landing order, not by plan. The alpha.9 numbers known on 2026-11-04 are 00100 (M15
 backups), 00101 (syslog destinations), 00102 (this plan's grant), 00103 (device diagnostics) and 00104 (access review
 grants); the example in §6.3 follows them. A plan's label for a migration is corrected at the next touch of that plan.
+
+## Amendment 2026-11-06 — `./paddock upgrade` and `./paddock rollback` as implemented (PDK-743, review 1)
+
+Binding refinements of decisions 6 and 7; where they differ, this amendment wins.
+
+1. **Rollback restores a point in time, not the labelled set as such.** `./paddock upgrade` records, in
+   `.upgrade-state`, the timestamp `up-started=<RFC 3339 UTC>` immediately before its first `./paddock up`. A
+   rollback after a schema change restores PostgreSQL with `--at <up-started>` from the local repository; the
+   OpenBao snapshot and the Fleet dump are the newest at or before that time, which the labelled
+   `pre-upgrade-<version>` run guarantees to exist (M15 decision 23 step 1 checks it). Everything written between
+   the labelled backup and the first container change is therefore kept; everything after `up-started` is lost
+   (RR-107 unchanged).
+2. **The old release's `restore.sh` is an interface between releases.** `rollback.sh` of release N+1 sources
+   `<old dir>/scripts/restore.sh` of release N and calls its functions, so a rollback runs the restore logic of
+   the release whose data it restores. The following names are frozen for every guaranteed pair (ADR 0047
+   decision 2 gains this item): functions `restore_trap_set`, `restore_trap_reset`, `set_opts`, `read_set`,
+   `key_fingerprint`, `prompt_key`, `normalize_at`, `preflight`, `confirm`, `flush_wal`, `stop_writers`, `run`,
+   `cleanup`, `die`; variables `RESTORE_SOURCE`, `RESTORE_SOURCE_LABEL`, `RESTORE_AT`, `RESTORE_ONLY`,
+   `RESTORE_SET`, `RESTORE_KEY_FILE`, `RESTORE_KEY_PATH`. A change to a frozen name is a breaking change of the
+   upgrade guarantee and needs this plan's next amendment; `rollback_test.sh` holds the contract test (it sources
+   the shipped `restore.sh` and asserts every name is defined). `make lint-migrations-frozen`'s companion check
+   (`tools/migrationsfrozen --restore-interface`) compares the list against the previous tag's `restore.sh`.
+3. **Checks before `down`.** `./paddock rollback` runs, in this order and before anything stops: the key check
+   (`key_fingerprint` against the set's manifest), the old release's `preflight` (schema versions, stanzas, the
+   oldest backup at or before `up-started`, the OpenBao snapshot and the Fleet dump), and the terminal
+   confirmation `restore`; only then `./paddock down`. `restore_run` repeats its own preflight after `down` and
+   receives `restore` on stdin from the rollback script (no second prompt). A failure before `down` leaves the
+   running stack untouched.
+4. **Additional rules.** `--skip-backup` is refused when `FLEET_IMAGE` differs between the two `versions.env`
+   (a Fleet migration needs the dump). A lab host without backups (`PADDOCK_LAB_BACKUP=no`) must pass
+   `--skip-backup` for an upgrade whose release notes say `Schema: migrations …` or that changes `FLEET_IMAGE`,
+   and the command prints that a rollback will then be `down` + old `up` only, with the data loss that implies.
+   On the audit host and the lab, `rollback` stops `paddock-audit-writer` before `down` when the `Schema:` line
+   names audit migrations or is missing (an unknown schema state is treated as changed).
+5. **One rollback per upgrade attempt.** `./paddock upgrade` writes `.upgrade-rollback` with
+   `attempt=<16 hex>`, `from=<N>`, `to=<N+1>`; `.upgrade-state` carries `attempt=` and `up-started=`. `rollback`
+   uses the record only when both versions match the two directories and either no `.upgrade-state` exists
+   (completed upgrade — the main case) or its `attempt` equals the record's. After a successful rollback the
+   record is renamed `.upgrade-rollback.rolled-back-<attempt>` and the state gains `rolled-back=<RFC 3339>`; a
+   second rollback of the same attempt is refused with the file named. A new `./paddock upgrade` starts a new
+   attempt.
+
+Consequences: §6.1 gains no flag; `docs/operations/upgrade.md` (PDK-746) documents the point-in-time semantics,
+the pre-`down` checks, the lab rule and the one-rollback rule; RR-107 keeps its text (the loss window ends at
+`up-started`).
+
+## Amendment 2026-11-06 — the pair 0.1.0-alpha.8 → 0.1.0-alpha.9 (PDK-840; decisions-alpha9 items 46 and 49)
+
+0.1.0-alpha.8 has none of what decisions 6 and 7 rely on. It has no `backup now --label`, no M15 tables or key, no
+local repository and no `restore.sh`. It is still the first guaranteed pair, so that pair gets a legacy path. The
+path lives in `deploy/compose/scripts/legacy-alpha8.sh`, which both commands source.
+
+1. **Detection.** The path applies when the old directory's `VERSION` is exactly `0.1.0-alpha.8`, the release
+   sequence that `upgrade-check` already checks. It never probes the old bundle for features. Every other old
+   release without `backup now` is still refused.
+2. **Pre-upgrade backup (upgrade step `backup`, before `up`).** The upgrade runs alpha.8's runbook step 3 through
+   `<old>/paddock compose`, which uses alpha.8's Compose files and images, while alpha.8 still runs:
+   - `run --rm --no-deps -T pgbackrest backup --start-fast`, then the same for `pgbackrest-authentik`;
+   - `paddock-worker backup openbao`;
+   - `fleet-backup once`.
+
+   It reads the backup labels, the snapshot key and the dump name from what those commands print. Then it checks
+   them in the bucket:
+   - the newest backup of each stanza (`pgbackrest info`) is the new one;
+   - the snapshot exists;
+   - the dump exists, waiting up to 5 minutes for `fleet-backup-upload`. The upgrade does not upload the dump
+     itself, because that would race with the running service.
+
+   The bucket is read through a one-off of alpha.8's AWS CLI service, with the pgBackRest credential (the one that
+   alpha.8 grants `s3:GetObject` on `openbao/` and `fleet/`) mounted as read-only files.
+   `.upgrade-rollback` gains `method=legacy-0.1.0-alpha.8`, `legacy-paddock`, `legacy-authentik`, `legacy-openbao`,
+   `legacy-fleet` and `legacy-at` (the time the backup completed). These fields are bound to the attempt like the
+   rest of the record (amendment 2026-11-06 item 5).
+
+   **The fence (upgrade step `up`, before the record).** alpha.8's restore stages every WAL segment the bucket holds,
+   and alpha.8's pgBackRest would otherwise keep pushing from the shared spool while alpha.9's `up` migrates. So right
+   before the rollback point is recorded, the upgrade runs `<old>/paddock compose stop pgbackrest
+   pgbackrest-authentik`, then `run --rm --no-deps -T pgbackrest flush` and the same for `pgbackrest-authentik`. The
+   bucket's archive then ends before alpha.9 touches a database; WAL written after that reaches alpha.9's local
+   repository only. A failed stop or flush starts alpha.8's pgBackRest again, writes no record and does not run `up`;
+   the next run repeats the fence. After the fence, when nothing new can reach the bucket, the upgrade checks that the
+   newest backup of both stanzas is still the one recorded by the step `backup`: alpha.8's pgBackRest takes a full
+   backup on its own once the last is 24 h old, for example while a stopped run waits, and alpha.8's restore always
+   restores the newest. On a mismatch (or an unreadable `info`) it starts alpha.8's pgBackRest again, removes the step
+   `backup` and its `legacy-*` lines from `.upgrade-state`, writes no record and does not run `up`; the next run takes
+   the backup again. Every failure before `up` (fence, this check, the record write) says that `up` did not run and
+   alpha.8 runs unchanged, and leaves alpha.8's pgBackRest running. The record's `at` is the time right after the fence.
+3. **Rollback.** Instead of the old `restore.sh`, `rollback.sh` runs alpha.8's `docs/operations/restore.md` steps
+   2–6 through `<old>/paddock compose`.
+   - **Before anything stops**, in this order:
+     - the record names a valid legacy backup;
+     - the old directory names the same Compose project as this one (`PADDOCK_PROJECT` of the environment, else of
+       each `.env`, default `paddock`), because the volumes of this project are deleted and alpha.8 starts in its own;
+     - alpha.8's key and pgBackRest credential files exist;
+     - the newest backup of each stanza is the recorded one (alpha.8's `restore` always takes the newest);
+     - the recorded snapshot and, when `FLEET_IMAGE` changed, the dump are downloaded into a private work directory
+       and decrypt with the key.
+   - **Then:**
+     - `./paddock down`;
+     - both PostgreSQL clusters are restored by alpha.8's `pgbackrest restore` to the newest WAL alpha.8 archived.
+       The fence of item 2 ends that archive before `up`, and 0.1.0-alpha.9 archives into its local repository;
+     - the recovery is awaited;
+     - the snapshot is restored into a fresh OpenBao with one temporary share (`openbao-restore.sh`), and the restored
+       OpenBao is unsealed by the custodians or the automatic unseal;
+     - when Fleet changed, Fleet's database is dropped and loaded from the dump;
+     - step 5's restore commands run in their binding order;
+     - pgBackRest starts, then `<old>/paddock up`.
+   - **pgBackRest starts last, not in step 3.** With its fresh state it takes a full backup at once, which would make
+     a repeated rollback refuse after a later failure.
+   - **The loss window.** It starts at `legacy-at` at the latest, not at `up-started`: the restore reaches the WAL
+     that alpha.8 archived until the fence. The plan says so.
+   - **Escrow.** The escrow bucket is not part of alpha.8's restore and is not restored.
+4. **Volumes and OpenBao (item 49).** The legacy rollback deletes and recreates exactly these volumes:
+   `postgres-data`, `authentik-postgres-data`, both `pgbackrest-spool-*`, both `pgbackrest-state-*` and
+   `openbao-data`.
+   - The spools and the states go, so that WAL left behind by alpha.9 never reaches alpha.8's stanza.
+   - Fleet's volume is kept: its database is dropped instead.
+   - Only the OpenBao whose volume was just emptied is initialized, and only after it reports
+     `"initialized": false`.
+5. **Removal.** `legacy-alpha8.sh` and its call sites in `upgrade.sh`, `rollback.sh` and `paddock` are removed once
+   0.1.0-alpha.8 leaves the support window (ADR 0013 amendment: its own release plus two).
+6. **Proof.** PDK-744's CI job proves the pair end to end, including the rollback. The legacy rollback is never run
+   against a development stack that holds lab-linked secrets.
+7. **Retired services (note 2026-11-06, PDK-845; decisions-alpha9 items 52 and 55).** alpha.9 no longer defines
+   alpha.8's `fleet-backup-upload` (the only service of the bundle's Compose files that alpha.9 drops; the other,
+   `backup-s3-tls`, belongs to the development overlay and never ships). `up` and `down` without `--remove-orphans`
+   left its container running under alpha.9. The upgrade step `up` therefore runs `<old>/paddock compose rm -sf` for
+   the services of an explicit list in `upgrade.sh` (`UG_RETIRED`) that the old directory defines, after the fence and
+   the record and right before `up`, on every run of the step. The legacy backup's dump has reached the bucket by
+   then; a run that stops earlier leaves alpha.8 complete; a rollback's `<old>/paddock up` starts the service again.
+   No volume is removed. PDK-744's job fails on any container of a service the running release does not define.
+
+## Note 2026-11-06 — the upgrade job as implemented (PDK-744; decisions-alpha9 items 53–55; accepted (architect lead, 2026-11-06))
+
+This note replaces three passages of §3.5, and they are read as written here:
+- decision 10's "the smoke test's first administrator" and "the smoke test's WebAuthn helper" (items 4 and 5 below);
+- decision 11's candidate "`make release-bundle RELEASE_VERSION=ci-<sha> RELEASE_CHANNEL=edge` … images from the PR's
+  `make image`" (items 1 and 2);
+- decision 10's "`TestAuditChain`'s verification endpoint" (item 3).
+
+The points:
+
+1. **The candidate of `ci.yml` carries the release under development as its version**, the last entry of
+   `server/internal/buildinfo/releases.gen.go` (today `0.1.0-alpha.9`). It is built with `deploy/bundle/build.sh
+   --channel stable --images local`, not `make release-bundle RELEASE_VERSION=ci-<sha>` or `edge-<date>-<sha7>` with
+   `RELEASE_CHANNEL=edge`. The reason: `./paddock upgrade`'s post-check runs `admin upgrade-check --target-version
+   <bundle version>`, which refuses a version outside the binary's release sequence (`ErrUnknownTargetVersion`). An
+   edge version would fail every run. With the version under development, "versions adjacent" judges the real pair.
+   `UPGRADE_CANDIDATE_UNRELEASED=1` lets only `release notes`, `images pullable` and `disk` warn, because a tree has no
+   notes and its images are not in a registry. The release-prep commit of N therefore already moves `-current` in
+   `server/gen.go` to N+1 (`docs/operations/agent-releases.md`, "Changelog" step 3). Otherwise a pull request's
+   candidate would equal the newest tag and step 3 would fail "versions adjacent".
+2. **No image of a pull request is pushed (item 54).** The candidate's images are built in the job and named by local
+   tag (`*:upgrade-ci`), not by `images.txt` digests: an image that was never pushed has no registry digest.
+   `./paddock pull` without arguments pulls only images that are not present by their reference, so the upgrade's
+   pull step passes. Hosts that load their images with `docker load` benefit from the same change.
+3. **The chain check reads `GET /api/v1/audit/integrity`** (no `last_failure_at`) together with an audit event count
+   that only grows. `TestAuditChain`'s `audit seal --day` of the current day is development-only, so a production
+   stack cannot verify today's events.
+4. **Administrators sign in with WebAuthn passkeys.** The plan's "smoke test's first administrator" and "WebAuthn
+   helper" did not exist, and a production bundle validates WebAuthn at every sign-in and step-up. The job creates
+   its platform and organization administrators as Authentik users. It registers a software passkey for each
+   (`authflow.WebAuthn`, shared with the system gates of PDK-738) with `ak shell`, as the gates install TOTP devices.
+   The escrow reveal uses a WebAuthn step-up. `UPGRADE_SKIP_REVEAL=1` exists only while the job is brought up; it
+   must be off and green before the alpha.9 tag (item 53).
+5. **"The previous devicesim"** is `test/acceptance/cmd/upgradesim`. This driver keeps the device's identity in a
+   state file and is built in a checkout of the previous tag against that release's `devicesim` package. The
+   previous release's `devicesim` CLI enrolls a new device on every call, so it cannot check in again after the
+   upgrade.

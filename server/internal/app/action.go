@@ -208,11 +208,14 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 		id:         uuid.Must(uuid.NewV7()),
 		code:       spec.Code,
 		params:     params,
-		correlated: r.correlationID(ctx),
+		correlated: r.requestCorrelation(ctx),
 		startedAt:  audit.Timestamp(r.now()),
 	}
 	if spec.CorrelationID != "" {
 		rec.correlated = spec.CorrelationID
+	}
+	if rec.correlated == "" {
+		rec.correlated = newCorrelationID()
 	}
 	if spec.Target != nil {
 		t := *spec.Target
@@ -238,6 +241,18 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 	}
 	return rec
 }
+
+// requestCorrelation is the request ID of ctx, "" outside a request.
+func (r *ActionRunner) requestCorrelation(ctx context.Context) string {
+	if r.correlationID == nil {
+		return ""
+	}
+	return r.correlationID(ctx)
+}
+
+// newCorrelationID is the correlation ID of an action without a request (a startup import, a worker round): the audit
+// writer dead-letters an event without one, so the attempt would not be recorded at all (decisions-alpha9 item 69).
+func newCorrelationID() string { return uuid.Must(uuid.NewV7()).String() }
 
 // checkStepUp reports problem.StepUpRequired unless an administrator's step-up is at most the step-up window old.
 // System principals never step up; an API token or an MCP session never can (ADR 0034 decision 3, ADR 0044 decision
@@ -493,7 +508,8 @@ func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 //   - all events or none: they are recorded exactly when claim reports true and the transaction commits; claim false
 //     (or an error) records nothing, not even a failure event;
 //   - claim false means its guarded change no longer applies: another replica, or an earlier attempt, already made
-//     that transition and recorded its events, or another change overtook it.
+//     that transition and recorded its events, or another change overtook it;
+//   - outside a request, the events without a CorrelationID of their own share one generated correlation ID.
 //
 // It serves system-observed transitions that must be recorded exactly once, such as the notifier's delivery, stall
 // and resumption events (plan M9 decision 22).
@@ -506,8 +522,15 @@ func (r *ActionRunner) RecordAllOnce(ctx context.Context, scope Scope, specs []A
 	if scope == ScopeOrg && p.OrganizationID == uuid.Nil {
 		return false, problem.NoOrganization
 	}
+	shared := r.requestCorrelation(ctx)
+	if shared == "" {
+		shared = newCorrelationID()
+	}
 	recs := make([]*recorder, len(specs))
 	for i, spec := range specs {
+		if spec.CorrelationID == "" {
+			spec.CorrelationID = shared
+		}
 		recs[i] = r.newRecorder(ctx, p, scope, spec)
 	}
 	recorded := false
@@ -909,11 +932,7 @@ func (r *ActionRunner) finishStarted(ctx context.Context, q *pgstore.Queries, re
 }
 
 func insertOutbox(ctx context.Context, q *pgstore.Queries, rec *recorder, outcome audit.Outcome, errorCode string, at time.Time) error {
-	ev := audit.Event{
-		Schema: audit.Schema, EventID: rec.id, OrganizationID: rec.org, OccurredAt: at, Code: rec.code,
-		Outcome: outcome, Actor: rec.actor, Target: rec.target, Source: rec.source,
-		Params: maps.Clone(rec.params), ErrorCode: errorCode, CorrelationID: rec.correlated,
-	}
+	ev := rec.event(outcome, errorCode, at)
 	payload, err := json.Marshal(ev)
 	if err != nil {
 		return err
@@ -921,6 +940,15 @@ func insertOutbox(ctx context.Context, q *pgstore.Queries, rec *recorder, outcom
 	return q.InsertOutbox(ctx, pgstore.InsertOutboxParams{
 		OrganizationID: rec.org, Subject: audit.Subject(rec.org, ev.Source), MsgID: rec.id.String(), Payload: payload,
 	})
+}
+
+// event is the audit event the outbox carries for rec.
+func (rec *recorder) event(outcome audit.Outcome, errorCode string, at time.Time) audit.Event {
+	return audit.Event{
+		Schema: audit.Schema, EventID: rec.id, OrganizationID: rec.org, OccurredAt: at, Code: rec.code,
+		Outcome: outcome, Actor: rec.actor, Target: rec.target, Source: rec.source,
+		Params: maps.Clone(rec.params), ErrorCode: errorCode, CorrelationID: rec.correlated,
+	}
 }
 
 func encodeParts(rec *recorder) (actor, target, params json.RawMessage, err error) {

@@ -96,19 +96,27 @@ const countDeviceDiagnostics = `-- name: CountDeviceDiagnostics :one
 SELECT count(*) FROM (
   SELECT 1 FROM device_diagnostics
   WHERE device_id = $1
-    AND ($2::text[] IS NULL OR state = ANY($2::text[]))
-  LIMIT $3
+    AND ($2::text IS NULL OR requested_by ILIKE $2::text ESCAPE '\'
+      OR reason ILIKE $2::text ESCAPE '\')
+    AND ($3::text[] IS NULL OR state = ANY($3::text[]))
+  LIMIT $4
 ) c
 `
 
 type CountDeviceDiagnosticsParams struct {
 	DeviceID   uuid.UUID
+	QPattern   *string
 	States     []string
 	CountLimit int32
 }
 
 func (q *Queries) CountDeviceDiagnostics(ctx context.Context, arg CountDeviceDiagnosticsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countDeviceDiagnostics, arg.DeviceID, arg.States, arg.CountLimit)
+	row := q.db.QueryRow(ctx, countDeviceDiagnostics,
+		arg.DeviceID,
+		arg.QPattern,
+		arg.States,
+		arg.CountLimit,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -476,18 +484,21 @@ func (q *Queries) ListAllDeviceDiagnostics(ctx context.Context, arg ListAllDevic
 const listDeviceDiagnostics = `-- name: ListDeviceDiagnostics :many
 SELECT dd.id, dd.organization_id, dd.device_id, dd.requested_by, dd.requested_at, dd.reason, dd.state, dd.object_key, dd.size, dd.sha256, dd.nonce, dd.wrapped_dek, dd.files, dd.truncated_entries, dd.notified_sessions, dd.uploaded_at, dd.stored_at, dd.expires_at, dd.failed_reason, dd.download_count, dd.last_downloaded_at, dd.purged_at, dd.key_version, d.hostname FROM device_diagnostics dd JOIN device d ON d.id = dd.device_id
 WHERE dd.device_id = $1
-  AND ($2::text[] IS NULL OR dd.state = ANY($2::text[]))
+  AND ($2::text IS NULL OR dd.requested_by ILIKE $2::text ESCAPE '\'
+    OR dd.reason ILIKE $2::text ESCAPE '\')
+  AND ($3::text[] IS NULL OR dd.state = ANY($3::text[]))
 ORDER BY
-  CASE WHEN $3::text = 'requested_at' THEN dd.requested_at END ASC,
-  CASE WHEN $3::text = '-requested_at' THEN dd.requested_at END DESC,
-  CASE WHEN $3::text = 'state' THEN dd.state END ASC,
-  CASE WHEN $3::text = '-state' THEN dd.state END DESC,
+  CASE WHEN $4::text = 'requested_at' THEN dd.requested_at END ASC,
+  CASE WHEN $4::text = '-requested_at' THEN dd.requested_at END DESC,
+  CASE WHEN $4::text = 'state' THEN dd.state END ASC,
+  CASE WHEN $4::text = '-state' THEN dd.state END DESC,
   dd.id
-LIMIT $5 OFFSET $4
+LIMIT $6 OFFSET $5
 `
 
 type ListDeviceDiagnosticsParams struct {
 	DeviceID uuid.UUID
+	QPattern *string
 	States   []string
 	Sort     string
 	SkipRows int32
@@ -499,10 +510,11 @@ type ListDeviceDiagnosticsRow struct {
 	Hostname         string
 }
 
-// The bundles of one device (plan M12 decision 13).
+// The bundles of one device (plan M12 decision 13); q searches the requester and the reason.
 func (q *Queries) ListDeviceDiagnostics(ctx context.Context, arg ListDeviceDiagnosticsParams) ([]ListDeviceDiagnosticsRow, error) {
 	rows, err := q.db.Query(ctx, listDeviceDiagnostics,
 		arg.DeviceID,
+		arg.QPattern,
 		arg.States,
 		arg.Sort,
 		arg.SkipRows,

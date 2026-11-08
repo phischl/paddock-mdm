@@ -15,7 +15,7 @@ public repository has a queue of 20 GitHub runners, which cannot run the accepta
 
 | Job | What it runs | When |
 |---|---|---|
-| `lint` | `make lint`: golangci-lint and `go vet`, the OpenAPI contract test, `make lint-tidy` (every workspace module must be tidy: `go mod tidy -diff`), govulncheck for all modules, the build stages of the server and compiler images (arm64 cross-compiled as well), ESLint and vue-tsc for the portal, the Prometheus and Caddy configuration checks, the license gate, the supervisor's line budget, shellcheck and the changelog fragment check | every pull request, push to `main` and the weekly schedule |
+| `lint` | `make lint`: golangci-lint and `go vet`, the OpenAPI contract test, `make lint-tidy` (every workspace module must be tidy: `go mod tidy -diff`), govulncheck for all modules, the build stages of the server and compiler images (arm64 cross-compiled as well), ESLint and vue-tsc for the portal, the Prometheus and Caddy configuration checks, the license gate, the supervisor's line budget, shellcheck, the changelog fragment check and the frozen-migrations check (`make lint-migrations-frozen`: a migration of the previous release tag that is edited or deleted fails, ADR 0047 decision 2) | every pull request, push to `main` and the weekly schedule |
 | `test` | `make test` (Go unit and integration tests with Docker test containers, the shell script tests, portal unit tests), then `make fuzz` (every fuzz test of `pkg/` for 30 s) | as `lint` |
 | `secrets` | gitleaks: on a pull request over its own commits and, as a second view, over the final content of every changed file and every added blob (`make scan-secrets`, `make scan-secrets-diff`); otherwise over the full history | as `lint` |
 | `trivy` | `make scan-fs` and `make scan-images` (vulnerabilities in dependencies and images) | as `lint`; the weekly schedule catches new CVEs in unchanged dependencies |
@@ -23,6 +23,7 @@ public repository has a queue of 20 GitHub runners, which cannot run the accepta
 | `acceptance-scope` | decides whether a pull request changes documentation only (`scripts/acceptance-scope.sh`, see *Documentation-only pull requests* below); on a push or the schedule it always answers "no" | pull requests to `main`, pushes to `main`, the schedule |
 | `acceptance (shard 1)` … `acceptance (shard 4)` | each shard on its own stack: `make dev-secrets`, `make up`, `make dev-seed`, then `make acceptance SHARD=i/4` | pull requests to `main` that do not change documentation only, pushes to `main`, the schedule; after `acceptance-scope`, `lint`, `test`, `web`, `secrets` and `trivy` passed |
 | `acceptance (disruptive, e2e)` | on its own stack: the disruptive gates (`PADDOCK_ACCEPTANCE_DISRUPTIVE=1 make acceptance T='TestSessionsEndAll\|TestAutoUnsealRestart'`, which end every portal session and restart OpenBao and therefore run alone), then `make e2e` (Playwright) | as the shards, in parallel with them |
+| `upgrade (previous release to this tree)` | the upgrade gate of ADR 0047 decision 5 (`deploy/bundle/ci/upgrade.sh`, plan M16 decisions 10–12): the previous release (the newest `v*` tag) installed from its published, cosign-verified bundle and agent artifacts as the smoke test does, seeded (`seed.sh`: organization, enrollment token, a device of the previous release's devicesim package with an escrowed password, managed file, notification destination, API token), `./paddock upgrade-check` and `./paddock upgrade` on both hosts to a bundle of the tree, probes (every seeded object with its ID, the audit count, the chain verification, the API token, the escrow reveal with a WebAuthn step-up, the old device's check-in and events, a new device, the hardening), the restore drill (`backup now`, `down --volumes`, `secrets`, `restore --from --at`), probes again, `./paddock rollback` on both hosts and probes on the previous release. The candidate's images are built in the job and never pushed. A failing step is named in the log and as an annotation; the logs of both projects are the artifact `upgrade-logs` | as `acceptance (disruptive, e2e)`, in parallel with the shards |
 | `acceptance` | summary job: green only if every shard and the disruptive/e2e job are green; a skipped prerequisite fails it. A documentation-only pull request is the one exception (below) | every run of `ci.yml`; on a pull request to another branch than `main` it is named `acceptance (not required off main)` and succeeds without checking anything |
 | `bundle-smoke` | builds the images and the operator bundle from the pull request's code and installs it with the smoke scripts (default profile, then the lab profile behind Nginx); nothing is pushed or signed | only pull requests that change `deploy/**`, the `Makefile`, `.dockerignore` or the workflow itself (path filter) |
 | `edge` | release images (pushed to ghcr.io and signed keylessly), SBOMs, operator bundle, checksums, then the smoke test of the edge bundle and of its lab profile | pushes to `main` only, after `acceptance` |
@@ -87,13 +88,18 @@ Everything of a cluster, on the release candidate, plus:
 - the release workflow (`release.yml`, started by a `v*` tag): `build` (images, agent packages, SBOMs, operator
   bundle, checksums, keyless signatures), `smoke` (installs the release bundle on both hosts and checks them, without
   a registry login, which proves the images are publicly pullable), `sign` (agent release key, after the
-  maintainer's approval) and `publish`;
+  maintainer's approval) and `publish`; `upgrade` (the upgrade gate above, from the release tag's predecessor to the
+  release bundle with the release's own agent artifacts) runs after `build` next to `smoke`, and `sign` and `publish`
+  need both;
 - the compatibility fixtures of the release candidate (ADR 0047 decision 2): `make compat-fixtures
   RELEASE=<version>` writes `pkg/compat/testdata/<version>/` (bundles per schema version, check-in, events, commands,
   the audit writer's insert) and deletes the directories older than two releases; commit the result with the release
   commit. `TestPreviousReleaseFixtures` (`pkg/compat`) and `TestPreviousReleaseAuditInsert`
   (`server/internal/auditwriter`) then prove that every later tree still reads what this release produced. `make lint`
   (`lint-migrations-frozen`) fails when a migration of the previous release tag is edited or deleted;
+- the upgrade of the lab host from the previous release to the release candidate with `./paddock upgrade-check` and
+  `./paddock upgrade`, one `./paddock rollback` and the upgrade again (`docs/operations/upgrade.md`): the CI job runs
+  on one machine with both hosts and cannot show the timing and network of a real installation (residual risk RR-105);
 - an installation of the release bundle on a lab host (`docs/operations/lab-install.md`) with real devices.
 
 ## 2. Flake policy

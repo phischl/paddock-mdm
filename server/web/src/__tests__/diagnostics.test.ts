@@ -45,7 +45,7 @@ const page = (items: Diagnostics[]) => () => Promise.resolve({ items, page: 1, p
 
 let wrapper: VueWrapper | null = null
 
-async function mountList(role: string, items: Diagnostics[]): Promise<void> {
+async function mountList(role: string, items: Diagnostics[], locale: 'en' | 'de' = 'en'): Promise<void> {
   const pinia = createPinia()
   setActivePinia(pinia)
   useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role, locale: 'en', theme: 'system', organization: null } as never
@@ -72,7 +72,7 @@ async function mountList(role: string, items: Diagnostics[]): Promise<void> {
       ],
     }),
   })
-  wrapper = mount(Host, { global: { plugins: [createPortalI18n(), vuetify, router, pinia] }, attachTo: document.body })
+  wrapper = mount(Host, { global: { plugins: [createPortalI18n(locale), vuetify, router, pinia] }, attachTo: document.body })
   await flushPromises()
 }
 
@@ -128,6 +128,25 @@ describe('diagnostics list', () => {
     await mountList('org_admin', [bundle('b1', 'stored')])
     await vi.waitFor(() => expect(button('diagnostics-problem')?.textContent).toContain('not possible in the current state'))
     expect(mocks.startStepUp).not.toHaveBeenCalled()
+  })
+
+  it('says when no user was notified of a collection, and only then', async () => {
+    await mountList('org_admin', [
+      { ...bundle('b1', 'stored'), notified_sessions: 0 },
+      { ...bundle('b2', 'stored'), notified_sessions: 1 },
+      bundle('b3', 'requested'),
+    ])
+    const chips = document.querySelectorAll('[data-testid="diagnostics-not-notified"]')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].textContent).toContain('User not notified')
+    expect(chips[0].getAttribute('title')).toContain('transparency notice')
+  })
+
+  it('says in German when no user was notified', async () => {
+    await mountList('org_admin', [{ ...bundle('b1', 'stored'), notified_sessions: 0 }], 'de')
+    const chip = document.querySelector('[data-testid="diagnostics-not-notified"]')
+    expect(chip?.textContent).toContain('Benutzer nicht benachrichtigt')
+    expect(chip?.getAttribute('title')).toContain('Transparenzhinweis')
   })
 
   it('purges after the confirmation dialog only', async () => {

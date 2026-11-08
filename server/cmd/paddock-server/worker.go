@@ -72,10 +72,6 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		}
 	}
 	tlsAddr := l.String("PADDOCK_TLS_PROBE_ADDR", "caddy:443")
-	backups, err := loadBackup(l, baoCfg.Addr)
-	if err != nil {
-		return err
-	}
 	pool, err := db.NewOrgPool(ctx, dsn, db.Options{ApplicationName: "paddock-worker", MaxConns: 8})
 	if err != nil {
 		return err
@@ -139,9 +135,6 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	jobs := []func(context.Context) error{
 		worker.NewOpsProbe(signer, worker.DialCertExpiry(tlsAddr, nil), tlsHosts).Run,
 		worker.NewAutoUnsealObserver(platformPool, runner).Run,
-	}
-	if backups != nil {
-		jobs = append(jobs, worker.NewBackups(backups.store, backups.snap, backups.key, platformPool).Run)
 	}
 	return runAll(ctx, append(jobs,
 		func(ctx context.Context) error {

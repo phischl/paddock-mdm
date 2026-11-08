@@ -106,6 +106,8 @@ type handlers struct {
 	backupTargets  *app.BackupTargets
 	backupSchedule *app.BackupSchedule
 	backupRuns     *app.BackupRuns
+	// backupRestorePlans are the restore plans (plan M15 decisions 25–26).
+	backupRestorePlans *app.BackupRestorePlans
 }
 
 // stepUpTiming is the step-up window of the action runner and the maximum auth age of the step-up callback.

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"aead.dev/minisign"
@@ -167,7 +168,15 @@ func ComposeProduction(ctx context.Context, env []string, args ...string) (strin
 }
 
 func compose(ctx context.Context, env []string, stdin io.Reader, args []string) (string, error) {
-	return composeFiles(ctx, env, stdin, Project(), ".env", []string{"compose.yaml", "compose.audit.yaml", "compose.auto-unseal.yaml", "compose.dev.yaml"}, args)
+	return composeFiles(ctx, env, stdin, Project(), ".env", devFiles, args)
+}
+
+var devFiles = []string{"compose.yaml", "compose.audit.yaml", "compose.auto-unseal.yaml", "compose.dev.yaml"}
+
+// ComposeBackup is Compose for a stack started with `make up BACKUP=1`: the development files plus the backup files
+// (DEV_BACKUP_FILES of deploy/compose/scripts/lib.sh), so that the backup services resolve.
+func ComposeBackup(ctx context.Context, env []string, args ...string) (string, error) {
+	return composeFiles(ctx, env, nil, Project(), ".env", append(slices.Clone(devFiles), "compose.backup.yaml", "compose.backup.dev.yaml"), args)
 }
 
 // ProdFiles returns the Compose files of a production host from deploy/compose/scripts/lib.sh (PROD_FILES_<host>,

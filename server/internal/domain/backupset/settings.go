@@ -2,6 +2,7 @@ package backupset
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -114,4 +115,13 @@ func DestinationChange(typ TargetType, cur, next Settings) string {
 		}
 	}
 	return ""
+}
+
+// ParseCredentials decodes the plaintext of backup_target.credentials_ciphertext.
+func ParseCredentials(raw []byte) (Credentials, error) {
+	var c Credentials
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return Credentials{}, errors.New("backupset: target credentials are not valid JSON")
+	}
+	return c, nil
 }

@@ -195,6 +195,8 @@ lab_check "the audit reader URL names audit-postgres without TLS" \
   grep -qE '@audit-postgres:5432/paddock_audit\?sslmode=disable$' <<<"$reader_url"
 lab_check "openbao and rabbitmq certificates exist" test -s "$lab/.secrets/tls/openbao.crt" -a -s "$lab/.secrets/tls/rabbitmq.crt"
 lab_check "no audit-postgres certificate" test ! -e "$lab/.secrets/tls/audit-postgres.crt"
+# A fresh installation starts without a backup key: no host key file for the legacy import (decisions-alpha9 item 63).
+lab_check "no legacy backup key file" test ! -e "$lab/.secrets/backup_encryption_key"
 no_copy_message() { ! grep -qiE "the (audit|control-plane|other) host|peer-ca" <<<"$lab_out"; }
 lab_check "nothing is to be copied to or from another host" no_copy_message
 leaked=()

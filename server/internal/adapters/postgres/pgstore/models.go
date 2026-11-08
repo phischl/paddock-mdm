@@ -209,6 +209,7 @@ type BackupRun struct {
 	ErrorClass  *string
 	Targets     json.RawMessage
 	CreatedAt   time.Time
+	MirroredAt  *time.Time
 }
 
 type BackupSchedule struct {
@@ -586,6 +587,16 @@ type EnrollmentToken struct {
 	ExpiresAt      time.Time
 	RevokedAt      *time.Time
 	CreatedBy      uuid.UUID
+	CreatedAt      time.Time
+}
+
+type EscrowRefusal struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Kind           string
+	Generation     int32
+	Reason         string
 	CreatedAt      time.Time
 }
 

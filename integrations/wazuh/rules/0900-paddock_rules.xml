@@ -8,7 +8,7 @@
   Wazuh checks the children of a rule in file order and the first match wins, so the specific rules (including the
   refused API token, 100940, whose only outcome is denied) come before the denied rule 100960, which in turn comes
   before the generic identity, platform and configuration rules, so a denied action is never below level 7. Levels:
-  tamper and revocation 12, reveals and root grants 10, denied 7, login and configuration 5.
+  tamper and revocation 12, reveals, root grants and the start of a restore 10, denied 7, login and configuration 5.
 
   The query "which day's event count differs from the checkpoint" is not a rule (Wazuh cannot count a day); it is in
   docs/operations/siem.md.
@@ -85,7 +85,7 @@
 
   <rule id="100915" level="10">
     <if_sid>100900,100901</if_sid>
-    <field name="event.code" type="pcre2">^device\.(?:clone_suspected|event_gap|event_seq_reset|header_object_rejected|header_escrow_refused)$</field>
+    <field name="event.code" type="pcre2">^device\.(?:clone_suspected|event_gap|event_seq_reset|header_object_rejected|header_escrow_refused|escrow_refused_destroyed)$</field>
     <description>Paddock: device integrity event $(event.code)</description>
   </rule>
 </group>
@@ -138,6 +138,12 @@
     <if_sid>100900,100901</if_sid>
     <field name="event.code" type="pcre2">^platform\.(?:ip_allowlist_denied|ip_allowlist_disabled|auto_unseal_disabled)$</field>
     <description>Paddock: platform protection reduced or refused ($(event.code))</description>
+  </rule>
+
+  <rule id="100932" level="10">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^platform\.restore_started$</field>
+    <description>Paddock: control plane restore started on the host by $(event.actor.display) ($(event.outcome))</description>
   </rule>
 
   <rule id="100931" level="5">

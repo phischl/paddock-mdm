@@ -30,6 +30,8 @@ import (
 	vk "github.com/valkey-io/valkey-go"
 
 	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/pkg/revocation"
 	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
@@ -1253,6 +1255,85 @@ func TestEscrowHeaderVolume(t *testing.T) {
 		"ciphertext": base64.StdEncoding.EncodeToString([]byte("x")), "volume": volume}
 	e.expectProblem(e.send(c, request{method: "POST", path: "/v1/escrow", device: id.String(), body: secret, skipReqCheck: true}),
 		http.StatusBadRequest, "invalid_request")
+}
+
+// revocationEnvelope is a revocation token of device as the revocation-issuer puts it into cmd:<device_id>.
+func revocationEnvelope(t *testing.T, id, device uuid.UUID, action string, now time.Time) json.RawMessage {
+	t.Helper()
+	payload, err := revocation.Encode(revocation.Token{CommandID: id.String(), DeviceID: device.String(), OrganizationID: uuid.NewString(),
+		RequestID: id.String(), Action: action, IssuedAt: now, ExpiresAt: now.Add(revocation.Lifetime)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := dsse.New(revocation.PayloadType, payload, dsse.Signature{KeyID: "revocation-signing:v1", Sig: "AA=="}).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+// TestEscrowRefusedAfterDestroy (PDK-794): while cmd:<device_id> holds an unexpired Destroy token of the device, a
+// LUKS header gets no presigned PUT and a recovery key or header is published flagged and without key material, so
+// that the worker refuses it; an administrator password, a Lock, an expired Destroy and another device's Destroy
+// change nothing.
+func TestEscrowRefusedAfterDestroy(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c, other := newClient(t), newClient(t)
+	id, otherID := e.enrolled(c, "active"), e.enrolled(other, "active")
+	ctx := context.Background()
+	put := func(device uuid.UUID, action string, expiresAt time.Time) {
+		t.Helper()
+		cmd := uuid.Must(uuid.NewV7())
+		if err := e.cache.PutCommand(ctx, device, cmd, devicecache.Command{ExpiresAt: expiresAt,
+			Envelope: revocationEnvelope(t, cmd, device, action, e.now)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	header := func() map[string]any {
+		return map[string]any{"escrow_id": uuid.Must(uuid.NewV7()).String(), "kind": "luks_header", "generation": 3, "key_version": 1,
+			"wrapped_dek": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 512)),
+			"nonce":       base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{2}, 12)),
+			"sha256":      strings.Repeat("ab", 32), "size": 100}
+	}
+	secret := func(kind string) map[string]any {
+		return map[string]any{"escrow_id": uuid.Must(uuid.NewV7()).String(), "kind": kind, "generation": 2, "key_version": 1,
+			"ciphertext": base64.StdEncoding.EncodeToString([]byte("x"))}
+	}
+	upload := func(c client, device uuid.UUID, body map[string]any) (escrow.Accepted, ingest.Escrow) {
+		t.Helper()
+		r := e.send(c, request{method: "POST", path: "/v1/escrow", device: device.String(), body: body})
+		var accepted escrow.Accepted
+		if err := json.Unmarshal(r.body, &accepted); err != nil || r.status != http.StatusAccepted || accepted.EscrowID != body["escrow_id"] {
+			t.Fatalf("upload: %d %s", r.status, r.body)
+		}
+		var in ingest.Escrow
+		if err := json.Unmarshal(e.pub.last(t).Body, &in); err != nil || in.EscrowID.String() != body["escrow_id"] {
+			t.Fatalf("published %+v: %v", in, err)
+		}
+		return accepted, in
+	}
+
+	put(id, revocation.ActionLock, e.now.Add(time.Hour))
+	put(id, revocation.ActionDestroy, e.now)
+	put(otherID, revocation.ActionDestroy, e.now.Add(time.Hour))
+	if accepted, in := upload(c, id, header()); accepted.UploadURL == "" || in.DestroyIssued || in.ObjectKey == "" {
+		t.Fatalf("header under a Lock and an expired Destroy: %+v %+v", accepted, in)
+	}
+
+	put(id, revocation.ActionDestroy, e.now.Add(time.Hour))
+	if accepted, in := upload(c, id, header()); accepted.UploadURL != "" || !in.DestroyIssued || in.ObjectKey != "" ||
+		in.WrappedDEK != nil || in.Nonce != nil || in.Generation != 3 || in.Kind != "luks_header" {
+		t.Fatalf("header under a Destroy: %+v %+v", accepted, in)
+	}
+	if _, in := upload(c, id, secret("luks_recovery_key")); !in.DestroyIssued || in.Ciphertext != nil {
+		t.Fatalf("recovery key under a Destroy: %+v", in)
+	}
+	if _, in := upload(c, id, secret("admin_password")); in.DestroyIssued || len(in.Ciphertext) != 1 {
+		t.Fatalf("administrator password under a Destroy: %+v", in)
+	}
+	if accepted, in := upload(other, otherID, header()); accepted.UploadURL != "" || !in.DestroyIssued {
+		t.Fatalf("the other device's own Destroy: %+v %+v", accepted, in)
+	}
 }
 
 // TestCheckinRetryWhileStalledKeepsSeq (PDK-590): a check-in stalls after the gateway drew its number (an AMQP write

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -180,6 +181,42 @@ func TestRecorderSourceAndClient(t *testing.T) {
 	anonymous.Actor = &audit.Actor{Type: audit.ActorAnonymous}
 	if rec := r.newRecorder(context.Background(), principal.Principal{Kind: principal.KindSystem}, ScopePlatform, anonymous); rec.source != audit.SourcePortal {
 		t.Fatalf("explicit anonymous actor: source %q", rec.source)
+	}
+}
+
+// TestSystemActionWithoutRequestPassesTheWriter: an action of a system principal outside a request (the legacy backup
+// key import at api start, a worker or backup round) gets a generated correlation ID, a source and a system actor, so
+// the audit writer accepts its event instead of dead-lettering it (decisions-alpha9 item 69); a request ID and a
+// spec's own correlation ID still win.
+func TestSystemActionWithoutRequestPassesTheWriter(t *testing.T) {
+	sys := principal.Principal{Kind: principal.KindSystem, Display: "paddock-api"}
+	spec := ActionSpec{Code: audit.CodePlatformBackupKeyGenerated}
+	for name, r := range map[string]*ActionRunner{
+		"no request ID":         NewActionRunner(nil, nil, func(context.Context) string { return "" }),
+		"no correlation source": NewActionRunner(nil, nil, nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			first, second := r.newRecorder(context.Background(), sys, ScopePlatform, spec),
+				r.newRecorder(context.Background(), sys, ScopePlatform, spec)
+			if first.correlated == "" || first.correlated == second.correlated {
+				t.Fatalf("correlation IDs %q and %q, want two distinct generated ones", first.correlated, second.correlated)
+			}
+			ev := first.event(audit.OutcomeSuccess, "", time.Now())
+			if ev.Source != audit.SourceSystem || ev.Actor.Type != audit.ActorSystem || ev.Actor.Display != "paddock-api" {
+				t.Fatalf("source %q actor %+v", ev.Source, ev.Actor)
+			}
+			if err := auditwriter.Validate(ev); err != nil {
+				t.Fatalf("the audit writer refuses the event: %v", err)
+			}
+		})
+	}
+	if rec := testRunner().newRecorder(context.Background(), sys, ScopePlatform, spec); rec.correlated != "req-1" {
+		t.Fatalf("request ID replaced: %q", rec.correlated)
+	}
+	own := spec
+	own.CorrelationID = "ipal-1"
+	if rec := NewActionRunner(nil, nil, nil).newRecorder(context.Background(), sys, ScopePlatform, own); rec.correlated != "ipal-1" {
+		t.Fatalf("spec correlation ID replaced: %q", rec.correlated)
 	}
 }
 

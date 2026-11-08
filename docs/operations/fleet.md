@@ -177,6 +177,6 @@ pending.
 
 ## Backups
 
-`fleet-backup` dumps `fleet-mysql` daily (`mysqldump`, encrypted) and `fleet-backup-upload` copies the dump to the
-backup bucket (`docs/operations/restore.md`); everything in it can be rebuilt from the devices within a day
-(architecture §20).
+`fleet-backup` dumps `fleet-mysql` daily (`mysqldump`, plaintext); the backup role seals the dump into the backup set
+and mirrors it to the backup targets (`docs/operations/backup.md`, `docs/operations/restore.md`). Everything in it can
+be rebuilt from the devices within a day (architecture §20).

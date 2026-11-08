@@ -149,6 +149,7 @@ const (
 	CodeRevocationIssueRefused          Code = "revocation.issue_refused"
 	CodeRevocationLimitExceeded         Code = "revocation.limit_exceeded"
 	CodeDeviceEscrowDestroyed           Code = "device.escrow_destroyed"
+	CodeDeviceEscrowRefusedDestroyed    Code = "device.escrow_refused_destroyed"
 	CodeDeviceRevocationConfirmed       Code = "device.revocation_confirmed"
 	CodeDeviceRevocationRefused         Code = "device.revocation_refused"
 	CodeSettingsDMSChanged              Code = "settings.dms_changed"
@@ -186,6 +187,7 @@ const (
 	// Restore commands of paddock-server admin (plan M6c decision 21).
 	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
 	CodePlatformBundleSeqBumped        Code = "platform.bundle_seq_bumped"
+	CodePlatformBundleSeqRaised        Code = "platform.bundle_seq_raised"
 	CodePlatformCacheRebuilt           Code = "platform.cache_rebuilt"
 
 	// IP allow list of the administrative surfaces (plan M7a decision 14).
@@ -311,6 +313,16 @@ const (
 	CodePlatformBackupTargetTested    Code = "platform.backup_target_tested"
 	CodePlatformBackupScheduleChanged Code = "platform.backup_schedule_changed"
 	CodePlatformBackupRunRequested    Code = "platform.backup_run_requested"
+	// Runs of the backup role (plan M15 decision 16).
+	CodePlatformBackupCompleted Code = "platform.backup_completed"
+	CodePlatformBackupFailed    Code = "platform.backup_failed"
+	// Restore plans: approved in the portal, executed and reported by the host (plan M15 decisions 23–26).
+	CodePlatformRestorePlanned   Code = "platform.restore_planned"
+	CodePlatformRestoreCancelled Code = "platform.restore_cancelled"
+	CodePlatformRestoreStarted   Code = "platform.restore_started"
+	CodePlatformRestoreCompleted Code = "platform.restore_completed"
+	CodePlatformRestoreFailed    Code = "platform.restore_failed"
+	CodePlatformRestoreAbandoned Code = "platform.restore_abandoned"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -325,6 +337,22 @@ type Definition struct {
 
 // backupTargetParams are the params of the backup target events (plan M15 §6.4): never a credential.
 var backupTargetParams = []string{"target_id", "name", "type", "enabled", "host_revision"}
+
+// restorePlanParams are the params of a restore plan's portal events, restoreStartParams those of the host's start and
+// restoreRunParams those of the host's final report (plan M15 §6.4); a completed run also counts the escrowed headers
+// it kept out because their device's escrow was destroyed (decisions-alpha9 item 44).
+var (
+	restorePlanParams      = []string{"plan_id", "kind", "source", "source_target_id", "at", "components"}
+	restoreStartParams     = []string{"plan_id", "source", "source_target_id", "components"}
+	restoreRunParams       = []string{"plan_id", "source", "source_target_id", "at", "components", "duration_s", "detail"}
+	restoreCompletedParams = []string{"plan_id", "source", "source_target_id", "at", "components", "duration_s", "detail",
+		"escrow_skipped_destroyed"}
+)
+
+// backupRunParams are the params of the run events of the backup role (plan M15 §6.4); completed_at is the run's local
+// completion, which the event follows after the round's mirror (decisions-alpha9 item 79).
+var backupRunParams = []string{"run_id", "kind", "label", "bytes", "duration_s", "completed_at", "targets_ok",
+	"targets_failed", "error_class"}
 
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
@@ -1109,6 +1137,13 @@ var registry = map[Code]Definition{
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeUnknown},
 		Note:        "failure leaves the request approved; the issuer retries it.",
 	},
+	CodeDeviceEscrowRefusedDestroyed: {
+		Code: CodeDeviceEscrowRefusedDestroyed, Emitted: true,
+		Description: "The worker refused a LUKS recovery key or header escrow of a device with an issued, unexpired Destroy: the crypto-shredding was decided, so the key is not escrowed again (actor: the device).",
+		Params:      []string{"kind", "generation", "volume"},
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "error_code invalid_state; recorded once per escrow ID. kind is luks_recovery_key or luks_header, volume the header's LUKS UUID (empty for the root volume of an older agent and for a recovery key). No key material is kept; the device sees the escrow as refused.",
+	},
 	CodeRevocationLimitExceeded: {
 		Code: CodeRevocationLimitExceeded, Emitted: true,
 		Description: "The revocation-issuer refused a revocation because it exceeded a limit of ADR 0014 (per administrator 3 per hour and 10 per 24 h, per organization 20 per 24 h); the request is rejected, an alert is raised and the requester's revocations are frozen for 24 h (actor: system).",
@@ -1271,6 +1306,13 @@ var registry = map[Code]Definition{
 		Description: "An operator ran paddock-server admin bump-bundle-seq after a database restore: the bundle sequence of every device was raised (actor: system, platform pseudo-organization).",
 		Params:      []string{"by", "devices"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodePlatformBundleSeqRaised: {
+		Code: CodePlatformBundleSeqRaised, Emitted: true,
+		Description: "An operator ran paddock-server admin raise-bundle-seq after a database restore: every device's bundle sequence was raised to at least at_least and by at least one (actor: system, platform pseudo-organization).",
+		Params:      []string{"at_least", "devices"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "./paddock restore runs it with the highest sequence before the restore plus 1,000,000 (ADR 0046, amendment 2026-11-07).",
 	},
 	CodePlatformCacheRebuilt: {
 		Code: CodePlatformCacheRebuilt, Emitted: true,
@@ -1874,6 +1916,62 @@ var registry = map[Code]Definition{
 		Params:      []string{"kinds", "label"},
 		Outcomes:    adminOutcomes,
 		Note:        "kinds lists postgres, authentik, openbao, fleet and escrow, or the requested subset. Failure with invalid_state while no backup key is confirmed, invalid_request for an unknown kind or a label longer than 64 characters. Platform pseudo-organization.",
+	},
+	CodePlatformBackupCompleted: {
+		Code: CodePlatformBackupCompleted, Emitted: true,
+		Description: "The backup role finished one backup of one kind (a pgBackRest full backup, an OpenBao snapshot, a Fleet dump, an escrow mirror pass) and mirrored the backup set to the enabled targets.",
+		Params:      backupRunParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Actor is the system paddock-backup; target is the run (type backup_run, display the kind). targets_ok and targets_failed count the enabled targets the set reached or missed in the mirror that followed the run (a target that hit the round's copy budget counts as missed); a missed target does not fail the run. The event is recorded after that mirror, which can take hours on a large target; completed_at is when the backup itself finished, and the run is visible in the API from then on. Never a key, a credential or a path's content. Platform pseudo-organization.",
+	},
+	CodePlatformBackupFailed: {
+		Code: CodePlatformBackupFailed, Emitted: true,
+		Description: "One backup of one kind failed in the backup role, or a requested run got no result within an hour.",
+		Params:      backupRunParams,
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "error_class names the cause without detail: openbao, fleet, escrow, pgbackrest, repo, timeout, or record (the backup was taken but its run could not be written). The log of paddock-backup or of the pgbackrest container has the detail. Platform pseudo-organization.",
+	},
+	CodePlatformRestorePlanned: {
+		Code: CodePlatformRestorePlanned, Emitted: true,
+		Description: "A platform administrator approved a restore plan after a step-up and the typed word restore; the host executes it within 24 hours with ./paddock restore --plan <id>.",
+		Params:      restorePlanParams,
+		Outcomes:    adminOutcomes,
+		Note:        "kind is point_in_time or components; source is repo (the local backup repository) or target, with source_target_id; at is the point in time or empty for the newest backups; components lists postgres, openbao, fleet and escrow, or a subset. Failure with invalid_request without the typed word or for an invalid kind, component or point in time, invalid_state while another plan is approved or running or when the source has no successful backup of a chosen component at or before the point (the detail names the kind). Platform pseudo-organization.",
+	},
+	CodePlatformRestoreCancelled: {
+		Code: CodePlatformRestoreCancelled, Emitted: true,
+		Description: "A platform administrator cancelled an approved restore plan after a step-up; the plan is expired and the host refuses it.",
+		Params:      restorePlanParams,
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with not_found, or invalid_state for a plan that is not approved (running, finished or expired). Platform pseudo-organization.",
+	},
+	CodePlatformRestoreStarted: {
+		Code: CodePlatformRestoreStarted, Emitted: true,
+		Description: "The host started an approved restore plan (paddock-server backup restore-report --outcome running); from here it stops the stack and overwrites data (actor: the operator on the host).",
+		Params:      restoreStartParams,
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Recorded once per attempt, a refused one included. Actor is system with the operator's login name ($SUDO_USER or $USER) as display, or host when the name is not a login name. source, source_target_id and components are the stored plan's. Failure with invalid_request for a report without a plan or with invalid input, not_found for an unknown plan, invalid_state for a plan that is expired, cancelled, already running, finished or abandoned, or whose backup target was deleted. Platform pseudo-organization.",
+	},
+	CodePlatformRestoreCompleted: {
+		Code: CodePlatformRestoreCompleted, Emitted: true,
+		Description: "The host finished a restore (paddock-server backup restore-report): a planned restore, a fresh installation from a backup set, or the repository alone (actor: the operator on the host).",
+		Params:      restoreCompletedParams,
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Actor is system with the operator's login name ($SUDO_USER or $USER) as display. plan_id is empty for a restore without a plan, which is recorded as a plan of kind fresh_install; source is set, repo or target. A plan the restored database no longer holds is recorded again under its ID. Failure with invalid_state when the plan is already finished or a platform administrator abandoned it (platform.restore_abandoned). escrow_skipped_destroyed, set when the escrow step ran, counts the escrowed headers not put back because the audit trail holds a successful device.escrow_destroyed of their device; a count only, never a device ID. Never the backup key. Platform pseudo-organization.",
+	},
+	CodePlatformRestoreFailed: {
+		Code: CodePlatformRestoreFailed, Emitted: true,
+		Description: "A restore on the host stopped at a failed step (paddock-server backup restore-report); the step is named in detail (actor: the operator on the host).",
+		Params:      restoreRunParams,
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "detail is <step>: <text> with the step stop, postgres, openbao, paddock, fleet, escrow or backup-repo; the terminal and the container logs have the cause. Platform pseudo-organization.",
+	},
+	CodePlatformRestoreAbandoned: {
+		Code: CodePlatformRestoreAbandoned, Emitted: true,
+		Description: "A platform administrator marked a running restore plan as abandoned after a step-up and the typed word abandon, because the host never reported its end; the slot for a new plan is free and the host's later report for the plan is refused.",
+		Params:      restorePlanParams,
+		Outcomes:    adminOutcomes,
+		Note:        "The plan's state becomes abandoned and its outcome_detail reads abandoned by <administrator>. Failure with invalid_request without the typed word, not_found, or invalid_state for a plan that is not running (cancel an approved plan instead). Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

@@ -1,5 +1,5 @@
 // Package desktop shows notifications in the graphical sessions of the device's users (ADR 0048 decision 6): one
-// notify-send per active wayland or x11 session, run in the user's own service manager. It is best effort: a
+// notify-send per active wayland or x11 user session, run in the user's own service manager. It is best effort: a
 // session that cannot be reached is counted as not notified, never an error of the caller.
 package desktop
 
@@ -29,18 +29,29 @@ const (
 	English = "en"
 )
 
-// Notify shows summary and body in every active wayland or x11 session and returns the number of sessions reached.
-// The error is only that the sessions could not be listed.
-func Notify(ctx context.Context, sys reconcile.System, summary, body string) (int, error) {
+// Result is the outcome of a notification: the active graphical sessions found and how many of them were reached.
+type Result struct {
+	Sessions int
+	Reached  int
+}
+
+// Notify shows summary and body in every active wayland or x11 session of class user (plan M12 decision 11): a login
+// screen is no user to tell, and on Ubuntu 24.04 the GDM greeter is an active wayland session that cannot show a
+// notice (PDK-878). A session it cannot reach is logged at warn
+// level with the cause (PDK-878: the signed privacy text promises the notice, so a silent failure is not acceptable)
+// and counted as not reached. The error is only that the sessions could not be listed.
+func Notify(ctx context.Context, sys reconcile.System, summary, body string) (Result, error) {
 	list, err := sessions.List(ctx, sys.Loginctl)
 	if err != nil {
-		return 0, fmt.Errorf("list the sessions: %w", err)
+		return Result{}, fmt.Errorf("list the sessions: %w", err)
 	}
-	reached := 0
+	var res Result
 	for _, s := range list {
-		if (s.Type != "wayland" && s.Type != "x11") || s.State != "active" || s.User == "" || s.UID < 0 {
+		if s.Class != "user" || (s.Type != "wayland" && s.Type != "x11") || s.State != "active" || s.User == "" ||
+			s.UID < 0 {
 			continue
 		}
+		res.Sessions++
 		nctx, cancel := context.WithTimeout(ctx, NotifyTimeout)
 		// The UID, not the name: systemd splits --machine at the first "@", which a directory user's name contains.
 		// "--" keeps an administrator's reason that starts with "-" from being read as an option of notify-send.
@@ -48,12 +59,12 @@ func Notify(ctx context.Context, sys reconcile.System, summary, body string) (in
 			"--collect", "--wait", "notify-send", "--app-name=Paddock", "--urgency=normal", "--", summary, body)
 		cancel()
 		if err != nil {
-			slog.DebugContext(ctx, "desktop notification not shown", "session", s.ID, "error", err)
+			slog.WarnContext(ctx, "desktop notification not shown", "session", s.ID, "uid", s.UID, "error", err)
 			continue
 		}
-		reached++
+		res.Reached++
 	}
-	return reached, nil
+	return res, nil
 }
 
 // Language returns German when LANG of the system locale starts with "de", English otherwise (also when the file is

@@ -97,19 +97,55 @@ func untar(t *testing.T, archive []byte) map[string][]byte {
 	}
 }
 
-// graphicalSessionsScript counts the active wayland and x11 sessions, the sessions the agent notifies.
-const graphicalSessionsScript = `for s in $(loginctl list-sessions --no-legend | awk '{print $1}'); do ` +
-	`loginctl show-session "$s" -p Type -p State | sort | paste -sd' '; done | grep -cE '^State=active Type=(wayland|x11)$' || true`
+// userSessionsScript counts the active wayland and x11 sessions of class user, the sessions the agent notifies; a
+// login screen (Ubuntu 24.04's GDM greeter is an active wayland session) is no user to tell (PDK-878).
+const userSessionsScript = `for s in $(loginctl list-sessions --no-legend | awk '{print $1}'); do ` +
+	`loginctl show-session "$s" -p Class -p Type -p State | sort | paste -sd' '; done | ` +
+	`grep -cE '^Class=user State=active Type=(wayland|x11)$' || true`
+
+// sessionsScript lists every session's class, type, state and user for a failure message.
+const sessionsScript = `for s in $(loginctl list-sessions --no-legend | awk '{print $1}'); do ` +
+	`loginctl show-session "$s" -p Id -p Class -p Type -p State -p Name | sort | paste -sd' '; done`
+
+// ensureUserSession returns the number of active graphical user sessions on d, at least one. A fresh VM sits at the
+// login screen (its image configures no autologin): DS1 then logs the VM's user in by a GDM autologin for this
+// snapshot only, and fails loudly when that gives no user session, since DS1 proves that a user is told.
+func ensureUserSession(t *testing.T, d *Device) int {
+	t.Helper()
+	count := func() int {
+		n, err := strconv.Atoi(strings.TrimSpace(d.Must(userSessionsScript)))
+		if err != nil {
+			t.Fatalf("graphical user sessions: %v", err)
+		}
+		return n
+	}
+	if n := count(); n > 0 {
+		return n
+	}
+	user := d.Must("id -un")
+	t.Logf("%s: no active graphical user session (%s); logging %s in by a GDM autologin", d.Name,
+		d.Must(sessionsScript), user)
+	// GDM logs in automatically once per start; its ran-once marker in /run would skip the autologin after a restart.
+	d.Must("printf '[daemon]\\nAutomaticLoginEnable=true\\nAutomaticLogin=%s\\n' '" + user + "'" +
+		" | sudo tee /etc/gdm3/custom.conf >/dev/null && sudo rm -f /run/gdm3/ran-once-marker /run/gdm/ran-once-marker" +
+		" && sudo systemctl restart display-manager.service")
+	n := 0
+	deadline := time.Now().Add(2 * time.Minute)
+	for n = count(); n == 0 && time.Now().Before(deadline); n = count() {
+		time.Sleep(5 * time.Second)
+	}
+	if n == 0 {
+		t.Fatalf("%s: still no active graphical user session after the autologin: %s", d.Name, d.Must(sessionsScript))
+	}
+	return n
+}
 
 // secretLine is a Himmelblau configuration line the collector must redact (ADR 0048 decision 2).
 var secretLine = regexp.MustCompile(`(?i)secret|password|key`)
 
 func gateDS1(t *testing.T, d *Device) {
-	sessions, err := strconv.Atoi(strings.TrimSpace(d.Must(graphicalSessionsScript)))
-	if err != nil {
-		t.Fatalf("graphical sessions: %v", err)
-	}
-	t.Logf("%s: %d active graphical sessions", d.Name, sessions)
+	sessions := ensureUserSession(t, d)
+	t.Logf("%s: %d active graphical user sessions", d.Name, sessions)
 	// The newest line of the agent's own work before the request; the archive's journal must hold it.
 	lastApplied := d.Must("sudo journalctl -u paddock-supervisor.service -o short-iso --no-pager | grep 'bundle applied' | tail -n 1")
 	if lastApplied == "" {
@@ -158,17 +194,10 @@ func gateDS1(t *testing.T, d *Device) {
 	if bundle.NotifiedSessions == nil {
 		t.Fatal("the bundle reports no notified_sessions")
 	}
-	if sessions > 0 && *bundle.NotifiedSessions < 1 {
-		t.Errorf("notified_sessions %d with %d active graphical sessions", *bundle.NotifiedSessions, sessions)
-	}
-	if sessions == 0 {
-		if *bundle.NotifiedSessions != 0 {
-			t.Errorf("notified_sessions %d without a graphical session", *bundle.NotifiedSessions)
-		}
+	if *bundle.NotifiedSessions < 1 {
 		since := requested.Add(-time.Minute).Format("2006-01-02 15:04:05")
-		if out := d.Must("sudo journalctl -u paddock-supervisor.service --no-pager --since '" + since + "'"); !strings.Contains(out, "no active graphical session") {
-			t.Errorf("the agent's journal has no line \"no active graphical session\" since %s", since)
-		}
+		t.Errorf("notified_sessions %d with %d active graphical user sessions; agent journal: %s", *bundle.NotifiedSessions,
+			sessions, d.Must("sudo journalctl -u paddock-supervisor.service --no-pager --since '"+since+"' | grep -i notif || true"))
 	}
 	if out := d.Must("sudo find /var/lib/paddock/diagnostics -mindepth 1 2>/dev/null || true"); out != "" {
 		t.Errorf("temporary files left on the device: %s", out)

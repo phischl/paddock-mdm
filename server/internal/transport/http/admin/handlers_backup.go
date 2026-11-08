@@ -15,6 +15,8 @@ import (
 var (
 	backupTargetList = listing.Spec{Sort: []string{"name", "type", "created_at"}, DefaultSort: "name"}
 	backupRunList    = listing.Spec{Sort: []string{"started_at", "kind", "outcome"}, DefaultSort: "-started_at"}
+	// The restore plans (plan M15 decision 26).
+	backupRestorePlanList = listing.Spec{Sort: []string{"created_at", "state"}, DefaultSort: "-created_at"}
 )
 
 func (h *handlers) GetBackupOverview(ctx context.Context, _ adminapi.GetBackupOverviewRequestObject) (adminapi.GetBackupOverviewResponseObject, error) {
@@ -180,6 +182,82 @@ func (h *handlers) ListBackupRuns(ctx context.Context, req adminapi.ListBackupRu
 		return nil, err
 	}
 	return adminapi.ListBackupRuns200JSONResponse(listing.NewPage(toBackupRuns(res.Items), params, res.Count)), nil
+}
+
+func (h *handlers) ListBackupRestorePlans(ctx context.Context, req adminapi.ListBackupRestorePlansRequestObject) (adminapi.ListBackupRestorePlansResponseObject, error) {
+	params, err := listing.Parse(backupRestorePlanList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	states, err := listing.Enum("state", req.Params.State)
+	if err != nil {
+		return nil, err
+	}
+	res, err := h.backupRestorePlans.List(ctx, app.RestorePlanQuery{Page: params.ListPage(), States: states})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]adminapi.BackupRestorePlan, len(res.Items))
+	for i, p := range res.Items {
+		items[i] = toBackupRestorePlan(p)
+	}
+	return adminapi.ListBackupRestorePlans200JSONResponse(listing.NewPage(items, params, res.Count)), nil
+}
+
+func (h *handlers) CreateBackupRestorePlan(ctx context.Context, req adminapi.CreateBackupRestorePlanRequestObject) (adminapi.CreateBackupRestorePlanResponseObject, error) {
+	b := req.Body
+	in := app.PlanInput{Kind: string(b.Kind), SourceTargetID: b.SourceTargetId, At: b.At, Confirmation: b.Confirmation}
+	for _, c := range b.Components {
+		in.Components = append(in.Components, string(c))
+	}
+	p, err := h.backupRestorePlans.Create(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	loc := "/api/platform/v1/backup/restore-plans/" + p.ID.String()
+	return adminapi.CreateBackupRestorePlan201JSONResponse{
+		Body: toBackupRestorePlan(p), Headers: adminapi.CreateBackupRestorePlan201ResponseHeaders{Location: &loc},
+	}, nil
+}
+
+func (h *handlers) GetBackupRestorePlan(ctx context.Context, req adminapi.GetBackupRestorePlanRequestObject) (adminapi.GetBackupRestorePlanResponseObject, error) {
+	p, err := h.backupRestorePlans.Get(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.GetBackupRestorePlan200JSONResponse(toBackupRestorePlan(p)), nil
+}
+
+func (h *handlers) CancelBackupRestorePlan(ctx context.Context, req adminapi.CancelBackupRestorePlanRequestObject) (adminapi.CancelBackupRestorePlanResponseObject, error) {
+	p, err := h.backupRestorePlans.Cancel(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.CancelBackupRestorePlan200JSONResponse(toBackupRestorePlan(p)), nil
+}
+
+func (h *handlers) AbandonBackupRestorePlan(ctx context.Context, req adminapi.AbandonBackupRestorePlanRequestObject) (adminapi.AbandonBackupRestorePlanResponseObject, error) {
+	p, err := h.backupRestorePlans.Abandon(ctx, req.Id, req.Body.Confirmation)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.AbandonBackupRestorePlan200JSONResponse(toBackupRestorePlan(p)), nil
+}
+
+func toBackupRestorePlan(p app.Plan) adminapi.BackupRestorePlan {
+	components := make([]adminapi.BackupRestorePlanComponents, len(p.Components))
+	for i, c := range p.Components {
+		components[i] = adminapi.BackupRestorePlanComponents(c)
+	}
+	return adminapi.BackupRestorePlan{
+		Id: p.ID, Kind: adminapi.BackupRestorePlanKind(p.Kind), Source: adminapi.BackupRestorePlanSource(p.Source),
+		SourceTargetId: p.SourceTargetID, SourceTargetName: p.SourceTargetName, At: utcPtr(p.At), Components: components,
+		State: adminapi.BackupRestorePlanState(p.State), CreatedBy: p.CreatedBy, CreatedAt: p.CreatedAt.UTC(),
+		ExpiresAt: utcPtr(p.ExpiresAt), StartedAt: utcPtr(p.StartedAt), FinishedAt: utcPtr(p.FinishedAt),
+		OutcomeDetail: p.OutcomeDetail, HostCommand: p.HostCommand,
+	}
 }
 
 // toTargetInput maps the body; only the group of the type is read by the use case, an absent group is empty and

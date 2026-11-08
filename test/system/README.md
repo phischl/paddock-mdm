@@ -16,6 +16,10 @@ release without rollout. Every test starts from the snapshot `base-installed`
 and restores it, powered off, when it ends; with `PADDOCK_SYSTEM_KEEP=1` a failed test leaves its VM running for
 inspection. Screenshots are kept in `bin/system-evidence/<vm>/`.
 
+`make system-test VM=all` skips the backup gates (`TestBackupGates`) unless `PADDOCK_SYSTEM_BACKUP=1` is set. A release
+regression sets it and runs them on their own, after the other gates (section
+[Backup and recovery](#backup-and-recovery-plan-m15) lists the prerequisites).
+
 ## Worktrees
 
 `make system-test`, `make acceptance` and `make e2e` need the checkout's `deploy/compose/.env` and
@@ -142,3 +146,46 @@ first). The VM's serial console is written to `bin/system-ai/<vm>/serial.log` (t
 console lines there), and its disk is throttled while the background reencryption runs, so that a power cut lands in
 its middle; the limit is set only while the VM is powered off (a change at runtime did not take effect), so a gate
 lifts it with a clean restart.
+
+## Backup and recovery (plan M15)
+
+`TestBackupGates` (BS1–BS5, plan M15 §9 and the mirror amendment's loss case L1) is opt-in and a required part of
+every release regression: it runs only with `PADDOCK_SYSTEM_BACKUP=1` and skips with a pointer to this section
+otherwise. It does not use the development stack. It installs the local operator bundle on
+the host as a lab with backups (`lab.go`, the steps of `deploy/bundle/ci/smoke-lab.sh` with `PADDOCK_LAB_BACKUP=yes`,
+project `paddock-systest-lab`, Nginx on 80/443 with a throwaway CA) and removes it, its volumes and its local backup
+root `/srv/paddock-systest-<run>` when it ends:
+
+```sh
+make build web image image-compiler image-pgbackrest bundle
+PADDOCK_SYSTEM_BACKUP=1 make system-test VM=all T='TestBackupGates'
+```
+
+It needs passwordless `sudo` on the host (the local root is root-owned, and `./paddock restore` hands the staged set to
+uid 999), and 80, 443, 445, 2049 and 127.0.0.1:8080 free; the subnets 172.30.0.0/24 and 172.30.1.0/24 of
+`compose.ci-lab.yaml` must not be taken by another Compose network. Run it alone: it destroys the lab twice and must
+never run beside acceptance, e2e or other system tests. It takes about two hours. `PADDOCK_SYSTEM_BUNDLE` names another
+bundle tarball. Before the port check it removes what a killed earlier run left behind under the gate's own fixed names
+(the Compose project `paddock-systest-lab` with its volumes, the proxy, the share relay, the S3 store).
+
+- A production-profile installation accepts only WebAuthn as second factor, so the gate's Authentik accounts get a
+  software WebAuthn credential (`authflow.WebAuthn`), installed in Authentik's shell like the dev users' TOTP.
+- VM A (the first VM) serves an SMB share and an NFS export (`share.go`: `samba` and `nfs-kernel-server` from the
+  Ubuntu archive). A target names no port and the VMs sit behind VirtualBox NAT, so the host reaches them through NAT
+  forwards (host ports 14445 and 12049) and a relay of `NGINX_IMAGE` on `127.0.0.1:445` and `127.0.0.1:2049`.
+- BS3's S3 target is a RustFS of `RUSTFS_IMAGE` behind an Nginx TLS front (`https://paddock-systest-s3`) on the
+  Docker network `paddock-systest-s3`, outside the lab's project so that `./paddock down --volumes` leaves it; a
+  Compose overlay attaches the backup role to it.
+- VM B (the second VM) enrolls into the lab's organization, runs the disk setup and escrows its recovery key and
+  header, which must come back unchanged after each restore.
+
+| Gate | What it proves |
+| --- | --- |
+| BS1 `TestBackupShareTargets` | SMB and NFS targets `pending_host` → `mounted` after `backup-target apply` and `up`; `backup now` puts the set with its manifest on VM A; a stopped `smbd` turns the SMB target `unreachable` within 5 minutes with `PaddockBackupTargetUnreachable` pending; every service stays healthy |
+| BS2 `TestRestoreFreshInstallFromUpload` | the set of the local target as a tarball restores the lab after `down --volumes` and `secrets` (`sudo ./paddock restore --from`, the gate unseals OpenBao as the custodians would): sign-in, VM B applies a higher bundle version, the same recovery key, the header downloads, `platform.restore_completed` with source `set` |
+| BS3 `TestRestoreFreshInstallFromTarget` | the same from the S3 target with the file of `backup-target export` (`--from-target-file`), source `target` |
+| BS4 `TestRestorePointInTime` | a plan to T1 + 30 s (`./paddock restore --plan`) keeps the managed file of T1 and drops the one of T2, VM B applies a higher bundle version, the plan is `completed` and `platform.restore_completed` names the operator (`$SUDO_USER`) |
+| BS5 `TestRestoreBackupRepoFromTarget` | after a mirrored round the local repository volume `backup-repo` is deleted (loss case L1, state volumes kept): the local and the S3 target stay byte for byte as they were and report `set_shrunk` with `PaddockBackupTargetUnreachable` pending; `./paddock restore --only backup-repo --from systest-local` rebuilds the repository, `platform.restore_completed` records it (source `target`, component `backup-repo`), and the next `backup now` reaches every target without an error |
+
+`PADDOCK_SYSTEM_KEEP=1` leaves a failed run's lab in place (the log line names what to remove); the lab's logs are kept
+in `bin/system-evidence/lab/`.

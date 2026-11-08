@@ -133,6 +133,8 @@ type Deps struct {
 	BackupTargets  *app.BackupTargets
 	BackupSchedule *app.BackupSchedule
 	BackupRuns     *app.BackupRuns
+	// BackupRestorePlans are the restore plans (plan M15 decisions 25–26).
+	BackupRestorePlans *app.BackupRestorePlans
 }
 
 // privileged maps route patterns of privileged actions to their audit spec, so that requests rejected before
@@ -282,6 +284,9 @@ var privileged = map[string]struct {
 	"POST /api/platform/v1/backup/targets/{id}/enable":                     {app.ScopePlatform, app.SpecBackupTargetUpdate},
 	"POST /api/platform/v1/backup/targets/{id}/disable":                    {app.ScopePlatform, app.SpecBackupTargetUpdate},
 	"POST /api/platform/v1/backup/run":                                     {app.ScopePlatform, app.SpecBackupRunRequest},
+	"POST /api/platform/v1/backup/restore-plans":                           {app.ScopePlatform, app.SpecRestorePlan},
+	"POST /api/platform/v1/backup/restore-plans/{id}/cancel":               {app.ScopePlatform, app.SpecRestoreCancel},
+	"POST /api/platform/v1/backup/restore-plans/{id}/abandon":              {app.ScopePlatform, app.SpecRestoreAbandon},
 }
 
 // ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the
@@ -316,7 +321,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns,
+		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns, backupRestorePlans: d.BackupRestorePlans,
 		securityReview: d.SecurityReview,
 		accessReview:   d.AccessReview,
 		diagnostics:    d.Diagnostics,

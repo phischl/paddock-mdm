@@ -175,10 +175,10 @@ tests:
         values: "0 1 1 1"
       - series: 'paddock_osv_stale{role="paddock-worker"}'
         values: "1"
-      # At 27 h: postgres 25 h old (fine), fleet never backed up (0).
-      - series: 'paddock_backup_last_success_timestamp_seconds{kind="postgres", role="paddock-worker"}'
+      # At 27 h: postgres 25 h old (fine), fleet never reached the target nas (0).
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="postgres", target="repo", role="paddock-backup"}'
         values: "7200x1620"
-      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", role="paddock-worker"}'
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", target="nas", role="paddock-backup"}'
         values: "0x1620"
       - series: 'paddock_tls_certificate_expiry_timestamp_seconds{host="admin.example.org", role="paddock-worker"}'
         values: "864000"
@@ -200,10 +200,10 @@ tests:
       - eval_time: 27h
         alertname: PaddockBackupStale
         exp_alerts:
-          - exp_labels: { severity: critical, kind: fleet }
+          - exp_labels: { severity: critical, kind: fleet, target: nas }
             exp_annotations:
-              summary: "No fleet backup for more than 26 hours"
-              description: "The newest fleet backup in the backup bucket is older than 26 hours (docs/operations/restore.md)."
+              summary: "No fleet backup on nas for too long"
+              description: "The newest fleet backup on nas (repo: the local repository) is older than 26 hours (escrow: 3 hours); check paddock-backup and the target (docs/operations/restore.md)."
       - eval_time: 0m
         alertname: PaddockCertificateExpiry
         exp_alerts:
@@ -215,9 +215,9 @@ tests:
   - name: series that are never set
     interval: 1m
     input_series:
-      - series: 'paddock_backup_kinds{role="paddock-worker"}'
-        values: "4x70"
-      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", role="paddock-worker"}'
+      - series: 'paddock_backup_age_series{role="paddock-backup"}'
+        values: "10x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", target="repo", role="paddock-backup"}'
         values: "0x70"
       - series: 'up{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
         values: "1x70"
@@ -235,7 +235,7 @@ tests:
           - exp_labels: { severity: critical }
             exp_annotations:
               summary: "The age of some backups is unknown"
-              description: "The worker exports the age of fewer backup kinds than configured; check its log and its backup bucket credential."
+              description: "The backup role exports the age of fewer kinds and targets than configured (a target that never received the set); check its log and the targets."
       - eval_time: 65m
         alertname: PaddockOpenBaoHealthMissing
         exp_alerts:
@@ -254,15 +254,17 @@ tests:
   - name: complete series and a host without a worker stay silent
     interval: 1m
     input_series:
-      - series: 'paddock_backup_kinds{role="paddock-worker"}'
-        values: "4x70"
-      - series: 'paddock_backup_last_success_timestamp_seconds{kind="postgres", role="paddock-worker"}'
+      - series: 'paddock_backup_age_series{role="paddock-backup"}'
+        values: "5x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="postgres", target="repo", role="paddock-backup"}'
         values: "1x70"
-      - series: 'paddock_backup_last_success_timestamp_seconds{kind="authentik", role="paddock-worker"}'
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="authentik", target="repo", role="paddock-backup"}'
         values: "1x70"
-      - series: 'paddock_backup_last_success_timestamp_seconds{kind="openbao", role="paddock-worker"}'
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="openbao", target="repo", role="paddock-backup"}'
         values: "1x70"
-      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", role="paddock-worker"}'
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", target="repo", role="paddock-backup"}'
+        values: "1x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="escrow", target="repo", role="paddock-backup"}'
         values: "1x70"
       - series: 'paddock_tls_probe_hosts{role="paddock-worker"}'
         values: "0x70"
@@ -283,9 +285,9 @@ tests:
   - name: a stalled WAL archive fires after 15 minutes of lag for 10 minutes
     interval: 1m
     input_series:
-      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-worker"}'
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-backup"}'
         values: "0+60x10 600x50"
-      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="authentik", role="paddock-worker"}'
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="authentik", role="paddock-backup"}'
         values: "0+60x60"
     alert_rule_test:
       - eval_time: 20m
@@ -300,14 +302,14 @@ tests:
           - exp_labels: { severity: critical, stanza: paddock }
             exp_annotations:
               summary: "The WAL archive of paddock lags by more than 15 minutes"
-              description: "No WAL segment of the paddock database has reached the backup bucket for 15 minutes; check the pgbackrest container and its spool volume (docs/operations/restore.md)."
+              description: "No WAL segment of the paddock database has reached the local backup repository for 15 minutes; check the pgbackrest container and its spool volume (docs/operations/restore.md)."
 
   - name: a WAL archive age that is never set
     interval: 1m
     input_series:
-      - series: 'paddock_backup_wal_stanzas{role="paddock-worker"}'
+      - series: 'paddock_backup_wal_stanzas{role="paddock-backup"}'
         values: "2x60"
-      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-worker"}'
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-backup"}'
         values: "0+60x60"
     alert_rule_test:
       - eval_time: 20m
@@ -319,16 +321,16 @@ tests:
           - exp_labels: { severity: critical }
             exp_annotations:
               summary: "The WAL archive lag of some databases is unknown"
-              description: "The worker exports the WAL archive age of fewer stanzas than configured; check its log and its backup bucket credential."
+              description: "The backup role exports the WAL archive age of fewer stanzas than configured; check its log and the local repository."
 
   - name: complete WAL archive ages stay silent
     interval: 1m
     input_series:
-      - series: 'paddock_backup_wal_stanzas{role="paddock-worker"}'
+      - series: 'paddock_backup_wal_stanzas{role="paddock-backup"}'
         values: "2x60"
-      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-worker"}'
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-backup"}'
         values: "0+60x60"
-      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="authentik", role="paddock-worker"}'
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="authentik", role="paddock-backup"}'
         values: "0+60x60"
     alert_rule_test:
       - eval_time: 50m
@@ -683,3 +685,106 @@ tests:
       - eval_time: 18m
         alertname: PaddockNotificationStalled
         exp_alerts: []
+
+  # Plan M15, amendment 2026-11-05: a target that holds objects for a week; a hold that ends resets the wait.
+  - name: backup target holding
+    interval: 4m
+    input_series:
+      # nas holds from 2 h on; s3 held for 100 h, then its hold ended.
+      - series: 'paddock_backup_target_held_files{target="nas", role="paddock-backup"}'
+        values: "0x30 3x2700"
+      - series: 'paddock_backup_target_held_files{target="s3", role="paddock-backup"}'
+        values: "2x1500 0x1300"
+    alert_rule_test:
+      - eval_time: 160h
+        alertname: PaddockBackupTargetHolding
+        exp_alerts: []
+      - eval_time: 175h
+        alertname: PaddockBackupTargetHolding
+        exp_alerts:
+          - exp_labels: { severity: warning, target: nas }
+            exp_annotations:
+              summary: "The backup target nas has held objects for a week"
+              description: "nas keeps objects the local backup repository lacks (WAL of a broken or unverified archive, snapshots, dumps or escrowed headers the local set lost, a retired or unknown repository path); repair the local repository (./paddock restore --only backup-repo) or let it roll, see docs/operations/restore.md."
+  # Plan M15, amendment 2026-11-05, A2 note b: a suspicious escrow listing alerts after 5 minutes and clears with it.
+  - name: backup escrow listing suspicious
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_escrow_listing_suspicious{role="paddock-backup"}'
+        values: "0x10 1x20 0x10"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: PaddockBackupEscrowListingSuspicious
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: PaddockBackupEscrowListingSuspicious
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "The escrow bucket lacks escrowed LUKS headers without Destroy evidence"
+              description: "The escrow bucket listing lacks all or more than 10 % of the headers the backup set holds, and no Destroy explains it (lost RustFS volume, re-created bucket or wrong PADDOCK_ESCROW_S3_BUCKET). Every copy is held; restore the headers to the bucket (./paddock restore --only escrow) or fix the bucket setting, see docs/operations/restore.md."
+      - eval_time: 35m
+        alertname: PaddockBackupEscrowListingSuspicious
+        exp_alerts: []
+  # Plan M15 decision 19: escrow is stale after 3 hours, the key, the targets and the repository's free space.
+  - name: backup role alerts
+    interval: 1m
+    input_series:
+      # Escrow last copied at 0: stale from 3 h on; the openbao series of the same target stays fresh.
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="escrow", target="repo", role="paddock-backup"}'
+        values: "0x250"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="openbao", target="repo", role="paddock-backup"}'
+        values: "0+60x250"
+      - series: 'paddock_backup_key_confirmed{role="paddock-backup"}'
+        values: "0x70"
+      # nas fails from minute 10 on, s3 stays reachable.
+      - series: 'paddock_backup_target_reachable{target="nas", role="paddock-backup"}'
+        values: "1x10 0x60"
+      - series: 'paddock_backup_target_reachable{target="s3", role="paddock-backup"}'
+        values: "1x70"
+      # 5 % free from minute 10 on.
+      - series: 'paddock_backup_repo_bytes{what="free", role="paddock-backup"}'
+        values: "50x10 5x60"
+      - series: 'paddock_backup_repo_bytes{what="used", role="paddock-backup"}'
+        values: "50x10 95x60"
+    alert_rule_test:
+      - eval_time: 170m
+        alertname: PaddockBackupStale
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: PaddockBackupStale
+        exp_alerts:
+          - exp_labels: { severity: critical, kind: escrow, target: repo }
+            exp_annotations:
+              summary: "No escrow backup on repo for too long"
+              description: "The newest escrow backup on repo (repo: the local repository) is older than 26 hours (escrow: 3 hours); check paddock-backup and the target (docs/operations/restore.md)."
+      - eval_time: 50m
+        alertname: PaddockBackupKeyUnconfirmed
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: PaddockBackupKeyUnconfirmed
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "No backup runs: the backup key is not confirmed"
+              description: "Generate and confirm the backup key in the portal (Platform, Backup); until then nothing is backed up."
+      - eval_time: 35m
+        alertname: PaddockBackupTargetUnreachable
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: PaddockBackupTargetUnreachable
+        exp_alerts:
+          - exp_labels: { severity: warning, target: nas }
+            exp_annotations:
+              summary: "The backup target nas is unreachable"
+              description: "The backup set has not reached nas for 30 minutes (share not mounted, endpoint down, credentials refused); the local repository and the other targets still receive it (./paddock backup status)."
+      - eval_time: 5m
+        alertname: PaddockBackupRepoFull
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: PaddockBackupRepoFull
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "The local backup repository has less than 10 % free space"
+              description: "pgBackRest and the backup role stop writing when the volume backup-repo is full; free space or lower the retention (docs/operations/restore.md)."

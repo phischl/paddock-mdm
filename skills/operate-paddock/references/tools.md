@@ -165,6 +165,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getAutoUnseal` | read | no | The automatic-unseal setting (ADR 0035): the acknowledged decision, the unsealer's report and OpenBao's seal status. |
 | `getBackupKey` | read | no | The backup key state (plan M15 decision 7): the active key, the key waiting for its confirmation and the retired keys. |
 | `getBackupOverview` | read | no | The backup overview (plan M15 decision 13): the key state, the schedule, every target with its mirror state per kind, the local repository and the newest run per kind. |
+| `getBackupRestorePlan` | read | no | One restore plan. |
 | `getBackupSchedule` | read | no | The backup schedule and retention; without a stored schedule the defaults (full backup every 24 h, OpenBao every 6 h, Fleet every 24 h, escrow every hour, 14 full backups, 30 days of snapshots and dumps) with updated_by and updated_at null. |
 | `getBackupTarget` | read | no | One target with its last test and its mirror state per kind; 404 not_found for a missing or deleted one. |
 | `getIpAllowlistEntry` | read | no | One entry. |
@@ -173,6 +174,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getUpgradeCheck` | read | no | The read-only report before an upgrade to target_version (ADR 0047 decision 2, plan M16 decision 4), the same as paddock-server admin upgrade-check: migrations (FAIL when the database is ahead of this release), agents (active devices whose agent is a release older than the target's support window: FAIL above 1 % of the active devices or 5, whichever is larger, WARN below), backups, openbao, pending (running agent rollout, halted configuration rollouts: WARN) and sessions. |
 | `haltAgentRollout` | write | yes | POST /api/platform/v1/agent-releases/{version}/rollout/halt |
 | `listAgentReleases` | read | no | Agent releases with their rollout status (plan M2b decision 20). |
+| `listBackupRestorePlans` | read | no | The restore plans: approved in the portal, executed on the host with host_command, and the restores the host ran without a plan (kind fresh_install). |
 | `listBackupRuns` | read | no | The backup runs, one per kind and attempt, with the mirror result per target. |
 | `listBackupTargets` | read | no | The backup targets: local directories of the host, SMB and NFS shares the host mounts, S3-compatible buckets. |
 | `listComponentTargets` | read | no | The versions devices are expected to run (plan M8d decision 55): paddockd, the supervisor and paddock-revoke from the current release, fleetd from the newest published release, Himmelblau from the compiler. |
@@ -285,7 +287,9 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 
 | Operation | Tag | Summary |
 | --- | --- | --- |
+| `abandonBackupRestorePlan` | platform | Marks a running plan as abandoned when the host never reported its end (the host crashed, or the database was unreachable when the restore stopped): the plan no longer blocks a new one, its outcome_detail names the administrator, and the host's later report for it is refused (409). |
 | `approveRevocationRequest` | revocation | POST /api/v1/revocation-requests/{id}/approve |
+| `cancelBackupRestorePlan` | platform | Cancels an approved plan: it is expired and the host refuses it. |
 | `cancelDeviceEncryption` | devices | Cancels the open in-place encryption before the device restarts (plan M8e decision 8): while the encrypt_disk command has not reached the device (pending, failed or expired) it is withdrawn and the conversion is cancelled at once; once the device received it, or while the conversion is prepared, the device is sent the signed command encrypt_disk_abort and the conversion keeps its phase until the device reports the abort (cancelled) or refuses it (abort_refused_reason). |
 | `cancelRevocationRequest` | revocation | POST /api/v1/revocation-requests/{id}/cancel |
 | `confirmBackupKey` | platform | Confirms a key with the characters of its text at the six positions of the generating response (or of pending.positions in GET /api/platform/v1/backup/key), in that order. |
@@ -293,6 +297,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `confirmPermissionProfileRootGrant` | privileges | Confirms an effectively Full profile that existed before the step-up rule covered it; needs a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). |
 | `createApiToken` | api-tokens | The role may not be above the creator's: org_admin creates any organization role, org_operator creates org_operator and org_auditor (403 forbidden). |
 | `createAuditExport` | audit | Requests a signed evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). |
+| `createBackupRestorePlan` | platform | Approves a restore plan, which the host executes within 24 hours with ./paddock restore --plan <id> (host_command). |
 | `createBackupTarget` | platform | Adds a target. |
 | `createIpAllowlistEntry` | platform | Adds a range. |
 | `createNotificationDestination` | notifications | Creates a destination. |

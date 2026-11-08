@@ -227,3 +227,12 @@ func (h *Helper) run(ctx context.Context, name string, args ...string) error {
 
 // packageTimeout bounds every tool run, apt-get included (the agent's PackageTimeout).
 const packageTimeout = 15 * time.Minute
+
+// aptLockTimeout lets apt wait for the dpkg lock that an unattended upgrade or another apt run may hold, like every
+// other apt call of the agent. It stays below packageTimeout so that the removal itself still has time to run.
+const aptLockTimeout = "DPkg::Lock::Timeout=600"
+
+// purgeArgs is the apt-get command line that purges pkgs and waits for the dpkg lock.
+func purgeArgs(pkgs ...string) []string {
+	return append([]string{"remove", "--purge", "-y", "-o", aptLockTimeout}, pkgs...)
+}

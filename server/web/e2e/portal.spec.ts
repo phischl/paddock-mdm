@@ -6,6 +6,9 @@ import { test } from './cleanup'
 test('organization admin manages a device group and sees the audit trail', async ({ page, cleanup }) => {
   const csp = watchCSP(page)
   await login(page, 'alice@acme.test', 'dev_alice_password')
+  // The Upgrade card is for platform administrators only (PDK-746).
+  await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible()
+  await expect(page.getByTestId('upgrade-card')).toHaveCount(0)
   await expectAdminStartPage(page)
   await openUserMenu(page)
   await expect(page.getByTestId('user-role')).toHaveText('Organization administrator')
@@ -156,6 +159,7 @@ test('auditor sees the audit log but cannot create device groups', async ({ page
   await login(page, 'bob@acme.test', 'dev_bob_password')
   await expect(page).toHaveURL(/\/audit$/)
   await expect(page.getByTestId('audit-table')).toBeVisible()
+  await expect(page.getByTestId('upgrade-card')).toHaveCount(0)
   await expectAccessible(page)
   await mainNav(page).getByRole('link', { name: 'Device groups' }).click()
   await expect(page.getByRole('heading', { name: 'Device groups' })).toBeVisible()
@@ -169,6 +173,11 @@ test('platform admin sees the organizations page', async ({ page }) => {
   const csp = watchCSP(page)
   await login(page, 'platform-admin@paddock.test', 'dev_platform_admin_password')
   await expect(page).toHaveURL(/\/platform\/organizations$/)
+  // The Upgrade card shows the report or, on a development build, that its version is no known release; no action.
+  const upgrade = page.getByTestId('upgrade-card')
+  await expect(upgrade.getByRole('heading', { name: 'Upgrade' })).toBeVisible()
+  await expect(upgrade.getByTestId('upgrade-window').or(upgrade.getByTestId('upgrade-problem'))).toBeVisible()
+  await expect(upgrade.getByRole('button')).toHaveCount(0)
   await page.getByTestId('list-search').getByRole('searchbox').fill('acme')
   await expect(page).toHaveURL(/q=acme/)
   await expect(page.getByRole('cell', { name: 'acme', exact: true })).toBeVisible()

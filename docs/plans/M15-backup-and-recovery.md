@@ -421,7 +421,8 @@ amendment, `docs/reqirements/`.
 
 ```
 name: 1–64 characters, the API-token name pattern ^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$; unique
-local: path absolute, no "..", ≤ 256 bytes (a host directory; must exist on the host — checked by apply)
+local: path a relative subpath of PADDOCK_BACKUP_LOCAL_ROOT (amendment 2026-11-05, decision 36): no leading "/",
+       no "..", "." or empty element, ≤ 256 bytes; resolved and checked on the host by apply
 smb:   host (DNS name or IP literal, ≤ 253), share (^[A-Za-z0-9_$. -]{1,80}$), path (relative, optional, no ".."),
        username (1–104), password (1–256, write-only), domain (optional ≤ 64), options (optional, ≤ 256, the
        allow list vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N; anything else 400)
@@ -511,6 +512,7 @@ func NewDirTarget(root string) Target
 | `platform.backup_run_requested` | platform admin / operator (host) | backup | `kinds`, `label` |
 | `platform.backup_completed` / `platform.backup_failed` | system `paddock-backup` | backup_run | `run_id`, `kind`, `label`, `bytes`, `duration_s`, `targets_ok`, `targets_failed`, `error_class` (outcomes success / failure) |
 | `platform.restore_planned` / `platform.restore_cancelled` | platform admin | backup_restore_plan | `plan_id`, `kind`, `source`, `at`, `components` |
+| `platform.restore_started` | operator (host) | backup_restore_plan | `plan_id`, `source`, `source_target_id`, `components` (once per attempt, refusals included; note 2026-11-05 on PDK-735) |
 | `platform.restore_completed` / `platform.restore_failed` | operator (host) | backup_restore_plan | `plan_id`, `source`, `at`, `components`, `duration_s`, `detail` |
 
 ### 6.5 Backup set (`paddock.backup-set.v1`)
@@ -1035,3 +1037,246 @@ L8/L9, `TestMirrorGuardIgnoresEmptyLastFull` → L8, `TestMirrorGuardPartialInfo
   be written (step 5), size check before the manifest (step 4), no put of a label directory without
   `backup.manifest` (step 3), and a hard cap on a trickling target (cancel the mirror context at
   `started + budget + size/min_rate` with `min_rate` = 1 MiB/s).
+
+### Note 2026-11-05 a — A6 rows L5 and L8 corrected (A3 wins; decisions-alpha9 item 26)
+
+- **L5** (`TestMirrorKindPartialLossFollowsKeep`): D4 applies to S2 as well, because S3 (10 d) is newer than S2 (31 d),
+  so S2 is not the newest of its kind on the step-1 listing. Round 1 puts S4, deletes S1 and S2 and holds S3, the
+  newest. The "second round" (25 days later; T holds S3 and S4) deletes S3. The newest file of a kind on the step-1
+  listing is never deleted.
+- **L8** (`TestMirrorRotationPutsNewPathHoldsOld`): in the main case, L still holds P1, so T holds nothing that L
+  lacks, and **held = 0**. The assertion "held counts P1's files" moves to **L9a**, where L lacks P1. The L8 subtest
+  "A complete, T.Newest(P1) older than keep: P1 deleted whole" runs with a local set that has already expired P1.
+
+### Note 2026-11-05 b — escrow headers leave only on Destroy evidence (decisions-alpha9 items 27 and 29)
+
+PDK-732 review 6 (S1): under A2 and D5, a *successful* escrow listing that lacked a header removed it from L and from
+every target. A lost RustFS volume, whose bucket `rustfs-bundles-bootstrap.sh` re-creates empty, or a wrong
+`PADDOCK_ESCROW_S3_BUCKET` would therefore have wiped every escrow copy. From now on, **absence from the listing never
+deletes on its own**. This note replaces the `escrow/<key>` row of A2 and rule D5 of A3.
+
+- **Evidence.** An escrowed header copy, in L or on a target, may be deleted only on audited evidence that its
+  device's escrow was removed on purpose, and only after the keep window has passed since that evidence. The only
+  such evidence in the code base is the revocation-issuer's Destroy (crypto-shredding): the audit action
+  `device.escrow_destroyed` with `status = 'finished'` and `outcome = 'success'`. The issuer deletes the device's header
+  objects only there. Device retirement (`device.retired`) deletes no escrow, so it is no evidence. The role reads
+  `organization_id`, the target device ID and the newest `finished_at` per device (`BackupRoleEscrowEvidence`).
+- **Keep window** = `retention_full × full_interval`, the window in which a retained database full can still predate
+  the Destroy. No schema change.
+- **Rule** (`escrowRule.gone`, used by the local expire and by D5): delete `escrow/<key>` iff this round's bucket
+  listing succeeded, was not suspicious, lacks `<key>`, and the device of `<key>` has evidence older than the keep
+  window. Otherwise HOLD (counted in `held` on targets).
+- **Suspicious listing.** *Unevidenced* absences are the headers L holds that the listing lacks and whose device has
+  no evidence. Evidenced absences go through the keep window and never count. When the unevidenced absences are all
+  of L's headers, or more than 10 % of them, the listing is suspicious. In that case the escrow pass copies nothing
+  from the bucket (a wrong bucket's headers never enter the set), deletes nothing in L or on any target, records the
+  escrow run as failed (class `escrow`), and sets `paddock_backup_escrow_listing_suspicious` = 1, which fires
+  `PaddockBackupEscrowListingSuspicious` (critical, 5 min). Fewer unevidenced absences are held, logged once per
+  change of their set, and counted in `paddock_backup_escrow_unevidenced_missing`. A failed listing or a failed
+  evidence query fails the escrow run and deletes nothing.
+- **Known limit.** When L has also lost `escrow/`, an empty listing cannot be told apart from a new installation. No
+  alert fires, but nothing is deleted either: the targets hold every header that has no evidence.
+- **Recorded deviation from organization isolation** (architect lead, item 29; also in `docs/architecture.md` §5):
+  migration 00107 adds a permissive `FOR SELECT` policy `backup_escrow_evidence` on `action` TO `paddock_backup`,
+  limited to `code = 'device.escrow_destroyed' AND status = 'finished' AND outcome = 'success'` and to the role's
+  platform context (`current_setting('paddock.org_id')` = the nil organization, so a missing context fails closed).
+  The nil-organization policy `backup` is unchanged, and no other role gains anything.
+- **A6 L7** (`TestMirrorEscrowFollowsBucket`) becomes these subtests: listing failed / bucket has x / bucket lacks x
+  without evidence / evidence within the keep window / suspicious listing / empty bucket → **held**; evidence older
+  than the keep window → **deleted**. Engine-level regression tests: `TestEscrowEmptyBucketHoldsEverything`,
+  `TestEscrowWrongBucketHoldsEverything`, `TestEscrowPartialAbsenceWithoutEvidence`, `TestEscrowEvidenceKeepWindow`,
+  `TestEscrowEvidenceQueryFailsHoldsEverything`, `TestEscrowUnevidencedWarnedOncePerChange`. The invariants oracle
+  states the same rule.
+
+### Note 2026-11-05 c — Destroy evidence applies per copy (decisions-alpha9 item 31)
+
+PDK-732 review 7 (M1): note b matched the evidence per device. A device that has not yet executed its Destroy token
+(valid for 30 days) can still escrow new header generations, and an old Destroy then let such a newer copy leave L
+and every target as soon as it left the bucket for any other reason. This note narrows the evidence rule of note b.
+
+- **Per copy.** A Destroy covers a header copy only if the escrow object existed at or before the Destroy's
+  `finished_at`. A copy newer than the Destroy, or one without a recorded time, is *unevidenced*: held in L and on
+  every target, counted in `paddock_backup_escrow_unevidenced_missing`, and part of the suspicious share.
+- **Time source.** The escrow object's own time: its `LastModified` (on a versioned bucket, the current version's
+  time) from the bucket listing at copy time, never the local file's mtime (A1). The escrow pass lists through
+  `objectstore.Store.ListInfo` (size and `LastModified`).
+- **L's index.** The time is recorded in the set's index, `manifest.json`: each `contents.escrow` entry gains
+  `"at"` (optional, omitted when unknown; no schema bump). A manifest without it stays readable; its copies are
+  unevidenced until the bucket lists the same key with the same size again, whose `LastModified` is then recorded
+  (objects are immutable, so that is the time at copy time). A recorded time is ignored when L's copy no longer has
+  the recorded size.
+- **Targets.** A target copy is judged with the time L's index held at the start of the round. Once L has deleted
+  its copy, a target copy the same round could not delete (a failed or skipped target mirror) has no recorded time
+  and stays held.
+- **Tests.** `TestEscrowGenerationNewerThanDestroyHeld` (a generation newer than the Destroy goes missing: held on L
+  and both targets, counted), `TestEscrowOlderGenerationWithEvidenceDeleted` (older generations with evidence beyond
+  the keep window still leave), `TestEscrowIndexRecordsObjectTime` (manifest records `LastModified`; a manifest
+  without times holds); A6 L7 gains "copy as old as the Destroy" (deleted), "copy newer than the Destroy" and "copy
+  without a recorded time" (held); the invariants oracle draws the copy times as well.
+
+### Note 2026-11-05 — restore plans: the start is audited, the target must exist (PDK-735; decisions-alpha9 items 37 and 39)
+
+- **Start audited.** `backup restore-report --outcome running` is the moment the host starts overwriting data. It
+  goes through the ActionRunner and records exactly one `platform.restore_started` per attempt, a refused one
+  included (actor system with the operator as display, `host` when the name is no login name; params `plan_id`,
+  `source`, `source_target_id`, `components` of the stored plan; failure `invalid_request`, `not_found` or
+  `invalid_state`). §6.4 lists it. Wazuh rule 100932 (level 10, Sigma `high`) classifies it.
+- **Target gone.** A plan with `source = target` whose `source_target_id` became NULL (`ON DELETE SET NULL`) is
+  refused on the host: `backup plan <id>` exits 1 and `running` fails with `invalid_state`. It is never run from the
+  local repository.
+- **`at` only for point_in_time.** A `components` plan with `at` is 400 `invalid_request`, so a plan the restored
+  database lost is re-inserted with an unambiguous kind.
+- **Additive param.** `source_target_id` is part of every restore event (§6.4 lists only `source`).
+- The CLI flags of `backup plan` and `backup restore-report` (PDK-734's contract) are unchanged.
+
+## Amendment 2026-11-05 — local targets are subpaths of a configured root (PDK-760, `decisions-alpha9.md` item 36)
+
+Decision: a local target no longer names an absolute host directory. A new host setting `PADDOCK_BACKUP_LOCAL_ROOT`
+(default `/srv/paddock-backup`) is the base directory; `local.path` is a **relative subpath** of it. This replaces any
+deny list of system and deployment directories (PDK-729 review): there is no absolute path to deny.
+
+- `backupset.ValidateTarget` refuses an empty path, a leading `/`, a `..`, `.` or empty element, a backslash, control
+  characters and more than 256 bytes (400 `invalid_request`, field `local.path`). The server does not know the root.
+- `backuprole.ResolveLocal(root, sub)` is the host step's join (`./paddock backup-target apply`, PDK-733): the root and
+  every component must exist, be a directory and not be a symlink; otherwise the target is refused and nothing is
+  mounted (fail closed). The backup role itself still sees only the mounted volume and keeps its `os.Root`
+  confinement, so its `dirTarget` is unchanged.
+- `./paddock check` item `backup: local target root`: FAIL when the root is not a clean absolute path other than `/`,
+  is a symlink or not a directory, or is writable by group or others; WARN when it does not exist.
+- Alpha: existing local targets with an absolute path fail validation on the next edit and need the subpath form;
+  there is no migration (no users).
+
+### Note 2026-11-06 — host restore: escrow credential, key file, fresh-install duration (PDK-734; decisions-alpha9 items 38 and 39)
+
+- **Escrow credential (M5 accepted).** The escrow step of `./paddock restore` runs `backup restore-escrow` in a
+  one-off `paddock-backup` container that mounts the gateway's RustFS escrow write credential
+  (`rustfs_bundles_gateway_access_key`, `rustfs_bundles_gateway_secret_key`) read-only as files, because only that
+  credential may put headers. The mount exists only in that one-off container and only for the duration of the
+  restore step; the long-running `paddock-backup` role never holds it. A host restore is operator-initiated and the
+  host already holds every secret, so this crosses no boundary the operator does not already hold. No dedicated
+  restore credential is introduced.
+- **Key file.** `./paddock restore` writes the entered backup key to `.secrets/restore/backup_key` (0600), which no
+  Compose file mounts, and deletes it on every exit (success, failure, refusal; EXIT trap) unless `--keep-key-file`
+  is given. It never writes the api-mounted `.secrets/backup_encryption_key`.
+- **No duration for a fresh install.** A `fresh_install` run has no plan and therefore no `started_at`; its
+  `platform.restore_completed` / `platform.restore_failed` event carries no `duration_s` (§6.4 lists it for planned
+  runs only). `backup restore-report` has no `--duration-s` flag; the duration is computed from the plan's
+  `started_at`.
+
+## Note 2026-11-06 — §6.7: the SMB login in the volume's options (PDK-733, `decisions-alpha9.md` item 35)
+
+`credentials=` is a mount.cifs option the kernel ignores, and Docker's local driver mounts with `mount(2)`; ADR 0046
+amendment 2026-11-06 records it. §6.7 changes accordingly: no `.secrets/backup-targets/<id>.cifs` file; an SMB
+volume's `o` is `uid=999,gid=999,file_mode=0640,dir_mode=0750,<options, vers=3 by default>,username=…[,domain=…],password=…`
+(password last). A comma or whitespace in the password is refused when the target is saved and again at render (PDK-733 review 3: Compose folds the `o` line at a space, past any line-based redaction): Docker splits `o` on every comma and takes a segment
+that names a mount flag (`bind`, `ro`, `remount`, …) as a flag of the mount, so doubled commas do not protect it. The
+volume name is `backup-target-<id>-r<revision>-<fingerprint>`, the fingerprint being the first 12 hex digits of the
+SHA-256 of type, device and options without the password, because Docker never changes an existing volume's options
+and a non-interactive Compose run keeps a volume whose options changed: another `PADDOCK_BACKUP_LOCAL_ROOT` or a
+release's new default options change the name without a new revision (a new password always raises the revision).
+`apply` removes every other volume of the targets once `paddock-backup` no longer uses them, then the deleted targets' rows. Every value is YAML-quoted with `$`
+doubled. The header records `# revisions:` (for the online check item of decision 22) and every local device
+(`# local: <base64>`), which `./paddock up` resolves again below `PADDOCK_BACKUP_LOCAL_ROOT` before each start.
+
+### Note 2026-11-06 b — the escrow step reads the Destroy evidence from the audit index (PDK-831; decisions-alpha9 items 39, 44 and 45)
+
+- **Evidence source.** A restore never puts back an escrowed LUKS header whose device has a successful
+  `device.escrow_destroyed` not older than the copy. `backup restore-escrow` reads that evidence from the audit index
+  (`paddock_audit_reader`, once per organization of the set's escrow keys, `max(occurred_at)` per device), because the
+  audit domain survives the restore and a point-in-time restore to before the Destroy leaves the restored database
+  without it. The audit index is the only source: item 44 allowed the restored database as an extra skip-only source,
+  item 45 dropped it together with its database credential (least privilege on a container that holds the gateway's
+  put credential). An unreadable audit index, or an escrow key whose organization or device segment is not a
+  canonical UUID (the evidence is matched on that exact string), fails the step and puts nothing back.
+- **Trust path (replaces the escrow-credential bullet of the note 2026-11-06 above).** The step runs in the one-off
+  service `backup-restore-escrow` of `compose.backup.yaml` (profile `restore`, never started by `up`; the backup image
+  and hardening, uid 999, read-only root, `backup-repo` read-only), on networks `cp` and `audit-index`, with the escrow
+  lister (`rustfs_escrow_backup_*`), the gateway putter (`rustfs_bundles_gateway_*`), `db_paddock_audit_reader_url`
+  and the public `internal_ca_bundle` for the reader's `verify-full` DSN, and with no control-plane database
+  credential (item 45). `restore.sh` no longer mounts the gateway credential into a `paddock-backup` container. The
+  long-running `paddock-backup` never holds the audit credential or joins `audit-index`, and the step never holds a
+  database credential other than the audit reader's; `./paddock check` fails if either happens.
+- **Report.** The terminal lists every skipped header, one line per device ID. `platform.restore_completed` gains the
+  additive param `escrow_skipped_destroyed` (a count, no device IDs), set only for a completed run that included the
+  escrow step (`backup restore-report --escrow-skipped-destroyed <n>`).
+
+### Note 2026-11-06 c — decision 30: the drill restores as a fresh install (PDK-737, decisions-alpha9 item 48)
+
+- **Change.** `restore-drill.sh` runs `restore_run fresh repo` after `backup fetch-set` from the local development
+  target, not `restore_run plan …` as decision 30 states. The rest of decision 30 holds: backup now, destroy, restore
+  through `restore.sh`, acceptance subset, RTO line in `docs/operations/restore.md`.
+- **Reason.** A restore plan lives in the control-plane database, which is what the drill destroys; a plan cannot
+  survive the loss the drill measures. The drill measures the RTO from losing the databases, the case an operator
+  restores without a plan.
+- **Plan path.** The plan-based path is covered by the `TestRestorePlan` gates (§9 B5: typed word, point in time,
+  approval, expiry, cancel, the host command `./paddock restore --plan <id>`); its execution on a host stays with
+  system gate BS4.
+
+### Note 2026-11-07 — the budget and the hard cap count only the copy phase (PDK-865; decisions-alpha9 items 66 and 67)
+
+- A7's round budget (10 min) and its hard cap on a trickling target (`copy start + budget + size/min_rate`) apply only
+  to the copy phase of step 3. The budget starts with the first copied file and is checked after every copied file;
+  the cap applies only while a file is in flight.
+- Listings (step 1 and step 4) are not charged against the budget. Only the stall watchdog guards them: the S3
+  listing reports progress after every page, a mounted target's walk every 1 024 entries, and a listing whose next
+  page does not arrive within the stall window fails the mirror. Once the copies are done, step 6 stays reachable.
+- The watchdog's error names the phase (for example `no progress for 2m0s while listing the target`); a copy-rate
+  error is only ever reported for a copy.
+- Step 6 is not bounded by the budget yet. After a long target outage, the first successful mirror can hold the role
+  for the length of the delete backlog (RR-126). Bounding the deletions by the budget is planned for alpha.10 with an
+  A3/A7 amendment (PDK-869).
+
+
+### Note 2026-11-07 b — runs are recorded in two phases (PDK-881; decisions-alpha9 items 78 and 79)
+
+- **Phase 1.** Each kind's run is written right after its local step (snapshot, dump, escrow pass, pgBackRest
+  marker, timeout), before the round's mirror: the `backup_run` row (or the answered request, which ends
+  `backup now --wait`) with outcome, times, bytes, error class and `targets = []`. Restore plans and the history see
+  the backup at once; before, a mirror of hours (item 67) kept it out of the database for as long.
+- **Phase 2.** After `mirrorAll`, every finished run without `mirrored_at` gets the round's per-target results and its
+  audit event `platform.backup_completed` / `platform.backup_failed` as before (§6.4; params gain `completed_at`, the
+  local completion). That covers this round's runs and any an earlier round could not finish because the role
+  stopped between the phases: exactly one event per run; a target the set did not reach counts as `targets_failed`.
+  Migration `00112_backup_run_mirrored` adds `mirrored_at` with the default `now()`: existing runs, and runs an older
+  backup role writes during an upgrade (it records their event itself), count as mirrored; phase 1 writes NULL. A
+  phase-2 write that fails leaves the runner's failure event as the run's one event and marks the run mirrored; a run
+  phase 1 cannot write gets a `platform.backup_failed` with `error_class` `record` instead.
+- **Copy budget.** A target whose mirror used the round's copy budget gets `RunTarget{ok: false, error_class:
+  "continues"}`; its `backup_target_status` keeps `last_success_at` and `bytes` and has no `last_error` (an error of an
+  earlier round is cleared: the mirror is progressing); the portal's run history says "continues next round". A3's
+  order of steps is unchanged.
+
+### Note 2026-11-07 c — the Fleet run is recorded while the mirror runs (PDK-885; decisions-alpha9 item 82)
+
+- The Fleet kind is asynchronous: a round writes the dump request, fleet-backup answers some seconds later. Phase 1 of
+  note "2026-11-07 b" could only record it in the next round, i.e. after the round's mirror, which can take hours. A
+  round that asked for a dump now watches the dumps volume while its mirror runs (every 5 s) and seals and records the
+  dump as soon as it is there. This round's mirror does not hold that file, so the run's mirror results and audit
+  event are the next round's phase 2 (the round passes the IDs of runs recorded after its index to `MirrorRuns` as
+  skipped). A request the round already answered with a timeout is not given to the watcher. When the mirror ends
+  first, the next round seals the dump as before.
+- The development stack's full interval is 20 minutes (was 120 s); gate B4 bounds the key switch without it, since a
+  new repository path makes a full due at once, and requests a full in the old path right before the switch, so a
+  switch that waited for the schedule cannot fall inside the bound.
+
+### Note 2026-11-08 — a request is answered by a full that starts after it; a share outage is unreachable (PDK-893; decisions-alpha9 item 89)
+
+- **Requested fulls.** A requested pgBackRest backup (`backup now`, decision 16) is answered only by a full that
+  started at or after the request (Unix seconds). run.sh records the start of every full in `last-full-start` next to
+  `last-full` (its end) and takes a new full when a request is newer than that start; the backup role answers
+  requests by the same start. A full that was already running when the request came (the installation's first full,
+  the path switch's full after a restore or a rotation) no longer answers it. Before, it did: the run's start lay
+  before its own request, and the target status, which reports the full's start, never reached the request (gates
+  BS1/BS3 timed out).
+- **Restore staging.** `run.sh restore` stages the WAL from the start of the backup pgBackRest reports having restored,
+  on that backup's timeline, with the history files up to it (for `--at` it refuses to guess when pgBackRest names no
+  backup); before, a point in time was staged from the oldest backup's timeline and failed after an earlier restore
+  had moved the stanza to a later timeline (gate BS4). A point on a later timeline than the restored backup's (after
+  a promotion that followed that backup) is not walked yet: a timeline-aware walk is planned for alpha.10
+  (decisions-alpha9 item 91). Every completed restore that replaces the databases removes the pgBackRest state, so
+  serve takes a full on the new timeline at once, and a later point in time has a backup on its own timeline.
+- **Restore on a running installation.** The postgres step removes the backup role's stopped container with the
+  databases and pgBackRest before it deletes the pgBackRest state volumes, which the role mounts read-only.
+- **Share outage.** The host state of a volume target is `unreachable` when its mount or marker returns an error of a
+  share whose server is gone (EIO, EHOSTDOWN, ETIMEDOUT, ESTALE and the like, as a soft CIFS or NFS mount does), and
+  `pending_host` only while the marker is absent or not what the host step wrote (decision 2, gate BS1).

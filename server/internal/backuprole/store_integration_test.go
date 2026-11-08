@@ -1,0 +1,418 @@
+package backuprole
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
+)
+
+// TestPGStore runs every query of the backup role on role paddock_backup (plan M15 decisions 15–16, migration 00100
+// and 00107): it reads the active key's ciphertext and the targets with their credentials, writes host state, test
+// results, target status and runs, and records each run with one audit event in the platform pseudo-organization.
+func TestPGStore(t *testing.T) {
+	ctx := context.Background()
+	pg := pgtest.SharedPaddock(t)
+	pool, err := db.NewBackupPool(ctx, pg.Backup, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	platform, err := db.NewPlatformPool(ctx, pg.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, pg.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := super.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec("DELETE FROM backup_target_status")
+	exec("DELETE FROM backup_target")
+	exec("DELETE FROM backup_run")
+	exec("DELETE FROM backup_key")
+	exec("DELETE FROM backup_schedule")
+	runner := app.NewActionRunner(nil, platform, func(context.Context) string { return "" },
+		app.WithPlatformScope(pool.InBackup))
+	s := NewPGStore(pool, platform, runner)
+
+	if _, ok, err := s.ActiveKey(ctx); err != nil || ok {
+		t.Fatalf("active key without a row: %v %v", ok, err)
+	}
+	exec(`INSERT INTO backup_key (key_id, state, ciphertext, fingerprint, challenge_positions, challenge_sha256, created_by)
+		VALUES ($1, 'confirmed', 'vault:v1:key', '1111111111111111', '{1,2,3,4,5,6}', '\x00', 'alice'),
+		('bk-20260101-00000001', 'retired', 'vault:v1:old', '2222222222222222', '{1,2,3,4,5,6}', '\x00', 'alice')`, testKeyID)
+	exec(`UPDATE backup_key SET retired_at = '2026-11-01T00:00:00Z' WHERE key_id = 'bk-20260101-00000001'`)
+	key, ok, err := s.ActiveKey(ctx)
+	if err != nil || !ok || key.ID != testKeyID || key.Ciphertext != "vault:v1:key" {
+		t.Fatalf("active key %+v %v %v", key, ok, err)
+	}
+	keys, err := s.Keys(ctx)
+	if err != nil || len(keys) != 2 || keys[0] != (KeyRecord{ID: "bk-20260101-00000001", State: "retired",
+		RetiredAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}) || keys[1].ID != testKeyID || keys[1].State != "confirmed" ||
+		!keys[1].RetiredAt.IsZero() {
+		t.Errorf("keys %+v %v", keys, err)
+	}
+	if sc, err := s.Schedule(ctx); err != nil || sc != backupset.DefaultSchedule() {
+		t.Errorf("default schedule %+v %v", sc, err)
+	}
+
+	smb, s3 := uuid.New(), uuid.New()
+	exec(`INSERT INTO backup_target (id, name, type, settings, credentials_ciphertext, host_state, host_revision,
+		test_requested_at, created_by) VALUES
+		($1, 'nas', 'smb', '{"host":"nas.example","share":"b"}', 'vault:v1:smb', 'pending_host', 2, now(), 'alice'),
+		($2, 'bucket', 's3', '{"endpoint":"https://s3.example","bucket":"b"}', 'vault:v1:s3', 'n/a', 1, NULL, 'alice')`,
+		smb, s3)
+	targets, err := s.Targets(ctx)
+	if err != nil || len(targets) != 2 {
+		t.Fatalf("targets %+v %v", targets, err)
+	}
+	if targets[0].Name != "bucket" || targets[0].CredentialsCiphertext != "vault:v1:s3" || targets[0].TestRequested ||
+		targets[1].HostRevision != 2 || !targets[1].TestRequested || targets[1].Settings.Host != "nas.example" {
+		t.Errorf("targets %+v", targets)
+	}
+	// A round that read revision 1 must not mark the target mounted after an update raised it to 2 (PDK-731 review).
+	if err := s.SetHostState(ctx, smb, 1, HostMounted); err != nil {
+		t.Fatal(err)
+	}
+	var stale string
+	if err := super.QueryRow(ctx, `SELECT host_state FROM backup_target WHERE id = $1`, smb).Scan(&stale); err != nil ||
+		stale != HostPending {
+		t.Errorf("host state after a stale revision: %s %v", stale, err)
+	}
+	if err := s.SetHostState(ctx, smb, 2, HostMounted); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTestResult(ctx, smb, ClassAuth); err != nil {
+		t.Fatal(err)
+	}
+	var state, testErr string
+	var requested *time.Time
+	if err := super.QueryRow(ctx, `SELECT host_state, last_test_error, test_requested_at FROM backup_target WHERE id = $1`,
+		smb).Scan(&state, &testErr, &requested); err != nil || state != HostMounted || testErr != ClassAuth || requested != nil {
+		t.Errorf("target after the round: %s %s %v %v", state, testErr, requested, err)
+	}
+	at := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	if err := s.SetTargetStatus(ctx, s3, KindOpenBao, KindStatus{LastSuccess: at, Bytes: 42}); err != nil {
+		t.Fatal(err)
+	}
+	// The end of the copy budget (decisions-alpha9 item 79) writes an empty status: no last_error, the last success
+	// and its size stay.
+	if err := s.SetTargetStatus(ctx, s3, KindPostgres, KindStatus{LastSuccess: at, Bytes: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTargetStatus(ctx, s3, KindPostgres, KindStatus{Error: ClassSizeMismatch}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTargetStatus(ctx, s3, KindPostgres, KindStatus{}); err != nil {
+		t.Fatal(err)
+	}
+	var keptAt time.Time
+	var keptBytes int64
+	var keptErr *string
+	if err := super.QueryRow(ctx, `SELECT last_success_at, bytes, last_error FROM backup_target_status
+		WHERE target_id = $1 AND kind = 'postgres'`, s3).Scan(&keptAt, &keptBytes, &keptErr); err != nil ||
+		!keptAt.Equal(at) || keptBytes != 42 || keptErr != nil {
+		t.Errorf("status after the budget's end %v %d %v %v", keptAt, keptBytes, keptErr, err)
+	}
+	if err := s.SetTargetStatus(ctx, s3, KindOpenBao, KindStatus{Error: ClassDial}); err != nil {
+		t.Fatal(err)
+	}
+	var last time.Time
+	var bytes int64
+	var lastErr string
+	if err := super.QueryRow(ctx, `SELECT last_success_at, bytes, last_error FROM backup_target_status
+		WHERE target_id = $1 AND kind = 'openbao'`, s3).Scan(&last, &bytes, &lastErr); err != nil ||
+		!last.Equal(at) || bytes != 42 || lastErr != ClassDial {
+		t.Errorf("status %v %d %s %v", last, bytes, lastErr, err)
+	}
+
+	req := uuid.Must(uuid.NewV7())
+	exec(`INSERT INTO backup_run (id, kind, label, state, requested_by) VALUES ($1, 'openbao', 'before upgrade', 'requested', 'alice')`, req)
+	reqs, err := s.RequestedRuns(ctx)
+	if err != nil || len(reqs) != 1 || reqs[0].Label != "before upgrade" {
+		t.Fatalf("requested %+v %v", reqs, err)
+	}
+	targetsOK := []backupset.RunTarget{{TargetID: s3.String(), OK: true}, {TargetID: smb.String(), ErrorClass: ClassNotMounted}}
+	if _, err := s.RecordRun(ctx, RunRecord{Kind: KindOpenBao, Requests: reqs, Succeeded: true, StartedAt: at,
+		FinishedAt: at.Add(3 * time.Second), Bytes: 99}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordRun(ctx, RunRecord{Kind: KindFleet, ErrorClass: runClassFleet, StartedAt: at, FinishedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	// Phase 1 (decisions-alpha9 item 79): the requested run is finished at once, without targets and without an event.
+	var phase1 string
+	var events int
+	if err := super.QueryRow(ctx, `SELECT outcome FROM backup_run WHERE id = $1 AND state = 'finished' AND mirrored_at IS NULL
+		AND targets = '[]'`, req).Scan(&phase1); err != nil || phase1 != "succeeded" {
+		t.Fatalf("requested run after phase 1: %q %v", phase1, err)
+	}
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE code IN ('platform.backup_completed',
+		'platform.backup_failed')`).Scan(&events); err != nil || events != 0 {
+		t.Fatalf("events after phase 1: %d %v", events, err)
+	}
+	if err := s.MirrorRuns(ctx, targetsOK, nil); err != nil {
+		t.Fatal(err)
+	}
+	// A second phase 2 finds nothing due: exactly one event per run.
+	if err := s.MirrorRuns(ctx, targetsOK, nil); err != nil {
+		t.Fatal(err)
+	}
+	var outcome, rawTargets string
+	if err := super.QueryRow(ctx, `SELECT outcome, targets::text FROM backup_run WHERE id = $1 AND state = 'finished'`,
+		req).Scan(&outcome, &rawTargets); err != nil || outcome != "succeeded" {
+		t.Fatalf("requested run %s %v", outcome, err)
+	}
+	if got, err := backupset.ParseRunTargets([]byte(rawTargets)); err != nil || len(got) != 2 || !got[0].OK {
+		t.Errorf("run targets %v %v", got, err)
+	}
+	var params []byte
+	var actor []byte
+	if err := super.QueryRow(ctx, `SELECT params, actor FROM action WHERE code = 'platform.backup_completed'
+		AND organization_id = $1 AND outcome = 'success' AND target->>'id' = $2`,
+		audit.PlatformOrganizationID, req.String()).Scan(&params, &actor); err != nil {
+		t.Fatalf("completed event: %v", err)
+	}
+	var completed int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE code = 'platform.backup_completed'
+		AND target->>'id' = $1`, req.String()).Scan(&completed); err != nil || completed != 1 {
+		t.Errorf("completed events of the requested run %d %v, want exactly one", completed, err)
+	}
+	var p map[string]any
+	if err := json.Unmarshal(params, &p); err != nil || p["label"] != "before upgrade" || p["targets_ok"] != 1.0 ||
+		p["targets_failed"] != 1.0 || p["bytes"] != 99.0 || p["duration_s"] != 3.0 ||
+		p["completed_at"] != at.Add(3*time.Second).UTC().Format(time.RFC3339) {
+		t.Errorf("params %s %v", params, err)
+	}
+	if !json.Valid(actor) || !strings.Contains(string(actor), Actor) {
+		t.Errorf("actor %s", actor)
+	}
+	var failed int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE code = 'platform.backup_failed' AND outcome = 'failure'
+		AND params->>'error_class' = 'fleet'`).Scan(&failed); err != nil || failed != 1 {
+		t.Errorf("failed events %d %v", failed, err)
+	}
+	var outbox int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE organization_id = $1`, audit.PlatformOrganizationID).
+		Scan(&outbox); err != nil || outbox < 2 {
+		t.Errorf("outbox rows %d %v", outbox, err)
+	}
+	// A backup round runs without a request: its events still pass the audit writer (decisions-alpha9 item 69).
+	rows, err := super.Query(ctx, `SELECT payload FROM outbox WHERE payload ->> 'code' IN ('platform.backup_completed', 'platform.backup_failed')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var ev audit.Event
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil || json.Unmarshal(payload, &ev) != nil {
+			t.Fatalf("outbox payload %s: %v", payload, err)
+		}
+		if err := auditwriter.Validate(ev); err != nil || ev.Source != audit.SourceSystem || ev.Actor.Type != audit.ActorSystem {
+			t.Errorf("backup event %s %+v: %v", ev.Code, ev, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	hist, err := s.History(ctx)
+	if err != nil || !hist[KindOpenBao].LastSuccess.Equal(at.Add(3*time.Second)) || !hist[KindFleet].LastSuccess.IsZero() ||
+		!hist[KindFleet].LastAttempt.Equal(at) {
+		t.Errorf("history %+v %v", hist, err)
+	}
+	if id, err := s.InstallationID(ctx); err != nil || uuid.Validate(id) != nil {
+		t.Errorf("installation ID %q %v", id, err)
+	}
+	if v, err := s.SchemaVersion(ctx); err != nil || v < 107 {
+		t.Errorf("schema version %d %v", v, err)
+	}
+
+	// Phase 1 cannot write the run (its request was answered already): the attempt still gets its one event, a
+	// platform.backup_failed with error_class record (decisions-alpha9 item 79).
+	if _, err := s.RecordRun(ctx, RunRecord{Kind: KindOpenBao, Requests: reqs, Succeeded: true, StartedAt: at,
+		FinishedAt: at}); err == nil {
+		t.Fatal("phase 1 answered a request twice")
+	}
+	var recordFailed int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE code = 'platform.backup_failed'
+		AND params->>'error_class' = 'record' AND target->>'id' = $1`, req.String()).Scan(&recordFailed); err != nil ||
+		recordFailed != 1 {
+		t.Errorf("record failure events %d %v, want one", recordFailed, err)
+	}
+
+	// Phase 2 fails for one run: the runner records that attempt's failure event, and the run counts as mirrored, so a
+	// later phase 2 records no second event for it.
+	exec(`CREATE SEQUENCE pdk881_fail`)
+	exec(`CREATE FUNCTION pdk881_fail_once() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN
+		IF NEW.label = 'fail phase 2' AND NEW.mirrored_at IS NOT NULL AND nextval('pdk881_fail') = 1 THEN
+			RAISE EXCEPTION 'phase 2 write failed'; END IF; RETURN NEW; END $$`)
+	exec(`CREATE TRIGGER pdk881_fail BEFORE UPDATE ON backup_run FOR EACH ROW EXECUTE FUNCTION pdk881_fail_once()`)
+	failing := uuid.Must(uuid.NewV7())
+	exec(`INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, targets, mirrored_at)
+		VALUES ($1, 'openbao', 'fail phase 2', 'finished', 'succeeded', now(), now(), '[]', NULL)`, failing)
+	// A run an older backup role wrote during an upgrade counts as mirrored: it recorded its event itself.
+	old := uuid.Must(uuid.NewV7())
+	exec(`INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, targets)
+		VALUES ($1, 'openbao', 'older role', 'finished', 'succeeded', now(), now(), '[]')`, old)
+	if err := s.MirrorRuns(ctx, targetsOK, nil); err == nil {
+		t.Fatal("phase 2 hid the failed write")
+	}
+	if err := s.MirrorRuns(ctx, targetsOK, nil); err != nil {
+		t.Fatal(err)
+	}
+	var failingEvents int
+	var mirrored bool
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE target->>'id' = $1`, failing.String()).
+		Scan(&failingEvents); err != nil || failingEvents != 1 {
+		t.Errorf("events of the run whose phase 2 failed %d %v, want exactly one", failingEvents, err)
+	}
+	var oldEvents int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE target->>'id' = $1`, old.String()).
+		Scan(&oldEvents); err != nil || oldEvents != 0 {
+		t.Errorf("events of the older role's run %d %v, want none from this role", oldEvents, err)
+	}
+	if err := super.QueryRow(ctx, `SELECT mirrored_at IS NOT NULL FROM backup_run WHERE id = $1`, failing).
+		Scan(&mirrored); err != nil || !mirrored {
+		t.Errorf("run whose phase 2 failed mirrored %v %v", mirrored, err)
+	}
+}
+
+// TestPGStoreEscrowEvidence: the store reads the newest successful Destroy per device of any organization through
+// paddock_backup (migration 00107), one entry per device, and ignores failed Destroys.
+func TestPGStoreEscrowEvidence(t *testing.T) {
+	ctx := context.Background()
+	pg := pgtest.SharedPaddock(t)
+	pool, err := db.NewBackupPool(ctx, pg.Backup, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	super, err := pgx.Connect(ctx, pg.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	org, device, failedDevice := uuid.New(), uuid.NewString(), uuid.NewString()
+	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for _, row := range []struct {
+		device  string
+		outcome string
+		at      time.Time
+	}{{device, "success", at}, {device, "success", at}, {failedDevice, "failure", at}} {
+		if _, err := super.Exec(ctx, `INSERT INTO action (id, organization_id, code, status, outcome, actor, target, params,
+			correlation_id, started_at, finished_at) VALUES ($1, $2, 'device.escrow_destroyed', 'finished', $3,
+			'{"kind":"system","id":"issuer"}', jsonb_build_object('type', 'device', 'id', $4::text), '{}', $5, $6, $6)`,
+			uuid.New(), org, row.outcome, row.device, uuid.NewString(), row.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := NewPGStore(pool, nil, nil).EscrowEvidence(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The action_integrity trigger (migration 00084) stamps finished_at with the database clock.
+	if at, ok := got[org.String()+"/"+device]; !ok || time.Since(at).Abs() > time.Minute {
+		t.Errorf("evidence of the device %v %v, want the Destroy's finish time", at, ok)
+	}
+	if _, ok := got[org.String()+"/"+failedDevice]; ok {
+		t.Error("a failed Destroy counts as evidence")
+	}
+}
+
+// TestHostTargetQueries covers the queries of ./paddock backup-target apply (plan M15 decision 20): the role
+// paddock_backup reads every volume target with its credentials, deleted ones flagged and S3 targets left out, and
+// the purge deletes a deleted target's row only while no open restore plan reads from it.
+func TestHostTargetQueries(t *testing.T) {
+	ctx := context.Background()
+	pg := pgtest.SharedPaddock(t)
+	pool, err := db.NewBackupPool(ctx, pg.Backup, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	platform, err := db.NewPlatformPool(ctx, pg.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, pg.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := super.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec("DELETE FROM backup_restore_plan")
+	exec("DELETE FROM backup_target_status")
+	exec("DELETE FROM backup_target")
+	live, gone, planned, s3 := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	exec(`INSERT INTO backup_target (id, name, type, settings, credentials_ciphertext, host_state, host_revision, created_by,
+		deleted_at) VALUES
+		($1, 'nas', 'smb', '{"host":"nas","share":"b"}', 'vault:v1:smb', 'mounted', 3, 'alice', NULL),
+		($2, 'old', 'nfs', '{"host":"h","export":"/e"}', NULL, 'mounted', 1, 'alice', now()),
+		($3, 'planned', 'local', '{"path":"p"}', NULL, 'mounted', 2, 'alice', now()),
+		($4, 'bucket', 's3', '{"endpoint":"https://s3.example","bucket":"b"}', 'vault:v1:s3', 'n/a', 1, 'alice', NULL)`,
+		live, gone, planned, s3)
+	exec(`INSERT INTO backup_restore_plan (id, kind, source_target_id, source, components, state, created_by, expires_at)
+		VALUES ($1, 'components', $2, 'target', '{postgres}', 'approved', 'alice', now() + interval '1 hour')`, uuid.New(), planned)
+
+	var rows []pgstore.BackupHostTargetsRow
+	if err := pool.InBackup(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		rows, err = q.BackupHostTargets(ctx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]pgstore.BackupHostTargetsRow{}
+	for _, r := range rows {
+		got[r.ID] = r
+	}
+	if len(rows) != 3 || got[live].Deleted || got[live].CredentialsCiphertext == nil || got[live].HostRevision != 3 ||
+		!got[gone].Deleted || !got[planned].Deleted {
+		t.Errorf("host targets %+v", rows)
+	}
+
+	purged := map[uuid.UUID]int64{}
+	if err := platform.InPlatform(principal.With(ctx, principal.Principal{Kind: principal.KindSystem}),
+		func(ctx context.Context, q *pgstore.Queries) error {
+			for _, id := range []uuid.UUID{live, gone, planned} {
+				n, err := q.PurgeDeletedBackupTarget(ctx, id)
+				if err != nil {
+					return err
+				}
+				purged[id] = n
+			}
+			return nil
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if purged[live] != 0 || purged[gone] != 1 || purged[planned] != 0 {
+		t.Errorf("purged %v: only the deleted target without an open plan may go", purged)
+	}
+}

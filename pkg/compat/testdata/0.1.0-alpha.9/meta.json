@@ -1,0 +1,22 @@
+{
+  "release": "0.1.0-alpha.9",
+  "device_id": "0190f000-0000-7000-8000-00000000d001",
+  "organization_id": "0190f000-0000-7000-8000-00000000a001",
+  "schema_versions": [
+    1,
+    2
+  ],
+  "bundle_keys": [
+    {
+      "key_id": "bundle-signing:fixture",
+      "public_key": "JmOTt42kPgTZB/y3rpzxG6T98mmamzfS4EKU0XbFi/Q="
+    }
+  ],
+  "command_keys": [
+    {
+      "key_id": "command-signing:fixture",
+      "public_key": "RueH/wNPixnwCeGTJSwmiCE86afuXGxIGUma/SngAbk="
+    }
+  ],
+  "command_verify_at": "2026-11-04T09:00:00Z"
+}

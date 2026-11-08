@@ -4512,6 +4512,103 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/backup/restore-plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The restore plans: approved in the portal, executed on the host with host_command,
+         *     and the restores the host ran without a plan (kind fresh_install). An approved plan reads as expired 24 hours
+         *     after its approval.
+         */
+        get: operations["listBackupRestorePlans"];
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Approves a restore plan, which the host executes within 24 hours with
+         *     ./paddock restore --plan <id> (host_command). confirmation must be the typed word restore (400
+         *     invalid_request otherwise); 400 invalid_request also for a point_in_time plan without at, a point in the
+         *     future, an unknown component or a source_target_id that names no target. 409 invalid_state while another
+         *     plan is approved or running, or when the source (the local backup repository without source_target_id) has
+         *     no successful backup of a chosen component at or before at; the detail names the missing kind. Needs a
+         *     step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["createBackupRestorePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/restore-plans/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: platform_admin. One restore plan. */
+        get: operations["getBackupRestorePlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/restore-plans/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Cancels an approved plan: it is expired and the host refuses it. 409 invalid_state for
+         *     a plan that is not approved. Needs a step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["cancelBackupRestorePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/backup/restore-plans/{id}/abandon": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Marks a running plan as abandoned when the host never reported its end (the host
+         *     crashed, or the database was unreachable when the restore stopped): the plan no longer blocks a new one, its
+         *     outcome_detail names the administrator, and the host's later report for it is refused (409).
+         *     confirmation must be the typed word abandon (400 invalid_request otherwise). 409 invalid_state for a plan that
+         *     is not running; cancel an approved plan instead. Needs a step-up within the last 5 minutes (403
+         *     step_up_required).
+         */
+        post: operations["abandonBackupRestorePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/notification-destinations/{id}/replay": {
         parameters: {
             query?: never;
@@ -7030,7 +7127,7 @@ export interface components {
             s3?: components["schemas"]["BackupTargetS3Settings"];
         };
         BackupTargetLocalInput: {
-            /** @description An absolute directory of the host without "..". */
+            /** @description A relative subpath of the host's local backup root (PADDOCK_BACKUP_LOCAL_ROOT, default /srv/paddock-backup) without "..", "." or empty elements (400 invalid_request local.path). The host step refuses a symlink component. */
             path: string;
         };
         BackupTargetLocalSettings: {
@@ -7043,7 +7140,7 @@ export interface components {
             /** @description Relative path below the share; optional. */
             path?: string;
             username: string;
-            /** @description Required on creation and when host, share, domain, username or options change; otherwise absent on an update keeps the stored one. Stored encrypted, never returned. */
+            /** @description No comma and no whitespace (they cannot be passed to the share's mount). Required on creation and when host, share, domain, username or options change; otherwise absent on an update keeps the stored one. Stored encrypted, never returned. */
             password?: string;
             domain?: string;
             /** @description Comma-separated: vers=3.0|3.1.1, seal, noperm, cache=none|strict, actimeo=N. */
@@ -7208,6 +7305,79 @@ export interface components {
         };
         BackupRunPage: {
             items: components["schemas"]["BackupRun"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @enum {string} */
+        BackupRestorePlanState: "approved" | "running" | "completed" | "failed" | "expired" | "abandoned";
+        BackupRestorePlanInput: {
+            /**
+             * @description point_in_time needs at.
+             * @enum {string}
+             */
+            kind: "point_in_time" | "components";
+            /**
+             * Format: uuid
+             * @description The target to restore from; absent or null for the local backup repository.
+             */
+            source_target_id?: string | null;
+            /**
+             * Format: date-time
+             * @description The point in time; required for kind point_in_time, absent or null for kind components (the newest backups).
+             */
+            at?: string | null;
+            components: ("postgres" | "openbao" | "fleet" | "escrow")[];
+            /** @description The typed word restore. */
+            confirmation: string;
+        };
+        BackupRestorePlanAbandonInput: {
+            /** @description The typed word abandon. */
+            confirmation: string;
+        };
+        BackupRestorePlan: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: "point_in_time" | "components" | "fresh_install";
+            /**
+             * @description repo: the local backup repository; target: source_target_id; set: a backup set the host was given.
+             * @enum {string}
+             */
+            source: "repo" | "target" | "set";
+            /** Format: uuid */
+            source_target_id: string | null;
+            /** @description Null when the target is gone or the source is not a target. */
+            source_target_name: string | null;
+            /** Format: date-time */
+            at: string | null;
+            components: ("postgres" | "openbao" | "fleet" | "escrow" | "backup-repo")[];
+            state: components["schemas"]["BackupRestorePlanState"];
+            /** @description The administrator who approved the plan, or the host operator of a restore without a plan. */
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description 24 hours after the approval; null for a restore without a plan.
+             */
+            expires_at: string | null;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+            /** @description The failed step and what happened, as <step>: <text>; abandoned by <administrator> for a plan in state abandoned. */
+            outcome_detail: string | null;
+            /** @description The command that executes the plan on the host: ./paddock restore --plan <id>. */
+            host_command: string;
+        };
+        BackupRestorePlanPage: {
+            items: components["schemas"]["BackupRestorePlan"][];
             page: number;
             page_size: number;
             /** @description Matching items, counted up to 10000. */
@@ -8593,6 +8763,8 @@ export interface components {
         BackupTargetSort: "name" | "-name" | "type" | "-type" | "created_at" | "-created_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         BackupRunSort: "started_at" | "-started_at" | "kind" | "-kind" | "outcome" | "-outcome";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        BackupRestorePlanSort: "created_at" | "-created_at" | "state" | "-state";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         NotificationDestinationSort: "name" | "-name" | "type" | "-type" | "created_at" | "-created_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -14270,6 +14442,8 @@ export interface operations {
                 page_size?: components["parameters"]["PageSize"];
                 /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
                 sort?: components["parameters"]["DeviceDiagnosticsSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
                 /** @description Repeatable. */
                 state?: components["parameters"]["DiagnosticsStateFilter"];
             };
@@ -16700,6 +16874,156 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    listBackupRestorePlans: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["BackupRestorePlanSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                state?: components["schemas"]["BackupRestorePlanState"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of restore plans. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRestorePlanPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createBackupRestorePlan: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupRestorePlanInput"];
+            };
+        };
+        responses: {
+            /** @description The approved plan. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRestorePlan"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getBackupRestorePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plan. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRestorePlan"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    cancelBackupRestorePlan: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRestorePlan"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    abandonBackupRestorePlan: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupRestorePlanAbandonInput"];
+            };
+        };
+        responses: {
+            /** @description Abandoned; the plan's state is abandoned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRestorePlan"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     replayPlatformNotificationDestination: {

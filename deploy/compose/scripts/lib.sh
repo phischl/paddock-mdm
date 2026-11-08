@@ -14,12 +14,27 @@ PROD_FILES_lab="compose.yaml compose.prod.yaml compose.audit.yaml compose.lab.ya
 LAB_BACKUP_FILES="compose.backup.yaml"
 # The unsealer of the automatic unseal of OpenBao (ADR 0035), on a control-plane or lab host with PADDOCK_AUTO_UNSEAL=yes.
 AUTO_UNSEAL_FILES="compose.auto-unseal.yaml"
+# The import of the host key file of an installation older than 0.1.0-alpha.9 (decisions-alpha9 item 63): compose_files
+# appends it on a host with backups only while .secrets/backup_encryption_key exists, which fresh installations never get.
+BACKUP_LEGACY_KEY_FILES="compose.backup-legacy-key.yaml"
+# The volume backup targets rendered by ./paddock backup-target apply (plan M15 decision 20): host-local, mode 0600, it
+# holds the SMB passwords, never shipped or committed. compose_files appends it on a host with backups.
+BACKUP_TARGETS_FILE="$COMPOSE_DIR/compose.backup-targets.yaml"
 
 # redact_tokens replaces the value of every token=<value> field, and of every "token": "<value>" field of the JSON
 # lines Authentik writes in a container, in a log stream: Authentik 2026.8.3 logs the raw refresh token of a refused
 # refresh ("Refresh token is revoked", providers/oauth2/token/refresh_token.py), and Paddock's rule is that no secret
 # is ever printed (RR-63). -u keeps `logs -f` live instead of block-buffered.
 redact_tokens() { sed -u -E -e 's/(token=)[A-Za-z0-9._~+\/=-]+/\1<redacted>/g' -e 's/("token": ?")[^"]*/\1<redacted>/g'; }
+
+# redact_mount_secrets replaces everything after password= on a line: Docker prints a volume's mount options in its mount
+# errors, and Compose prints them in its configuration (decisions-alpha9 item 35). The password is the last option of a
+# rendered SMB volume, so only it is lost. Behind Docker's own mask the errno stays (": permission denied" tells a wrong
+# login from an unreachable share); it is only lower-case words, so no quoted Compose value passes as one.
+redact_mount_secrets() { sed -u -E 's/(password=)(\*{8}(: [a-z][a-z ]*)|.*)$/\1<redacted>\3/'; }
+
+# run_redacted <command…>: runs the command with its stderr through redact_mount_secrets and keeps its exit code.
+run_redacted() { { "$@" 2>&1 1>&3 3>&- | redact_mount_secrets >&2; } 3>&1; }
 
 # env_value <name>: value from the process environment, else from .env, else from .env.example.
 env_value() {
@@ -49,8 +64,32 @@ require_development() {
 
 # compose_files prints the Compose files of this host, one per line: the development set (plus the backup files when
 # BACKUP is set) or the production set of PADDOCK_HOST (on a control-plane or lab host plus the unsealer when
-# PADDOCK_AUTO_UNSEAL is yes, on a lab host plus the backup file when PADDOCK_LAB_BACKUP is yes), then every path of PADDOCK_COMPOSE_EXTRA (space-separated absolute paths; the CI smoke test's overlay, empty
+# PADDOCK_AUTO_UNSEAL is yes, on a lab host plus the backup file when PADDOCK_LAB_BACKUP is yes, on a host with backups
+# plus the legacy key import while .secrets/backup_encryption_key exists), then every path of PADDOCK_COMPOSE_EXTRA (space-separated absolute paths; the CI smoke test's overlay, empty
 # otherwise). Returns 2 when a production host has no valid PADDOCK_HOST.
+# backup_root_mount <root>: the docker run arguments that make the parent of the local backup root (default
+# /srv/paddock-backup) visible at its own path, read-only. prod-check lstats the root itself, so a symlink, a file or an
+# open mode is seen as it is on the host; a mount of the root would follow a symlink. A root that is not a clean
+# absolute path of two elements or more, or whose parent is missing, mounts nothing (prod-check reports the root).
+backup_root_mount() {
+  local root="${1:-/srv/paddock-backup}" parent
+  [[ "$root" == /*/* && "$root" != */ && "$root" != *//* && "$root" != */./* && "$root" != */../* ]] || return 0
+  parent="${root%/*}"
+  [[ "$parent" == /?* && -d "$parent" ]] || return 0
+  printf '%s\n' --mount "type=bind,src=$parent,dst=$parent,readonly"
+}
+
+# backup_host succeeds on a production host that runs the backup role: the control plane, or a lab host with
+# PADDOCK_LAB_BACKUP=yes.
+backup_host() {
+  [[ "$(env_value PADDOCK_ENV)" != development ]] || return 1
+  case "$(env_value PADDOCK_HOST)" in
+    controlplane) return 0 ;;
+    lab) [[ "$(env_value PADDOCK_LAB_BACKUP)" == yes ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 compose_files() {
   local files f host
   if [[ "$(env_value PADDOCK_ENV)" == development ]]; then
@@ -75,7 +114,13 @@ compose_files() {
         ;;
     esac
   fi
+  # -e or -L: a present but broken key file (a directory, a dangling link) is mounted and fails the start, never skipped.
+  f="$COMPOSE_DIR/.secrets/backup_encryption_key"
+  if [[ -e "$f" || -L "$f" ]] && backup_host; then files+=" $BACKUP_LEGACY_KEY_FILES"; fi
   for f in $files; do printf '%s\n' "$COMPOSE_DIR/$f"; done
+  # BACKUP_TARGETS_OVERLAY replaces the rendered file (backup-target apply tries a new one first); empty leaves it out.
+  f="${BACKUP_TARGETS_OVERLAY-$BACKUP_TARGETS_FILE}"
+  if [[ -n "$f" && -f "$f" ]] && backup_host; then printf '%s\n' "$f"; fi
   for f in ${PADDOCK_COMPOSE_EXTRA:-}; do printf '%s\n' "$f"; done
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -573,5 +574,53 @@ func TestRecordAllOnce(t *testing.T) {
 	}
 	if actions, _ := h.recorded(t, "corr-"+t.Name()); len(actions) != 3 {
 		t.Fatalf("a refused call recorded events (%d actions)", len(actions))
+	}
+
+	// Outside a request (decisions-alpha9 item 69): the events without an ID of their own share one generated ID, a
+	// spec's own ID is kept, and every event passes the audit writer.
+	env := pgtest.SharedPaddock(t)
+	orgPool, err := db.NewOrgPool(context.Background(), env.API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(orgPool.Close)
+	noRequest := app.NewActionRunner(orgPool, nil, func(context.Context) string { return "" })
+	marker := "no-request-" + uuid.NewString()
+	ownID := "own-" + marker
+	outside := []app.ActionSpec{
+		{Code: audit.CodeNotificationDelivered, Params: map[string]any{"destination": marker}},
+		{Code: audit.CodeNotificationDestinationResumed, Params: map[string]any{"destination": marker}},
+		{Code: audit.CodeNotificationDelivered, Params: map[string]any{"destination": marker}, CorrelationID: ownID},
+	}
+	if ok, err := noRequest.RecordAllOnce(ctx, app.ScopeOrg, outside, fresh); !ok || err != nil {
+		t.Fatalf("outside a request: %t %v", ok, err)
+	}
+	rows, err := h.super.Query(context.Background(), "SELECT payload FROM outbox WHERE payload -> 'params' ->> 'destination' = $1", marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int{}
+	for rows.Next() {
+		var payload []byte
+		var ev audit.Event
+		if err := rows.Scan(&payload); err != nil || json.Unmarshal(payload, &ev) != nil {
+			t.Fatalf("outbox payload %s: %v", payload, err)
+		}
+		if err := auditwriter.Validate(ev); err != nil {
+			t.Errorf("the audit writer refuses %s: %v", ev.Code, err)
+		}
+		ids[ev.CorrelationID]++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	shared := 0
+	for id, n := range ids {
+		if id != ownID && id != "" {
+			shared = n
+		}
+	}
+	if len(ids) != 2 || ids[ownID] != 1 || shared != 2 {
+		t.Fatalf("correlation IDs outside a request %v, want one generated ID twice and %s once", ids, ownID)
 	}
 }

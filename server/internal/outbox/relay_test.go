@@ -13,6 +13,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/devicecommand"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
@@ -456,6 +457,36 @@ func TestReaperKeepsTheStoredSource(t *testing.T) {
 	if ev.Source != audit.SourceMCP || subject != audit.Subject(org, audit.SourceMCP) || ev.Actor.Type != audit.ActorAdmin ||
 		ev.Actor.Client != "claude-code/2.1" || ev.Outcome != audit.OutcomeUnknown {
 		t.Fatalf("reaped MCP action: subject %q event %+v", subject, ev)
+	}
+}
+
+// TestReaperGivesAnUncorrelatedActionAnID: a system action started outside a request before the runner generated
+// correlation IDs has an empty one; its reaped event gets "reaper-<action id>" and passes the audit writer, which would
+// dead-letter it otherwise (decisions-alpha9 item 69).
+func TestReaperGivesAnUncorrelatedActionAnID(t *testing.T) {
+	h := newRelayHarness(t, nil)
+	ctx := context.Background()
+	stuck := uuid.Must(uuid.NewV7())
+	if err := pgtest.ExecUntriggered(ctx, h.super, `INSERT INTO action (id, organization_id, code, status, actor, target, params,
+		correlation_id, started_at)
+		VALUES ($1, $2, 'platform.backup_key_generated', 'started', '{"type":"system","display":"paddock-api","step_up":false}',
+		        NULL, '{"key_id":"legacy","legacy":true}', '', now() - interval '11 minutes')`, stuck, audit.PlatformOrganizationID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := outbox.NewReaper(h.pool, outbox.DefaultReaperThreshold).RunOnce(ctx); err != nil || n != 1 {
+		t.Fatalf("reaper finalized %d actions (%v), want 1", n, err)
+	}
+	var payload []byte
+	if err := h.super.QueryRow(ctx, "SELECT payload FROM outbox WHERE msg_id = $1", stuck.String()).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	var ev audit.Event
+	if err := json.Unmarshal(payload, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if err := auditwriter.Validate(ev); err != nil || ev.CorrelationID != "reaper-"+stuck.String() ||
+		ev.Source != audit.SourceSystem || ev.Actor.Type != audit.ActorSystem {
+		t.Fatalf("reaped uncorrelated action: event %+v: %v", ev, err)
 	}
 }
 

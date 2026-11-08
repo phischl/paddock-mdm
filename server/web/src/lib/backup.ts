@@ -14,9 +14,14 @@ export type BackupOverview = components['schemas']['BackupOverview']
 export type BackupSchedule = components['schemas']['BackupSchedule']
 export type BackupScheduleUpdate = components['schemas']['BackupScheduleUpdate']
 export type BackupRun = components['schemas']['BackupRun']
+export type BackupRestorePlan = components['schemas']['BackupRestorePlan']
+export type BackupRestorePlanInput = components['schemas']['BackupRestorePlanInput']
+export type BackupRestorePlanState = components['schemas']['BackupRestorePlanState']
+export type RestoreComponent = BackupRestorePlanInput['components'][number]
 type TargetBody = components['schemas']['BackupTargetInput']
 type TargetSort = components['parameters']['BackupTargetSort']
 type RunSort = components['parameters']['BackupRunSort']
+type PlanSort = components['parameters']['BackupRestorePlanSort']
 
 /** The answer of an operation: the problem code with the server's detail when it sent one. */
 export interface BackupProblem {
@@ -173,6 +178,16 @@ export type TargetField =
   | 's3Endpoint' | 's3Bucket' | 's3AccessKey' | 's3SecretKey'
 export type TargetErrors = Partial<Record<TargetField, string>>
 
+const controlChars = /[\u0000-\u001f\u007f-\u009f]/
+function hasControl(p: string): boolean {
+  return controlChars.test(p)
+}
+
+/** A relative subpath of the host's local backup root: no empty, '.' or '..' element (plan M15 decision 36). */
+function validLocalSubpath(p: string): boolean {
+  return p !== '' && new TextEncoder().encode(p).length <= 256 && !p.includes('\\') && !hasControl(p) && p.split('/').every((el) => el !== '' && el !== '.' && el !== '..')
+}
+
 /** Validates like the server's first line of defense (plan M15 §6.1); returns message keys by field. */
 export function validateTarget(input: TargetInput, original: TargetInput | null): TargetErrors {
   const errors: TargetErrors = {}
@@ -180,13 +195,14 @@ export function validateTarget(input: TargetInput, original: TargetInput | null)
   if (!namePattern.test(input.name)) errors.name = 'backup.targets.nameInvalid'
   switch (input.type) {
     case 'local':
-      if (!input.local.path.startsWith('/') || input.local.path.split('/').includes('..')) errors.localPath = 'backup.targets.pathInvalid'
+      if (!validLocalSubpath(input.local.path)) errors.localPath = 'backup.targets.pathInvalid'
       break
     case 'smb':
       if (input.smb.host.trim() === '') errors.smbHost = 'backup.targets.required'
       if (input.smb.share.trim() === '') errors.smbShare = 'backup.targets.required'
       if (input.smb.username.trim() === '') errors.smbUsername = 'backup.targets.required'
       if (need.password && input.smb.password === '') errors.smbPassword = original === null ? 'backup.targets.required' : 'backup.targets.passwordAgain'
+      else if (/[\s,]/.test(input.smb.password)) errors.smbPassword = 'backup.targets.passwordChars'
       break
     case 'nfs':
       if (input.nfs.host.trim() === '') errors.nfsHost = 'backup.targets.required'
@@ -410,4 +426,107 @@ export async function setTargetEnabled(id: string, enabled: boolean): Promise<Ba
 export async function requestRun(): Promise<BackupProblem | null> {
   const { error } = await api.POST('/api/platform/v1/backup/run', { params: { header: csrf }, body: { label: '' } })
   return error ? problemOf(error) : null
+}
+
+/** The word that confirms a restore plan; the server checks it again (plan M15 decision 25). */
+export const restoreWord = 'restore'
+export const restoreComponents: RestoreComponent[] = ['postgres', 'openbao', 'fleet', 'escrow']
+export const restorePlanStates: BackupRestorePlanState[] = ['approved', 'running', 'completed', 'failed', 'expired', 'abandoned']
+
+export const planFilters: ListFilter[] = [
+  { kind: 'enum', key: 'state', label: 'backup.restore.state', options: restorePlanStates.map((value) => ({ value, title: 'backup.restore.states.' + value })) },
+]
+
+/** The chip of a plan's state; the server already reports an approved plan past its expiry as expired. */
+export function planStateStatus(state: BackupRestorePlanState): StatusView {
+  const status: Record<BackupRestorePlanState, Status> = { approved: 'info', running: 'warn', completed: 'ok', failed: 'critical', expired: 'neutral', abandoned: 'neutral' }
+  return { status: status[state], label: 'backup.restore.states.' + state }
+}
+
+/**
+ * The newest success per kind of a source: the target's own status, or for the local repository the newest run per
+ * kind that succeeded (the overview carries the newest run per kind only).
+ */
+export function newestSuccess(overview: BackupOverview, sourceTargetId: string | null): Record<BackupKind, string | null> {
+  const out = Object.fromEntries(backupKinds.map((k) => [k, null])) as Record<BackupKind, string | null>
+  if (sourceTargetId) {
+    for (const s of overview.targets.find((x) => x.id === sourceTargetId)?.status ?? []) out[s.kind] = s.last_success_at
+    return out
+  }
+  for (const r of overview.last_runs) if (r.outcome === 'succeeded') out[r.kind] = r.finished_at ?? r.started_at
+  return out
+}
+
+/** What the plan dialog edits; at is the value of a datetime-local field. */
+export interface PlanInput {
+  kind: 'point_in_time' | 'components'
+  sourceTargetId: string | null
+  at: string
+  components: RestoreComponent[]
+  confirmation: string
+}
+
+export function emptyPlan(): PlanInput {
+  return { kind: 'components', sourceTargetId: null, at: '', components: [...restoreComponents], confirmation: '' }
+}
+
+export type PlanField = 'at' | 'components' | 'confirmation'
+
+/** The fields that block the request: a point in the future or missing, no component, a wrong word. */
+export function planErrors(i: PlanInput, now: Date): PlanField[] {
+  const errors: PlanField[] = []
+  if (i.kind === 'point_in_time') {
+    const at = new Date(i.at)
+    if (i.at === '' || Number.isNaN(at.getTime()) || at.getTime() > now.getTime() + 60_000) errors.push('at')
+  }
+  if (i.components.length === 0) errors.push('components')
+  if (i.confirmation !== restoreWord) errors.push('confirmation')
+  return errors
+}
+
+export function planBody(i: PlanInput): BackupRestorePlanInput {
+  return {
+    kind: i.kind,
+    components: restoreComponents.filter((c) => i.components.includes(c)),
+    confirmation: i.confirmation,
+    ...(i.sourceTargetId ? { source_target_id: i.sourceTargetId } : {}),
+    ...(i.kind === 'point_in_time' ? { at: new Date(i.at).toISOString() } : {}),
+  }
+}
+
+/** The time left until expiresAt in whole hours and minutes; null once it has passed. */
+export function timeLeft(expiresAt: string, now: Date): { hours: number; minutes: number } | null {
+  const ms = Date.parse(expiresAt) - now.getTime()
+  if (!(ms > 0)) return null
+  const minutes = Math.floor(ms / 60_000)
+  return { hours: Math.floor(minutes / 60), minutes: minutes % 60 }
+}
+
+export function planLister(): (p: ListParams) => Promise<Page<BackupRestorePlan>> {
+  return async (p) =>
+    listPage(
+      await api.GET('/api/platform/v1/backup/restore-plans', {
+        params: {
+          query: {
+            page: p.page, page_size: p.page_size, sort: p.sort as PlanSort, q: p.q,
+            state: p.state as BackupRestorePlanState[],
+          },
+        },
+      }),
+    )
+}
+
+export async function createRestorePlan(input: PlanInput): Promise<BackupRestorePlan | BackupProblem> {
+  const { data, error } = await api.POST('/api/platform/v1/backup/restore-plans', { params: { header: csrf }, body: planBody(input) })
+  return data ?? problemOf(error)
+}
+
+export async function abandonRestorePlan(id: string, confirmation: string): Promise<BackupRestorePlan | BackupProblem> {
+  const { data, error } = await api.POST('/api/platform/v1/backup/restore-plans/{id}/abandon', { params: { path: { id }, header: csrf }, body: { confirmation } })
+  return data ?? problemOf(error)
+}
+
+export async function cancelRestorePlan(id: string): Promise<BackupRestorePlan | BackupProblem> {
+  const { data, error } = await api.POST('/api/platform/v1/backup/restore-plans/{id}/cancel', { params: { path: { id }, header: csrf } })
+  return data ?? problemOf(error)
 }
