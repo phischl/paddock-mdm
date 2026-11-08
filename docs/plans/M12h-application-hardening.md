@@ -790,3 +790,17 @@ and devicecache packages' logic (only the test support changes).
 Names of shell variables and helper functions in `entrypoint.sh`; whether `Prefixes()` functions or a literal list
 backs `TestACLTemplateComplete` (one approach for every package); the structure of the Go table in
 `TestACLRoleMatrix`; the Compose fixture format of the `prodcheck` tests (follow `compose_test.go`).
+
+## Amendment 2026-11-09 (architect-lead decision A10-5, PDK-822)
+
+The `cap_add` of the Valkey container is exactly `CHOWN`, `SETUID`, `SETGID` and `DAC_READ_SEARCH`; decision A10-5
+(`decisions-alpha10.md` §14) accepts `DAC_READ_SEARCH` in addition to the three the plan named.
+
+- Reason: without `DAC_READ_SEARCH` the entrypoint crash-loops on an existing data volume, because root, with every
+  other capability dropped, cannot traverse the existing mode-0700 data directory (`/data/appendonlydir`, owned by
+  the valkey user) before it drops to that user. The reviewer of PDK-822 reproduced the crash loop.
+- Scope: the capability lets the root-run entrypoint read and traverse the container's own filesystem and its data
+  volume only, until `setpriv` drops to the valkey user. No other capability is added.
+- Reference: PDK-824 (`fleet-redis`) and PDK-825 (the hardening and prod-check matrix) use this four-capability set
+  as the Valkey reference. `tools/composelint` pins it: any extra or missing capability for `valkey` in any host file
+  set fails `make lint-compose` and its tests.

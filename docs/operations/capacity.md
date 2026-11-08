@@ -293,6 +293,44 @@ Measure the size of one full backup with `./paddock compose run --rm --no-deps p
 role. Every backup target holds another copy of the same set, so size those disks the same way. The figures of
 `docs/operations/backup.md` ("What is backed up") are the defaults the sizing assumes.
 
+## Memory limits
+
+Every container of the stack gets a memory limit (ADR 0051 decision 4, plan M12h §3.4), so that a runaway or attacked
+service cannot starve the host that also runs OpenBao. When a container reaches its limit, the kernel's OOM killer
+kills the largest process inside it, which is not necessarily the container's main process (RR-120):
+
+- PostgreSQL (`postgres`, `authentik-postgres`, `audit-postgres`): usually a backend process is killed. The postmaster
+  terminates the other connections, runs crash recovery and accepts connections again; the container keeps running and
+  its restart count does not change. Clients see dropped connections and failed transactions.
+- Valkey (`valkey`, `fleet-redis`): the killed process may be the child of a background save or AOF rewrite. The
+  server keeps running and retries later; after a failed background save it refuses writes until a save succeeds
+  (`stop-writes-on-bgsave-error`, on by default), and `INFO persistence` shows `rdb_last_bgsave_status:err` or
+  `aof_last_bgrewrite_status:err`. If the server itself is killed, Docker restarts the container and the restart
+  count rises.
+
+Neither a Paddock alert nor the restart count reliably shows such a kill (`PaddockRoleDown` covers only the Paddock
+roles). The evidence is `docker inspect --format '{{.State.OOMKilled}}' <container>` (set when the container's main
+process was killed), the `oom_kill` counter in the container's cgroup `memory.events`
+(`docker exec <container> cat /sys/fs/cgroup/memory.events`), and the kernel log (`journalctl -k | grep -i oom`).
+
+The limits are set from the measured working set with headroom and can be raised per installation in `.env`; apply a
+change with `./paddock up` (it recreates the container). The table grows with each hardened service group; services
+without a limit yet are listed in `deploy/compose/hardening-exceptions.yaml`.
+
+| Service | Host | Default limit | `.env` variable | Snapshot (development stack, 2026-11-09) |
+| --- | --- | --- | --- | --- |
+| `postgres` | control plane | 2 GiB | `PADDOCK_POSTGRES_MEM_LIMIT` | 190–245 MiB |
+| `authentik-postgres` | control plane | 1 GiB | `PADDOCK_AUTHENTIK_POSTGRES_MEM_LIMIT` | 210–215 MiB |
+| `audit-postgres` | audit | 1 GiB | `PADDOCK_AUDIT_POSTGRES_MEM_LIMIT` | 50–75 MiB |
+| `valkey` | control plane | 512 MiB | `PADDOCK_VALKEY_MEM_LIMIT` | 6–12 MiB |
+| `fleet-redis` | control plane | 512 MiB | `PADDOCK_FLEET_REDIS_MEM_LIMIT` | 4–5 MiB |
+
+The snapshot is the resident memory (`docker stats`) of two idle development stacks after their acceptance runs, not
+a peak under load. PostgreSQL's page cache does not count against the limit beyond what the kernel can reclaim, so a
+larger database grows into the host's page cache instead; raise `PADDOCK_POSTGRES_MEM_LIMIT` when you raise
+`shared_buffers` or the number of connections. Valkey holds sessions, device keys, nonces and counters only; a limit
+reached there points to a leak, not to a larger installation.
+
 ## Method
 
 The load generator is k6 (`K6_IMAGE` in `deploy/compose/versions.env`, a tool only, never shipped). It runs as a
