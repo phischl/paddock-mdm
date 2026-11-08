@@ -335,21 +335,32 @@ case "${1:-serve}" in
     require_runtime "$repo_path"
     restore_dir="$SPOOL/restore"
     target=()
-    # The newest backup's WAL is enough for the latest point; a point in time may lie before it, so the staging starts
-    # at the oldest backup then.
-    pick=tail
     if [[ -n "$at" ]]; then
       target=(--type=time "--target=$at" --target-action=promote)
-      pick=head
     fi
     # The restored cluster reads its WAL from the staged directory: PostgreSQL's image has no pgBackRest.
-    pgb restore "${target[@]}" --recovery-option="restore_command=cp $restore_dir/%f %p"
+    out="$(pgb restore "${target[@]}" --recovery-option="restore_command=cp $restore_dir/%f %p" 2>&1)" || {
+      echo "$out" >&2
+      exit 1
+    }
+    echo "$out"
     rm -rf "$restore_dir" && mkdir -p "$restore_dir"
-    # Every segment from the backup's first one on, until the repository has no next one.
-    label="$(pgb info --output=json | grep -o '"label":"[^"]*"' | "$pick" -1 | cut -d'"' -f4)"
+    # The staging starts at the backup pgBackRest restored, on that backup's timeline: after a restore or a
+    # promotion the archive holds several timelines, and the oldest backup's lies before the restored one's
+    # (gate BS4; decisions-alpha9 item 89). Without pgBackRest's line the newest backup is the default it restores.
+    label="$({ grep -oE 'restore backup set [0-9]{8}-[0-9]{6}F(_[0-9]{8}-[0-9]{6}[DI])?' <<<"$out" || true; } |
+      tail -1 | awk '{print $4}')"
+    [[ -n "$label" ]] || label="$(pgb info --output=json | grep -o '"label":"[^"]*"' | tail -1 | cut -d'"' -f4)"
     start="$(pgb info --set="$label" --output=json | grep -o '"start":"[0-9A-F]\{24\}"' | head -1 | cut -d'"' -f4)"
     [[ -n "$start" ]] || { echo "pgbackrest: cannot read the WAL start of backup $label" >&2; exit 1; }
     tli="${start:0:8}"
+    # The history files of the timelines up to the backup's, so that recovery follows its timeline's parents.
+    for ((t = 2; t <= 16#$tli; t++)); do
+      h="$(printf '%08X.history' "$t")"
+      rc=0
+      pgb archive-get "$h" "$restore_dir/$h" >/dev/null 2>&1 || rc=$?
+      ((rc == 0 || rc == 1)) || { echo "pgbackrest: archive-get $h failed (exit $rc)" >&2; exit 1; }
+    done
     log=$((16#${start:8:8}))
     seg=$((16#${start:16:8}))
     n=0

@@ -20,7 +20,7 @@ cleanup() {
   kill "${pusher_pid:-}" 2>/dev/null || true
   docker rm -f "$id-pg" "$id-pg2" "$id-serve" "$id-lock" >/dev/null 2>&1 || true
   docker volume rm "$id-data" "$id-sock" "$id-repo" "$id-state" "$id-data2" "$id-sock2" "$id-spool2" "$id-state2" \
-    "$id-bin" "$id-brepo" "$id-runtime" "$id-empty" "$id-rec" >/dev/null 2>&1 || true
+    "$id-bin" "$id-brepo" "$id-runtime" "$id-empty" "$id-rec" "$id-tl" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 # The cipher pass the backup role would write into the runtime tmpfs (any text; pgBackRest derives the key from it).
@@ -262,6 +262,37 @@ check "restore --repo-path reads the named key's repository" \
 rc=0
 docker run --rm "${restore_args[@]}" restore --repo-path ../../etc >/dev/null 2>&1 || rc=$?
 check "restore refuses a repository path outside the set (exit $rc)" "$([[ $rc == 3 ]] && echo 0 || echo 1)"
+# Several timelines (after a restore and its promotion, gate BS4; decisions-alpha9 item 89): the staging starts at the
+# backup pgBackRest restored, on its timeline, with the timeline's history, not at the oldest backup's timeline.
+docker volume create "$id-tl" >/dev/null
+docker run --rm -i -u 0 --entrypoint sh -v "$id-tl:/bin-vol" "$image" \
+  -c 'cat >/bin-vol/pgbackrest && chmod 755 /bin-vol/pgbackrest && chown 999:999 /bin-vol' <<'TIMELINES'
+#!/bin/sh
+case " $* " in
+  *" restore "*) echo "P00   INFO: repo1: restore backup set 20261104-110000F, recovery will start at 2026-11-04 11:00:00" ;;
+  *" --set=20261104-110000F "*) echo '[{"backup":[{"label":"20261104-110000F","archive":{"start":"000000020000000000000005"}}]}]' ;;
+  *" --set=20261104-100000F "*) echo '[{"backup":[{"label":"20261104-100000F","archive":{"start":"000000010000000000000003"}}]}]' ;;
+  *" info "*) echo '[{"backup":[{"label":"20261104-100000F","archive":{"start":"000000010000000000000003"}},{"label":"20261104-110000F","archive":{"start":"000000020000000000000005"}}],"archive":[{"max":"000000020000000000000006"}]}]' ;;
+  *" archive-get "*)
+    name="$(echo "$*" | sed 's/.* archive-get \([^ ]*\) .*/\1/')"
+    echo "$name" >>/opt/test-bin/gets
+    case "$name" in
+      00000002.history|000000020000000000000005|000000020000000000000006) : >"$(echo "$*" | sed 's/.* archive-get [^ ]* \([^ ]*\).*/\1/')" ;;
+      *) exit 1 ;;
+    esac
+    ;;
+esac
+TIMELINES
+tl_args=(-v "$id-tl:/opt/test-bin" -e PATH=/opt/test-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  "${run_sh_args[@]}")
+rc=0
+out="$(docker run --rm "${tl_args[@]}" restore --at "2026-11-04 11:30:00+00" --repo-path "$old_path" 2>&1)" || rc=$?
+gets="$(docker run --rm --entrypoint cat -v "$id-tl:/opt/test-bin" "$image" /opt/test-bin/gets 2>/dev/null || true)"
+check "a point-in-time restore stages the restored backup's timeline (exit $rc)" \
+  "$([[ $rc == 0 ]] && grep -q 'restored test from backup 20261104-110000F; staged 2 WAL segments from 000000020000000000000005 to 000000020000000000000006' <<<"$out" && echo 0 || echo 1)"
+check "the staging fetches the timeline's history and not the older timeline's segments" \
+  "$(grep -qx '00000002.history' <<<"$gets" && ! grep -q '^00000001000' <<<"$gets" && echo 0 || echo 1)"
+
 # The operator's verify (decisions-alpha9 item 33): a verify that reports a problem leaves verify-ok absent, the
 # whole-stanza verify without a time limit writes it.
 docker run --rm -u 0 --entrypoint rm -v "$id-state2:/state" "$image" -f /state/verify-ok
