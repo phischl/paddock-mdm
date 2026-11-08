@@ -186,6 +186,69 @@ func (c *Client) GroupMembers(ctx context.Context, groupPK string) ([]string, er
 	return pks, err
 }
 
+// DeviceLoginGroups lists the per-device login groups of the organization slug (organization.DeviceLoginGroup) with
+// the pks of their direct members, keyed by name, in one paged listing of groups instead of a lookup and a member
+// listing per device (PDK-570). The listing searches the groups by the name prefix and keeps only the names that start
+// with it. Pages are numbered, so a group deleted during the listing shifts the next page and another group could be
+// skipped, which would read as a group that does not exist: the listing is repeated when the total changed between
+// pages or does not match what was read, and fails if it never settles. A group without its member list fails the
+// listing: an empty list would read as a group without members.
+func (c *Client) DeviceLoginGroups(ctx context.Context, slug string) (map[string]ports.IdentityGroupMembers, error) {
+	prefix := organization.DeviceLoginGroupPrefix(slug)
+	for range roleGroupAttempts {
+		out, settled, err := c.deviceLoginGroups(ctx, prefix)
+		if err != nil || settled {
+			return out, err
+		}
+	}
+	return nil, fmt.Errorf("%w: the device login groups of %s changed during every listing", problem.UpstreamUnavailable, slug)
+}
+
+func (c *Client) deviceLoginGroups(ctx context.Context, prefix string) (map[string]ports.IdentityGroupMembers, bool, error) {
+	q := url.Values{"search": {prefix}, "include_users": {"false"}, "ordering": {"name"}, "page_size": {strconv.Itoa(pageSize)}}
+	out := map[string]ports.IdentityGroupMembers{}
+	total, read := -1, 0
+	for page := 1; page <= maxPages; page++ {
+		q.Set("page", strconv.Itoa(page))
+		var res struct {
+			Pagination struct {
+				Next  int `json:"next"`
+				Count int `json:"count"`
+			} `json:"pagination"`
+			Results []struct {
+				PK    string `json:"pk"`
+				Name  string `json:"name"`
+				Users *[]int `json:"users"`
+			} `json:"results"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/api/v3/core/groups/?"+q.Encode(), nil, &res); err != nil {
+			return nil, false, upstream(err)
+		}
+		if total >= 0 && res.Pagination.Count != total {
+			return nil, false, nil
+		}
+		total = res.Pagination.Count
+		read += len(res.Results)
+		for _, g := range res.Results {
+			if !strings.HasPrefix(g.Name, prefix) {
+				continue
+			}
+			if g.Users == nil {
+				return nil, false, upstream(fmt.Errorf("group %s listed without its members", g.Name))
+			}
+			members := make([]string, 0, len(*g.Users))
+			for _, pk := range *g.Users {
+				members = append(members, strconv.Itoa(pk))
+			}
+			out[g.Name] = ports.IdentityGroupMembers{PK: g.PK, Members: members}
+		}
+		if res.Pagination.Next == 0 {
+			return out, read == total, nil
+		}
+	}
+	return nil, false, fmt.Errorf("authentik: the device login groups have more than %d pages", maxPages)
+}
+
 // UpstreamGroups lists the groups outside Paddock's namespace that have at least one direct member of
 // paddock.<slug> (plan M3b decision 1): an organization never sees groups that only other organizations' users are in.
 func (c *Client) UpstreamGroups(ctx context.Context, slug string) ([]ports.IdentityGroup, error) {

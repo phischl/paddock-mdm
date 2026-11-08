@@ -33,7 +33,8 @@ type directory struct {
 	// roleGroups are the members of role groups by group name; roleGroupCalls counts their listings.
 	roleGroups     map[string][]ports.IdentityUser
 	roleGroupCalls int
-	// roleGroupFail makes the listing of a role group fail with its error (the other listings still work).
+	// roleGroupFail makes the listing of the role groups fail with the error of any group it names; ErrGroupNotFound
+	// only leaves that group out.
 	roleGroupFail map[string]error
 	// unlisted are UIDs the role group listings leave out (a paged listing that skipped them); a direct read still
 	// finds them.
@@ -50,6 +51,9 @@ type directory struct {
 	usersVisible bool
 	probeFail    error
 	probes       int
+	// deviceListings counts the listings of device login groups; deviceListFail makes them fail.
+	deviceListings int
+	deviceListFail error
 }
 
 func newDirectory() *directory {
@@ -73,20 +77,29 @@ func (d *directory) OrganizationUsers(context.Context, string) ([]ports.Identity
 	defer d.mu.Unlock()
 	return slices.Clone(d.users), d.fail
 }
-func (d *directory) RoleGroupUsers(_ context.Context, name string) ([]ports.IdentityUser, error) {
+func (d *directory) RoleGroupsMembers(_ context.Context, names []string) (map[string][]ports.IdentityUser, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.roleGroupCalls++
-	if err := d.roleGroupFail[name]; err != nil {
-		return nil, err
+	if d.fail != nil {
+		return nil, d.fail
 	}
-	var out []ports.IdentityUser
-	for _, m := range d.roleGroups[name] {
-		if !d.unlisted[m.UID] {
-			out = append(out, m)
+	out := map[string][]ports.IdentityUser{}
+	for _, name := range names {
+		// One listing reads every group: a missing group only lacks its key, any other failure fails all of them.
+		if err := d.roleGroupFail[name]; errors.Is(err, ports.ErrGroupNotFound) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		out[name] = []ports.IdentityUser{}
+		for _, m := range d.roleGroups[name] {
+			if !d.unlisted[m.UID] {
+				out[name] = append(out[name], m)
+			}
 		}
 	}
-	return out, d.fail
+	return out, nil
 }
 func (d *directory) Superusers(context.Context) ([]ports.IdentityUser, error) {
 	d.mu.Lock()
@@ -177,6 +190,21 @@ func (d *directory) GroupMembers(_ context.Context, g string) ([]string, error) 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return slices.Clone(d.members[g]), nil
+}
+func (d *directory) DeviceLoginGroups(_ context.Context, slug string) (map[string]ports.IdentityGroupMembers, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.deviceListings++
+	if d.deviceListFail != nil {
+		return nil, d.deviceListFail
+	}
+	out := map[string]ports.IdentityGroupMembers{}
+	for pk, name := range d.groups {
+		if strings.HasPrefix(name, organization.DeviceLoginGroupPrefix(slug)) {
+			out[name] = ports.IdentityGroupMembers{PK: pk, Members: slices.Clone(d.members[pk])}
+		}
+	}
+	return out, nil
 }
 func (d *directory) UpstreamGroups(context.Context, string) ([]ports.IdentityGroup, error) {
 	return nil, nil
@@ -388,6 +416,86 @@ func TestSyncGroupMirrorsAndReconcile(t *testing.T) {
 	}
 	if pk, _ := s.dir.FindGroup(ctx, organization.DeviceLoginGroup(s.slug, device)); pk != "" {
 		t.Fatal("per-device group of a retired device kept")
+	}
+}
+
+// TestReconcileListsDeviceGroupsOnce (PDK-570): the reconcile round reads every per-device group of the organization in
+// one listing and changes them as before: a listed group loses the members not assigned and gains the assigned ones, a
+// missing group is created, a retired device's group is deleted. A failed listing changes no group.
+func TestReconcileListsDeviceGroupsOnce(t *testing.T) {
+	s := newSyncHarness(t)
+	ctx := context.Background()
+	if err := s.sync.Reconcile(s.system()); err != nil || s.dir.deviceListings != 0 {
+		t.Fatalf("an organization without login assignments: %v, %d listings", err, s.dir.deviceListings)
+	}
+	suffix := s.org.String()[24:]
+	erin := ports.IdentityUser{PK: "e" + suffix, Username: "erin@r-" + suffix + ".test", Name: "Erin"}
+	frank := ports.IdentityUser{PK: "f" + suffix, Username: "frank@r-" + suffix + ".test", Name: "Frank"}
+	s.dir.users = []ports.IdentityUser{erin, frank}
+	if _, err := s.sync.SyncUsers(s.system(), func(string) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	userID := func(pk string) uuid.UUID {
+		var id uuid.UUID
+		if err := s.super.QueryRow(ctx, "SELECT id FROM app_user WHERE authentik_pk = $1", pk).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	device := func(hostname, state string, users ...string) uuid.UUID {
+		id := uuid.Must(uuid.NewV7())
+		if _, err := s.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, $3, $4)",
+			id, s.org, hostname, state); err != nil {
+			t.Fatal(err)
+		}
+		for _, u := range users {
+			if _, err := s.super.Exec(ctx, `INSERT INTO device_login_assignment (organization_id, device_id, subject_type, subject_id)
+				VALUES ($1, $2, 'user', $3)`, s.org, id, userID(u)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+	listed := device("listed", "active", erin.PK)
+	created := device("created", "active", erin.PK, frank.PK)
+	retired := device("retired", "retired", erin.PK)
+	group := func(d uuid.UUID) string {
+		pk, _ := s.dir.FindGroup(ctx, organization.DeviceLoginGroup(s.slug, d))
+		return pk
+	}
+	prepare := func() {
+		pk, _ := s.dir.EnsureGroup(ctx, s.slug, organization.DeviceLoginGroup(s.slug, listed))
+		s.dir.members[pk] = []string{"stranger", erin.PK}
+		pk, _ = s.dir.EnsureGroup(ctx, s.slug, organization.DeviceLoginGroup(s.slug, retired))
+		s.dir.members[pk] = []string{erin.PK}
+	}
+	prepare()
+	s.dir.deviceListFail = errors.New("authentik: HTTP 503")
+	if err := s.sync.Reconcile(s.system()); err == nil {
+		t.Fatal("a failed listing did not fail the round")
+	}
+	if !slices.Equal(s.dir.members[group(listed)], []string{"stranger", erin.PK}) || group(created) != "" || group(retired) == "" {
+		t.Fatalf("a failed listing changed groups: listed %v, created %q, retired %q", s.dir.members[group(listed)], group(created), group(retired))
+	}
+	s.dir.deviceListFail, s.dir.deviceListings = nil, 0
+	if err := s.sync.Reconcile(s.system()); err != nil {
+		t.Fatal(err)
+	}
+	if s.dir.deviceListings != 1 {
+		t.Fatalf("%d device group listings, want 1", s.dir.deviceListings)
+	}
+	if got := s.dir.members[group(listed)]; !slices.Equal(got, []string{erin.PK}) {
+		t.Fatalf("listed group members %v", got)
+	}
+	if got := slices.Sorted(slices.Values(s.dir.members[group(created)])); !slices.Equal(got, []string{erin.PK, frank.PK}) {
+		t.Fatalf("created group members %v", got)
+	}
+	if group(retired) != "" {
+		t.Fatal("the retired device's group was kept")
+	}
+	// A second round finds everything in place and changes nothing.
+	if err := s.sync.Reconcile(s.system()); err != nil || !slices.Equal(s.dir.members[group(listed)], []string{erin.PK}) || group(retired) != "" {
+		t.Fatalf("second round: %v", err)
 	}
 }
 

@@ -31,10 +31,14 @@ type fakeAuthentik struct {
 	users  map[int]*fakeUser
 	// afterUserPage runs after every page of a user listing (membership changing during a listing).
 	afterUserPage func()
-	objects       map[string]map[string]map[string]any // collection → pk → object (flows, mappings, providers, …)
-	tokens        map[string][]int                     // "refresh_tokens"/"access_tokens" → owning user pks
-	sessions      map[int]int                          // user pk → number of sessions
-	nextPK        int
+	// afterGroupPage runs after every page of a group listing (groups changing during a listing).
+	afterGroupPage func()
+	// groupsWithoutUsers leaves the member pks out of every group (an Authentik that no longer sends them).
+	groupsWithoutUsers bool
+	objects            map[string]map[string]map[string]any // collection → pk → object (flows, mappings, providers, …)
+	tokens             map[string][]int                     // "refresh_tokens"/"access_tokens" → owning user pks
+	sessions           map[int]int                          // user pk → number of sessions
+	nextPK             int
 	// deactivations counts PATCHes with is_active false.
 	deactivations int
 
@@ -68,6 +72,8 @@ type fakeAuthentik struct {
 	blind bool
 	// unnamedGroupRefusal refuses an unknown groups_by_name without naming the group (another wording).
 	unnamedGroupRefusal bool
+	// dropGroupsObj answers include_groups=true without groups_obj (an Authentik that ignores the parameter).
+	dropGroupsObj bool
 }
 
 type fakeGroup struct {
@@ -169,7 +175,55 @@ func (f *fakeAuthentik) page(items []map[string]any) map[string]any {
 func (f *fakeAuthentik) groupJSON(g *fakeGroup) map[string]any {
 	j := f.fixture("post_core_groups.json")
 	j["pk"], j["name"], j["parents"] = g.pk, g.name, g.parents
+	users := []int{}
+	for _, u := range f.users {
+		if slices.Contains(u.groups, g.pk) {
+			users = append(users, u.pk)
+		}
+	}
+	slices.Sort(users)
+	j["users"] = users
+	if f.groupsWithoutUsers {
+		delete(j, "users")
+	}
 	return j
+}
+
+// listGroups answers a group listing: name filters exactly, search by a case-insensitive part of the name (Authentik's
+// search on the group name), ordered by name; page_size pages the listing, without it every group is one page.
+func (f *fakeAuthentik) listGroups(q map[string][]string) (int, any) {
+	var match []*fakeGroup
+	for _, g := range f.sortedGroups() {
+		if f.blind {
+			break
+		}
+		if name := first(q["name"]); name != "" && g.name != name {
+			continue
+		}
+		if search := first(q["search"]); search != "" && !strings.Contains(strings.ToLower(g.name), strings.ToLower(search)) {
+			continue
+		}
+		match = append(match, g)
+	}
+	from, to, page := 0, len(match), 1
+	if size, _ := strconv.Atoi(first(q["page_size"])); size > 0 {
+		page, _ = strconv.Atoi(first(q["page"]))
+		from = min((page-1)*size, len(match))
+		to = min(from+size, len(match))
+	}
+	var items []map[string]any
+	for _, g := range match[from:to] {
+		items = append(items, f.groupJSON(g))
+	}
+	out := f.page(items)
+	out["pagination"].(map[string]any)["count"] = len(match)
+	if to < len(match) {
+		out["pagination"].(map[string]any)["next"] = page + 1
+	}
+	if f.afterGroupPage != nil {
+		f.afterGroupPage()
+	}
+	return http.StatusOK, out
 }
 
 func (f *fakeAuthentik) userJSON(u *fakeUser, includeGroups bool) map[string]any {
@@ -189,6 +243,9 @@ func (f *fakeAuthentik) userJSON(u *fakeUser, includeGroups bool) map[string]any
 			}
 		}
 		j["groups_obj"] = objs
+	}
+	if f.dropGroupsObj {
+		delete(j, "groups_obj")
 	}
 	return j
 }
@@ -279,16 +336,7 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 	p, q := r.URL.Path, r.URL.Query()
 	switch {
 	case p == "/api/v3/core/groups/" && r.Method == http.MethodGet:
-		var items []map[string]any
-		for _, g := range f.sortedGroups() {
-			if f.blind {
-				break
-			}
-			if name := q.Get("name"); name == "" || g.name == name {
-				items = append(items, f.groupJSON(g))
-			}
-		}
-		return http.StatusOK, f.page(items)
+		return f.listGroups(q)
 	case p == "/api/v3/core/groups/" && r.Method == http.MethodPost:
 		name, _ := body["name"].(string)
 		for _, g := range f.groups {
