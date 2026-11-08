@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 )
 
 // MissingError lists every required variable that is not set.
@@ -374,6 +376,79 @@ func LoadValkey(l *Loader) Valkey {
 		Addr:     l.Required("PADDOCK_VALKEY_ADDR"),
 		Password: l.SecretFile("PADDOCK_VALKEY_PASSWORD_FILE"),
 	}
+}
+
+// RateLimitVars are the settings of the api's rate limit classes (plan M12h §6.1).
+var RateLimitVars = map[ratelimit.Class]string{
+	ratelimit.Auth:           "PADDOCK_RATELIMIT_AUTH",
+	ratelimit.AdminRead:      "PADDOCK_RATELIMIT_ADMIN_READ",
+	ratelimit.AdminWrite:     "PADDOCK_RATELIMIT_ADMIN_WRITE",
+	ratelimit.PlatformUpload: "PADDOCK_RATELIMIT_PLATFORM_UPLOAD",
+	ratelimit.BundlesAPT:     "PADDOCK_RATELIMIT_BUNDLES_APT",
+}
+
+// RateLimits are the api's limits per minute and class (0 = off, which prod-check refuses in production) and the
+// client ranges the limiter never counts.
+type RateLimits struct {
+	Limits map[ratelimit.Class]int
+	Exempt []netip.Prefix
+}
+
+// LoadRateLimits reads PADDOCK_RATELIMIT_* and the development-only PADDOCK_TEST_RATELIMIT_EXEMPT_CIDRS: the
+// acceptance gates sign in from the stack's private network far more often than any administrator, while their rate
+// limit gate sends from a documentation address through the trusted edge listener.
+func LoadRateLimits(l *Loader, c Common) RateLimits {
+	defaults := map[ratelimit.Class]int{
+		ratelimit.Auth: ratelimit.DefaultAuth, ratelimit.AdminRead: ratelimit.DefaultAdminRead,
+		ratelimit.AdminWrite: ratelimit.DefaultAdminWrite, ratelimit.PlatformUpload: ratelimit.DefaultPlatformUpload,
+		ratelimit.BundlesAPT: ratelimit.DefaultBundlesAPT,
+	}
+	r := RateLimits{Limits: map[ratelimit.Class]int{}}
+	for class, name := range RateLimitVars {
+		n := l.Int(name, defaults[class])
+		if n < 0 {
+			l.Invalid(name, fmt.Sprintf("not a limit per minute (0 = off): %d", n))
+		}
+		r.Limits[class] = n
+	}
+	const exempt = "PADDOCK_TEST_RATELIMIT_EXEMPT_CIDRS"
+	if v, ok := l.get(exempt); ok {
+		if !c.Development() {
+			l.Invalid(exempt, "only allowed with PADDOCK_ENV=development")
+			return r
+		}
+		for _, f := range strings.Fields(v) {
+			p, err := netip.ParsePrefix(f)
+			if err != nil {
+				l.Invalid(exempt, fmt.Sprintf("not a CIDR: %q", f))
+				continue
+			}
+			r.Exempt = append(r.Exempt, p.Masked())
+		}
+	}
+	return r
+}
+
+// DeviceRateLimits are the gateway's per-address window (PADDOCK_DEVICE_PER_IP_LIMIT) and the prefix length an IPv6
+// device address is keyed by (PADDOCK_DEVICE_PER_IP_V6_PREFIX).
+type DeviceRateLimits struct {
+	PerIP    int
+	V6Prefix int
+}
+
+// LoadDeviceRateLimits reads PADDOCK_DEVICE_PER_IP_LIMIT and PADDOCK_DEVICE_PER_IP_V6_PREFIX.
+func LoadDeviceRateLimits(l *Loader) DeviceRateLimits {
+	d := DeviceRateLimits{
+		PerIP:    l.Int("PADDOCK_DEVICE_PER_IP_LIMIT", ratelimit.DefaultDevice),
+		V6Prefix: l.Int("PADDOCK_DEVICE_PER_IP_V6_PREFIX", ratelimit.DefaultV6Prefix),
+	}
+	if d.PerIP < 1 {
+		l.Invalid("PADDOCK_DEVICE_PER_IP_LIMIT", fmt.Sprintf("not a limit per minute: %d", d.PerIP))
+	}
+	if d.V6Prefix < 1 || d.V6Prefix > 128 {
+		l.Invalid("PADDOCK_DEVICE_PER_IP_V6_PREFIX", fmt.Sprintf("not an IPv6 prefix length: %d", d.V6Prefix))
+	}
+	return d
 }
 
 // ReleaseSource is the GitHub-compatible release source of the agent release import (ADR 0043 decision 6).

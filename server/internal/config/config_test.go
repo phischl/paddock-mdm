@@ -3,12 +3,15 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 )
 
 // TestLoadOpenBaoAddr reads the address only: no AppRole file is required (plan M8u decision 9).
@@ -335,5 +338,52 @@ func TestLoadReleaseSource(t *testing.T) {
 	l = NewLoaderFrom(map[string]string{token: empty})
 	if LoadReleaseSource(l, prod); l.Err() == nil || !strings.Contains(l.Err().Error(), token) {
 		t.Fatalf("empty token file: %v", l.Err())
+	}
+}
+
+func TestRateLimits(t *testing.T) {
+	r := LoadRateLimits(NewLoaderFrom(nil), Common{Env: "production"})
+	want := map[ratelimit.Class]int{ratelimit.Auth: 20, ratelimit.AdminRead: 600, ratelimit.AdminWrite: 120,
+		ratelimit.PlatformUpload: 10, ratelimit.BundlesAPT: 60}
+	if !reflect.DeepEqual(r.Limits, want) || r.Exempt != nil {
+		t.Fatalf("defaults: %+v", r)
+	}
+	l := NewLoaderFrom(map[string]string{"PADDOCK_RATELIMIT_AUTH": "0", "PADDOCK_RATELIMIT_ADMIN_READ": "1200"})
+	if r := LoadRateLimits(l, Common{Env: "production"}); l.Err() != nil || r.Limits[ratelimit.Auth] != 0 || r.Limits[ratelimit.AdminRead] != 1200 {
+		t.Fatalf("set: %+v %v", r, l.Err())
+	}
+	l = NewLoaderFrom(map[string]string{"PADDOCK_RATELIMIT_ADMIN_WRITE": "-1"})
+	if LoadRateLimits(l, Common{Env: "production"}); l.Err() == nil || !strings.Contains(l.Err().Error(), "PADDOCK_RATELIMIT_ADMIN_WRITE") {
+		t.Fatalf("negative limit: %v", l.Err())
+	}
+
+	exempt := map[string]string{"PADDOCK_TEST_RATELIMIT_EXEMPT_CIDRS": "10.0.0.0/8 fc00::/7"}
+	l = NewLoaderFrom(exempt)
+	if r := LoadRateLimits(l, Common{Env: "development"}); l.Err() != nil || len(r.Exempt) != 2 || r.Exempt[1] != netip.MustParsePrefix("fc00::/7") {
+		t.Fatalf("development exemption: %+v %v", r.Exempt, l.Err())
+	}
+	l = NewLoaderFrom(exempt)
+	if r := LoadRateLimits(l, Common{Env: "production"}); l.Err() == nil || r.Exempt != nil {
+		t.Fatalf("exemption accepted in production: %+v", r.Exempt)
+	}
+	l = NewLoaderFrom(map[string]string{"PADDOCK_TEST_RATELIMIT_EXEMPT_CIDRS": "10.0.0.1"})
+	if LoadRateLimits(l, Common{Env: "development"}); l.Err() == nil {
+		t.Fatal("an address without prefix length accepted")
+	}
+}
+
+func TestDeviceRateLimits(t *testing.T) {
+	if d := LoadDeviceRateLimits(NewLoaderFrom(nil)); d != (DeviceRateLimits{PerIP: 300, V6Prefix: 64}) {
+		t.Fatalf("defaults: %+v", d)
+	}
+	l := NewLoaderFrom(map[string]string{"PADDOCK_DEVICE_PER_IP_LIMIT": "1000", "PADDOCK_DEVICE_PER_IP_V6_PREFIX": "56"})
+	if d := LoadDeviceRateLimits(l); l.Err() != nil || d != (DeviceRateLimits{PerIP: 1000, V6Prefix: 56}) {
+		t.Fatalf("set: %+v %v", d, l.Err())
+	}
+	for k, v := range map[string]string{"PADDOCK_DEVICE_PER_IP_LIMIT": "0", "PADDOCK_DEVICE_PER_IP_V6_PREFIX": "129"} {
+		l := NewLoaderFrom(map[string]string{k: v})
+		if LoadDeviceRateLimits(l); l.Err() == nil {
+			t.Errorf("%s=%s accepted", k, v)
+		}
 	}
 }

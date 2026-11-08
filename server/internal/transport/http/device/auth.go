@@ -11,6 +11,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 )
 
 // signed is a request whose signature and nonce were verified.
@@ -33,7 +34,7 @@ func pathQuery(r *http.Request) string { return r.URL.RequestURI() }
 // readSigned applies the per-address limit, reads the body and checks header presence and the timestamp — the
 // steps before a key is known.
 func (g *gateway) readSigned(w http.ResponseWriter, r *http.Request, limit int64) (signed, error) {
-	if err := g.limit(r.Context(), "ip:"+httpx.ClientIP(r), g.d.PerIPLimit); err != nil {
+	if err := g.limit(r.Context(), ratelimit.Device, ratelimit.IPKey(httpx.ClientIP(r), g.d.PerIPV6Prefix)); err != nil {
 		return signed{}, err
 	}
 	body, err := readBody(w, r, limit)
@@ -62,7 +63,7 @@ func (g *gateway) verify(ctx context.Context, r *http.Request, s signed, pub *ec
 	if !fresh {
 		return errReplay.with("nonce already used")
 	}
-	return g.limit(ctx, "key:"+s.headers.KeyID, g.d.PerKeyLimit)
+	return g.limit(ctx, ratelimit.DeviceKey, s.headers.KeyID)
 }
 
 // authenticateDevice verifies a request of an enrolled device in the order of architecture §6.3: header presence,

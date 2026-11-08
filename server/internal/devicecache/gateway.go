@@ -163,32 +163,6 @@ func (c *Cache) BundlePointer(ctx context.Context, device uuid.UUID) (BundlePoin
 	return BundlePointer{Version: v, SHA256: m["sha256"], ObjectKey: m["object_key"]}, true, nil
 }
 
-// Allow is a rate limiter over core commands only: a sliding window of one minute, estimated from the counters of
-// the current and the previous minute, which behaves like a token bucket of limit tokens refilled per minute. It
-// returns whether the request may proceed and, if not, how long to wait.
-func (c *Cache) Allow(ctx context.Context, scope string, limit int, now time.Time) (bool, time.Duration, error) {
-	minute := now.Unix() / 60
-	cur := "rl:" + scope + ":" + strconv.FormatInt(minute, 10)
-	prev := "rl:" + scope + ":" + strconv.FormatInt(minute-1, 10)
-	res := c.c.DoMulti(ctx,
-		c.c.B().Incr().Key(cur).Build(),
-		c.c.B().Expire().Key(cur).Seconds(120).Build(),
-		c.c.B().Get().Key(prev).Build())
-	count, err := res[0].AsInt64()
-	if err != nil {
-		return false, 0, fmt.Errorf("devicecache: rate limit: %w", err)
-	}
-	previous, err := res[2].AsInt64()
-	if err != nil && !valkey.IsValkeyNil(err) {
-		return false, 0, fmt.Errorf("devicecache: rate limit: %w", err)
-	}
-	elapsed := float64(now.Unix()%60) / 60
-	if float64(previous)*(1-elapsed)+float64(count) <= float64(limit) {
-		return true, 0, nil
-	}
-	return false, time.Duration(60-now.Unix()%60) * time.Second, nil
-}
-
 // HeartbeatInterval coalesces device_status writes to one per device and interval (plan M2a decision 12).
 const HeartbeatInterval = 60 * time.Second
 

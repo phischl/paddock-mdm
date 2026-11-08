@@ -143,8 +143,8 @@ func TestProductionConfigurationPasses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected all PASS:\n%s", out)
 	}
-	if strings.Count(out, "PASS") != 18 {
-		t.Fatalf("expected 18 items:\n%s", out)
+	if strings.Count(out, "PASS") != 19 {
+		t.Fatalf("expected 19 items:\n%s", out)
 	}
 }
 
@@ -456,6 +456,29 @@ func TestAllowlistBypass(t *testing.T) {
 	failLine(t, out, "PADDOCK_IP_ALLOWLIST_BYPASS is true")
 }
 
+// TestRateLimits: a rate limit class switched off fails prod-check (plan M12h decision 7); a raised limit passes.
+func TestRateLimits(t *testing.T) {
+	for _, c := range []struct{ name, value string }{
+		{"PADDOCK_RATELIMIT_AUTH", "0"},
+		{"PADDOCK_RATELIMIT_ADMIN_READ", "0"},
+		{"PADDOCK_RATELIMIT_PLATFORM_UPLOAD", "-5"},
+		{"PADDOCK_RATELIMIT_BUNDLES_APT", "off"},
+	} {
+		f := newFixture(t)
+		f.setEnv("paddock-api", c.name, c.value)
+		ok, out := run(t, f.cfg, prodcheck.Options{})
+		if ok {
+			t.Fatalf("%s=%s: expected FAIL:\n%s", c.name, c.value, out)
+		}
+		failLine(t, out, "paddock-api: "+c.name+"="+c.value+" switches the rate limit off")
+	}
+	f := newFixture(t)
+	f.setEnv("paddock-api", "PADDOCK_RATELIMIT_AUTH", "200")
+	if ok, out := run(t, f.cfg, prodcheck.Options{}); !ok {
+		t.Fatalf("raised limit: expected all PASS:\n%s", out)
+	}
+}
+
 // TestRetentionInterval: a retention round below one minute fails, an operator's longer interval passes (plan M10
 // amendment 2026-10-30).
 func TestRetentionInterval(t *testing.T) {
@@ -636,6 +659,7 @@ var labItems = []string{
 	"lab: roles resolve the public names to the proxy",
 	"role trusted proxies",
 	"ip allow list bypass is off",
+	"rate limits are on",
 	"backup: no S3 credentials or encryption key on the worker",
 	"audit index retention of the retention round",
 	"release public keys are production keys",

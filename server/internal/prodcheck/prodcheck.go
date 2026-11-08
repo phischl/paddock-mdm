@@ -189,7 +189,7 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		results = append(results, checkRoleTrustedProxies(c))
 	}
 	if _, ok := c.Services["paddock-api"]; ok {
-		results = append(results, checkAllowlistBypass(c))
+		results = append(results, checkAllowlistBypass(c), checkRateLimits(c))
 	}
 	if usesAny(c, []string{legacyBackupKeyVar}) {
 		results = append(results, checkLegacyBackupKey(c))
@@ -1099,6 +1099,25 @@ func checkAllowlistBypass(c Config) Result {
 		f = append(f, "paddock-api: PADDOCK_IP_ALLOWLIST_BYPASS is true (break-glass; remove it once access is restored)")
 	}
 	return result("ip allow list bypass is off", f)
+}
+
+// checkRateLimits fails on a rate limit class switched off (0) or set to no limit at all (plan M12h decision 7):
+// without it every unauthenticated endpoint is open to unthrottled sign-in attempts.
+func checkRateLimits(c Config) Result {
+	vars := slices.Sorted(maps.Values(config.RateLimitVars))
+	var f []string
+	for _, name := range sortedServices(c) {
+		for _, k := range vars {
+			v := env(c.Services[name], k)
+			if v == "" {
+				continue
+			}
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err != nil || n < 1 {
+				f = append(f, fmt.Sprintf("%s: %s=%s switches the rate limit off; remove it or set a limit per minute", name, k, v))
+			}
+		}
+	}
+	return result("rate limits are on", f)
 }
 
 // legacyBackupKeyVar names the host key file the api imports once as backup key legacy (plan M15 decision 9).

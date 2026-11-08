@@ -119,23 +119,6 @@ func TestGatewayKeys(t *testing.T) {
 		t.Fatalf("pointer moved back to %d", p.Version)
 	}
 
-	now := time.Date(2026, 10, 4, 12, 0, 30, 0, time.UTC)
-	for i := range 3 {
-		if ok, _, err := cache.Allow(ctx, "key:x", 3, now); err != nil || !ok {
-			t.Fatalf("request %d limited: %v", i, err)
-		}
-	}
-	ok, wait, err := cache.Allow(ctx, "key:x", 3, now)
-	if err != nil || ok || wait != 30*time.Second {
-		t.Fatalf("fourth request: %v %s %v", ok, wait, err)
-	}
-	if ok, _, _ := cache.Allow(ctx, "key:other", 3, now); !ok {
-		t.Fatal("limits are not per scope")
-	}
-	// 45 s into the next minute only a quarter of the previous minute still counts.
-	if ok, _, _ := cache.Allow(ctx, "key:x", 3, now.Add(75*time.Second)); !ok {
-		t.Fatal("window does not slide")
-	}
 }
 
 // TestSeqAfterCacheLoss (PDK-475): on an emptied Valkey the counter does not restart at 1 below
