@@ -96,6 +96,7 @@ if grep -q -- "-f .* run --rm --no-deps -T --entrypoint /paddock-server paddock-
   pass "the old alpha.8 stack is asked with the new image"
 else fail "compose log: $(cat "$work/compose.log")"; fi
 hasnt "no secret or setting value is printed" 'paddock.example.org|debug'
+hasnt "a changed default the old .env does not set is not reported" 'changed default'
 
 # --json: {items, exit}.
 run 1 "--json" "$fixtures/old" --json
@@ -111,16 +112,31 @@ mkdir -p "$work/old2/.secrets/release-production" "$work/old2/.secrets/approle/p
 touch "$work/old2/.secrets/db_password" "$work/old2/.secrets/release-production/minisign.pub" \
   "$work/old2/.secrets/approle/paddock-api/role_id"
 printf 'PADDOCK_SMTP_HOST=mail.example.org\nPADDOCK_REMOVED_SETTING=1\nPADDOCK_RETIRED_SETTING=1\nPADDOCK_AUTO_UNSEAL=yes\n' >>"$work/old2/.env"
+printf 'PADDOCK_CHANGED_SETTING=old\nPADDOCK_LOG_LEVEL=info\n' >>"$work/old2/.env"
 mkdir -p "$work/old2/.secrets/openbao"
 touch "$work/old2/.secrets/openbao/auto-unseal-shares"
 run 0 "complete old installation" "$work/old2"
 has "unknown old key is a WARN" '^WARN +env +settings this bundle does not know .*: PADDOCK_REMOVED_SETTING$'
 has "a key this release retired is an INFO" '^INFO +env +retired by this release; kept for the rollback: PADDOCK_RETIRED_SETTING$'
+has "a set key whose default this release changed is a WARN" '^WARN +env +changed default: this release changed the default of PADDOCK_CHANGED_SETTING;'
+hasnt "a default an earlier release changed is not reported" 'default of .*PADDOCK_LOG_LEVEL'
 has "secrets PASS" '^PASS +secrets '
 has "auto-unseal with shares PASS" '^PASS +openbao unseal path'
 has "table ends with no FAIL" 'upgrade check: no FAIL'
 run 0 "--json without FAIL" "$work/old2" --json
 if [[ "$out" == *',"exit":0}' ]]; then pass "--json exit 0"; else fail "--json exit: $out"; fi
+
+# A lab: the changed defaults are values of its proxy and networks, so the WARN points at lab-install.md instead of
+# "remove the line", and names the lab's trusted proxies too (PDK-819).
+old_bundle "$work/oldlab"
+cp -a "$work/old2/.secrets" "$work/oldlab/"
+cp "$work/old2/.env" "$work/oldlab/.env"
+sed -i 's/^PADDOCK_HOST=.*/PADDOCK_HOST=lab/' "$work/oldlab/.env"
+printf 'PADDOCK_EDGE_TRUSTED_PROXIES=172.30.0.1\n' >>"$work/oldlab/.env"
+out="$(cd "$work/new" && ./paddock upgrade-check "$work/oldlab" 2>&1)" || true
+has "a lab's changed default points at lab-install.md" \
+  '^WARN +env +changed default on a lab: this release changed what PADDOCK_CHANGED_SETTING PADDOCK_EDGE_TRUSTED_PROXIES must name; do not remove the lines, set each again as docs/operations/lab-install.md sections 4 and 5'
+hasnt "a lab is not told to remove the line" 'remove the line to take the new default'
 
 # Adjacency: a two-step jump names the intermediate release; a newer or equal old version fails.
 old_bundle "$work/old3"
@@ -207,6 +223,9 @@ if [[ -f "$work/b/paddock-deploy-0.1.0-alpha.7/RELEASES" ]]; then
   if grep -qE '^0\.1\.0-alpha\.9 PADDOCK_BACKUP_S3_ENDPOINT$' "$bd/RETIRED-SETTINGS" 2>/dev/null; then
     pass "bundle ships RETIRED-SETTINGS"
   else fail "no RETIRED-SETTINGS with the settings 0.1.0-alpha.9 retired"; fi
+  if grep -qE '^0\.1\.0-alpha\.10 PADDOCK_TRUSTED_PROXY_CIDRS$' "$bd/CHANGED-DEFAULTS" 2>/dev/null; then
+    pass "bundle ships CHANGED-DEFAULTS"
+  else fail "no CHANGED-DEFAULTS with the defaults 0.1.0-alpha.10 changed"; fi
 else
   fail "build.sh produced no RELEASES file"
 fi

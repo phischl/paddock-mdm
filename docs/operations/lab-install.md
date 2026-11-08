@@ -179,18 +179,19 @@ Bind Caddy to loopback and let the proxy forward there:
 - `upstream` of the Nginx file: `server 127.0.0.1:8080;`
 - `PADDOCK_INTERCONNECT_ADDR=127.0.0.1`
 - `PADDOCK_LAB_PROXY_ADDR`: the host's LAN address (the roles reach the proxy there).
-- `PADDOCK_EDGE_TRUSTED_PROXIES`: the gateway address of the Compose network `<project>_cp` (`paddock_cp` with the
-  default project name). The proxy's connections reach Caddy from that address after Docker's NAT. It exists after
-  `./paddock up --infra` (section 5); set it then, before `./paddock check`:
+- `PADDOCK_EDGE_TRUSTED_PROXIES`: the gateway address of the Compose network `<project>_edge` (`paddock_edge` with
+  the default project name; `172.28.0.1` with the default `PADDOCK_EDGE_SUBNET`). The proxy's connections reach Caddy
+  from that address after Docker's NAT. It exists after `./paddock up --infra` (section 5); check it then, before
+  `./paddock check`:
   ```sh
-  docker network inspect paddock_cp -f '{{(index .IPAM.Config 0).Gateway}}'
+  docker network inspect paddock_edge -f '{{(index .IPAM.Config 0).Gateway}}'
   ```
-- `PADDOCK_INTERNAL_CIDRS`: the subnets of `paddock_cp` and of `paddock_audit-index`, separated by a space
+- `PADDOCK_INTERNAL_CIDRS`: the subnets of `paddock_data` and of `paddock_audit-index`, separated by a space
   (`{{(index .IPAM.Config 0).Subnet}}` of each): the roles' calls reach the proxy on this host from their container
-  addresses, and the api leaves through `audit-index`, its first network. Without that subnet the api's calls to
-  Authentik's API are refused with 403.
+  addresses; the api leaves through `audit-index`, its first network, the worker, the escrow-reader and the
+  revocation-issuer through `data`. Without those subnets their calls to Authentik are refused with 403.
   ```sh
-  docker network inspect paddock_cp paddock_audit-index -f '{{(index .IPAM.Config 0).Subnet}}'
+  docker network inspect paddock_data paddock_audit-index -f '{{(index .IPAM.Config 0).Subnet}}'
   ```
 - In this variant every local process on the host reaches Caddy from the same gateway address as the proxy, so Caddy
   trusts its `X-Forwarded-For` like the proxy's. Prefer the proxy on another machine when the host runs anything else.
@@ -222,7 +223,7 @@ be chosen.
 | 16 | SMTP relay for e-mail notifications (optional) | `PADDOCK_SMTP_ENABLED`, `PADDOCK_SMTP_*` (`docs/operations/install.md`, *E-mail relay*) | `false` |
 
 With the proxy on the Paddock host (section 4), rows 7, 9, 10 and 12 change: `127.0.0.1`, the host's LAN address,
-the gateway of `paddock_cp`, and the subnets of `paddock_cp` and `paddock_audit-index` separated by a space; the
+the gateway of `paddock_edge`, and the subnets of `paddock_data` and `paddock_audit-index` separated by a space; the
 proxy's `upstream` is `127.0.0.1:8080`.
 
 Run every command inside the bundle directory, as the user who runs Docker.
@@ -379,7 +380,7 @@ As in production: `docs/operations/upgrade.md`. Extract the new bundle next to t
 - **403 on `admin.<domain>`.** The client address Caddy resolved is not in `PADDOCK_ADMIN_ALLOWED_CIDRS` (or, once set,
   the application IP allow list). Caddy's access log (`./paddock logs caddy`) shows the address it resolved: the
   proxy's own address there means `PADDOCK_EDGE_TRUSTED_PROXIES` does not match the proxy as Caddy sees it (with the
-  proxy on the same host: the gateway of `paddock_cp`).
+  proxy on the same host: the gateway of `paddock_edge`).
 - **Logins, step-ups and identity synchronization fail.** The roles reach Authentik through your proxy; while it is
   down or its certificate is not trusted, logins fail. Devices keep working (fail safe).
 - **`PaddockCertificateProbeFailing`.** The worker cannot verify your proxy's certificate for one of the five names:

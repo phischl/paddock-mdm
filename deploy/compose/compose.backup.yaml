@@ -174,7 +174,7 @@ services:
       - pgbackrest-state-authentik:/pgbackrest-state/authentik:ro
       # Raised to the highest device.bundle_seq after every successful round (decisions-alpha9 item 68).
       - ./bundle-seq:/bundle-seq
-    networks: [cp]
+    networks: [data]
     depends_on:
       paddock-migrate:
         condition: service_completed_successfully
@@ -219,7 +219,7 @@ services:
       - internal_ca_bundle
     volumes:
       - backup-repo:/backup-repo:ro
-    networks: [cp, audit-index]
+    networks: [data, audit-index]
 
   prometheus:
     volumes:

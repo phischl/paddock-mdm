@@ -69,16 +69,18 @@ func TestEscrowReaderIsolation(t *testing.T) {
 		}
 	})
 
-	t.Run("not reachable from the control-plane network", func(t *testing.T) {
+	t.Run("not reachable from the control-plane networks", func(t *testing.T) {
 		image, err := stack.Image("GO_BUILD_IMAGE")
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The service name resolves on cp, but the escrow-reader listens on its escrow address only.
-		out, err := stack.Docker(ctx, nil, "run", "--rm", "--network", stack.Network("cp"), image, "sh", "-c",
-			"curl -sS -m 5 -o /dev/null -X POST http://paddock-escrow-reader:8080/internal/v1/decrypt; echo exit=$?")
-		if err != nil || !strings.Contains(out, "exit=7") {
-			t.Fatalf("from network cp: %q %v, want connection refused (curl exit 7)", out, err)
+		// The service name resolves on data and edge, but the escrow-reader listens on its escrow address only.
+		for _, network := range []string{"data", "edge"} {
+			out, err := stack.Docker(ctx, nil, "run", "--rm", "--network", stack.Network(network), image, "sh", "-c",
+				"curl -sS -m 5 -o /dev/null -X POST http://paddock-escrow-reader:8080/internal/v1/decrypt; echo exit=$?")
+			if err != nil || !strings.Contains(out, "exit=7") {
+				t.Fatalf("from network %s: %q %v, want connection refused (curl exit 7)", network, out, err)
+			}
 		}
 	})
 

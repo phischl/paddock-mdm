@@ -44,7 +44,7 @@ services:
       # amqps verifies RabbitMQ's certificate against the internal CAs.
       SSL_CERT_FILE: /run/secrets/internal_ca_bundle
     secrets: [internal_ca_bundle]
-    # The network cp exists on the control-plane host only; the interconnect is reached through the host.
+    # The network data exists on the control-plane host only; the interconnect is reached through the host.
     networks: !override [audit-index, audit-store]
 
   # The audit host's own Prometheus (`--profile observability`): the audit writer's metrics stay on this host; the

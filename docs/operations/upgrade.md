@@ -199,6 +199,35 @@ Never edit the shipped files of a bundle to change behaviour: `./paddock verify`
 One subsection per release from 0.1.0-alpha.8 on, newest first. Each states what B changes for A's installation. The
 older notes are in the *Archive*.
 
+### 0.1.0-alpha.10, from 0.1.0-alpha.9
+
+**Networks by trust zone (ADR 0051 decision 1).** The flat network `cp` is replaced by `edge`, `data` and the internal
+`authentik` (architecture §4.1). `./paddock up` recreates every container on the new networks; nothing else is needed.
+The old network `cp` stays behind unused (it is what a rollback to 0.1.0-alpha.9 attaches to again) and may be removed
+with `docker network rm <project>_cp` once the release is accepted.
+
+- `edge` has the fixed subnet `PADDOCK_EDGE_SUBNET` (default `172.28.0.0/24`) with Caddy at
+  `PADDOCK_EDGE_CADDY_ADDRESS` (default `172.28.0.10`), outside the pool of dynamic addresses `PADDOCK_EDGE_IP_RANGE`
+  (default `172.28.0.128/25`). `./paddock check` warns when another Docker network of the host overlaps the subnet;
+  `./paddock up` would then fail with *Pool overlaps with other one on this address space*. Set all three settings in
+  `.env` to a free `/24`, a pool inside it and Caddy's address inside it but outside the pool. The check sees only
+  networks that already exist: the networks `./paddock up` creates in the same run (`data`, `authentik`, …) take
+  their subnets from Docker's default pools, so if `up` still reports the overlap, move the edge settings as above.
+- The worker, the escrow-reader and the revocation-issuer sit on `data` and `edge` (they call the public names
+  through Caddy); their health and metrics port listens on `data` only.
+- **Changed defaults.** `PADDOCK_TRUSTED_PROXY_CIDRS` now defaults to Caddy's address alone and, in production,
+  `PADDOCK_INTERNAL_CIDRS` to the edge subnet. `./paddock upgrade-check` lists either setting under `env` as *changed
+  default* when the old `.env` sets it: remove the line to take the new default. `./paddock check` fails a trusted
+  proxy other than Caddy and `private_ranges` as internal ranges, so the upgrade stops at its check step until then.
+  On a lab, `./paddock upgrade-check` reports these settings as *changed default on a lab* instead: keep the lines and
+  set them again. `PADDOCK_INTERNAL_CIDRS` names the subnets of `<project>_data` and `<project>_audit-index` instead of
+  `<project>_cp` (and, with the proxy on the same host, `PADDOCK_EDGE_TRUSTED_PROXIES` the gateway of
+  `<project>_edge`, `172.28.0.1` by default): `docs/operations/lab-install.md`.
+- RabbitMQ's management API listens on the container's loopback address only; `rabbitmqctl` inside the container
+  works as before.
+- `./paddock check` warns while `PADDOCK_ADMIN_ALLOWED_CIDRS` admits every address; name the office ranges
+  (`docs/operations/ip-allowlist.md`).
+
 ### 0.1.0-alpha.9, from 0.1.0-alpha.8
 
 The release notes of this release carry these lines (the lines of `CHANGELOG.md` are authoritative):

@@ -362,6 +362,25 @@ Public hostnames (each its own TLS certificate and rate limit profile):
 
 Fleet's own UI and admin API are **not** published; Paddock reaches them on the internal network.
 
+**Networks by trust zone** *(ADR 0051 decision 1, plan M12h §3.1)*. The control-plane host has no flat network; a
+compromised container reaches only the zones it is a member of:
+
+| Network | Members | Why |
+| --- | --- | --- |
+| `edge` (fixed subnet `PADDOCK_EDGE_SUBNET`, default `172.28.0.0/24`) | Caddy (alone of its networks, fixed address `PADDOCK_EDGE_CADDY_ADDRESS`, default `172.28.0.10`, with the public names as aliases), `api`, `gateway`, `authentik-server`, `fleet`, the bundles' object storage, and the roles that call the public names through Caddy: `worker` (Authentik's API, the certificate probe, Fleet's API), `escrow-reader` and `revocation-issuer` (the step-up issuer's discovery) | What Caddy reaches; no datastore |
+| `data` | PostgreSQL, Valkey, RabbitMQ, OpenBao, the object storage, every Paddock role, `backup`, `unsealer`, Prometheus, the audit writer of a single-host stack | The datastores; never Caddy, Fleet or Authentik |
+| `authentik` (internal) | `authentik-server`, `authentik-worker`, Authentik's PostgreSQL | Authentik's own database, no route out |
+| `fleet` (internal) | Fleet, its MySQL and Redis, the Fleet dump job | Fleet's own datastores |
+| `escrow` (internal) | `api`, `escrow-reader` | The decrypt call only |
+| `audit-index`, `audit-store` | the audit domain and its readers | unchanged |
+
+The roles trust `X-Paddock-Client-IP` from Caddy's address alone (`PADDOCK_TRUSTED_PROXY_CIDRS`); in production the
+edge's internal ranges default to the edge subnet. RabbitMQ's management API listens on the container's loopback
+address only (`rabbitmqctl` works inside, port 15672 answers no container). `./paddock check` fails a datastore on
+`edge`, Caddy on any other network, Fleet, Caddy or Authentik on `data`, a trusted proxy other than Caddy,
+`private_ranges` as internal ranges and a management API that is not on loopback; it warns while the edge admin allow
+list admits every address. The development and lab stacks use the same networks.
+
 **Separation of duties for audit (concept, "Audit log"):** the audit domain runs on a separate host
 with separate credentials. The control-plane host holds only a RabbitMQ credential that can **publish**
 to exchange `paddock.audit` and, for the portal's audit view, a **read-only** database role on the audit index

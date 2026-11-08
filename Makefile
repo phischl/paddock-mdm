@@ -259,6 +259,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash deploy/bundle/rollback_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
 	bash deploy/bundle/ci/assert-hardening_test.sh
+	bash deploy/bundle/ci/assert-segmentation_test.sh
 	bash deploy/bundle/ci/upgrade_test.sh
 	bash deploy/bundle/ci/fetch-previous_test.sh
 	bash test/scan-secrets_test.sh
@@ -540,7 +541,7 @@ e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running
 		-v $(CURDIR):/src -v "$$(realpath -e $(SECRETS_DIR))":/secrets -w /src/$(WEB_DIR) \
 		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test $(SPEC)'
 
-# Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network <project>_cp and talk to
+# Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network <project>_edge and talk to
 # one gateway replica directly (http://paddock-gateway:8081), each device with its own X-Paddock-Client-IP address.
 LOAD_DIR := bin/load
 COUNT    ?= 10000
@@ -560,15 +561,16 @@ load-identities: ## Enroll COUNT load test devices with the enrollment configura
 	@test -n "$(CONFIGS)" || { echo "usage: make load-identities CONFIGS='token-1.json token-2.json …' [COUNT=10000]"; exit 2; }
 	@$(LOAD_GUARD)
 	CGO_ENABLED=0 go build -trimpath -o $(LOAD_DIR)/identities ./test/load/cmd/identities
-	docker run --rm --network $(DEV_PROJECT)_cp -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
+	docker run --rm --network $(DEV_PROJECT)_edge -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
 		/src/$(LOAD_DIR)/identities $(foreach c,$(CONFIGS),--config $(c)) --count $(COUNT) \
 		--server http://paddock-gateway:8081 --client-ip --out $(LOAD_DIR)/identities.json
 
+# k6 joins edge for the gateway and data for the ingest scenario's Prometheus, which stays off edge (PDK-819).
 .PHONY: load-test
 load-test: ## Run the k6 scenario SCENARIO=checkin|ingest against the running stack (RATE, VUS, WARMUP, DURATION, EVENTS_PER_S, BATCH, DRAIN, SCRAPE_INTERVAL_S)
 	@test -s $(LOAD_DIR)/identities.json || { echo "missing $(LOAD_DIR)/identities.json: run make load-identities"; exit 2; }
 	@$(LOAD_GUARD)
-	docker run --rm --network $(DEV_PROJECT)_cp -u $(UID):$(GID) -v $(CURDIR)/test/load/k6:/scripts:ro -v $(CURDIR)/$(LOAD_DIR):/data \
+	docker run --rm --network $(DEV_PROJECT)_edge --network $(DEV_PROJECT)_data -u $(UID):$(GID) -v $(CURDIR)/test/load/k6:/scripts:ro -v $(CURDIR)/$(LOAD_DIR):/data \
 		-e IDENTITIES=/data/identities.json \
 		$(foreach v,RATE VUS WARMUP DURATION EVENTS_PER_S BATCH DRAIN GATEWAY_URL PROMETHEUS_URL SCRAPE_INTERVAL_S,$(if $($(v)),-e $(v)='$($(v))',)) \
 		$(K6_IMAGE) run --summary-export /data/$(SCENARIO)-summary.json /scripts/$(SCENARIO).js

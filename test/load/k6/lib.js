@@ -78,7 +78,7 @@ export async function signedRequest(dev, method, path, body, tags) {
   }
   if (payload !== '') headers['Content-Type'] = 'application/json'
   // Only honoured when the scenario talks to the gateway directly (no edge in front) from an address in
-  // PADDOCK_TRUSTED_PROXY_CIDRS (the development stack trusts the private ranges): a fleet has many addresses, the
+  // PADDOCK_TRUSTED_PROXY_CIDRS (the development gateway trusts the edge subnet): a fleet has many addresses, the
   // gateway's per-IP limit would otherwise throttle the single load generator.
   if (dev.ip) headers['X-Paddock-Client-IP'] = dev.ip
   return http.asyncRequest(method, baseURL + path, payload === '' ? null : payload, { headers, tags })

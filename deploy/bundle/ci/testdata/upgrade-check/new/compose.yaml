@@ -5,6 +5,7 @@ services:
       PADDOCK_DOMAIN: ${PADDOCK_DOMAIN:?set PADDOCK_DOMAIN}
       PADDOCK_SMTP_HOST: ${PADDOCK_SMTP_HOST:?set PADDOCK_SMTP_HOST}
       PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
+      PADDOCK_CHANGED_SETTING: ${PADDOCK_CHANGED_SETTING:-new}
     secrets: [db_password, release_public_key, approle_role_id]
   postgres:
     image: ${POSTGRES_IMAGE}

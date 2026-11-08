@@ -21,7 +21,7 @@ import (
 // (compose.dev.yaml: http://osv-fixture:8080/Ubuntu/all.zip).
 const osvFixtureAlias = "osv-fixture"
 
-// startOSVFixture serves dir on the stack's network cp as http://osv-fixture:8080/ with Caddy's file server, which
+// startOSVFixture serves dir on the stack's network data as http://osv-fixture:8080/ with Caddy's file server, which
 // answers like the OSV bucket: 200 with an ETag, 304 for a matching If-None-Match, 404 for a missing file. Fixture
 // containers of an earlier run are removed first.
 func startOSVFixture(t *testing.T, dir string) {
@@ -37,7 +37,7 @@ func startOSVFixture(t *testing.T, dir string) {
 		_, _ = stack.Docker(ctx, nil, append([]string{"rm", "-f"}, strings.Fields(old)...)...)
 	}
 	name := "paddock-osv-fixture-" + uniqueSuffix()
-	if out, err := stack.Docker(ctx, nil, "run", "-d", "--rm", "--name", name, "--label", label, "--network", stack.Network("cp"),
+	if out, err := stack.Docker(ctx, nil, "run", "-d", "--rm", "--name", name, "--label", label, "--network", stack.Network("data"),
 		"--network-alias", osvFixtureAlias, "-v", dir+":/srv:ro", image, "caddy", "file-server", "--root", "/srv",
 		"--listen", ":8080"); err != nil {
 		t.Fatalf("start the OSV fixture server: %v: %s", err, out)

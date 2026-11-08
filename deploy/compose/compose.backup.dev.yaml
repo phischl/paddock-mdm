@@ -32,7 +32,7 @@ services:
       - rustfs_escrow_backup_secret_key
     volumes:
       - backup-local-dev:/backup-targets
-    networks: [cp, audit-store]
+    networks: [data, audit-store]
 
   backup-restore-escrow:
     environment:

@@ -1,6 +1,6 @@
 {
 	# Caddy listens on the public port inside the container too, so containers reach Authentik and the
-	# portal through the same URLs as the browser (network aliases on network cp).
+	# portal through the same URLs as the browser (network aliases on network edge).
 	https_port {$PADDOCK_HTTPS_PORT}
 	auto_https disable_redirects
 	admin 127.0.0.1:2019

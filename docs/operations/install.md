@@ -248,7 +248,10 @@ secret; 80/443 published by any service but Caddy, or another published port tha
 `caddy/guards.caddy` and `caddy/entrypoint.sh` not mounted next to the Caddyfile, or a Caddyfile that sets
 `trusted_proxies` itself; an edge client address configuration that is not consistent (a `/0` trusted proxy, a header
 without proxies or proxies without a header, an unknown header name, item `edge client address`); a `/0` in a role's
-`PADDOCK_TRUSTED_PROXY_CIDRS`; a Paddock role or Caddy that keeps capabilities (beyond Caddy's `NET_BIND_SERVICE`)
+`PADDOCK_TRUSTED_PROXY_CIDRS`, or one that trusts any peer but Caddy's address on network `edge` (item `trusted
+proxies: caddy's address only`); Caddy on another network than `edge` or without its fixed address, a datastore on
+`edge`, Fleet, Caddy or Authentik on `data` (items `networks: …`, ADR 0051); `private_ranges` in
+`PADDOCK_INTERNAL_CIDRS`; RabbitMQ's management API not bound to loopback or port 15672 published; a Paddock role or Caddy that keeps capabilities (beyond Caddy's `NET_BIND_SERVICE`)
 or may gain privileges, or a service without `pids_limit` (item `container hardening`);
 a service whose container log is not rotated (log driver other than `json-file` or no `max-size`, item
 `container logs are rotated`);

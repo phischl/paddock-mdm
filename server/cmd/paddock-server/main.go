@@ -17,6 +17,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/platform/migrate"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 )
 
 const usage = `usage: paddock-server <command> [arguments] [+ <command> [arguments] ...]
@@ -64,7 +65,8 @@ commands:
   backup restore-escrow <set dir>
   backup target-export <name|id>   (prints the S3 target with its credentials; ./paddock backup-target export)
   prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online]
-        [--backup-revisions-file <list> --backup-revisions-db <list>] < config.json
+        [--backup-revisions-file <list> --backup-revisions-db <list>]
+        [--docker-networks [--docker-network <name>=<subnet>[,<subnet>...]]...] < config.json
   healthcheck
   version
 
@@ -252,14 +254,21 @@ func printSchemaVersions(out io.Writer) error {
 	return err
 }
 
-// runHealthcheck is the container health check: GET /readyz on the ops listener.
+// runHealthcheck is the container health check: GET /readyz on the ops listener. A host name resolves to the same
+// local address ops.Serve binds, so a scaled replica checks itself and not a peer behind the shared alias.
 func runHealthcheck(ctx context.Context, common config.Common) error {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
 	addr := common.OpsAddr
 	if strings.HasPrefix(addr, ":") {
 		addr = "127.0.0.1" + addr
+	} else {
+		local, err := ops.ListenAddr(ctx, addr)
+		if err != nil {
+			return err
+		}
+		addr = local
 	}
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/readyz", nil)
 	if err != nil {
 		return err

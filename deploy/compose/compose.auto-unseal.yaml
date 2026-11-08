@@ -43,7 +43,7 @@ services:
       - db_paddock_unsealer_url
       - openbao_auto_unseal_shares
       - internal_ca_bundle
-    networks: [cp]
+    networks: [data]
     depends_on:
       postgres:
         condition: service_healthy

@@ -125,11 +125,11 @@ const (
 )
 
 // s3Overlay attaches the backup role, whose one-off containers also fetch a set at a restore, to the S3 store's
-// network. The list keeps cp in case Compose replaced the service's networks instead of merging them.
+// network. The list keeps data in case Compose replaced the service's networks instead of merging them.
 const s3Overlay = `# Backup system gates (test/system/share.go): the backup role reaches the gates' S3 store. Never shipped.
 services:
   paddock-backup:
-    networks: [cp, systest-s3]
+    networks: [data, systest-s3]
 networks:
   systest-s3:
     external: true

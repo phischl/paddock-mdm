@@ -21,11 +21,11 @@ import (
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
-// githubFixtureAlias is the host name of the GitHub fixture on the network cp; compose.dev.yaml points
+// githubFixtureAlias is the host name of the GitHub fixture on the network data; compose.dev.yaml points
 // PADDOCK_AGENT_RELEASE_SOURCE_URL of paddock-api at it (ADR 0043 decision 9).
 const githubFixtureAlias = "github-fixture"
 
-// startGitHubFixture serves dir as GitHub's REST API under http://github-fixture:8080 on the network cp: dir holds
+// startGitHubFixture serves dir as GitHub's REST API under http://github-fixture:8080 on the network data: dir holds
 // repos/phischl/paddock-mdm/releases (the release list) and download/v<v>/<asset>. The file server reads the disk on
 // every request, so a gate may rewrite dir while it runs. Older fixture servers are removed first.
 func startGitHubFixture(t *testing.T, dir string) {
@@ -44,7 +44,7 @@ func startGitHubFixture(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	name := "paddock-github-fixture-" + uniqueSuffix()
-	if out, err := stack.Docker(ctx, nil, "run", "-d", "--rm", "--name", name, "--label", label, "--network", stack.Network("cp"),
+	if out, err := stack.Docker(ctx, nil, "run", "-d", "--rm", "--name", name, "--label", label, "--network", stack.Network("data"),
 		"--network-alias", githubFixtureAlias, "-v", dir+":/srv:ro", image, "caddy", "file-server", "--root", "/srv",
 		"--listen", ":8080"); err != nil {
 		t.Fatalf("start the GitHub fixture server: %v: %s", err, out)

@@ -1,7 +1,7 @@
 # CI overlay of the lab smoke test (plan M8a decision 18; deploy/bundle/ci/smoke-lab.sh): Nginx runs on the runner
-# itself (the same-host variant of decision 14), so its connections reach Caddy from the gateway of network cp, which
-# is pinned here to the address the smoke test trusts; network audit-index, the api's default route, is pinned so that
-# the api's source address is known. The roles reach Authentik and the step-up issuer through Nginx with a throwaway
+# itself (the same-host variant of decision 14), so its connections reach Caddy from the gateway of network edge, which
+# is pinned here to the address the smoke test trusts; networks data and audit-index, the roles' default routes, are
+# pinned so that the roles' source addresses are known. The roles reach Authentik and the step-up issuer through Nginx with a throwaway
 # certificate, so they trust its CA (a real lab trusts the system store). Added through PADDOCK_COMPOSE_EXTRA for the
 # running stack only; `./paddock check` renders the shipped files without it. Never shipped, never used on a host.
 # PADDOCK_CI_LAB_TLS is the absolute path of the throwaway CA (set by smoke-lab.sh).
@@ -21,7 +21,14 @@ services:
   paddock-notifier: *lab-ca
 
 networks:
-  cp:
+  edge:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+          ip_range: 172.28.0.128/25
+          gateway: 172.28.0.1
+  # The default route of the worker, the escrow-reader and the revocation-issuer (the network that sorts first).
+  data:
     ipam:
       config:
         - subnet: 172.30.0.0/24
