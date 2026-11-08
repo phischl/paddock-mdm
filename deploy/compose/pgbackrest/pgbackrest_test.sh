@@ -217,6 +217,27 @@ sets_kept="$(pgb info --output=json | grep -o '"label":"[^"]*"' | wc -l)"
 check "the old key's repository stays for the role's expire ($sets_kept sets)" \
   "$([[ $sets_kept -gt $sets_before ]] && echo 0 || echo 1)"
 
+# A request made while a full was running (after its start, before its end) asks for a new full: serve does not take
+# the running one as the answer (decisions-alpha9 item 89).
+state_epoch() { docker run --rm --entrypoint cat -v "$id-state2:/state" "$image" "/state/$1" 2>/dev/null || echo 0; }
+full_start="$(state_epoch last-full-start)"
+full_end="$(state_epoch last-full)"
+check "a full records its start and end ($full_start, $full_end)" \
+  "$([[ $full_start =~ ^[0-9]+$ && $full_end =~ ^[0-9]+$ ]] && ((full_start > 0 && full_start <= full_end)) && echo 0 || echo 1)"
+docker run --rm -u 999 --entrypoint sh -v "$id-runtime:/rt" -e R="$((full_start + 1))" "$image" -c 'printf %s "$R" >/rt/request-test'
+docker run -d --name "$id-serve" "${run_sh_args[@]}" serve >/dev/null
+answered=1
+for _ in $(seq 1 240); do
+  if [[ "$(state_epoch last-full-start)" -gt "$full_end" ]]; then
+    answered=0
+    break
+  fi
+  sleep 1
+done
+docker rm -f "$id-serve" >/dev/null
+docker run --rm -u 999 --entrypoint rm -v "$id-runtime:/rt" "$image" -f /rt/request-test
+check "a request made while a full ran gets a full that starts after it" "$answered"
+
 # restore --at and --repo-path: a pgbackrest earlier in PATH records what run.sh passes and plays an archive without
 # further segments.
 docker run --rm -i -u 0 --entrypoint sh -v "$id-bin:/bin-vol" "$image" \

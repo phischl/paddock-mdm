@@ -30,7 +30,7 @@
 # `key`, and `schedule.env` with PADDOCK_BACKUP_REPO_PATH (pgbackrest/<key_id>), PADDOCK_BACKUP_RETENTION_FULL and
 # PADDOCK_BACKUP_FULL_INTERVAL_S; `request-<stanza>` holds the time of a requested backup. Every new key starts a new
 # repository path; the role expires the old one. The state volume (/var/lib/pgbackrest) keeps the lock, `last-full`,
-# `last-error` and `verify-ok` (Unix seconds, read by the backup role) and `repo-path`.
+# `last-full-start`, `last-error` and `verify-ok` (Unix seconds, read by the backup role) and `repo-path`.
 #
 # Settings: PADDOCK_BACKUP_STANZA (paddock or authentik), PADDOCK_BACKUP_PG_USER (the superuser that connects over
 # the socket, default postgres), PADDOCK_BACKUP_REPO_DIR, PADDOCK_BACKUP_RUNTIME_DIR.
@@ -138,7 +138,8 @@ ensure_stanza() {
 # verify that reports a problem (a gap in the archive) or does not finish within VERIFY_S leaves `verify-ok` as it is,
 # and the new backup alone must pass `verify --set`.
 full_backup() {
-  local label report rc=0
+  local label report started rc=0
+  started="$(date +%s)"
   pgb backup --type=full "$@" || return
   label="$(pgb info --output=json | grep -o '"label":"[^"]*"' | tail -1 | cut -d'"' -f4)"
   report="$(timeout "$VERIFY_S" pgbackrest --stanza="$STANZA" verify --output=text --verbose)" || rc=$?
@@ -146,6 +147,7 @@ full_backup() {
     echo "pgbackrest: stanza $STANZA verified"
     echo "pgbackrest: backup $label of $STANZA verified"
     date +%s >"$STATE/verify-ok"
+    echo "$started" >"$STATE/last-full-start"
     date +%s >"$STATE/last-full"
     return 0
   fi
@@ -163,6 +165,7 @@ full_backup() {
     return 1
   fi
   echo "pgbackrest: backup $label of $STANZA verified"
+  echo "$started" >"$STATE/last-full-start"
   date +%s >"$STATE/last-full"
 }
 
@@ -171,23 +174,26 @@ full_backup() {
 switch_repo_path() {
   [[ "$(cat "$STATE/repo-path" 2>/dev/null)" == "$REPO_PATH" ]] && return 0
   echo "pgbackrest: repository of $STANZA is now $REPO_PATH; creating the stanza and taking a full backup"
-  rm -f "$STATE/stanza" "$STATE/last-full" "$STATE/last-error" "$STATE/verify-ok"
+  rm -f "$STATE/stanza" "$STATE/last-full" "$STATE/last-full-start" "$STATE/last-error" "$STATE/verify-ok"
   echo "$REPO_PATH" >"$STATE/repo-path"
 }
 
 # full_due reports whether serve takes a full backup now: the interval passed, the backup role requested one after the
-# last, or the path is new; after a failure it waits RETRY_S unless a newer request came.
+# last full started, or the path is new; after a failure it waits RETRY_S unless a newer request came. A full that was
+# already running when the request came does not answer it: the request asks for a backup taken from then on, and the
+# role answers it only with a full that started at or after it (decisions-alpha9 item 89).
 full_due() {
-  local now last failed req
+  local now last start failed req
   now="$(date +%s)"
   last="$(cat "$STATE/last-full" 2>/dev/null || echo 0)"
+  start="$(cat "$STATE/last-full-start" 2>/dev/null || echo "$last")"
   failed="$(cat "$STATE/last-error" 2>/dev/null || echo 0)"
   req="$(cat "$RUNTIME/request-$STANZA" 2>/dev/null || echo 0)"
   [[ "$req" =~ ^[0-9]+$ ]] || req=0
   if ((failed > last && now - failed < RETRY_S && req <= failed)); then
     return 1
   fi
-  ((now - last >= FULL_INTERVAL_S || req > last))
+  ((now - last >= FULL_INTERVAL_S || req > start))
 }
 
 # pusher keeps pushing the spool in the background: a backup waits for WAL segments that only the spool delivers.

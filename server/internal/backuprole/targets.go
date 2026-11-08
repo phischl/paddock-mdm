@@ -648,7 +648,8 @@ const probeTimeout = 10 * time.Second
 const probeFile = ".paddock-probe"
 
 // HostState returns the host state of a volume target (plan M15 decision 16 g): pending_host while the volume or its
-// marker for the current revision is missing, unreachable when a write fails, mounted otherwise. It blocks while the
+// marker for the current revision is missing, unreachable when the share cannot be read or a write fails, mounted
+// otherwise. It blocks while the
 // share does; the engine bounds it.
 func HostState(targetsDir string, t TargetRecord) string {
 	return hostState(MountDir(targetsDir, t), t.HostRevision)
@@ -659,17 +660,17 @@ func HostState(targetsDir string, t TargetRecord) string {
 func hostState(dir string, revision int) string {
 	m, err := openMount(dir)
 	if err != nil {
-		return HostPending
+		return absentOr(err)
 	}
 	defer func() { _ = m.Close() }()
 	f, err := openRegular(m, markerFile)
 	if err != nil {
-		return HostPending
+		return absentOr(err)
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, 32))
 	_ = f.Close()
 	if err != nil {
-		return HostPending
+		return absentOr(err)
 	}
 	rev, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 	if err != nil || rev < revision {
@@ -679,6 +680,23 @@ func hostState(dir string, revision int) string {
 		return HostUnreachable
 	}
 	return HostMounted
+}
+
+// shareGone holds the errors a mounted network share returns once its server is gone: a soft CIFS or NFS mount answers
+// with them instead of blocking.
+var shareGone = []error{syscall.EIO, syscall.EHOSTDOWN, syscall.EHOSTUNREACH, syscall.ENETUNREACH, syscall.ENOTCONN,
+	syscall.ETIMEDOUT, syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ECONNABORTED, syscall.ESTALE, syscall.EREMOTEIO}
+
+// absentOr is the host state of a mount or marker that could not be opened: unreachable when the share's server is
+// gone (plan M15 decision 2 and gate BS1: a share outage is unreachable; decisions-alpha9 item 89), pending otherwise,
+// as for a volume the host has not mounted or a marker that is not what the host step created.
+func absentOr(err error) string {
+	for _, gone := range shareGone {
+		if errors.Is(err, gone) {
+			return HostUnreachable
+		}
+	}
+	return HostPending
 }
 
 // Host states of a target (plan M15 decision 2).

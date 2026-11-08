@@ -751,6 +751,12 @@ func (e *Engine) pgbackrest(ctx context.Context, keyID string, history map[strin
 		}
 		last := history[kind].LastAttempt
 		full, failed := readEpoch(state, "last-full"), readEpoch(state, "last-error")
+		// A request is answered only by a full that started at or after it: one that was already running asks for no
+		// new backup (decisions-alpha9 item 89). run.sh compares the request with this start in Unix seconds too.
+		started := readEpoch(state, "last-full-start")
+		if started.IsZero() {
+			started = full
+		}
 		_ = state.Close()
 		reqs := byKind[kind]
 		if failed.After(last) {
@@ -758,8 +764,9 @@ func (e *Engine) pgbackrest(ctx context.Context, keyID string, history map[strin
 			runs = append(runs, run{Kind: kind, StartedAt: failed, FinishedAt: failed, ErrorClass: runClassPgBackRest})
 		}
 		if full.After(last) {
-			answered := slices.DeleteFunc(slices.Clone(reqs), func(q RequestedRun) bool { return q.CreatedAt.After(full) })
-			reqs = slices.DeleteFunc(slices.Clone(reqs), func(q RequestedRun) bool { return !q.CreatedAt.After(full) })
+			later := func(q RequestedRun) bool { return q.CreatedAt.Truncate(time.Second).After(started) }
+			answered := slices.DeleteFunc(slices.Clone(reqs), later)
+			reqs = slices.DeleteFunc(slices.Clone(reqs), func(q RequestedRun) bool { return !later(q) })
 			runs = append(runs, e.fullRun(kind, stanza, keyID, full, answered))
 		}
 		reqName := "request-" + stanza
