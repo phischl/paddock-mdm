@@ -32,7 +32,7 @@ type revokeTarget struct {
 // override of paddock-revoke test builds (plan M4c decision 13).
 func loopTarget(t *testing.T, d *Device) *revokeTarget {
 	t.Helper()
-	dev := d.Must(`sudo sh -c 'truncate -s 64M /root/revoke-target.img && losetup -f --show /root/revoke-target.img'`)
+	dev := d.MustDevice(`sudo sh -c 'truncate -s 64M /root/revoke-target.img && losetup -f --show /root/revoke-target.img'`)
 	if !strings.HasPrefix(dev, "/dev/loop") {
 		t.Fatalf("loop device %q", dev)
 	}

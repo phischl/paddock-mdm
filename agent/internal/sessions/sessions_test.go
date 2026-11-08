@@ -119,3 +119,37 @@ func TestParseTimestamp(t *testing.T) {
 		t.Fatalf("garbage parsed as %v", got)
 	}
 }
+
+// nssNoise is the line Himmelblau's NSS module printed while himmelblaud was down (PDK-892).
+const nssNoise = "2026-11-08T05:01:13.152453Z ERROR Unix socket stream setup error while connecting to " +
+	"/var/run/himmelblaud/socket -> Os { code: 111, kind: ConnectionRefused, message: \"Connection refused\" }\n"
+
+// TestListRejectsForeignLines: a log line on loginctl's stdout is an error, never a session ID or a property line
+// that splits a session in two.
+func TestListRejectsForeignLines(t *testing.T) {
+	for name, tc := range map[string]struct{ list, show string }{
+		"noise before the sessions":     {nssNoise + listed, shown},
+		"noise after the sessions":      {listed + nssNoise, shown},
+		"noise before the properties":   {listed, nssNoise + shown},
+		"noise inside a property block": {listed, "Id=7\nUser=811622788\n" + nssNoise + "Name=dave@acme.test\nClass=user\n"},
+		"session line without a UID":    {"     7 dave@acme.test seat0\n", shown},
+	} {
+		loginctl := func(_ context.Context, args ...string) (string, int, error) {
+			if args[0] == "list-sessions" {
+				return tc.list, 0, nil
+			}
+			return tc.show, 0, nil
+		}
+		if list, err := List(context.Background(), loginctl); err == nil {
+			t.Errorf("%s: List = %+v, want an error", name, list)
+		}
+	}
+}
+
+// TestListAcceptsSystemd255 is the list-sessions format of Ubuntu 24.04 (SESSION UID USER SEAT TTY).
+func TestListAcceptsSystemd255(t *testing.T) {
+	ids, err := parseList("     2 1000 paddock seat0 tty2\n    c1  127 gdm     seat0 tty1\n")
+	if err != nil || !slices.Equal(ids, []string{"2", "c1"}) {
+		t.Fatalf("parseList = %v, %v", ids, err)
+	}
+}

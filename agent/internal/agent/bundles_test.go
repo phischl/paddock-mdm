@@ -338,6 +338,35 @@ func TestSessionLogins(t *testing.T) {
 	}
 }
 
+// TestSessionLoginsRejectForeignGetentOutput: a log line on getent's stdout (PDK-892) is not read as the UPN's entry;
+// the session is reported once getent answers cleanly.
+func TestSessionLoginsRejectForeignGetentOutput(t *testing.T) {
+	ctx := context.Background()
+	a := newAgent(t, testgw.New(t))
+	sys := withSystem(t, a)
+	sys.Files["/etc/passwd"] = &fakesys.File{Data: []byte("paddock:x:1000:1000::/home/paddock:/bin/bash\n"), Mode: 0o644}
+	sys.Sessions = []fakesys.Session{{ID: "7", UID: 811622788, User: "dave", Class: "user"}}
+	a.d.Now = func() time.Time { return time.Date(2026, 10, 4, 8, 0, 0, 0, time.UTC) }
+	login, err := bundle.LoginResource(bundle.LoginSpec{Provider: bundle.ProviderHimmelblau, Himmelblau: bundle.HimmelblauSpec{Domain: "acme.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.current = &bundle.Bundle{Resources: []bundle.Resource{login}}
+	sys.Passwd = map[string]int{"dave@acme.test": 811622788}
+	sys.GetentNoise = "2026-11-08T05:01:13.152453Z ERROR Unix socket stream setup error while connecting to " +
+		"/var/run/himmelblaud/socket -> Os { code: 111, kind: ConnectionRefused, message: \"Connection refused\" }\n"
+	a.trackSessions(ctx)
+	if pending, _ := a.d.Spool.Pending(); len(pending) != 0 {
+		t.Fatalf("reported from foreign getent output: %+v", pending)
+	}
+	delete(a.st.SessionsReported, "dave")
+	sys.GetentNoise = ""
+	a.trackSessions(ctx)
+	if pending, _ := a.d.Spool.Pending(); len(pending) != 1 || string(pending[0].Data) != `{"username":"dave@acme.test","at":"2026-10-04T08:00:00Z"}` {
+		t.Fatalf("spool %+v", pending)
+	}
+}
+
 // TestSessionLoginsEverySession (plan M8d decision 17): with report_every_session two sessions of the same user are
 // two session.login events with their session start times; a session that ends is pruned, and a new one is reported.
 func TestSessionLoginsEverySession(t *testing.T) {
