@@ -187,3 +187,25 @@ func TestNotifyRestartCompleted(t *testing.T) {
 		t.Fatalf("no reminder after 4 hours: %v", d.runs)
 	}
 }
+
+// TestNotifyRestartRejectsForeignGetentOutput: a log line before the passwd entry (PDK-892) used to become the
+// --gid of systemd-run; now the session is not notified, and the next session with a clean entry is.
+func TestNotifyRestartRejectsForeignGetentOutput(t *testing.T) {
+	const nssNoise = "2026-11-08T05:01:13.152453Z ERROR Unix socket stream setup error while connecting to " +
+		"/var/run/himmelblaud/socket -> Os { code: 111, kind: ConnectionRefused, message: \"Connection refused\" }\n"
+	d := newDesktop(t, session{"3", "user", "wayland", 811622788}, session{"4", "user", "wayland", 1000})
+	handle := d.Handle
+	d.Handle = func(line string) (string, int, bool) {
+		switch line {
+		case "getent passwd 811622788":
+			return nssNoise + "dave:x:811622788:811622788::/home/dave:/bin/bash\n", 0, true
+		case "getent passwd 1000":
+			return "paddock:x:1000:1001::/home/paddock:/bin/bash\n", 0, true
+		}
+		return handle(line)
+	}
+	d.notify("tpm_pin", map[string]time.Time{}, time.Now())
+	if len(d.runs) != 1 || !strings.Contains(d.runs[0], "--uid=1000 --gid=1001 ") {
+		t.Fatalf("runs %v", d.runs)
+	}
+}

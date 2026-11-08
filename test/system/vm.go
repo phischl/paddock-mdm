@@ -185,30 +185,33 @@ func (v *VM) sshArgs() []string {
 	}
 }
 
-// SSH runs a shell command in the guest as user paddock (passwordless sudo) with optional stdin. It repeats the
-// command once when ssh failed before the command started; a command that cuts its own connection (reboot, poweroff,
-// an sshd restart) must use SSHNoRetry, because a drop that leaves no text is indistinguishable from a handshake
-// failure and the repeat would run the command twice (PDK-720).
+// SSH runs a shell command in the guest as user paddock (passwordless sudo) with optional stdin and returns its
+// standard output followed by its standard error. It repeats the command once when ssh failed before the command
+// started; a command that cuts its own connection (reboot, poweroff, an sshd restart) must use SSHNoRetry, because a
+// drop that leaves no text is indistinguishable from a handshake failure and the repeat would run the command twice
+// (PDK-720). A caller that parses the output uses Must, which returns the standard output alone.
 func (v *VM) SSH(ctx context.Context, stdin []byte, command string) (string, error) {
-	return v.sshRetrying(ctx, stdin, command, false)
+	stdout, stderr, err := v.sshRetrying(ctx, stdin, command, false)
+	return stdout + stderr, err
 }
 
 // SSHNoRetry runs the command exactly once. State-changing commands that end the session use it.
 func (v *VM) SSHNoRetry(ctx context.Context, stdin []byte, command string) (string, error) {
-	return v.sshRetrying(ctx, stdin, command, true)
+	stdout, stderr, err := v.sshRetrying(ctx, stdin, command, true)
+	return stdout + stderr, err
 }
 
-func (v *VM) sshRetrying(ctx context.Context, stdin []byte, command string, noRetry bool) (string, error) {
-	out, err := v.ssh(ctx, stdin, command)
+func (v *VM) sshRetrying(ctx context.Context, stdin []byte, command string, noRetry bool) (stdout, stderr string, err error) {
+	stdout, stderr, err = v.ssh(ctx, stdin, command)
 	// Transport resilience, not a test retry: package upgrades in a gate restart sshd and drop a connection that was
 	// being opened.
-	if shouldRetrySSH(noRetry, sshExitCode(err), out) && ctx.Err() == nil {
+	if shouldRetrySSH(noRetry, sshExitCode(err), stdout+stderr) && ctx.Err() == nil {
 		if v.t != nil {
-			v.t.Logf("%s: ssh exited 255 (%s); retrying once: %s", v.Name, strings.TrimSpace(out), command)
+			v.t.Logf("%s: ssh exited 255 (%s); retrying once: %s", v.Name, strings.TrimSpace(stdout+stderr), command)
 		}
-		out, err = v.ssh(ctx, stdin, command)
+		stdout, stderr, err = v.ssh(ctx, stdin, command)
 	}
-	return out, err
+	return stdout, stderr, err
 }
 
 // shouldRetrySSH decides whether a command is run again: never when the caller opted out, otherwise only for an ssh
@@ -240,16 +243,18 @@ func sshHandshakeFailed(out string) bool {
 	return true
 }
 
-func (v *VM) ssh(ctx context.Context, stdin []byte, command string) (string, error) {
+// ssh keeps the guest command's standard output apart from its standard error (and ssh's own messages): an NSS
+// module that logs while the guest resolves a user, e.g. in sudo, must never become command output (PDK-892).
+func (v *VM) ssh(ctx context.Context, stdin []byte, command string) (string, string, error) {
 	args := append(v.sshArgs(), "-p", v.port, "paddock@127.0.0.1", command)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
 	err := cmd.Run()
-	return out.String(), err
+	return stdout.String(), stderr.String(), err
 }
 
 // Bind makes the VM's helpers (Must, Copy, …) report to the subtest t until t ends; then they report to the test they
@@ -261,7 +266,8 @@ func (v *VM) Bind(t *testing.T) {
 	t.Cleanup(func() { v.t = prev })
 }
 
-// Must runs a command and fails the test on error.
+// Must runs a command and fails the test on error. It returns the command's standard output alone, trimmed; a
+// command whose result is on standard error redirects it (2>&1).
 func (v *VM) Must(command string) string {
 	v.t.Helper()
 	return v.MustIn(nil, command)
@@ -276,16 +282,16 @@ func (v *VM) MustIn(stdin []byte, command string) string {
 	defer cancel()
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
-		out, err := v.SSH(ctx, stdin, command)
+		stdout, stderr, err := v.sshRetrying(ctx, stdin, command, false)
 		if err == nil {
-			return strings.TrimSpace(out)
+			return strings.TrimSpace(stdout)
 		}
 		var exit *exec.ExitError
-		connection := errors.As(err, &exit) && exit.ExitCode() == 255 && strings.Contains(out, "Connection")
+		connection := errors.As(err, &exit) && exit.ExitCode() == 255 && strings.Contains(stderr, "Connection")
 		if !connection || time.Now().After(deadline) {
-			v.t.Fatalf("%s: %s: %v\n%s", v.Name, command, err, out)
+			v.t.Fatalf("%s: %s: %v\n%s%s", v.Name, command, err, stdout, stderr)
 		}
-		v.t.Logf("%s: SSH connection failed (%s), retrying", v.Name, strings.TrimSpace(out))
+		v.t.Logf("%s: SSH connection failed (%s), retrying", v.Name, strings.TrimSpace(stderr))
 		time.Sleep(5 * time.Second)
 	}
 }

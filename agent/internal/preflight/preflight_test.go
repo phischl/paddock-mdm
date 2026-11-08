@@ -206,6 +206,19 @@ func TestPrivilegedGroupsListsEveryMember(t *testing.T) {
 	}
 }
 
+// TestPrivilegedGroupsReportForeignGetentOutput: a log line on getent's stdout (PDK-892) is reported as unreadable,
+// never listed as members.
+func TestPrivilegedGroupsReportForeignGetentOutput(t *testing.T) {
+	s := healthy()
+	s.Members["sudo"] = []string{"alice"}
+	s.GetentNoise = "2026-11-08T05:01:13.152453Z ERROR Unix socket stream setup error while connecting to " +
+		"/var/run/himmelblaud/socket -> Os { code: 111, kind: ConnectionRefused, message: \"Connection refused\" }\n"
+	c := status(t, run(t, s, luksTools{lsblk: plain}, nil), "privileged_groups", preflight.Warn)
+	if !strings.Contains(c.Detail, "sudo: unexpected getent output") || strings.Contains(c.Detail, "sudo:  111") {
+		t.Fatalf("detail %q", c.Detail)
+	}
+}
+
 func TestClockWarnsWithoutNTP(t *testing.T) {
 	s := healthy()
 	s.NTP = false

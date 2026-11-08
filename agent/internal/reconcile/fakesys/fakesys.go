@@ -69,6 +69,8 @@ type System struct {
 	// of a user who never signed in; Members the members of groups getent group lists.
 	Passwd  map[string]int
 	Members map[string][]string
+	// GetentNoise is prepended to the stdout of every getent that resolves: an NSS module's log line (PDK-892).
+	GetentNoise string
 	// VisudoReject makes visudo fail for a file (or, with -c alone, a configuration) that contains it. A visudo
 	// below /usr/lib/cargo (sudo-rs) also refuses lecture_file, like sudo-rs 0.2.
 	VisudoReject string
@@ -611,11 +613,11 @@ func (s *System) Getent(_ context.Context, database, key string) (string, int, e
 	switch database {
 	case "passwd":
 		if uid, ok := s.Passwd[key]; ok {
-			return fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash\n", key, uid, uid, key), 0, nil
+			return s.GetentNoise + fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash\n", key, uid, uid, key), 0, nil
 		}
 	case "group":
 		if members, ok := s.Members[key]; ok {
-			return fmt.Sprintf("%s:x:27:%s\n", key, strings.Join(members, ",")), 0, nil
+			return s.GetentNoise + fmt.Sprintf("%s:x:27:%s\n", key, strings.Join(members, ",")), 0, nil
 		}
 	}
 	return "", 2, nil

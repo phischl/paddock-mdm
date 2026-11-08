@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -44,11 +45,9 @@ func List(ctx context.Context, loginctl Loginctl) ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	var ids []string
-	for _, line := range strings.Split(out, "\n") {
-		if f := strings.Fields(line); len(f) > 0 {
-			ids = append(ids, f[0])
-		}
+	ids, err := parseList(out)
+	if err != nil {
+		return nil, err
 	}
 	if len(ids) == 0 {
 		return nil, nil
@@ -61,11 +60,45 @@ func List(ctx context.Context, loginctl Loginctl) ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseShow(out), nil
+	return parseShow(out)
 }
 
-// parseShow parses the property blocks of `loginctl show-session`, separated by empty lines.
-func parseShow(out string) []Session {
+// parseList returns the session IDs of `loginctl list-sessions --no-legend`. Every non-empty line must start with a
+// session ID and a numeric UID: a foreign line, such as an NSS module's log line on stdout (PDK-892), is an error,
+// never a session ID.
+func parseList(out string) ([]string, error) {
+	var ids []string
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if len(f) < 3 || !sessionID.MatchString(f[0]) {
+			return nil, fmt.Errorf("loginctl list-sessions: unexpected line %q", clip(line))
+		}
+		if _, err := strconv.ParseUint(f[1], 10, 32); err != nil {
+			return nil, fmt.Errorf("loginctl list-sessions: unexpected line %q", clip(line))
+		}
+		ids = append(ids, f[0])
+	}
+	return ids, nil
+}
+
+// sessionID is the form of a logind session ID ("2", "c1").
+var sessionID = regexp.MustCompile(`^[A-Za-z0-9]+$`)
+
+// clip bounds a line quoted in an error.
+func clip(s string) string {
+	const limit = 200
+	if len(s) <= limit {
+		return s
+	}
+	return s[:limit] + "…"
+}
+
+// parseShow parses the property blocks of `loginctl show-session`, separated by empty lines. A non-empty line that
+// is not a property (PDK-892) makes the whole output an error.
+func parseShow(out string) ([]Session, error) {
 	var list []Session
 	var cur Session
 	flush := func() {
@@ -76,10 +109,14 @@ func parseShow(out string) []Session {
 	}
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
-		k, v, ok := strings.Cut(strings.TrimSpace(sc.Text()), "=")
-		if !ok {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
 			flush()
 			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || !propertyName.MatchString(k) {
+			return nil, fmt.Errorf("loginctl show-session: unexpected line %q", clip(line))
 		}
 		switch k {
 		case "Id":
@@ -99,8 +136,11 @@ func parseShow(out string) []Session {
 		}
 	}
 	flush()
-	return list
+	return list, sc.Err()
 }
+
+// propertyName is the form of a logind property name ("Id", "LockedHint").
+var propertyName = regexp.MustCompile(`^[A-Z][A-Za-z]*$`)
 
 // timestampLayout is how loginctl prints a timestamp property ("Sat 2026-10-17 10:15:02 CEST").
 const timestampLayout = "Mon 2006-01-02 15:04:05 MST"

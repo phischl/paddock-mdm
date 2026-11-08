@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -145,8 +146,42 @@ func (d *Device) AnswerDiskSetup(t *testing.T, pin string) {
 	})
 }
 
-// LUKSDevice is the LUKS partition of the guest.
-func (v *VM) LUKSDevice() string { return v.Must("sudo blkid -t TYPE=crypto_LUKS -o device | head -1") }
+// LUKSDevice is the LUKS partition of the guest: the first LUKS device blkid lists.
+func (v *VM) LUKSDevice() string { return v.MustDevice("sudo blkid -t TYPE=crypto_LUKS -o device") }
+
+// MustDevice runs a command that prints device paths, one per line, and returns the first. Any other line, such as
+// an NSS module's log line (PDK-892), fails the test instead of becoming the device argument of the next command.
+func (v *VM) MustDevice(command string) string {
+	v.t.Helper()
+	out := v.Must(command)
+	devices, err := devicePaths(out)
+	if err != nil {
+		v.t.Fatalf("%s: %s: %v", v.Name, command, err)
+	}
+	return devices[0]
+}
+
+// devicePath is the form of a device path the guest's tools print (/dev/sda3, /dev/loop0, /dev/mapper/vg-root).
+var devicePath = regexp.MustCompile(`^/dev/[A-Za-z0-9._/:+-]+$`)
+
+// devicePaths parses one device path per line; it fails on no path and on any line that is not one.
+func devicePaths(out string) ([]string, error) {
+	var devices []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !devicePath.MatchString(line) || strings.Contains(line, "..") {
+			return nil, fmt.Errorf("not a device path: %q in output:\n%s", line, out)
+		}
+		devices = append(devices, line)
+	}
+	if len(devices) == 0 {
+		return nil, errors.New("no device path in the output")
+	}
+	return devices, nil
+}
 
 // Keyslots are the keyslot kinds of the guest's LUKS volume, sorted, as the agent names them.
 func (v *VM) Keyslots(t *testing.T) []string {

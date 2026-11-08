@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/config"
+	"github.com/phischl/paddock-mdm/agent/internal/getent"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -225,11 +226,15 @@ func privilegedGroupsCheck(ctx context.Context, sys reconcile.System) Check {
 		if err != nil || exit != 0 {
 			continue
 		}
-		fields := strings.Split(strings.TrimSpace(out), ":")
-		if len(fields) < 4 || fields[3] == "" {
+		group, err := getent.ParseGroup(out, g)
+		if err != nil {
+			parts = append(parts, g+": "+err.Error())
 			continue
 		}
-		parts = append(parts, g+": "+fields[3])
+		if len(group.Members) == 0 {
+			continue
+		}
+		parts = append(parts, g+": "+strings.Join(group.Members, ","))
 	}
 	if len(parts) == 0 {
 		c.Status, c.Detail = OK, "the groups sudo and admin have no members"

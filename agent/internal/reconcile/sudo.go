@@ -12,10 +12,10 @@ import (
 	"io/fs"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/getent"
 	"github.com/phischl/paddock-mdm/agent/internal/sessions"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -40,7 +40,7 @@ const (
 )
 
 // SudoFlavor detects the active sudo implementation: the version output of the binary /usr/bin/sudo resolves to
-// starts with "sudo-rs" for sudo-rs; anything else is classic sudo. It also returns the resolved visudo that belongs
+// starts with "sudo-rs " for sudo-rs and with "Sudo version " for classic sudo; anything else is an error. It also returns the resolved visudo that belongs
 // to it. An operator can switch the alternative at any time, so it is detected at every plan and apply.
 func SudoFlavor(ctx context.Context, sys System) (sudoers.Flavor, string, error) {
 	bin, err := sys.EvalSymlinks(sudoBinary)
@@ -58,10 +58,15 @@ func SudoFlavor(ctx context.Context, sys System) (sudoers.Flavor, string, error)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve %s: %w", visudoBinary, err)
 	}
-	if strings.HasPrefix(firstLine(out), "sudo-rs") {
+	switch first := firstLine(out); {
+	case strings.HasPrefix(first, "sudo-rs "):
 		return sudoers.SudoRS, visudo, nil
+	case strings.HasPrefix(first, "Sudo version "):
+		return sudoers.Classic, visudo, nil
+	default:
+		// A foreign first line (an NSS module's log line on stdout, PDK-892) must not turn sudo-rs into classic sudo.
+		return "", "", fmt.Errorf("%s --version: unexpected first line %q", bin, first)
 	}
-	return sudoers.Classic, visudo, nil
 }
 
 // includedir is the line of /etc/sudoers that makes sudo read /etc/sudoers.d.
@@ -294,15 +299,17 @@ func (s *Sudo) uid(ctx context.Context, username string) (uint32, bool, error) {
 	if err != nil {
 		return 0, false, fmt.Errorf("getent passwd %s: %w", username, err)
 	}
-	f := strings.Split(strings.TrimSpace(out), ":")
-	if exit != 0 || len(f) < 3 {
+	if exit != 0 {
 		return 0, false, nil
 	}
-	uid, err := strconv.ParseUint(f[2], 10, 32)
-	if err != nil || uid < sessions.FirstDirectoryUID {
+	pw, err := getent.ParsePasswd(out)
+	if err != nil {
+		return 0, false, fmt.Errorf("getent passwd %s: %w", username, err)
+	}
+	if pw.UID < sessions.FirstDirectoryUID {
 		return 0, false, nil
 	}
-	return uint32(uid), true, nil
+	return pw.UID, true, nil
 }
 
 // install applies one sudoers file with the procedure of architecture §10.3: rollback copy, a temporary file sudo
