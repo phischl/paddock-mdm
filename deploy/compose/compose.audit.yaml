@@ -31,10 +31,12 @@ services:
       - audit-postgres-data:/var/lib/postgresql
     networks: [audit-index]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d paddock_audit"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d paddock_audit"]
       interval: 5s
       timeout: 5s
       retries: 20
+      # initdb counts against the TCP probe, which a socket probe skipped (PDK-893).
+      start_period: 120s
 
   # Counterpart of db-provision of compose.yaml for the audit database (plan M16 decision 8): a role a release adds
   # exists before paddock-audit-migrate runs, whose owner stays NOCREATEROLE.

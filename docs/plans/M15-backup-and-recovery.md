@@ -1258,3 +1258,25 @@ doubled. The header records `# revisions:` (for the online check item of decisio
 - The development stack's full interval is 20 minutes (was 120 s); gate B4 bounds the key switch without it, since a
   new repository path makes a full due at once, and requests a full in the old path right before the switch, so a
   switch that waited for the schedule cannot fall inside the bound.
+
+### Note 2026-11-08 — a request is answered by a full that starts after it; a share outage is unreachable (PDK-893; decisions-alpha9 item 89)
+
+- **Requested fulls.** A requested pgBackRest backup (`backup now`, decision 16) is answered only by a full that
+  started at or after the request (Unix seconds). run.sh records the start of every full in `last-full-start` next to
+  `last-full` (its end) and takes a new full when a request is newer than that start; the backup role answers
+  requests by the same start. A full that was already running when the request came (the installation's first full,
+  the path switch's full after a restore or a rotation) no longer answers it. Before, it did: the run's start lay
+  before its own request, and the target status, which reports the full's start, never reached the request (gates
+  BS1/BS3 timed out).
+- **Restore staging.** `run.sh restore` stages the WAL from the start of the backup pgBackRest reports having restored,
+  on that backup's timeline, with the history files up to it (for `--at` it refuses to guess when pgBackRest names no
+  backup); before, a point in time was staged from the oldest backup's timeline and failed after an earlier restore
+  had moved the stanza to a later timeline (gate BS4). A point on a later timeline than the restored backup's (after
+  a promotion that followed that backup) is not walked yet: a timeline-aware walk is planned for alpha.10
+  (decisions-alpha9 item 91). Every completed restore that replaces the databases removes the pgBackRest state, so
+  serve takes a full on the new timeline at once, and a later point in time has a backup on its own timeline.
+- **Restore on a running installation.** The postgres step removes the backup role's stopped container with the
+  databases and pgBackRest before it deletes the pgBackRest state volumes, which the role mounts read-only.
+- **Share outage.** The host state of a volume target is `unreachable` when its mount or marker returns an error of a
+  share whose server is gone (EIO, EHOSTDOWN, ETIMEDOUT, ESTALE and the like, as a soft CIFS or NFS mount does), and
+  `pending_host` only while the marker is absent or not what the host step wrote (decision 2, gate BS1).

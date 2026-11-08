@@ -458,7 +458,9 @@ restore_postgres() {
   local svc pg_at=()
   RESTORE_COMPONENT=postgres
   restore_log "PostgreSQL: emptying the databases' volumes"
-  compose --profile paddock rm -sf postgres authentik-postgres pgbackrest pgbackrest-authentik
+  # The backup role mounts the pgBackRest state volumes read-only: its stopped container still holds them, and Docker
+  # refuses to delete a volume any container uses (gate BS4; decisions-alpha9 item 89). The run's final up recreates it.
+  compose --profile paddock rm -sf postgres authentik-postgres pgbackrest pgbackrest-authentik paddock-backup
   for v in postgres-data authentik-postgres-data pgbackrest-spool-paddock pgbackrest-spool-authentik \
     pgbackrest-state-paddock pgbackrest-state-authentik; do
     restore_volume_rm "$v"
@@ -670,7 +672,7 @@ restore_backup_repo() {
     compose run --rm --no-deps -T --entrypoint bash "$svc" -c 'set -e
 : >/var/lib/pgbackrest/stanza
 printf "%s\n" "$1" >/var/lib/pgbackrest/repo-path
-rm -f /var/lib/pgbackrest/last-full /var/lib/pgbackrest/verify-ok /var/lib/pgbackrest/last-error' restore "$repo_path" </dev/null
+rm -f /var/lib/pgbackrest/last-full /var/lib/pgbackrest/last-full-start /var/lib/pgbackrest/verify-ok /var/lib/pgbackrest/last-error' restore "$repo_path" </dev/null
   done
   compose --profile paddock up -d --no-deps pgbackrest pgbackrest-authentik paddock-backup
   restore_log "backup-repo: restored; the next round takes a full backup and verifies the stanzas"

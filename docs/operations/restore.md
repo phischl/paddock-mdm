@@ -169,6 +169,14 @@ deletion. A platform administrator plans, the operator executes.
 A restore plan that stays `running` because the host never reported is handled under "A restore plan stuck in
 `running`" below.
 
+**Points in time and earlier restores.** Every restore that replaces the databases starts a new database timeline,
+and pgBackRest takes a new full backup on it at once. A point in time is restored from the newest full backup before
+it, with the database log of that backup's timeline. A point that lies after a restore but before the first full
+backup on the new timeline cannot be restored yet (RR-128): after up to 30 minutes the restore stops with "restore:
+postgres did not finish its recovery" instead of restoring a different point; `./paddock compose logs postgres` shows
+the cause ("recovery ended before configured recovery target was reached"). Choose a point after that full backup, or the
+latest point.
+
 ## Scenario 3: partial restore
 
 `--only <component>` (repeatable; default: all four) restores selected components from a set; `backup-repo` is a
