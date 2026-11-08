@@ -217,9 +217,14 @@ case "${1:-serve}" in
       if ensure_stanza; then
         if full_due; then
           # The operator's verify holds the lock for as long as it runs: the full waits for it instead of failing.
+          # The first full in a new path (a key rotation, switch_repo_path drops last-full) forces the checkpoint:
+          # the rotation must not wait up to checkpoint_timeout. Scheduled fulls keep the default (decisions-alpha9
+          # item 87).
+          fast=()
+          [[ -e "$STATE/last-full" ]] || fast=(--start-fast)
           if [[ -e "$STANZA_LOCK" ]] && ! flock -n "$STANZA_LOCK" true; then
             :
-          elif ! full_backup; then
+          elif ! full_backup "${fast[@]}"; then
             date +%s >"$STATE/last-error"
             echo "pgbackrest: full backup of $STANZA failed; retrying in $((RETRY_S / 60)) minutes" >&2
           fi
