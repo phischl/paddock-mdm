@@ -169,6 +169,10 @@ var errPlanted = errors.New("backup target: unexpected file type")
 func openMount(mount string) (*os.Root, error) {
 	info, err := os.Lstat(mount) //nolint:gosec // the role's own mount point below the configured targets directory
 	if err != nil {
+		if absentOr(err) == HostUnreachable {
+			// A share whose server is gone is mounted but unreachable: its mirror fails as io, not not_mounted.
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: %w", errNotMounted, err)
 	}
 	if !info.IsDir() {

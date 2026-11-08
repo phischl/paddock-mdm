@@ -1,6 +1,8 @@
 package backuprole
 
 import (
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -62,5 +64,17 @@ func TestShareGoneIsUnreachable(t *testing.T) {
 		if got := absentOr(tc.err); got != tc.want {
 			t.Errorf("%s: %s, want %s", name, got, tc.want)
 		}
+	}
+}
+
+// TestShareGoneMirrorIsIO: a mirror to a share whose server is gone fails as io, not as not_mounted, so its run and
+// status match the target's unreachable host state (decisions-alpha9 item 89).
+func TestShareGoneMirrorIsIO(t *testing.T) {
+	gone := &fs.PathError{Op: "lstat", Path: "/backup-targets/x", Err: syscall.EHOSTDOWN}
+	if !errors.Is(gone, syscall.EHOSTDOWN) || ErrorClass(fmt.Errorf("open: %w", gone)) != ClassIO {
+		t.Errorf("share gone: %s, want %s", ErrorClass(gone), ClassIO)
+	}
+	if _, err := openMount(filepath.Join(t.TempDir(), "absent")); ErrorClass(err) != ClassNotMounted {
+		t.Errorf("absent mount: %s, want %s", ErrorClass(err), ClassNotMounted)
 	}
 }
