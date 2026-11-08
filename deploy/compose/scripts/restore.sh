@@ -670,7 +670,7 @@ restore_backup_repo() {
     compose run --rm --no-deps -T --entrypoint bash "$svc" -c 'set -e
 : >/var/lib/pgbackrest/stanza
 printf "%s\n" "$1" >/var/lib/pgbackrest/repo-path
-rm -f /var/lib/pgbackrest/last-full /var/lib/pgbackrest/verify-ok /var/lib/pgbackrest/last-error' restore "$repo_path" </dev/null
+rm -f /var/lib/pgbackrest/last-full /var/lib/pgbackrest/last-full-start /var/lib/pgbackrest/verify-ok /var/lib/pgbackrest/last-error' restore "$repo_path" </dev/null
   done
   compose --profile paddock up -d --no-deps pgbackrest pgbackrest-authentik paddock-backup
   restore_log "backup-repo: restored; the next round takes a full backup and verifies the stanzas"

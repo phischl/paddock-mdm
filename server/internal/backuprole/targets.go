@@ -649,8 +649,7 @@ const probeFile = ".paddock-probe"
 
 // HostState returns the host state of a volume target (plan M15 decision 16 g): pending_host while the volume or its
 // marker for the current revision is missing, unreachable when the share cannot be read or a write fails, mounted
-// otherwise. It blocks while the
-// share does; the engine bounds it.
+// otherwise. It blocks while the share does; the engine bounds it.
 func HostState(targetsDir string, t TargetRecord) string {
 	return hostState(MountDir(targetsDir, t), t.HostRevision)
 }
