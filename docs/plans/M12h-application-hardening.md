@@ -373,6 +373,50 @@ command sets — **decided 2026-11-08 by the architect lead's guidelines (A10-2)
   alpha.10 being in place. Open decisions before its plan: the MFA enrolment model (maintainer), the Trusted
   Types enforcement date (architect lead), new CI tools (maintainer).
 
+## Amendment 2026-11-08 (architect-lead decision Q19)
+
+Open point (4) of §12 is decided: the network names `edge`, `data` and `authentik` and the edge subnet
+`172.28.0.0/24` (Caddy at `172.28.0.10`) are accepted as proposed in §3.1 and §6.1. The rate-limit defaults of §3.3
+and the ACL command sets of §6.3 (open points 3 and 5) are accepted by the same decision; a Valkey key prefix missing
+from the ACL stays a stop condition, never `~*`. Open point (1), the default of `PADDOCK_ADMIN_ALLOWED_CIDRS`, is
+still with the maintainer: until answered the recommended variant applies (the default stays open, `./paddock check`
+warns).
+
+## Amendment 2026-11-08 (architect-lead decision A10-1, PDK-819)
+
+The implementation of §3.1 deviates from its membership list as follows; decision A10-1 (`decisions-alpha10.md` §9)
+accepts it with the conditions below.
+
+- `paddock-worker`, `paddock-escrow-reader` and `paddock-revocation-issuer` join `data` **and** `edge`, not `data`
+  alone: the worker calls Authentik's API and the certificate probe through Caddy's aliases and Fleet's API
+  (`fleet:8080`), and the escrow-reader and the revocation-issuer run the step-up issuer's discovery against
+  `auth.<domain>`.
+- Condition: the ops listener (port 9090: `/healthz`, `/readyz`, `/metrics`) of these three roles is not reachable
+  from `edge`. Each binds `PADDOCK_OPS_ADDR` to an alias that exists on `data` only (`worker-ops`,
+  `escrow-reader-ops`, `revocation-issuer-ops`), as the escrow-reader's API already binds to its `escrow` alias; no
+  new dependency. `prod-check` item `networks: ops listeners off edge` fails a role of the three on `edge` whose ops
+  listener binds to every address or to a name that is not an alias of another network only. Gates: acceptance
+  `TestOpsListenersOffEdge` (9090 of the three and the escrow-reader's API refuse a container on `edge`; 9090 answers
+  on `data`) and `deploy/bundle/ci/assert-segmentation.sh` (the same from inside Caddy, by name and by edge address).
+  With the worker scaled (`--scale paddock-worker=N`) every replica carries the alias; the ops listener therefore
+  binds the one resolved address that is assigned to a local interface and fails closed on none or several, and the
+  container health check dials that same address.
+- Residual risk (until PDK-824 and PDK-825 land): under Linux's weak host model a container on `edge` that may craft
+  or route packets (`NET_RAW`/`NET_ADMIN`; `fleet` and `authentik-server` keep Docker's default `NET_RAW`, Caddy drops
+  every capability) can reach the `data`-bound port 9090 through a role's `edge` interface. PDK-824 (Fleet) and
+  PDK-825 (Authentik) close it by dropping those capabilities. The exposure is limited: `/healthz` returns a fixed
+  text, `/readyz` the dependency error texts (PostgreSQL errors omit the password, OpenBao errors carry URL and status,
+  not the request body), and `/metrics` counters and gauges labelled by status, store, route, code, host and reason;
+  none carries a secret.
+- `prometheus` is on `data` only, not `data` + `edge`: it scrapes no Caddy target. The k6 load generator joins
+  `data` beside `edge` to read the queue backlog.
+- `edge` gets the pool of dynamic addresses `PADDOCK_EDGE_IP_RANGE` (default `172.28.0.128/25`), and Caddy's fixed
+  address must lie outside it, so that no container started while Caddy is down takes the trusted proxy's address;
+  `networks: caddy on edge only` fails a missing pool or Caddy inside it. `PADDOCK_EDGE_CADDY_ADDRESS` and the
+  per-instance development subnets `172.28.(n-1).0/24` (pool `172.28.(n-1).128/25`) are accepted.
+- Production keeps one documented, overridable subnet; `./paddock check` warns (item `networks: edge subnet free on
+  this host`) when an existing Docker network other than `<project>_edge` overlaps it.
+
 ## 14. Amendment 2026-11-08 (PDK-820, A10-2) — Valkey ACL users revised against the code
 
 Author: architect · basis: the implementer's key-prefix inventory of PDK-820 (stopped before any code change),

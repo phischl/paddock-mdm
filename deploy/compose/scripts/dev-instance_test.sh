@@ -45,9 +45,27 @@ check "instance 2: Prometheus port" "$(setting "$second" PADDOCK_DEV_PROMETHEUS_
 check "instance 2: own secrets" "$(cmp -s "$first/.secrets/postgres_superuser_password" \
   "$second/.secrets/postgres_superuser_password" && echo shared || echo own)" own
 
+check "instance 2: edge subnet" "$(setting "$second" PADDOCK_EDGE_SUBNET)" 172.28.1.0/24
+check "instance 2: Caddy's edge address" "$(setting "$second" PADDOCK_EDGE_CADDY_ADDRESS)" 172.28.1.10
+check "instance 2: edge dynamic pool" "$(setting "$second" PADDOCK_EDGE_IP_RANGE)" 172.28.1.128/25
+
 before="$(cat "$second/.env")"
 PADDOCK_INSTANCE=2 bash "$second/scripts/gen-dev-secrets.sh" >/dev/null
 check "instance 2: rerun keeps .env" "$(cat "$second/.env")" "$before"
+
+# An instance .env from before network edge gets its own subnet on the next run, once.
+sed -i '/^PADDOCK_EDGE_/d' "$second/.env"
+bash "$second/scripts/gen-dev-secrets.sh" >/dev/null
+check "instance 2: backfilled edge subnet" "$(grep -c '^PADDOCK_EDGE_SUBNET=' "$second/.env"):$(setting "$second" PADDOCK_EDGE_SUBNET)" \
+  1:172.28.1.0/24
+check "instance 2: backfilled Caddy address" "$(setting "$second" PADDOCK_EDGE_CADDY_ADDRESS)" 172.28.1.10
+check "instance 2: backfilled dynamic pool" "$(setting "$second" PADDOCK_EDGE_IP_RANGE)" 172.28.1.128/25
+# An instance .env with the subnet but from before the dynamic pool gets the pool, once.
+sed -i '/^PADDOCK_EDGE_IP_RANGE=/d' "$second/.env"
+bash "$second/scripts/gen-dev-secrets.sh" >/dev/null
+check "instance 2: pool backfilled beside the subnet" \
+  "$(grep -c '^PADDOCK_EDGE_SUBNET=' "$second/.env"):$(grep -c '^PADDOCK_EDGE_IP_RANGE=' "$second/.env"):$(setting "$second" PADDOCK_EDGE_IP_RANGE)" \
+  1:1:172.28.1.128/25
 
 refused() { if "$@" >/dev/null 2>&1; then echo ran; else echo refused; fi; }
 check "instance 2 in the first checkout refused" "$(PADDOCK_INSTANCE=2 refused bash "$first/scripts/gen-dev-secrets.sh")" refused

@@ -120,7 +120,7 @@ services:
       # limiter does not count private clients; gate TestRateLimit sends from documentation addresses through the
       # trusted edge listener and gets the production limits (development only, refused in production).
       PADDOCK_TEST_RATELIMIT_EXEMPT_CIDRS: ${PADDOCK_TEST_RATELIMIT_EXEMPT_CIDRS:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 fc00::/7 ::1/128}
-      # Agent releases are imported from the GitHub fixture that gate TestAgentReleaseImport starts on the network cp,
+      # Agent releases are imported from the GitHub fixture that gate TestAgentReleaseImport starts on the network data,
       # never from GitHub (ADR 0043 decision 9); without the gate running, the check fails with
       # release_source_unavailable.
       PADDOCK_AGENT_RELEASE_SOURCE_URL: ${PADDOCK_AGENT_RELEASE_SOURCE_URL:-http://github-fixture:8080}
@@ -170,7 +170,7 @@ services:
       PADDOCK_RETENTION_UNIT: ${PADDOCK_RETENTION_UNIT:-seconds}
       # The retention round every 15 s, so the gates see a purge within seconds (plan M10 amendment A3).
       PADDOCK_RETENTION_INTERVAL: ${PADDOCK_RETENTION_INTERVAL:-15s}
-      # Ubuntu's vulnerability data from the fixture server that gate O1 starts on the network cp, every 30 s, instead
+      # Ubuntu's vulnerability data from the fixture server that gate O1 starts on the network data, every 30 s, instead
       # of the real bulk file once a day (plan M5c); without the gate running, the downloads fail and the data stays.
       PADDOCK_OSV_UBUNTU_URL: ${PADDOCK_OSV_UBUNTU_URL:-http://osv-fixture:8080/Ubuntu/all.zip}
       PADDOCK_OSV_SYNC_INTERVAL: ${PADDOCK_OSV_SYNC_INTERVAL:-30s}
@@ -179,6 +179,9 @@ services:
     build: *paddock-build
     environment:
       PADDOCK_ENV: development
+      # The load generator (make load-identities, make load-test) runs on network edge and names each simulated
+      # device's address (docs/operations/capacity.md); production trusts Caddy's address alone.
+      PADDOCK_TRUSTED_PROXY_CIDRS: ${PADDOCK_TRUSTED_PROXY_CIDRS:-${PADDOCK_EDGE_SUBNET:-172.28.0.0/24}}
 
   paddock-compiler:
     build:

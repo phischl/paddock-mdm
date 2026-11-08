@@ -17,7 +17,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUCKET="${PADDOCK_BUNDLES_S3_BUCKET:-paddock-bundles}"
 ARTIFACTS_BUCKET="${PADDOCK_ARTIFACTS_S3_BUCKET:-paddock-agent-artifacts}"
 ESCROW_BUCKET="${PADDOCK_ESCROW_S3_BUCKET:-paddock-escrow}"
-NETWORK="${NETWORK:-${PADDOCK_PROJECT}_cp}"
+NETWORK="${NETWORK:-${PADDOCK_PROJECT}_data}"
 ENDPOINT="${ENDPOINT:-http://rustfs:9000}"
 
 AWS_ACCESS_KEY_ID="$(cat "$SECRETS_DIR/rustfs_root_user")"

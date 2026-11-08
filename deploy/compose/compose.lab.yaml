@@ -26,8 +26,11 @@ services:
       PADDOCK_EDGE_CLIENT_IP_HEADER: ${PADDOCK_EDGE_CLIENT_IP_HEADER:-X-Forwarded-For}
     volumes:
       - ./caddy/Caddyfile.lab:/etc/caddy/Caddyfile:ro
-    # No hostname aliases: a role resolving a public name to Caddy would bypass the proxy's TLS.
-    networks: !override [cp]
+    # No hostname aliases: a role resolving a public name to Caddy would bypass the proxy's TLS. The fixed address on
+    # edge stays: it is the roles' trusted proxy here too.
+    networks: !override
+      edge:
+        ipv4_address: ${PADDOCK_EDGE_CADDY_ADDRESS:-172.28.0.10}
 
   # The audit writer runs on this host and reaches both on the internal networks.
   openbao:

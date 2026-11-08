@@ -63,6 +63,7 @@ smoke_start
 
 step "8 probes"
 smoke_probes
+"$here/assert-segmentation.sh" paddock-cp
 smoke_backup_waits
 if [[ -n "$agent_artifacts" ]]; then smoke_agent_release "$agent_artifacts"; fi
 

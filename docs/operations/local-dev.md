@@ -69,7 +69,7 @@ The acceptance gate A3 sets them while it runs. `PADDOCK_TEST_IP_ALLOWLIST_WINDO
 
 Inside containers `.localhost` does not resolve. Caddy therefore carries the network aliases
 `admin.paddock.localhost`, `auth.paddock.localhost`, `device.paddock.localhost` and `bundles.paddock.localhost` on
-network `cp` and listens on the public port inside the
+network `edge` and listens on the public port inside the
 container as well, so containers use exactly the same URLs as the browser (the OIDC issuer must match).
 
 Caddy uses its internal CA (`tls internal`). The one-shot service `caddy-ca-export` copies the root certificate to
@@ -213,6 +213,10 @@ and can also be set one by one; unset, they keep the first stack's values.
 | `PADDOCK_DEV_RABBITMQ_PORT`, `PADDOCK_DEV_RABBITMQ_MANAGEMENT_PORT` | `5672`, `15672` | `5772`, `15772` |
 | `PADDOCK_DEV_VALKEY_PORT`, `PADDOCK_DEV_OPENBAO_PORT` | `6379`, `8200` | `6479`, `8300` |
 | `PADDOCK_DEV_AUDIT_S3_PORT`, `PADDOCK_DEV_FLEET_PORT`, `PADDOCK_DEV_PROMETHEUS_PORT` | `9001`, `8412`, `9091` | `9101`, `8512`, `9191` |
+| `PADDOCK_EDGE_SUBNET`, `PADDOCK_EDGE_CADDY_ADDRESS` (network `edge` has a fixed subnet) | `172.28.0.0/24`, `172.28.0.10` | `172.28.1.0/24`, `172.28.1.10` |
+
+An instance's `.env` from before network `edge` gets its two edge settings on the next `make dev-secrets`; without
+them the second stack claims the first one's subnet and `make up` fails with an overlapping address pool.
 
 The `make` targets (`up`, `down`, `logs`, `bao-unseal`, the bootstraps, `dev-seed`, `acceptance`, `e2e`, the load
 test) and the acceptance gates read the project and the ports from the checkout's `.env`, so they need no extra

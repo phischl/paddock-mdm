@@ -11,6 +11,9 @@ their users' logins and the device-code approval on a phone are never restricted
 The edge list is the coarse, static perimeter; the application list is the audited one that administrators manage
 themselves. A request must pass both.
 
+`PADDOCK_ADMIN_ALLOWED_CIDRS` defaults to every address (`0.0.0.0/0 ::/0`) in production; `./paddock check` reports
+that as WARN (ADR 0051). Set it to your office and VPN ranges.
+
 ## Public on `auth.<domain>`
 
 Everything logins and the device-code flow need stays reachable from the internet; everything else on `auth.` is
@@ -26,9 +29,10 @@ restricted to `PADDOCK_ADMIN_ALLOWED_CIDRS`:
   UI makes
 - `/static/*`, `/media/*`, `/.well-known/*`, `/favicon.ico`
 
-The rest of `/api/v3/*` is additionally allowed from `PADDOCK_INTERNAL_CIDRS` (default `private_ranges`), because the
-Paddock roles reach Authentik's API through Caddy with their service token. Narrow it to the Compose network's subnet
-(`docker network inspect paddock_cp`) when other machines share the host's private ranges.
+The rest of `/api/v3/*` is additionally allowed from `PADDOCK_INTERNAL_CIDRS`, because the Paddock roles reach
+Authentik's API through Caddy with their service token. In production it defaults to the subnet of network `edge`
+(`PADDOCK_EDGE_SUBNET`, `172.28.0.0/24`), where those roles meet Caddy; `private_ranges` fails `./paddock check`
+(ADR 0051). The development stack keeps `private_ranges`.
 
 ## Client address: trusted proxies and the canonical header
 
@@ -73,8 +77,8 @@ Four configurations:
 
 Behind Caddy there is exactly one hop: Caddy replaces the header `X-Paddock-Client-IP` on every request to the
 Paddock roles with the address it resolved, and the roles read that header only from peers in
-`PADDOCK_TRUSTED_PROXY_CIDRS` (default: the private ranges, which is where the Compose network lives; the roles'
-ports are never published in production). The roles never read `X-Forwarded-For`, `X-Real-IP` or
+`PADDOCK_TRUSTED_PROXY_CIDRS` (default: Caddy's fixed address on network `edge`, `172.28.0.10/32`; `./paddock check`
+fails on any other peer, ADR 0051). The roles never read `X-Forwarded-For`, `X-Real-IP` or
 `CF-Connecting-IP`. `GET /api/v1/me` returns the resolved address as `client_ip`; the portal shows it on the allow
 list page as *Your current address*.
 

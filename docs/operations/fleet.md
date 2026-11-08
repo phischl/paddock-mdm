@@ -127,11 +127,12 @@ software report (hourly by default) and the next round.
 
 ## Access for platform operators
 
-Fleet's UI and API are reachable on the internal network `cp` only (`http://fleet:8080`). Platform operators who need
+Fleet's UI and API are reachable on the network `edge` only (`http://fleet:8080`; Caddy publishes the device paths
+alone). Platform operators who need
 the UI forward a local port to it, for example from their workstation through the Docker host:
 
 ```sh
-ip=$(ssh docker-host docker inspect -f '{{(index .NetworkSettings.Networks "paddock_cp").IPAddress}}' paddock-fleet-1)
+ip=$(ssh docker-host docker inspect -f '{{(index .NetworkSettings.Networks "paddock_edge").IPAddress}}' paddock-fleet-1)
 ssh -N -L 127.0.0.1:8412:"$ip":8080 docker-host
 # then open http://127.0.0.1:8412 and sign in as admin@paddock-mdm.invalid (password: secret fleet_admin_password)
 ```

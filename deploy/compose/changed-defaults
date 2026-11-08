@@ -1,0 +1,6 @@
+# Settings of .env whose default a release changed, one per line: <release> <setting>. The bundle ships this file as
+# CHANGED-DEFAULTS; ./paddock upgrade-check reports a setting of the old .env that the new bundle's release lists here
+# as WARN: the old .env keeps the old value and overrides the new default (docs/operations/upgrade.md, section of that
+# release). Lines of earlier releases stay as history.
+0.1.0-alpha.10 PADDOCK_TRUSTED_PROXY_CIDRS
+0.1.0-alpha.10 PADDOCK_INTERNAL_CIDRS

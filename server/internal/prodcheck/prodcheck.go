@@ -39,7 +39,28 @@ const (
 type Config struct {
 	Services map[string]Service `json:"services"`
 	Secrets  map[string]Secret  `json:"secrets"`
+	Networks map[string]Network `json:"networks"`
 	Prod     Prod               `json:"x-paddock-prod"`
+}
+
+// Network is a top-level Compose network.
+type Network struct {
+	// Name is the Docker network's name, <project>_<key>.
+	Name     string `json:"name"`
+	Internal bool   `json:"internal"`
+	IPAM     IPAM   `json:"ipam"`
+}
+
+// IPAM is a network's address configuration.
+type IPAM struct {
+	Config []IPAMConfig `json:"config"`
+}
+
+// IPAMConfig is one subnet of a network.
+type IPAMConfig struct {
+	Subnet string `json:"subnet"`
+	// IPRange is the pool of dynamically assigned addresses inside Subnet.
+	IPRange string `json:"ip_range"`
 }
 
 // Prod is the extension x-paddock-prod of the production overlays: values of .env that the checks need.
@@ -80,7 +101,8 @@ type Logging struct {
 
 // ServiceNetwork is a service's attachment to one network.
 type ServiceNetwork struct {
-	Aliases []string `json:"aliases"`
+	Aliases     []string `json:"aliases"`
+	IPv4Address string   `json:"ipv4_address"`
 }
 
 // Port is a published port.
@@ -135,6 +157,14 @@ type Options struct {
 	LocalRootUID uint32
 	// BackupRevisions compares the rendered compose.backup-targets.yaml with the database online; nil means not checked.
 	BackupRevisions *BackupRevisions
+	// DockerNetworks are the networks that exist on the host (docker network inspect); nil means not checked.
+	DockerNetworks []DockerNetwork
+}
+
+// DockerNetwork is an existing Docker network of the host and its subnets.
+type DockerNetwork struct {
+	Name    string
+	Subnets []string
 }
 
 // Result is one line of the checklist.
@@ -184,6 +214,19 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		if _, ok := c.Services["caddy"]; ok {
 			results = append(results, checkCaddy(c), checkEdgeClientAddress(c, false))
 		}
+	}
+	if _, ok := c.Services["caddy"]; ok {
+		results = append(results, checkCaddyOnEdgeOnly(c), checkNoDatastoreOnEdge(c), checkEdgeServicesOffData(c),
+			checkOpsListenersOffEdge(c), checkTrustedProxiesCaddyOnly(c), checkInternalRanges(c))
+		if o.DockerNetworks != nil {
+			results = append(results, checkEdgeSubnetFree(c, o.DockerNetworks))
+		}
+		if !lab {
+			results = append(results, checkAdminAllowedCIDRs(c))
+		}
+	}
+	if _, ok := c.Services["rabbitmq"]; ok {
+		results = append(results, checkRabbitMQManagement(c))
 	}
 	if usesAny(c, []string{"PADDOCK_TRUSTED_PROXY_CIDRS"}) {
 		results = append(results, checkRoleTrustedProxies(c))
@@ -1090,6 +1133,268 @@ func checkRoleTrustedProxies(c Config) Result {
 		}
 	}
 	return result("role trusted proxies", f)
+}
+
+// Networks of the trust zones (ADR 0051 decision 1, architecture §4.1).
+const (
+	edgeNetwork = "edge"
+	dataNetwork = "data"
+)
+
+// datastores are the services that hold state or secrets; none of them may be reachable from network edge.
+var datastores = []string{"postgres", "valkey", "rabbitmq", "openbao", "authentik-postgres", "fleet-mysql", "fleet-redis",
+	"audit-postgres", "audit-rustfs"}
+
+// offData are the internet-facing services that must not reach the datastores of network data.
+var offData = []string{"caddy", "fleet", "authentik-server", "authentik-worker"}
+
+// opsOffEdge are the roles on network edge only as clients of the public names, whose ops listener (metrics and
+// health) must not answer there (decisions-alpha10 A10-1).
+var opsOffEdge = []string{"paddock-worker", "paddock-escrow-reader", "paddock-revocation-issuer"}
+
+// AdminAllowedEverywhereFails decides whether an edge admin allow list of every address (0.0.0.0/0 or ::/0) fails the
+// production check or only warns (ADR 0051 decision 1; maintainer question 9 of alpha.10, open: warn until answered).
+const AdminAllowedEverywhereFails = false
+
+// sortedNetworks returns the names of a service's networks in order.
+func sortedNetworks(s Service) []string {
+	names := make([]string, 0, len(s.Networks))
+	for n := range s.Networks {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// caddyEdgeAddress returns Caddy's fixed address on network edge, or a finding why there is none.
+func caddyEdgeAddress(c Config) (netip.Addr, string) {
+	raw := strings.TrimSpace(c.Services["caddy"].Networks[edgeNetwork].IPv4Address)
+	if raw == "" {
+		return netip.Addr{}, "caddy has no fixed ipv4_address on network edge"
+	}
+	a, err := netip.ParseAddr(raw)
+	if err != nil {
+		return netip.Addr{}, fmt.Sprintf("caddy's address %q on network edge is not an IP address", raw)
+	}
+	return a, ""
+}
+
+// checkCaddyOnEdgeOnly requires Caddy on network edge alone, at a fixed address inside the edge subnet: its
+// upstreams are there and no datastore is.
+func checkCaddyOnEdgeOnly(c Config) Result {
+	var f []string
+	nets := sortedNetworks(c.Services["caddy"])
+	if !slices.Equal(nets, []string{edgeNetwork}) {
+		f = append(f, fmt.Sprintf("caddy is on networks %v, want [edge]", nets))
+	}
+	addr, problem := caddyEdgeAddress(c)
+	if problem != "" {
+		f = append(f, problem)
+	} else if subnets := c.Networks[edgeNetwork].IPAM.Config; len(subnets) > 0 {
+		inside := false
+		for _, cfg := range subnets {
+			p, err := netip.ParsePrefix(cfg.Subnet)
+			if err != nil || !p.Contains(addr) {
+				continue
+			}
+			inside = true
+			// Without a pool that excludes it, a container started while Caddy is down can take Caddy's address and
+			// with it the trust of every role.
+			if r, err := netip.ParsePrefix(cfg.IPRange); err != nil {
+				f = append(f, "network edge has no ip_range for dynamic addresses (PADDOCK_EDGE_IP_RANGE)")
+			} else if r.Contains(addr) {
+				f = append(f, fmt.Sprintf("caddy's address %s lies in the dynamic pool %s of network edge", addr, r))
+			}
+		}
+		if !inside {
+			f = append(f, fmt.Sprintf("caddy's address %s is outside the subnet of network edge", addr))
+		}
+	} else {
+		f = append(f, "network edge has no fixed subnet (PADDOCK_EDGE_SUBNET)")
+	}
+	return result("networks: caddy on edge only", f)
+}
+
+// checkNoDatastoreOnEdge fails a datastore on network edge, where a compromised Caddy, Authentik or Fleet reaches it.
+func checkNoDatastoreOnEdge(c Config) Result {
+	var f []string
+	for _, name := range datastores {
+		if _, on := c.Services[name].Networks[edgeNetwork]; on {
+			f = append(f, name+" is on network edge")
+		}
+	}
+	return result("networks: no datastore on edge", f)
+}
+
+// checkEdgeServicesOffData fails Fleet, Caddy or Authentik on network data, where every datastore is.
+func checkEdgeServicesOffData(c Config) Result {
+	var f []string
+	for _, name := range offData {
+		if _, on := c.Services[name].Networks[dataNetwork]; on {
+			f = append(f, name+" is on network data")
+		}
+	}
+	return result("networks: fleet, caddy and authentik not on data", f)
+}
+
+// checkOpsListenersOffEdge requires the ops listener of the opsOffEdge roles on network edge to bind to an alias the
+// role has on another network only: on every address (":9090") it would answer Caddy, Authentik and Fleet.
+func checkOpsListenersOffEdge(c Config) Result {
+	var f []string
+	for _, name := range opsOffEdge {
+		s, ok := c.Services[name]
+		if !ok {
+			continue
+		}
+		if _, on := s.Networks[edgeNetwork]; !on {
+			continue
+		}
+		addr := env(s, "PADDOCK_OPS_ADDR")
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil || host == "" {
+			f = append(f, fmt.Sprintf("%s: PADDOCK_OPS_ADDR %q listens on every network, edge included", name, addr))
+			continue
+		}
+		var on []string
+		for _, n := range sortedNetworks(s) {
+			if slices.Contains(s.Networks[n].Aliases, host) {
+				on = append(on, n)
+			}
+		}
+		if len(on) == 0 || slices.Contains(on, edgeNetwork) {
+			f = append(f, fmt.Sprintf("%s: PADDOCK_OPS_ADDR host %q is not an alias on a network other than edge "+
+				"(aliased on %v)", name, host, on))
+		}
+	}
+	return result("networks: ops listeners off edge", f)
+}
+
+// checkEdgeSubnetFree warns when an existing Docker network other than this project's edge overlaps the edge subnet:
+// `./paddock up` would fail with "Pool overlaps" while recreating the running stack (decisions-alpha10 A10-1).
+func checkEdgeSubnetFree(c Config, existing []DockerNetwork) Result {
+	const item = "networks: edge subnet free on this host"
+	edge := c.Networks[edgeNetwork]
+	var f []string
+	for _, cfg := range edge.IPAM.Config {
+		p, err := netip.ParsePrefix(cfg.Subnet)
+		if err != nil {
+			continue
+		}
+		for _, n := range existing {
+			if edge.Name != "" && n.Name == edge.Name {
+				continue
+			}
+			for _, sub := range n.Subnets {
+				if q, err := netip.ParsePrefix(strings.TrimSpace(sub)); err == nil && q.Overlaps(p) {
+					f = append(f, fmt.Sprintf("Docker network %s (%s) overlaps the edge subnet %s: set PADDOCK_EDGE_SUBNET, "+
+						"PADDOCK_EDGE_IP_RANGE and PADDOCK_EDGE_CADDY_ADDRESS to a free range", n.Name, q, p))
+				}
+			}
+		}
+	}
+	if len(f) == 0 {
+		return Result{Item: item, OK: true}
+	}
+	slices.Sort(f)
+	return Result{Item: item, OK: true, Warn: true, Detail: strings.Join(f, "\n")}
+}
+
+// checkTrustedProxiesCaddyOnly requires every role's PADDOCK_TRUSTED_PROXY_CIDRS to name Caddy's address alone: any
+// other peer could claim a client address towards the api or the gateway.
+func checkTrustedProxiesCaddyOnly(c Config) Result {
+	const item = "trusted proxies: caddy's address only"
+	addr, problem := caddyEdgeAddress(c)
+	if problem != "" {
+		return result(item, []string{problem})
+	}
+	want := netip.PrefixFrom(addr, addr.BitLen())
+	var f []string
+	for _, name := range sortedServices(c) {
+		for _, p := range strings.Fields(env(c.Services[name], "PADDOCK_TRUSTED_PROXY_CIDRS")) {
+			if got, err := netip.ParsePrefix(p); err != nil || got.Masked() != want {
+				f = append(f, fmt.Sprintf("%s: PADDOCK_TRUSTED_PROXY_CIDRS trusts %s, not only Caddy's %s", name, p, want))
+			}
+		}
+	}
+	return result(item, f)
+}
+
+// checkInternalRanges fails private_ranges in PADDOCK_INTERNAL_CIDRS: every LAN peer would pass the edge's internal
+// guards; the roles that call the public names sit on network edge, whose subnet is the default.
+func checkInternalRanges(c Config) Result {
+	var f []string
+	if slices.Contains(strings.Fields(env(c.Services["caddy"], "PADDOCK_INTERNAL_CIDRS")), "private_ranges") {
+		f = append(f, "PADDOCK_INTERNAL_CIDRS holds private_ranges; name the edge subnet (the default) or the exact ranges")
+	}
+	return result("edge: internal ranges are not private_ranges", f)
+}
+
+// checkAdminAllowedCIDRs warns (or, with AdminAllowedEverywhereFails, fails) while the portal, the admin API and
+// Authentik's administrative paths are open to every address; the runbook recommends the office ranges.
+func checkAdminAllowedCIDRs(c Config) Result {
+	const item = "edge admin allow list"
+	var open []string
+	for _, p := range strings.Fields(env(c.Services["caddy"], "PADDOCK_ADMIN_ALLOWED_CIDRS")) {
+		if prefix, err := netip.ParsePrefix(p); err == nil && prefix.Bits() == 0 {
+			open = append(open, p)
+		}
+	}
+	if len(open) == 0 {
+		return Result{Item: item, OK: true}
+	}
+	detail := fmt.Sprintf("PADDOCK_ADMIN_ALLOWED_CIDRS admits every address (%s): name the networks that may open the "+
+		"portal (docs/operations/ip-allowlist.md)", strings.Join(open, " "))
+	return Result{Item: item, OK: !AdminAllowedEverywhereFails, Warn: !AdminAllowedEverywhereFails, Detail: detail}
+}
+
+// rabbitmqConfDir is where the broker reads its additional configuration files, after rabbitmq.conf in name order.
+const rabbitmqConfDir = "/etc/rabbitmq/conf.d/"
+
+// checkRabbitMQManagement requires the management API on the loopback address inside the container and its port
+// published nowhere: rabbitmqctl keeps working, no other container reaches 15672.
+func checkRabbitMQManagement(c Config) Result {
+	var f []string
+	s := c.Services["rabbitmq"]
+	for _, p := range s.Ports {
+		if p.Target == 15672 {
+			f = append(f, fmt.Sprintf("rabbitmq: management port 15672 published on %s:%s", hostIP(p), p.Published))
+		}
+	}
+	var files []Volume
+	for _, v := range s.Volumes {
+		if v.Target == "/etc/rabbitmq/rabbitmq.conf" || strings.HasPrefix(v.Target, rabbitmqConfDir) {
+			files = append(files, v)
+		}
+	}
+	// The broker reads rabbitmq.conf first, then conf.d in name order; the last value of a key wins.
+	slices.SortFunc(files, func(a, b Volume) int {
+		aMain, bMain := !strings.HasPrefix(a.Target, rabbitmqConfDir), !strings.HasPrefix(b.Target, rabbitmqConfDir)
+		if aMain != bMain {
+			if aMain {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Target, b.Target)
+	})
+	ip := ""
+	for _, v := range files {
+		b, err := os.ReadFile(v.Source) //nolint:gosec // operator configuration
+		if err != nil {
+			f = append(f, "rabbitmq: configuration unreadable: "+v.Source)
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			key, value, ok := strings.Cut(line, "=")
+			if ok && strings.TrimSpace(key) == "management.tcp.ip" {
+				ip = strings.TrimSpace(value)
+			}
+		}
+	}
+	if ip != "127.0.0.1" {
+		f = append(f, fmt.Sprintf("rabbitmq: management.tcp.ip is %q, want 127.0.0.1 (rabbitmq/management-loopback.conf)", ip))
+	}
+	return result("rabbitmq: management bound to loopback", f)
 }
 
 // checkAllowlistBypass fails while the api bypasses the application IP allow list (plan M7a decision 22).

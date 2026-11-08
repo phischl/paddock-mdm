@@ -22,8 +22,9 @@ services:
     environment:
       PADDOCK_ACME_EMAIL: ${PADDOCK_ACME_EMAIL:-}
       PADDOCK_ADMIN_ALLOWED_CIDRS: ${PADDOCK_ADMIN_ALLOWED_CIDRS:-0.0.0.0/0 ::/0}
-      # Edge allow list and client address (plan M7a decisions 1 and 8; docs/operations/ip-allowlist.md).
-      PADDOCK_INTERNAL_CIDRS: ${PADDOCK_INTERNAL_CIDRS:-private_ranges}
+      # Edge allow list and client address (plan M7a decisions 1 and 8; docs/operations/ip-allowlist.md). Internal
+      # callers are the roles on network edge (ADR 0051 decision 1), not every private address.
+      PADDOCK_INTERNAL_CIDRS: ${PADDOCK_INTERNAL_CIDRS:-${PADDOCK_EDGE_SUBNET:-172.28.0.0/24}}
       PADDOCK_EDGE_TRUSTED_PROXIES: ${PADDOCK_EDGE_TRUSTED_PROXIES:-}
       PADDOCK_EDGE_CLIENT_IP_HEADER: ${PADDOCK_EDGE_CLIENT_IP_HEADER:-none}
       # The servers block applies to every listener; the development value names the trusted listener only.
@@ -53,6 +54,7 @@ services:
   rabbitmq:
     volumes:
       - ./rabbitmq/tls.conf:/etc/rabbitmq/conf.d/20-tls.conf:ro
+      - ./rabbitmq/management-loopback.conf:/etc/rabbitmq/conf.d/30-management-loopback.conf:ro
     secrets: [rabbitmq_tls_crt, rabbitmq_tls_key, internal_ca_bundle]
     ports:
       # amqps for the audit writer on the audit host; plaintext 5672 stays on the internal network.

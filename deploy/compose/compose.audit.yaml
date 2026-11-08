@@ -154,7 +154,7 @@ services:
       - approle_audit_writer_secret_id
       - rustfs_audit_writer_access_key
       - rustfs_audit_writer_secret_key
-    networks: [audit-index, audit-store, cp]
+    networks: [audit-index, audit-store, data]
     healthcheck:
       test: ["CMD", "/paddock-server", "healthcheck"]
       interval: 10s

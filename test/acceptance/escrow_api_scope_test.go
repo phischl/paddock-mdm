@@ -54,7 +54,7 @@ func escrowAPICall(t *testing.T, args ...string) (string, error) {
 	creds := mustSecret(t, "rustfs_escrow_api_access_key") + "\n" + mustSecret(t, "rustfs_escrow_api_secret_key") + "\n"
 	script := `read -r AWS_ACCESS_KEY_ID; read -r AWS_SECRET_ACCESS_KEY; export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; ` +
 		`aws --endpoint-url http://rustfs:9000 s3api "$@" --output json`
-	dockerArgs := append([]string{"run", "--rm", "-i", "--network", stack.Network("cp"), "-e", "AWS_DEFAULT_REGION=us-east-1",
+	dockerArgs := append([]string{"run", "--rm", "-i", "--network", stack.Network("data"), "-e", "AWS_DEFAULT_REGION=us-east-1",
 		"-e", "AWS_PAGER=", "--entrypoint", "sh", image, "-c", script, "sh"}, args...)
 	out, err := stack.Docker(testContext(t, 2*time.Minute), strings.NewReader(creds), dockerArgs...)
 	return string(out), err

@@ -72,7 +72,7 @@ shipped=(
   caddy/Caddyfile.prod caddy/Caddyfile.lab caddy/guards.caddy caddy/entrypoint.sh
   nginx/paddock.conf.example
   openbao/config.hcl openbao/prod.hcl
-  rabbitmq/rabbitmq.conf rabbitmq/enabled_plugins rabbitmq/tls.conf rabbitmq/definitions.json.tmpl
+  rabbitmq/rabbitmq.conf rabbitmq/enabled_plugins rabbitmq/tls.conf rabbitmq/management-loopback.conf rabbitmq/definitions.json.tmpl
   valkey/valkey.conf
   postgres/provision-roles.sh
   authentik/entrypoint.sh
@@ -102,6 +102,7 @@ chmod 0755 "$dir/paddock"
 copy "$src/prod.env.example" "$dir/.env.example"
 copy "$src/lab.env.example" "$dir/.env.lab.example"
 copy "$src/retired-settings" "$dir/RETIRED-SETTINGS"
+copy "$src/changed-defaults" "$dir/CHANGED-DEFAULTS"
 # The bundle sequence's high-water file lives here (decisions-alpha9 item 68): compose.backup.yaml bind-mounts the
 # directory, which postgres hands to uid 999 on every start; shipped empty so that Docker does not create it.
 mkdir -m 0755 "$dir/bundle-seq"

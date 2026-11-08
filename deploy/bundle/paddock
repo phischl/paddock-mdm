@@ -261,10 +261,27 @@ case "$cmd" in
       [[ "$rev_db" =~ ^(none|[0-9a-f=\ -]+)$ ]] || rev_db=""
       revisions=(--backup-revisions-file "${rev_file:-none}" --backup-revisions-db "$rev_db")
     fi
+    # The host's Docker networks, so that an edge subnet another network already holds warns before up fails with
+    # "Pool overlaps" (decisions-alpha10 A10-1); the check container has no Docker socket.
+    # A failed listing must not read as "no network overlaps": the item is then reported as not checked.
+    docker_networks=()
+    if listing="$(
+      docker network ls -q | xargs -r docker network inspect \
+        --format '{{.Name}}={{range $i, $c := .IPAM.Config}}{{if $i}},{{end}}{{$c.Subnet}}{{end}}'
+    )"; then
+      docker_networks=(--docker-networks)
+      while IFS= read -r n; do
+        [[ -z "$n" ]] || docker_networks+=(--docker-network "$n")
+      done <<<"$listing"
+    else
+      echo "WARN  networks: edge subnet free on this host"
+      echo "      - not checked: listing the host's Docker networks failed"
+    fi
     PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
       docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" \
         -v "$BUNDLE_DIR:$BUNDLE_DIR:ro" -w "$BUNDLE_DIR" "$PADDOCK_IMAGE" \
-        prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online} "${revisions[@]}"
+        prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online} "${revisions[@]}" \
+        "${docker_networks[@]}"
     ;;
   up)
     profiles=(--profile paddock --profile observability)

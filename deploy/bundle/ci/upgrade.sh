@@ -369,6 +369,8 @@ orphans
 # --- 5 probes --------------------------------------------------------------------------------------------------------
 step "5.1 probes: hosts"
 hosts_healthy
+# The candidate's trust zones after the upgrade recreated every container (ADR 0051 decision 1).
+"$here/assert-segmentation.sh" paddock-cp
 step "5.2 probes: the seeded set"
 if ((${#reveal[@]} == 0)); then
   echo "upgrade: the escrow reveal is skipped (UPGRADE_SKIP_REVEAL=1); it must run before a release tag" >&2
