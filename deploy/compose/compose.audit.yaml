@@ -31,7 +31,7 @@ services:
       - audit-postgres-data:/var/lib/postgresql
     networks: [audit-index]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d paddock_audit"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d paddock_audit"]
       interval: 5s
       timeout: 5s
       retries: 20

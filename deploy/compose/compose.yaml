@@ -137,7 +137,7 @@ services:
       - postgres-data:/var/lib/postgresql
     networks: [cp]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d paddock"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d paddock"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -277,7 +277,7 @@ services:
       - authentik-postgres-data:/var/lib/postgresql
     networks: [cp]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U authentik -d authentik"]
       interval: 5s
       timeout: 5s
       retries: 20
