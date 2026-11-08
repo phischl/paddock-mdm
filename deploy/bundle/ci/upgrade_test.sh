@@ -59,6 +59,18 @@ if out="$(lib check_upgrade "$json" 2>&1)"; then failed "a published candidate p
   [[ "$out" == *"WARN images pullable"* && "$out" == *"WARN release notes"* ]]; then pass "a published candidate names the release WARNs"; else
   failed "release WARNs: $out"
 fi
+# A published release whose notes announce manual steps passes that WARN; one without an Upgrade line does not.
+steps='{"name":"release notes","status":"WARN","detail":"Upgrade: from 0.1.0-alpha.8: steps: BAO_TOKEN for ./paddock upgrade; Agents: supports 0.1.0-alpha.9"}'
+json="$(doc "$steps" "$(item "openbao unseal path" WARN)")"
+if out="$(lib check_upgrade "$json" 2>&1)"; then pass "a published release with Upgrade steps passes"; else failed "Upgrade steps: $out"; fi
+json="$(doc '{"name":"release notes","status":"WARN","detail":"this bundle carries no Upgrade line: read the release notes of 0.1.0-alpha.9"}')"
+if out="$(lib check_upgrade "$json" 2>&1)"; then failed "a published release without an Upgrade line passes"; elif
+  [[ "$out" == *"WARN release notes"* ]]; then pass "a published release without an Upgrade line fails"; else failed "no Upgrade line: $out"; fi
+json="$(doc "$steps" "$(item "images pullable" WARN)")"
+if out="$(lib check_upgrade "$json" 2>&1)"; then failed "Upgrade steps excuse an image WARN"; elif
+  [[ "$out" == *"WARN images pullable"* && "$out" != *"WARN release notes"* ]]; then pass "Upgrade steps excuse only the notes"; else
+  failed "steps and images: $out"
+fi
 json="$(doc "$(item "versions adjacent" WARN)" "$(item "running stack healthy" WARN)" "$(item "server report" FAIL)")"
 if out="$(UPGRADE_CANDIDATE_UNRELEASED=1 lib check_upgrade "$json" 2>&1)"; then failed "a FAIL passes"; elif
   [[ "$out" == *"upgrade-check: WARN versions adjacent WARN running stack healthy FAIL server report"* ]]; then
