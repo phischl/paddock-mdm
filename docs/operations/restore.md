@@ -275,6 +275,7 @@ development stack; it destroys the development volumes it names and never touche
 | --- | --- | --- |
 | first drill (gate P-3): reference machine (`docs/operations/capacity.md`), 2026-10-09, M6-integration `058e769`, manual runbook | 75 s | 150 s |
 | alpha.9 release regression: development host (22 cores, shared with other stacks), 2026-11-07, cluster/alpha9-features `a8095211`, `make restore-drill` with `./paddock restore` | 270 s | 745 s |
+| 0.1.0-alpha.9 release regression: development host (22 cores, shared with other stacks), 2026-11-08, main `179fb36f`, `make restore-drill` with `./paddock restore` | 248 s | 653 s |
 
 The stated RTO of 4 hours covers a rebuilt host, the custodians' arrival and the copy of the set; the drill measures the
 technical part. The release regression for every release that changes the backup runs the `BACKUP=1` gate sequence and
