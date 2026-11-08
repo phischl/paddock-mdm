@@ -86,7 +86,7 @@ services:
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
       PADDOCK_IP_ALLOWLIST_BYPASS: ${PADDOCK_IP_ALLOWLIST_BYPASS:-false}
     secrets: !override
-      - valkey_password
+      - valkey_api_password
       - release_public_key
       - revoke_release_public_key
       - rustfs_artifacts_api_access_key
@@ -116,7 +116,7 @@ services:
       - db_paddock_escrow_reader_url
       - approle_escrow_reader_role_id
       - approle_escrow_reader_secret_id
-      - valkey_password
+      - valkey_escrow_reader_password
       - internal_ca_bundle
 
   paddock-revocation-issuer:
@@ -131,7 +131,7 @@ services:
       - rabbitmq_revocation_issuer_password
       - approle_revocation_issuer_role_id
       - approle_revocation_issuer_secret_id
-      - valkey_password
+      - valkey_revocation_issuer_password
       - rustfs_escrow_revocation_access_key
       - rustfs_escrow_revocation_secret_key
       - internal_ca_bundle
@@ -171,7 +171,7 @@ services:
       - db_paddock_worker_url
       - db_paddock_platform_url
       - rabbitmq_worker_password
-      - valkey_password
+      - valkey_worker_password
       - approle_worker_role_id
       - approle_worker_secret_id
       - authentik_service_token

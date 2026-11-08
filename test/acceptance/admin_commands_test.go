@@ -23,15 +23,23 @@ func runAdmin(t *testing.T, args ...string) string {
 	return out
 }
 
-// valkeyCLI runs valkey-cli in the stack's Valkey container.
-func valkeyCLI(t *testing.T, args string) string {
+// valkeyCLI runs valkey-cli in the stack's Valkey container as the ACL user user (plan M12h §14.10.2), with the
+// password of /run/secrets/valkey_<user>_password.
+func valkeyCLI(t *testing.T, user, args string) string {
 	t.Helper()
-	out, err := stack.Compose(testContext(t, time.Minute), nil, "exec", "-T", "valkey", "sh", "-c",
-		`REDISCLI_AUTH="$(cat /run/secrets/valkey_password)" valkey-cli --no-auth-warning `+args)
+	out, err := valkeyCLIResult(t, user, args)
 	if err != nil {
-		t.Fatalf("valkey-cli %s: %v", args, err)
+		t.Fatalf("valkey-cli --user %s %s: %v\n%s", user, args, err, out)
 	}
 	return strings.TrimSpace(out)
+}
+
+// valkeyCLIResult is valkeyCLI without failing the test: denied commands and failed authentication come back as
+// output and error.
+func valkeyCLIResult(t *testing.T, user, args string) (string, error) {
+	t.Helper()
+	return stack.Compose(testContext(t, time.Minute), nil, "exec", "-T", "valkey", "sh", "-c",
+		`REDISCLI_AUTH="$(cat /run/secrets/valkey_`+user+`_password)" valkey-cli --no-auth-warning --user `+user+` `+args)
 }
 
 // expectIndexEventSince waits for exactly one event of code in org that occurred at or after since.
@@ -98,14 +106,14 @@ func TestAdminCommands(t *testing.T) {
 	}
 
 	key := "dk:" + dev.KeyID
-	if got := valkeyCLI(t, "DEL "+key); got != "1" {
+	if got := valkeyCLI(t, "worker", "DEL "+key); got != "1" {
 		t.Fatalf("DEL %s = %q", key, got)
 	}
 	since = time.Now().Add(-time.Second)
 	if out := runAdmin(t, "rebuild-cache"); !strings.Contains(out, "cache rebuilt for ") {
 		t.Fatalf("rebuild-cache printed %q", out)
 	}
-	if got := valkeyCLI(t, "EXISTS "+key); got != "1" {
+	if got := valkeyCLI(t, "worker", "EXISTS "+key); got != "1" {
 		t.Fatalf("%s missing right after rebuild-cache (EXISTS = %q)", key, got)
 	}
 	expectIndexEventSince(t, idx, platformOrg, "platform.cache_rebuilt", since)

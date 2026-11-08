@@ -356,6 +356,7 @@ func LoadOpenBaoAddr(l *Loader) string {
 // Valkey is the Valkey connection of gateway, worker and compiler.
 type Valkey struct {
 	Addr     string
+	Username string // ACL user of the role (plan M12h §14.7)
 	Password string
 }
 
@@ -374,6 +375,7 @@ func LoadAuthentik(l *Loader) Authentik {
 func LoadValkey(l *Loader) Valkey {
 	return Valkey{
 		Addr:     l.Required("PADDOCK_VALKEY_ADDR"),
+		Username: l.Required("PADDOCK_VALKEY_USER"),
 		Password: l.SecretFile("PADDOCK_VALKEY_PASSWORD_FILE"),
 	}
 }

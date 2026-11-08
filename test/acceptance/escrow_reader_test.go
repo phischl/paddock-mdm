@@ -165,17 +165,11 @@ func callEscrowReader(t *testing.T, secret string, req map[string]any) (int, []b
 	return status, []byte(rest)
 }
 
-// latestStepUpToken returns the newest step-up ID token of alice that the api keeps in Valkey (stepup:<jti>).
+// latestStepUpToken returns the newest step-up ID token of alice that the api keeps in Valkey (stepup:<jti>). It
+// enumerates keys (SCAN), which only the development and CI user acceptance may (plan M12h §14.6.4).
 func latestStepUpToken(t *testing.T) string {
 	t.Helper()
-	valkey := func(args string) string {
-		out, err := stack.Compose(testContext(t, time.Minute), nil, "exec", "-T", "valkey", "sh", "-c",
-			`REDISCLI_AUTH="$(cat /run/secrets/valkey_password)" valkey-cli --no-auth-warning `+args)
-		if err != nil {
-			t.Fatalf("valkey-cli: %v", err)
-		}
-		return out
-	}
+	valkey := func(args string) string { return valkeyCLI(t, "acceptance", args) }
 	var newest string
 	var newestAt time.Time
 	for _, key := range strings.Fields(valkey(`--scan --pattern 'stepup:*'`)) {

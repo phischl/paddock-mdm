@@ -86,7 +86,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		return err
 	}
 	defer platformPool.Close()
-	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password})
+	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Username: vkCfg.Username, Password: vkCfg.Password})
 	if err != nil {
 		return err
 	}

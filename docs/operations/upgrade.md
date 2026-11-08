@@ -228,6 +228,14 @@ with `docker network rm <project>_cp` once the release is accepted.
 - `./paddock check` warns while `PADDOCK_ADMIN_ALLOWED_CIDRS` admits every address; name the office ranges
   (`docs/operations/ip-allowlist.md`).
 
+**Valkey users (ADR 0051, plan M12h §14).** Valkey has one ACL user per role instead of one shared password.
+`./paddock up` creates the seven secrets `.secrets/valkey_<user>_password` (`api`, `gateway`, `worker`, `compiler`,
+`escrow_reader`, `revocation_issuer`, `healthcheck`) before it starts the stack; there is no operator step. Valkey keeps
+its data, so administrators stay signed in. The files `.secrets/valkey_password` and `.secrets/valkey/auth.conf` are
+no longer used; keep them while a rollback to 0.1.0-alpha.9 is possible, then they may be deleted. Fleet's Redis is
+unchanged (its configuration moved to `valkey/fleet-redis.conf` with the same content). The administration commands
+`paddock-server admin …` authenticate to Valkey as `worker`.
+
 ### 0.1.0-alpha.9, from 0.1.0-alpha.8
 
 The release notes of this release carry these lines (the lines of `CHANGELOG.md` are authoritative):

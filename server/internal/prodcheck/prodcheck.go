@@ -82,6 +82,8 @@ type Service struct {
 	Secrets     []ServiceSecret    `json:"secrets"`
 	Volumes     []Volume           `json:"volumes"`
 	Command     []string           `json:"command"`
+	Entrypoint  []string           `json:"entrypoint"`
+	Tmpfs       []string           `json:"tmpfs"`
 	// ExtraHosts are rendered as "<host>=<ip>" entries.
 	ExtraHosts  []string                  `json:"extra_hosts"`
 	Networks    map[string]ServiceNetwork `json:"networks"`
@@ -227,6 +229,16 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	}
 	if _, ok := c.Services["rabbitmq"]; ok {
 		results = append(results, checkRabbitMQManagement(c))
+	}
+	_, valkey := c.Services[valkeyService]
+	if valkey {
+		results = append(results, checkValkeyACL(c), checkValkeyNoDevUser(c))
+	}
+	if valkey || usesAny(c, []string{"PADDOCK_VALKEY_ADDR"}) {
+		results = append(results, checkValkeyUsers(c))
+	}
+	if _, ok := c.Services[fleetRedisService]; ok {
+		results = append(results, checkFleetRedisConf(c))
 	}
 	if usesAny(c, []string{"PADDOCK_TRUSTED_PROXY_CIDRS"}) {
 		results = append(results, checkRoleTrustedProxies(c))
@@ -396,7 +408,7 @@ const (
 
 // autoUnsealForbiddenEnv are the variables of credentials the unsealer must not hold.
 var autoUnsealForbiddenEnv = []string{"PADDOCK_OPENBAO_ROLE_ID_FILE", "PADDOCK_OPENBAO_SECRET_ID_FILE", "PADDOCK_VALKEY_ADDR",
-	"PADDOCK_AMQP_URL"}
+	"PADDOCK_VALKEY_USER", "PADDOCK_VALKEY_PASSWORD_FILE", "PADDOCK_AMQP_URL"}
 
 // checkAutoUnseal: the unsealer and the switch PADDOCK_AUTO_UNSEAL go together, never on the audit host; only the
 // unsealer mounts the shares, and it holds no AppRole and no database URL but its own. A production control plane with

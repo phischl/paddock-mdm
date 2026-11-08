@@ -93,8 +93,10 @@ run from the repository root, switches it off after a failed run.
 ## Valkey
 
 Valkey holds caches, nonces and bundle pointers of the device control plane; it is never a source of truth
-(architecture §8.3). The password is in `.secrets/valkey_password`, e.g.
-`REDISCLI_AUTH="$(cat deploy/compose/.secrets/valkey_password)" valkey-cli -h 127.0.0.1 ping`.
+(architecture §8.3). Every role has its own ACL user; the development stack adds the user `acceptance`, which may
+read and write any key (but run no administrative command), with the password in
+`.secrets/valkey_acceptance_password`, e.g.
+`REDISCLI_AUTH="$(cat deploy/compose/.secrets/valkey_acceptance_password)" valkey-cli -h 127.0.0.1 --user acceptance --scan`.
 
 Losing Valkey's data is harmless apart from a short interruption: the worker rewrites the enrollment token and
 device key caches (`et:`, `dk:`) and restores sequence numbers (`seq:`) from PostgreSQL every 60 s, and the compiler

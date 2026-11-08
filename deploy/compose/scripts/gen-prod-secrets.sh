@@ -135,8 +135,10 @@ controlplane_secrets() {
     secret "rustfs_escrow_${role}_secret_key"
   done
   secret escrow_reader_token
-  secret valkey_password
-  secret valkey/auth.conf "requirepass $(read_secret valkey_password)"
+  # One Valkey ACL user per role (plan M12h §14.6.3); the container stores only the SHA-256 of each password.
+  for user in api gateway worker compiler escrow_reader revocation_issuer healthcheck; do
+    secret "valkey_${user}_password"
+  done
 
   for user in provisioner relay audit_writer gateway worker compiler revocation_issuer; do
     secret "rabbitmq_${user}_password"

@@ -255,7 +255,7 @@ flowchart TB
 | Role | Responsibility | Scales by | Keys it may use |
 | --- | --- | --- | --- |
 | `api` | Portal BFF (OIDC session), admin REST API, `paddockctl` API; writes configuration and commands in one DB transaction with an outbox record; imports agent releases from the configured GitHub release source after verifying them with the release public key (ADR 0043, the api's only outbound request to a third party); MCP login (device grant against Authentik) and MCP guard for MCP sessions (ADR 0044) | replicas behind proxy | none (escrow reveal is delegated to the `escrow-reader` role) |
-| `gateway` | Device endpoints: enroll, check-in, events, results, escrow upload; verifies device signatures; reads only from Valkey; writes only to RabbitMQ (and nonces to Valkey) | replicas | none |
+| `gateway` | Device endpoints: enroll, check-in, events, results, escrow upload; verifies device signatures; reads only from Valkey; writes only to RabbitMQ (and nonces to Valkey) and its own coordination keys (`seq:`, `sd:`, `enr:`, `cres:`, `diag:`, `rl:`) | replicas | none |
 | `worker` | Consumes ingest queues, materializes device status and the Valkey cache, inventory sync with Fleet, staleness evaluation, Authentik sync | competing consumers on quorum queues | `command-signing` |
 | `compiler` | Recomputes effective state on input change, renders and signs bundles | consumer replicas, partitioned by organization | `bundle-signing`, `time-ticket` |
 | `revocation-issuer` | Validates approvals, enforces rate limits, signs revocation tokens | exactly 1 active replica (leader lease) | `revocation-signing` |
@@ -866,18 +866,44 @@ except nonces can be rebuilt from PostgreSQL (`paddock-server admin rebuild-cach
 are used (strings, hashes, `SET NX EX/PX`, `MGET`, `EXPIRE`), no modules, so ElastiCache for Valkey
 is a drop-in target.
 
-| Key | Type | Written by | Read by | TTL |
-| --- | --- | --- | --- | --- |
-| `dk:<key_id>` | hash (device_id, org, status, public key) | worker | gateway | none |
-| `nonce:<device_id>:<nonce>` | string | gateway (`SET NX EX 600`) | gateway | 600 s |
-| `bp:<device_id>` | string (version, sha256, object key) | compiler | gateway | none |
-| `cmd:<device_id>` | hash command_id → signed envelope | worker, revocation-issuer | gateway | expired fields removed by a cleanup job |
-| `tt:<org>` | string (signed time ticket) | compiler | gateway | 30 min |
-| `ar:<org>` | string (rollout state) | worker | gateway | none |
-| `seq:<device_id>` | string counter | worker | gateway | none |
-| `sd:<device_id>` | string (last delivered seq) | gateway | gateway | none |
-| `et:<token_hash>` | hash (enrollment token: org, status, uses) | api (right after commit, best effort) + worker (NOTIFY/reconcile) | gateway | token expiry |
-| `lock:compile:<device_id>`, `lock:<job>` | string | compiler, scheduler | – | 30 s |
+| Key | Type | Written by | Read by | TTL | Users |
+| --- | --- | --- | --- | --- | --- |
+| `dk:<key_id>` | hash (device, org, status, public key) | worker | gateway | none | worker RW, gateway R |
+| `seq:<device_id>` | string counter | worker (restore), gateway (Lua) | gateway | none | worker RW, gateway RW |
+| `sd:<device_id>` | string (last delivered seq) | gateway, worker (Lua) | gateway | none | worker RW, gateway RW |
+| `nonce:<device_id>:<nonce>` | string | gateway (`SET NX EX`) | gateway | 600 s | gateway RW |
+| `rl:<class>:<key>:<window>` | string counter | api, gateway | api, gateway | two windows | api RW, gateway RW |
+| `bp:<device_id>` | hash (version, sha256, object key) | compiler | gateway | none | compiler RW, gateway R |
+| `tt:<org>` | string (signed time ticket) | compiler | gateway | none | compiler RW, gateway R |
+| `et:<token_hash>` | hash (enrollment token) | api (right after commit, best effort), worker (NOTIFY/reconcile) | gateway | token expiry | api RW, worker RW, gateway R |
+| `enr:<enrollment_id>` | hash (enrollment request) | gateway, worker | gateway | 7 days | worker RW, gateway RW |
+| `cmd:<device_id>` | hash command_id → signed envelope | worker, revocation-issuer; api and worker delete | gateway | expired fields removed on read | worker RW, revocation_issuer RW, api RW, gateway R |
+| `cres:<command_id>` | string (device, status) | gateway, api | gateway | 30 days | gateway RW, api RW |
+| `esc:<escrow_id>` | string (device, status) | worker | gateway | 24 h | worker RW, gateway R |
+| `diag:<command_id>` | string (claim) | gateway | gateway | 24 h | gateway RW |
+| `hb:<device_id>` | string (heartbeat claim) | worker | worker | 60 s | worker RW |
+| `au:<device_id>` | string (requested agent version) | worker | gateway | 24 h after the request | worker RW, gateway R |
+| `ar:current` | string (agent rollout offer) | worker | gateway, api | none | worker RW, gateway R, api R |
+| `stepup:<jti>` | string (raw step-up ID token) | api | api | step-up window | api RW |
+| `stepup-uses:<jti>` | string counter | escrow-reader | escrow-reader | token expiry | escrow_reader RW |
+| `revocation-jti:<jti>` | string (request) | revocation-issuer | revocation-issuer | 48 h | revocation_issuer RW |
+| `sess:<sid>` | string (session record) | api; api and worker revoke | api | session lifetime | api RW, worker RW |
+| `acct-sess:<account>` | set of sids | api; api and worker revoke | api, worker | longest session | api RW, worker RW |
+| `sess-gen` | string counter | api, `admin end-sessions` (worker) | api | none | api RW, worker RW |
+| `mcp-bind:<sha256>:<auth_time>` | string (MCP binding) | api; api and worker revoke | api | binding lifetime | api RW, worker RW |
+| `acct-mcp-bind:<account>` | set of bindings | api; api and worker revoke | api, worker | binding lifetime | api RW, worker RW |
+| `mcp-chain:<sha256>:<auth_time>` | set of sids | api; api and worker revoke | api | binding lifetime | api RW, worker RW |
+| `mcp-used:<sha256>` | string (login token marker) | api | api | token lifetime | api RW |
+| `ipal:ver` | string counter (IP allow list version) | api, `admin allowlist` (worker) | api | none | api RW, worker RW |
+
+**Users.** Valkey has one ACL user per role that opens a client — `api`, `gateway`, `worker` (also the host
+tooling `paddock-server admin …`, which runs in the worker container), `compiler`, `escrow_reader`,
+`revocation_issuer` — plus `healthcheck` for the container health check; `default` is off (ADR 0051, plan M12h §14).
+A user gets `~<pattern>` (RW) on the keys its code writes and `%R~<pattern>` (R) on the keys it only reads, and
+`-@all` plus exactly the commands its code issues, including those inside its Lua scripts; no user holds `~*`, a
+command category, or an administrative command. The entrypoint renders the ACL file from
+`deploy/compose/valkey/users.acl.tmpl` with the SHA-256 of each role's secret `valkey_<user>_password`, so no plaintext
+password is stored. The development and CI stack adds the user `acceptance` for the acceptance helpers.
 
 Deployment: one primary + one replica with Sentinel in production; AOF `everysec`. Loss of Valkey
 stops check-ins until it is back and rebuilt (devices keep working, C2); loss of nonces only reopens

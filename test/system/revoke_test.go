@@ -228,7 +228,8 @@ func TestRevocationRefusalGates(t *testing.T) {
 			field, _ := json.Marshal(map[string]any{"expires_at": time.Now().Add(time.Hour).UTC(), "envelope": json.RawMessage(env)})
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			script := fmt.Sprintf(`REDISCLI_AUTH="$(cat /run/secrets/valkey_password)" valkey-cli --no-auth-warning HSET cmd:%s %s '%s'`,
+			// As the worker, which writes cmd:<device_id> (plan M12h §14.10.2).
+			script := fmt.Sprintf(`REDISCLI_AUTH="$(cat /run/secrets/valkey_worker_password)" valkey-cli --no-auth-warning --user worker HSET cmd:%s %s '%s'`,
 				d.ID, uuid.NewString(), string(field))
 			if out, err := portal.Compose(ctx, "exec", "-T", "valkey", "sh", "-c", script); err != nil {
 				t.Fatalf("valkey: %v %s", err, out)
