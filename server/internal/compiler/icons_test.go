@@ -159,3 +159,42 @@ func TestSoftwareIconsOlderAgent(t *testing.T) {
 		t.Fatalf("pointer icons %+v", p.Icons)
 	}
 }
+
+// TestSoftwareIconsUploadedOnce: a content-addressed icon is uploaded once; later bundles that name it, also from a
+// restarted compiler, do not upload it again.
+func TestSoftwareIconsUploadedOnce(t *testing.T) {
+	w := newWorld(t)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.assign(nano, nil, "available", "latest", nil)
+	icon := iconPNG(t, 32)
+	w.setIcon(nano, icon)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	key := compiler.IconObjectKey(w.org, hexSHA256(icon))
+	if n := w.store.putCount(key); n != 1 {
+		t.Fatalf("first publish uploaded the icon %d times", n)
+	}
+
+	for i, name := range []string{"htop", "vim"} {
+		if i == 1 {
+			w.restart(func(*compiler.Config) {})
+		}
+		before := w.version(d)
+		e := w.entry(name, nil, [4]string{"ubuntu", "*", "*", name})
+		w.assign(e, nil, "available", "latest", nil)
+		w.mustCompile(statechange.ScopeOrg, w.org)
+		if w.version(d) == before {
+			t.Fatalf("adding %s did not publish a new bundle", name)
+		}
+		if p := pkgOf(w.fetch(d).Software, "nano"); p == nil || p.IconSHA256 != hexSHA256(icon) {
+			t.Fatalf("package nano after adding %s: %+v", name, p)
+		}
+		if n := w.store.putCount(key); n != 1 {
+			t.Fatalf("after adding %s the icon was uploaded %d times", name, n)
+		}
+	}
+	if data, _ := w.object(key); !bytes.Equal(data, icon) {
+		t.Fatal("icon object lost")
+	}
+}

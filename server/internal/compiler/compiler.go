@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,6 +62,8 @@ type Signer interface {
 // Store uploads bundle objects (objectstore.Store).
 type Store interface {
 	Put(ctx context.Context, key, contentType, cacheControl string, body []byte) error
+	// Size tells whether an object exists; the compiler only checks content-addressed catalog icons with it.
+	Size(ctx context.Context, key string) (size int64, found bool, err error)
 }
 
 // Config is the configuration of the schema v2 content (plan M3a decisions 15 and 16).
@@ -103,12 +106,15 @@ type Compiler struct {
 	// keysDigest is the digest of the keys object and the revocation section the last complete reconcile saw (owned
 	// by RunReconcile).
 	keysDigest [32]byte
+	// iconsMu guards iconsStored, the object keys of the catalog icons this process knows are in the bucket.
+	iconsMu     sync.Mutex
+	iconsStored map[string]bool
 }
 
 // New creates a compiler.
 func New(pool *db.OrgPool, signer Signer, store Store, cache *devicecache.Cache, cfg Config) *Compiler {
 	cfg.AuthentikURL = strings.TrimRight(cfg.AuthentikURL, "/")
-	return &Compiler{pool: pool, signer: signer, store: store, cache: cache, cfg: cfg, now: time.Now}
+	return &Compiler{pool: pool, signer: signer, store: store, cache: cache, cfg: cfg, now: time.Now, iconsStored: map[string]bool{}}
 }
 
 // ObjectKey is the object of a bundle version (architecture §7.1).
@@ -623,14 +629,32 @@ func (c *Compiler) uploadIcons(ctx context.Context, org uuid.UUID, todo []render
 			if _, ok := done[ic.sha256]; ok {
 				continue
 			}
-			err := c.store.Put(ctx, IconObjectKey(org, ic.sha256), "image/png", "private, max-age=86400", ic.data)
-			if err != nil {
-				err = fmt.Errorf("upload catalog icon %s: %w", ic.sha256, err)
-			}
-			done[ic.sha256] = err
+			done[ic.sha256] = c.uploadIcon(ctx, IconObjectKey(org, ic.sha256), ic)
 		}
 	}
 	return done
+}
+
+// uploadIcon puts an icon unless its object exists: the key is content-addressed, so an existing object already holds
+// these bytes and every publish would otherwise upload every icon again.
+func (c *Compiler) uploadIcon(ctx context.Context, key string, ic catalogIcon) error {
+	c.iconsMu.Lock()
+	stored := c.iconsStored[key]
+	c.iconsMu.Unlock()
+	if stored {
+		return nil
+	}
+	_, found, err := c.store.Size(ctx, key)
+	if err == nil && !found {
+		err = c.store.Put(ctx, key, "image/png", "private, max-age=86400", ic.data)
+	}
+	if err != nil {
+		return fmt.Errorf("upload catalog icon %s: %w", ic.sha256, err)
+	}
+	c.iconsMu.Lock()
+	c.iconsStored[key] = true
+	c.iconsMu.Unlock()
+	return nil
 }
 
 // commit records and uploads one bundle and updates its pointer.
