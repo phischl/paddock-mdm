@@ -85,3 +85,14 @@ signature from the source's `Signed-By` keyring; apt reads credentials from `/et
   per-organization read credential (RR-115).
 - Follow-ups: per-device credentials or signed URLs in a later release; the platform-shared catalog (M13c) may
   reference platform-stored packages through the same repository shape under `apt/platform/`.
+
+## Amendment 2026-11-09 (PDK-812) — two Transit keys; signing columns nullable until the first build
+
+Decision 3 has the worker generate the signing key on first use, but the repository row is created earlier by the
+api with the access credential (decision 4). The row's signing columns are therefore nullable with a completeness
+constraint (all set or all `NULL`); the system `paddock` source exists only once the key does. The credential of
+decision 4 is wrapped with its own derived Transit key `software-repo-credential` (api encrypts, compiler
+decrypts), not with `software-repo-wrap`, so the compiler — which must decrypt the credential for every bundle —
+never gains the ability to decrypt a signing private key; `software-repo-wrap` stays worker-only. Consequence:
+two Transit keys instead of one (the "one more Transit key" above becomes two); the policies are per key and
+per role, and no role decrypts both. Plan M13c §3.4 decision 11 is edited accordingly (amendment 2026-11-09).

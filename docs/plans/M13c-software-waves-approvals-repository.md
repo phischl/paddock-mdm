@@ -138,10 +138,15 @@ catalog that organizations copy from; and everything about software is part of t
     ```sql
     CREATE TABLE software_repository (
       organization_id uuid PRIMARY KEY REFERENCES organization(id),
-      signing_public_key text NOT NULL, signing_fingerprint text NOT NULL CHECK (signing_fingerprint ~ '^[0-9A-F]{40}$'),
-      signing_private_ciphertext text NOT NULL,       -- transit software-repo-wrap (worker decrypts)
+      -- amendment 2026-11-09 (PDK-812): the three signing columns are nullable until the worker generates the key
+      -- (ADR 0050 decision 3, PDK-813); all three are NULL or all three are set
+      signing_public_key text, signing_fingerprint text CHECK (signing_fingerprint IS NULL OR signing_fingerprint ~ '^[0-9A-F]{40}$'),
+      signing_private_ciphertext text,                -- transit software-repo-wrap (worker decrypts; nothing else)
+      CONSTRAINT software_repository_signing_key_complete CHECK (
+        (signing_public_key IS NULL) = (signing_fingerprint IS NULL)
+        AND (signing_public_key IS NULL) = (signing_private_ciphertext IS NULL)),
       previous_public_key text, previous_fingerprint text, previous_retired_at timestamptz,
-      credential_ciphertext text NOT NULL,            -- transit software-repo-wrap: the basic-auth secret
+      credential_ciphertext text NOT NULL,            -- transit software-repo-credential (api encrypts, compiler decrypts)
       credential_sha256 bytea NOT NULL,               -- the api checks requests against it
       generation bigint NOT NULL DEFAULT 0, rebuild_requested_at timestamptz, last_built_at timestamptz, last_error text,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
@@ -851,3 +856,30 @@ difference only in those rows.
   ticket, with a test that an unchanged device inside the wave gets a tagged bundle and one outside the wave does not.
 - **PDK-944** dates staged software applies and failures by `device_software_status.reported_at` (§2 "recent").
 - **PDK-937** (other pending software reasons) is unchanged by this table: only `outside_window` is WW.
+
+## Amendment 2026-11-09 (architect, PDK-812): nullable signing columns, separate Transit key for the repository credential
+
+Raised by the PDK-812 implementer; decided by the architect on 2026-11-09. Both change §3.4 decision 11 (migration
+`00112_software_repository.sql`, edited in place above) and are recorded in ADR 0050 (amendment 2026-11-09).
+
+1. **Signing columns nullable.** ADR 0050 decision 3 has the **worker** generate the organization's OpenPGP key on
+   first use (PDK-813), while PDK-812 creates the `software_repository` row with the credential from the api
+   (upload, `GET`, `rotate-credential`). `NOT NULL` on `signing_public_key`, `signing_fingerprint` and
+   `signing_private_ciphertext` was therefore unsatisfiable. They are nullable, the fingerprint `CHECK` applies when
+   set, and the constraint `software_repository_signing_key_complete` keeps the three together (all `NULL` or all
+   set). The system-managed `paddock` `software_source` row is created and rendered only once the key exists
+   (PDK-813); until then the api reports the repository without a signing key and renders no source — never a
+   source without a keyring.
+2. **Transit key `software-repo-credential`.** The compiler decrypts the basic-auth credential to render
+   `software.repository.auth` into bundles. Under one key `software-repo-wrap` it would also hold the power to
+   decrypt every organization's signing private key. Two keys, least privilege:
+   - `software-repo-wrap` (exists per ADR 0050): signing private keys; worker AppRole `decrypt` (and `encrypt`
+     for `rotate-key`); no other role.
+   - `software-repo-credential` (new; aes256-gcm96, derived, context = organization id, created by PDK-812 in
+     `deploy/compose/scripts/openbao-configure.sh`): the repository credential; api AppRole `encrypt` only (the
+     api verifies requests against `credential_sha256` and never decrypts), compiler AppRole `decrypt` only;
+     `rotate-credential` re-encrypts under this key. No AppRole holds `decrypt` on both keys.
+   - Tests: the OpenBao policy tests get a negative case per role (api `decrypt` on either key → 403; compiler
+     `decrypt` on `software-repo-wrap` → 403; worker on `software-repo-credential` → 403) where the policy test
+     pattern exists; otherwise the implementer records the gap in the result document and the reviewer checks
+     the rendered policies by hand.
