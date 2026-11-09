@@ -101,6 +101,26 @@ func TestDeclarativeSoftwareRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDeclarativeSoftwareEntryUpdateFailureIsReported: a failing update of a catalog entry fails the apply and changes
+// nothing. A category with trailing blanks passes validation (it is trimmed for the length check) but exceeds the
+// column's limit as stored, so the UPDATE itself is refused.
+func TestDeclarativeSoftwareEntryUpdateFailureIsReported(t *testing.T) {
+	h := newConfigHarness(t)
+	ctx := principal.With(context.Background(), h.account(t, principal.RoleOrgAdmin, true))
+	doc := softwareConfig(t)
+	if _, _, err := h.config.Apply(ctx, raw(t, doc), ""); err != nil {
+		t.Fatal(err)
+	}
+	(*doc.SoftwareCatalog)[0].Category = strings.Repeat("c", software.MaxCategoryLength) + " "
+	if _, _, err := h.config.Apply(ctx, raw(t, doc), ""); err == nil || !strings.Contains(err.Error(), "category") {
+		t.Fatalf("apply with a refused entry update = %v, want the update's own constraint error", err)
+	}
+	got := h.export(t, h.account(t, principal.RoleOrgAdmin, false))
+	if c := (*got.SoftwareCatalog)[0].Category; c != "web" {
+		t.Fatalf("category after the refused update = %q", c)
+	}
+}
+
 // TestDeclarativeSoftwareSourceStepUp (plan M13c decision 2, ADR 0034 decision 3): a plan with a source change needs
 // an organization administrator with a fresh step-up for the whole apply. An API token's apply is refused and applies
 // nothing, its dry run names the section; without a source change the token applies.

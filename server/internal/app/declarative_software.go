@@ -238,8 +238,8 @@ func (ex *configExec) softwareEntry(ctx context.Context, c declarative.Change) e
 		if _, err := ex.q.GetSoftwareCatalogEntryForUpdate(ctx, id); err != nil {
 			return notFound(err)
 		}
-		intents, err := ex.q.ListSoftwareAssignmentIntentsOfEntry(ctx, id)
-		if err != nil {
+		var intents []string
+		if intents, err = ex.q.ListSoftwareAssignmentIntentsOfEntry(ctx, id); err != nil {
 			return err
 		}
 		for _, intent := range intents {
