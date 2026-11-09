@@ -1188,6 +1188,8 @@ type SoftwareRepository struct {
 	LastError                   *string
 	CreatedAt                   time.Time
 	UpdatedAt                   time.Time
+	KeyRotationRequestedAt      *time.Time
+	PreviousPrivateCiphertext   *string
 }
 
 type SoftwareRequest struct {

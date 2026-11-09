@@ -4,8 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -15,8 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/openpgpkey"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
@@ -24,9 +27,6 @@ import (
 const (
 	softwarePackages   = "/api/v1/software-packages"
 	softwareRepository = "/api/v1/software-repository"
-	// gateFakeSigningKey marks a signing key this gate set itself because no worker generated one (PDK-813 not yet
-	// deployed); the gate removes it again.
-	gateFakeSigningKey = "acceptance-gate-fake-key"
 )
 
 // gateDeb builds a binary package with a gzip control archive; controlName replaces control.tar.gz.
@@ -115,11 +115,23 @@ func aptGet(t *testing.T, hc *http.Client, url, secret string) aptAnswer {
 }
 
 type gateRepository struct {
-	State       string  `json:"state"`
-	URL         string  `json:"url"`
-	Fingerprint *string `json:"fingerprint"`
-	Generation  int64   `json:"generation"`
-	Source      any     `json:"source"`
+	State               string  `json:"state"`
+	URL                 string  `json:"url"`
+	Fingerprint         *string `json:"fingerprint"`
+	PreviousFingerprint *string `json:"previous_fingerprint"`
+	Generation          int64   `json:"generation"`
+	Source              any     `json:"source"`
+}
+
+// sourceID is the ID of the repository's system source.
+func (r gateRepository) sourceID(t *testing.T) string {
+	t.Helper()
+	src, _ := r.Source.(map[string]any)
+	id, _ := src["id"].(string)
+	if id == "" {
+		t.Fatalf("repository without a system source: %+v", r)
+	}
+	return id
 }
 
 func getRepository(t *testing.T, p *env.Portal) gateRepository {
@@ -172,7 +184,7 @@ func TestSoftwarePackages(t *testing.T) {
 		if resp := aptGet(t, hc, repo.URL+"dists/paddock/InRelease", cred.Secret); resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("InRelease without a signing key: HTTP %d, want 404", resp.StatusCode)
 		}
-		repo = awaitSigningKey(t, alice, org)
+		repo = awaitSigningKey(t, alice)
 	}
 
 	t.Run("upload", func(t *testing.T) {
@@ -255,6 +267,110 @@ func TestSoftwarePackages(t *testing.T) {
 				t.Fatalf("unknown path: HTTP %d", resp.StatusCode)
 			}
 		})
+
+		// PDK-813 (plan M13c decision 13, §3.8 L5; ADR 0050 decision 3): the upload is published within a round, signed
+		// with the key of the system source; a key rotation re-signs before the devices receive the new key, so a device
+		// whose bundle carries the new keyring finds InRelease signed with it and its keyring matches its fingerprint
+		// (never software.apply_failed fingerprint_mismatch); the old key stays as previous_fingerprint and signs InRelease
+		// too for 30 days, so a device that has not received the new key yet keeps verifying it.
+		t.Run("signing key rotation", func(t *testing.T) {
+			s.stepUp(t)
+			res := call(t, admin.Portal, http.MethodPost, softwareRepository+"/rotate-credential", nil)
+			expectStatus(t, res, http.StatusOK, "")
+			var cred struct{ Secret string }
+			if err := res.JSON(&cred); err != nil {
+				t.Fatal(err)
+			}
+			awaitRepository(t, alice, func(r gateRepository) bool { return r.State == "built" })
+			list := string(aptFetch(t, hc, repo.URL+"dists/paddock/main/binary-amd64/Packages", cred.Secret))
+			if !strings.Contains(list, "Package: "+pkg+"\n") || !strings.Contains(list, "SHA256: "+stored.Sha256+"\n") ||
+				!strings.Contains(list, "Filename: "+stored.Filename+"\n") {
+				t.Fatalf("the uploaded package is not in the published list:\n%s", list)
+			}
+			sourceKey := func(fingerprint string) string {
+				t.Helper()
+				res := call(t, alice, http.MethodGet, softwareSources+"/"+getRepository(t, alice).sourceID(t), nil)
+				expectStatus(t, res, http.StatusOK, "")
+				var got struct {
+					Kind        string `json:"kind"`
+					SigningKey  string `json:"signing_key"`
+					Fingerprint string `json:"fingerprint"`
+				}
+				if err := res.JSON(&got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Kind != "paddock" || got.Fingerprint != fingerprint {
+					t.Fatalf("system source %s %s, want paddock %s", got.Kind, got.Fingerprint, fingerprint)
+				}
+				return got.SigningKey
+			}
+			before := getRepository(t, alice)
+			oldKey := sourceKey(*before.Fingerprint)
+			if err := verifyInRelease(t, aptFetch(t, hc, repo.URL+"dists/paddock/InRelease", cred.Secret), oldKey); err != nil {
+				t.Fatalf("InRelease does not verify with the source's key: %v", err)
+			}
+
+			// The device that receives the new bundle: its software section names the system source.
+			group := namedGroup(t, alice, "sw-repo-key")
+			d := activeDevice(t, alice, group, "sw-repo-key-"+uniqueSuffix())
+			d.SchemaVersions = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
+			entry := gateEntry(t, admin.Portal, before.sourceID(t), packageRef("ubuntu", "*", pkg))
+			res = call(t, admin.Portal, http.MethodPost, softwareAssignments, map[string]any{
+				"catalog_entry_id": entry, "device_group_id": group, "intent": "required",
+			})
+			expectStatus(t, res, http.StatusCreated, "")
+			deleteOnCleanup(t, admin.Portal, softwareAssignments+"/"+responseID(t, res).String())
+			paddockSource := func(b *bundle.Bundle) *bundle.SoftwareSource {
+				if b.Software == nil {
+					return nil
+				}
+				for i, src := range b.Software.Sources {
+					if src.Slug == "paddock" {
+						return &b.Software.Sources[i]
+					}
+				}
+				return nil
+			}
+			latestBundle(t, d, 2*time.Minute, func(b *bundle.Bundle) bool {
+				src := paddockSource(b)
+				return src != nil && src.Fingerprint == *before.Fingerprint
+			})
+
+			expectRefusal(t, alice, call(t, withoutStepUp(t, admin), http.MethodPost, softwareRepository+"/rotate-key", nil),
+				http.StatusForbidden, "step_up_required", "software_repository.key_rotated")
+			s.stepUp(t)
+			res = call(t, admin.Portal, http.MethodPost, softwareRepository+"/rotate-key", nil)
+			expectStatus(t, res, http.StatusAccepted, "")
+			if ev := expectOneEvent(t, alice, res.RequestID, "software_repository.key_rotated", "success"); ev.Params["previous_fingerprint"] != *before.Fingerprint {
+				t.Fatalf("key_rotated params %v", ev.Params)
+			}
+			after := awaitRepository(t, alice, func(r gateRepository) bool {
+				return r.Fingerprint != nil && *r.Fingerprint != *before.Fingerprint && r.State == "built"
+			})
+			if after.PreviousFingerprint == nil || *after.PreviousFingerprint != *before.Fingerprint {
+				t.Fatalf("previous_fingerprint %v, want %s", after.PreviousFingerprint, *before.Fingerprint)
+			}
+			newKey := sourceKey(*after.Fingerprint)
+			b := latestBundle(t, d, 2*time.Minute, func(b *bundle.Bundle) bool {
+				src := paddockSource(b)
+				return src != nil && src.Fingerprint == *after.Fingerprint
+			})
+			keyring, err := base64.StdEncoding.DecodeString(paddockSource(b).Keyring)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fp, err := openpgpkey.FingerprintBinary(keyring); err != nil || fp != *after.Fingerprint {
+				t.Fatalf("the bundle's keyring has the fingerprint %s (%v), want %s: the agent would report fingerprint_mismatch",
+					fp, err, *after.Fingerprint)
+			}
+			inRelease := aptFetch(t, hc, repo.URL+"dists/paddock/InRelease", cred.Secret)
+			if err := verifyInRelease(t, inRelease, newKey); err != nil {
+				t.Fatalf("a device with the new bundle cannot verify InRelease: %v", err)
+			}
+			if err := verifyInRelease(t, inRelease, oldKey); err != nil {
+				t.Fatalf("during the 30-day overlap a device that still has the old key cannot verify InRelease: %v", err)
+			}
+		})
 	})
 
 	t.Run("rate limit per address", func(t *testing.T) {
@@ -276,43 +392,62 @@ func TestSoftwarePackages(t *testing.T) {
 	})
 }
 
-// awaitSigningKey waits for the worker to generate the repository's signing key (PDK-813). Without that worker the
-// gate sets a placeholder key, which it removes again, so that the upload and access cases still run.
-func awaitSigningKey(t *testing.T, p *env.Portal, org fmt.Stringer) gateRepository {
+// awaitSigningKey waits for the worker to generate the repository's signing key and publish the first build (PDK-813).
+func awaitSigningKey(t *testing.T, p *env.Portal) gateRepository {
 	t.Helper()
-	deadline := time.Now().Add(90 * time.Second)
-	for time.Now().Before(deadline) {
-		if r := getRepository(t, p); r.Fingerprint != nil {
+	return awaitRepository(t, p, func(r gateRepository) bool { return r.Fingerprint != nil && r.Generation > 0 })
+}
+
+// awaitRepository polls the repository until cond holds; the worker's round runs every 60 s.
+func awaitRepository(t *testing.T, p *env.Portal, cond func(gateRepository) bool) gateRepository {
+	t.Helper()
+	deadline := time.Now().Add(150 * time.Second)
+	for {
+		r := getRepository(t, p)
+		if cond(r) {
 			return r
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("repository %+v: the worker did not build in time", r)
 		}
 		time.Sleep(3 * time.Second)
 	}
-	dsn, err := stack.PaddockOwnerDSN()
+}
+
+// aptFetch reads a repository file as apt does: basic auth on the bundles host, then the presigned redirect.
+func aptFetch(t *testing.T, hc *http.Client, url, secret string) []byte {
+	t.Helper()
+	resp := aptGet(t, hc, url, secret)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("GET %s: HTTP %d, want 302", url, resp.StatusCode)
+	}
+	req, err := http.NewRequestWithContext(testContext(t, time.Minute), http.MethodGet, resp.Header.Get("Location"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn, err := pgx.Connect(testContext(t, time.Minute), dsn)
+	got, err := hc.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = conn.Close(context.Background()) }()
-	if _, err := conn.Exec(testContext(t, time.Minute), `UPDATE software_repository SET signing_public_key = $2,
-		signing_fingerprint = $3, signing_private_ciphertext = $2 WHERE organization_id = $1 AND signing_fingerprint IS NULL`,
-		org.String(), gateFakeSigningKey, strings.Repeat("0A", 20)); err != nil {
+	defer func() { _ = got.Body.Close() }()
+	body, err := io.ReadAll(got.Body)
+	if err != nil || got.StatusCode != http.StatusOK {
+		t.Fatalf("presigned GET of %s: HTTP %d (%v)", url, got.StatusCode, err)
+	}
+	return body
+}
+
+// verifyInRelease checks the clearsigned InRelease with the ASCII-armored public key, as apt does with Signed-By.
+func verifyInRelease(t *testing.T, inRelease []byte, publicKey string) error {
+	t.Helper()
+	keyring, err := openpgp.ReadArmoredKeyRing(strings.NewReader(publicKey))
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		conn, err := pgx.Connect(context.Background(), dsn)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		defer func() { _ = conn.Close(context.Background()) }()
-		if _, err := conn.Exec(context.Background(), `UPDATE software_repository SET signing_public_key = NULL,
-			signing_fingerprint = NULL, signing_private_ciphertext = NULL WHERE organization_id = $1 AND signing_private_ciphertext = $2`,
-			org.String(), gateFakeSigningKey); err != nil {
-			t.Error(err)
-		}
-	})
-	return getRepository(t, p)
+	block, _ := clearsign.Decode(inRelease)
+	if block == nil {
+		t.Fatalf("InRelease is not clearsigned:\n%s", inRelease)
+	}
+	_, err = block.VerifySignature(keyring, nil)
+	return err
 }

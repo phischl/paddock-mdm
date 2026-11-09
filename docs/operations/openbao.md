@@ -13,7 +13,8 @@ OpenBao holds Paddock's keys (ADR 0006):
 | `transit/keys/notification-wrap` | AES-256-GCM key (non-exportable, derived: every ciphertext is bound to `<organization ID>:<field>` as context) that encrypts the webhook URL (it may carry the credential) and the signing secret of notification destinations (ADR 0031 decision 11 and amendment 2026-10-31) | encrypt: `api` (AppRole `paddock-api`, `transit/encrypt/notification-wrap` only); decrypt: the `notifier` role only (AppRole `paddock-notifier`) |
 | `transit/keys/backup-wrap` | AES-256-GCM key (non-exportable, no plaintext backup) that encrypts the backup key and the credentials of backup targets (ADR 0046) | encrypt: `api` (policy `paddock-api`, `transit/encrypt/backup-wrap`); decrypt: the backup role only (AppRole `paddock-backup`, `transit/decrypt/backup-wrap`; the same AppRole may read Raft snapshots) |
 | `transit/keys/notification-pseudonym` | AES-256-GCM key (non-exportable, derived like `notification-wrap`) that wraps the per-organization pseudonym keys: data keys whose plaintext the api never sees (ADR 0031 decision 8 and amendment 2026-10-31) | wrapped data keys: `api` (`transit/datakey/wrapped/notification-pseudonym` only); decrypt: the `notifier` role only. A notification key created without derivation cannot be converted: the configuration stops with the commands to delete and re-create it, which is safe only before any destination exists |
-| `transit/keys/software-repo-credential` | AES-256-GCM key (non-exportable, derived like `notification-wrap`) that encrypts the read credential of each organization's Paddock repository (ADR 0050 decision 4, plan M13c amendment 2026-11-09 (PDK-812)) | encrypt: `api` (`transit/encrypt/software-repo-credential` only; it checks apt's requests against the credential's SHA-256); decrypt: the `compiler` only (AppRole `paddock-compiler`), which renders the credential into the bundles. No role holds it together with the repositories' signing-key wrap (PDK-813) |
+| `transit/keys/software-repo-credential` | AES-256-GCM key (non-exportable, derived like `notification-wrap`) that encrypts the read credential of each organization's Paddock repository (ADR 0050 decision 4, plan M13c amendment 2026-11-09 (PDK-812)) | encrypt: `api` (`transit/encrypt/software-repo-credential` only; it checks apt's requests against the credential's SHA-256); decrypt: the `compiler` only (AppRole `paddock-compiler`), which renders the credential into the bundles. No role holds it together with `software-repo-wrap` |
+| `transit/keys/software-repo-wrap` | AES-256-GCM key (non-exportable, derived per organization) that encrypts the private OpenPGP signing key of each organization's Paddock repository (ADR 0050 decision 3, PDK-813) | the `worker` only (AppRole `paddock-worker`: `transit/encrypt/software-repo-wrap` when it generates a key, `transit/decrypt/software-repo-wrap` for each build); no other role |
 | `secret/paddock/session` (KV v2) | AES-256 keys `current` / `previous` of the portal session cookie | `api` (AppRole `paddock-api`) |
 
 Storage is the integrated Raft backend on the `openbao-data` volume (`deploy/compose/openbao/config.hcl`).
@@ -55,14 +56,15 @@ read -rs BAO_TOKEN && export BAO_TOKEN   # the decrypted root token, typed witho
 
 It enables `transit`, `secret` (kv-v2) and `approle`, creates the transit keys `audit-chain`, `bundle-signing`,
 `command-signing`, `revocation-signing`, `time-ticket` (Ed25519), `escrow-wrap` (RSA-4096), `notification-wrap`,
-`notification-pseudonym` and `software-repo-credential` (AES-256-GCM, derived), `backup-wrap` (AES-256-GCM, not exportable, no plaintext backup; the
+`notification-pseudonym`, `software-repo-credential` and `software-repo-wrap` (AES-256-GCM, derived), `backup-wrap` (AES-256-GCM, not exportable, no plaintext backup; the
 backup encryption key and the backup targets' credentials, ADR 0046), the KV secret `secret/paddock/session`, the eight
 policies and AppRoles of `deploy/compose/scripts/openbao-configure.sh` (the same as in development: each role reads or
 signs only with its own keys; `paddock-revocation-issuer` is the only role that signs revocations, `paddock-backup` may
 only read Raft snapshots and decrypt with `backup-wrap` (`transit/decrypt/backup-wrap`), with which `paddock-api` may
 only encrypt (`transit/encrypt/backup-wrap`), `paddock-notifier` may only decrypt with the two notification keys, with
 which `paddock-api` may only encrypt and obtain wrapped data keys, `paddock-compiler` may only decrypt with
-`software-repo-credential`, with which `paddock-api` may only encrypt), and writes each AppRole's role ID and secret ID to `.secrets/approle/<role>/`.
+`software-repo-credential`, with which `paddock-api` may only encrypt, and `paddock-worker` alone encrypts and decrypts
+with `software-repo-wrap`), and writes each AppRole's role ID and secret ID to `.secrets/approle/<role>/`.
 It is idempotent: a stored secret ID is kept. The roles read them as files referenced by
 `PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`: `paddock-escrow-reader` reaches the escrow-reader
 and never the api, `paddock-revocation-issuer` the revocation-issuer and no other role, `paddock-backup` the backup role (`paddock-backup`, `docs/operations/backup.md`),
@@ -91,6 +93,7 @@ the stored shares.
 | --- | --- |
 | Portal login and sessions | `api` cannot load the session keys after its own restart; it stays not ready (`/readyz` 503) until OpenBao is unsealed: the sign-in page shows *The server's key store is sealed* until OpenBao is unsealed; `./paddock up` names the reason in its timeout line. A running `api` keeps the keys it loaded and keeps working; key reloads (every 10 min) fail and are logged. |
 | Bundles and commands | The compiler cannot sign new bundles and the worker cannot sign new commands; devices keep their last bundle and receive commands once OpenBao is unsealed (commands that expired meanwhile are never delivered). |
+| Paddock repositories | The worker cannot sign a new build or generate a signing key: builds fail with `last_error` (`software_repository.build_failed`) and are retried every minute; devices keep reading the last published build. |
 | Daily audit seal | The sealer cannot sign; the 00:15 UTC run fails (`paddock_audit_seal_total{result="error"}`) and catches up on the next successful run, because it seals every unsealed day up to yesterday. |
 | Audit event ingestion | Continues: the audit writer needs OpenBao only for signing and readiness. Events wait in RabbitMQ if the writer is restarted while OpenBao is sealed (it reports not ready but keeps consuming once running). |
 | Everything else | Unaffected. |

@@ -2215,6 +2215,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/software-repository/rotate-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Replaces the repository's OpenPGP signing key (ADR 0050 decision 3). The worker generates the
+         *     new key at its next round (within a minute), signs the repository with it and only then gives it to the devices
+         *     with their next bundle, so a device that received the new key always finds the repository signed with it; a
+         *     device that is offline meanwhile receives the new key before its next update. For 30 days the repository is
+         *     signed with the previous key (previous_fingerprint) as well, so a device that has not received the new key yet
+         *     keeps updating; then it is signed with the new key alone. The answer is the repository with key_rotation_requested_at set; fingerprint
+         *     changes once the worker has published. 409 repository_not_ready while the first key is being generated. Needs a
+         *     step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["rotateSoftwareRepositoryKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/software-catalog": {
         parameters: {
             query?: never;
@@ -7007,6 +7033,11 @@ export interface components {
             fingerprint: string | null;
             /** @description The previous signing key's fingerprint for 30 days after a key rotation. */
             previous_fingerprint: string | null;
+            /**
+             * Format: date-time
+             * @description Set while a key rotation waits for the worker.
+             */
+            key_rotation_requested_at: string | null;
             /**
              * Format: int64
              * @description The number of published builds.
@@ -13623,6 +13654,31 @@ export interface operations {
             };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    rotateSoftwareRepositoryKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rotation is queued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRepository"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     listSoftwareCatalog: {

@@ -643,6 +643,11 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/software-repository/rotate-credential": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return softwareRepository + "/rotate-credential", nil
 	}},
+	// The rotation needs the organization's first signing key, which the worker generates (PDK-813).
+	"POST /api/v1/software-repository/rotate-key": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		awaitSigningKey(t, w.alice)
+		return softwareRepository + "/rotate-key", nil
+	}},
 	"GET /api/v1/software-catalog": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return softwareCatalog + "?page_size=100", nil
 	}},

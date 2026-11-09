@@ -59,6 +59,25 @@ func (q *Queries) DeleteSoftwarePackage(ctx context.Context, id uuid.UUID) (int6
 	return result.RowsAffected(), nil
 }
 
+const expireSoftwareRepositoryPreviousKey = `-- name: ExpireSoftwareRepositoryPreviousKey :exec
+UPDATE software_repository SET previous_public_key = NULL, previous_fingerprint = NULL, previous_retired_at = NULL,
+  previous_private_ciphertext = NULL, rebuild_requested_at = now(), updated_at = now()
+WHERE organization_id = $1 AND previous_retired_at < $2
+`
+
+type ExpireSoftwareRepositoryPreviousKeyParams struct {
+	OrganizationID uuid.UUID
+	RetiredBefore  *time.Time
+}
+
+// The previous signing key signs the index alongside the current one until @retired_before (30 days after its
+// successor was first published, ADR 0050 decision 3, §3.8 L5; NULL while it is not, so it never expires then); dropping it queues a rebuild, so the index is then signed by the current key
+// alone.
+func (q *Queries) ExpireSoftwareRepositoryPreviousKey(ctx context.Context, arg ExpireSoftwareRepositoryPreviousKeyParams) error {
+	_, err := q.db.Exec(ctx, expireSoftwareRepositoryPreviousKey, arg.OrganizationID, arg.RetiredBefore)
+	return err
+}
+
 const getPaddockSoftwareSource = `-- name: GetPaddockSoftwareSource :one
 SELECT id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at, kind FROM software_source WHERE kind = 'paddock'
 `
@@ -111,7 +130,7 @@ func (q *Queries) GetSoftwarePackage(ctx context.Context, id uuid.UUID) (Softwar
 }
 
 const getSoftwareRepository = `-- name: GetSoftwareRepository :one
-SELECT organization_id, signing_public_key, signing_fingerprint, signing_private_ciphertext, previous_public_key, previous_fingerprint, previous_retired_at, credential_ciphertext, credential_sha256, previous_credential_sha256, previous_credential_expires_at, credential_rotated_at, generation, rebuild_requested_at, last_built_at, last_error, created_at, updated_at FROM software_repository LIMIT 1
+SELECT organization_id, signing_public_key, signing_fingerprint, signing_private_ciphertext, previous_public_key, previous_fingerprint, previous_retired_at, credential_ciphertext, credential_sha256, previous_credential_sha256, previous_credential_expires_at, credential_rotated_at, generation, rebuild_requested_at, last_built_at, last_error, created_at, updated_at, key_rotation_requested_at, previous_private_ciphertext FROM software_repository LIMIT 1
 `
 
 // The repository of the context's organization (one row at most, RLS).
@@ -137,12 +156,14 @@ func (q *Queries) GetSoftwareRepository(ctx context.Context) (SoftwareRepository
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KeyRotationRequestedAt,
+		&i.PreviousPrivateCiphertext,
 	)
 	return i, err
 }
 
 const getSoftwareRepositoryForUpdate = `-- name: GetSoftwareRepositoryForUpdate :one
-SELECT organization_id, signing_public_key, signing_fingerprint, signing_private_ciphertext, previous_public_key, previous_fingerprint, previous_retired_at, credential_ciphertext, credential_sha256, previous_credential_sha256, previous_credential_expires_at, credential_rotated_at, generation, rebuild_requested_at, last_built_at, last_error, created_at, updated_at FROM software_repository LIMIT 1 FOR UPDATE
+SELECT organization_id, signing_public_key, signing_fingerprint, signing_private_ciphertext, previous_public_key, previous_fingerprint, previous_retired_at, credential_ciphertext, credential_sha256, previous_credential_sha256, previous_credential_expires_at, credential_rotated_at, generation, rebuild_requested_at, last_built_at, last_error, created_at, updated_at, key_rotation_requested_at, previous_private_ciphertext FROM software_repository LIMIT 1 FOR UPDATE
 `
 
 func (q *Queries) GetSoftwareRepositoryForUpdate(ctx context.Context) (SoftwareRepository, error) {
@@ -167,6 +188,57 @@ func (q *Queries) GetSoftwareRepositoryForUpdate(ctx context.Context) (SoftwareR
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KeyRotationRequestedAt,
+		&i.PreviousPrivateCiphertext,
+	)
+	return i, err
+}
+
+const insertPaddockSoftwareSource = `-- name: InsertPaddockSoftwareSource :one
+INSERT INTO software_source (id, organization_id, slug, name, kind, uris, suites, components, architectures,
+  signing_key, fingerprint)
+VALUES ($1, $2, $3, $4, 'paddock', $5, '{paddock}', '{main}', '{}', $6, $7)
+RETURNING id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at, kind
+`
+
+type InsertPaddockSoftwareSourceParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Slug           string
+	Name           string
+	Uris           []string
+	SigningKey     string
+	Fingerprint    string
+}
+
+// The system source of the organization's Paddock repository, created by the worker with the first published build.
+func (q *Queries) InsertPaddockSoftwareSource(ctx context.Context, arg InsertPaddockSoftwareSourceParams) (SoftwareSource, error) {
+	row := q.db.QueryRow(ctx, insertPaddockSoftwareSource,
+		arg.ID,
+		arg.OrganizationID,
+		arg.Slug,
+		arg.Name,
+		arg.Uris,
+		arg.SigningKey,
+		arg.Fingerprint,
+	)
+	var i SoftwareSource
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Slug,
+		&i.Name,
+		&i.Uris,
+		&i.Suites,
+		&i.Components,
+		&i.Architectures,
+		&i.SigningKey,
+		&i.Fingerprint,
+		&i.WeakKey,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
 	)
 	return i, err
 }
@@ -336,6 +408,100 @@ func (q *Queries) ListSoftwarePackages(ctx context.Context, arg ListSoftwarePack
 	return items, nil
 }
 
+const listSoftwarePackagesForIndex = `-- name: ListSoftwarePackagesForIndex :many
+SELECT id, organization_id, package, version, architecture, size, sha256, object_key, control, uploaded_by, uploaded_at FROM software_package ORDER BY package, version, architecture, id
+`
+
+// Every stored package of the organization in the order of the published index.
+func (q *Queries) ListSoftwarePackagesForIndex(ctx context.Context) ([]SoftwarePackage, error) {
+	rows, err := q.db.Query(ctx, listSoftwarePackagesForIndex)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SoftwarePackage{}
+	for rows.Next() {
+		var i SoftwarePackage
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.Package,
+			&i.Version,
+			&i.Architecture,
+			&i.Size,
+			&i.Sha256,
+			&i.ObjectKey,
+			&i.Control,
+			&i.UploadedBy,
+			&i.UploadedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markSoftwareRepositoryBuildFailed = `-- name: MarkSoftwareRepositoryBuildFailed :execrows
+UPDATE software_repository SET last_error = $1, updated_at = now()
+WHERE organization_id = $2 AND last_error IS DISTINCT FROM $1
+`
+
+type MarkSoftwareRepositoryBuildFailedParams struct {
+	LastError      *string
+	OrganizationID uuid.UUID
+}
+
+// Records a failed build; 0 rows when the same error is already recorded, so a failure repeated every round is audited
+// once.
+func (q *Queries) MarkSoftwareRepositoryBuildFailed(ctx context.Context, arg MarkSoftwareRepositoryBuildFailedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markSoftwareRepositoryBuildFailed, arg.LastError, arg.OrganizationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markSoftwareRepositoryBuilt = `-- name: MarkSoftwareRepositoryBuilt :execrows
+UPDATE software_repository SET generation = generation + 1, last_built_at = now(), last_error = NULL,
+  previous_retired_at = CASE WHEN previous_fingerprint IS NOT NULL THEN coalesce(previous_retired_at, now()) END,
+  rebuild_requested_at = CASE WHEN rebuild_requested_at IS NOT DISTINCT FROM $1::timestamptz
+    THEN NULL ELSE rebuild_requested_at END,
+  updated_at = now()
+WHERE organization_id = $2 AND generation = $3
+`
+
+type MarkSoftwareRepositoryBuiltParams struct {
+	ServedRequest  *time.Time
+	OrganizationID uuid.UUID
+	BuiltOn        int64
+}
+
+// A published build: the generation read (@built_on) plus one; the rebuild request it served is cleared, a later one
+// stays queued. The build moves the system source to the current key in the same transaction, so the 30 days of a
+// previous key start here, at the first publication of its successor, not when the successor was generated (§3.8 L5).
+func (q *Queries) MarkSoftwareRepositoryBuilt(ctx context.Context, arg MarkSoftwareRepositoryBuiltParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markSoftwareRepositoryBuilt, arg.ServedRequest, arg.OrganizationID, arg.BuiltOn)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const requestSoftwareRepositoryKeyRotation = `-- name: RequestSoftwareRepositoryKeyRotation :exec
+UPDATE software_repository SET key_rotation_requested_at = now(), rebuild_requested_at = now(), updated_at = now()
+WHERE organization_id = $1
+`
+
+// The worker generates the new key at its next round (plan M13c decision 12, amendment 2026-11-09 (PDK-812)).
+func (q *Queries) RequestSoftwareRepositoryKeyRotation(ctx context.Context, organizationID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, requestSoftwareRepositoryKeyRotation, organizationID)
+	return err
+}
+
 const requestSoftwareRepositoryRebuild = `-- name: RequestSoftwareRepositoryRebuild :exec
 UPDATE software_repository SET rebuild_requested_at = now(), updated_at = now() WHERE organization_id = $1
 `
@@ -350,7 +516,7 @@ UPDATE software_repository SET previous_credential_sha256 = credential_sha256,
   previous_credential_expires_at = $1, credential_ciphertext = $2,
   credential_sha256 = $3, credential_rotated_at = now(), updated_at = now()
 WHERE organization_id = $4
-RETURNING organization_id, signing_public_key, signing_fingerprint, signing_private_ciphertext, previous_public_key, previous_fingerprint, previous_retired_at, credential_ciphertext, credential_sha256, previous_credential_sha256, previous_credential_expires_at, credential_rotated_at, generation, rebuild_requested_at, last_built_at, last_error, created_at, updated_at
+RETURNING organization_id, signing_public_key, signing_fingerprint, signing_private_ciphertext, previous_public_key, previous_fingerprint, previous_retired_at, credential_ciphertext, credential_sha256, previous_credential_sha256, previous_credential_expires_at, credential_rotated_at, generation, rebuild_requested_at, last_built_at, last_error, created_at, updated_at, key_rotation_requested_at, previous_private_ciphertext
 `
 
 type RotateSoftwareRepositoryCredentialParams struct {
@@ -388,6 +554,95 @@ func (q *Queries) RotateSoftwareRepositoryCredential(ctx context.Context, arg Ro
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KeyRotationRequestedAt,
+		&i.PreviousPrivateCiphertext,
+	)
+	return i, err
+}
+
+const storeSoftwareRepositorySigningKey = `-- name: StoreSoftwareRepositorySigningKey :execrows
+UPDATE software_repository SET
+  previous_public_key = CASE WHEN signing_fingerprint = src.fingerprint THEN signing_public_key ELSE previous_public_key END,
+  previous_fingerprint = CASE WHEN signing_fingerprint = src.fingerprint THEN signing_fingerprint ELSE previous_fingerprint END,
+  previous_private_ciphertext = CASE WHEN signing_fingerprint = src.fingerprint THEN signing_private_ciphertext
+    ELSE previous_private_ciphertext END,
+  previous_retired_at = CASE WHEN signing_fingerprint = src.fingerprint THEN NULL ELSE previous_retired_at END,
+  signing_public_key = $1, signing_fingerprint = $2,
+  signing_private_ciphertext = $3,
+  key_rotation_requested_at = CASE WHEN key_rotation_requested_at IS NOT DISTINCT FROM $4::timestamptz
+    THEN NULL ELSE key_rotation_requested_at END,
+  updated_at = now()
+FROM (SELECT (SELECT fingerprint FROM software_source WHERE kind = 'paddock') AS fingerprint) src
+WHERE software_repository.organization_id = $5
+  AND software_repository.signing_fingerprint IS NOT DISTINCT FROM $6::text
+`
+
+type StoreSoftwareRepositorySigningKeyParams struct {
+	SigningPublicKey         *string
+	SigningFingerprint       *string
+	SigningPrivateCiphertext *string
+	ServedRotation           *time.Time
+	OrganizationID           uuid.UUID
+	ExpectedFingerprint      *string
+}
+
+// The worker's new signing key (PDK-813), unless another replica stored one since it read @expected_fingerprint. A
+// current key that the system source carries (published) becomes the previous one, which signs the index alongside the
+// new one for 30 days from the publication of the new one (§3.8 L5). A current key that was never published is replaced
+// and the previous key stays: no device can rely on the unpublished key, but devices still rely on the previous one, so
+// a rotation retried after a failed build never drops it. The rotation request it serves is cleared; a later one stays.
+func (q *Queries) StoreSoftwareRepositorySigningKey(ctx context.Context, arg StoreSoftwareRepositorySigningKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, storeSoftwareRepositorySigningKey,
+		arg.SigningPublicKey,
+		arg.SigningFingerprint,
+		arg.SigningPrivateCiphertext,
+		arg.ServedRotation,
+		arg.OrganizationID,
+		arg.ExpectedFingerprint,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updatePaddockSoftwareSource = `-- name: UpdatePaddockSoftwareSource :one
+UPDATE software_source SET uris = $1, signing_key = $2, fingerprint = $3, updated_at = now()
+WHERE kind = 'paddock' AND id = $4
+RETURNING id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at, kind
+`
+
+type UpdatePaddockSoftwareSourceParams struct {
+	Uris        []string
+	SigningKey  string
+	Fingerprint string
+	ID          uuid.UUID
+}
+
+func (q *Queries) UpdatePaddockSoftwareSource(ctx context.Context, arg UpdatePaddockSoftwareSourceParams) (SoftwareSource, error) {
+	row := q.db.QueryRow(ctx, updatePaddockSoftwareSource,
+		arg.Uris,
+		arg.SigningKey,
+		arg.Fingerprint,
+		arg.ID,
+	)
+	var i SoftwareSource
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Slug,
+		&i.Name,
+		&i.Uris,
+		&i.Suites,
+		&i.Components,
+		&i.Architectures,
+		&i.SigningKey,
+		&i.Fingerprint,
+		&i.WeakKey,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
 	)
 	return i, err
 }

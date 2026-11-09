@@ -291,6 +291,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/software-packages":                                       {app.ScopeOrg, app.SpecSoftwarePackageUpload},
 	"DELETE /api/v1/software-packages/{id}":                                {app.ScopeOrg, app.SpecSoftwarePackageDelete},
 	"POST /api/v1/software-repository/rotate-credential":                   {app.ScopeOrg, app.SpecSoftwareRepositoryRotate},
+	"POST /api/v1/software-repository/rotate-key":                          {app.ScopeOrg, app.SpecSoftwareRepositoryKeyRotate},
 	"POST /api/v1/software-catalog":                                        {app.ScopeOrg, app.SpecSoftwareCatalogEntryCreate},
 	"PATCH /api/v1/software-catalog/{id}":                                  {app.ScopeOrg, app.SpecSoftwareCatalogEntryUpdate},
 	"DELETE /api/v1/software-catalog/{id}":                                 {app.ScopeOrg, app.SpecSoftwareCatalogEntryDelete},

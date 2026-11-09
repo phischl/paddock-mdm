@@ -1,0 +1,24 @@
+Package: acme-docs
+Version: 1:3.1
+Architecture: all
+Filename: pool/main/a/acme-docs/acme-docs_3.1_all.deb
+Size: 900
+SHA256: 99cdad5dc57b27896cf5ea63b4f68a7c3ff63d10f988d1ffc36bc061a8299971
+Description: Acme documentation
+
+Package: acme-tool
+Version: 1.0-1
+Architecture: amd64
+Maintainer: Acme <it@acme.example>
+Installed-Size: 12
+Depends: libc6 (>= 2.35)
+Section: utils
+Priority: optional
+X-Custom: yes
+Filename: pool/main/a/acme-tool/acme-tool_1.0-1_amd64.deb
+Size: 900
+SHA256: 13f53b355c6e080e790f95df5ea1d76046823d66298f7d415a06c75580f4bb19
+Description: Acme tool
+ First paragraph.
+ .
+ Second paragraph.

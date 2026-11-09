@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "1090231cb9db6df8f0705d95033e01310dcf7207458a48faa0b5ef950b3d1782"
+const Version = "c79f79ef4ebf7d8b61388afbe05665ff949ce898b6caafb4662bcf0cb89b1511"
 
 var tools = []Tool{
 	{
@@ -4182,6 +4182,24 @@ var tools = []Tool{
 		AuditCode:   "software_repository.credential_rotated",
 		Summary:     "",
 		Description: "Roles: org_admin. Replaces the repository's read credential (HTTP basic authentication, user paddock) with a new random secret and returns it once; it is never shown again and never recorded. Every device receives the new one with its next bundle; the previous one stays valid for 24 hours (previous_valid_until). Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "rotateSoftwareRepositoryKey",
+		Method:      "POST",
+		Path:        "/api/v1/software-repository/rotate-key",
+		Pattern:     "POST /api/v1/software-repository/rotate-key",
+		Tag:         "software",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "software_repository.key_rotated",
+		Summary:     "",
+		Description: "Roles: org_admin. Replaces the repository's OpenPGP signing key (ADR 0050 decision 3). The worker generates the new key at its next round (within a minute), signs the repository with it and only then gives it to the devices with their next bundle, so a device that received the new key always finds the repository signed with it; a device that is offline meanwhile receives the new key before its next update. For 30 days the repository is signed with the previous key (previous_fingerprint) as well, so a device that has not received the new key yet keeps updating; then it is signed with the new key alone. The answer is the repository with key_rotation_requested_at set; fingerprint changes once the worker has published. 409 repository_not_ready while the first key is being generated. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{},\"type\":\"object\"}"),
 	},
 	{
