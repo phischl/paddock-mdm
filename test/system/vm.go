@@ -358,3 +358,39 @@ func (v *VM) Together(t *testing.T, gate, step string, fn func() string) string 
 	t.Helper()
 	return v.group.Together(t, v.Name, gate, step, fn)
 }
+
+// autologinScript makes GDM log the account $1 in automatically and restarts GDM: the AutomaticLogin keys go into the
+// [daemon] section of /etc/gdm3/custom.conf (added when the file or the section is missing), replacing earlier ones.
+// It ends with autologinRestart.
+const autologinScript = `set -eu
+conf=/etc/gdm3/custom.conf
+[ -f "$conf" ] || : >"$conf"
+grep -q '^\[daemon\]' "$conf" || printf '\n[daemon]\n' >>"$conf"
+awk -v n="$1" '/^AutomaticLogin/ {next} {print} /^\[daemon\]$/ {print "AutomaticLoginEnable=true"; print "AutomaticLogin=" n}' "$conf" >"$conf.new"
+mv "$conf.new" "$conf"
+` + autologinRestart
+
+// autologinRestart restarts GDM so that it applies the automatic login. GDM logs in automatically only on its first
+// start per boot; its ran-once marker in /run would skip the autologin after the restart (as in DS1's ensureUserSession).
+const autologinRestart = `rm -f /run/gdm3/ran-once-marker /run/gdm/ran-once-marker
+systemctl restart display-manager.service
+`
+
+// Autologin gives the account name a graphical session through GDM's automatic login and waits until logind lists it
+// as an active Wayland or X11 session of class user, which it returns. Nobody may be logged in at the console: the
+// restart of GDM ends every graphical session. The session lasts until the VM returns to its snapshot.
+func (v *VM) Autologin(t *testing.T, name string) Session {
+	t.Helper()
+	v.MustRootIn([]byte(autologinScript), "bash -s -- "+shellQuote(name))
+	var found Session
+	Until(t, v.Name+": graphical session of "+name, 3*time.Minute, 5*time.Second, nil, func() bool {
+		for _, s := range v.UserSessions(name) {
+			if (s.Type == "wayland" || s.Type == "x11") && s.State == "active" {
+				found = s
+				return true
+			}
+		}
+		return false
+	})
+	return found
+}

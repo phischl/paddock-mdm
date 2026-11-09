@@ -65,6 +65,9 @@ func FleetAdminURL() string { return stack.FleetAdminURL() }
 // HTTPSPort is the host port of this checkout's Caddy, which a guest reaches as 10.0.2.2 (default 8443).
 func HTTPSPort() string { return stack.HTTPSPort() }
 
+// AdminURL is the portal and admin API of this checkout's stack (PADDOCK_TEST_ADMIN_URL overrides).
+func AdminURL() string { return stack.AdminURL() }
+
 // Authentik is the Authentik admin API with the bootstrap token.
 type Authentik = env.Authentik
 
