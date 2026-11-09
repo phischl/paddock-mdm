@@ -408,6 +408,9 @@ func (h *handlers) ListDeviceManagedSoftware(ctx context.Context, req adminapi.L
 		intent := string(*req.Params.Intent)
 		query.Intent = &intent
 	}
+	if query.Scope, err = scopeFilter(req.Params.Scope); err != nil {
+		return nil, err
+	}
 	res, err := h.softwareStatus.DeviceManagedSoftware(ctx, req.Id, query)
 	if err != nil {
 		return nil, err
@@ -416,7 +419,8 @@ func (h *handlers) ListDeviceManagedSoftware(ctx context.Context, req adminapi.L
 	for i, m := range res.Items {
 		items[i] = adminapi.DeviceManagedSoftware{
 			CatalogEntryId: m.CatalogEntryID, Name: m.Name, Package: m.Package, Intent: adminapi.SoftwareIntent(m.Intent),
-			State: adminapi.DeviceSoftwareState(m.State), Version: m.Version, Reason: m.Reason, Error: m.Error, ReportedAt: m.ReportedAt,
+			State: adminapi.DeviceSoftwareState(m.State), Version: m.Version, Reason: m.Reason, Error: m.Error,
+			Scope: adminapi.SoftwareScope(m.Scope), ReportedAt: m.ReportedAt,
 		}
 	}
 	page := listing.NewPage(items, params, res.Count)
@@ -441,6 +445,9 @@ func (h *handlers) ListSoftwareCatalogDevices(ctx context.Context, req adminapi.
 		state := string(*req.Params.State)
 		query.State = &state
 	}
+	if query.Scope, err = scopeFilter(req.Params.Scope); err != nil {
+		return nil, err
+	}
 	res, err := h.softwareStatus.CatalogDevices(ctx, req.Id, query)
 	if err != nil {
 		return nil, err
@@ -449,8 +456,21 @@ func (h *handlers) ListSoftwareCatalogDevices(ctx context.Context, req adminapi.
 	for i, d := range res.Items {
 		items[i] = adminapi.SoftwareCatalogDevice{
 			DeviceId: d.DeviceID, Hostname: d.Hostname, Name: d.Name, DeviceGroupIds: d.DeviceGroupIDs, Package: d.Package, Intent: adminapi.SoftwareIntent(d.Intent),
-			State: adminapi.DeviceSoftwareState(d.State), Version: d.Version, Reason: d.Reason, Error: d.Error, ReportedAt: d.ReportedAt,
+			State: adminapi.DeviceSoftwareState(d.State), Version: d.Version, Reason: d.Reason, Error: d.Error,
+			Scope: adminapi.SoftwareScope(d.Scope), ReportedAt: d.ReportedAt,
 		}
 	}
 	return adminapi.ListSoftwareCatalogDevices200JSONResponse(listing.NewPage(items, params, res.Count)), nil
+}
+
+// scopeFilter is the scope filter of the software status lists (plan M13b decision 17); nil when absent.
+func scopeFilter(scope *adminapi.DeviceSoftwareScopeFilter) (*string, error) {
+	if scope == nil {
+		return nil, nil
+	}
+	if !adminapi.SoftwareScope(*scope).Valid() {
+		return nil, problem.InvalidRequest.WithDetail("unknown scope")
+	}
+	s := string(*scope)
+	return &s, nil
 }

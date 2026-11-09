@@ -36,7 +36,11 @@ type softwareStatusRow struct {
 	Version string `json:"version"`
 	Reason  string `json:"reason"`
 	Error   string `json:"error"`
+	Scope   string `json:"scope"`
 }
+
+// key is the row's primary key within the device as DeleteDeviceSoftwareStatusNotIn compares it: entry and scope.
+func (r softwareStatusRow) key() string { return r.ID + "/" + r.Scope }
 
 // recordSoftwareStatus stores health.software of a heartbeat in the transaction of the status upsert (plan M13a
 // §3.4): with items it replaces the device's rows (an empty list prunes them, an absent or null one is no report and
@@ -87,20 +91,20 @@ func recordSoftwareStatus(ctx context.Context, q *pgstore.Queries, hb ingest.Hea
 	return nil
 }
 
-// replaceSoftwareStatus makes the items the device's rows: entries the report no longer names are deleted, the rest
-// upserted. A report that names items but none a row can be made of (a misbehaving agent) leaves the rows alone
+// replaceSoftwareStatus makes the items the device's rows: entries and scopes the report no longer names are deleted,
+// the rest upserted. A report that names items but none a row can be made of (a misbehaving agent) leaves the rows alone
 // instead of wiping them.
 func replaceSoftwareStatus(ctx context.Context, q *pgstore.Queries, hb ingest.Heartbeat, items []json.RawMessage) error {
 	rows := normalizeSoftwareRows(items)
 	if len(items) > 0 && len(rows) == 0 {
 		return nil
 	}
-	ids := make([]uuid.UUID, 0, len(rows))
+	keys := make([]string, 0, len(rows))
 	for _, r := range rows {
-		ids = append(ids, uuid.MustParse(r.ID))
+		keys = append(keys, r.key())
 	}
 	if err := q.DeleteDeviceSoftwareStatusNotIn(ctx, pgstore.DeleteDeviceSoftwareStatusNotInParams{
-		DeviceID: hb.DeviceID, EntryIds: ids, ReportedAt: hb.ReceivedAt,
+		DeviceID: hb.DeviceID, Keys: keys, ReportedAt: hb.ReceivedAt,
 	}); err != nil {
 		return fmt.Errorf("delete the software status the report dropped: %w", err)
 	}
@@ -119,12 +123,26 @@ func replaceSoftwareStatus(ctx context.Context, q *pgstore.Queries, hb ingest.He
 	return nil
 }
 
-// reportedIntents are the intents a device reports.
-var reportedIntents = []string{software.IntentRequired, software.IntentUninstall, software.IntentHold, software.IntentForbid}
+// reportedIntents are the intents a device reports; available since the self-service (plan M13b decision 14).
+var reportedIntents = []string{software.IntentRequired, software.IntentUninstall, software.IntentHold, software.IntentForbid,
+	software.IntentAvailable}
+
+// reportedScope is the stored scope of an item: system for an item without one (agents before alpha.10), false for an
+// unknown one.
+func reportedScope(scope string) (string, bool) {
+	switch scope {
+	case "", software.ScopeSystem:
+		return software.ScopeSystem, true
+	case software.ScopeUser:
+		return software.ScopeUser, true
+	}
+	return "", false
+}
 
 // normalizeSoftwareRows reads the first protocol.MaxSoftwareItems items, drops those that are malformed, have an ID that
-// is not a UUID, an empty or too long package or an unknown intent or state, bounds the free text and keeps the last
-// item of an entry: one statement cannot upsert a row twice.
+// is not a UUID or is the nil UUID (the flatpak runtime package, which belongs to no entry, plan M13b §6.3), an empty
+// or too long package or an unknown intent, state or scope, bounds the free text and keeps the last item of an entry
+// and scope: one statement cannot upsert a row twice.
 func normalizeSoftwareRows(items []json.RawMessage) []softwareStatusRow {
 	index := map[string]int{}
 	out := make([]softwareStatusRow, 0, min(len(items), protocol.MaxSoftwareItems))
@@ -135,19 +153,21 @@ func normalizeSoftwareRows(items []json.RawMessage) []softwareStatusRow {
 		}
 		id, err := uuid.Parse(it.CatalogEntryID)
 		pkg := stripControls(it.Package)
-		if err != nil || pkg == "" || len(pkg) > maxSoftwarePackage ||
+		scope, knownScope := reportedScope(it.Scope)
+		if err != nil || id == uuid.Nil || pkg == "" || len(pkg) > maxSoftwarePackage || !knownScope ||
 			!slices.Contains(reportedIntents, it.Intent) || !slices.Contains(protocol.SoftwareStates, it.State) {
 			continue
 		}
 		row := softwareStatusRow{
 			ID: id.String(), Package: pkg, Intent: it.Intent, State: it.State, Version: boundText(it.Version, maxSoftwareVersion),
-			Reason: boundText(it.Reason, maxSoftwareReason), Error: boundText(it.Error, maxSoftwareError),
+			Reason: boundText(it.Reason, maxSoftwareReason), Error: boundText(it.Error, maxSoftwareError), Scope: scope,
 		}
-		if i, ok := index[row.ID]; ok {
+		key := row.key()
+		if i, ok := index[key]; ok {
 			out[i] = row
 			continue
 		}
-		index[row.ID] = len(out)
+		index[key] = len(out)
 		out = append(out, row)
 	}
 	return out

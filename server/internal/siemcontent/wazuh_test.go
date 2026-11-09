@@ -467,6 +467,7 @@ var informational = map[audit.Code]bool{
 	"device.software_installed":                     true,
 	"device.software_reinstalled":                   true,
 	"device.software_removed":                       true,
+	"device.software_self_service":                  true,
 	"device.stale_cleared":                          true,
 	"device.stale_critical":                         true,
 	"device.stale_warning":                          true,

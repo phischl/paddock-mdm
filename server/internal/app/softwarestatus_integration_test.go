@@ -141,7 +141,7 @@ func TestSoftwareStatusIngestion(t *testing.T) {
 	skipped := []protocol.SoftwareItem{
 		item("x", "installed"), item(uuid.New(), "installed"), item(foreign, "installed"), item(e1, "unknown_state"),
 		{CatalogEntryID: e1.String(), Package: "", Intent: "required", State: "installed"},
-		{CatalogEntryID: e1.String(), Package: "nano", Intent: "available", State: "installed"},
+		{CatalogEntryID: e1.String(), Package: "nano", Intent: "suggested", State: "installed"},
 	}
 	beat(at.Add(4*time.Minute), softwareReport(t, "d3", append(skipped, protocol.SoftwareItem{CatalogEntryID: e2.String(), Package: "nano",
 		Intent: "hold", State: "failed", Reason: "apt_failed", Error: long})...))
@@ -176,6 +176,107 @@ func TestSoftwareStatusIngestion(t *testing.T) {
 	}
 	if rows = h.softwareRows(t, dev); len(rows) != 0 {
 		t.Fatalf("rows of a deleted entry %+v", rows)
+	}
+}
+
+// TestSoftwareStatusScopes (plan M13b decision 17, PDK-803): an entry keeps one row per scope; an item without a scope
+// is a system row (agents before alpha.10), an available item is stored, a later report without the user-scope item
+// deletes that row only, and items of the nil entry (the flatpak runtime package) or of an unknown scope are skipped.
+func TestSoftwareStatusScopes(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, dev := h.device(t)
+	e1 := h.softwareEntry(t, org, "GIMP", nanoEverywhere)
+	e2 := h.softwareEntry(t, org, "Editor", nanoEverywhere)
+	at := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
+	beat := func(at time.Time, items ...protocol.SoftwareItem) {
+		t.Helper()
+		if err := h.reports.RecordStatus(systemCtx(org), ingest.Heartbeat{DeviceID: dev, OrganizationID: org, ReceivedAt: at,
+			Health: softwareReport(t, at.String(), items...)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scoped := func() string {
+		t.Helper()
+		var got string
+		if err := h.super.QueryRow(context.Background(), `SELECT coalesce(string_agg(CASE catalog_entry_id WHEN $2 THEN 'e1' ELSE 'e2' END
+			|| ':' || scope || ':' || username || ':' || intent || ':' || state, ' ' ORDER BY catalog_entry_id = $2 DESC, scope), '')
+			FROM device_software_status WHERE device_id = $1`, dev, e1).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	item := func(id uuid.UUID, scope, intent string) protocol.SoftwareItem {
+		return protocol.SoftwareItem{CatalogEntryID: id.String(), Package: "flatpak:org.gimp.GIMP", Intent: intent, State: "installed", Scope: scope}
+	}
+
+	beat(at, item(e1, "", "required"), item(e1, "user", "available"), item(e2, "system", "available"),
+		item(uuid.Nil, "", "required"), item(e2, "group", "required"))
+	if got := scoped(); got != "e1:system::required:installed e1:user::available:installed e2:system::available:installed" {
+		t.Fatalf("rows %q", got)
+	}
+
+	// The reads list an entry once per scope, the scope filter selects one; another organization's reader sees nothing.
+	api, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(api.Close)
+	status := app.NewSoftwareStatus(api)
+	reader := adminCtx(org, principal.RoleOrgAuditor, "auditor")
+	if _, err := h.super.Exec(context.Background(), `INSERT INTO software_assignment (id, organization_id, catalog_entry_id, intent) VALUES ($1, $2, $3, 'required')`,
+		uuid.Must(uuid.NewV7()), org, e1); err != nil {
+		t.Fatal(err)
+	}
+	str := func(s string) *string { return &s }
+	managed := func(scope *string) string {
+		t.Helper()
+		got, err := status.DeviceManagedSoftware(reader, dev, app.DeviceManagedSoftwareQuery{Page: app.ListPage{Sort: "name", Limit: 100}, Scope: scope})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, it := range got.Items {
+			out = append(out, it.Name+":"+it.Scope+":"+it.Intent)
+		}
+		return strings.Join(out, " ")
+	}
+	if got := managed(nil); got != "Editor:system:available GIMP:system:required GIMP:user:available" {
+		t.Fatalf("managed software %q", got)
+	}
+	if got := managed(str("user")); got != "GIMP:user:available" {
+		t.Fatalf("managed software in user scope %q", got)
+	}
+	devices := func(scope *string) string {
+		t.Helper()
+		got, err := status.CatalogDevices(reader, e1, app.SoftwareCatalogDeviceQuery{Page: app.ListPage{Sort: "hostname", Limit: 100}, Scope: scope})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, it := range got.Items {
+			out = append(out, it.Scope+":"+it.State)
+		}
+		return strings.Join(out, " ")
+	}
+	if got := devices(nil); got != "system:installed user:installed" {
+		t.Fatalf("devices of the entry %q", got)
+	}
+	if got := devices(str("system")); got != "system:installed" {
+		t.Fatalf("devices of the entry in system scope %q", got)
+	}
+	otherOrg, _ := h.device(t)
+	if _, err := status.DeviceManagedSoftware(adminCtx(otherOrg, principal.RoleOrgAuditor, "auditor"), dev,
+		app.DeviceManagedSoftwareQuery{Page: app.ListPage{Sort: "name", Limit: 10}, Scope: str("user")}); !errors.Is(err, problem.NotFound) {
+		t.Fatalf("another organization read the device: %v", err)
+	}
+
+	beat(at.Add(time.Minute), item(e1, "system", "required"), item(e2, "", "available"))
+	if got := scoped(); got != "e1:system::required:installed e2:system::available:installed" {
+		t.Fatalf("rows after the user-scope item was dropped %q", got)
+	}
+	beat(at.Add(2*time.Minute), item(e1, "user", "available"))
+	if got := scoped(); got != "e1:user::available:installed" {
+		t.Fatalf("rows after the system items were dropped %q", got)
 	}
 }
 

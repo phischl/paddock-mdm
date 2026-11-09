@@ -37,9 +37,11 @@ type DeviceManagedSoftwareQuery struct {
 	Page   ListPage
 	State  *string
 	Intent *string
+	Scope  *string
 }
 
-// DeviceManagedSoftware is one entry as a device sees it. ReportedAt is nil for a derived state.
+// DeviceManagedSoftware is one entry and scope as a device sees it (plan M13b decision 17: an entry may have a system
+// and a user row). ReportedAt is nil for a derived state.
 type DeviceManagedSoftware struct {
 	CatalogEntryID uuid.UUID
 	Name           string
@@ -49,6 +51,7 @@ type DeviceManagedSoftware struct {
 	Version        string
 	Reason         string
 	Error          string
+	Scope          string
 	ReportedAt     *time.Time
 }
 
@@ -86,12 +89,13 @@ func (s *SoftwareStatus) DeviceManagedSoftware(ctx context.Context, deviceID uui
 		}
 		for _, r := range rows {
 			item := DeviceManagedSoftware{CatalogEntryID: r.CatalogEntryID, Name: r.Name, Package: r.Package, Intent: r.Intent,
-				State: r.State, Version: r.Version, Reason: r.Reason, Error: r.Error, ReportedAt: r.ReportedAt}
+				State: r.State, Version: r.Version, Reason: r.Reason, Error: r.Error, Scope: r.Scope, ReportedAt: r.ReportedAt}
 			if r.State == "" {
-				item.State, item.Package = derivedSoftwareState(r.Packages, target.OsID, target.OsVersionID, target.Arch)
+				item.State, item.Package, item.Scope = derivedSoftwareState(r.Packages, target.OsID, target.OsVersionID, target.Arch)
 				item.Intent = strongestIntent(r.Intents)
 			}
-			if (query.State == nil || *query.State == item.State) && (query.Intent == nil || *query.Intent == item.Intent) {
+			if (query.State == nil || *query.State == item.State) && (query.Intent == nil || *query.Intent == item.Intent) &&
+				(query.Scope == nil || *query.Scope == item.Scope) {
 				all = append(all, item)
 			}
 		}
@@ -112,9 +116,11 @@ type SoftwareCatalogDeviceQuery struct {
 	Page          ListPage
 	State         *string
 	DeviceGroupID *uuid.UUID
+	Scope         *string
 }
 
-// SoftwareCatalogDevice is one device an entry is assigned to, with what it reported or the derived state.
+// SoftwareCatalogDevice is one device an entry is assigned to, with what it reported in one scope or the derived
+// state.
 type SoftwareCatalogDevice struct {
 	DeviceID       uuid.UUID
 	Hostname       string
@@ -126,6 +132,7 @@ type SoftwareCatalogDevice struct {
 	Version        string
 	Reason         string
 	Error          string
+	Scope          string
 	ReportedAt     *time.Time
 }
 
@@ -152,12 +159,12 @@ func (s *SoftwareStatus) CatalogDevices(ctx context.Context, entryID uuid.UUID, 
 		for _, r := range rows {
 			item := SoftwareCatalogDevice{DeviceID: r.DeviceID, Hostname: r.Hostname, Name: r.Name,
 				DeviceGroupIDs: groupIDsOrEmpty(r.DeviceGroupIds), Package: r.Package, Intent: r.Intent,
-				State: r.State, Version: r.Version, Reason: r.Reason, Error: r.Error, ReportedAt: r.ReportedAt}
+				State: r.State, Version: r.Version, Reason: r.Reason, Error: r.Error, Scope: r.Scope, ReportedAt: r.ReportedAt}
 			if r.State == "" {
-				item.State, item.Package = derivedFromRefs(refs, decodeErr, r.OsID, r.OsVersionID, r.Arch)
+				item.State, item.Package, item.Scope = derivedFromRefs(refs, decodeErr, r.OsID, r.OsVersionID, r.Arch)
 				item.Intent = strongestIntent(r.Intents)
 			}
-			if query.State == nil || *query.State == item.State {
+			if (query.State == nil || *query.State == item.State) && (query.Scope == nil || *query.Scope == item.Scope) {
 				all = append(all, item)
 			}
 		}
@@ -183,28 +190,33 @@ func groupIDsOrEmpty(ids []uuid.UUID) []uuid.UUID {
 
 // derivedSoftwareState is the state of a targeted entry without a reported row: not_applicable when it names no package
 // for the platform, otherwise unknown with the package the device is to get. An entry whose packages cannot be read
-// is unknown: the compiler refuses it, the status cannot tell more.
-func derivedSoftwareState(packages json.RawMessage, osID, versionID, arch string) (state, pkg string) {
+// is unknown: the compiler refuses it, the status cannot tell more. The scope is that of the package that applies,
+// system when none does.
+func derivedSoftwareState(packages json.RawMessage, osID, versionID, arch string) (state, pkg, scope string) {
 	refs, err := software.DecodePackages(packages)
 	return derivedFromRefs(refs, err, osID, versionID, arch)
 }
 
 // derivedFromRefs is derivedSoftwareState for packages decoded once (err: the decoding failed).
-func derivedFromRefs(refs []software.PackageRef, err error, osID, versionID, arch string) (state, pkg string) {
+func derivedFromRefs(refs []software.PackageRef, err error, osID, versionID, arch string) (state, pkg, scope string) {
 	if err != nil {
-		return SoftwareStateUnknown, ""
+		return SoftwareStateUnknown, "", software.ScopeSystem
 	}
-	pkg, ok := software.Resolve(refs, osID, versionID, arch)
+	ref, ok := software.ResolveRef(refs, osID, versionID, arch)
 	if !ok {
-		return SoftwareStateNotApplicable, ""
+		return SoftwareStateNotApplicable, "", software.ScopeSystem
 	}
-	return SoftwareStateUnknown, pkg
+	if ref.Scope == software.ScopeUser {
+		return SoftwareStateUnknown, ref.Package, software.ScopeUser
+	}
+	return SoftwareStateUnknown, ref.Package, software.ScopeSystem
 }
 
 // strongestIntent is the intent that wins among the assignments of one entry on a device, in the order of
-// software.MergeIntents: forbid, uninstall, required, hold.
+// software.MergeIntents: forbid, uninstall, required, hold, available.
 func strongestIntent(intents []string) string {
-	for _, intent := range []string{software.IntentForbid, software.IntentUninstall, software.IntentRequired, software.IntentHold} {
+	for _, intent := range []string{software.IntentForbid, software.IntentUninstall, software.IntentRequired, software.IntentHold,
+		software.IntentAvailable} {
 		if slices.Contains(intents, intent) {
 			return intent
 		}

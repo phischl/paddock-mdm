@@ -82,6 +82,11 @@ var (
 	// TooManyVolumes is the error code of a header escrow for a 33rd distinct volume of a device (PDK-009, review
 	// round 1); recorded by the worker, never sent over HTTP.
 	TooManyVolumes = &Error{Code: "too_many_volumes", Status: http.StatusConflict}
+	// SelfServiceFailed and SelfServiceRefused are the error codes of a device.software_self_service event whose
+	// operation the device reported as failed or refused (plan M13b decision 18); recorded by the worker, never sent
+	// over HTTP.
+	SelfServiceFailed  = &Error{Code: "self_service_failed", Status: http.StatusUnprocessableEntity}
+	SelfServiceRefused = &Error{Code: "self_service_refused", Status: http.StatusUnprocessableEntity}
 	// Identity and privileges (plan M3a).
 	UsernameTaken          = &Error{Code: "username_taken", Status: http.StatusConflict}
 	DomainTaken            = &Error{Code: "domain_taken", Status: http.StatusConflict}

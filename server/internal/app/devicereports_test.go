@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 func TestEventParams(t *testing.T) {
@@ -42,6 +44,9 @@ func TestEventParams(t *testing.T) {
 			map[string]any{"package": "nano", "version": "7.2-1", "intent": "required", "catalog_entry_id": "0b9e2c4e-4b7a-4f43-9a51-1c2d3e4f5a6b", "reason": "first_install"}},
 		{"software apply failed", `{"source":"vendor","stage":"keyring","reason":"fingerprint_mismatch","error":"keyring of source vendor"}`,
 			map[string]any{"source": "vendor", "stage": "keyring", "reason": "fingerprint_mismatch", "error": "keyring of source vendor"}},
+		{"software self-service", `{"user":"alice@acme.test","entry_id":"0b9e2c4e-4b7a-4f43-9a51-1c2d3e4f5a6b","flatpak_ref":"org.gimp.GIMP","scope":"user","action":"install","outcome":"failed","reason":"flatpak_failed","version":"2.10"}`,
+			map[string]any{"user": "alice@acme.test", "entry_id": "0b9e2c4e-4b7a-4f43-9a51-1c2d3e4f5a6b", "flatpak_ref": "org.gimp.GIMP", "scope": "user",
+				"action": "install", "outcome": "failed", "reason": "flatpak_failed", "version": "2.10"}},
 		{"oversized strings", `{"reason":"` + long + `","version":"` + long + `"}`, map[string]any{}},
 		{"not an object", `[1]`, map[string]any{}},
 		{"control characters", `{"message":"a\u0000b\u001bc\td\ne\rf","resource_ids":["\u0000x"],"errors":[{"id":"i\u0007","message":"m\u0000"}]}`,
@@ -152,6 +157,57 @@ func TestSoftwareEventCodes(t *testing.T) {
 		entry, ok := eventEntry(uuid.New(), protocol.Event{EventSeq: 1, Type: typ, OccurredAt: time.Now(), Data: json.RawMessage(`{}`)}, time.Now())
 		if !ok || entry.Spec.Code != code || !code.Registered() {
 			t.Errorf("%s: %v %s", typ, ok, entry.Spec.Code)
+		}
+	}
+}
+
+// TestSoftwareSelfServiceEvent (plan M13b decision 18): software.self_service is audited as
+// device.software_self_service with every field of the event; succeeded is a success, failed and refused are failures
+// with their own error code, and an outcome that is missing or unknown is a failure. Every param is registered.
+func TestSoftwareSelfServiceEvent(t *testing.T) {
+	tests := []struct {
+		outcome string
+		refusal error
+	}{
+		{protocol.SelfServiceSucceeded, nil},
+		{protocol.SelfServiceFailed, problem.SelfServiceFailed},
+		{protocol.SelfServiceRefused, problem.SelfServiceRefused},
+		{"", problem.SelfServiceFailed},
+		{"exploded", problem.SelfServiceFailed},
+	}
+	for _, tt := range tests {
+		t.Run("outcome "+tt.outcome, func(t *testing.T) {
+			data, err := json.Marshal(protocol.SoftwareSelfService{User: "alice@acme.test", EntryID: uuid.NewString(), Package: "code",
+				Scope: "system", Action: protocol.SelfServiceInstall, Outcome: tt.outcome, Reason: "not_in_audience", Version: "1.95"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry, ok := eventEntry(uuid.New(), protocol.Event{EventSeq: 3, Type: protocol.EventSoftwareSelfService, OccurredAt: time.Now(), Data: data}, time.Now())
+			if !ok || entry.Spec.Code != audit.CodeDeviceSoftwareSelfService {
+				t.Fatalf("audit code %q (audited %t)", entry.Spec.Code, ok)
+			}
+			if entry.Refusal != tt.refusal {
+				t.Fatalf("refusal %v, want %v", entry.Refusal, tt.refusal)
+			}
+			if outcome, _ := OutcomeOf(entry.Refusal); (tt.refusal == nil) != (outcome == audit.OutcomeSuccess) {
+				t.Fatalf("audit outcome %s for device outcome %q", outcome, tt.outcome)
+			}
+			def, _ := audit.Lookup(audit.CodeDeviceSoftwareSelfService)
+			for _, key := range []string{"user", "entry_id", "package", "scope", "action", "reason", "version"} {
+				if _, ok := entry.Spec.Params[key]; !ok {
+					t.Errorf("param %s missing: %v", key, entry.Spec.Params)
+				}
+			}
+			for key := range entry.Spec.Params {
+				if !slices.Contains(def.Params, key) {
+					t.Errorf("param %s is not registered for %s", key, audit.CodeDeviceSoftwareSelfService)
+				}
+			}
+		})
+	}
+	for _, typ := range []string{protocol.EventSoftwareInstalled, protocol.EventSoftwareApplyFailed} {
+		if entry, _ := eventEntry(uuid.New(), protocol.Event{EventSeq: 1, Type: typ, OccurredAt: time.Now(), Data: json.RawMessage(`{"outcome":"failed"}`)}, time.Now()); entry.Refusal != nil {
+			t.Errorf("%s carries a refusal: %v", typ, entry.Refusal)
 		}
 	}
 }

@@ -17,7 +17,7 @@ const entry: SoftwareCatalogEntry = {
 }
 const device = (over: Partial<SoftwareCatalogDevice>): SoftwareCatalogDevice => ({
   device_id: 'd1', hostname: 'lap-0421', name: '', device_group_ids: [], package: 'nano', intent: 'required', state: 'installed', version: '7.2',
-  reason: '', error: '', reported_at: '2026-10-02T00:00:00Z', ...over,
+  reason: '', error: '', scope: 'system', reported_at: '2026-10-02T00:00:00Z', ...over,
 })
 const setIcon = vi.hoisted(() => vi.fn())
 const saveAssignment = vi.hoisted(() => vi.fn())

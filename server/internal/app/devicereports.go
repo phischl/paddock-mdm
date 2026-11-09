@@ -22,6 +22,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // DeviceReports turn heartbeats and events from devices into status, quarantine and audit events (worker, plan
@@ -439,6 +440,7 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventSoftwareReinstalled: audit.CodeDeviceSoftwareReinstalled,
 	protocol.EventSoftwareRemoved:     audit.CodeDeviceSoftwareRemoved,
 	protocol.EventSoftwareApplyFailed: audit.CodeDeviceSoftwareApplyFailed,
+	protocol.EventSoftwareSelfService: audit.CodeDeviceSoftwareSelfService,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -451,7 +453,7 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 	if !ok {
 		return false, nil // the gateway admits only known types; anything else is ignored
 	}
-	return d.runner.RecordOnce(ctx, entry.Spec, entry.Claim, entry.After)
+	return d.runner.recordOnceEntry(ctx, entry)
 }
 
 // RecordEvents is RecordEvent for the events of one ingest message, session logins included, in one transaction
@@ -505,7 +507,7 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) (On
 		Target: &audit.Target{Type: "device", ID: deviceID.String()},
 		Params: params,
 	}
-	return OnceEntry{Spec: spec, After: tamperFindingAfter(deviceID, code, ev.Data, receivedAt), Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+	return OnceEntry{Spec: spec, Refusal: selfServiceRefusal(ev.Type, params), After: tamperFindingAfter(deviceID, code, ev.Data, receivedAt), Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
 		org, err := orgOf(ctx)
 		if err != nil {
 			return false, err
@@ -557,6 +559,22 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) (On
 		}
 		return true, err
 	}}, true
+}
+
+// selfServiceRefusal is the audit outcome of a software.self_service event (plan M13b decision 18): nil for a succeeded
+// operation, otherwise a failure with the device's outcome as error code; an outcome that is missing or unknown is a
+// failure too. Every other type is nil.
+func selfServiceRefusal(eventType string, params map[string]any) error {
+	if eventType != protocol.EventSoftwareSelfService {
+		return nil
+	}
+	switch params["outcome"] {
+	case protocol.SelfServiceSucceeded:
+		return nil
+	case protocol.SelfServiceRefused:
+		return problem.SelfServiceRefused
+	}
+	return problem.SelfServiceFailed
 }
 
 // droppedRange is the range of event numbers an agent.events_dropped event with number eventSeq declares (plan M8b
@@ -768,7 +786,8 @@ func eventParams(ev protocol.Event) map[string]any {
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
 		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit",
 		"kind", "started_at", "finished_at", "result", "error", "volume", "command_id", "mode", "local_admin", "tpm",
-		"conversion_id", "layout", "init_result", "by", "state", "package", "intent", "catalog_entry_id", "source"} {
+		"conversion_id", "layout", "init_result", "by", "state", "package", "intent", "catalog_entry_id", "source",
+		"user", "entry_id", "flatpak_ref", "scope", "action"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}
