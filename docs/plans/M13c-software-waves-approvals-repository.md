@@ -515,3 +515,20 @@ entry's deletion. Outside that revert, the guard is unchanged.
   for an agent release before `approvalAgent`, the first release with PDK-811 (`0.1.0-alpha.10`). This is the A10-6
   mechanism, tested against the alpha.9 compat fixture. It is a constant of its own, so it moves if PDK-811 ships
   later than the self-service app. No agent release may come from a tree that has PDK-810 without PDK-811.
+
+## Amendment 2026-11-09 (PDK-943, the approval gate after PDK-810)
+
+Recorded by the cluster lead after the PDK-943 review; it corrects the "Agent gate" bullet of the PDK-810 amendment.
+
+- **The gate is empty until PDK-811.** The compiler constant for the first agent that understands approvals is empty
+  today, which means no agent understands them yet: every agent, including development builds (`0.0.0-dev`,
+  devicesim) and an agent built from this tree as `0.1.0-alpha.10`, gets no approval-required package. PDK-811 sets
+  the constant to its release; from then on the A10-6 rules apply (older releases are left out, development builds
+  are current). Decision A10-17 ("no agent release from a tree with PDK-810 without PDK-811 or this gate") is met by
+  the empty gate.
+- **The gate holds across catalog entries.** When several entries offer the same package and one of them requires
+  approval, the merged package is withheld from an agent below the gate whatever the merge order.
+- **Meaning of `approved` in the bundle.** It lists the audience users who may install without a request: the users an
+  administrator approved and the users another catalog entry offers the same package to without approval. The agent
+  rule is unchanged: a listed user installs, every other audience user sees "Request". PDK-811 reads it with this
+  meaning.

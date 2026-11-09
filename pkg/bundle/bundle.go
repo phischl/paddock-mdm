@@ -497,8 +497,9 @@ type SoftwarePackage struct {
 	// install it (plan M13c decision 9); absent otherwise. Additive to schema 2 (ADR 0013): only a server that knows
 	// approvals renders it, and an agent before the compiler's self-service gate never gets an available package.
 	Approval string `json:"approval,omitempty"`
-	// Approved are the users of the audience an administrator approved (lower-case UPNs, sorted, 1 to
-	// MaxSoftwareAudience, ValidAudienceUser); only with Approval. A pointer like Audience, so SoftwarePackage stays
+	// Approved are the users of the audience who may install without a request (lower-case UPNs, sorted, 1 to
+	// MaxSoftwareAudience, ValidAudienceUser): those an administrator approved and those another catalog entry offers
+	// the same package to without approval; only with Approval. A pointer like Audience, so SoftwarePackage stays
 	// comparable.
 	Approved *[]string `json:"approved,omitempty"`
 }

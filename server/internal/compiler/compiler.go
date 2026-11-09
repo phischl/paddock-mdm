@@ -109,12 +109,16 @@ type Compiler struct {
 	// iconsMu guards iconsStored, the object keys of the catalog icons this process knows are in the bucket.
 	iconsMu     sync.Mutex
 	iconsStored map[string]bool
+	// approvalAgent is the constant approvalAgent; tests of the approval flow set the gate it will have once PDK-811
+	// ships.
+	approvalAgent string
 }
 
 // New creates a compiler.
 func New(pool *db.OrgPool, signer Signer, store Store, cache *devicecache.Cache, cfg Config) *Compiler {
 	cfg.AuthentikURL = strings.TrimRight(cfg.AuthentikURL, "/")
-	return &Compiler{pool: pool, signer: signer, store: store, cache: cache, cfg: cfg, now: time.Now, iconsStored: map[string]bool{}}
+	return &Compiler{pool: pool, signer: signer, store: store, cache: cache, cfg: cfg, now: time.Now, iconsStored: map[string]bool{},
+		approvalAgent: approvalAgent}
 }
 
 // ObjectKey is the object of a bundle version (architecture §7.1).
@@ -240,6 +244,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Software, err = loadSoftware(ctx, q); err != nil {
 			return err
 		}
+		keys.Software.approvalGate = c.approvalAgent
 		rows, err := q.ListCompileTargets(ctx, ids)
 		if err != nil {
 			return err

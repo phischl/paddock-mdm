@@ -37,6 +37,8 @@ type orgSoftware struct {
 	icons map[uuid.UUID]catalogIcon
 	// approved are the users an administrator approved, by device and catalog entry, sorted (plan M13c decision 9).
 	approved map[uuid.UUID]map[uuid.UUID][]string
+	// approvalGate is the compiler's approvalAgent, the gate withheldForApproval applies.
+	approvalGate string
 }
 
 // catalogIcon is a validated catalog icon with the hex SHA-256 that names it in bundles and object storage.
@@ -188,7 +190,8 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 // of the same application contributes the winning intent (architect decision A10-11, PDK-925); a truncated list returns a flatpak_users_truncated warning. Required and available packages name their source, and Sources lists
 // exactly those; a section with a Flatpak source also requires the flatpak runtime package (plan M13b decision 9), so
 // a Flatpak forbid, uninstall or hold alone never installs Flatpak (architect decision A10-7). For an agent release
-// before selfServiceAgent, available packages and Flatpak applications are left out (A10-6). When the flatpak package
+// before selfServiceAgent, available packages and Flatpak applications are left out (A10-6), and for an agent before
+// the approval gate each available assignment whose entry requires approval, before the merge (A10-17). When the flatpak package
 // itself resolves to forbid or uninstall, every Flatpak application is left out with its remote and the runtime, and
 // each required or available one returns a flatpak_forbidden warning (A10-9); a truncated audience returns an
 // audience_truncated warning (A10-10). Both warnings name every assignment the package came from. The section is nil
@@ -198,6 +201,8 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 	var effective []software.Effective
 	// contributors are the assignments each package came from, by packageKey, for the warnings.
 	contributors := map[string][]pgstore.SoftwareAssignment{}
+	// approvals are the approval inputs of each available package, by packageKey (plan M13c decision 9).
+	approvals := map[string]*packageApproval{}
 	for _, a := range s.assignments {
 		owners, applies := s.targets(a, device, groups)
 		if !applies {
@@ -221,6 +226,11 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 			return nil, nil, nil, nil, fmt.Errorf("software assignment %s of catalog entry %s (%s) fails the assignment rules: %w",
 				a.ID, a.CatalogEntryID, software.DisplayParam(e.name, 100), err)
 		}
+		// Per assignment, before the merge: another entry of the same package must neither carry this entry's audience
+		// to the device nor lift it by supplying the merged package (A10-17).
+		if withheldForApproval(a.Intent, e.approval, agent, s.approvalGate) {
+			continue
+		}
 		slug := ""
 		if e.source.Valid {
 			src, ok := s.sources[e.source.UUID]
@@ -241,6 +251,14 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 			Version: a.Version, Audience: audience, Users: users})
 		key := packageKey(bundle.SoftwarePackage{Package: ref.Package, FlatpakRef: ref.FlatpakRef})
 		contributors[key] = append(contributors[key], a)
+		if a.Intent == software.IntentAvailable {
+			pa := approvals[key]
+			if pa == nil {
+				pa = &packageApproval{}
+				approvals[key] = pa
+			}
+			pa.add(a.CatalogEntryID, e.approval == software.ApprovalRequired, audience)
+		}
 	}
 	resolved, mergeHolds, conflicts := software.MergeIntents(effective)
 	if len(resolved) == 0 {
@@ -256,9 +274,6 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 	var holds []bundle.Hold
 	for _, r := range resolved {
 		if !selfService && (r.FlatpakRef != "" || r.Intent == software.IntentAvailable) {
-			continue
-		}
-		if withheldForApproval(r.Intent, s.entries[r.CatalogEntryID].approval, agent, approvalAgent) {
 			continue
 		}
 		if flatpakForbidden && r.FlatpakRef != "" {
@@ -306,7 +321,7 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 				map[string]any{"users": len(*u), "kept": bundle.MaxSoftwareAudience, "flatpak_ref": p.FlatpakRef})...)
 			*u = (*u)[:bundle.MaxSoftwareAudience]
 		}
-		s.applyApproval(&p, device, r.CatalogEntryID)
+		s.applyApproval(&p, device, approvals[packageKey(p)])
 		spec.Packages = append(spec.Packages, p)
 		// ADR 0042 decision 3: a hold and a required pinned package are held by the updates reconciler, the single
 		// owner of apt-mark and the pin file.
@@ -324,16 +339,44 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 	return spec, holds, conflicts, warnings, nil
 }
 
-// applyApproval marks an available package whose entry requires approval (plan M13c decision 9): Approval required and
-// Approved the users of its audience an administrator approved on this device. When every user of a listed audience is
-// approved, nothing is left to ask for and both are omitted. The approved users come only from the requests of the
-// device, after the rollout overlay chose the package, so an approval reaches no device the package does not.
-func (s *orgSoftware) applyApproval(p *bundle.SoftwarePackage, device, entry uuid.UUID) {
-	if p.Intent != software.IntentAvailable || p.Audience == nil || s.entries[entry].approval != software.ApprovalRequired {
+// packageApproval collects, for one available package, the entries of its available assignments that require approval
+// and the merged audience of those whose entry does not, since several catalog entries can name the same package.
+type packageApproval struct {
+	gated []uuid.UUID
+	free  bundle.SoftwareAudience
+}
+
+// add records an available assignment of entry with the given audience.
+func (pa *packageApproval) add(entry uuid.UUID, gated bool, audience *bundle.SoftwareAudience) {
+	switch {
+	case gated:
+		if !slices.Contains(pa.gated, entry) {
+			pa.gated = append(pa.gated, entry)
+		}
+	case audience == nil:
+	case audience.All:
+		pa.free.All = true
+	default:
+		pa.free.Users = append(pa.free.Users, audience.Users...)
+	}
+}
+
+// applyApproval marks an available package that an entry requiring approval offers (plan M13c decision 9): Approval
+// required and Approved the users of its audience an administrator approved on this device. Whichever entry supplies
+// the merged package, an entry requiring approval keeps it, and a user another entry offers the package to without
+// approval counts as approved; when that entry offers it to everyone, no approval is left. When every user of a listed
+// audience is approved, nothing is left to ask for and both are omitted. The approved users come only from the requests
+// of the device, after the rollout overlay chose the package, so an approval reaches no device the package does not.
+func (s *orgSoftware) applyApproval(p *bundle.SoftwarePackage, device uuid.UUID, pa *packageApproval) {
+	if p.Intent != software.IntentAvailable || p.Audience == nil || pa == nil || len(pa.gated) == 0 || pa.free.All {
 		return
 	}
 	var approved []string
-	for _, u := range s.approved[device][entry] {
+	candidates := slices.Clone(pa.free.Users)
+	for _, entry := range pa.gated {
+		candidates = append(candidates, s.approved[device][entry]...)
+	}
+	for _, u := range candidates {
 		if bundle.ValidAudienceUser(u) && (p.Audience.All || slices.Contains(p.Audience.Users, u)) && !slices.Contains(approved, u) {
 			approved = append(approved, u)
 		}
@@ -351,14 +394,23 @@ func (s *orgSoftware) applyApproval(p *bundle.SoftwarePackage, device, entry uui
 
 // approvalAgent is the first agent release that honours SoftwarePackage.Approval, the first with PDK-811 (architect
 // decision A10-17). An older agent would offer Install to every user of the audience, so it never gets a package whose
-// entry requires approval. It is its own gate, not selfServiceAgent: if PDK-811 ships in a later release than the
-// self-service app, only this constant moves.
-const approvalAgent = "0.1.0-alpha.10"
+// entry requires approval. It is its own gate, not selfServiceAgent, so it follows PDK-811's release alone.
+//
+// It is empty while no agent has PDK-811: then every agent, a development build included, is withheld these packages.
+// A development build counts as current under A10-6 because it is built from this tree, and this tree has no PDK-811
+// yet, so a 0.0.0-dev or devicesim agent would offer an approval-required package without approval; an agent release
+// cut from this tree would as well. PDK-811 sets the release it ships in, and from then on development builds get the
+// packages again, so the approval flow stays testable on development stacks and with the device simulator.
+const approvalAgent = ""
 
 // withheldForApproval reports whether an available package whose entry has approval is left out for agent: it requires
-// approval and agent is a release before gate (A10-17, with the A10-6 gating mechanism).
+// approval and agent is a release before gate (A10-17, with the A10-6 gating mechanism), or gate is empty (no agent
+// release honours approval yet).
 func withheldForApproval(intent, approval, agent, gate string) bool {
-	return intent == software.IntentAvailable && approval == software.ApprovalRequired && buildinfo.OlderRelease(agent, gate)
+	if intent != software.IntentAvailable || approval != software.ApprovalRequired {
+		return false
+	}
+	return gate == "" || buildinfo.OlderRelease(agent, gate)
 }
 
 // selfServiceAgent is the first agent release that reads what plan M13b added to the software section: available
