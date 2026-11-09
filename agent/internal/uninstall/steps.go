@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/pkg/policy"
 )
@@ -134,7 +135,7 @@ func (h *Helper) sudoersAndNotices(ctx context.Context) string {
 			errs = append(errs, file+": unreadable")
 			continue
 		}
-		if err := os.Remove(h.path(file)); err != nil {
+		if err := fsutil.Remove(h.path(file)); err != nil {
 			errs = append(errs, err.Error())
 			continue
 		}
@@ -217,7 +218,7 @@ func (h *Helper) managedFiles(ctx context.Context) string {
 		if sum := sha256.Sum256(content); hex.EncodeToString(sum[:]) != m.Files[p] {
 			continue
 		}
-		if err := os.Remove(h.path(p)); err != nil {
+		if err := fsutil.Remove(h.path(p)); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
@@ -297,9 +298,10 @@ func (h *Helper) remove(p string) error {
 	return err
 }
 
-// removed deletes a file and reports whether it existed.
+// removed deletes a file and reports whether it existed. Like every delete of a managed file, it refuses a parent
+// directory that fails the parent rule (fsutil.ErrParentNotTrusted).
 func (h *Helper) removed(p string) (bool, error) {
-	err := os.Remove(h.path(p))
+	err := fsutil.Remove(h.path(p))
 	switch {
 	case err == nil:
 		return true, nil

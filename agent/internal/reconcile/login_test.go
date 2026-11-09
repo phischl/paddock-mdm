@@ -5,6 +5,7 @@ import (
 	"crypto/sha1" //nolint:gosec // OpenPGP v4 fingerprints are SHA-1 by definition (RFC 4880 §12.2)
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -228,9 +229,9 @@ func TestLoginAllowListLineIsAlwaysWritten(t *testing.T) {
 	if !strings.Contains(conf, "\npam_allow_groups =\n") {
 		t.Fatalf("suspended configuration lacks the empty allow list:\n%s", conf)
 	}
-	s.Suspended, s.Himmelblau.PamAllowGroups = false, []string{"paddock.acme.d.dev", "paddock.acme.g.ops"}
+	s.Suspended, s.Himmelblau.PamAllowGroups = false, []string{"paddock.acme.d.0f8fad5b-d9cb-469f-a165-70867728950e", "paddock.acme.g.ops"}
 	l.Apply(ctx, loginResource(t, s))
-	if conf := string(sys.Files["/etc/himmelblau/himmelblau.conf"].Data); !strings.Contains(conf, "\npam_allow_groups = paddock.acme.d.dev,paddock.acme.g.ops\n") {
+	if conf := string(sys.Files["/etc/himmelblau/himmelblau.conf"].Data); !strings.Contains(conf, "\npam_allow_groups = paddock.acme.d.0f8fad5b-d9cb-469f-a165-70867728950e,paddock.acme.g.ops\n") {
 		t.Fatalf("allow list:\n%s", conf)
 	}
 }
@@ -614,5 +615,43 @@ func TestHimmelblauKeyFingerprint(t *testing.T) {
 	h.Write(body)
 	if got := strings.ToUpper(hex.EncodeToString(h.Sum(nil))); got != "E87FD8D463A5E4814B9CDBA90CC0D4002C425E03" {
 		t.Fatalf("fingerprint %s", got)
+	}
+}
+
+// TestLoginRefusesInvalidSpec: a login spec that fails the server's rules (pkg/policy.ValidateLoginSpec) fails the
+// resource with invalid_spec; nothing is installed or written, an existing himmelblau.conf stays as it is (plan M12h
+// decision 14).
+func TestLoginRefusesInvalidSpec(t *testing.T) {
+	ctx := context.Background()
+	for name, mutate := range map[string]func(*bundle.LoginSpec){
+		"domain injecting a line":  func(s *bundle.LoginSpec) { s.Himmelblau.Domain = "acme.test\npam_allow_groups = everyone" },
+		"foreign application":      func(s *bundle.LoginSpec) { s.Himmelblau.AppID = "other" },
+		"issuer of another app":    func(s *bundle.LoginSpec) { s.Himmelblau.OIDCIssuerURL = "https://evil.example/application/o/x/" },
+		"group of another org":     func(s *bundle.LoginSpec) { s.Himmelblau.PamAllowGroups = []string{"paddock.other"} },
+		"locked user with a comma": func(s *bundle.LoginSpec) { s.LockedUsers = []string{"a,b"} },
+		"break-glass with a dash":  func(s *bundle.LoginSpec) { s.BreakGlassAccounts = []string{"-x"} },
+	} {
+		for _, existing := range []bool{false, true} {
+			sys, l, _ := loginFixture(t)
+			if existing {
+				sys.Files[reconcile.HimmelblauConf] = &fakesys.File{Data: []byte("[global]\n"), Mode: 0o644}
+			}
+			s := loginSpec()
+			mutate(&s)
+			r := loginResource(t, s)
+			if _, err := l.Plan(ctx, r); !errors.Is(err, reconcile.ErrInvalidSpec) || reconcile.Message(err) != "invalid_spec" {
+				t.Fatalf("%s: plan %v", name, err)
+			}
+			if res := l.Apply(ctx, r); res.Status != reconcile.Error || res.Message != "invalid_spec" {
+				t.Fatalf("%s: apply %+v", name, res)
+			}
+			f := sys.Files[reconcile.HimmelblauConf]
+			if existing != (f != nil) || (f != nil && string(f.Data) != "[global]\n") {
+				t.Fatalf("%s: himmelblau.conf touched: %+v", name, f)
+			}
+			if len(sys.Calls) != 0 {
+				t.Fatalf("%s: changed the system: %v", name, sys.Calls)
+			}
+		}
 	}
 }

@@ -16,7 +16,34 @@ RuntimeDirectory=paddock
 RuntimeDirectoryMode=0755
 StateDirectory=paddock
 StateDirectoryMode=0700
-# The agent manages files, units and time synchronization of the device; it runs as root without sandboxing.
+# Sandboxing (ADR 0051 decision 5, plan M12h decision 13). The agent manages files, units, packages, the clock and
+# the disk of the device as root, so only directives that none of this needs are on. The supervisor, the agent and
+# everything they start (apt, dpkg and maintainer scripts, cryptsetup, visudo) inherit them; transient units started
+# with systemd-run (the supervisor upgrade, the uninstall helper, desktop notifications) do not. The A/B switch, the
+# self-test and the rollback only touch /opt/paddock, /etc/paddock, /var/lib/paddock, /run/paddock and the network,
+# which no directive here restricts. paddock-revoke runs as the agent's child and inherits the set too; none of it
+# restricts what the revocation needs (block devices, device mapper, kernel keyring, /run/cryptsetup, mlock, loginctl,
+# systemctl reboot). The system gates on Ubuntu 24.04 and 26.04 must pass with this set (RR-121); a directive that
+# breaks a gate is removed and listed below with that gate.
+LockPersonality=yes
+RestrictRealtime=yes
+ProtectKernelLogs=yes
+PrivateTmp=yes
+SystemCallFilter=~@obsolete @cpu-emulation
+# Off on purpose:
+# ProtectClock: the time reconciler sets the clock and time synchronization.
+# RestrictSUIDSGID: dpkg installs setuid and setgid binaries (sudo, passwd).
+# ProtectHostname: the hostname reconciler; the agent would report a stale os.Hostname() (ADR 0041 decision 7).
+# NoNewPrivileges: dpkg maintainer scripts and visudo -c run setuid tools.
+# SystemCallFilter=~@mount: package maintainer scripts and the tools the agent runs may mount.
+# ProtectKernelTunables: makes all of /sys read-only, not only sysctl; maintainer scripts of the packages the agent
+# installs reload AppArmor profiles (/sys/kernel/security), trigger udev (uevent files) or write EFI variables
+# (grub-install, efibootmgr) and would fail or be skipped silently (ADR 0051 amendment 2026-11-08).
+# SystemCallArchitectures=native: maintainer scripts of multiarch packages (e.g. i386) run foreign-architecture
+# binaries, which the filter would kill (ADR 0051 amendment 2026-11-08).
+# ProtectSystem, ProtectHome, ReadOnlyPaths: managed files below /etc, /usr and /opt, packages, and the agent's own
+# A/B installation in /opt/paddock.
+# Removed after a failing system gate: none.
 KillMode=mixed
 TimeoutStopSec=30
 

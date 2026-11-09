@@ -765,7 +765,7 @@ func TestReportOnlyCoversEveryReconciler(t *testing.T) {
 
 	login, err := bundle.LoginResource(bundle.LoginSpec{Provider: bundle.ProviderHimmelblau, SessionAction: bundle.SessionActionLockScreen,
 		BreakGlassAccounts: []string{"paddock"}, LocalAdmin: &bundle.LocalAdminSpec{Username: "paddock", RotationDays: 30},
-		Himmelblau: bundle.HimmelblauSpec{OIDCIssuerURL: "https://auth.example.org/application/o/acme/", AppID: "acme",
+		Himmelblau: bundle.HimmelblauSpec{OIDCIssuerURL: "https://auth.example.org/application/o/paddock-device-acme/", AppID: "paddock-device-acme",
 			Domain: "acme.test", PamAllowGroups: []string{"paddock.acme"}, PackageVersion: "4.0.4"}})
 	if err != nil {
 		t.Fatal(err)

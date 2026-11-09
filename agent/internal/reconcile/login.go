@@ -16,6 +16,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/agent/internal/sessions"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/policy"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -108,14 +109,10 @@ func (l *Login) spec(r bundle.Resource) (bundle.LoginSpec, error) {
 	if !validNotice(s.Notice) {
 		return s, errors.New("invalid notice: not plain text of at most 2000 characters")
 	}
-	// Defence in depth: every value ends up in a line-based file.
-	h := s.Himmelblau
-	values := append([]string{h.OIDCIssuerURL, h.AppID, h.Domain}, h.PamAllowGroups...)
-	values = append(append(values, s.LockedUsers...), s.BreakGlassAccounts...)
-	for _, v := range values {
-		if !plainValue(v) {
-			return s, fmt.Errorf("invalid login value %q", v)
-		}
+	// Defence in depth with the server's own rules (plan M12h decision 14): every value ends up in a line-based
+	// file, and a refused spec never reaches himmelblau.conf.
+	if err := policy.ValidateLoginSpec(s); err != nil {
+		return s, fmt.Errorf("%w: %w", ErrInvalidSpec, err)
 	}
 	return s, nil
 }

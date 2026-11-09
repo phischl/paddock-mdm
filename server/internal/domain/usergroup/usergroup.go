@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/phischl/paddock-mdm/pkg/policy"
 )
 
 // Sources of a group.
@@ -21,7 +23,7 @@ var (
 	ErrInvalidName = errors.New("name must be 1 to 100 characters")
 )
 
-var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,40}[a-z0-9]$`)
+var slugPattern = regexp.MustCompile(`^` + policy.GroupSlugPattern + `$`)
 
 // ValidateSlug checks the slug that forms the group's Authentik name.
 func ValidateSlug(slug string) error {
