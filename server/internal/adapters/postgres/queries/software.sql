@@ -144,9 +144,9 @@ SELECT id, name FROM software_catalog_entry WHERE name = ANY(@names::text[]) ORD
 
 -- name: InsertSoftwareAssignment :exec
 INSERT INTO software_assignment (id, organization_id, catalog_entry_id, device_group_id, user_id, user_group_id, intent,
-  update_rule, version, reason, created_by)
+  update_rule, version, reason, created_by, urgent)
 VALUES (@id, @organization_id, @catalog_entry_id, sqlc.narg(device_group_id), sqlc.narg(user_id),
-  sqlc.narg(user_group_id), @intent, @update_rule, sqlc.narg(version), @reason, sqlc.narg(created_by));
+  sqlc.narg(user_group_id), @intent, @update_rule, sqlc.narg(version), @reason, sqlc.narg(created_by), @urgent);
 
 -- name: GetSoftwareAssignment :one
 SELECT a.*, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
@@ -157,8 +157,10 @@ WHERE a.id = @id;
 SELECT * FROM software_assignment WHERE id = @id FOR UPDATE;
 
 -- name: UpdateSoftwareAssignment :execrows
+-- A NULL urgent keeps the stored flag: the declarative document does not carry it (PDK-809), so an apply that changes
+-- only the reason keeps it and one that changes the effect passes false.
 UPDATE software_assignment SET intent = @intent, update_rule = @update_rule, version = sqlc.narg(version),
-  reason = @reason, updated_at = now()
+  reason = @reason, urgent = COALESCE(sqlc.narg(urgent)::boolean, urgent), updated_at = now()
 WHERE id = @id;
 
 -- name: DeleteSoftwareAssignment :execrows

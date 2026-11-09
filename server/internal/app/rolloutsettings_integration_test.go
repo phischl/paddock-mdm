@@ -88,6 +88,29 @@ func TestRolloutSettingsUpdateRecordsEveryField(t *testing.T) {
 	}
 }
 
+// TestRolloutSettingsWaveRules (A10-16): the wave success threshold and the stall warning hours default to 90 and 24,
+// are stored when given and kept when a write leaves them out (zero), so a client that does not know them never resets
+// them.
+func TestRolloutSettingsWaveRules(t *testing.T) {
+	h := newHarness(t)
+	r := newRolloutSettings(t, h, false)
+	got, err := r.Update(h.admin(principal.RoleOrgAdmin), rolloutInput(nil))
+	if err != nil || got.WaveSuccessThresholdPercent != 90 || got.StallWarningHours != 24 {
+		t.Fatalf("defaults %+v %v", got, err)
+	}
+	in := rolloutInput(nil)
+	in.WaveSuccessThresholdPercent, in.StallWarningHours = 70, 48
+	if got, err = r.Update(h.admin(principal.RoleOrgAdmin), in); err != nil || got.WaveSuccessThresholdPercent != 70 || got.StallWarningHours != 48 {
+		t.Fatalf("stored %+v %v", got, err)
+	}
+	in = rolloutInput(nil)
+	in.MinWaveMinutes = 45
+	if got, err = r.Update(h.admin(principal.RoleOrgAdmin), in); err != nil || got.WaveSuccessThresholdPercent != 70 ||
+		got.StallWarningHours != 48 || got.MinWaveMinutes != 45 {
+		t.Fatalf("a write without the wave rules %+v %v", got, err)
+	}
+}
+
 func TestRolloutSettingsValidation(t *testing.T) {
 	cases := map[string]struct {
 		mutate      func(*app.RolloutConfig)
@@ -101,6 +124,9 @@ func TestRolloutSettingsValidation(t *testing.T) {
 		"zero minutes in development":  {func(c *app.RolloutConfig) { c.MinWaveMinutes = 0 }, true, false},
 		"threshold percent above 100":  {func(c *app.RolloutConfig) { c.FailureThresholdPercent = 101 }, false, false},
 		"negative threshold minimum":   {func(c *app.RolloutConfig) { c.FailureThresholdMin = -1 }, false, false},
+		"success threshold above 100":  {func(c *app.RolloutConfig) { c.WaveSuccessThresholdPercent = 101 }, false, false},
+		"stall hours above 720":        {func(c *app.RolloutConfig) { c.StallWarningHours = 721 }, false, false},
+		"negative stall hours":         {func(c *app.RolloutConfig) { c.StallWarningHours = -1 }, false, false},
 		"organization-wide, no canary": {func(c *app.RolloutConfig) {}, false, true},
 	}
 	for name, c := range cases {

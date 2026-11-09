@@ -253,6 +253,19 @@ func DefaultUpdateRule(intent string, version *string) string {
 	return UpdateLatest
 }
 
+// MinUrgentReasonLength is the shortest reason an urgent assignment takes (plan M13c decision 7).
+const MinUrgentReasonLength = 2
+
+// ValidateUrgent checks the reason of an urgent assignment (plan M13c decision 7): an assignment the devices apply
+// outside their maintenance windows says why, in 2 to 500 characters that are not only spaces. Violations wrap
+// ErrAssignment.
+func ValidateUrgent(urgent bool, reason string) error {
+	if urgent && utf8.RuneCountInString(strings.TrimSpace(reason)) < MinUrgentReasonLength {
+		return fmt.Errorf("%w: urgent needs a reason of %d to %d characters", ErrAssignment, MinUrgentReasonLength, MaxReasonLength)
+	}
+	return nil
+}
+
 // ValidateAssignment checks the intent, update rule, version and reason of an assignment (plan M13a decision 9, plan
 // M13b decision 4). Violations wrap ErrAssignment.
 func ValidateAssignment(intent, updateRule string, version *string, reason string) error {

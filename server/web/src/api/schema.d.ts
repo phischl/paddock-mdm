@@ -334,6 +334,33 @@ export interface paths {
         patch: operations["updateDeviceGroup"];
         trace?: never;
     };
+    "/api/v1/device-groups/{id}/maintenance-window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. 404 not_found when the group has no window, is unknown or is another organization's. */
+        get: operations["getDeviceGroupMaintenanceWindow"];
+        /**
+         * @description Roles: org_admin, org_operator. Sets or replaces the group's maintenance window (plan M13c decision 4): the
+         *     group's devices install and remove the software of their policy only inside the union of the windows of their
+         *     groups; urgent assignments, the users' own self-service operations and source files do not wait. A value out
+         *     of range or a timezone the server does not know is 400 invalid_request; an unknown group or another
+         *     organization's is 404 not_found.
+         */
+        put: operations["setDeviceGroupMaintenanceWindow"];
+        post?: never;
+        /** @description Roles: org_admin, org_operator. Removes the group's window: its devices apply their software policy at the next pass unless another group of theirs has a window. 404 not_found when the group has none. */
+        delete: operations["deleteDeviceGroupMaintenanceWindow"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit-events": {
         parameters: {
             query?: never;
@@ -825,8 +852,8 @@ export interface paths {
          * @description Roles: org_admin, org_operator, org_auditor. The active devices of the organization as the rollout sees them:
          *     whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the
          *     rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged
-         *     resources. Equal sort keys are ordered by hostname. 404 not_found for an unknown rollout or one of another
-         *     organization.
+         *     resources, and whether the device holds the rollout until it applies successfully (awaiting_retry). Equal sort
+         *     keys are ordered by hostname. 404 not_found for an unknown rollout or one of another organization.
          */
         get: operations["listConfigRolloutDevices"];
         put?: never;
@@ -1942,8 +1969,9 @@ export interface paths {
         /**
          * @description Roles: org_admin. Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1
          *     and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent
-         *     (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first.
-         *     An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404
+         *     (0–100), failure_threshold_min (at least 0), the optional canary device group, whose devices always go first,
+         *     and the optional wave_success_threshold_percent (1–100) and stall_warning_hours (1–720), which keep their stored
+         *     values when absent. An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404
          *     not_found. A rollout that is already running keeps the values it started with.
          */
         put: operations["updateRolloutSettings"];
@@ -2212,7 +2240,9 @@ export interface paths {
          *     to install themselves and loses against every other intent on the same device. uninstall, forbid and
          *     available take no version. Violations are 400 invalid_request. An entry, device group, user or user group of
          *     another organization or an unknown one is 404 not_found; a second assignment of the entry to the same target
-         *     is 409 already_exists.
+         *     is 409 already_exists. urgent (plan M13c decision 7) makes the devices apply the assignment outside their
+         *     maintenance windows: it needs a reason of 2 to 500 characters (400 invalid_request otherwise) and a step-up
+         *     within the last 5 minutes (403 step_up_required otherwise; always for API tokens and MCP sessions).
          */
         post: operations["createSoftwareAssignment"];
         delete?: never;
@@ -2239,9 +2269,10 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * @description Roles: org_admin, org_operator. Replaces intent, update_rule, version and reason with the submitted values
-         *     (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the
-         *     same rules as on creation apply. The entry and the target are fixed: giving a catalog_entry_id,
+         * @description Roles: org_admin, org_operator. Replaces intent, update_rule, version, reason and urgent with the submitted
+         *     values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty,
+         *     an absent urgent is false); the same rules as on creation apply, so keeping or setting urgent needs a reason
+         *     and a step-up again. The entry and the target are fixed: giving a catalog_entry_id,
          *     device_group_id, user_id or user_group_id is 400 invalid_request.
          */
         patch: operations["updateSoftwareAssignment"];
@@ -5700,8 +5731,16 @@ export interface components {
             applied: number;
             /** @description Eligible devices the failure threshold counts (since the start or the last resume). */
             failed: number;
-            /** @description The other eligible devices. */
+            /** @description The other eligible devices, those waiting for their maintenance window included. */
             pending: number;
+            /** @description Pending eligible devices whose staged software change waits for their maintenance window (A10-16). */
+            waiting: number;
+            /**
+             * @description Eligible devices that hold the rollout until they apply successfully (A10-19): a failure the last resume
+             *     discarded (counted in pending) and, after a resume, a failure since (counted in failed). While it is above
+             *     zero no wave advances and the rollout does not complete by itself.
+             */
+            awaiting_retry: number;
         };
         ConfigRollout: {
             /** Format: uuid */
@@ -5725,6 +5764,21 @@ export interface components {
             /** Format: date-time */
             ended_at: string | null;
             ended_reason: string | null;
+            /** @description The wave success threshold the rollout started with (A10-16). */
+            wave_success_threshold_percent?: number;
+            /** @description The stall warning hours the rollout started with (A10-16). */
+            stall_warning_hours?: number;
+            /**
+             * Format: date-time
+             * @description When the worker first saw a device that joined in the current wave applied; min_wave_minutes counts from
+             *     here, not from wave_started_at (A10-16). Null while none has; a wave no device joined counts from its start.
+             */
+            wave_first_applied_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Set while the current wave is stalled and was warned about (config_rollout.stalled): the last time more of its devices applied, or its start or last resume.
+             */
+            stalled_since?: string | null;
             /** @description The counts of the rollout. After a wave action they are all zero when they could not be read once the action had been applied. */
             counts: components["schemas"]["ConfigRolloutCounts"];
         };
@@ -5771,6 +5825,19 @@ export interface components {
              *     the device is pending until it reports again.
              */
             failed_resource_ids: string[];
+            /**
+             * @description The device applied the bundle (report_outcome applied) but a staged software change still waits for its
+             *     maintenance window (pending/outside_window). It counts as pending, never as failed, and holds the wave
+             *     while the wave's applied share is below wave_success_threshold_percent (A10-16).
+             */
+            waiting_for_window: boolean;
+            /**
+             * @description The device is inside the wave and holds the rollout until it applies successfully (A10-19): its failure was
+             *     received before the rollout's last resume and it has not reported since (report_outcome none), or the
+             *     rollout was resumed and its newest report is a failure. No wave advances and the rollout does not complete
+             *     by itself while such a device exists.
+             */
+            awaiting_retry: boolean;
         };
         ConfigRolloutDevicePage: {
             items: components["schemas"]["ConfigRolloutDevice"][];
@@ -6600,6 +6667,14 @@ export interface components {
              * @description Devices of this group always go first; null = none.
              */
             canary_device_group_id: string | null;
+            /**
+             * @description Default 90 (architect decision A10-16). A wave advances only once min_wave_minutes passed since the first
+             *     device that joined in the wave applied, and once this share of those devices applied (with success or
+             *     failure) or none of them still waits for its maintenance window.
+             */
+            wave_success_threshold_percent?: number;
+            /** @description Default 24. A wave whose devices apply nothing for this long is warned about once (audit event config_rollout.stalled); the warning forces nothing. */
+            stall_warning_hours?: number;
             /** Format: date-time */
             updated_at?: string;
         };
@@ -6616,6 +6691,10 @@ export interface components {
              * @description Omit or null for none.
              */
             canary_device_group_id?: string | null;
+            /** @description 1 to 100; absent keeps the stored value (default 90). */
+            wave_success_threshold_percent?: number;
+            /** @description 1 to 720; absent keeps the stored value (default 24). */
+            stall_warning_hours?: number;
         };
         PrivacySettings: {
             retired_inventory_days: number;
@@ -6924,6 +7003,8 @@ export interface components {
             /** @description ^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall, forbid and available. */
             version?: string | null;
             reason?: string;
+            /** @description The devices apply the assignment outside their maintenance windows. Needs a reason and a fresh step-up; absent is false. */
+            urgent?: boolean;
         };
         SoftwareAssignmentUpdate: {
             /**
@@ -6950,6 +7031,8 @@ export interface components {
             update_rule?: components["schemas"]["SoftwareUpdateRule"];
             version?: string | null;
             reason?: string;
+            /** @description The devices apply the assignment outside their maintenance windows. Needs a reason and a fresh step-up; absent is false. */
+            urgent?: boolean;
         };
         SoftwareAssignment: {
             /** Format: uuid */
@@ -6977,8 +7060,30 @@ export interface components {
             update_rule: components["schemas"]["SoftwareUpdateRule"];
             version: string | null;
             reason: string;
+            /** @description The devices apply the assignment outside their maintenance windows. */
+            urgent: boolean;
             /** Format: date-time */
             created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        MaintenanceWindowInput: {
+            /** @description ISO weekdays, 1 = Monday to 7 = Sunday, each at most once; stored sorted. */
+            days: number[];
+            /** @description Minutes after local midnight in the timezone. */
+            start_minute: number;
+            /** @description Elapsed minutes; the window may run past midnight into the next day. */
+            duration_minutes: number;
+            /** @description An IANA timezone name such as Europe/Berlin. */
+            timezone: string;
+        };
+        MaintenanceWindow: {
+            /** Format: uuid */
+            device_group_id: string;
+            days: number[];
+            start_minute: number;
+            duration_minutes: number;
+            timezone: string;
             /** Format: date-time */
             updated_at: string;
         };
@@ -7076,7 +7181,7 @@ export interface components {
             intent: components["schemas"]["SoftwareIntent"];
             state: components["schemas"]["DeviceSoftwareState"];
             version: string;
-            /** @description pending: dpkg_locked, deferred_offline or not_yet_applied; failed: the reason of software.apply_failed. */
+            /** @description pending: dpkg_locked, deferred_offline, outside_window or not_yet_applied; failed: the reason of software.apply_failed. */
             reason: string;
             /** @description At most 200 characters; may name paths. */
             error: string;
@@ -9807,6 +9912,92 @@ export interface operations {
             409: components["responses"]["Problem"];
         };
     };
+    getDeviceGroupMaintenanceWindow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device group's maintenance window. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceWindow"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    setDeviceGroupMaintenanceWindow: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaintenanceWindowInput"];
+            };
+        };
+        responses: {
+            /** @description The window as stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceWindow"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    deleteDeviceGroupMaintenanceWindow: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
     listAuditEvents: {
         parameters: {
             query?: {
@@ -10624,6 +10815,8 @@ export interface operations {
                  *     OpenAPI enum, as for the outcome filter of the device's bundles.
                  */
                 report_outcome?: string[];
+                /** @description Only the devices whose awaiting_retry is this value. */
+                awaiting_retry?: boolean;
             };
             header?: never;
             path: {

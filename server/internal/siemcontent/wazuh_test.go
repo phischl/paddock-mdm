@@ -419,6 +419,7 @@ var informational = map[audit.Code]bool{
 	"config_rollout.completed":                      true,
 	"config_rollout.halted":                         true,
 	"config_rollout.resumed":                        true,
+	"config_rollout.stalled":                        true,
 	"device.agent_events_dropped":                   true,
 	"device.agent_rollback_failed":                  true,
 	"device.agent_rolled_back":                      true,

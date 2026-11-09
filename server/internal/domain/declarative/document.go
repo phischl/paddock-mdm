@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/phischl/paddock-mdm/server/internal/domain/devicegroup"
 )
 
 //go:generate cp ../../../../api/schema/paddock.v1.json paddock.v1.json
@@ -102,10 +104,12 @@ type UpdateSettings struct {
 	AgentUpdatePolicy string `json:"agent_update_policy,omitempty"`
 }
 
-// DeviceGroup is a device group; key: Name.
+// DeviceGroup is a device group; key: Name. MaintenanceWindow is the group's maintenance window (plan M13c decision 4);
+// nil means the group has none, so an item without it removes a stored window.
 type DeviceGroup struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name              string              `json:"name"`
+	Description       string              `json:"description"`
+	MaintenanceWindow *devicegroup.Window `json:"maintenance_window,omitempty"`
 }
 
 // PermissionProfile is a permission profile; key: Name.

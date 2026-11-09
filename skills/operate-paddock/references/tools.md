@@ -35,7 +35,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getConfigRollout` | read | no | A rollout with its counts, its change set and the bundle resource IDs it stages; 404 not_found for an unknown rollout or one of another organization. |
 | `haltConfigRollout` | write | yes | POST /api/v1/config-rollouts/{id}/halt |
 | `listChangeSets` | read | no | Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource. |
-| `listConfigRolloutDevices` | read | no | The active devices of the organization as the rollout sees them: whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged resources. |
+| `listConfigRolloutDevices` | read | no | The active devices of the organization as the rollout sees them: whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged resources, and whether the device holds the rollout until it applies successfully (awaiting_retry). |
 | `listConfigRollouts` | read | no | The staged configuration rollouts of the organization (plan M11 decision 34), each with its counts, which are also what the worker evaluates: eligible are the active devices inside the wave the rollout reached (every device once it completed). |
 | `resumeConfigRollout` | write | no | POST /api/v1/config-rollouts/{id}/resume |
 | `revertChangeSet` | write | yes | Applies the inverse of a change set in one transaction (plan M11 decision 21): an item it created is deleted, an item it updated or deleted is restored from its stored before-state; items created since are kept, and an item whose deleted key was created again since is set back to the before-state. |
@@ -46,9 +46,12 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | --- | --- | --- | --- |
 | `createDeviceGroup` | write | no | POST /api/v1/device-groups |
 | `deleteDeviceGroup` | write | yes | While a configuration rollout is open, a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict; the items of a deleted group are removed from every device at once (plan M11 amendment R6.13). |
+| `deleteDeviceGroupMaintenanceWindow` | write | yes | Removes the group's window: its devices apply their software policy at the next pass unless another group of theirs has a window. |
 | `getDeviceGroup` | read | no | GET /api/v1/device-groups/{id} |
+| `getDeviceGroupMaintenanceWindow` | read | no | GET /api/v1/device-groups/{id}/maintenance-window |
 | `listDeviceGroupDevices` | read | no | The members of a device group. |
 | `listDeviceGroups` | read | no | GET /api/v1/device-groups |
+| `setDeviceGroupMaintenanceWindow` | write | no | Sets or replaces the group's maintenance window (plan M13c decision 4): the group's devices install and remove the software of their policy only inside the union of the windows of their groups; urgent assignments, the users' own self-service operations and source files do not wait. |
 | `updateDeviceGroup` | write | no | While a configuration rollout is open, renaming a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict (plan M11 amendment R6.13). |
 
 ## devices
@@ -224,7 +227,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `updateDMSSettings` | write | no | Replaces the dead man's switch settings (plan M4c decision 15): period_days 7–365 (the portal warns below 30), distinct warn_days below the period. |
 | `updateLoginSettings` | write | no | Replaces the login settings; every device is recompiled. |
 | `updatePrivacySettings` | write | no | Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator, hour and set of filters) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). |
-| `updateRolloutSettings` | write | no | Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first. |
+| `updateRolloutSettings` | write | no | Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0), the optional canary device group, whose devices always go first, and the optional wave_success_threshold_percent (1–100) and stall_warning_hours (1–720), which keep their stored values when absent. |
 | `updateUpdateSettings` | write | no | Replaces the update settings: security_daily_at (HH:MM, local device time), regular_schedule (a subset of systemd OnCalendar: optional comma-separated weekdays Mon…Sun, then HH:MM; anything else is 422 invalid_schedule), regular_updates_enabled, max_random_delay_min (0–720), staleness_warning_h (1–720) and staleness_critical_h (above the warning, at most 2160; 400 invalid_request otherwise). |
 
 ## software
@@ -248,7 +251,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `listSoftwareCatalogDevices` | read | no | The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, with what they reported or the derived state not_applicable or unknown (see the device's managed software). |
 | `listSoftwareRequests` | read | no | The users' requests for available applications whose catalog entry requires approval (plan M13c decision 10), with their state: requested (waiting for a decision), approved, denied, expired (30 days without a decision, or the entry no longer requires approval) or withdrawn. |
 | `listSoftwareSources` | read | no | The organization's APT package sources (plan M13a decision 1); the list never contains the signing key. |
-| `updateSoftwareAssignment` | write | no | Replaces intent, update_rule, version and reason with the submitted values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the same rules as on creation apply. |
+| `updateSoftwareAssignment` | write | no | Replaces intent, update_rule, version, reason and urgent with the submitted values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty, an absent urgent is false); the same rules as on creation apply, so keeping or setting urgent needs a reason and a step-up again. |
 | `updateSoftwareCatalogEntry` | write | no | Replaces the entry's name, description, category, source and package references with the submitted values (an absent description or category becomes empty, an absent or null source_id selects the distribution's own repositories); the icon is changed with its own operation. |
 
 ## updates

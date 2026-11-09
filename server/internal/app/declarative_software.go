@@ -294,9 +294,15 @@ func (ex *configExec) softwareAssignment(ctx context.Context, c declarative.Chan
 		return err
 	}
 	if c.Action == declarative.ActionUpdate {
-		_, err := ex.q.UpdateSoftwareAssignment(ctx, pgstore.UpdateSoftwareAssignmentParams{
+		params := pgstore.UpdateSoftwareAssignmentParams{
 			ID: ex.id(c), Intent: a.Intent, UpdateRule: a.UpdateRule, Version: a.Version, Reason: a.Reason,
-		})
+		}
+		// The document cannot carry urgent and an apply has no step-up, so an urgent assignment whose effect changes
+		// loses the flag; otherwise an apply could repurpose it to run outside the windows (plan M13c decision 7).
+		if repurposesAssignment(c) {
+			params.Urgent = new(false)
+		}
+		_, err := ex.q.UpdateSoftwareAssignment(ctx, params)
 		return err
 	}
 	var group, user, userGroup *uuid.UUID
@@ -328,6 +334,18 @@ func (ex *configExec) softwareAssignment(ctx context.Context, c declarative.Chan
 		return problem.AlreadyExists.WithDetail("this application is already assigned to this target")
 	}
 	return err
+}
+
+// repurposesAssignment reports whether an assignment update changes what the assignment does on a device, as opposed
+// to a change of its reason alone.
+func repurposesAssignment(c declarative.Change) bool {
+	for _, f := range c.Fields {
+		switch f.Name {
+		case "intent", "update_rule", "version":
+			return true
+		}
+	}
+	return false
 }
 
 // guardEntryDeletions refuses a plan that deletes a catalog entry (a rename in a document is the deletion of the old

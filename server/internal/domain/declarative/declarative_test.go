@@ -519,3 +519,46 @@ func mustRevert(t *testing.T, d declarative.Document, plan declarative.Plan, bef
 	}
 	return out
 }
+
+// TestMaintenanceWindowItem (PDK-809): the schema checks a device group's window, the decoded item carries it, and a
+// plan shows a changed window as one field in its summary form.
+func TestMaintenanceWindowItem(t *testing.T) {
+	doc := func(window string) []byte {
+		return []byte(`{"api_version":"paddock/v1","kind":"OrganizationConfig","device_groups":[{"name":"night"` + window + `}]}`)
+	}
+	ok := `,"maintenance_window":{"days":[1,5],"start_minute":1320,"duration_minutes":120,"timezone":"Europe/Berlin"}`
+	if err := declarative.ValidateJSON(doc(ok)); err != nil {
+		t.Fatalf("valid window refused: %v", err)
+	}
+	for _, bad := range []string{
+		`,"maintenance_window":{"days":[8],"start_minute":0,"duration_minutes":60,"timezone":"UTC"}`,
+		`,"maintenance_window":{"days":[1,1],"start_minute":0,"duration_minutes":60,"timezone":"UTC"}`,
+		`,"maintenance_window":{"days":[1],"start_minute":1440,"duration_minutes":60,"timezone":"UTC"}`,
+		`,"maintenance_window":{"days":[1],"start_minute":0,"duration_minutes":20,"timezone":"UTC"}`,
+		`,"maintenance_window":{"days":[1],"start_minute":0,"duration_minutes":60,"timezone":"../x"}`,
+		`,"maintenance_window":{"days":[1],"start_minute":0,"duration_minutes":60}`,
+	} {
+		if err := declarative.ValidateJSON(doc(bad)); err == nil {
+			t.Errorf("window %s accepted", bad)
+		}
+	}
+	with, err := declarative.Decode(doc(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := declarative.Decode(doc(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := (*with.DeviceGroups)[0].MaintenanceWindow; w == nil || w.Timezone != "Europe/Berlin" || len(w.Days) != 2 {
+		t.Fatalf("decoded window %+v", w)
+	}
+	plan := declarative.Diff(without, with)
+	if len(plan.Changes) != 1 || len(plan.Changes[0].Fields) != 1 || plan.Changes[0].Fields[0].Name != "maintenance_window" ||
+		plan.Changes[0].Fields[0].Before != nil || plan.Changes[0].Fields[0].After != "1,5 22:00+120m Europe/Berlin" {
+		t.Fatalf("plan %+v", plan)
+	}
+	if back := declarative.Diff(with, without); len(back.Changes) != 1 || back.Changes[0].Fields[0].After != nil {
+		t.Fatalf("removal plan %+v", back)
+	}
+}

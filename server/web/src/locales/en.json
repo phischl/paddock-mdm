@@ -384,7 +384,9 @@
     "device_group": {
       "created": "{actor} created the device group {name}",
       "updated": "{actor} updated the device group {name}",
-      "deleted": "{actor} deleted the device group {name}"
+      "deleted": "{actor} deleted the device group {name}",
+      "maintenance_window_changed": "{actor} set the maintenance window of the device group {name}",
+      "maintenance_window_removed": "{actor} removed the maintenance window of the device group {name}"
     },
     "enrollment_token": {
       "created": "{actor} created the enrollment token {name}",
@@ -554,7 +556,8 @@
       "advanced": "The configuration rollout moved to {percent, number} % of the devices",
       "halted": "The configuration rollout was halted: {reason}",
       "resumed": "{actor} resumed the configuration rollout",
-      "completed": "The configuration rollout was completed"
+      "completed": "The configuration rollout was completed",
+      "stalled": "The current wave of the configuration rollout made no progress for {stall_warning_hours, number} hours: {waiting, number} devices wait for their maintenance window, {awaiting_retry, number} await a successful retry"
     },
     "managed_file": {
       "created": "{actor} defined the managed file {path}",
@@ -3538,6 +3541,7 @@
     "reason": {
       "dpkg_locked": "Another package operation is running; the device retries.",
       "deferred_offline": "The device waits for a server connection before it removes software.",
+      "outside_window": "The device waits for its maintenance window before it installs or removes software.",
       "would_remove_dependents": "The operation would remove other packages; nothing was changed.",
       "no_candidate": "The package or version is not available from the device's sources.",
       "fingerprint_mismatch": "The source key does not match its fingerprint; the source was not written.",

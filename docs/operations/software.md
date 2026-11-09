@@ -153,6 +153,64 @@ The source files, keyrings and the forbid pin file are a **protected area**: an 
 `device.tamper_protected_file_changed` naming the file (RR-80). The Himmelblau source and keyring belong to the login
 configuration and are never touched by the catalog.
 
+## Maintenance windows
+
+A device group can have one maintenance window (`GET`, `PUT`, `DELETE /api/v1/device-groups/{id}/maintenance-window`,
+or the `maintenance_window` field of the group's item in the declarative configuration). A window is a set of ISO
+weekdays (`days`, 1 = Monday to 7 = Sunday), a start in minutes after local midnight (`start_minute`, 0 to 1439), a
+duration (`duration_minutes`, 30 to 1440) and an IANA timezone (`timezone`, for example `Europe/Berlin`):
+
+```json
+{ "days": [1, 2, 3, 4, 5], "start_minute": 1320, "duration_minutes": 180, "timezone": "Europe/Berlin" }
+```
+
+is every weekday night from 22:00 to 01:00 Berlin time. A window may run past midnight into the next day; the next day
+need not be one of its days. The duration is elapsed time: on the night the clocks change, a window ends an hour
+earlier or later on the wall clock, a start that falls into the skipped hour moves forward by that hour, so a window
+is never skipped, and a start in the repeated hour opens once, at its second occurrence. A window of 1440 minutes
+from 00:00 is therefore not "always": on the night the clocks go back it ends at 23:00, and the device waits one hour
+until the next day's window opens at midnight. A group that should apply at any time has no window. Setting and removing a window
+needs `org_admin` or `org_operator` and is audited (`device_group.maintenance_window_changed`,
+`device_group.maintenance_window_removed`, with every field).
+
+**A device in several groups** has the union of their windows: it applies its software whenever one of them is
+open. Only groups with a window count (Q17, confirmed by architect decision A10-16): a device in a group with a window
+and in another group without one has the first group's window and stays restricted to it. A device none of whose
+groups has a window applies at any time.
+
+**Outside every window** the device still writes the source files, keyrings and the forbid pin file, but it neither
+installs, reinstalls, moves to a pinned version nor removes the packages of its policy, APT and Flatpak alike. They
+report `pending`, `outside_window`, and the first drift check inside a window runs them (the check runs every 5
+minutes, so a 30-minute window always gets several). The drift checks keep their own rhythm and do not wait for a
+window to open: a device whose `drift_interval_s` in `/etc/paddock/agent.yml` is raised to the length of its shortest
+window or more can miss that window on some days, so keep the interval well below the shortest window. Removals inside the window still wait for a server connection
+(`deferred_offline`). A user's own self-service installs and removals never wait. Removing a window lets the devices
+apply at their next drift check.
+
+**Urgent assignments.** An assignment with `urgent: true` is applied outside the windows too, for example a `forbid`
+of a package with a known vulnerability. Setting `urgent` (on creation or on an update, where an absent `urgent` is
+`false`) needs a reason of 2 to 500 characters and a step-up within the last 5 minutes; API tokens and MCP sessions
+cannot set it (403 `step_up_required`). The audit event carries `urgent` and the reason. The declarative configuration
+does not carry the flag: an apply that changes only the reason keeps it, and an apply that changes the intent, the
+update rule or the version clears it, because an apply cannot carry a step-up. Set it again through the API after
+such an apply. `urgent` is about the window only; it does not skip a staged rollout's waves (that is the `urgent`
+query parameter of the configuration writes).
+
+**Staged rollouts and windows.** In a staged rollout, a device whose staged entry waits for its window counts as
+pending, never as failed, until it has run the change; the rollout's device list shows it with `waiting_for_window`.
+A wave advances only when both hold (architect decision A10-16): `min_wave_minutes` have passed since the first device
+of the wave applied, and the share of the wave's devices that applied reaches the rollout's
+`wave_success_threshold_percent` (default 90) or none of them still waits for its window. A change made during the day
+for devices with a nightly window therefore stays in its first wave until the night; the next wave starts once the
+first one's devices have applied and the minimum duration has passed. A wave without a new apply for `stall_warning_hours` (default 24) gets one `config_rollout.stalled` audit
+event; it forces nothing and nothing is installed outside a window because of it. To go faster, advance the wave by
+hand or make the assignment `urgent`. Details: [configuration rollouts](configuration-rollouts.md), section 5.
+
+**Timezones.** The api accepts only timezones it knows. A device without the zone in its tzdata evaluates the window
+in UTC and names the zone in the software resource's status message (`window_timezone_unknown: <zone> (evaluated in
+UTC)`); the agent's log has it once per bundle. Install the `tzdata` package on the device to fix it. An agent before
+0.1.0-alpha.10 does not know windows and applies at once.
+
 ## States and reasons
 
 The device reports one state per assigned application with its check-in when the status changed, and at least once a
@@ -173,6 +231,7 @@ day; the portal shows when it was reported (RR-82).
 | `not_yet_applied` | pending | the device has the assignment but has not run the operation yet; wait for the next drift check |
 | `dpkg_locked` | pending | another package operation holds the dpkg lock; the device retries at the next drift check |
 | `deferred_offline` | pending | a removal waits because the device has had no check-in for 15 minutes; it runs after the next successful check-in |
+| `outside_window` | pending | the device is outside the maintenance windows of its groups; the operation runs at the first drift check inside one, or at once when the assignment is made `urgent` |
 | `fingerprint_mismatch` | failed | the keyring in the bundle does not have the source's fingerprint; nothing of the source was written. Check the source's key |
 | `source_unreachable` | failed | the source's `apt-get update` failed (DNS, TLS, HTTP, signature); the error has apt's message. See troubleshooting |
 | `conflicting_source` | failed | the device already has the repository with another keyring; remove one of the two entries |
@@ -220,5 +279,6 @@ On the device:
 ## Residual risks
 
 RR-77 (a source key is root-equivalent), RR-78 (maintainer scripts run as root), RR-79 (reserved for Flathub, M13b),
-RR-80 (local root bypasses pins and holds), RR-81 (refused operations stay refused), RR-82 (status can lag) and RR-83
-(pinned versions vanish), in [residual-risks.md](../compliance/residual-risks.md#software-catalog-m13a).
+RR-80 (local root bypasses pins and holds), RR-81 (refused operations stay refused), RR-82 (status can lag), RR-83
+(pinned versions vanish) and RR-118 (maintenance windows defer security-relevant removals), in
+[residual-risks.md](../compliance/residual-risks.md#software-catalog-m13a).

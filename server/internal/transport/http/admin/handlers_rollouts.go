@@ -76,7 +76,7 @@ func (h *handlers) ListConfigRolloutDevices(ctx context.Context, req adminapi.Li
 		}
 	}
 	res, err := h.configRollouts.ListDevices(ctx, req.Id, app.ConfigRolloutDeviceQuery{
-		Page: params.ListPage(), InWave: req.Params.InWave, ReportOutcomes: outcomes,
+		Page: params.ListPage(), InWave: req.Params.InWave, ReportOutcomes: outcomes, AwaitingRetry: req.Params.AwaitingRetry,
 	})
 	if err != nil {
 		return nil, err
@@ -86,6 +86,7 @@ func (h *handlers) ListConfigRolloutDevices(ctx context.Context, req adminapi.Li
 		items[i] = adminapi.ConfigRolloutDevice{
 			DeviceId: d.DeviceID, Hostname: d.Hostname, InWave: d.InWave, BundleVersion: d.BundleVersion,
 			CarriesRollout: d.CarriesRollout, ReportOutcome: d.ReportOutcome, FailedResourceIds: d.FailedResourceIDs,
+			WaitingForWindow: d.WaitingForWindow, AwaitingRetry: d.AwaitingRetry,
 		}
 	}
 	return adminapi.ListConfigRolloutDevices200JSONResponse(listing.NewPage(items, params, res.Count)), nil
@@ -150,7 +151,14 @@ func toConfigRollout(r pgstore.ConfigRollout, c app.RolloutCounts) adminapi.Conf
 		FailureThresholdPercent: int(r.FailureThresholdPercent), FailureThresholdMin: int(r.FailureThresholdMin),
 		Status: adminapi.ConfigRolloutStatus(r.Status), HaltedReason: r.HaltedReason, StartedBy: r.StartedBy,
 		StartedAt: r.StartedAt.UTC(), EndedAt: utcPtr(r.EndedAt), EndedReason: r.EndedReason,
-		Counts: adminapi.ConfigRolloutCounts{Eligible: c.Eligible, Applied: c.Applied, Failed: c.Failed, Pending: c.Pending},
+		Counts: adminapi.ConfigRolloutCounts{Eligible: c.Eligible, Applied: c.Applied, Failed: c.Failed, Pending: c.Pending,
+			Waiting: c.Waiting, AwaitingRetry: c.AwaitingRetry},
+		WaveSuccessThresholdPercent: new(int(r.WaveSuccessThresholdPercent)), StallWarningHours: new(int(r.StallWarningHours)),
+		WaveFirstAppliedAt: utcPtr(r.WaveFirstAppliedAt),
+	}
+	if r.StallWarnedAt != nil {
+		since := r.WaveProgressAt.UTC()
+		out.StalledSince = &since
 	}
 	if r.CanaryDeviceGroupID.Valid {
 		out.CanaryDeviceGroupId = &r.CanaryDeviceGroupID.UUID

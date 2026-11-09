@@ -231,7 +231,7 @@ func (q *Queries) GetDeviceSoftwareTarget(ctx context.Context, id uuid.UUID) (Ge
 }
 
 const getSoftwareAssignment = `-- name: GetSoftwareAssignment :one
-SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, a.user_id, a.user_group_id, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, a.user_id, a.user_group_id, a.urgent, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
 WHERE a.id = $1
 `
 
@@ -249,6 +249,7 @@ type GetSoftwareAssignmentRow struct {
 	UpdatedAt      time.Time
 	UserID         uuid.NullUUID
 	UserGroupID    uuid.NullUUID
+	Urgent         bool
 	AppName        string
 }
 
@@ -269,13 +270,14 @@ func (q *Queries) GetSoftwareAssignment(ctx context.Context, id uuid.UUID) (GetS
 		&i.UpdatedAt,
 		&i.UserID,
 		&i.UserGroupID,
+		&i.Urgent,
 		&i.AppName,
 	)
 	return i, err
 }
 
 const getSoftwareAssignmentForUpdate = `-- name: GetSoftwareAssignmentForUpdate :one
-SELECT id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_by, created_at, updated_at, user_id, user_group_id FROM software_assignment WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_by, created_at, updated_at, user_id, user_group_id, urgent FROM software_assignment WHERE id = $1 FOR UPDATE
 `
 
 // The assignment locked for the rest of the transaction: an update writes the intent columns back.
@@ -296,6 +298,7 @@ func (q *Queries) GetSoftwareAssignmentForUpdate(ctx context.Context, id uuid.UU
 		&i.UpdatedAt,
 		&i.UserID,
 		&i.UserGroupID,
+		&i.Urgent,
 	)
 	return i, err
 }
@@ -465,9 +468,9 @@ func (q *Queries) GetSoftwareSourceForUpdate(ctx context.Context, id uuid.UUID) 
 
 const insertSoftwareAssignment = `-- name: InsertSoftwareAssignment :exec
 INSERT INTO software_assignment (id, organization_id, catalog_entry_id, device_group_id, user_id, user_group_id, intent,
-  update_rule, version, reason, created_by)
+  update_rule, version, reason, created_by, urgent)
 VALUES ($1, $2, $3, $4, $5,
-  $6, $7, $8, $9, $10, $11)
+  $6, $7, $8, $9, $10, $11, $12)
 `
 
 type InsertSoftwareAssignmentParams struct {
@@ -482,6 +485,7 @@ type InsertSoftwareAssignmentParams struct {
 	Version        *string
 	Reason         string
 	CreatedBy      uuid.NullUUID
+	Urgent         bool
 }
 
 func (q *Queries) InsertSoftwareAssignment(ctx context.Context, arg InsertSoftwareAssignmentParams) error {
@@ -497,6 +501,7 @@ func (q *Queries) InsertSoftwareAssignment(ctx context.Context, arg InsertSoftwa
 		arg.Version,
 		arg.Reason,
 		arg.CreatedBy,
+		arg.Urgent,
 	)
 	return err
 }
@@ -595,7 +600,7 @@ func (q *Queries) InsertSoftwareSource(ctx context.Context, arg InsertSoftwareSo
 }
 
 const listAllSoftwareAssignments = `-- name: ListAllSoftwareAssignments :many
-SELECT id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_by, created_at, updated_at, user_id, user_group_id FROM software_assignment ORDER BY catalog_entry_id, device_group_id NULLS FIRST, id
+SELECT id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_by, created_at, updated_at, user_id, user_group_id, urgent FROM software_assignment ORDER BY catalog_entry_id, device_group_id NULLS FIRST, id
 `
 
 // Every assignment of the organization (compiler), in a stable order.
@@ -622,6 +627,7 @@ func (q *Queries) ListAllSoftwareAssignments(ctx context.Context) ([]SoftwareAss
 			&i.UpdatedAt,
 			&i.UserID,
 			&i.UserGroupID,
+			&i.Urgent,
 		); err != nil {
 			return nil, err
 		}
@@ -875,7 +881,7 @@ func (q *Queries) ListSoftwareAssignmentTargetsOfEntry(ctx context.Context, arg 
 }
 
 const listSoftwareAssignments = `-- name: ListSoftwareAssignments :many
-SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, a.user_id, a.user_group_id, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, a.user_id, a.user_group_id, a.urgent, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
 WHERE ($1::text IS NULL OR e.name ILIKE $1::text ESCAPE '\')
   AND ($2::uuid IS NULL OR a.catalog_entry_id = $2::uuid)
   AND ($3::uuid IS NULL OR a.device_group_id = $3::uuid)
@@ -923,6 +929,7 @@ type ListSoftwareAssignmentsRow struct {
 	UpdatedAt      time.Time
 	UserID         uuid.NullUUID
 	UserGroupID    uuid.NullUUID
+	Urgent         bool
 	AppName        string
 }
 
@@ -960,6 +967,7 @@ func (q *Queries) ListSoftwareAssignments(ctx context.Context, arg ListSoftwareA
 			&i.UpdatedAt,
 			&i.UserID,
 			&i.UserGroupID,
+			&i.Urgent,
 			&i.AppName,
 		); err != nil {
 			return nil, err
@@ -1412,8 +1420,8 @@ func (q *Queries) SetSoftwareCatalogEntryIcon(ctx context.Context, arg SetSoftwa
 
 const updateSoftwareAssignment = `-- name: UpdateSoftwareAssignment :execrows
 UPDATE software_assignment SET intent = $1, update_rule = $2, version = $3,
-  reason = $4, updated_at = now()
-WHERE id = $5
+  reason = $4, urgent = COALESCE($5::boolean, urgent), updated_at = now()
+WHERE id = $6
 `
 
 type UpdateSoftwareAssignmentParams struct {
@@ -1421,15 +1429,19 @@ type UpdateSoftwareAssignmentParams struct {
 	UpdateRule string
 	Version    *string
 	Reason     string
+	Urgent     *bool
 	ID         uuid.UUID
 }
 
+// A NULL urgent keeps the stored flag: the declarative document does not carry it (PDK-809), so an apply that changes
+// only the reason keeps it and one that changes the effect passes false.
 func (q *Queries) UpdateSoftwareAssignment(ctx context.Context, arg UpdateSoftwareAssignmentParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateSoftwareAssignment,
 		arg.Intent,
 		arg.UpdateRule,
 		arg.Version,
 		arg.Reason,
+		arg.Urgent,
 		arg.ID,
 	)
 	if err != nil {

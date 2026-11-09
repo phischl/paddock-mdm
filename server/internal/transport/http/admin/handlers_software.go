@@ -269,6 +269,7 @@ func (h *handlers) CreateSoftwareAssignment(ctx context.Context, req adminapi.Cr
 		CatalogEntryID: &b.CatalogEntryId, DeviceGroupID: b.DeviceGroupId, UserID: b.UserId, UserGroupID: b.UserGroupId,
 		Intent:     string(b.Intent),
 		UpdateRule: string(deref(b.UpdateRule, "")), Version: b.Version, Reason: deref(b.Reason, ""),
+		Urgent: deref(b.Urgent, false),
 	})
 	if err != nil {
 		return nil, err
@@ -293,6 +294,7 @@ func (h *handlers) UpdateSoftwareAssignment(ctx context.Context, req adminapi.Up
 		CatalogEntryID: b.CatalogEntryId, DeviceGroupID: b.DeviceGroupId, UserID: b.UserId, UserGroupID: b.UserGroupId,
 		Intent:     string(b.Intent),
 		UpdateRule: string(deref(b.UpdateRule, "")), Version: b.Version, Reason: deref(b.Reason, ""),
+		Urgent: deref(b.Urgent, false),
 	})
 	if err != nil {
 		return nil, err
@@ -350,7 +352,7 @@ func toSoftwareAssignment(a app.Assignment) adminapi.SoftwareAssignment {
 		Id: a.ID, AppName: a.AppName, CatalogEntryId: a.CatalogEntryID, DeviceGroupId: idPtr(a.DeviceGroupID),
 		UserId: idPtr(a.UserID), UserGroupId: idPtr(a.UserGroupID),
 		Intent: adminapi.SoftwareIntent(a.Intent), UpdateRule: adminapi.SoftwareUpdateRule(a.UpdateRule), Version: a.Version,
-		Reason: a.Reason, CreatedAt: a.CreatedAt.UTC(), UpdatedAt: a.UpdatedAt.UTC(),
+		Reason: a.Reason, Urgent: a.Urgent, CreatedAt: a.CreatedAt.UTC(), UpdatedAt: a.UpdatedAt.UTC(),
 	}
 }
 

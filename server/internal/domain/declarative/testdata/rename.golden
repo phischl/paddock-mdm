@@ -51,6 +51,11 @@
           "name": "description",
           "before": "",
           "after": null
+        },
+        {
+          "name": "maintenance_window",
+          "before": null,
+          "after": null
         }
       ]
     },
@@ -68,6 +73,11 @@
           "name": "description",
           "before": null,
           "after": ""
+        },
+        {
+          "name": "maintenance_window",
+          "before": null,
+          "after": null
         }
       ]
     },

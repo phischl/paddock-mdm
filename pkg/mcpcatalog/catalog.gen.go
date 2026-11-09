@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "bf4f2b9028697894c3a1810dd181a925d1a48818e5d6c2ba6951f881e310a7e7"
+const Version = "c7141bf0a618de18569ec6aca18e15d1212167af5f71a1fd1bb45aa00ad9cb50"
 
 var tools = []Tool{
 	{
@@ -653,8 +653,8 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "software_assignment.created",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator. Assigns a catalog entry with an intent to one target: every device of the organization (no target ID), a device group (device_group_id), a user (user_id) or a user group (user_group_id); more than one target ID is 400 invalid_request. required keeps the application installed (update_rule latest without a version, or pinned with one; omitted, the rule is pinned for a required assignment with a version and latest otherwise); uninstall removes it; hold keeps the installed version (with a version it is pinned); forbid removes it and blocks it for apt; available offers it to the target's users to install themselves and loses against every other intent on the same device. uninstall, forbid and available take no version. Violations are 400 invalid_request. An entry, device group, user or user group of another organization or an unknown one is 404 not_found; a second assignment of the entry to the same target is 409 already_exists.\n\nChanges data; needs your MCP write access.",
-		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"catalog_entry_id\":{\"format\":\"uuid\",\"type\":\"string\"},\"device_group_id\":{\"description\":\"Omit or null, together with user_id and user_group_id, for every device of the organization.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"intent\":{\"enum\":[\"required\",\"uninstall\",\"hold\",\"forbid\",\"available\"],\"type\":\"string\"},\"reason\":{\"maxLength\":500,\"type\":\"string\"},\"update_rule\":{\"enum\":[\"latest\",\"pinned\"],\"type\":\"string\"},\"user_group_id\":{\"description\":\"The user group the assignment targets.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"user_id\":{\"description\":\"The user the assignment targets.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"version\":{\"description\":\"^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall, forbid and available.\",\"maxLength\":128,\"type\":[\"string\",\"null\"]}},\"required\":[\"catalog_entry_id\",\"intent\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
+		Description: "Roles: org_admin, org_operator. Assigns a catalog entry with an intent to one target: every device of the organization (no target ID), a device group (device_group_id), a user (user_id) or a user group (user_group_id); more than one target ID is 400 invalid_request. required keeps the application installed (update_rule latest without a version, or pinned with one; omitted, the rule is pinned for a required assignment with a version and latest otherwise); uninstall removes it; hold keeps the installed version (with a version it is pinned); forbid removes it and blocks it for apt; available offers it to the target's users to install themselves and loses against every other intent on the same device. uninstall, forbid and available take no version. Violations are 400 invalid_request. An entry, device group, user or user group of another organization or an unknown one is 404 not_found; a second assignment of the entry to the same target is 409 already_exists. urgent (plan M13c decision 7) makes the devices apply the assignment outside their maintenance windows: it needs a reason of 2 to 500 characters (400 invalid_request otherwise) and a step-up within the last 5 minutes (403 step_up_required otherwise; always for API tokens and MCP sessions).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"catalog_entry_id\":{\"format\":\"uuid\",\"type\":\"string\"},\"device_group_id\":{\"description\":\"Omit or null, together with user_id and user_group_id, for every device of the organization.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"intent\":{\"enum\":[\"required\",\"uninstall\",\"hold\",\"forbid\",\"available\"],\"type\":\"string\"},\"reason\":{\"maxLength\":500,\"type\":\"string\"},\"update_rule\":{\"enum\":[\"latest\",\"pinned\"],\"type\":\"string\"},\"urgent\":{\"description\":\"The devices apply the assignment outside their maintenance windows. Needs a reason and a fresh step-up; absent is false.\",\"type\":\"boolean\"},\"user_group_id\":{\"description\":\"The user group the assignment targets.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"user_id\":{\"description\":\"The user the assignment targets.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"version\":{\"description\":\"^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall, forbid and available.\",\"maxLength\":128,\"type\":[\"string\",\"null\"]}},\"required\":[\"catalog_entry_id\",\"intent\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "createSoftwareCatalogEntry",
@@ -762,6 +762,24 @@ var tools = []Tool{
 		AuditCode:   "device_group.deleted",
 		Summary:     "",
 		Description: "Roles: org_admin. While a configuration rollout is open, a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict; the items of a deleted group are removed from every device at once (plan M11 amendment R6.13).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "deleteDeviceGroupMaintenanceWindow",
+		Method:      "DELETE",
+		Path:        "/api/v1/device-groups/{id}/maintenance-window",
+		Pattern:     "DELETE /api/v1/device-groups/{id}/maintenance-window",
+		Tag:         "device-groups",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: true,
+		Idempotent:  true,
+		AuditCode:   "device_group.maintenance_window_removed",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator. Removes the group's window: its devices apply their software policy at the next pass unless another group of theirs has a window. 404 not_found when the group has none.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
@@ -1734,6 +1752,24 @@ var tools = []Tool{
 		AuditCode:   "",
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "getDeviceGroupMaintenanceWindow",
+		Method:      "GET",
+		Path:        "/api/v1/device-groups/{id}/maintenance-window",
+		Pattern:     "GET /api/v1/device-groups/{id}/maintenance-window",
+		Tag:         "device-groups",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. 404 not_found when the group has no window, is unknown or is another organization's.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
@@ -2849,8 +2885,8 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator, org_auditor. The active devices of the organization as the rollout sees them: whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged resources. Equal sort keys are ordered by hostname. 404 not_found for an unknown rollout or one of another organization.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: hostname, in_wave, report_outcome), q (search over: hostname).",
-		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"in_wave\":{\"type\":\"boolean\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"report_outcome\":{\"description\":\"Repeatable; applied, rejected, report_only or none (400 invalid_request otherwise). The values are not an\\nOpenAPI enum, as for the outcome filter of the device's bundles.\\n\",\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"sort\":{\"default\":\"hostname\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The hostname, then the device id is the tie-breaker.\",\"enum\":[\"hostname\",\"-hostname\",\"in_wave\",\"-in_wave\",\"report_outcome\",\"-report_outcome\"],\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+		Description: "Roles: org_admin, org_operator, org_auditor. The active devices of the organization as the rollout sees them: whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged resources, and whether the device holds the rollout until it applies successfully (awaiting_retry). Equal sort keys are ordered by hostname. 404 not_found for an unknown rollout or one of another organization.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: hostname, in_wave, report_outcome), q (search over: hostname).",
+		InputSchema: json.RawMessage("{\"properties\":{\"awaiting_retry\":{\"description\":\"Only the devices whose awaiting_retry is this value.\",\"type\":\"boolean\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"in_wave\":{\"type\":\"boolean\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"report_outcome\":{\"description\":\"Repeatable; applied, rejected, report_only or none (400 invalid_request otherwise). The values are not an\\nOpenAPI enum, as for the outcome filter of the device's bundles.\\n\",\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"sort\":{\"default\":\"hostname\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The hostname, then the device id is the tie-breaker.\",\"enum\":[\"hostname\",\"-hostname\",\"in_wave\",\"-in_wave\",\"report_outcome\",\"-report_outcome\"],\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listConfigRollouts",
@@ -4077,6 +4113,24 @@ var tools = []Tool{
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
+		Name:        "setDeviceGroupMaintenanceWindow",
+		Method:      "PUT",
+		Path:        "/api/v1/device-groups/{id}/maintenance-window",
+		Pattern:     "PUT /api/v1/device-groups/{id}/maintenance-window",
+		Tag:         "device-groups",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "device_group.maintenance_window_changed",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator. Sets or replaces the group's maintenance window (plan M13c decision 4): the group's devices install and remove the software of their policy only inside the union of the windows of their groups; urgent assignments, the users' own self-service operations and source files do not wait. A value out of range or a timezone the server does not know is 400 invalid_request; an unknown group or another organization's is 404 not_found.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"days\":{\"description\":\"ISO weekdays, 1 = Monday to 7 = Sunday, each at most once; stored sorted.\",\"items\":{\"maximum\":7,\"minimum\":1,\"type\":\"integer\"},\"maxItems\":7,\"minItems\":1,\"type\":\"array\"},\"duration_minutes\":{\"description\":\"Elapsed minutes; the window may run past midnight into the next day.\",\"maximum\":1440,\"minimum\":30,\"type\":\"integer\"},\"start_minute\":{\"description\":\"Minutes after local midnight in the timezone.\",\"maximum\":1439,\"minimum\":0,\"type\":\"integer\"},\"timezone\":{\"description\":\"An IANA timezone name such as Europe/Berlin.\",\"maxLength\":64,\"type\":\"string\"}},\"required\":[\"days\",\"start_minute\",\"duration_minutes\",\"timezone\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
+	{
 		Name:        "setDeviceGroups",
 		Method:      "PUT",
 		Path:        "/api/v1/devices/{id}/groups",
@@ -4649,8 +4703,8 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "settings.rollout_changed",
 		Summary:     "",
-		Description: "Roles: org_admin. Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first. An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404 not_found. A rollout that is already running keeps the values it started with.\n\nChanges data; needs your MCP write access.",
-		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"canary_device_group_id\":{\"description\":\"Omit or null for none.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"enabled\":{\"type\":\"boolean\"},\"failure_threshold_min\":{\"minimum\":0,\"type\":\"integer\"},\"failure_threshold_percent\":{\"maximum\":100,\"minimum\":0,\"type\":\"integer\"},\"min_wave_minutes\":{\"description\":\"At least 15 (1 in a development stack).\",\"type\":\"integer\"},\"waves\":{\"description\":\"Strictly increasing, ending with 100.\",\"items\":{\"maximum\":100,\"minimum\":1,\"type\":\"integer\"},\"maxItems\":10,\"minItems\":1,\"type\":\"array\"}},\"required\":[\"enabled\",\"waves\",\"min_wave_minutes\",\"failure_threshold_percent\",\"failure_threshold_min\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
+		Description: "Roles: org_admin. Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0), the optional canary device group, whose devices always go first, and the optional wave_success_threshold_percent (1–100) and stall_warning_hours (1–720), which keep their stored values when absent. An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404 not_found. A rollout that is already running keeps the values it started with.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"canary_device_group_id\":{\"description\":\"Omit or null for none.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"enabled\":{\"type\":\"boolean\"},\"failure_threshold_min\":{\"minimum\":0,\"type\":\"integer\"},\"failure_threshold_percent\":{\"maximum\":100,\"minimum\":0,\"type\":\"integer\"},\"min_wave_minutes\":{\"description\":\"At least 15 (1 in a development stack).\",\"type\":\"integer\"},\"stall_warning_hours\":{\"description\":\"1 to 720; absent keeps the stored value (default 24).\",\"maximum\":720,\"minimum\":1,\"type\":\"integer\"},\"wave_success_threshold_percent\":{\"description\":\"1 to 100; absent keeps the stored value (default 90).\",\"maximum\":100,\"minimum\":1,\"type\":\"integer\"},\"waves\":{\"description\":\"Strictly increasing, ending with 100.\",\"items\":{\"maximum\":100,\"minimum\":1,\"type\":\"integer\"},\"maxItems\":10,\"minItems\":1,\"type\":\"array\"}},\"required\":[\"enabled\",\"waves\",\"min_wave_minutes\",\"failure_threshold_percent\",\"failure_threshold_min\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "updateSoftwareAssignment",
@@ -4667,8 +4721,8 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "software_assignment.updated",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator. Replaces intent, update_rule, version and reason with the submitted values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the same rules as on creation apply. The entry and the target are fixed: giving a catalog_entry_id, device_group_id, user_id or user_group_id is 400 invalid_request.\n\nChanges data; needs your MCP write access.",
-		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"catalog_entry_id\":{\"description\":\"Fixed; any value is refused with 400 invalid_request.\",\"format\":\"uuid\",\"type\":\"string\"},\"device_group_id\":{\"description\":\"Fixed; any value is refused with 400 invalid_request.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"intent\":{\"enum\":[\"required\",\"uninstall\",\"hold\",\"forbid\",\"available\"],\"type\":\"string\"},\"reason\":{\"maxLength\":500,\"type\":\"string\"},\"update_rule\":{\"enum\":[\"latest\",\"pinned\"],\"type\":\"string\"},\"user_group_id\":{\"description\":\"Fixed; any value is refused with 400 invalid_request.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"user_id\":{\"description\":\"Fixed; any value is refused with 400 invalid_request.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"version\":{\"maxLength\":128,\"type\":[\"string\",\"null\"]}},\"required\":[\"intent\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+		Description: "Roles: org_admin, org_operator. Replaces intent, update_rule, version, reason and urgent with the submitted values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty, an absent urgent is false); the same rules as on creation apply, so keeping or setting urgent needs a reason and a step-up again. The entry and the target are fixed: giving a catalog_entry_id, device_group_id, user_id or user_group_id is 400 invalid_request.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"catalog_entry_id\":{\"description\":\"Fixed; any value is refused with 400 invalid_request.\",\"format\":\"uuid\",\"type\":\"string\"},\"device_group_id\":{\"description\":\"Fixed; any value is refused with 400 invalid_request.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"intent\":{\"enum\":[\"required\",\"uninstall\",\"hold\",\"forbid\",\"available\"],\"type\":\"string\"},\"reason\":{\"maxLength\":500,\"type\":\"string\"},\"update_rule\":{\"enum\":[\"latest\",\"pinned\"],\"type\":\"string\"},\"urgent\":{\"description\":\"The devices apply the assignment outside their maintenance windows. Needs a reason and a fresh step-up; absent is false.\",\"type\":\"boolean\"},\"user_group_id\":{\"description\":\"Fixed; any value is refused with 400 invalid_request.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"user_id\":{\"description\":\"Fixed; any value is refused with 400 invalid_request.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"version\":{\"maxLength\":128,\"type\":[\"string\",\"null\"]}},\"required\":[\"intent\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "updateSoftwareCatalogEntry",

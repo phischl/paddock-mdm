@@ -384,7 +384,9 @@
     "device_group": {
       "created": "{actor} hat die Gerätegruppe {name} angelegt",
       "updated": "{actor} hat die Gerätegruppe {name} geändert",
-      "deleted": "{actor} hat die Gerätegruppe {name} gelöscht"
+      "deleted": "{actor} hat die Gerätegruppe {name} gelöscht",
+      "maintenance_window_changed": "{actor} hat das Wartungsfenster der Gerätegruppe {name} gesetzt",
+      "maintenance_window_removed": "{actor} hat das Wartungsfenster der Gerätegruppe {name} entfernt"
     },
     "enrollment_token": {
       "created": "{actor} hat das Registrierungstoken {name} angelegt",
@@ -554,7 +556,8 @@
       "advanced": "Das Konfigurations-Rollout hat {percent, number} % der Geräte erreicht",
       "halted": "Das Konfigurations-Rollout wurde angehalten: {reason}",
       "resumed": "{actor} hat das Konfigurations-Rollout fortgesetzt",
-      "completed": "Das Konfigurations-Rollout wurde abgeschlossen"
+      "completed": "Das Konfigurations-Rollout wurde abgeschlossen",
+      "stalled": "Die aktuelle Welle des Konfigurations-Rollouts kommt seit {stall_warning_hours, number} Stunden nicht voran: {waiting, number} Geräte warten auf ihr Wartungsfenster, {awaiting_retry, number} auf eine erfolgreiche Wiederholung"
     },
     "managed_file": {
       "created": "{actor} hat die verwaltete Datei {path} definiert",
@@ -3538,6 +3541,7 @@
     "reason": {
       "dpkg_locked": "Ein anderer Paketvorgang läuft; das Gerät versucht es erneut.",
       "deferred_offline": "Das Gerät wartet auf eine Serververbindung, bevor es Software entfernt.",
+      "outside_window": "Das Gerät wartet auf sein Wartungsfenster, bevor es Software installiert oder entfernt.",
       "would_remove_dependents": "Der Vorgang würde andere Pakete entfernen; es wurde nichts geändert.",
       "no_candidate": "Das Paket oder die Version ist in den Quellen des Geräts nicht verfügbar.",
       "fingerprint_mismatch": "Der Quellenschlüssel passt nicht zu seinem Fingerabdruck; die Quelle wurde nicht geschrieben.",

@@ -468,7 +468,7 @@ func flatpakPlanLine(p bundle.SoftwarePackage, installed map[string]string, suff
 // application fails as flatpak_missing (F13); forbid, uninstall and hold need nothing where Flatpak is absent
 // (architect decision A10-7). A failing flatpak command fails its applications for the pass, never more (design
 // contract 8).
-func (s *Software) applyFlatpak(ctx context.Context, sp bundle.SoftwareSpec, reachable bool, pass *softwarePass) error {
+func (s *Software) applyFlatpak(ctx context.Context, sp bundle.SoftwareSpec, reachable, outside bool, pass *softwarePass) error {
 	s.userScoped = hasUserScope(sp)
 	pkgs := flatpakPackages(sp)
 	if !s.Sys.PackageInstalled(FlatpakRuntime) {
@@ -510,7 +510,7 @@ func (s *Software) applyFlatpak(ctx context.Context, sp bundle.SoftwareSpec, rea
 	for _, src := range sp.Sources {
 		sources[src.Slug] = src
 	}
-	f := &flatpakApply{s: s, pass: pass, reachable: reachable, usable: usable, sources: sources, users: users,
+	f := &flatpakApply{s: s, pass: pass, reachable: reachable, outside: outside, usable: usable, sources: sources, users: users,
 		userApps: map[int]map[string]string{}}
 	for _, p := range pkgs {
 		if _, decided := pass.outcome[softwareKey(p)]; decided {
@@ -673,10 +673,13 @@ type flatpakApply struct {
 	s         *Software
 	pass      *softwarePass
 	reachable bool
-	usable    map[string]bool
-	sources   map[string]bundle.SoftwareSource
-	users     map[string]int
-	userApps  map[int]map[string]string
+	// outside is set while the device is outside its maintenance windows: the policy's installations and removals
+	// of non-urgent applications wait (plan M13c decision 6).
+	outside  bool
+	usable   map[string]bool
+	sources  map[string]bundle.SoftwareSource
+	users    map[string]int
+	userApps map[int]map[string]string
 }
 
 // targets returns the listed users with a session whose installation a user-scope application is applied to (A10-11).
@@ -694,9 +697,19 @@ func (f *flatpakApply) waiting(p bundle.SoftwarePackage, key string) bool {
 	return true
 }
 
+// waitsForWindow reports an operation of a non-urgent application outside the maintenance window.
+func (f *flatpakApply) waitsForWindow(p bundle.SoftwarePackage) bool { return f.outside && !p.Urgent }
+
 func (f *flatpakApply) installSystem(ctx context.Context, p bundle.SoftwarePackage) {
 	key := softwareKey(p)
-	if _, ok := f.pass.flatpak.apps[p.FlatpakRef]; ok || f.waiting(p, key) {
+	if _, ok := f.pass.flatpak.apps[p.FlatpakRef]; ok {
+		return
+	}
+	if f.waitsForWindow(p) {
+		f.pass.set(key, protocol.SoftwareStatePending, protocol.SoftwareOutsideWindow, "")
+		return
+	}
+	if f.waiting(p, key) {
 		return
 	}
 	if !f.usable[p.Source] {
@@ -734,6 +747,10 @@ func (f *flatpakApply) removeSystem(ctx context.Context, p bundle.SoftwarePackag
 		return
 	}
 	key := softwareKey(p)
+	if f.waitsForWindow(p) {
+		f.pass.set(key, protocol.SoftwareStatePending, protocol.SoftwareOutsideWindow, "")
+		return
+	}
 	if !f.reachable {
 		f.pass.set(key, protocol.SoftwareStatePending, protocol.SoftwareDeferredOffline, "")
 		return
@@ -785,10 +802,15 @@ func (f *flatpakApply) installUser(ctx context.Context, p bundle.SoftwarePackage
 		return
 	}
 	var errs []string
+	windowed := false
 	for _, uid := range f.targets(p) {
 		installed, err := f.apps(ctx, uid)
 		if err == nil {
 			if _, ok := installed[p.FlatpakRef]; ok {
+				continue
+			}
+			if f.waitsForWindow(p) {
+				windowed = true
 				continue
 			}
 			name := FlatpakRemoteName(p.Source)
@@ -814,6 +836,10 @@ func (f *flatpakApply) installUser(ctx context.Context, p bundle.SoftwarePackage
 		f.s.failPackage(f.pass, p, protocol.SoftwareStageInstall, protocol.SoftwareFlatpakFailed, msg)
 		return
 	}
+	if windowed {
+		f.pass.set(key, protocol.SoftwareStatePending, protocol.SoftwareOutsideWindow, "")
+		return
+	}
 	f.pass.set(key, protocol.SoftwareStateInstalled, "", "")
 }
 
@@ -821,12 +847,16 @@ func (f *flatpakApply) installUser(ctx context.Context, p bundle.SoftwarePackage
 func (f *flatpakApply) removeUser(ctx context.Context, p bundle.SoftwarePackage) {
 	key := softwareKey(p)
 	var errs []string
-	deferred := false
+	deferred, windowed := false, false
 	for _, uid := range f.targets(p) {
 		installed, err := f.apps(ctx, uid)
 		if err == nil {
 			version, ok := installed[p.FlatpakRef]
 			if !ok {
+				continue
+			}
+			if f.waitsForWindow(p) {
+				windowed = true
 				continue
 			}
 			if !f.reachable {
@@ -844,6 +874,8 @@ func (f *flatpakApply) removeUser(ctx context.Context, p bundle.SoftwarePackage)
 	switch {
 	case len(errs) > 0:
 		f.s.failPackage(f.pass, p, protocol.SoftwareStageRemove, protocol.SoftwareFlatpakFailed, strings.Join(errs, "; "))
+	case windowed:
+		f.pass.set(key, protocol.SoftwareStatePending, protocol.SoftwareOutsideWindow, "")
 	case deferred:
 		f.pass.set(key, protocol.SoftwareStatePending, protocol.SoftwareDeferredOffline, "")
 	}
