@@ -301,13 +301,19 @@ func verifyReason(err error) string {
 // FirstUserUID is the lowest UID of a non-system user (login.defs UID_MIN); nobody (65534) is a system user.
 const FirstUserUID = 1000
 
-// terminateSessions ends every session of a non-system user: `loginctl terminate-user` per UID.
+// terminateSessions ends every session of a non-system user: `loginctl terminate-user` per UID. An output with a
+// line that is not a user ends no session and is logged (PDK-945); the erasure runs either way.
 func (r *Revoker) terminateSessions(ctx context.Context) {
 	out, exit, err := r.Sys.Loginctl(ctx, "list-users", "--no-legend")
 	if err != nil || exit != 0 {
 		return
 	}
-	for _, uid := range userIDs(out) {
+	uids, err := userIDs(out)
+	if err != nil {
+		slog.Error("terminating the sessions failed; the erasure continues", "error", err)
+		return
+	}
+	for _, uid := range uids {
 		_, _, _ = r.Sys.Loginctl(ctx, "terminate-user", strconv.Itoa(uid))
 	}
 }
@@ -505,19 +511,35 @@ func (r *Revoker) record(commandID string) error {
 	return r.Sys.WriteFile(StateFile, data)
 }
 
-// userIDs returns the UIDs of non-system users in the output of `loginctl list-users --no-legend`, whose first
-// column is the UID.
-func userIDs(out string) []int {
+// userIDs returns the UIDs of non-system users in the output of `loginctl list-users --no-legend`. Every non-empty
+// line must be a user, `UID USER LINGER STATE` with a decimal UID (systemd 255 on Ubuntu 24.04, 259 on Ubuntu 26.04).
+// Any other line is an error, so that foreign output (NSS module messages on stdout, PDK-892) neither hides nor
+// invents a user (PDK-945).
+func userIDs(out string) ([]int, error) {
 	var uids []int
-	for _, line := range strings.Split(out, "\n") {
+	for n, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
 		if len(f) == 0 {
 			continue
 		}
-		uid, err := strconv.Atoi(f[0])
-		if err == nil && uid >= FirstUserUID && uid != 65534 {
-			uids = append(uids, uid)
+		uid, err := strconv.ParseUint(f[0], 10, 32)
+		valid := err == nil && len(f) == 4 && (f[2] == "yes" || f[2] == "no") && userState(f[3])
+		if !valid {
+			return nil, fmt.Errorf("loginctl list-users: line %d is not a user: %.80q", n+1, line)
+		}
+		if uid >= FirstUserUID && uid != 65534 {
+			uids = append(uids, int(uid))
 		}
 	}
-	return uids
+	return uids, nil
+}
+
+// userState reports whether s is a value of the STATE column of `loginctl list-users`: the logind D-Bus property
+// User.State, i.e. systemd's user_state_table (user_get_state, identical in 255 and 259); "-" is an empty cell.
+func userState(s string) bool {
+	switch s {
+	case "offline", "opening", "lingering", "online", "active", "closing", "-":
+		return true
+	}
+	return false
 }

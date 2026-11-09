@@ -58,6 +58,7 @@ type fakeSys struct {
 	targets Targets
 	log     []string
 	rootErr error
+	users   string // stdout of `loginctl list-users --no-legend`
 }
 
 func newSys(t *testing.T) *fakeSys {
@@ -65,7 +66,8 @@ func newSys(t *testing.T) *fakeSys {
 	trust, _ := json.Marshal(revocation.TrustFile{RevocationKeys: []revocation.Key{{KeyID: "revocation-signing:v1",
 		PublicKey: base64.StdEncoding.EncodeToString(trustedKey.Public().(ed25519.PublicKey))}}})
 	return &fakeSys{files: map[string][]byte{EnabledFile: {}, TrustFile: trust},
-		volumes: map[string]*fakeVolume{"/dev/vda3": {slots: 2}}, targets: Targets{Devices: []string{"/dev/vda3"}}}
+		volumes: map[string]*fakeVolume{"/dev/vda3": {slots: 2}}, targets: Targets{Devices: []string{"/dev/vda3"}},
+		users: "120 gdm no active\n1000 paddock no active\n200001 alice no online\n65534 nobody no closing\n"}
 }
 
 func (s *fakeSys) add(entry string) {
@@ -136,7 +138,7 @@ func (s *fakeSys) Command(_ context.Context, _ []string, name string, args ...st
 func (s *fakeSys) Loginctl(_ context.Context, args ...string) (string, int, error) {
 	s.add("loginctl " + strings.Join(args, " "))
 	if args[0] == "list-users" {
-		return "120 gdm no active\n1000 paddock no active\n200001 alice no online\n65534 nobody no closing\n", 0, nil
+		return s.users, 0, nil
 	}
 	return "", 0, nil
 }
@@ -795,8 +797,92 @@ func TestSecondTokenRefused(t *testing.T) {
 	}
 }
 
+// TestUserIDs: real `loginctl list-users --no-legend` outputs give the UIDs of the non-system users.
 func TestUserIDs(t *testing.T) {
-	if got := userIDs("120 gdm no active\n1000 paddock\n 200001 alice\n65534 nobody\n\nUID USER\n"); !slices.Equal(got, []int{1000, 200001}) {
-		t.Fatalf("uids %v", got)
+	for name, tc := range map[string]struct {
+		out  string
+		want []int
+	}{
+		// systemd 255 (Ubuntu 24.04) and 257: UID USER LINGER STATE, the UID right-aligned.
+		"systemd 255": {out: " 120 gdm      no  active\n1000 paddock  no  active\n", want: []int{1000}},
+		"systemd 257": {out: "   1000 alice@contoso.onmicrosoft.com no  active\n 200001 bob   yes lingering\n" +
+			"  65534 nobody no  closing\n", want: []int{1000, 200001}},
+		// Every value of systemd's user_state_table (offline, opening, lingering, online, active, closing) and the
+		// empty cell "-".
+		"every state": {out: "1001 a no offline\n1002 b no opening\n1003 c yes lingering\n1004 d no online\n" +
+			"1005 e no active\n1006 f no closing\n1007 g no -\n", want: []int{1001, 1002, 1003, 1004, 1005, 1006, 1007}},
+		"greeter opening": {out: " 120 gdm no opening\n1000 paddock no active\n", want: []int{1000}},
+		"empty lines":     {out: "\n1000 paddock no active\n\n  \n200001 alice no online\n\n", want: []int{1000, 200001}},
+		"system users":    {out: "0 root no active\n120 gdm no active\n999 svc no online\n65534 nobody no closing\n"},
+		"no users":        {out: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := userIDs(tc.out)
+			if err != nil || !slices.Equal(got, tc.want) {
+				t.Fatalf("uids %v %v, want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// nssNoise is the line Himmelblau's NSS module printed on stdout while himmelblaud was down (PDK-892).
+const nssNoise = "2026-11-08T05:01:13.152453Z ERROR Unix socket stream setup error while connecting to " +
+	"/var/run/himmelblaud/socket -> Os { code: 111, kind: ConnectionRefused, message: \"Connection refused\" }"
+
+// TestUserIDsRejectsForeignLines (PDK-945): any non-empty line that is not a user is an error, never a UID and never
+// skipped.
+func TestUserIDsRejectsForeignLines(t *testing.T) {
+	for name, out := range map[string]string{
+		"noise before":         nssNoise + "\n1000 paddock no active\n",
+		"noise after":          "1000 paddock no active\n" + nssNoise + "\n",
+		"noise between":        "1000 paddock no active\n" + nssNoise + "\n200001 alice no online\n",
+		"noise only":           nssNoise + "\n",
+		"legend":               "UID USER LINGER STATE\n1000 paddock no active\n",
+		"footer":               "1000 paddock no active\n\n1 users listed.\n",
+		"uid only":             "1000\n",
+		"uid with colon":       "1000: nss lookup failed\n",
+		"uid with suffix":      "1000x paddock no active\n",
+		"signed uid":           "+1000 paddock no active\n",
+		"negative uid":         "-1 paddock no active\n",
+		"uid beyond 32 bits":   "4294967296 paddock no active\n",
+		"three columns":        "1000 paddock no\n",
+		"five columns":         "1000 paddock no active extra\n",
+		"linger not a boolean": "1000 paddock maybe active\n",
+		"unknown state":        "1000 paddock no unreachable\n",
+		"number then words":    "404 lookup of user failed\n",
+		// The pre-254 `UID USER` form is printed by no supported release.
+		"two columns":         "120 gdm\n1000 paddock\n 200001 alice\n65534 nobody\n",
+		"number then a word":  "1001 errors\n",
+		"two columns between": "1000 paddock no active\n1001 errors\n200001 alice no online\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := userIDs(out); err == nil {
+				t.Fatalf("uids %v, want an error", got)
+			}
+		})
+	}
+}
+
+// TestSequenceForeignLoginctlLine (PDK-945): a foreign line in the user list ends no session; the erasure, the
+// confirmation and the reboot run as without it.
+func TestSequenceForeignLoginctlLine(t *testing.T) {
+	sys := newSys(t)
+	sys.users = "1000 paddock no active\n" + nssNoise + "\n200001 alice no online\n"
+	c := &fakeConfirmer{sys: sys}
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
+	if err != nil || !e.Erased {
+		t.Fatalf("execute: %+v %v", e, err)
+	}
+	want := []string{
+		"write " + StateFile,
+		"loginctl list-users --no-legend",
+		"cryptsetup luksDump --dump-json-metadata -- /dev/vda3",
+		"cryptsetup luksErase --batch-mode -- /dev/vda3",
+		"cryptsetup luksDump --dump-json-metadata -- /dev/vda3",
+		"confirm 0190f000-0000-7000-8000-0000000000c1",
+		"reboot",
+	}
+	if !slices.Equal(sys.log, want) {
+		t.Fatalf("sequence\n%s\nwant\n%s", strings.Join(sys.log, "\n"), strings.Join(want, "\n"))
 	}
 }
