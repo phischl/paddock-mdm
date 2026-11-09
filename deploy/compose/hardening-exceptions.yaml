@@ -79,21 +79,9 @@ services:
   # Not a composelint setting, recorded here so that the matrix is complete: rabbitmq has no read_only root filesystem
   # (plan M12h §3.4), because the broker writes its Erlang cookie and node files and renders its configuration at start.
   # It runs as the image's rabbitmq user with no capability. fleet and prometheus have read_only.
-
-  authentik-server:
-    cap_drop:
-      reason: pending PDK-825
-    no_new_privileges:
-      reason: pending PDK-825
-    mem_limit:
-      reason: pending PDK-825
-  authentik-worker:
-    cap_drop:
-      reason: pending PDK-825
-    no_new_privileges:
-      reason: pending PDK-825
-    mem_limit:
-      reason: pending PDK-825
+  # Likewise authentik-server and authentik-worker have no read_only root filesystem (plan M12h §3.4): Authentik writes
+  # media, generated templates and its blueprint state at runtime. Both run as the image's authentik user with no
+  # capability (PDK-825).
 
   # Helper containers and the Paddock roles: no ticket of plan M12h-1 covers them (PDK-910).
   prometheus-audit:

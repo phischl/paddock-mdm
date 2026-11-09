@@ -120,10 +120,11 @@ ug_show() {
 # ug_prod_check_step: ./paddock check before up. On the audit host and a lab it runs online: offline, the item of the
 # audit bucket's Object Lock is "not checked" and fails, so these hosts could never pass; the old stack still runs and
 # provides the audit-store network the online check reads the bucket over. The comparison of the backup targets' revisions
-# waits for the post-checks: before up it would run the new backup role inside the old project.
+# waits for the post-checks: before up it would run the new backup role inside the old project. So does the container
+# matrix (plan M12h decision 10): it describes the new release, the containers before up are the old release's.
 ug_prod_check_step() {
   if [[ "$UG_HOST" != controlplane ]]; then
-    PADDOCK_CHECK_SKIP_REVISIONS=1 ug_show "$UG_NEW/paddock" check --online </dev/null
+    PADDOCK_CHECK_SKIP_REVISIONS=1 PADDOCK_CHECK_SKIP_CONTAINERS=1 ug_show "$UG_NEW/paddock" check --online </dev/null
   else
     ug_show "$UG_NEW/paddock" check </dev/null
   fi

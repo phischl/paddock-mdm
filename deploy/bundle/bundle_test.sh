@@ -685,6 +685,11 @@ case "$*" in
       exit 1
     fi
     ;;
+  *":/run/paddock-check/containers.json:ro "*)
+    for a in "$@"; do [[ "$a" != *:/run/paddock-check/containers.json:ro ]] || cp "${a%%:*}" "$FAKE_DOCKER_LOG.containers"; done
+    ;;
+  "ps -q --filter label=com.docker.compose.project="*) [[ -z "${FAKE_PS_FAIL:-}" ]] || exit 1; printf '%s\n' $FAKE_CONTAINERS ;;
+  "inspect "*) printf '[{"Name":"/%s"}]\n' "${*:2}" ;;
   "network ls"*) [[ -z "${FAKE_NETWORKS_FAIL:-}" ]] || exit 1; printf '%s\n' n1 n2 ;;
   "network inspect"*) printf '%s\n' paddock_edge=172.28.0.0/24 vpn=10.8.0.0/16,fd00::/64 ;;
   "volume ls"*) printf '%s\n' $FAKE_VOLUMES ;;
@@ -798,9 +803,38 @@ grep -q -- "prod-check --host controlplane .* --online --backup-revisions-file $
   pass "check --online compares the file's revisions with the database's and leaves the targets file out" ||
   fail "check --online: $(grep -e prod-check -e 'config --format' "$FAKE_DOCKER_LOG")"
 # decisions-alpha10 A10-1: the check container has no Docker socket, so ./paddock check hands it the host's networks.
-grep -q -- "prod-check .* --docker-networks --docker-network paddock_edge=172.28.0.0/24 --docker-network vpn=10.8.0.0/16,fd00::/64$" \
+grep -q -- "prod-check .* --docker-networks --docker-network paddock_edge=172.28.0.0/24 --docker-network vpn=10.8.0.0/16,fd00::/64 " \
   "$FAKE_DOCKER_LOG" && pass "check hands prod-check the host's Docker networks and their subnets" ||
   fail "check without the host's networks: $(grep prod-check "$FAKE_DOCKER_LOG")"
+# Plan M12h decision 10: online, prod-check gets the project's running containers (docker inspect, as a mounted file)
+# and the bundle's exceptions file; the file is removed afterwards.
+: >"$FAKE_DOCKER_LOG"
+rm -f "$FAKE_DOCKER_LOG.containers"
+FAKE_CONTAINERS="c1 c2" FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
+mounted="$(grep -o -- "-v [^ ]*:/run/paddock-check/containers.json:ro" "$FAKE_DOCKER_LOG" | head -1 | sed 's/^-v //; s/:.*//')"
+grep -q -- "^ps -q --filter label=com.docker.compose.project=paddock$" "$FAKE_DOCKER_LOG" &&
+  grep -q -- "prod-check .* --online .* --containers /run/paddock-check/containers.json --hardening-exceptions $work/t/hardening-exceptions.yaml$" \
+    "$FAKE_DOCKER_LOG" && [[ "$(cat "$FAKE_DOCKER_LOG.containers" 2>/dev/null)" == '[{"Name":"/c1 c2"}]' ]] &&
+  [[ -n "$mounted" && ! -e "$mounted" ]] &&
+  pass "check --online hands prod-check the inspected containers of the project and the exceptions file" ||
+  fail "check --online without the containers: exit $rc, $out, docker: $(grep -e prod-check -e '^ps ' -e '^inspect' "$FAKE_DOCKER_LOG")"
+: >"$FAKE_DOCKER_LOG"
+FAKE_CONTAINERS="c1" FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check
+! grep -q -- "--containers" "$FAKE_DOCKER_LOG" && ! grep -q "^ps -q" "$FAKE_DOCKER_LOG" &&
+  pass "check without --online inspects no container" || fail "offline check inspected: $(cat "$FAKE_DOCKER_LOG")"
+: >"$FAKE_DOCKER_LOG"
+PADDOCK_CHECK_SKIP_CONTAINERS=1 FAKE_CONTAINERS="c1" FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
+[[ "$out" == *"WARN  containers: capabilities and security options match the matrix"*"not checked: the old release still runs"* ]] &&
+  grep -q -- "prod-check .* --online " "$FAKE_DOCKER_LOG" && ! grep -q -- "--containers" "$FAKE_DOCKER_LOG" &&
+  ! grep -q "^ps -q" "$FAKE_DOCKER_LOG" &&
+  pass "check --online with PADDOCK_CHECK_SKIP_CONTAINERS (upgrade before up) inspects no container" ||
+  fail "check --online with PADDOCK_CHECK_SKIP_CONTAINERS: exit $rc, $out, docker: $(grep -e prod-check -e '^ps ' "$FAKE_DOCKER_LOG")"
+: >"$FAKE_DOCKER_LOG"
+FAKE_PS_FAIL=1 FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
+[[ "$out" == *"WARN  containers: capabilities and security options match the matrix"*"not checked: listing the project's containers failed"* ]] &&
+  grep -q -- "prod-check " "$FAKE_DOCKER_LOG" && ! grep -q -- "--containers" "$FAKE_DOCKER_LOG" &&
+  pass "check --online reports the container matrix as not checked when listing the containers fails" ||
+  fail "check --online with a failed container listing: exit $rc, $out, docker: $(grep prod-check "$FAKE_DOCKER_LOG")"
 : >"$FAKE_DOCKER_LOG"
 FAKE_NETWORKS_FAIL=1 paddock_t check
 [[ "$out" == *"WARN  networks: edge subnet free on this host"*"not checked: listing the host's Docker networks failed"* ]] &&

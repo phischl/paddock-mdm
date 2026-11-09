@@ -24,10 +24,15 @@ A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST
   `sha256sum`. **The control-plane host must be amd64**: the Fleet image (`fleetdm/fleet`) is published for
   `linux/amd64` only, and `./paddock up` refuses another architecture there. The audit host may be amd64 or arm64
   (the Paddock images are published for both).
-- Keep Docker's default seccomp and AppArmor profiles enabled (do not run the daemon with them turned off). The
-  Paddock roles run without any Linux capability and without privilege gain (`cap_drop: [ALL]`,
-  `no-new-privileges:true`); Caddy keeps only `NET_BIND_SERVICE` for 80 and 443; every service has a `pids_limit`.
-  `./paddock check` fails the item `container hardening` when a Compose edit removes one of these settings.
+- Keep Docker's default seccomp and AppArmor profiles enabled (do not run the daemon with them turned off, and do not
+  set `seccomp=unconfined` or `apparmor=unconfined` for a service); `docker info` lists `seccomp` and, on hosts with
+  AppArmor, `apparmor` under *Security Options*. Every container runs without privilege gain
+  (`no-new-privileges:true`) and drops every Linux capability (`cap_drop: [ALL]`), unless `hardening-exceptions.yaml`
+  lists the service with the reason; the Paddock roles and Authentik add none, Caddy only `NET_BIND_SERVICE` for 80
+  and 443, and the few images whose entrypoints need more (PostgreSQL, Valkey, MySQL, OpenBao's `IPC_LOCK`) add
+  exactly the capabilities that file lists. Every service has a `pids_limit`. `./paddock check` fails the item `container hardening` when a Compose edit removes one of these
+  settings, and `./paddock check --online` fails the item `containers: capabilities and security options match the
+  matrix` when a running container differs from that file (section 8).
 - Control plane: 4 vCPU, 16 GB RAM, 100 GB disk for 100 devices. Audit domain: 2 vCPU, 4 GB RAM, disk for 400 days
   of audit evidence (about 1 GB per 100 devices and year) plus free space for one evidence export of up to
   `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default 4 GiB) on the audit writer's temp volume (`audit-bucket.md` section 4).
@@ -229,7 +234,7 @@ tunnel.
 
 ```sh
 ./paddock check                       # control plane: every item PASS, else fix and repeat
-./paddock check --online              # audit host: also reads the audit bucket's Object Lock
+./paddock check --online              # after up: the running containers; audit host: the audit bucket's Object Lock
 ./paddock up                          # control plane first, then the audit host; starts the roles and Prometheus
 ./paddock ps
 ```
@@ -264,8 +269,12 @@ on the control plane, a `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` that is missing, no
 `PADDOCK_AUDIT_RETENTION_DAYS`, with which the worker does not start (item `audit index retention of the retention
 round`);
 a `PADDOCK_AUTHENTIK_WEB_WORKERS` that is not an integer of at least 1 (item `authentik web workers`);
-the development release key (its secret key next to the public key); and, on the audit host with `--online`, an
-audit bucket without Object Lock COMPLIANCE of at least 400 days.
+the development release key (its secret key next to the public key); on the audit host with `--online`, an
+audit bucket without Object Lock COMPLIANCE of at least 400 days; and, with `--online` on every host, a running
+container of the project whose capabilities (`CapAdd`, `CapDrop`), security options (`no-new-privileges`, an
+unconfined seccomp or AppArmor profile), privileged mode, host PID or IPC namespace, pids or memory limit differ from
+the matrix of `hardening-exceptions.yaml` (item `containers: capabilities and security options match the matrix`;
+it warns "not checked" while no container of the project runs).
 
 Portal sessions are kept in Valkey: while Valkey is unreachable the portal answers 503 `session_store_unavailable`
 (devices and API tokens are not affected), and after Valkey is back every session continues. Signing out ends the

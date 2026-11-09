@@ -369,6 +369,7 @@ orphans
 # --- 5 probes --------------------------------------------------------------------------------------------------------
 step "5.1 probes: hosts"
 hosts_healthy
+smoke_hardening
 # The candidate's trust zones after the upgrade recreated every container (ADR 0051 decision 1).
 "$here/assert-segmentation.sh" paddock-cp
 step "5.2 probes: the seeded set"

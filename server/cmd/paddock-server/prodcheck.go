@@ -30,6 +30,8 @@ func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io
 	fs.Var(&devKeys, "dev-release-key", "public key written by make dev-release-key (repeatable)")
 	checkNets := fs.Bool("docker-networks", false, "check the edge subnet against the --docker-network list")
 	fs.Var(&dockerNets, "docker-network", "an existing Docker network as name=subnet[,subnet...] (repeatable)")
+	containers := fs.String("containers", "", "docker inspect output of the project's running containers (with --online)")
+	exceptions := fs.String("hardening-exceptions", "hardening-exceptions.yaml", "the container hardening exceptions file")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return errUsage
 	}
@@ -52,6 +54,13 @@ func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io
 				Subnets: strings.FieldsFunc(subnets, func(r rune) bool { return r == ',' })})
 		}
 	}
+	if *online && *containers != "" {
+		m, err := readContainerMatrix(*containers, *exceptions)
+		if err != nil {
+			return err
+		}
+		opts.Containers = &m
+	}
 	if *online && *revFile != "" {
 		opts.BackupRevisions = &prodcheck.BackupRevisions{File: *revFile, Database: *revDB}
 	}
@@ -66,6 +75,52 @@ func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io
 		return errProdCheckFailed
 	}
 	return nil
+}
+
+// runCheckContainers reads `docker inspect` of a project's containers from stdin and checks them against the hardening
+// matrix, the item `./paddock check --online` prints (deploy/bundle/ci/assert-hardening.sh runs it on the smoke
+// stacks).
+func runCheckContainers(args []string, stdin io.Reader, stdout io.Writer) error {
+	fs := flag.NewFlagSet("check-containers", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	exceptions := fs.String("exceptions", "hardening-exceptions.yaml", "the container hardening exceptions file")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return errUsage
+	}
+	m, err := containerMatrix(stdin, *exceptions)
+	if err != nil {
+		return err
+	}
+	if !prodcheck.Write(stdout, []prodcheck.Result{prodcheck.CheckContainerMatrix(m)}) {
+		return errProdCheckFailed
+	}
+	return nil
+}
+
+func readContainerMatrix(inspectPath, exceptionsPath string) (prodcheck.ContainerMatrix, error) {
+	f, err := os.Open(inspectPath) //nolint:gosec // G304: ./paddock check names the file it wrote
+	if err != nil {
+		return prodcheck.ContainerMatrix{}, fmt.Errorf("prod-check --containers: %w", err)
+	}
+	defer f.Close()
+	return containerMatrix(f, exceptionsPath)
+}
+
+func containerMatrix(inspect io.Reader, exceptionsPath string) (prodcheck.ContainerMatrix, error) {
+	containers, err := prodcheck.ParseInspect(inspect)
+	if err != nil {
+		return prodcheck.ContainerMatrix{}, err
+	}
+	f, err := os.Open(exceptionsPath) //nolint:gosec // G304: the bundle's exceptions file, named by the operator
+	if err != nil {
+		return prodcheck.ContainerMatrix{}, fmt.Errorf("hardening exceptions: %w", err)
+	}
+	defer f.Close()
+	exceptions, err := prodcheck.ParseHardeningExceptions(f)
+	if err != nil {
+		return prodcheck.ContainerMatrix{}, err
+	}
+	return prodcheck.ContainerMatrix{Containers: containers, Exceptions: exceptions}, nil
 }
 
 // auditBucket builds the audit writer's S3 client from its service in the configuration; the secret files are read on

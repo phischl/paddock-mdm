@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -57,5 +60,53 @@ func TestProdCheckDockerNetworks(t *testing.T) {
 		!strings.Contains(out, "Docker network paddock_cp (172.28.0.0/16) overlaps the edge subnet 172.28.0.0/24") ||
 		strings.Contains(out, "network bridge") || strings.Contains(out, "network paddock_edge") {
 		t.Fatalf("overlapping paddock_cp:\n%s", out)
+	}
+}
+
+// TestCheckContainers: check-containers reads `docker inspect` from stdin and the exceptions file, passes a hardened
+// container and fails (exit 1) one that adds a capability the matrix does not list; prod-check --online --containers
+// prints the same item.
+func TestCheckContainers(t *testing.T) {
+	dir := t.TempDir()
+	exceptions := filepath.Join(dir, "hardening-exceptions.yaml")
+	if err := os.WriteFile(exceptions, []byte("services:\n  caddy:\n    cap_add:\n      value: [NET_BIND_SERVICE]\n      reason: r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inspect := func(capAdd string) string {
+		return `[{"Name":"/p-caddy-1","Config":{"Labels":{"com.docker.compose.service":"caddy"}},"HostConfig":{"CapAdd":` + capAdd +
+			`,"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges:true"],"PidsLimit":64,"Memory":1048576}}]`
+	}
+	const item = "containers: capabilities and security options match the matrix"
+	var out bytes.Buffer
+	if err := runCheckContainers([]string{"--exceptions", exceptions}, strings.NewReader(inspect(`["CAP_NET_BIND_SERVICE"]`)), &out); err != nil ||
+		!strings.Contains(out.String(), "PASS  "+item) {
+		t.Fatalf("hardened: %v\n%s", err, out.String())
+	}
+	out.Reset()
+	err := runCheckContainers([]string{"--exceptions", exceptions}, strings.NewReader(inspect(`["CAP_NET_BIND_SERVICE","CAP_NET_RAW"]`)), &out)
+	if !errors.Is(err, errProdCheckFailed) || !strings.Contains(out.String(), "FAIL  "+item) || !strings.Contains(out.String(), "p-caddy-1") {
+		t.Fatalf("added capability: %v\n%s", err, out.String())
+	}
+	if err := runCheckContainers([]string{"--exceptions", filepath.Join(dir, "missing.yaml")}, strings.NewReader("[]"), io.Discard); err == nil {
+		t.Fatal("a missing exceptions file passed")
+	}
+	if err := runCheckContainers([]string{"extra"}, strings.NewReader("[]"), io.Discard); !errors.Is(err, errUsage) {
+		t.Fatalf("positional argument: %v", err)
+	}
+
+	containers := filepath.Join(dir, "containers.json")
+	if err := os.WriteFile(containers, []byte(inspect(`null`)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	_ = runProdCheck(context.Background(), []string{"--online", "--containers", containers, "--hardening-exceptions", exceptions},
+		strings.NewReader(`{}`), &out)
+	if !strings.Contains(out.String(), "FAIL  "+item) || !strings.Contains(out.String(), "CapAdd [], the matrix allows [NET_BIND_SERVICE]") {
+		t.Fatalf("prod-check --online --containers:\n%s", out.String())
+	}
+	out.Reset()
+	_ = runProdCheck(context.Background(), []string{"--containers", containers, "--hardening-exceptions", exceptions}, strings.NewReader(`{}`), &out)
+	if strings.Contains(out.String(), item) {
+		t.Fatalf("offline with --containers:\n%s", out.String())
 	}
 }

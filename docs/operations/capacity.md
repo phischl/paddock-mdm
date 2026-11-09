@@ -245,7 +245,8 @@ Every portal login, step-up, device login and every call of the worker's identit
 - **Sizing:** one worker per core you give Authentik. The default of 4 matches the minimum of 4 vCPU of the control
   plane (`install.md`) and of the lab (`lab-install.md`); the workers only use a core while they serve requests. On a
   larger host with many simultaneous logins (shift start, a large device rollout) raise it with the cores and plan
-  about 250 MiB RAM per worker. Apply a change with `./paddock up` (it recreates `authentik-server`).
+  about 250 MiB RAM per worker (raise `PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT` with it, section "Memory limits"). Apply a
+  change with `./paddock up` (it recreates `authentik-server`).
 - `./paddock check` fails the item `authentik web workers` unless the value is an integer of at least 1: Authentik
   falls back to 2 workers on a value it cannot parse and serves no login with 0.
 - Authentik's API throttle for anonymous requests counts in a cache of each worker process, so its per-address ceiling
@@ -328,6 +329,8 @@ without a limit yet are listed in `deploy/compose/hardening-exceptions.yaml`.
 | `rabbitmq` | control plane | 1 GiB | `PADDOCK_RABBITMQ_MEM_LIMIT` | 155–170 MiB |
 | `fleet` | control plane | 3 GiB | `PADDOCK_FLEET_MEM_LIMIT` | 90–120 MiB; 810 MiB during a vulnerability run |
 | `prometheus` | control plane | 1 GiB | `PADDOCK_PROMETHEUS_MEM_LIMIT` | 60–65 MiB |
+| `authentik-server` | control plane | 2 GiB | `PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT` | 860 MiB–1.05 GiB idle with 4 web workers; 1.1 GiB peak at the first start |
+| `authentik-worker` | control plane | 1 GiB | `PADDOCK_AUTHENTIK_WORKER_MEM_LIMIT` | 265–330 MiB; 370 MiB peak at the first start |
 
 The snapshot is the resident memory (`docker stats`) of two idle development stacks after their acceptance runs, not
 a peak under load. PostgreSQL's page cache does not count against the limit beyond what the kernel can reclaim, so a
@@ -343,6 +346,11 @@ alarm blocks publishers at 60 % of the limit (the healthcheck `check_local_alarm
 kill the broker. The alarm reads the suffixes as decimal units (`1g` = 10⁹ bytes), slightly below Docker's binary
 ones. The limit must be a whole number with an optional unit (`1536m`, not `1.5g`): RabbitMQ ignores any other value
 with a log warning only and sizes the alarm from the host's RAM, so `prod-check` rejects it.
+
+`authentik-server` grows with its web workers (section "Authentik web workers"): about 250 MiB per worker on top of
+about 0.5 GiB. The default of 2 GiB fits the default of 4 workers with headroom for simultaneous logins; raise
+`PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT` by 256 MiB for every worker you add with `PADDOCK_AUTHENTIK_WEB_WORKERS`. The
+peaks are the cgroup's `memory.peak` of a scratch project's first start, which applies every blueprint.
 
 ## Request limits
 

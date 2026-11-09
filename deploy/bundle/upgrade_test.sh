@@ -528,6 +528,9 @@ before "the old audit writer stops before up" '^old compose stop paddock-audit-w
 called "the audit host runs the online check" '^docker run .*prod-check .*--online'
 before "the audit host checks online before up" '^docker run .*prod-check .*--online' "$UP"
 has "the audit host's plan names the online check" '^  check +\./paddock check --online '
+# Plan M12h decision 10: before up the old release still runs, so only the post-checks compare the containers.
+before "the audit host lists its containers only after up" "$UP" '^docker ps -q'
+before "the audit host checks the container matrix only after up" "$UP" '^docker run .*prod-check .*--containers '
 not_called "the audit host asks no server report" '^docker compose .*admin upgrade-check'
 setup audit "Schema: migrations 00105 (control-plane database); audit unchanged"
 run 0 "audit host without audit migrations" "$work/t/old" --yes

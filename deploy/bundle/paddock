@@ -277,11 +277,32 @@ case "$cmd" in
       echo "WARN  networks: edge subnet free on this host"
       echo "      - not checked: listing the host's Docker networks failed"
     fi
+    # Online, the project's running containers against the hardening matrix of hardening-exceptions.yaml (plan M12h
+    # decision 10): their `docker inspect` goes in as a file, because stdin carries the configuration. As above, a
+    # failed listing is reported as not checked, never as a pass.
+    # PADDOCK_CHECK_SKIP_CONTAINERS: set by ./paddock upgrade before up; the running containers are the old release's,
+    # which the matrix does not describe. The post-checks after up check them.
+    containers=() containers_mount=()
+    if [[ -n "$online" && -n "${PADDOCK_CHECK_SKIP_CONTAINERS:-}" ]]; then
+      echo "WARN  containers: capabilities and security options match the matrix"
+      echo "      - not checked: the old release still runs; the checks after up compare the new containers"
+    elif [[ -n "$online" ]]; then
+      containers_file="$(mktemp)"
+      trap 'rm -f "$containers_file"' EXIT
+      if ids="$(docker ps -q --filter "label=com.docker.compose.project=$PADDOCK_PROJECT")" &&
+        if [[ -n "$ids" ]]; then xargs docker inspect <<<"$ids"; else echo '[]'; fi >"$containers_file"; then
+        containers_mount=(-v "$containers_file:/run/paddock-check/containers.json:ro")
+        containers=(--containers /run/paddock-check/containers.json --hardening-exceptions "$BUNDLE_DIR/hardening-exceptions.yaml")
+      else
+        echo "WARN  containers: capabilities and security options match the matrix"
+        echo "      - not checked: listing the project's containers failed"
+      fi
+    fi
     PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
-      docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" \
+      docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" "${containers_mount[@]}" \
         -v "$BUNDLE_DIR:$BUNDLE_DIR:ro" -w "$BUNDLE_DIR" "$PADDOCK_IMAGE" \
         prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online} "${revisions[@]}" \
-        "${docker_networks[@]}"
+        "${docker_networks[@]}" "${containers[@]}"
     ;;
   up)
     profiles=(--profile paddock --profile observability)

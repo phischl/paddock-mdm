@@ -162,6 +162,9 @@ type Options struct {
 	BackupRevisions *BackupRevisions
 	// DockerNetworks are the networks that exist on the host (docker network inspect); nil means not checked.
 	DockerNetworks []DockerNetwork
+	// Containers are the running containers of the project (docker inspect) and the exceptions file; nil means not
+	// checked (offline).
+	Containers *ContainerMatrix
 }
 
 // DockerNetwork is an existing Docker network of the host and its subnets.
@@ -207,6 +210,9 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		checkMountedReferences(c),
 		checkAutoUnseal(c, o),
 		checkLogRotation(c),
+	}
+	if o.Containers != nil {
+		results = append(results, CheckContainerMatrix(*o.Containers))
 	}
 	lab := o.Host == HostLab
 	if lab {
