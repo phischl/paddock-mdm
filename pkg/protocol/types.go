@@ -332,6 +332,10 @@ const (
 	SoftwareAptFailed             = "apt_failed"
 	SoftwareDeferredOffline       = "deferred_offline"
 	SoftwareNotYetApplied         = "not_yet_applied"
+	// SoftwareFlatpakMissing fails a required Flatpak application while the flatpak runtime is not installed;
+	// SoftwareFlatpakFailed is a flatpak command that failed (plan M13b §3.7 F8, F13).
+	SoftwareFlatpakMissing = "flatpak_missing"
+	SoftwareFlatpakFailed  = "flatpak_failed"
 )
 
 // SoftwareApplyFailed is the data of software.apply_failed: a package or a source (Source without Package) that could
