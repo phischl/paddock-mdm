@@ -301,7 +301,7 @@ func (q *Queries) GetSoftwareAssignmentForUpdate(ctx context.Context, id uuid.UU
 }
 
 const getSoftwareCatalogEntry = `-- name: GetSoftwareCatalogEntry :one
-SELECT e.id, e.organization_id, e.name, e.description, e.category, e.source_id, e.packages, e.created_by,
+SELECT e.id, e.organization_id, e.name, e.description, e.category, e.source_id, e.packages, e.approval, e.created_by,
   e.created_at, e.updated_at, (e.icon IS NOT NULL)::boolean AS has_icon, coalesce(s.slug, '')::text AS source_slug,
   (SELECT count(*) FROM software_assignment a WHERE a.catalog_entry_id = e.id)::bigint AS assignment_count
 FROM software_catalog_entry e LEFT JOIN software_source s ON s.id = e.source_id
@@ -316,6 +316,7 @@ type GetSoftwareCatalogEntryRow struct {
 	Category        string
 	SourceID        uuid.NullUUID
 	Packages        json.RawMessage
+	Approval        string
 	CreatedBy       uuid.NullUUID
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -336,6 +337,7 @@ func (q *Queries) GetSoftwareCatalogEntry(ctx context.Context, id uuid.UUID) (Ge
 		&i.Category,
 		&i.SourceID,
 		&i.Packages,
+		&i.Approval,
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -347,7 +349,7 @@ func (q *Queries) GetSoftwareCatalogEntry(ctx context.Context, id uuid.UUID) (Ge
 }
 
 const getSoftwareCatalogEntryForUpdate = `-- name: GetSoftwareCatalogEntryForUpdate :one
-SELECT id, organization_id, name, description, category, source_id, packages, created_by, created_at, updated_at
+SELECT id, organization_id, name, description, category, source_id, packages, approval, created_by, created_at, updated_at
 FROM software_catalog_entry WHERE id = $1 FOR UPDATE
 `
 
@@ -359,6 +361,7 @@ type GetSoftwareCatalogEntryForUpdateRow struct {
 	Category       string
 	SourceID       uuid.NullUUID
 	Packages       json.RawMessage
+	Approval       string
 	CreatedBy      uuid.NullUUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -377,6 +380,7 @@ func (q *Queries) GetSoftwareCatalogEntryForUpdate(ctx context.Context, id uuid.
 		&i.Category,
 		&i.SourceID,
 		&i.Packages,
+		&i.Approval,
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -498,8 +502,8 @@ func (q *Queries) InsertSoftwareAssignment(ctx context.Context, arg InsertSoftwa
 }
 
 const insertSoftwareCatalogEntry = `-- name: InsertSoftwareCatalogEntry :exec
-INSERT INTO software_catalog_entry (id, organization_id, name, description, category, source_id, packages, created_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO software_catalog_entry (id, organization_id, name, description, category, source_id, packages, approval, created_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type InsertSoftwareCatalogEntryParams struct {
@@ -510,6 +514,7 @@ type InsertSoftwareCatalogEntryParams struct {
 	Category       string
 	SourceID       uuid.NullUUID
 	Packages       json.RawMessage
+	Approval       string
 	CreatedBy      uuid.NullUUID
 }
 
@@ -522,6 +527,7 @@ func (q *Queries) InsertSoftwareCatalogEntry(ctx context.Context, arg InsertSoft
 		arg.Category,
 		arg.SourceID,
 		arg.Packages,
+		arg.Approval,
 		arg.CreatedBy,
 	)
 	return err
@@ -628,7 +634,7 @@ func (q *Queries) ListAllSoftwareAssignments(ctx context.Context) ([]SoftwareAss
 }
 
 const listAllSoftwareCatalogEntries = `-- name: ListAllSoftwareCatalogEntries :many
-SELECT id, organization_id, name, description, category, source_id, packages, created_by, created_at, updated_at
+SELECT id, organization_id, name, description, category, source_id, packages, approval, created_by, created_at, updated_at
 FROM software_catalog_entry ORDER BY name, id
 `
 
@@ -640,6 +646,7 @@ type ListAllSoftwareCatalogEntriesRow struct {
 	Category       string
 	SourceID       uuid.NullUUID
 	Packages       json.RawMessage
+	Approval       string
 	CreatedBy      uuid.NullUUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -663,6 +670,7 @@ func (q *Queries) ListAllSoftwareCatalogEntries(ctx context.Context) ([]ListAllS
 			&i.Category,
 			&i.SourceID,
 			&i.Packages,
+			&i.Approval,
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -1056,7 +1064,7 @@ func (q *Queries) ListSoftwareCatalogDevices(ctx context.Context, arg ListSoftwa
 }
 
 const listSoftwareCatalogEntries = `-- name: ListSoftwareCatalogEntries :many
-SELECT e.id, e.organization_id, e.name, e.description, e.category, e.source_id, e.packages, e.created_by,
+SELECT e.id, e.organization_id, e.name, e.description, e.category, e.source_id, e.packages, e.approval, e.created_by,
   e.created_at, e.updated_at, (e.icon IS NOT NULL)::boolean AS has_icon, coalesce(s.slug, '')::text AS source_slug,
   (SELECT count(*) FROM software_assignment a WHERE a.catalog_entry_id = e.id)::bigint AS assignment_count
 FROM software_catalog_entry e LEFT JOIN software_source s ON s.id = e.source_id
@@ -1094,6 +1102,7 @@ type ListSoftwareCatalogEntriesRow struct {
 	Category        string
 	SourceID        uuid.NullUUID
 	Packages        json.RawMessage
+	Approval        string
 	CreatedBy       uuid.NullUUID
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -1126,6 +1135,7 @@ func (q *Queries) ListSoftwareCatalogEntries(ctx context.Context, arg ListSoftwa
 			&i.Category,
 			&i.SourceID,
 			&i.Packages,
+			&i.Approval,
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -1430,8 +1440,9 @@ func (q *Queries) UpdateSoftwareAssignment(ctx context.Context, arg UpdateSoftwa
 
 const updateSoftwareCatalogEntry = `-- name: UpdateSoftwareCatalogEntry :execrows
 UPDATE software_catalog_entry SET name = $1, description = $2, category = $3,
-  source_id = $4, packages = $5, updated_at = now()
-WHERE id = $6
+  source_id = $4, packages = $5, approval = $6,
+  approval_epoch = approval_epoch + CASE WHEN approval = $6 THEN 0 ELSE 1 END, updated_at = now()
+WHERE id = $7
 `
 
 type UpdateSoftwareCatalogEntryParams struct {
@@ -1440,9 +1451,11 @@ type UpdateSoftwareCatalogEntryParams struct {
 	Category    string
 	SourceID    uuid.NullUUID
 	Packages    json.RawMessage
+	Approval    string
 	ID          uuid.UUID
 }
 
+// A change of the approval starts a new approval epoch: the requests and approvals of the old one no longer hold.
 func (q *Queries) UpdateSoftwareCatalogEntry(ctx context.Context, arg UpdateSoftwareCatalogEntryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateSoftwareCatalogEntry,
 		arg.Name,
@@ -1450,6 +1463,7 @@ func (q *Queries) UpdateSoftwareCatalogEntry(ctx context.Context, arg UpdateSoft
 		arg.Category,
 		arg.SourceID,
 		arg.Packages,
+		arg.Approval,
 		arg.ID,
 	)
 	if err != nil {

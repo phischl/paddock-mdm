@@ -241,6 +241,10 @@ const (
 	EventSoftwareApplyFailed = "software.apply_failed" // data: SoftwareApplyFailed
 	// Self-service (plan M13b decision 18, ADR 0049 decision 7): one per operation a user asked for on the device.
 	EventSoftwareSelfService = "software.self_service" // data: SoftwareSelfService
+	// A user asked for an available application that needs an administrator's approval (plan M13c decision 9). The
+	// agent emits it only while its bundle carries a package with approval required, which only a server that knows
+	// approvals renders (ADR 0024).
+	EventSoftwareRequest = "software.request" // data: SoftwareRequest
 )
 
 // Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial; helper_failed when
@@ -373,6 +377,14 @@ type SoftwareSelfService struct {
 	Version    string `json:"version,omitempty"`
 }
 
+// SoftwareRequest is the data of software.request: the user name of the asking account (the UPN of a directory user)
+// and the catalog entry it asks for. The user's justification text is not part of it until the maintainer decides on
+// it (plan M13c §12 Q4).
+type SoftwareRequest struct {
+	User    string `json:"user"`
+	EntryID string `json:"entry_id"`
+}
+
 // SoftwareApplyFailed is the data of software.apply_failed: a package or a source (Source without Package) that could
 // not be applied. Error is at most 200 characters.
 type SoftwareApplyFailed struct {
@@ -408,7 +420,7 @@ var EventTypes = []string{
 	EventDiskConversionPrepared, EventDiskConversionStarted, EventDiskConversionCompleted, EventDiskConversionFailed,
 	EventDiskConversionAborted, EventDiskConversionNeutralizeFailed, EventDiskConversionUnlockRestoreFailed,
 	EventSoftwareInstalled, EventSoftwareReinstalled, EventSoftwareRemoved, EventSoftwareApplyFailed,
-	EventSoftwareSelfService,
+	EventSoftwareSelfService, EventSoftwareRequest,
 }
 
 // SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass

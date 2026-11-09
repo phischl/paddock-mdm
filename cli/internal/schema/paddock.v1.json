@@ -276,7 +276,8 @@
         "description": { "type": "string", "maxLength": 1000, "default": "" },
         "category": { "type": "string", "maxLength": 64, "default": "" },
         "source": { "type": ["string", "null"], "description": "The slug of a software source; null for the distribution's own repositories.", "default": null },
-        "packages": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/$defs/softwarePackageRef" } }
+        "packages": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/$defs/softwarePackageRef" } },
+        "approval": { "enum": ["none", "required"], "default": "none", "description": "required: the users of an available assignment must ask an administrator before they install the application." }
       }
     },
     "softwareAssignment": {

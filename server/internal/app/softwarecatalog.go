@@ -113,11 +113,25 @@ func (c *SoftwareCatalog) Icon(ctx context.Context, id uuid.UUID) ([]byte, error
 	return out, err
 }
 
-// EntryInput are the fields of a catalog entry. On update they replace the stored values.
+// EntryInput are the fields of a catalog entry. On update they replace the stored values, except a nil Approval,
+// which keeps the stored approval (none on creation, plan M13c decision 8).
 type EntryInput struct {
 	Name, Description, Category string
 	SourceID                    *uuid.UUID
 	Packages                    []software.PackageRef
+	Approval                    *string
+}
+
+// entryApproval is the approval an entry gets from in: the given one, or else stored (none for a new entry). An
+// unknown value is invalid_request.
+func entryApproval(in EntryInput, stored string) (string, error) {
+	if in.Approval == nil {
+		return stored, nil
+	}
+	if !software.ValidApproval(*in.Approval) {
+		return "", problem.InvalidRequest.WithDetail("approval must be none or required")
+	}
+	return *in.Approval, nil
 }
 
 // Create adds a catalog entry (audited: software_catalog_entry.created). A source that is not one of the
@@ -130,10 +144,18 @@ func (c *SoftwareCatalog) Create(ctx context.Context, in EntryInput) (CatalogEnt
 	spec.Params = map[string]any{
 		"name": software.DisplayParam(in.Name, software.MaxNameLength), "category": software.DisplayParam(in.Category, software.MaxCategoryLength),
 		"source_id": idParam(in.SourceID), "source_slug": nil, "package_count": len(in.Packages),
+		"approval": software.ApprovalNone,
+	}
+	if in.Approval != nil {
+		spec.Params["approval"] = software.DisplayParam(*in.Approval, 16)
 	}
 	err := c.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if err := software.ValidateEntry(in.Name, in.Description, in.Category, in.Packages); err != nil {
 			return softwareEntryProblem(err)
+		}
+		approval, err := entryApproval(in, software.ApprovalNone)
+		if err != nil {
+			return err
 		}
 		slug, kind, err := entrySource(ctx, q, in.SourceID)
 		if err != nil {
@@ -155,7 +177,8 @@ func (c *SoftwareCatalog) Create(ctx context.Context, in EntryInput) (CatalogEnt
 		id := uuid.Must(uuid.NewV7())
 		err = q.InsertSoftwareCatalogEntry(ctx, pgstore.InsertSoftwareCatalogEntryParams{
 			ID: id, OrganizationID: org, Name: in.Name, Description: in.Description, Category: in.Category,
-			SourceID: nullID(in.SourceID), Packages: packages, CreatedBy: uuid.NullUUID{UUID: p.ID, Valid: p.ID != uuid.Nil},
+			SourceID: nullID(in.SourceID), Packages: packages, Approval: approval,
+			CreatedBy: uuid.NullUUID{UUID: p.ID, Valid: p.ID != uuid.Nil},
 		})
 		if db.IsUniqueViolation(err, "") {
 			return problem.AlreadyExists.WithDetail("a catalog entry with this name exists")
@@ -194,7 +217,11 @@ func (c *SoftwareCatalog) Update(ctx context.Context, id uuid.UUID, in EntryInpu
 			return err
 		}
 		rec.SetParam("name", software.DisplayParam(in.Name, software.MaxNameLength))
-		rec.SetParam("fields", entryFields(old, oldPackages, in))
+		approval, err := entryApproval(in, old.Approval)
+		if err != nil {
+			return err
+		}
+		rec.SetParam("fields", entryFields(old, oldPackages, in, approval))
 		if err := software.ValidateEntry(in.Name, in.Description, in.Category, in.Packages); err != nil {
 			return softwareEntryProblem(err)
 		}
@@ -220,7 +247,7 @@ func (c *SoftwareCatalog) Update(ctx context.Context, id uuid.UUID, in EntryInpu
 		}
 		n, err := q.UpdateSoftwareCatalogEntry(ctx, pgstore.UpdateSoftwareCatalogEntryParams{
 			ID: id, Name: in.Name, Description: in.Description, Category: in.Category, SourceID: nullID(in.SourceID),
-			Packages: packages,
+			Packages: packages, Approval: approval,
 		})
 		if db.IsUniqueViolation(err, "") {
 			return problem.AlreadyExists.WithDetail("a catalog entry with this name exists")
@@ -709,8 +736,8 @@ func assignmentParams(old *Assignment, in AssignmentInput) map[string]any {
 	return params
 }
 
-// entryFields names what a change of an entry changes.
-func entryFields(old pgstore.GetSoftwareCatalogEntryForUpdateRow, oldPackages []software.PackageRef, in EntryInput) []string {
+// entryFields names what a change of an entry to in with approval changes.
+func entryFields(old pgstore.GetSoftwareCatalogEntryForUpdateRow, oldPackages []software.PackageRef, in EntryInput, approval string) []string {
 	fields := []string{}
 	for _, f := range []struct {
 		name    string
@@ -721,6 +748,7 @@ func entryFields(old pgstore.GetSoftwareCatalogEntryForUpdateRow, oldPackages []
 		{"category", in.Category != old.Category},
 		{"source_id", nullID(in.SourceID) != old.SourceID},
 		{"packages", !slices.Equal(in.Packages, oldPackages)},
+		{"approval", approval != old.Approval},
 	} {
 		if f.changed {
 			fields = append(fields, f.name)

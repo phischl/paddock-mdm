@@ -156,7 +156,7 @@ func (h *handlers) CreateSoftwareCatalogEntry(ctx context.Context, req adminapi.
 	b := req.Body
 	e, err := h.softwareCatalog.Create(ctx, app.EntryInput{
 		Name: b.Name, Description: deref(b.Description, ""), Category: deref(b.Category, ""), SourceID: b.SourceId,
-		Packages: fromPackageRefs(b.Packages),
+		Packages: fromPackageRefs(b.Packages), Approval: (*string)(b.Approval),
 	})
 	if err != nil {
 		return nil, err
@@ -187,7 +187,7 @@ func (h *handlers) UpdateSoftwareCatalogEntry(ctx context.Context, req adminapi.
 	b := req.Body
 	e, err := h.softwareCatalog.Update(ctx, req.Id, app.EntryInput{
 		Name: b.Name, Description: deref(b.Description, ""), Category: deref(b.Category, ""), SourceID: b.SourceId,
-		Packages: fromPackageRefs(b.Packages),
+		Packages: fromPackageRefs(b.Packages), Approval: (*string)(b.Approval),
 	})
 	if err != nil {
 		return nil, err
@@ -340,7 +340,7 @@ func toSoftwareCatalogEntry(e app.CatalogEntry) (adminapi.SoftwareCatalogEntry, 
 	}
 	return adminapi.SoftwareCatalogEntry{
 		Id: e.ID, Name: e.Name, Description: e.Description, Category: e.Category, SourceId: source, SourceSlug: e.SourceSlug,
-		Packages: packages, HasIcon: e.HasIcon, AssignmentCount: int(e.AssignmentCount), CreatedAt: e.CreatedAt.UTC(),
+		Packages: packages, Approval: adminapi.SoftwareApproval(e.Approval), HasIcon: e.HasIcon, AssignmentCount: int(e.AssignmentCount), CreatedAt: e.CreatedAt.UTC(),
 		UpdatedAt: e.UpdatedAt.UTC(),
 	}, nil
 }

@@ -11,7 +11,7 @@ import { useSessionStore } from '../stores/session'
 import type { CompileWarning, SoftwareAssignment, SoftwareCatalogDevice, SoftwareCatalogEntry } from '../api/client'
 
 const entry: SoftwareCatalogEntry = {
-  id: 'e1', name: 'Editor', description: 'Text editor', category: 'Tools', source_id: null, source_slug: '', has_icon: false,
+  id: 'e1', name: 'Editor', description: 'Text editor', category: 'Tools', source_id: null, source_slug: '', has_icon: false, approval: 'none',
   packages: [{ distribution: 'ubuntu', release: '*', architecture: '*', package: 'nano' }], assignment_count: 1,
   created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
 }

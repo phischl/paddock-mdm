@@ -35,6 +35,8 @@ type orgSoftware struct {
 	members map[uuid.UUID][]uuid.UUID
 	// icons are the entries' icons that pass software.ValidateIcon, by entry ID (architect decision A10-14).
 	icons map[uuid.UUID]catalogIcon
+	// approved are the users an administrator approved, by device and catalog entry, sorted (plan M13c decision 9).
+	approved map[uuid.UUID]map[uuid.UUID][]string
 }
 
 // catalogIcon is a validated catalog icon with the hex SHA-256 that names it in bundles and object storage.
@@ -55,6 +57,7 @@ type softwareEntry struct {
 	name     string
 	source   uuid.NullUUID
 	packages []software.PackageRef
+	approval string
 	invalid  error
 }
 
@@ -90,10 +93,15 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	if err != nil {
 		return nil, err
 	}
+	approvals, err := q.ListApprovedSoftwareRequests(ctx)
+	if err != nil {
+		return nil, err
+	}
 	s := &orgSoftware{sources: map[uuid.UUID]bundle.SoftwareSource{}, bySlug: map[string]bundle.SoftwareSource{},
 		entries: make(map[uuid.UUID]softwareEntry, len(entries)), assignments: assignments,
 		invalidAssignments: map[uuid.UUID]error{}, owners: map[uuid.UUID][]deviceOwner{}, members: map[uuid.UUID][]uuid.UUID{},
-		icons: make(map[uuid.UUID]catalogIcon, len(icons))}
+		icons:    make(map[uuid.UUID]catalogIcon, len(icons)),
+		approved: map[uuid.UUID]map[uuid.UUID][]string{}}
 	for _, ic := range icons {
 		// The api checked the icon on upload; a row changed outside it must not reach object storage, so the entry then
 		// shows the category glyph.
@@ -103,6 +111,12 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 		}
 		sum := sha256.Sum256(ic.Icon)
 		s.icons[ic.ID] = catalogIcon{sha256: hex.EncodeToString(sum[:]), data: ic.Icon}
+	}
+	for _, a := range approvals {
+		if s.approved[a.DeviceID] == nil {
+			s.approved[a.DeviceID] = map[uuid.UUID][]string{}
+		}
+		s.approved[a.DeviceID][a.CatalogEntryID] = append(s.approved[a.DeviceID][a.CatalogEntryID], a.Username)
 	}
 	for _, o := range owners {
 		s.owners[o.DeviceID] = append(s.owners[o.DeviceID], deviceOwner{user: o.UserID, username: o.Username})
@@ -144,7 +158,7 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 		if err == nil {
 			err = software.ValidatePackages(kind, refs)
 		}
-		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: software.NormalizePackages(refs)}
+		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: software.NormalizePackages(refs), approval: e.Approval}
 		if err != nil {
 			slog.ErrorContext(ctx, "catalog entry fails the catalog rules; the devices it applies to keep their previous bundle",
 				"catalog_entry_id", e.ID, "error", err)
@@ -244,6 +258,9 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 		if !selfService && (r.FlatpakRef != "" || r.Intent == software.IntentAvailable) {
 			continue
 		}
+		if withheldForApproval(r.Intent, s.entries[r.CatalogEntryID].approval, agent, approvalAgent) {
+			continue
+		}
 		if flatpakForbidden && r.FlatpakRef != "" {
 			if r.Intent == software.IntentRequired || r.Intent == software.IntentAvailable {
 				slog.WarnContext(ctx, "flatpak_forbidden: an entry forbids or uninstalls flatpak, so a Flatpak application is left out",
@@ -289,6 +306,7 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 				map[string]any{"users": len(*u), "kept": bundle.MaxSoftwareAudience, "flatpak_ref": p.FlatpakRef})...)
 			*u = (*u)[:bundle.MaxSoftwareAudience]
 		}
+		s.applyApproval(&p, device, r.CatalogEntryID)
 		spec.Packages = append(spec.Packages, p)
 		// ADR 0042 decision 3: a hold and a required pinned package are held by the updates reconciler, the single
 		// owner of apt-mark and the pin file.
@@ -304,6 +322,43 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 	addFlatpakRuntime(spec)
 	slices.SortFunc(spec.Sources, func(a, b bundle.SoftwareSource) int { return strings.Compare(a.Slug, b.Slug) })
 	return spec, holds, conflicts, warnings, nil
+}
+
+// applyApproval marks an available package whose entry requires approval (plan M13c decision 9): Approval required and
+// Approved the users of its audience an administrator approved on this device. When every user of a listed audience is
+// approved, nothing is left to ask for and both are omitted. The approved users come only from the requests of the
+// device, after the rollout overlay chose the package, so an approval reaches no device the package does not.
+func (s *orgSoftware) applyApproval(p *bundle.SoftwarePackage, device, entry uuid.UUID) {
+	if p.Intent != software.IntentAvailable || p.Audience == nil || s.entries[entry].approval != software.ApprovalRequired {
+		return
+	}
+	var approved []string
+	for _, u := range s.approved[device][entry] {
+		if bundle.ValidAudienceUser(u) && (p.Audience.All || slices.Contains(p.Audience.Users, u)) && !slices.Contains(approved, u) {
+			approved = append(approved, u)
+		}
+	}
+	slices.Sort(approved)
+	if !p.Audience.All && len(approved) == len(p.Audience.Users) {
+		return
+	}
+	p.Approval = bundle.SoftwareApprovalRequired
+	if len(approved) > 0 {
+		approved = approved[:min(len(approved), bundle.MaxSoftwareAudience)]
+		p.Approved = &approved
+	}
+}
+
+// approvalAgent is the first agent release that honours SoftwarePackage.Approval, the first with PDK-811 (architect
+// decision A10-17). An older agent would offer Install to every user of the audience, so it never gets a package whose
+// entry requires approval. It is its own gate, not selfServiceAgent: if PDK-811 ships in a later release than the
+// self-service app, only this constant moves.
+const approvalAgent = "0.1.0-alpha.10"
+
+// withheldForApproval reports whether an available package whose entry has approval is left out for agent: it requires
+// approval and agent is a release before gate (A10-17, with the A10-6 gating mechanism).
+func withheldForApproval(intent, approval, agent, gate string) bool {
+	return intent == software.IntentAvailable && approval == software.ApprovalRequired && buildinfo.OlderRelease(agent, gate)
 }
 
 // selfServiceAgent is the first agent release that reads what plan M13b added to the software section: available

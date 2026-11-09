@@ -303,6 +303,13 @@ const (
 	CodeDeviceSoftwareApplyFailed Code = "device.software_apply_failed"
 	// A user's self-service operation on a device (plan M13b decision 18, ADR 0049 decision 7).
 	CodeDeviceSoftwareSelfService Code = "device.software_self_service"
+	// Approvals for available entries (plan M13c decisions 9 and 10): a user's request reported by the device, the
+	// request the worker opened from it (a notification code), the administrator's decision and the worker's expiry.
+	CodeDeviceSoftwareRequested Code = "device.software_requested"
+	CodeSoftwareRequestOpened   Code = "software_request.opened"
+	CodeSoftwareRequestApproved Code = "software_request.approved"
+	CodeSoftwareRequestDenied   Code = "software_request.denied"
+	CodeSoftwareRequestExpired  Code = "software_request.expired"
 
 	// The backup key (plan M15 §6.4).
 	CodePlatformBackupKeyGenerated Code = "platform.backup_key_generated"
@@ -1794,7 +1801,7 @@ var registry = map[Code]Definition{
 	CodeSoftwareCatalogEntryCreated: {
 		Code: CodeSoftwareCatalogEntryCreated, Emitted: true,
 		Description: "An application was added to the software catalog with its package names per distribution, release and architecture.",
-		Params:      []string{"name", "category", "source_id", "source_slug", "package_count"},
+		Params:      []string{"name", "category", "source_id", "source_slug", "package_count", "approval"},
 		Outcomes:    adminOutcomes,
 		Note:        "Failure with invalid_request for a refused name, description, category or package reference, already_exists for a duplicate name, not_found for a source of another organization. Request text is clipped before it is recorded.",
 	},
@@ -1803,7 +1810,7 @@ var registry = map[Code]Definition{
 		Description: "A software catalog entry changed (name, description, category, source, package names or icon).",
 		Params:      []string{"name", "fields"},
 		Outcomes:    adminOutcomes,
-		Note:        "fields lists what changed; an icon change names icon. Request text is clipped before it is recorded.",
+		Note:        "fields lists what changed; an icon change names icon, a changed approval (none or required) names approval. Request text is clipped before it is recorded.",
 	},
 	CodeSoftwareCatalogEntryDeleted: {
 		Code: CodeSoftwareCatalogEntryDeleted, Emitted: true,
@@ -1863,6 +1870,41 @@ var registry = map[Code]Definition{
 		Params:      []string{"event_seq", "occurred_at", "user", "entry_id", "package", "flatpak_ref", "scope", "action", "outcome", "reason", "version"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "action is install, update or remove; outcome is the device's: succeeded is recorded as success, failed (error_code self_service_failed) and refused (error_code self_service_refused) as failure. reason is a refusal (required_by_policy, not_in_audience) or a failure reason (interrupted, timeout, or one of device.software_apply_failed). package or flatpak_ref names the application; version is the installed version after a succeeded install or update.",
+	},
+	CodeDeviceSoftwareRequested: {
+		Code: CodeDeviceSoftwareRequested, Emitted: true,
+		Description: "A user asked through the self-service app of a device for an application whose catalog entry requires an administrator's approval (actor: the device; user: the user name of the asking account).",
+		Params:      []string{"event_seq", "occurred_at", "user", "entry_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded for every report; software_request.opened follows when it opened a request. A repeat while the request is open, a request within 24 hours of a denial, or one for an entry that does not exist or does not require approval opens none. The user's justification text is not recorded.",
+	},
+	CodeSoftwareRequestOpened: {
+		Code: CodeSoftwareRequestOpened, Emitted: true,
+		Description: "A software request is waiting for an administrator's decision (actor: system; the worker opened it from a device's report). Use it as a notification for administrators.",
+		Params:      []string{"catalog_entry_id", "app", "device_id", "hostname", "user", "expires_at"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Target is the request (type software_request). Not part of the security preset; a destination with all or a custom list that names it receives it. The request expires at expires_at, 30 days after it was opened.",
+	},
+	CodeSoftwareRequestApproved: {
+		Code: CodeSoftwareRequestApproved, Emitted: true,
+		Description: "An organization administrator approved a user's software request; the user may install the application on that device once its next bundle arrives.",
+		Params:      []string{"catalog_entry_id", "app", "device_id", "hostname", "user", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "No step-up of its own: trusting the entry's source needed one (plan M13c Q15). Failure with invalid_state unless the request is open, invalid_request for a reason that is too long or contains control characters, not_found for another organization's request.",
+	},
+	CodeSoftwareRequestDenied: {
+		Code: CodeSoftwareRequestDenied, Emitted: true,
+		Description: "An organization administrator denied a user's software request with a reason; the user may ask again after 24 hours.",
+		Params:      []string{"catalog_entry_id", "app", "device_id", "hostname", "user", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "No step-up of its own (plan M13c Q15). Failure with invalid_request without a reason or with one that is too long or contains control characters, invalid_state unless the request is open, not_found for another organization's request.",
+	},
+	CodeSoftwareRequestExpired: {
+		Code: CodeSoftwareRequestExpired, Emitted: true,
+		Description: "A software request expired (actor: system; the worker's request round): an open one without a decision, or an open or approved one whose application is no longer offered.",
+		Params:      []string{"catalog_entry_id", "device_id", "user", "cause"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "cause is validity_ended (30 days without a decision), approval_removed (the entry no longer requires approval, so the user may install without one) or assignment_removed (the entry has no available assignment left; an approval holds only while it exists).",
 	},
 	CodePlatformBackupKeyGenerated: {
 		Code: CodePlatformBackupKeyGenerated, Emitted: true,

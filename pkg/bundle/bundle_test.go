@@ -612,6 +612,46 @@ func TestValidateSoftware(t *testing.T) {
 			flatpak(s, "org.gimp.GIMP", "")
 			s.Packages = append(s.Packages, s.Packages[1])
 		}, false},
+		// Plan M13c decision 9: approval of an available package and its approved users.
+		"available requires approval": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+		}, true},
+		"available approved users": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{Users: audienceOf(3)})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{audienceOf(3)[0], audienceOf(3)[2]}
+		}, true},
+		"available 200 approved": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			approved := audienceOf(MaxSoftwareAudience)
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &approved
+		}, true},
+		"available 201 approved": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			approved := audienceOf(MaxSoftwareAudience + 1)
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &approved
+		}, false},
+		"approval unknown value": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = "none"
+		}, false},
+		"required with approval": {func(s *SoftwareSpec) { s.Packages[1].Approval = SoftwareApprovalRequired }, false},
+		"approved without approval": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approved = &[]string{"alice@example.org"}
+		}, false},
+		"approved empty": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{}
+		}, false},
+		"approved unsorted": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"bob@example.org", "alice@example.org"}
+		}, false},
+		"approved upper-case": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"Alice@example.org"}
+		}, false},
 		// Architect decision A10-11: the targeted users of a user-scope application, with the limits of an audience.
 		"flatpak user required for users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, "alice@example.org", "bob@example.org") }, true},
 		"flatpak user forbid for users":   {func(s *SoftwareSpec) { targeted(s, SoftwareForbid, "alice@example.org") }, true},
@@ -708,7 +748,7 @@ func TestSoftwareAudienceContentHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"kind"`, `"flatpak_ref"`, `"scope"`, `"audience"`, `"users"`} {
+	for _, field := range []string{`"kind"`, `"flatpak_ref"`, `"scope"`, `"audience"`, `"users"`, `"approval"`, `"approved"`} {
 		if strings.Contains(string(enc), field) {
 			t.Errorf("%s encoded although unset: %s", field, enc)
 		}

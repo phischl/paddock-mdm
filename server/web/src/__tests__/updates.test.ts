@@ -10,7 +10,7 @@ const everyKind: Record<AttentionKind, true> = {
   stale_warning: true, stale_critical: true, presumed_lost: true, quarantined: true, disk_not_compliant: true, agent_outdated: true,
   login_apply_failed: true, sudo_apply_failed: true, revocation_pending: true, revocation_expired: true, agent_rollback_pending: true,
   agent_not_running: true, uninstall_pending: true, config_behind: true, disk_conversion_failed: true, clock_drift: true, event_gap: true,
-  report_only: true,
+  report_only: true, software_requests_open: true,
 }
 
 const settings = {

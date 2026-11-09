@@ -2247,6 +2247,93 @@ export interface paths {
         patch: operations["updateSoftwareAssignment"];
         trace?: never;
     };
+    "/api/v1/software-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The users' requests for available applications whose catalog
+         *     entry requires approval (plan M13c decision 10), with their state: requested (waiting for a decision),
+         *     approved, denied, expired (30 days without a decision, or the entry no longer requires approval) or
+         *     withdrawn. The user's justification is not stored.
+         */
+        get: operations["listSoftwareRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. 404 not_found for another organization's request. */
+        get: operations["getSoftwareRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-requests/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Approves an open request, optionally with a reason; no step-up of its own (the entry's source
+         *     needed one). The device's next bundle lets the user install the application. 409 invalid_state unless the
+         *     request is open, 404 not_found for another organization's request.
+         */
+        post: operations["approveSoftwareRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-requests/{id}/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Denies an open request with a reason, which the user sees; no step-up of its own. The user
+         *     may ask again after 24 hours. 400 invalid_request without a reason, 409 invalid_state unless the request is
+         *     open, 404 not_found for another organization's request.
+         */
+        post: operations["denySoftwareRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/compile-warnings": {
         parameters: {
             query?: never;
@@ -6710,6 +6797,7 @@ export interface components {
             source_id?: string | null;
             /** @description Unique by distribution, release and architecture; the most specific reference wins on a device. */
             packages: components["schemas"]["PackageRef"][];
+            approval?: components["schemas"]["SoftwareApproval"];
         };
         SoftwareCatalogEntryUpdate: {
             name: string;
@@ -6721,6 +6809,8 @@ export interface components {
              */
             source_id?: string | null;
             packages: components["schemas"]["PackageRef"][];
+            /** @description Omit to keep the stored approval. */
+            approval?: components["schemas"]["SoftwareApproval"];
         };
         SoftwareCatalogEntry: {
             /** Format: uuid */
@@ -6733,12 +6823,72 @@ export interface components {
             /** @description Empty for the distribution's own repositories. */
             source_slug: string;
             packages: components["schemas"]["PackageRef"][];
+            approval: components["schemas"]["SoftwareApproval"];
             has_icon: boolean;
             assignment_count: number;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        /** @enum {string} */
+        SoftwareRequestState: "requested" | "approved" | "denied" | "expired" | "withdrawn";
+        /**
+         * @description required makes the users of an available assignment ask an administrator before they install the application.
+         * @enum {string}
+         */
+        SoftwareApproval: "none" | "required";
+        SoftwareRequest: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            catalog_entry_id: string;
+            entry_name: string;
+            entry_approval: components["schemas"]["SoftwareApproval"];
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            /**
+             * Format: uuid
+             * @description Null when no directory user has the user name.
+             */
+            user_id: string | null;
+            username: string;
+            state: components["schemas"]["SoftwareRequestState"];
+            /** Format: date-time */
+            requested_at: string;
+            /**
+             * Format: date-time
+             * @description When an open request expires without a decision.
+             */
+            expires_at: string;
+            /** @description The deciding administrator's display name. */
+            decided_by: string | null;
+            /**
+             * Format: date-time
+             * @description When it was decided or expired.
+             */
+            decided_at: string | null;
+            decision_reason: string | null;
+        };
+        SoftwareRequestPage: {
+            items: components["schemas"]["SoftwareRequest"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        SoftwareRequestDecision: {
+            /** @description Optional; trimmed. */
+            reason?: string;
+        };
+        SoftwareRequestDenial: {
+            /** @description Required: the user sees it. Trimmed; must not be empty. */
+            reason: string;
         };
         SoftwareCatalogEntryPage: {
             items: components["schemas"]["SoftwareCatalogEntry"][];
@@ -7016,7 +7166,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap" | "report_only";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap" | "report_only" | "software_requests_open";
         Attention: {
             /** @description The live finding of the condition (plan M9 decision 34); null until the findings round created it. */
             finding: components["schemas"]["AttentionFinding"] | null;
@@ -7028,10 +7178,10 @@ export interface components {
             hostname: string;
             /**
              * Format: date-time
-             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled).
+             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled; for software_requests_open when the oldest open request was made).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; report_only: the enrollment method; otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; report_only: the enrollment method; software_requests_open: the number of the device's open software requests; otherwise empty. */
             detail: string;
         };
         /** @enum {string} */
@@ -9053,6 +9203,8 @@ export interface components {
         PackageHoldSort: "package" | "-package" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         SoftwareSourceSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwareRequestSort: "requested_at" | "-requested_at" | "username" | "-username" | "state" | "-state" | "expires_at" | "-expires_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         SoftwareCatalogSort: "name" | "-name" | "category" | "-category" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -13353,6 +13505,133 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    listSoftwareRequests: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwareRequestSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                state?: components["schemas"]["SoftwareRequestState"][];
+                catalog_entry_id?: string;
+                device_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of software requests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRequestPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The software request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    approveSoftwareRequest: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SoftwareRequestDecision"];
+            };
+        };
+        responses: {
+            /** @description The approved request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    denySoftwareRequest: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareRequestDenial"];
+            };
+        };
+        responses: {
+            /** @description The denied request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     listCompileWarnings: {

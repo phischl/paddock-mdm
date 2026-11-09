@@ -461,6 +461,7 @@
       "software_removed": "Das Gerät {target} hat {package} {version} entfernt ({intent})",
       "software_apply_failed": "Das Gerät {target} konnte ein Softwarepaket oder eine Paketquelle nicht anwenden ({stage}: {reason})",
       "software_self_service": "{outcome, select, succeeded {{user} hat über den Self-Service auf dem Gerät {target} eine Anwendung {action, select, install {installiert} update {aktualisiert} remove {entfernt} other {geändert}}} refused {Das Gerät {target} hat die Self-Service-Aktion {action} von {user} abgelehnt ({reason})} other {Die Self-Service-Aktion {action} von {user} ist auf dem Gerät {target} fehlgeschlagen ({reason})}}",
+      "software_requested": "{user} hat auf dem Gerät {target} eine Anwendung angefragt, die eine Freigabe braucht",
       "stale_warning": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert (Warnung)",
       "stale_critical": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert und gilt als vermutlich verloren",
       "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert",
@@ -605,6 +606,12 @@
       "created": "{actor} hat {name} zum Software-Katalog hinzugefügt",
       "updated": "{actor} hat {name} im Software-Katalog geändert",
       "deleted": "{actor} hat {name} mit {assignment_count, plural, one {# Zuweisung} other {# Zuweisungen}} aus dem Software-Katalog entfernt"
+    },
+    "software_request": {
+      "opened": "{user} hat {app} auf {hostname} angefragt; die Anfrage wartet auf eine Entscheidung",
+      "approved": "{actor} hat die Anfrage von {user} für {app} auf {hostname} freigegeben",
+      "denied": "{actor} hat die Anfrage von {user} für {app} auf {hostname} abgelehnt: {reason}",
+      "expired": "Die Anfrage von {user} ist ohne Entscheidung abgelaufen ({cause})"
     },
     "software_assignment": {
       "created": "{actor} hat {app} mit der Absicht {intent} zugewiesen",
@@ -2558,7 +2565,8 @@
       "disk_conversion_failed": "Nachträgliche Verschlüsselung fehlgeschlagen",
       "clock_drift": "Zeitabweichung",
       "event_gap": "Ereignislücke",
-      "report_only": "Berichtsmodus, wartet auf Durchsetzung"
+      "report_only": "Berichtsmodus, wartet auf Durchsetzung",
+      "software_requests_open": "Softwareanfragen warten"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -2578,7 +2586,8 @@
       "disk_conversion_failed": "Gerät öffnen",
       "clock_drift": "Gerät öffnen",
       "event_gap": "Gerät öffnen",
-      "report_only": "Gerät öffnen"
+      "report_only": "Gerät öffnen",
+      "software_requests_open": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {

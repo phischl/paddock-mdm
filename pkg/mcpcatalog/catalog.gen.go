@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "b9edb6cac861bb4f487adb145908de4bafb623a9d1aeb8c85809f121cf6e8ce3"
+const Version = "bf4f2b9028697894c3a1810dd181a925d1a48818e5d6c2ba6951f881e310a7e7"
 
 var tools = []Tool{
 	{
@@ -133,6 +133,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit. The second approval of a Destroy; the caller must be another administrator than the requester, with another identity (403 forbidden otherwise). 409 invalid_state unless the request waits for its approval.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"confirm_hostname\":{\"maxLength\":253,\"type\":\"string\"}},\"required\":[\"confirm_hostname\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "approveSoftwareRequest",
+		Method:      "POST",
+		Path:        "/api/v1/software-requests/{id}/approve",
+		Pattern:     "POST /api/v1/software-requests/{id}/approve",
+		Tag:         "software",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "software_request.approved",
+		Summary:     "",
+		Description: "Roles: org_admin. Approves an open request, optionally with a reason; no step-up of its own (the entry's source needed one). The device's next bundle lets the user install the application. 409 invalid_state unless the request is open, 404 not_found for another organization's request.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"reason\":{\"description\":\"Optional; trimmed.\",\"maxLength\":500,\"type\":\"string\"}},\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "assignFinding",
@@ -654,7 +672,7 @@ var tools = []Tool{
 		AuditCode:   "software_catalog_entry.created",
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator. Adds an application with its package names per distribution, release and architecture (1 to 20 references; release and architecture may be \"*\"; the tuple is unique within the entry). source_id names one of the organization's package sources; without it the distribution's own repositories are used. A name already in use is 409 already_exists; a source_id of another organization or an unknown one is 404 not_found.\n\nChanges data; needs your MCP write access.",
-		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"category\":{\"description\":\"May be empty.\",\"maxLength\":64,\"type\":\"string\"},\"description\":{\"maxLength\":1000,\"type\":\"string\"},\"name\":{\"description\":\"1 to 100 characters after trimming; unique within the organization.\",\"type\":\"string\"},\"packages\":{\"description\":\"Unique by distribution, release and architecture; the most specific reference wins on a device.\",\"items\":{\"additionalProperties\":false,\"description\":\"Names either an APT package (package) or a Flatpak application (flatpak_ref, with scope); an entry of a Flatpak source names Flatpak applications only, every other entry APT packages only.\",\"properties\":{\"architecture\":{\"enum\":[\"*\",\"amd64\",\"arm64\"],\"type\":\"string\"},\"distribution\":{\"description\":\"The ID of /etc/os-release, ^[a-z][a-z0-9-]{0,31}$, e.g. ubuntu or debian.\",\"maxLength\":32,\"type\":\"string\"},\"flatpak_ref\":{\"description\":\"A Flatpak application ID, ^[A-Za-z][A-Za-z0-9_-]*(\\\\.[A-Za-z][A-Za-z0-9_-]*){2,}$, e.g. org.gimp.GIMP.\",\"maxLength\":255,\"type\":\"string\"},\"package\":{\"description\":\"^[a-z0-9][a-z0-9+.-]+$\",\"maxLength\":128,\"type\":\"string\"},\"release\":{\"description\":\"* or the VERSION_ID, ^[a-z0-9][a-z0-9.-]{0,31}$, e.g. 24.04.\",\"maxLength\":32,\"type\":\"string\"},\"scope\":{\"enum\":[\"system\",\"user\"],\"type\":\"string\"}},\"required\":[\"distribution\",\"release\",\"architecture\"],\"type\":\"object\"},\"maxItems\":20,\"minItems\":1,\"type\":\"array\"},\"source_id\":{\"description\":\"Omit or null for the distribution's own repositories.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]}},\"required\":[\"name\",\"packages\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"approval\":{\"description\":\"required makes the users of an available assignment ask an administrator before they install the application.\",\"enum\":[\"none\",\"required\"],\"type\":\"string\"},\"category\":{\"description\":\"May be empty.\",\"maxLength\":64,\"type\":\"string\"},\"description\":{\"maxLength\":1000,\"type\":\"string\"},\"name\":{\"description\":\"1 to 100 characters after trimming; unique within the organization.\",\"type\":\"string\"},\"packages\":{\"description\":\"Unique by distribution, release and architecture; the most specific reference wins on a device.\",\"items\":{\"additionalProperties\":false,\"description\":\"Names either an APT package (package) or a Flatpak application (flatpak_ref, with scope); an entry of a Flatpak source names Flatpak applications only, every other entry APT packages only.\",\"properties\":{\"architecture\":{\"enum\":[\"*\",\"amd64\",\"arm64\"],\"type\":\"string\"},\"distribution\":{\"description\":\"The ID of /etc/os-release, ^[a-z][a-z0-9-]{0,31}$, e.g. ubuntu or debian.\",\"maxLength\":32,\"type\":\"string\"},\"flatpak_ref\":{\"description\":\"A Flatpak application ID, ^[A-Za-z][A-Za-z0-9_-]*(\\\\.[A-Za-z][A-Za-z0-9_-]*){2,}$, e.g. org.gimp.GIMP.\",\"maxLength\":255,\"type\":\"string\"},\"package\":{\"description\":\"^[a-z0-9][a-z0-9+.-]+$\",\"maxLength\":128,\"type\":\"string\"},\"release\":{\"description\":\"* or the VERSION_ID, ^[a-z0-9][a-z0-9.-]{0,31}$, e.g. 24.04.\",\"maxLength\":32,\"type\":\"string\"},\"scope\":{\"enum\":[\"system\",\"user\"],\"type\":\"string\"}},\"required\":[\"distribution\",\"release\",\"architecture\"],\"type\":\"object\"},\"maxItems\":20,\"minItems\":1,\"type\":\"array\"},\"source_id\":{\"description\":\"Omit or null for the distribution's own repositories.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]}},\"required\":[\"name\",\"packages\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "createSoftwareSource",
@@ -979,6 +997,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin. Deletes the group in Authentik and Paddock with its login and profile assignments.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "denySoftwareRequest",
+		Method:      "POST",
+		Path:        "/api/v1/software-requests/{id}/deny",
+		Pattern:     "POST /api/v1/software-requests/{id}/deny",
+		Tag:         "software",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "software_request.denied",
+		Summary:     "",
+		Description: "Roles: org_admin. Denies an open request with a reason, which the user sees; no step-up of its own. The user may ask again after 24 hours. 400 invalid_request without a reason, 409 invalid_state unless the request is open, 404 not_found for another organization's request.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"reason\":{\"description\":\"Required: the user sees it. Trimmed; must not be empty.\",\"maxLength\":500,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"reason\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "destroyDevice",
@@ -2259,6 +2295,24 @@ var tools = []Tool{
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
+		Name:        "getSoftwareRequest",
+		Method:      "GET",
+		Path:        "/api/v1/software-requests/{id}",
+		Pattern:     "GET /api/v1/software-requests/{id}",
+		Tag:         "software",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. 404 not_found for another organization's request.\n\nRead-only.",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
 		Name:        "getSoftwareSource",
 		Method:      "GET",
 		Path:        "/api/v1/software-sources/{id}",
@@ -2562,7 +2616,7 @@ var tools = []Tool{
 		AuditCode:   "",
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor. The conditions that need an administrator, one row per open condition of a device (plan M5b decision 11): staleness warning and critical (the organization's thresholds), presumed lost, quarantined (clone suspected), disk encryption not compliant, agent not the current release, the latest login or sudo configuration failed, a Lock or Destroy waiting, or expired within the last 30 days, an agent release whose rollback failed and is still pending on the device (ADR 0024), a device clock more than 60 s off the server's, measured at check-in and cleared once it is back within 30 s (clock_drift, plan M8b decision 15), a hole in a device's event numbering still open after two further check-ins (event_gap, plan M8b decision 23). Read-only; the actions are the device's own (retire, release quarantine, lock).\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: since, kind, hostname), q (search over: hostname).",
-		InputSchema: json.RawMessage("{\"properties\":{\"kind\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"stale_warning\",\"stale_critical\",\"presumed_lost\",\"quarantined\",\"disk_not_compliant\",\"agent_outdated\",\"login_apply_failed\",\"sudo_apply_failed\",\"revocation_pending\",\"revocation_expired\",\"agent_rollback_pending\",\"agent_not_running\",\"uninstall_pending\",\"config_behind\",\"disk_conversion_failed\",\"clock_drift\",\"event_gap\",\"report_only\"],\"type\":\"string\"},\"type\":\"array\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-since\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The row id is the tie-breaker.\",\"enum\":[\"since\",\"-since\",\"kind\",\"-kind\",\"hostname\",\"-hostname\"],\"type\":\"string\"}},\"type\":\"object\"}"),
+		InputSchema: json.RawMessage("{\"properties\":{\"kind\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"stale_warning\",\"stale_critical\",\"presumed_lost\",\"quarantined\",\"disk_not_compliant\",\"agent_outdated\",\"login_apply_failed\",\"sudo_apply_failed\",\"revocation_pending\",\"revocation_expired\",\"agent_rollback_pending\",\"agent_not_running\",\"uninstall_pending\",\"config_behind\",\"disk_conversion_failed\",\"clock_drift\",\"event_gap\",\"report_only\",\"software_requests_open\"],\"type\":\"string\"},\"type\":\"array\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-since\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The row id is the tie-breaker.\",\"enum\":[\"since\",\"-since\",\"kind\",\"-kind\",\"hostname\",\"-hostname\"],\"type\":\"string\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listAttentionDevices",
@@ -2580,7 +2634,7 @@ var tools = []Tool{
 		AuditCode:   "",
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor. The attention list grouped by device: one item per device with an open condition, its conditions most severe first. A kind filter selects devices with at least one matching condition; all conditions of the device are listed.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: severity, hostname, since), q (search over: hostname).",
-		InputSchema: json.RawMessage("{\"properties\":{\"device_id\":{\"description\":\"Only this device (exact match; the device page reads its conditions with it).\",\"format\":\"uuid\",\"type\":\"string\"},\"kind\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"stale_warning\",\"stale_critical\",\"presumed_lost\",\"quarantined\",\"disk_not_compliant\",\"agent_outdated\",\"login_apply_failed\",\"sudo_apply_failed\",\"revocation_pending\",\"revocation_expired\",\"agent_rollback_pending\",\"agent_not_running\",\"uninstall_pending\",\"config_behind\",\"disk_conversion_failed\",\"clock_drift\",\"event_gap\",\"report_only\"],\"type\":\"string\"},\"type\":\"array\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-severity\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers.\",\"enum\":[\"severity\",\"-severity\",\"hostname\",\"-hostname\",\"since\",\"-since\"],\"type\":\"string\"}},\"type\":\"object\"}"),
+		InputSchema: json.RawMessage("{\"properties\":{\"device_id\":{\"description\":\"Only this device (exact match; the device page reads its conditions with it).\",\"format\":\"uuid\",\"type\":\"string\"},\"kind\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"stale_warning\",\"stale_critical\",\"presumed_lost\",\"quarantined\",\"disk_not_compliant\",\"agent_outdated\",\"login_apply_failed\",\"sudo_apply_failed\",\"revocation_pending\",\"revocation_expired\",\"agent_rollback_pending\",\"agent_not_running\",\"uninstall_pending\",\"config_behind\",\"disk_conversion_failed\",\"clock_drift\",\"event_gap\",\"report_only\",\"software_requests_open\"],\"type\":\"string\"},\"type\":\"array\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-severity\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers.\",\"enum\":[\"severity\",\"-severity\",\"hostname\",\"-hostname\",\"since\",\"-since\"],\"type\":\"string\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listAuditEvents",
@@ -3337,6 +3391,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, with what they reported or the derived state not_applicable or unknown (see the device's managed software). A device with a system and a user-scope row for the entry is listed once per scope (plan M13b decision 17). The search matches the hostname. 404 not_found for another organization's entry.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: hostname, state, reported_at), q (search over: hostname).",
 		InputSchema: json.RawMessage("{\"properties\":{\"device_group_id\":{\"description\":\"Only members of this device group.\",\"format\":\"uuid\",\"type\":\"string\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"scope\":{\"description\":\"Only rows of this scope, reported or derived.\",\"enum\":[\"system\",\"user\"],\"type\":\"string\"},\"sort\":{\"default\":\"hostname\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The hostname, then the device id, are the tie-breakers.\",\"enum\":[\"hostname\",\"-hostname\",\"state\",\"-state\",\"reported_at\",\"-reported_at\"],\"type\":\"string\"},\"state\":{\"description\":\"installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the\\ndevice's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.\\n\",\"enum\":[\"installed\",\"held\",\"absent\",\"pending\",\"failed\",\"not_applicable\",\"unknown\"],\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "listSoftwareRequests",
+		Method:      "GET",
+		Path:        "/api/v1/software-requests",
+		Pattern:     "GET /api/v1/software-requests",
+		Tag:         "software",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. The users' requests for available applications whose catalog entry requires approval (plan M13c decision 10), with their state: requested (waiting for a decision), approved, denied, expired (30 days without a decision, or the entry no longer requires approval) or withdrawn. The user's justification is not stored.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: requested_at, username, state, expires_at), q (search over: username).",
+		InputSchema: json.RawMessage("{\"properties\":{\"catalog_entry_id\":{\"format\":\"uuid\",\"type\":\"string\"},\"device_id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-requested_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"requested_at\",\"-requested_at\",\"username\",\"-username\",\"state\",\"-state\",\"expires_at\",\"-expires_at\"],\"type\":\"string\"},\"state\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"requested\",\"approved\",\"denied\",\"expired\",\"withdrawn\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listSoftwareSources",
@@ -4614,7 +4686,7 @@ var tools = []Tool{
 		AuditCode:   "software_catalog_entry.updated",
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator. Replaces the entry's name, description, category, source and package references with the submitted values (an absent description or category becomes empty, an absent or null source_id selects the distribution's own repositories); the icon is changed with its own operation. The same rules as on creation apply.\n\nChanges data; needs your MCP write access.",
-		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"category\":{\"maxLength\":64,\"type\":\"string\"},\"description\":{\"maxLength\":1000,\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"packages\":{\"items\":{\"additionalProperties\":false,\"description\":\"Names either an APT package (package) or a Flatpak application (flatpak_ref, with scope); an entry of a Flatpak source names Flatpak applications only, every other entry APT packages only.\",\"properties\":{\"architecture\":{\"enum\":[\"*\",\"amd64\",\"arm64\"],\"type\":\"string\"},\"distribution\":{\"description\":\"The ID of /etc/os-release, ^[a-z][a-z0-9-]{0,31}$, e.g. ubuntu or debian.\",\"maxLength\":32,\"type\":\"string\"},\"flatpak_ref\":{\"description\":\"A Flatpak application ID, ^[A-Za-z][A-Za-z0-9_-]*(\\\\.[A-Za-z][A-Za-z0-9_-]*){2,}$, e.g. org.gimp.GIMP.\",\"maxLength\":255,\"type\":\"string\"},\"package\":{\"description\":\"^[a-z0-9][a-z0-9+.-]+$\",\"maxLength\":128,\"type\":\"string\"},\"release\":{\"description\":\"* or the VERSION_ID, ^[a-z0-9][a-z0-9.-]{0,31}$, e.g. 24.04.\",\"maxLength\":32,\"type\":\"string\"},\"scope\":{\"enum\":[\"system\",\"user\"],\"type\":\"string\"}},\"required\":[\"distribution\",\"release\",\"architecture\"],\"type\":\"object\"},\"maxItems\":20,\"minItems\":1,\"type\":\"array\"},\"source_id\":{\"description\":\"Omit or null for the distribution's own repositories.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]}},\"required\":[\"name\",\"packages\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"approval\":{\"allOf\":[{\"description\":\"required makes the users of an available assignment ask an administrator before they install the application.\",\"enum\":[\"none\",\"required\"],\"type\":\"string\"}],\"description\":\"Omit to keep the stored approval.\"},\"category\":{\"maxLength\":64,\"type\":\"string\"},\"description\":{\"maxLength\":1000,\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"packages\":{\"items\":{\"additionalProperties\":false,\"description\":\"Names either an APT package (package) or a Flatpak application (flatpak_ref, with scope); an entry of a Flatpak source names Flatpak applications only, every other entry APT packages only.\",\"properties\":{\"architecture\":{\"enum\":[\"*\",\"amd64\",\"arm64\"],\"type\":\"string\"},\"distribution\":{\"description\":\"The ID of /etc/os-release, ^[a-z][a-z0-9-]{0,31}$, e.g. ubuntu or debian.\",\"maxLength\":32,\"type\":\"string\"},\"flatpak_ref\":{\"description\":\"A Flatpak application ID, ^[A-Za-z][A-Za-z0-9_-]*(\\\\.[A-Za-z][A-Za-z0-9_-]*){2,}$, e.g. org.gimp.GIMP.\",\"maxLength\":255,\"type\":\"string\"},\"package\":{\"description\":\"^[a-z0-9][a-z0-9+.-]+$\",\"maxLength\":128,\"type\":\"string\"},\"release\":{\"description\":\"* or the VERSION_ID, ^[a-z0-9][a-z0-9.-]{0,31}$, e.g. 24.04.\",\"maxLength\":32,\"type\":\"string\"},\"scope\":{\"enum\":[\"system\",\"user\"],\"type\":\"string\"}},\"required\":[\"distribution\",\"release\",\"architecture\"],\"type\":\"object\"},\"maxItems\":20,\"minItems\":1,\"type\":\"array\"},\"source_id\":{\"description\":\"Omit or null for the distribution's own repositories.\",\"format\":\"uuid\",\"type\":[\"string\",\"null\"]}},\"required\":[\"name\",\"packages\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "updateSoftwareSource",

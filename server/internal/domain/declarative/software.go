@@ -29,13 +29,15 @@ type SoftwareSource struct {
 }
 
 // SoftwareCatalogEntry is a catalog entry; key: Name. Source is the slug of the source it installs from; nil for the
-// distribution's own repositories. The icon is not part of the document.
+// distribution's own repositories. Approval is software.ApprovalRequired or empty for none (plan M13c decision 8), so a
+// document without approvals reads as before. The icon is not part of the document.
 type SoftwareCatalogEntry struct {
 	Name        string                `json:"name"`
 	Description string                `json:"description"`
 	Category    string                `json:"category"`
 	Source      *string               `json:"source"`
 	Packages    []software.PackageRef `json:"packages"`
+	Approval    string                `json:"approval,omitempty"`
 }
 
 // SoftwareAssignment assigns a catalog entry (by name) to a target; key: Entry and Target. UpdateRule is derived
@@ -86,8 +88,13 @@ func (e SoftwareCatalogEntry) fields() []field {
 	for i, p := range e.Packages {
 		packages[i] = PackageSummary(p)
 	}
+	// The plan compares the fields of the desired item only, so approval is always one: an absent approval is none.
+	approval := e.Approval
+	if approval == "" {
+		approval = software.ApprovalNone
+	}
 	return []field{{"name", e.Name}, {"description", e.Description}, {"category", e.Category}, {"source", optional(e.Source)},
-		{"packages", packages}}
+		{"packages", packages}, {"approval", approval}}
 }
 
 // PackageSummary is how a plan shows a package reference: distribution/release/architecture=package, or

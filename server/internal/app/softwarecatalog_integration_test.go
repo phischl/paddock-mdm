@@ -511,3 +511,43 @@ func TestSoftwareCatalogUpdateKeepsAssignmentsValid(t *testing.T) {
 		}
 	}
 }
+
+// TestSoftwareCatalogApproval (plan M13c decision 8): an entry is created with approval none unless it asks for
+// required; an update without approval keeps it, one with approval changes it and names the field; an unknown value
+// is invalid_request.
+func TestSoftwareCatalogApproval(t *testing.T) {
+	h := newPrivilegesHarness(t)
+	pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	catalog := app.NewSoftwareCatalog(h.runner, pool)
+	ctx := principal.With(context.Background(), h.account(t, principal.RoleOrgOperator, false))
+	nano := []software.PackageRef{{Distribution: "ubuntu", Release: "*", Architecture: "*", Package: "nano"}}
+	required, none, bogus := software.ApprovalRequired, software.ApprovalNone, "maybe"
+
+	plain, err := catalog.Create(ctx, app.EntryInput{Name: "Plain", Packages: nano})
+	if err != nil || plain.Approval != none {
+		t.Fatalf("default approval %q, %v", plain.Approval, err)
+	}
+	if _, err := catalog.Create(ctx, app.EntryInput{Name: "Bogus", Packages: nano, Approval: &bogus}); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("unknown approval: %v", err)
+	}
+	e, err := catalog.Create(ctx, app.EntryInput{Name: "Gated", Packages: nano, Approval: &required})
+	if err != nil || e.Approval != required || h.lastEvent(t).Params["approval"] != required {
+		t.Fatalf("created %q, %v", e.Approval, err)
+	}
+	if e, err = catalog.Update(ctx, e.ID, app.EntryInput{Name: "Gated", Description: "kept", Packages: nano}); err != nil || e.Approval != required {
+		t.Fatalf("update without approval: %q, %v", e.Approval, err)
+	}
+	if e, err = catalog.Update(ctx, e.ID, app.EntryInput{Name: "Gated", Description: "kept", Packages: nano, Approval: &none}); err != nil || e.Approval != none {
+		t.Fatalf("update to none: %q, %v", e.Approval, err)
+	}
+	if fields := h.lastEvent(t).Params["fields"]; fmt.Sprint(fields) != "[approval]" {
+		t.Fatalf("fields %v", fields)
+	}
+	if _, err := catalog.Update(ctx, e.ID, app.EntryInput{Name: "Gated", Packages: nano, Approval: &bogus}); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("update to an unknown approval: %v", err)
+	}
+}
