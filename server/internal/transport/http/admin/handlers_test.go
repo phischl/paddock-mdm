@@ -34,6 +34,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
@@ -171,7 +172,7 @@ func (f *fakeIdP) OrganizationUsers(context.Context, string) ([]ports.IdentityUs
 	return nil, f.err()
 }
 
-func (f *fakeIdP) RoleGroupUsers(context.Context, string) ([]ports.IdentityUser, error) {
+func (f *fakeIdP) RoleGroupsMembers(context.Context, []string) (map[string][]ports.IdentityUser, error) {
 	return nil, f.err()
 }
 
@@ -252,6 +253,18 @@ func (f *fakeIdP) GroupMembers(_ context.Context, group string) ([]string, error
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.members[group]), f.err()
+}
+
+func (f *fakeIdP) DeviceLoginGroups(_ context.Context, slug string) (map[string]ports.IdentityGroupMembers, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]ports.IdentityGroupMembers{}
+	for pk, name := range f.groups {
+		if strings.HasPrefix(name, organization.DeviceLoginGroupPrefix(slug)) {
+			out[name] = ports.IdentityGroupMembers{PK: pk, Members: slices.Clone(f.members[pk])}
+		}
+	}
+	return out, f.err()
 }
 
 func (f *fakeIdP) UpstreamGroups(_ context.Context, slug string) ([]ports.IdentityGroup, error) {
@@ -1044,6 +1057,9 @@ func TestStaticPortalAndHeaders(t *testing.T) {
 	}
 	if csp := rec.Header().Get("Content-Security-Policy"); csp != defaultCSP {
 		t.Fatalf("API CSP %q", csp)
+	}
+	if hsts := rec.Header().Get("Strict-Transport-Security"); hsts != "max-age=31536000; includeSubDomains" {
+		t.Fatalf("HSTS %q, want includeSubDomains (plan M12h decision 16)", hsts)
 	}
 	login := httptest.NewRequest("GET", "https://admin.test/api/auth/login?return_to=//evil", nil)
 	rec = httptest.NewRecorder()

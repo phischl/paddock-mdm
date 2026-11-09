@@ -331,6 +331,27 @@ larger database grows into the host's page cache instead; raise `PADDOCK_POSTGRE
 `shared_buffers` or the number of connections. Valkey holds sessions, device keys, nonces and counters only; a limit
 reached there points to a leak, not to a larger installation.
 
+## Request limits
+
+The fixed limits that bound one request (ADR 0051 decisions 3 and 6, architecture §4.1). They are sized above every
+legitimate request; a request beyond them is refused, not queued.
+
+| Limit | Value | Where | Beyond it |
+| --- | --- | --- | --- |
+| Request body, `admin.` | 2 MiB; 256 MiB for the platform uploads | Caddy | 413 from the edge |
+| Request body, `auth.`, `device.`, `bundles.` | 1 MiB (`bundles.`: 33 MiB for an escrowed LUKS header) | Caddy | 413 from the edge |
+| Request body, `fleet.` | 64 MiB | Caddy | 413 from the edge |
+| Reading a request (api, gateway, escrow-reader) | headers 10 s, whole request 60 s | Go server | connection closed; a body sent at 1 byte/s ends after 60 s |
+| Writing a response (api, gateway, escrow-reader) | 120 s; 30 min for agent release uploads; the audit export download 60 s per write, in total max(10 min, size at 64 KiB/s), at most 24 h | Go server | connection closed |
+| Idle keep-alive connection | 120 s | Go server | connection closed |
+| Requests per minute | `PADDOCK_RATELIMIT_*`, `PADDOCK_DEVICE_PER_IP_LIMIT` (`install.md` section 4) | api, gateway | 429 `rate_limited` |
+
+A 128 MiB agent artifact over a link of 1 Mbit/s takes about 17 minutes and fits the 30-minute upload deadline; on a
+slower link upload from a host closer to the control plane. An audit export download breaks off when the client
+accepts no data for 60 s or reads slower than 64 KiB/s on average (at least 10 minutes are always allowed, at most
+24 hours); the client detects the short body against `Content-Length` and `X-Paddock-Package-SHA256` and downloads
+again.
+
 ## Method
 
 The load generator is k6 (`K6_IMAGE` in `deploy/compose/versions.env`, a tool only, never shipped). It runs as a

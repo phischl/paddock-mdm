@@ -32,8 +32,9 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/paddock.example.org/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 
-    # Agent artifacts are up to 128 MiB (uploads through the admin API); escrowed LUKS headers up to 16 MiB.
-    client_max_body_size 160m;
+    # Caddy accepts platform uploads (agent artifacts, packages) of up to 256 MiB on admin. and escrowed LUKS headers of
+    # up to 33 MiB on bundles. (plan M12h decision 16); this proxy must not cut them first.
+    client_max_body_size 260m;
     client_body_timeout 300s;
     proxy_connect_timeout 10s;
     proxy_send_timeout 300s;

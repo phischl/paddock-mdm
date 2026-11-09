@@ -362,6 +362,29 @@ Public hostnames (each its own TLS certificate and rate limit profile):
 
 Fleet's own UI and admin API are **not** published; Paddock reaches them on the internal network.
 
+**Edge headers, body limits and server timeouts** *(ADR 0051 decision 6, plan M12h §3.6)*. Every site imports the
+Caddy snippet `hardening_headers` (`deploy/compose/caddy/guards.caddy`): `X-Content-Type-Options: nosniff`,
+`Strict-Transport-Security: max-age=31536000; includeSubDomains` and `X-Frame-Options: DENY` replace whatever an
+upstream sends (Authentik's flows and Fleet's endpoints are never framed), and `Referrer-Policy:
+strict-origin-when-cross-origin` is added where the upstream sends none (the admin API keeps its `no-referrer`). The
+edge refuses a body above the site's limit with 413 before it reaches the upstream:
+
+| Site | Request body limit |
+| --- | --- |
+| `admin.` | 2 MiB; 256 MiB for the platform uploads (`PUT`/`POST` on `/api/platform/v1/agent-releases/*` and `/api/v1/software-packages`) |
+| `auth.` | 1 MiB |
+| `device.` | 1 MiB (the gateway's own largest limit is `POST /v1/events` at 1 MiB) |
+| `bundles.` | 1 MiB; 33 MiB for the presigned escrow `PUT` of a LUKS header |
+| `fleet.` | 64 MiB (Fleet's documented maximum) |
+
+The api, the gateway and the escrow-reader bound a request with `ReadHeaderTimeout` 10 s, `ReadTimeout` 60 s,
+`WriteTimeout` 120 s and `IdleTimeout` 120 s, so a slow body cannot hold a goroutine; the agent release uploads extend
+their read and write deadlines to 30 minutes per request (`http.ResponseController`), and the audit export download
+sets its write deadline per chunk: 60 s per write, in total max(10 min, size at 64 KiB/s), at most 24 h. Rate limits
+per hostname: the api limits `/api/auth/*` per client address and the admin API per session or token, the gateway
+limits devices per address and per key (ADR 0051 decision 3, `PADDOCK_RATELIMIT_*`, `docs/operations/install.md`
+section 4); 429 `rate_limited` with `Retry-After`.
+
 **Networks by trust zone** *(ADR 0051 decision 1, plan M12h §3.1)*. The control-plane host has no flat network; a
 compromised container reaches only the zones it is a member of:
 

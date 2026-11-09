@@ -515,6 +515,20 @@ func TestOrganizationUsersPaginates(t *testing.T) {
 	}
 }
 
+// roleGroupUsers lists one role group as the worker's ListRoleGroups reads it: a group without a key is
+// ErrGroupNotFound.
+func roleGroupUsers(ctx context.Context, c *authentik.Client, name string) ([]ports.IdentityUser, error) {
+	members, err := c.RoleGroupsMembers(ctx, []string{name})
+	if err != nil {
+		return nil, err
+	}
+	users, ok := members[name]
+	if !ok {
+		return nil, fmt.Errorf("%s: %w", name, ports.ErrGroupNotFound)
+	}
+	return users, nil
+}
+
 // TestRoleGroupUsers (plan M8s decision 22): the direct members of a role group with their active flag; a group that
 // does not exist is ErrGroupNotFound, never an empty listing.
 func TestRoleGroupUsers(t *testing.T) {
@@ -528,12 +542,12 @@ func TestRoleGroupUsers(t *testing.T) {
 	f.users[910] = &fakeUser{pk: 910, username: "alice@acme.test", groups: []string{admins}}
 	f.users[911] = &fakeUser{pk: 911, username: "dave@acme.test", groups: []string{admins}, inactive: true}
 	f.users[912] = &fakeUser{pk: 912, username: "bob@acme.test", groups: []string{f.groupByName("paddock.acme.auditors").pk}}
-	users, err := c.RoleGroupUsers(ctx, "paddock.acme.admins")
+	users, err := roleGroupUsers(ctx, c, "paddock.acme.admins")
 	if err != nil || len(users) != 2 || users[0].Username != "alice@acme.test" || !users[0].Active ||
 		users[1].Username != "dave@acme.test" || users[1].Active || users[0].UID != "uid-910" {
 		t.Fatalf("role group users %+v %v", users, err)
 	}
-	if users, err := c.RoleGroupUsers(ctx, "paddock.globex.admins"); !errors.Is(err, ports.ErrGroupNotFound) || len(users) != 0 {
+	if users, err := roleGroupUsers(ctx, c, "paddock.globex.admins"); !errors.Is(err, ports.ErrGroupNotFound) || len(users) != 0 {
 		t.Fatalf("missing group: %+v %v", users, err)
 	}
 	// The direct read of one user requires its UID: a username can be reused.
@@ -638,7 +652,7 @@ func TestRoleGroupUsersSettles(t *testing.T) {
 			delete(f.users, 2001)
 		}
 	}
-	users, err := c.RoleGroupUsers(ctx, "paddock.acme.admins")
+	users, err := roleGroupUsers(ctx, c, "paddock.acme.admins")
 	if err != nil || len(users) != 1202 || slices.ContainsFunc(users, func(u ports.IdentityUser) bool { return u.Username == "a1" }) {
 		t.Fatalf("%d users, %v", len(users), err)
 	}
@@ -647,7 +661,7 @@ func TestRoleGroupUsersSettles(t *testing.T) {
 		next++
 		f.users[next] = &fakeUser{pk: next, username: "n" + strconv.Itoa(next), groups: []string{admins}}
 	}
-	if _, err := c.RoleGroupUsers(ctx, "paddock.acme.admins"); !errors.Is(err, problem.UpstreamUnavailable) {
+	if _, err := roleGroupUsers(ctx, c, "paddock.acme.admins"); !errors.Is(err, problem.UpstreamUnavailable) {
 		t.Fatalf("a listing that never settles: %v", err)
 	}
 }
@@ -707,7 +721,7 @@ func TestDirectoryProbe(t *testing.T) {
 		t.Fatalf("an external user: %v %v", ok, err)
 	}
 	f.blind = true
-	if users, err := c.RoleGroupUsers(ctx, "paddock.acme.admins"); err != nil || len(users) != 0 {
+	if users, err := roleGroupUsers(ctx, c, "paddock.acme.admins"); err != nil || len(users) != 0 {
 		t.Fatalf("blind listing: %+v %v, want empty without an error", users, err)
 	}
 	if ok, err := c.GroupReadable(ctx, "paddock.acme.admins"); err != nil || ok {

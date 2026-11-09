@@ -11,6 +11,7 @@
 import /etc/caddy/guards.caddy
 
 admin.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	tls internal
 	import admin_site
 }
@@ -18,18 +19,21 @@ admin.{$PADDOCK_DOMAIN} {
 # The untrusted listener of the acceptance gates (plan M7a decision 9): the servers block above is bound to the main
 # listener only, so here every client address header is ignored and the peer is the client.
 https://admin.{$PADDOCK_DOMAIN}:{$PADDOCK_HTTPS_UNTRUSTED_PORT} {
+	import hardening_headers
 	tls internal
 	import admin_site
 }
 
 auth.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	tls internal
 	import authentik_site
 }
 
 device.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	tls internal
-	import body_limit 2MiB 2097152
+	import body_limit 1MiB 1048576
 	reverse_proxy paddock-gateway:8081 {
 		header_up X-Paddock-Client-IP {client_ip}
 	}
@@ -39,6 +43,7 @@ device.{$PADDOCK_DOMAIN} {
 # Agent packages are public (plan M4b decision 1): /packages/… maps to the anonymously readable packages/ prefix of
 # paddock-agent-artifacts.
 bundles.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	tls internal
 	@packages {
 		method GET HEAD
@@ -76,6 +81,7 @@ bundles.{$PADDOCK_DOMAIN} {
 # osquery calls as `/api/v1/osquery/*`) and of fleetd (`/api/fleet/orbit/*`) are published. Fleet's UI, admin API and
 # file carving (`…/osquery/carve/*`, which Paddock never uses) answer 404 at the edge.
 fleet.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	tls internal
 	@carve path /api/osquery/carve/* /api/v1/osquery/carve/*
 	handle @carve {

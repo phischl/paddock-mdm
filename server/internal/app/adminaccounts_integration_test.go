@@ -148,8 +148,8 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	if err := accounts.Reconcile(sys, app.ListRoleGroups(sys, dir, admins, operators, auditors)); err != nil {
 		t.Fatal(err)
 	}
-	if dir.roleGroupCalls != 3 {
-		t.Fatalf("%d directory listings, want 3", dir.roleGroupCalls)
+	if dir.roleGroupCalls != 1 {
+		t.Fatalf("%d directory listings, want one for the three role groups (PDK-570)", dir.roleGroupCalls)
 	}
 	state := func(id uuid.UUID) (role string, disabled bool) {
 		if err := super.QueryRow(ctx, "SELECT role, disabled_at IS NOT NULL FROM admin_account WHERE id = $1", id).Scan(&role, &disabled); err != nil {

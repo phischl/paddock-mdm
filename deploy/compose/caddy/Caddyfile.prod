@@ -13,15 +13,18 @@
 import /etc/caddy/guards.caddy
 
 admin.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	import admin_site
 }
 
 auth.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	import authentik_site
 }
 
 device.{$PADDOCK_DOMAIN} {
-	import body_limit 2MiB 2097152
+	import hardening_headers
+	import body_limit 1MiB 1048576
 	reverse_proxy paddock-gateway:8081 {
 		header_up X-Paddock-Client-IP {client_ip}
 	}
@@ -31,6 +34,7 @@ device.{$PADDOCK_DOMAIN} {
 # Agent packages are public (plan M4b decision 1): /packages/… maps to the anonymously readable packages/ prefix of
 # paddock-agent-artifacts.
 bundles.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	@packages {
 		method GET HEAD
 		path /packages/*
@@ -65,6 +69,7 @@ bundles.{$PADDOCK_DOMAIN} {
 
 # Fleet (plan M5a decision 1, architecture §4.1): only the device endpoints of osquery and fleetd are published.
 fleet.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	@carve path /api/osquery/carve/* /api/v1/osquery/carve/*
 	handle @carve {
 		respond 404

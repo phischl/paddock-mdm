@@ -37,13 +37,21 @@ type roleGroupListing struct {
 	err     error
 }
 
-// ListRoleGroups lists every group of names once (ports.UserDirectory.RoleGroupUsers); a failing listing is kept as
-// that group's error and does not stop the others.
+// ListRoleGroups lists the groups names together in one settled listing (ports.UserDirectory.RoleGroupsMembers), so
+// an organization's three role groups cost one listing, not three (PDK-570). A group the listing does not know is
+// ports.ErrGroupNotFound; a failing listing is kept as the error of every group, so none of them reads as empty.
 func ListRoleGroups(ctx context.Context, dir ports.UserDirectory, names ...string) *RoleGroups {
 	g := &RoleGroups{dir: dir, listed: make(map[string]roleGroupListing, len(names))}
+	members, err := dir.RoleGroupsMembers(ctx, names)
 	for _, name := range names {
-		members, err := dir.RoleGroupUsers(ctx, name)
-		g.listed[name] = roleGroupListing{members: members, err: err}
+		switch m, ok := members[name]; {
+		case err != nil:
+			g.listed[name] = roleGroupListing{err: err}
+		case !ok:
+			g.listed[name] = roleGroupListing{err: fmt.Errorf("role group %s: %w", name, ports.ErrGroupNotFound)}
+		default:
+			g.listed[name] = roleGroupListing{members: m}
+		}
 	}
 	return g
 }

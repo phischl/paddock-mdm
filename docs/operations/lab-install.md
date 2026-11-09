@@ -113,8 +113,8 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/paddock.example.org/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 
-    # Agent artifacts are up to 128 MiB (uploads through the admin API); escrowed LUKS headers up to 16 MiB.
-    client_max_body_size 160m;
+    # Platform uploads are up to 256 MiB (admin API); escrowed LUKS headers up to 33 MiB.
+    client_max_body_size 260m;
     client_body_timeout 300s;
     proxy_connect_timeout 10s;
     proxy_send_timeout 300s;
@@ -144,9 +144,9 @@ Why it looks like this — keep these properties when you adapt it:
 - `Host $host`: presigned bundle, package and escrow URLs carry a SigV4 signature over the `Host` header.
 - `X-Forwarded-Proto https`: Authentik derives its issuer and cookie flags from it; Caddy passes it on only from the
   trusted proxy.
-- No `add_header Strict-Transport-Security`: the api sends it; a second header is undefined.
+- No `add_header Strict-Transport-Security`: Caddy sends it on every site; a second header is undefined.
 - No URI after `proxy_pass http://paddock_lab`: with one, Nginx re-encodes the path and breaks signed URLs.
-- `client_max_body_size 160m`: agent artifacts (128 MiB) and escrowed LUKS headers (16 MiB) must pass.
+- `client_max_body_size 260m`: platform uploads (up to 256 MiB, Caddy's limit on `admin.`) and escrowed LUKS headers (up to 33 MiB) must pass.
 
 The configuration MUST NOT be reachable from the internet.
 

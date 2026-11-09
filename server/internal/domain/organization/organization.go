@@ -89,8 +89,11 @@ func SyncedUserGroup(slug, groupSlug string) string { return RootGroup(slug) + "
 
 // DeviceLoginGroup returns the per-device group of directly assigned users: paddock.<slug>.d.<device_id>.
 func DeviceLoginGroup(slug string, deviceID uuid.UUID) string {
-	return RootGroup(slug) + ".d." + deviceID.String()
+	return DeviceLoginGroupPrefix(slug) + deviceID.String()
 }
+
+// DeviceLoginGroupPrefix returns the prefix of the names of the organization's per-device groups: paddock.<slug>.d.
+func DeviceLoginGroupPrefix(slug string) string { return RootGroup(slug) + ".d." }
 
 // DeviceLoginApp returns the slug of the device login OAuth2 provider and application: paddock-device-<slug>.
 func DeviceLoginApp(slug string) string { return "paddock-device-" + slug }
