@@ -713,6 +713,20 @@ changes; (5) counts bucket of `GET /config-rollouts/{id}` and the device-list fi
 | S14 | DC discarded | current | before resume | yes / – | – / – | – / – / yes | – | pending; `none`, false, **true** |
 | S15 | DC discarded | earlier | before resume | yes / – | – / – | – / – / yes | – | pending; `none`, false, **true** |
 
+**Correction 2026-11-09 (A10-20)** to row S1 (architect lead, after review 5 of PDK-809; the row above is kept as
+written, this note is binding where they differ):
+
+- S1 means "does not count for this rollout", not "shows nothing". The `none` in column (5) is withdrawn: the device
+  list keeps showing the stored outcome of a not-reached device — `report_only` for a report-only device, or the
+  earlier outcome (`applied`, `rejected`) of a device that left E (C3, C4, C6) — and marks the device as not counted
+  (`in_wave=false`; `waiting_for_window` and `awaiting_retry` stay `false`). The display behaviour of PDK-809 stays as
+  it is; at most a "not counted" hint is added in PDK-804's follow-up.
+- Point 1 of A10-20, recorded here because it touches the DC rows: a staged software entry `failed` whose
+  `reported_at` lies before `started_at` is not recent and is therefore DC (S14/S15), which holds the wave and never
+  advances it. This is accepted for now as the safe side and handled by PDK-944, which re-dates the software statuses
+  so the failure counts as FL-0 and the halt is not up to 24 h late; PDK-944 gets the acceptance criterion that a
+  failure reported before the rollout start halts the wave on the first evaluation after the rollout starts.
+
 Reading aids:
 - S10 is A10-16 unchanged: a sub-threshold failure before any resume counts as "applied (with failure)" for the share
   and does not hold the wave; the threshold decides.
