@@ -59,6 +59,9 @@ type isolationWorld struct {
 	globexEntry, globexSoftwareAssignment string
 	// globexSoftwareUser is a globex user that globexEntry is offered to (seedGlobexUserSoftware).
 	globexSoftwareUser string
+	// globexRequestGroup is a globex device group with a maintenance window and globexRequestDevice its device, and
+	// globexSoftwareRequest an open software request of that device (seedGlobexSoftwareRequest).
+	globexRequestGroup, globexRequestDevice, globexSoftwareRequest string
 	// globexChangeSet is a change set of globex (seedGlobexChangeSet).
 	globexChangeSet string
 	// globexRollout is a completed configuration rollout of globex (seedGlobexRollout).
@@ -238,6 +241,24 @@ func seedGlobexSoftwareCatalog(t *testing.T, w *isolationWorld) {
 	expectStatus(t, res, http.StatusCreated, "")
 	w.globexSoftwareAssignment = responseID(t, res).String()
 	w.globexIDs = append(w.globexIDs, w.globexSoftwareAssignment)
+}
+
+// seedGlobexSoftwareRequest gives globex a device group of its own with a maintenance window and a device, offers the
+// group an approval-required entry and opens a request of a globex user for it (plan M13c decisions 4 and 8 to 10). The
+// approval-required package reaches no agent (PDK-943), so no other globex bundle changes. Everything is removed when
+// the gate ends: the request with its entry.
+func seedGlobexSoftwareRequest(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	f := newRequestFixture(t, w.carol, "globex-iso-req")
+	w.globexRequestGroup, w.globexRequestDevice = f.group, f.device.DeviceID
+	res := call(t, w.carol, http.MethodPut, maintenanceWindowPath(f.group), nightlyWindow())
+	expectStatus(t, res, http.StatusOK, "")
+	deleteOnCleanup(t, w.carol, maintenanceWindowPath(f.group))
+	entry := f.offer(t, "globex-iso-req-"+uniqueSuffix(), "required")
+	user := "globex-iso-" + uniqueSuffix() + "@globex.test"
+	f.ask(t, entry, user)
+	w.globexSoftwareRequest = waitRequest(t, w.carol, entry, user, "requested", time.Minute).ID
+	w.globexIDs = append(w.globexIDs, f.group, f.device.DeviceID, entry, w.globexSoftwareRequest)
 }
 
 // settingsOnlyConfig is a document with acme's current update settings only: applying it changes and deletes nothing.
@@ -593,6 +614,25 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/compile-warnings": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/compile-warnings?page_size=100", nil
 	}},
+	"GET /api/v1/software-requests": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareRequests + "?page_size=100", nil
+	}},
+	"GET /api/v1/software-requests/{id}": itemFixture(func(w *isolationWorld) string { return softwareRequests + "/" + w.globexSoftwareRequest }, nil),
+	"POST /api/v1/software-requests/{id}/approve": itemFixture(func(w *isolationWorld) string {
+		return softwareRequests + "/" + w.globexSoftwareRequest + "/approve"
+	}, map[string]any{"reason": "acme-iso"}),
+	"POST /api/v1/software-requests/{id}/deny": itemFixture(func(w *isolationWorld) string {
+		return softwareRequests + "/" + w.globexSoftwareRequest + "/deny"
+	}, map[string]any{"reason": "acme-iso"}),
+	"GET /api/v1/device-groups/{id}/maintenance-window": itemFixture(func(w *isolationWorld) string {
+		return maintenanceWindowPath(w.globexRequestGroup)
+	}, nil),
+	"PUT /api/v1/device-groups/{id}/maintenance-window": itemFixture(func(w *isolationWorld) string {
+		return maintenanceWindowPath(w.globexRequestGroup)
+	}, nightlyWindow()),
+	"DELETE /api/v1/device-groups/{id}/maintenance-window": itemFixture(func(w *isolationWorld) string {
+		return maintenanceWindowPath(w.globexRequestGroup)
+	}, nil),
 	"GET /api/v1/software-assignments": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return softwareAssignments + "?page_size=100", nil
 	}},
@@ -1051,7 +1091,9 @@ var listIsolationQueries = map[string][]url.Values{
 	// globexEntry offered to globexSoftwareUser (seedGlobexUserSoftware).
 	"/api/v1/users/{id}/software": {{"q": {"globex-iso"}}, {"intent": {"available"}, "sort": {"-intent"}}},
 	// the flatpak_forbidden warnings of a globex device (seedGlobexCompileWarning).
-	"/api/v1/compile-warnings":              {{"q": {"globex-iso"}, "page_size": {"100"}}, {"code": {"flatpak_forbidden"}, "page_size": {"100"}}},
+	"/api/v1/compile-warnings": {{"q": {"globex-iso"}, "page_size": {"100"}}, {"code": {"flatpak_forbidden"}, "page_size": {"100"}}},
+	// the open request of a globex user (seedGlobexSoftwareRequest).
+	"/api/v1/software-requests":             {{"q": {"globex-iso"}}, {"state": {"requested"}, "sort": {"-requested_at"}, "page_size": {"100"}}},
 	"/api/v1/devices/{id}/vulnerabilities":  {{"q": {"globex-iso"}}, {"severity": {"high"}}},
 	"/api/v1/devices/{id}/config-status":    {{"q": {"globex-iso"}}, {"status": {"failed", "pending"}}},
 	"/api/v1/devices/{id}/bundles":          {{"outcome": {"applied", "none"}}},
@@ -1389,6 +1431,9 @@ var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Value
 	},
 	"/api/v1/software-catalog": {
 		func(w *isolationWorld) url.Values { return url.Values{"source_id": {w.globexSource}} },
+	},
+	"/api/v1/software-requests": {
+		func(w *isolationWorld) url.Values { return url.Values{"device_id": {w.globexRequestDevice}} },
 	},
 	"/api/v1/devices/{id}/logins": {
 		func(w *isolationWorld) url.Values { return url.Values{"username": {strings.ToLower(w.globexLogin)}} },

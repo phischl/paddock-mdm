@@ -13,17 +13,18 @@ import (
 )
 
 // TestMaintenanceWindow (PDK-809, plan M13c decisions 4 to 7, C2): two device groups' windows reach a member of both as
-// their union; a devicesim that reports its package pending/outside_window shows so on its device page; urgent needs a
-// reason (400), is refused for an API token (403) and with a step-up reaches the bundle as urgent, with urgent and the
-// reason in the audit event; another organization neither reads nor writes the window.
+// their union, and a third group of the device without a window adds nothing (Q17 as A10-16 confirmed it); a devicesim
+// that reports its package pending/outside_window shows so on its device page; urgent needs a reason (400), is refused
+// for an API token (403) and with a step-up reaches the bundle as urgent, with urgent and the reason in the audit
+// event; another organization neither reads nor writes the window.
 func TestMaintenanceWindow(t *testing.T) {
 	alice, carol := login(t, env.Alice), login(t, env.Carol)
 	admin := adminUser(t, "mw")
-	night, weekend := namedGroup(t, alice, "mw-night"), namedGroup(t, alice, "mw-weekend")
+	night, weekend, open := namedGroup(t, alice, "mw-night"), namedGroup(t, alice, "mw-weekend"), namedGroup(t, alice, "mw-open")
 	d := activeDevice(t, alice, night, "mw-"+uniqueSuffix())
 	d.SchemaVersions = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
 	expectStatus(t, call(t, alice, http.MethodPut, "/api/v1/devices/"+d.DeviceID+"/groups",
-		map[string]any{"device_group_ids": []string{night, weekend}}), http.StatusOK, "")
+		map[string]any{"device_group_ids": []string{night, weekend, open}}), http.StatusOK, "")
 
 	windowPath := func(group string) string { return "/api/v1/device-groups/" + group + "/maintenance-window" }
 	expectStatus(t, call(t, alice, http.MethodGet, windowPath(night), nil), http.StatusNotFound, "not_found")
