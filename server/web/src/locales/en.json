@@ -3449,7 +3449,7 @@
       "releaseInvalid": "Enter * or a release such as 24.04.",
       "packageInvalid": "Enter a Debian package name: lowercase letters, digits, +, . and -.",
       "deleteTitle": "Remove application",
-      "deleteConfirm": "{count, plural, one {The application and its # assignment are removed.} other {The application and its # assignments are removed.}} Installed software stays on the devices. Type the name to confirm.",
+      "deleteConfirm": "The application is removed from the catalog; nothing changes on the devices. An application that still has assignments cannot be removed: remove its assignments first. Type the name to confirm.",
       "empty": {
         "title": "No applications yet",
         "description": "Describe an application once, then assign it to device groups."

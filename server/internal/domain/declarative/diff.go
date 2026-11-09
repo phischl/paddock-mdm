@@ -28,14 +28,15 @@ const (
 // Sections returns the sections in application order (plan M6c decision 14); deletions run in reverse order first.
 func Sections() []string {
 	return []string{SectionDeviceGroups, SectionPermissionProfiles, SectionManagedFiles, SectionManagedUnits,
-		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSettingsLogin, SectionSettingsManaged,
-		SectionSettingsWatched, SectionSettingsPrivacy}
+		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSoftwareSources, SectionSoftwareCatalog,
+		SectionSoftwareAssignments, SectionSettingsLogin, SectionSettingsManaged, SectionSettingsWatched, SectionSettingsPrivacy}
 }
 
 // RolloutSections returns the sections a staged rollout stages, in Sections order (plan M11 decision 1): the ones that
-// change what a device applies without touching its identity or privileges.
+// change what a device applies without touching its identity or privileges. Software assignments joined them with ADR
+// 0033 amendment 2026-11-05; software sources and catalog entries are never staged.
 func RolloutSections() []string {
-	return []string{SectionManagedFiles, SectionManagedUnits, SectionPackageHolds, SectionSettingsUpdates}
+	return []string{SectionManagedFiles, SectionManagedUnits, SectionPackageHolds, SectionSettingsUpdates, SectionSoftwareAssignments}
 }
 
 // Actions of a change.
@@ -51,6 +52,10 @@ type Plan struct {
 	Created int      `json:"created"`
 	Updated int      `json:"updated"`
 	Deleted int      `json:"deleted"`
+	// RequiresStepUp are the sections of StepUpSections the plan changes (plan M13c decision 2): it is executed only
+	// with a fresh step-up, so an API token's apply of it is refused as a whole. Omitted when empty, so the SHA-256 of
+	// a plan without such a change is what it was before the field existed.
+	RequiresStepUp []string `json:"requires_step_up,omitempty"`
 }
 
 // Change is the creation, update or deletion of one item (or one settings section, key "").
@@ -118,6 +123,12 @@ func section(d Document, name string) (bool, []entry) {
 		return entries(d.PackageHolds, PackageHold.Key, PackageHold.fields)
 	case SectionProfileAssignments:
 		return entries(d.ProfileAssignments, ProfileAssignment.Key, ProfileAssignment.fields)
+	case SectionSoftwareSources:
+		return entries(d.SoftwareSources, SoftwareSource.Key, SoftwareSource.fields)
+	case SectionSoftwareCatalog:
+		return entries(d.SoftwareCatalog, SoftwareCatalogEntry.Key, SoftwareCatalogEntry.fields)
+	case SectionSoftwareAssignments:
+		return entries(d.SoftwareAssignments, SoftwareAssignment.Key, SoftwareAssignment.fields)
 	case SectionSettingsUpdates:
 		if d.Settings == nil || d.Settings.Updates == nil {
 			return false, nil
@@ -258,6 +269,11 @@ func Diff(current, desired Document) Plan {
 			}
 		}
 	}
+	for _, s := range StepUpSections() {
+		if slices.ContainsFunc(plan.Changes, func(c Change) bool { return c.Section == s }) {
+			plan.RequiresStepUp = append(plan.RequiresStepUp, s)
+		}
+	}
 	return plan
 }
 
@@ -312,6 +328,12 @@ func Revert(current Document, original Plan, before map[string]map[string]json.R
 			out.PackageHolds, err = revertItem(out.PackageHolds, PackageHold.Key, c, before)
 		case SectionProfileAssignments:
 			out.ProfileAssignments, err = revertItem(out.ProfileAssignments, ProfileAssignment.Key, c, before)
+		case SectionSoftwareSources:
+			out.SoftwareSources, err = revertItem(out.SoftwareSources, SoftwareSource.Key, c, before)
+		case SectionSoftwareCatalog:
+			out.SoftwareCatalog, err = revertItem(out.SoftwareCatalog, SoftwareCatalogEntry.Key, c, before)
+		case SectionSoftwareAssignments:
+			out.SoftwareAssignments, err = revertItem(out.SoftwareAssignments, SoftwareAssignment.Key, c, before)
 		default:
 			err = revertSettings(&out, c, before)
 		}

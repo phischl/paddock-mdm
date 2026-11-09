@@ -1807,9 +1807,10 @@ var registry = map[Code]Definition{
 	},
 	CodeSoftwareCatalogEntryDeleted: {
 		Code: CodeSoftwareCatalogEntryDeleted, Emitted: true,
-		Description: "A software catalog entry was removed together with its assignments; devices stop managing the application.",
+		Description: "A software catalog entry without assignments was removed; no device changes.",
 		Params:      []string{"name", "assignment_count"},
 		Outcomes:    adminOutcomes,
+		Note:        "An entry that still has assignments is refused (failure, in_use); assignment_count is their number.",
 	},
 	CodeSoftwareAssignmentCreated: {
 		Code: CodeSoftwareAssignmentCreated, Emitted: true,

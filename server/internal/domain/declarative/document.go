@@ -42,6 +42,10 @@ type Document struct {
 	ManagedUnits       *[]ManagedUnit       `json:"managed_units,omitempty"`
 	PackageHolds       *[]PackageHold       `json:"package_holds,omitempty"`
 	ProfileAssignments *[]ProfileAssignment `json:"profile_assignments,omitempty"`
+	// SoftwareSources, SoftwareCatalog and SoftwareAssignments are the software catalog (plan M13c decision 1).
+	SoftwareSources     *[]SoftwareSource       `json:"software_sources,omitempty"`
+	SoftwareCatalog     *[]SoftwareCatalogEntry `json:"software_catalog,omitempty"`
+	SoftwareAssignments *[]SoftwareAssignment   `json:"software_assignments,omitempty"`
 }
 
 // Settings are the organization's settings sections.

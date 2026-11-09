@@ -27,7 +27,8 @@ var (
 )
 
 // SoftwareSources are the use cases of the organization's package sources: APT repositories (plan M13a decisions 1–6)
-// and Flatpak remotes (plan M13b decision 5). The server never contacts a source.
+// and Flatpak remotes (plan M13b decision 5). The server never contacts a source. Every write records a change set
+// (plan M13c decision 3); a source change is never staged.
 type SoftwareSources struct {
 	runner *ActionRunner
 	org    *db.OrgPool
@@ -106,7 +107,7 @@ func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (
 		"components":  displayParams(in.Components, software.MaxComponents, maxComponentParam),
 		"fingerprint": software.DisplayParam(software.NormalizeFingerprint(in.Fingerprint), maxFingerprintParam),
 	}
-	err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := s.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		key, err := software.ValidateSource(in)
 		if err != nil {
 			return softwareSourceProblem(err)
@@ -132,7 +133,7 @@ func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (
 		rec.SetTarget(sourceTarget(out.SoftwareSource))
 		rec.StateChanged(statechange.ScopeOrg, org)
 		return nil
-	})
+	}))
 	return out, err
 }
 
@@ -151,7 +152,7 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 	var out SoftwareSourceView
 	spec := SpecSoftwareSourceUpdate
 	spec.Target = &audit.Target{Type: "software_source", ID: id.String()}
-	err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := s.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetSoftwareSourceForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -205,7 +206,7 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 		rec.SetTarget(sourceTarget(out.SoftwareSource))
 		rec.StateChanged(statechange.ScopeOrg, out.OrganizationID)
 		return nil
-	})
+	}))
 	return out, err
 }
 
@@ -213,7 +214,7 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 	spec := SpecSoftwareSourceDelete
 	spec.Target = &audit.Target{Type: "software_source", ID: id.String()}
-	return s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return s.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetSoftwareSourceForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -241,7 +242,7 @@ func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 		}
 		rec.StateChanged(statechange.ScopeOrg, old.OrganizationID)
 		return nil
-	})
+	}))
 }
 
 // mergeSource applies a change to a stored source and returns the result with the names of the fields whose value

@@ -819,6 +819,53 @@ func (q *Queries) ListSoftwareAssignmentIntentsOfEntry(ctx context.Context, cata
 	return items, nil
 }
 
+const listSoftwareAssignmentTargetsOfEntry = `-- name: ListSoftwareAssignmentTargetsOfEntry :many
+SELECT a.id,
+  (CASE WHEN a.device_group_id IS NOT NULL THEN 'device_group' WHEN a.user_id IS NOT NULL THEN 'user'
+    WHEN a.user_group_id IS NOT NULL THEN 'user_group' ELSE 'organization' END)::text AS target,
+  COALESCE(g.name, u.username, ug.slug, '')::text AS target_name
+FROM software_assignment a
+LEFT JOIN device_group g ON g.id = a.device_group_id
+LEFT JOIN app_user u ON u.id = a.user_id
+LEFT JOIN user_group ug ON ug.id = a.user_group_id
+WHERE a.catalog_entry_id = $1
+ORDER BY 2, 3, a.id
+LIMIT $2
+`
+
+type ListSoftwareAssignmentTargetsOfEntryParams struct {
+	CatalogEntryID uuid.UUID
+	MaxRows        int32
+}
+
+type ListSoftwareAssignmentTargetsOfEntryRow struct {
+	ID         uuid.UUID
+	Target     string
+	TargetName string
+}
+
+// The assignments that keep a catalog entry from being deleted, by target (plan M13c amendment 2026-11-09, A10-12):
+// the target type and the device group's name, the user's username or the user group's slug (” for the organization).
+func (q *Queries) ListSoftwareAssignmentTargetsOfEntry(ctx context.Context, arg ListSoftwareAssignmentTargetsOfEntryParams) ([]ListSoftwareAssignmentTargetsOfEntryRow, error) {
+	rows, err := q.db.Query(ctx, listSoftwareAssignmentTargetsOfEntry, arg.CatalogEntryID, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSoftwareAssignmentTargetsOfEntryRow{}
+	for rows.Next() {
+		var i ListSoftwareAssignmentTargetsOfEntryRow
+		if err := rows.Scan(&i.ID, &i.Target, &i.TargetName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSoftwareAssignments = `-- name: ListSoftwareAssignments :many
 SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, a.user_id, a.user_group_id, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
 WHERE ($1::text IS NULL OR e.name ILIKE $1::text ESCAPE '\')
@@ -1086,6 +1133,36 @@ func (q *Queries) ListSoftwareCatalogEntries(ctx context.Context, arg ListSoftwa
 			&i.SourceSlug,
 			&i.AssignmentCount,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSoftwareCatalogEntryIDsByName = `-- name: ListSoftwareCatalogEntryIDsByName :many
+SELECT id, name FROM software_catalog_entry WHERE name = ANY($1::text[]) ORDER BY name
+`
+
+type ListSoftwareCatalogEntryIDsByNameRow struct {
+	ID   uuid.UUID
+	Name string
+}
+
+// The IDs of the named entries (the worker resolves the staged entries of a rollout, plan M13c decision 3).
+func (q *Queries) ListSoftwareCatalogEntryIDsByName(ctx context.Context, names []string) ([]ListSoftwareCatalogEntryIDsByNameRow, error) {
+	rows, err := q.db.Query(ctx, listSoftwareCatalogEntryIDsByName, names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSoftwareCatalogEntryIDsByNameRow{}
+	for rows.Next() {
+		var i ListSoftwareCatalogEntryIDsByNameRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

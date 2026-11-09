@@ -336,7 +336,7 @@ func TestSoftwareCatalogAPI(t *testing.T) {
 		t.Fatalf("another organization lists %+v", page)
 	}
 
-	// Deleting an entry removes its assignments.
+	// An entry with assignments is not deleted: 409 in_use names them (plan M13c amendment 2026-11-09, A10-12).
 	r = e.do(call{method: "DELETE", path: itemA, cookie: dave})
 	if r.status != http.StatusForbidden {
 		t.Fatalf("auditor delete assignment: %d %s", r.status, r.body)
@@ -348,17 +348,23 @@ func TestSoftwareCatalogAPI(t *testing.T) {
 	}
 	e.expectEvent(r, "software_catalog_entry.deleted:denied:forbidden")
 	r = e.do(call{method: "DELETE", path: item, cookie: bob})
+	expectProblem(t, "delete entry with assignments", r, http.StatusConflict, "in_use")
+	if !strings.Contains(string(r.body), `\"Editor\" still has 2 assignments (device group \"Laptops\", organization)`) {
+		t.Fatalf("in_use does not name the assignments: %s", r.body)
+	}
+	e.expectEvent(r, "software_catalog_entry.deleted:failure:in_use")
+	for _, a := range []string{itemA, assignments + "/" + orgWide.Id.String()} {
+		if r = e.do(call{method: "DELETE", path: a, cookie: bob}); r.status != http.StatusNoContent {
+			t.Fatalf("delete assignment: %d %s", r.status, r.body)
+		}
+	}
+	r = e.do(call{method: "DELETE", path: item, cookie: bob})
 	if r.status != http.StatusNoContent {
 		t.Fatalf("delete entry: %d %s", r.status, r.body)
 	}
 	e.expectEvent(r, "software_catalog_entry.deleted:success:")
-	r = e.do(call{method: "GET", path: assignments + "?catalog_entry_id=" + created.Id.String(), cookie: dave})
-	r.decode(t, &apage)
-	if apage.Total != 0 {
-		t.Fatalf("assignments after the entry is gone: %s", r.body)
-	}
-	if r = e.do(call{method: "GET", path: itemA, cookie: dave}); r.status != http.StatusNotFound {
-		t.Fatalf("assignment after the entry is gone: %d", r.status)
+	if r = e.do(call{method: "GET", path: item, cookie: dave}); r.status != http.StatusNotFound {
+		t.Fatalf("entry after its deletion: %d", r.status)
 	}
 
 	// Without an entry, an assignment is deleted on its own.

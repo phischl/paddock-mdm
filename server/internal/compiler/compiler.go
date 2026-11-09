@@ -432,6 +432,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 				reason: "the before-state of configuration rollout " + overlay.id.String() + " is missing; the device keeps its previous bundle until the rollout is completed"}, nil
 		default:
 			defs, keys.Updates = overlay.apply(defs, keys.Updates)
+			keys.Software = overlay.applySoftware(keys.Software)
 		}
 	}
 	groups, err := q.ListDeviceGroupIDsOfDevice(ctx, t.id)
@@ -466,7 +467,8 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		var softwareHolds []bundle.Hold
 		if keys.Software != nil {
 			// Conflicts are dropped as UpdatesSection drops those of the holds (plan M13a decision 10): the smallest
-			// version wins either way. The software holds stay outside the rollout overlay until M13c (plan M11 R2.10).
+			// version wins either way. A device outside the wave of a rollout that stages assignments already has their
+			// before-state in keys.Software, holds included (plan M13c decision 3).
 			var err error
 			if softwareSection, softwareHolds, _, warnings, err = keys.Software.section(ctx, t.id, groups, t.osID, t.versionID, t.arch, t.agent); err != nil {
 				return rendered{}, false, &renderFailure{device: t.id, reason: err.Error() +
