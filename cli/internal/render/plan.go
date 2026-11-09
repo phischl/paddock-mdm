@@ -16,6 +16,9 @@ type Plan struct {
 	Created int      `json:"created"`
 	Updated int      `json:"updated"`
 	Deleted int      `json:"deleted"`
+	// RequiresStepUp are the sections whose change needs an administrator's fresh step-up (plan M13c decision 2): an
+	// API token cannot apply the plan.
+	RequiresStepUp []string `json:"requires_step_up,omitempty"`
 }
 
 // Change is one change of a plan.
@@ -34,7 +37,7 @@ type FieldChange struct {
 }
 
 // PlanText writes one line per created ("+") and deleted ("-") item, one line per changed field of an updated item
-// ("~"), and the summary line.
+// ("~"), the summary line and, when the plan needs a step-up, the line that names its sections.
 func PlanText(w io.Writer, p Plan) error {
 	var b strings.Builder
 	for _, c := range p.Changes {
@@ -54,6 +57,10 @@ func PlanText(w io.Writer, p Plan) error {
 		}
 	}
 	fmt.Fprintf(&b, "Plan: %d to create, %d to update, %d to delete\n", p.Created, p.Updated, p.Deleted)
+	if len(p.RequiresStepUp) > 0 {
+		fmt.Fprintf(&b, "Requires a step-up: %s (an API token cannot apply this plan; apply these sections from the portal)\n",
+			strings.Join(p.RequiresStepUp, ", "))
+	}
 	_, err := io.WriteString(w, b.String())
 	return err
 }

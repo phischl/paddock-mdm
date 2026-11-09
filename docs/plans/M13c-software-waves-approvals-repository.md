@@ -391,3 +391,84 @@ yes); (4) `software.request` carries the user's justification text (works-counci
 
 Query names; the exact Packages stanza order; the portal layout of the report; the CSV column order; German
 texts; whether the window evaluation lives in `reconcile` or a small `window` package in the agent.
+
+## Amendment 2026-11-09 (architect-lead decisions Q15–Q18 and A10-12, PDK-808)
+
+### Decided by the architect lead (`decisions-alpha10.md`, Q15–Q18)
+
+Open points (6) to (9) of §12 are decided as recommended:
+
+- **(6), Q15:** an approval decision (approve or deny) needs no step-up of its own: trusting the source was the
+  step-up. Every decision is still recorded with exactly one audit event per attempt (PDK-810).
+- **(7), Q16:** on rotation the repository's read credential keeps a 24 h overlap and its signing key a 30 d overlap
+  (§3.8 L5, L6; PDK-813).
+- **(8), Q17:** a device in several device groups has the union of their maintenance windows as its window (§3.8 L2;
+  PDK-809).
+- **(9), Q18:** `settings.patch_sla` becomes a declarative section of `PUT /api/v1/config` (PDK-814).
+
+### PDK-808 corrections against the code, decided by the architect lead (A10-12)
+
+PDK-808 landed decisions 1–3 of §3.1 on the code as it is on `cluster/alpha10-features`. The architect lead confirmed
+its corrections (A10-12, points 1, 3 and 4) and redirected the entry cascade (point 2, next subsection). ADR 0033's
+amendment 2026-11-05 still says "the stats function gains that join"; the first item replaces that.
+
+- **No stats function (point 1).** `paddock_config_rollout_stats` was dropped by migration `00094` (plan M11 amendment
+  R6.14 a): the worker and the API count with one Go rule over `ListConfigRolloutReports`. The failure join of
+  decision 3 therefore lives in that query: a `device_software_status` row in state `failed` reported since the
+  rollout's `evaluation_since` is listed as failed resource `software:<catalog_entry_id>` next to the bundle's failed
+  resources, and the existing rule keeps only the staged IDs. `StagedResourceIDs` stays as it was;
+  `configrollout.StagedEntries` names the staged entries and the use case resolves them to `software:<entry id>`.
+  The M11 rule and its tests are unchanged.
+- **Migration `00117_worker_reads_entry_names.sql`** (the numbers `00110`–`00114` were taken): the worker resolves
+  the staged entries by name, so it may now read `software_catalog_entry.name` (column grant, nothing else). The
+  migration also adds `config_rollout.staged_assignments` (next item).
+- **Staged assignments are matched by row ID (point 3).** When a rollout that stages software assignments starts, it
+  records per staged key the assignment's row ID, its catalog entry ID and its target ID
+  (`config_rollout.staged_assignments`). The compiler's overlay matches live rows and before items by these IDs, not by
+  the names in the key: a username comes from identity sync and can change while the rollout runs.
+- **Entries of staged assignments are protected (point 4).** While a rollout is open, a write that deletes or renames
+  a catalog entry named by a staged assignment key, a staged deletion included, is refused with 409
+  `rollout_conflict` — the entry analogue of M11 R6.13 for device groups.
+
+### No entry cascade (A10-12, point 2)
+
+PDK-808 first deleted the assignments of a deleted catalog entry with it and did not stage them. The architect lead
+redirected this: every change that reaches devices goes through the rollout and approval path, and an entry's
+deletion must not be a side door. This replaces the cascade of plan M13a (`DELETE /api/v1/software-catalog/{id}`
+"removes the entry together with its assignments").
+
+- Deleting a catalog entry that still has assignments is refused with 409 `in_use`. The problem detail names the
+  assignments by target (`organization`, `device group "<name>"`, `user "<username>"`, `user group "<slug>"`; the
+  first ten, then "and N more"). This holds for `DELETE /api/v1/software-catalog/{id}` and for a declarative document
+  that deletes or renames the entry, even when the same document deletes the assignments: the configuration as read
+  decides, and the refusal is checked before anything is written.
+- The admin first removes the assignments. That removal is an assignment change like any other: staged and rolled out
+  in waves when rollouts are enabled (and while it rolls out, the entry's deletion is 409 `rollout_conflict`, point 4).
+- Once no assignment is left, the entry can be deleted; its change set holds the catalog entry alone, stages nothing
+  and changes nothing on any device. The audit event `software_catalog_entry.deleted` keeps `assignment_count`: 0 on
+  success, the number of assignments on the refusal.
+- An entry that a per-resource write renames by identity keeps its assignment rows; only their keys change, so they
+  are not staged, neither the deletions of the old-name keys nor the creations of the new-name keys. This is no
+  cascade and stays as it was.
+
+#### Clarification 2026-11-09: revert of the open rollout (A10-13)
+
+The 409 `in_use` guard above does not apply to the revert of the open rollout's change set: that revert is the
+rollback itself and must always be possible (root agent contract 4 and 6, plan M11 decision 21.3). When the rollout's
+change set created a catalog entry and its assignments, the revert deletes the assignments first and the entry after
+them, in the same transaction, and ends the rollout. Only an assignment that the revert keeps still refuses the
+entry's deletion. Outside that revert, the guard is unchanged.
+
+### Implementer choices in PDK-808 (within the freedoms of §13)
+
+- **Item shapes.** A source item is `slug, kind, name, uris, suites, components, architectures, signing_key,
+  fingerprint`; an entry item `name, description, category, source` (slug or null), `packages`; an assignment item
+  `entry, target, intent, update_rule, version, reason` with `target` one of `{type: organization}`,
+  `{type: device_group, name}`, `{type: user, username}`, `{type: user_group, slug}`. The assignment key is
+  `[device group or null, entry, target type, username or slug or null]`, the form of group-scoped keys, so the
+  rules for deleted and renamed device groups (M11 R6.13) cover it unchanged. A plan shows a source's key as its
+  SHA-256 and a package reference as `distribution/release/architecture=package` (or `=flatpak:<ref>@<scope>`).
+- **Step-up in the plan.** `requires_step_up` is a field of the plan (omitted when empty, so existing plan hashes are
+  unchanged); the step-up is checked once for the whole apply before anything is written.
+- **Per-resource writes** of sources, entries and assignments record change sets; they take no urgent opt-out yet
+  (an urgent assignment change goes through `PUT /api/v1/config?urgent=true`).

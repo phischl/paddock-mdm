@@ -3449,7 +3449,7 @@
       "releaseInvalid": "Geben Sie * oder ein Release wie 24.04 ein.",
       "packageInvalid": "Geben Sie einen Debian-Paketnamen ein: Kleinbuchstaben, Ziffern, +, . und -.",
       "deleteTitle": "Anwendung entfernen",
-      "deleteConfirm": "{count, plural, one {Die Anwendung und ihre # Zuweisung werden entfernt.} other {Die Anwendung und ihre # Zuweisungen werden entfernt.}} Installierte Software bleibt auf den Geräten. Geben Sie zur Bestätigung den Namen ein.",
+      "deleteConfirm": "Die Anwendung wird aus dem Katalog entfernt; auf den Geräten ändert sich nichts. Eine Anwendung, die noch Zuweisungen hat, kann nicht entfernt werden: Entfernen Sie zuerst ihre Zuweisungen. Geben Sie zur Bestätigung den Namen ein.",
       "empty": {
         "title": "Noch keine Anwendungen",
         "description": "Beschreiben Sie eine Anwendung einmal und weisen Sie sie Gerätegruppen zu."

@@ -321,6 +321,7 @@ type ConfigRollout struct {
 	EndedAt                 *time.Time
 	EndedReason             *string
 	UpdatedAt               time.Time
+	StagedAssignments       json.RawMessage
 }
 
 type Device struct {

@@ -26,7 +26,8 @@ const countDeviceGroupScopedRows = `-- name: CountDeviceGroupScopedRows :one
 SELECT ((SELECT count(*) FROM managed_file f WHERE f.device_group_id = $1::uuid)
       + (SELECT count(*) FROM managed_unit u WHERE u.device_group_id = $1::uuid)
       + (SELECT count(*) FROM package_hold h WHERE h.device_group_id = $1::uuid)
-      + (SELECT count(*) FROM profile_assignment a WHERE a.device_group_id = $1::uuid))::bigint AS scoped
+      + (SELECT count(*) FROM profile_assignment a WHERE a.device_group_id = $1::uuid)
+      + (SELECT count(*) FROM software_assignment sa WHERE sa.device_group_id = $1::uuid))::bigint AS scoped
 `
 
 func (q *Queries) CountDeviceGroupScopedRows(ctx context.Context, id uuid.UUID) (int64, error) {

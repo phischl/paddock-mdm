@@ -191,5 +191,8 @@ func toConfigPlan(p declarative.Plan) adminapi.ConfigPlan {
 		}
 		out.Changes[i] = adminapi.ConfigChange{Section: c.Section, Key: c.Key, Action: adminapi.ConfigChangeAction(c.Action), Fields: fields}
 	}
+	if len(p.RequiresStepUp) > 0 {
+		out.RequiresStepUp = &p.RequiresStepUp
+	}
 	return out
 }

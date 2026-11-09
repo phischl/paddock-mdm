@@ -131,6 +131,10 @@ SELECT count(*) FROM (
 SELECT id, organization_id, name, description, category, source_id, packages, created_by, created_at, updated_at
 FROM software_catalog_entry ORDER BY name, id;
 
+-- name: ListSoftwareCatalogEntryIDsByName :many
+-- The IDs of the named entries (the worker resolves the staged entries of a rollout, plan M13c decision 3).
+SELECT id, name FROM software_catalog_entry WHERE name = ANY(@names::text[]) ORDER BY name;
+
 -- name: InsertSoftwareAssignment :exec
 INSERT INTO software_assignment (id, organization_id, catalog_entry_id, device_group_id, user_id, user_group_id, intent,
   update_rule, version, reason, created_by)
@@ -188,6 +192,21 @@ SELECT count(*) FROM (
     AND (sqlc.narg(intent)::text IS NULL OR a.intent = sqlc.narg(intent)::text)
   LIMIT @count_limit
 ) matching;
+
+-- name: ListSoftwareAssignmentTargetsOfEntry :many
+-- The assignments that keep a catalog entry from being deleted, by target (plan M13c amendment 2026-11-09, A10-12):
+-- the target type and the device group's name, the user's username or the user group's slug ('' for the organization).
+SELECT a.id,
+  (CASE WHEN a.device_group_id IS NOT NULL THEN 'device_group' WHEN a.user_id IS NOT NULL THEN 'user'
+    WHEN a.user_group_id IS NOT NULL THEN 'user_group' ELSE 'organization' END)::text AS target,
+  COALESCE(g.name, u.username, ug.slug, '')::text AS target_name
+FROM software_assignment a
+LEFT JOIN device_group g ON g.id = a.device_group_id
+LEFT JOIN app_user u ON u.id = a.user_id
+LEFT JOIN user_group ug ON ug.id = a.user_group_id
+WHERE a.catalog_entry_id = @catalog_entry_id
+ORDER BY 2, 3, a.id
+LIMIT @max_rows;
 
 -- name: ListAllSoftwareAssignments :many
 -- Every assignment of the organization (compiler), in a stable order.

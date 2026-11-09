@@ -15,7 +15,7 @@ import (
 
 const advanceConfigRollout = `-- name: AdvanceConfigRollout :one
 UPDATE config_rollout SET current_wave_index = current_wave_index + 1, wave_started_at = now(), updated_at = now()
-WHERE id = $1 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at
+WHERE id = $1 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at, staged_assignments
 `
 
 func (q *Queries) AdvanceConfigRollout(ctx context.Context, id uuid.UUID) (ConfigRollout, error) {
@@ -40,13 +40,14 @@ func (q *Queries) AdvanceConfigRollout(ctx context.Context, id uuid.UUID) (Confi
 		&i.EndedAt,
 		&i.EndedReason,
 		&i.UpdatedAt,
+		&i.StagedAssignments,
 	)
 	return i, err
 }
 
 const completeConfigRollout = `-- name: CompleteConfigRollout :one
 UPDATE config_rollout SET status = 'completed', ended_at = now(), ended_reason = $1, updated_at = now()
-WHERE id = $2 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at
+WHERE id = $2 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at, staged_assignments
 `
 
 type CompleteConfigRolloutParams struct {
@@ -76,6 +77,7 @@ func (q *Queries) CompleteConfigRollout(ctx context.Context, arg CompleteConfigR
 		&i.EndedAt,
 		&i.EndedReason,
 		&i.UpdatedAt,
+		&i.StagedAssignments,
 	)
 	return i, err
 }
@@ -151,7 +153,7 @@ func (q *Queries) EndConfigRolloutReverted(ctx context.Context, arg EndConfigRol
 
 const getConfigRollout = `-- name: GetConfigRollout :one
 
-SELECT id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at FROM config_rollout WHERE id = $1
+SELECT id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at, staged_assignments FROM config_rollout WHERE id = $1
 `
 
 // Evaluation and wave actions (plan M11 decisions 32-34, PDK-158).
@@ -177,6 +179,7 @@ func (q *Queries) GetConfigRollout(ctx context.Context, id uuid.UUID) (ConfigRol
 		&i.EndedAt,
 		&i.EndedReason,
 		&i.UpdatedAt,
+		&i.StagedAssignments,
 	)
 	return i, err
 }
@@ -225,7 +228,7 @@ func (q *Queries) GetOpenConfigRollout(ctx context.Context) (GetOpenConfigRollou
 }
 
 const getOpenConfigRolloutOverlay = `-- name: GetOpenConfigRolloutOverlay :one
-SELECT r.id, r.status, r.waves, r.current_wave_index, r.canary_device_group_id, c.plan, c.before
+SELECT r.id, r.status, r.waves, r.current_wave_index, r.canary_device_group_id, r.staged_assignments, c.plan, c.before
 FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
 WHERE r.status IN ('running', 'halted')
 `
@@ -236,12 +239,13 @@ type GetOpenConfigRolloutOverlayRow struct {
 	Waves               []int32
 	CurrentWaveIndex    int32
 	CanaryDeviceGroupID uuid.NullUUID
+	StagedAssignments   json.RawMessage
 	Plan                json.RawMessage
 	Before              json.RawMessage
 }
 
-// What the compiler needs of the open rollout: its wave, its canary group and the plan and before-states of its change
-// set.
+// What the compiler needs of the open rollout: its wave, its canary group, the rows of its staged software assignments
+// and the plan and before-states of its change set.
 func (q *Queries) GetOpenConfigRolloutOverlay(ctx context.Context) (GetOpenConfigRolloutOverlayRow, error) {
 	row := q.db.QueryRow(ctx, getOpenConfigRolloutOverlay)
 	var i GetOpenConfigRolloutOverlayRow
@@ -251,6 +255,7 @@ func (q *Queries) GetOpenConfigRolloutOverlay(ctx context.Context) (GetOpenConfi
 		&i.Waves,
 		&i.CurrentWaveIndex,
 		&i.CanaryDeviceGroupID,
+		&i.StagedAssignments,
 		&i.Plan,
 		&i.Before,
 	)
@@ -287,7 +292,7 @@ func (q *Queries) GetOpenConfigRolloutSummary(ctx context.Context) (GetOpenConfi
 
 const haltConfigRollout = `-- name: HaltConfigRollout :one
 UPDATE config_rollout SET status = 'halted', halted_reason = $1, updated_at = now()
-WHERE id = $2 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at
+WHERE id = $2 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at, staged_assignments
 `
 
 type HaltConfigRolloutParams struct {
@@ -317,6 +322,7 @@ func (q *Queries) HaltConfigRollout(ctx context.Context, arg HaltConfigRolloutPa
 		&i.EndedAt,
 		&i.EndedReason,
 		&i.UpdatedAt,
+		&i.StagedAssignments,
 	)
 	return i, err
 }
@@ -324,10 +330,10 @@ func (q *Queries) HaltConfigRollout(ctx context.Context, arg HaltConfigRolloutPa
 const insertConfigRollout = `-- name: InsertConfigRollout :one
 
 INSERT INTO config_rollout (id, organization_id, change_set_id, waves, min_wave_minutes, failure_threshold_percent,
-  failure_threshold_min, canary_device_group_id, status, started_by)
+  failure_threshold_min, canary_device_group_id, status, started_by, staged_assignments)
 VALUES ($1, $2, $3, $4, $5, $6,
-  $7, $8, 'running', $9)
-RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at
+  $7, $8, 'running', $9, $10)
+RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at, staged_assignments
 `
 
 type InsertConfigRolloutParams struct {
@@ -340,6 +346,7 @@ type InsertConfigRolloutParams struct {
 	FailureThresholdMin     int32
 	CanaryDeviceGroupID     uuid.NullUUID
 	StartedBy               string
+	StagedAssignments       json.RawMessage
 }
 
 // Staged configuration rollouts (plan M11 decisions 25-31). At most one rollout of an organization is open (running or
@@ -355,6 +362,7 @@ func (q *Queries) InsertConfigRollout(ctx context.Context, arg InsertConfigRollo
 		arg.FailureThresholdMin,
 		arg.CanaryDeviceGroupID,
 		arg.StartedBy,
+		arg.StagedAssignments,
 	)
 	var i ConfigRollout
 	err := row.Scan(
@@ -376,6 +384,7 @@ func (q *Queries) InsertConfigRollout(ctx context.Context, arg InsertConfigRollo
 		&i.EndedAt,
 		&i.EndedReason,
 		&i.UpdatedAt,
+		&i.StagedAssignments,
 	)
 	return i, err
 }
@@ -438,7 +447,10 @@ WITH latest AS (
 SELECT l.rollout_id::uuid AS rollout_id, l.device_id, l.version, l.outcome, l.mode, l.occurred_at, l.recorded_at,
   ARRAY(SELECT s.resource_id FROM device_resource_status s
         WHERE s.device_id = l.device_id AND s.bundle_version = l.version AND s.status = 'failed'
-        ORDER BY s.resource_id)::text[] AS failed_resource_ids
+        UNION
+        SELECT 'software:' || ss.catalog_entry_id::text FROM device_software_status ss JOIN config_rollout cr ON cr.id = l.rollout_id
+        WHERE ss.device_id = l.device_id AND ss.state = 'failed' AND ss.reported_at >= cr.evaluation_since
+        ORDER BY 1)::text[] AS failed_resource_ids
 FROM latest l
 `
 
@@ -456,6 +468,9 @@ type ListConfigRolloutReportsRow struct {
 // The newest report of every device on a bundle that carries one of the rollouts, with the resources that failed in
 // that version: what the counts of a rollout and its device list read (plan M11 amendment R6.14). recorded_at is when
 // the server received the report. The newest report is picked first, so the failed resources are read once per device.
+// A catalog entry the device reported failed since the rollout's evaluation_since is listed as software:<entry id>
+// (plan M13c decision 3): the software resource reports per entry through the heartbeat, not per bundle version, and
+// the counts keep only the IDs the rollout stages.
 func (q *Queries) ListConfigRolloutReports(ctx context.Context, rolloutIds []uuid.UUID) ([]ListConfigRolloutReportsRow, error) {
 	rows, err := q.db.Query(ctx, listConfigRolloutReports, rolloutIds)
 	if err != nil {
@@ -487,7 +502,7 @@ func (q *Queries) ListConfigRolloutReports(ctx context.Context, rolloutIds []uui
 
 const listConfigRollouts = `-- name: ListConfigRollouts :many
 
-SELECT r.id, r.organization_id, r.change_set_id, r.waves, r.current_wave_index, r.wave_started_at, r.min_wave_minutes, r.failure_threshold_percent, r.failure_threshold_min, r.canary_device_group_id, r.status, r.halted_reason, r.evaluation_since, r.started_by, r.started_at, r.ended_at, r.ended_reason, r.updated_at, c.plan FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
+SELECT r.id, r.organization_id, r.change_set_id, r.waves, r.current_wave_index, r.wave_started_at, r.min_wave_minutes, r.failure_threshold_percent, r.failure_threshold_min, r.canary_device_group_id, r.status, r.halted_reason, r.evaluation_since, r.started_by, r.started_at, r.ended_at, r.ended_reason, r.updated_at, r.staged_assignments, c.plan FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
 WHERE ($1::text IS NULL OR started_by ILIKE $1::text ESCAPE '\')
   AND ($2::text[] IS NULL OR status = ANY($2::text[]))
 ORDER BY
@@ -548,6 +563,7 @@ func (q *Queries) ListConfigRollouts(ctx context.Context, arg ListConfigRollouts
 			&i.ConfigRollout.EndedAt,
 			&i.ConfigRollout.EndedReason,
 			&i.ConfigRollout.UpdatedAt,
+			&i.ConfigRollout.StagedAssignments,
 			&i.Plan,
 		); err != nil {
 			return nil, err
@@ -561,7 +577,7 @@ func (q *Queries) ListConfigRollouts(ctx context.Context, arg ListConfigRollouts
 }
 
 const listRunningConfigRollouts = `-- name: ListRunningConfigRollouts :many
-SELECT r.id, r.organization_id, r.change_set_id, r.waves, r.current_wave_index, r.wave_started_at, r.min_wave_minutes, r.failure_threshold_percent, r.failure_threshold_min, r.canary_device_group_id, r.status, r.halted_reason, r.evaluation_since, r.started_by, r.started_at, r.ended_at, r.ended_reason, r.updated_at, c.plan
+SELECT r.id, r.organization_id, r.change_set_id, r.waves, r.current_wave_index, r.wave_started_at, r.min_wave_minutes, r.failure_threshold_percent, r.failure_threshold_min, r.canary_device_group_id, r.status, r.halted_reason, r.evaluation_since, r.started_by, r.started_at, r.ended_at, r.ended_reason, r.updated_at, r.staged_assignments, c.plan
 FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
 WHERE r.status = 'running'
 ORDER BY r.id
@@ -601,6 +617,7 @@ func (q *Queries) ListRunningConfigRollouts(ctx context.Context) ([]ListRunningC
 			&i.ConfigRollout.EndedAt,
 			&i.ConfigRollout.EndedReason,
 			&i.ConfigRollout.UpdatedAt,
+			&i.ConfigRollout.StagedAssignments,
 			&i.Plan,
 		); err != nil {
 			return nil, err
@@ -614,7 +631,7 @@ func (q *Queries) ListRunningConfigRollouts(ctx context.Context) ([]ListRunningC
 }
 
 const lockConfigRollout = `-- name: LockConfigRollout :one
-SELECT id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at FROM config_rollout WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at, staged_assignments FROM config_rollout WHERE id = $1 FOR UPDATE
 `
 
 // A rollout under its row lock, so that the worker's round and the administrator's actions see each other's change.
@@ -640,6 +657,7 @@ func (q *Queries) LockConfigRollout(ctx context.Context, id uuid.UUID) (ConfigRo
 		&i.EndedAt,
 		&i.EndedReason,
 		&i.UpdatedAt,
+		&i.StagedAssignments,
 	)
 	return i, err
 }
@@ -647,7 +665,7 @@ func (q *Queries) LockConfigRollout(ctx context.Context, id uuid.UUID) (ConfigRo
 const resumeConfigRollout = `-- name: ResumeConfigRollout :one
 UPDATE config_rollout SET status = 'running', halted_reason = NULL, evaluation_since = now(), wave_started_at = now(),
   updated_at = now()
-WHERE id = $1 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at
+WHERE id = $1 RETURNING id, organization_id, change_set_id, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, status, halted_reason, evaluation_since, started_by, started_at, ended_at, ended_reason, updated_at, staged_assignments
 `
 
 // Failures reported before the resume no longer count, and the wave gets its full duration again (plan M11 decision
@@ -674,6 +692,7 @@ func (q *Queries) ResumeConfigRollout(ctx context.Context, id uuid.UUID) (Config
 		&i.EndedAt,
 		&i.EndedReason,
 		&i.UpdatedAt,
+		&i.StagedAssignments,
 	)
 	return i, err
 }

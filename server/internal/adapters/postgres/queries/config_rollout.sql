@@ -3,9 +3,9 @@
 
 -- name: InsertConfigRollout :one
 INSERT INTO config_rollout (id, organization_id, change_set_id, waves, min_wave_minutes, failure_threshold_percent,
-  failure_threshold_min, canary_device_group_id, status, started_by)
+  failure_threshold_min, canary_device_group_id, status, started_by, staged_assignments)
 VALUES (@id, @organization_id, @change_set_id, @waves, @min_wave_minutes, @failure_threshold_percent,
-  @failure_threshold_min, sqlc.narg(canary_device_group_id), 'running', @started_by)
+  @failure_threshold_min, sqlc.narg(canary_device_group_id), 'running', @started_by, sqlc.narg(staged_assignments))
 RETURNING *;
 
 -- name: GetOpenConfigRollout :one
@@ -15,9 +15,9 @@ FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
 WHERE r.status IN ('running', 'halted');
 
 -- name: GetOpenConfigRolloutOverlay :one
--- What the compiler needs of the open rollout: its wave, its canary group and the plan and before-states of its change
--- set.
-SELECT r.id, r.status, r.waves, r.current_wave_index, r.canary_device_group_id, c.plan, c.before
+-- What the compiler needs of the open rollout: its wave, its canary group, the rows of its staged software assignments
+-- and the plan and before-states of its change set.
+SELECT r.id, r.status, r.waves, r.current_wave_index, r.canary_device_group_id, r.staged_assignments, c.plan, c.before
 FROM config_rollout r JOIN change_set c ON c.id = r.change_set_id
 WHERE r.status IN ('running', 'halted');
 
@@ -99,6 +99,9 @@ SELECT count(*) FROM (
 -- The newest report of every device on a bundle that carries one of the rollouts, with the resources that failed in
 -- that version: what the counts of a rollout and its device list read (plan M11 amendment R6.14). recorded_at is when
 -- the server received the report. The newest report is picked first, so the failed resources are read once per device.
+-- A catalog entry the device reported failed since the rollout's evaluation_since is listed as software:<entry id>
+-- (plan M13c decision 3): the software resource reports per entry through the heartbeat, not per bundle version, and
+-- the counts keep only the IDs the rollout stages.
 WITH latest AS (
   SELECT DISTINCT ON (b.config_rollout_id, r.device_id) b.config_rollout_id AS rollout_id, r.device_id, r.version,
     r.outcome, r.mode, r.occurred_at, r.recorded_at
@@ -109,7 +112,10 @@ WITH latest AS (
 SELECT l.rollout_id::uuid AS rollout_id, l.device_id, l.version, l.outcome, l.mode, l.occurred_at, l.recorded_at,
   ARRAY(SELECT s.resource_id FROM device_resource_status s
         WHERE s.device_id = l.device_id AND s.bundle_version = l.version AND s.status = 'failed'
-        ORDER BY s.resource_id)::text[] AS failed_resource_ids
+        UNION
+        SELECT 'software:' || ss.catalog_entry_id::text FROM device_software_status ss JOIN config_rollout cr ON cr.id = l.rollout_id
+        WHERE ss.device_id = l.device_id AND ss.state = 'failed' AND ss.reported_at >= cr.evaluation_since
+        ORDER BY 1)::text[] AS failed_resource_ids
 FROM latest l;
 
 -- name: ListConfigRolloutDevices :many

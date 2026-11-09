@@ -683,6 +683,13 @@ export interface paths {
          *     too), any other change of a section it stages with 409 rollout_running (package holds and update settings are
          *     one section; a mixed apply is refused as a whole), and a change of only other sections is immediate. The same
          *     rules apply to every per-resource write and to reverts (ADR 0033 amendment 2026-11-01).
+         *     Software (plan M13c decisions 1-3): the sections software_sources, software_catalog and software_assignments
+         *     follow the rules of their endpoints. A plan that changes software_sources needs an organization administrator
+         *     with a fresh step-up for the whole apply (ADR 0034 decision 3): an API token's apply is refused with 403
+         *     step_up_required and nothing is applied, its dry run lists the section in plan.requires_step_up. A
+         *     software_sources item whose fingerprint differs from its signing key is 422 fingerprint_mismatch. A change of
+         *     software_assignments is rollout-able like managed files (ADR 0033 amendment 2026-11-05); sources and catalog
+         *     entries are always immediate.
          */
         put: operations["applyConfig"];
         post?: never;
@@ -2119,8 +2126,10 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * @description Roles: org_admin, org_operator. Removes the entry together with its assignments (never 409); the devices stop
-         *     managing the application, installed software stays.
+         * @description Roles: org_admin, org_operator. Removes an entry that has no assignments; it changes nothing on any device. An
+         *     entry that still has assignments is 409 in_use, and the detail names them (target type and device group,
+         *     username or user group slug): remove the assignments first, a removal that rolls out in waves like every
+         *     other assignment change. While a rollout stages assignments of the entry, the deletion is 409 rollout_conflict.
          */
         delete: operations["deleteSoftwareCatalogEntry"];
         options?: never;
@@ -5498,6 +5507,8 @@ export interface components {
             created: number;
             updated: number;
             deleted: number;
+            /** @description Sections the plan changes whose change needs an organization administrator with a fresh step-up for the whole apply (plan M13c decision 2; today software_sources). Omitted when empty. An API token's apply of such a plan is refused with 403 step_up_required; its dry run shows the plan with this list instead. */
+            requires_step_up?: string[];
         };
         ConfigChange: {
             /** @description A section of the document, settings as settings.login and settings.updates. */
@@ -13052,6 +13063,7 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     updateSoftwareCatalogEntry: {

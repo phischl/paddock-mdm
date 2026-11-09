@@ -192,7 +192,8 @@ func SectionGroup(section string) string {
 // StagedKeys returns the keys of plan's changes in rollout-able sections by section (settings.updates: the key ""),
 // without the changes cascaded from a device group the plan deletes: those are never staged (plan M11 amendment
 // R6.13), because an overlay could not restore an item whose group is gone. Items of a group the plan creates follow
-// the normal rules.
+// the normal rules. A catalog entry has no such cascade: its deletion is refused while it has assignments (plan M13c
+// amendment 2026-11-09, A10-12), so a deletion of an assignment is always staged.
 func StagedKeys(p declarative.Plan) map[string]map[string]bool { return StagedKeysExcept(p, nil) }
 
 // StagedKeysExcept is StagedKeys that also leaves out the item changes of renamed, the new names of device groups the
@@ -250,6 +251,41 @@ func DeletedGroups(p declarative.Plan) map[string]bool {
 		}
 	}
 	return out
+}
+
+// StagedEntries returns the names of the catalog entries whose assignments plan stages, sorted: a failed software
+// status of one of them on a device of the wave counts against the rollout as resource software:<entry id> (plan M13c
+// decision 3). The names resolve to IDs against the catalog: an open rollout keeps them, because a write that renames or
+// deletes such an entry is refused while the rollout is open (app requireEntriesNotStaged), staged assignment deletions
+// included.
+func StagedEntries(p declarative.Plan) []string {
+	var out []string
+	for key := range StagedKeys(p)[declarative.SectionSoftwareAssignments] {
+		out = append(out, KeyEntry(key))
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// StagedAssignment is the row a staged software assignment key named when its rollout started: the assignment's row ID
+// (the replaced row of an update or deletion, the new row of a creation), its catalog entry and the device group, user
+// or user group it targets (nil for the organization). The compiler matches live rows and before items by these IDs,
+// not by the names in the key: a username comes from identity sync and can change while the rollout runs (plan M13c
+// decision 3).
+type StagedAssignment struct {
+	ID     uuid.UUID  `json:"id"`
+	Entry  uuid.UUID  `json:"entry_id"`
+	Target *uuid.UUID `json:"target_id,omitempty"`
+}
+
+// KeyEntry is the entry of a software assignment key ([group, entry, target type, user or user group]); "" for any
+// other key.
+func KeyEntry(key string) string {
+	var parts []*string
+	if err := json.Unmarshal([]byte(key), &parts); err != nil || len(parts) != 4 || parts[1] == nil {
+		return ""
+	}
+	return *parts[1]
 }
 
 // KeyGroup returns the device group of a group-scoped key ([group, name]); false for an item of every device and for
