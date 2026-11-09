@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PackageRef, SoftwareCatalogEntry } from '../api/client'
 import { useProblemText } from '../lib/problems'
-import { emptyPackageRef, entryHasErrors, validateEntry, type EntryInput } from '../lib/software'
+import {
+  emptyPackageRef, entryHasErrors, packagesForSource, softwareScopes, validateEntry, type EntryInput, type SourceOption,
+} from '../lib/software'
 
-/** Create and edit form of a catalog entry with the editor of its package rows (plan M13a decision 8). */
+/**
+ * Create and edit form of a catalog entry with the editor of its package rows (plan M13a decision 8). For a Flatpak
+ * source a row names a Flatpak application and its scope instead of an APT package (plan M13b decision 3).
+ */
 const props = withDefaults(
-  defineProps<{ sources: { id: string; name: string }[]; initial?: SoftwareCatalogEntry | null; problem?: string; pending?: boolean }>(),
+  defineProps<{ sources: Pick<SourceOption, 'id' | 'name' | 'kind'>[]; initial?: SoftwareCatalogEntry | null; problem?: string; pending?: boolean }>(),
   { initial: null, problem: '', pending: false },
 )
 const emit = defineEmits<{ submit: [input: EntryInput]; cancel: [] }>()
@@ -20,10 +25,17 @@ const category = ref(props.initial?.category ?? '')
 const sourceID = ref<string | null>(props.initial?.source_id ?? null)
 const packages = ref<PackageRef[]>(props.initial ? props.initial.packages.map((p) => ({ ...p })) : [emptyPackageRef()])
 const touched = ref(false)
+const flatpak = computed(() => props.sources.find((s) => s.id === sourceID.value)?.kind === 'flatpak')
 const input = computed<EntryInput>(() => ({
-  name: name.value, description: description.value, category: category.value, sourceID: sourceID.value, packages: packages.value,
+  name: name.value, description: description.value, category: category.value, sourceID: sourceID.value,
+  packages: packagesForSource(packages.value, flatpak.value),
 }))
-const errors = computed(() => validateEntry(input.value))
+const errors = computed(() => validateEntry(input.value, flatpak.value))
+const scopes = computed(() => softwareScopes.map((value) => ({ value, title: t('software.scope.' + value) })))
+
+watch(flatpak, (on) => {
+  if (on) for (const row of packages.value) row.scope ??= 'system'
+}, { immediate: true })
 const architectures = computed(() => [
   { value: '*', title: t('software.catalog.anyArchitecture') },
   { value: 'amd64', title: 'amd64' },
@@ -115,7 +127,25 @@ function message(key: string | undefined): string[] {
           :items="architectures"
           :data-testid="'package-architecture-' + i"
         />
+        <template v-if="flatpak">
+          <v-text-field
+            v-model="row.flatpak_ref"
+            :label="t('software.catalog.flatpakRef')"
+            :hint="t('software.catalog.flatpakRefHint')"
+            autocomplete="off"
+            spellcheck="false"
+            :error-messages="message(errors.rows[i]?.flatpakRef)"
+            :data-testid="'package-flatpak-ref-' + i"
+          />
+          <v-select
+            v-model="row.scope"
+            :label="t('software.scope.label')"
+            :items="scopes"
+            :data-testid="'package-scope-' + i"
+          />
+        </template>
         <v-text-field
+          v-else
           v-model="row.package"
           :label="t('software.catalog.package')"
           autocomplete="off"
@@ -147,7 +177,7 @@ function message(key: string | undefined): string[] {
         size="small"
         :disabled="packages.length >= 20"
         data-testid="add-package-row"
-        @click="packages.push(emptyPackageRef())"
+        @click="packages.push(emptyPackageRef(flatpak))"
       >
         {{ t('software.catalog.addRow') }}
       </v-btn>

@@ -8,17 +8,20 @@ import SoftwareAssignmentForm from '../components/SoftwareAssignmentForm.vue'
 import SoftwareCatalogEntryForm from '../components/SoftwareCatalogEntryForm.vue'
 import SoftwareStateChip from '../components/SoftwareStateChip.vue'
 import TimeCell from '../components/TimeCell.vue'
-import type { SoftwareAssignment, SoftwareCatalogDevice, SoftwareCatalogEntry } from '../api/client'
+import type { CompileWarning, PackageRef, SoftwareAssignment, SoftwareCatalogDevice, SoftwareCatalogEntry } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { usePending } from '../composables/usePending'
 import { allGroups, groupFilter } from '../lib/devices'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import {
-  allSoftwareSources, deleteCatalogEntry, deleteSoftwareAssignment, getCatalogEntry, iconFileProblem, iconUrl, listSoftwareAssignments,
-  listSoftwareCatalogDevices, saveCatalogEntry, saveSoftwareAssignment, setCatalogIcon, softwareIntentFilter, softwareStateFilter,
-  type AssignmentInput, type EntryInput,
+  allSoftwareAssignments, allSoftwareSources, assignmentTarget as targetOf, compileWarningCodeFilter, compileWarningMessage, deleteCatalogEntry,
+  deleteSoftwareAssignment, getCatalogEntry, iconFileProblem, iconUrl, listCompileWarnings, listSoftwareAssignments,
+  listSoftwareCatalogDevices, saveCatalogEntry, saveSoftwareAssignment, setCatalogIcon, softwareIntentFilter, softwareScopeFilter,
+  softwareStateFilter, softwareTargetFilter, type AssignmentInput, type EntryInput, type ScopedRow, type SourceOption,
 } from '../lib/software'
+import { allUserGroups } from '../lib/userGroups'
+import { allUsers } from '../lib/users'
 import { useSessionStore } from '../stores/session'
 
 const { t } = useI18n()
@@ -32,7 +35,10 @@ const id = computed(() => String(route.params.id))
 const entry = ref<SoftwareCatalogEntry | null>(null)
 const problem = ref('')
 const groups = ref<{ id: string; name: string }[]>([])
-const sources = ref<{ id: string; slug: string; name: string }[]>([])
+const users = ref<{ id: string; username: string }[]>([])
+const userGroups = ref<{ id: string; name: string }[]>([])
+const entryAssignments = ref<SoftwareAssignment[]>([])
+const sources = ref<SourceOption[]>([])
 const iconVersion = ref(0)
 const iconError = ref('')
 const entryOpen = ref(false)
@@ -45,6 +51,7 @@ const assignments = ref<{ reload: () => Promise<void> } | null>(null)
 const devices = ref<{ reload: () => Promise<void> } | null>(null)
 const fetchAssignments = computed(() => listSoftwareAssignments(id.value))
 const fetchDevices = computed(() => listSoftwareCatalogDevices(id.value))
+const fetchWarnings = computed(() => listCompileWarnings({ catalogEntryID: id.value }))
 
 const assignmentColumns = computed<ListColumn[]>(() => [
   { key: 'scope', title: 'managed.scope', role: 'primary' },
@@ -59,16 +66,54 @@ const deviceColumns: ListColumn[] = [
   { key: 'hostname', title: 'devices.hostname', sortable: true, role: 'primary' },
   { key: 'name', title: 'devices.name.label', role: 'meta' },
   { key: 'state', title: 'software.state.label', sortable: true, role: 'status' },
+  { key: 'scope', title: 'software.scope.label', role: 'meta' },
   { key: 'intent', title: 'software.assignments.intent', role: 'meta' },
   { key: 'package', title: 'software.catalog.package', role: 'meta', mono: true },
   { key: 'version', title: 'software.assignments.version', role: 'meta', mono: true },
   { key: 'reported_at', title: 'software.reportedAt', sortable: true, role: 'meta' },
 ]
-const deviceFilters = computed(() => [softwareStateFilter, groupFilter(groups.value)])
+const deviceFilters = computed(() => [softwareStateFilter, softwareScopeFilter, groupFilter(groups.value)])
+const warningColumns: ListColumn[] = [
+  { key: 'hostname', title: 'devices.hostname', sortable: true, role: 'primary' },
+  { key: 'code', title: 'software.compileWarnings.warning', sortable: true, role: 'status' },
+  { key: 'assignment', title: 'software.assignments.target', role: 'meta' },
+  { key: 'created_at', title: 'software.compileWarnings.compiledAt', sortable: true, role: 'meta' },
+]
 
-function groupName(groupID: string | null): string {
-  if (!groupID) return t('managed.allDevices')
-  return groups.value.find((g) => g.id === groupID)?.name ?? groupID
+/**
+ * The target of an assignment as the list, the edit and delete labels and the delete confirmation name it: every device,
+ * a device group, a user or a user group (ADR 0018: a confirmation names its real target).
+ */
+function targetName(item: Pick<SoftwareAssignment, 'device_group_id' | 'user_id' | 'user_group_id'>): string {
+  const { target, targetID } = targetOf(item)
+  switch (target) {
+    case 'device_group':
+      return groups.value.find((g) => g.id === targetID)?.name ?? targetID ?? ''
+    case 'user':
+      return t('software.target.named.user', { name: users.value.find((u) => u.id === targetID)?.username ?? targetID })
+    case 'user_group':
+      return t('software.target.named.user_group', { name: userGroups.value.find((g) => g.id === targetID)?.name ?? targetID })
+    default:
+      return t('managed.allDevices')
+  }
+}
+
+function packageLabel(p: PackageRef): string {
+  return p.flatpak_ref ? t('software.catalog.flatpakRow', { ref: p.flatpak_ref, scope: t('software.scope.' + (p.scope ?? 'system')) }) : (p.package ?? '')
+}
+
+function warningTarget(w: CompileWarning): string {
+  const a = entryAssignments.value.find((x) => x.id === w.assignment_id)
+  return a ? targetName(a) : '–'
+}
+
+function warningText(w: CompileWarning): string {
+  const m = compileWarningMessage(w)
+  return t(m.key, m.args)
+}
+
+async function loadAssignments(): Promise<void> {
+  entryAssignments.value = await allSoftwareAssignments(id.value).catch(() => [])
 }
 
 async function load(): Promise<void> {
@@ -83,9 +128,14 @@ async function load(): Promise<void> {
 }
 
 onMounted(async () => {
-  const [g, s] = await Promise.all([allGroups().catch(() => []), allSoftwareSources().catch(() => []), load()])
+  const [g, s, u, ug] = await Promise.all([
+    allGroups().catch(() => []), allSoftwareSources().catch(() => []), allUsers().catch(() => []), allUserGroups().catch(() => []),
+    load(), loadAssignments(),
+  ])
   groups.value = g
   sources.value = s
+  users.value = u
+  userGroups.value = ug
 })
 
 function openEntry(): void {
@@ -150,19 +200,19 @@ async function submitAssignment(input: AssignmentInput): Promise<void> {
   assignmentProblem.value = (await saveSoftwareAssignment(assignmentTarget.value?.id ?? null, input)) ?? ''
   if (assignmentProblem.value) return
   assignmentOpen.value = false
-  await Promise.all([assignments.value?.reload(), devices.value?.reload(), load()])
+  await Promise.all([assignments.value?.reload(), devices.value?.reload(), load(), loadAssignments()])
 }
 
 async function removeAssignment(item: SoftwareAssignment): Promise<void> {
   const confirmed = await confirm({
     title: t('software.assignments.deleteTitle'),
-    message: t('software.assignments.deleteConfirm', { app: item.app_name, scope: groupName(item.device_group_id) }),
+    message: t('software.assignments.deleteConfirm', { app: item.app_name, scope: targetName(item) }),
     confirmLabel: t('common.delete'),
     destructive: true,
   })
   if (!confirmed) return
   problem.value = (await deleteSoftwareAssignment(item.id)) ?? ''
-  await Promise.all([assignments.value?.reload(), devices.value?.reload(), load()])
+  await Promise.all([assignments.value?.reload(), devices.value?.reload(), load(), loadAssignments()])
 }
 </script>
 
@@ -234,7 +284,7 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
               v-for="p in entry.packages"
               :key="[p.distribution, p.release, p.architecture].join('/')"
             >
-              {{ p.distribution }} {{ p.release }} {{ p.architecture }}: {{ p.package }}
+              {{ p.distribution }} {{ p.release }} {{ p.architecture }}: {{ packageLabel(p) }}
             </li>
           </ul>
         </dd>
@@ -280,7 +330,7 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
         query-prefix="a"
         :columns="assignmentColumns"
         :fetch="fetchAssignments"
-        :filters="[softwareIntentFilter]"
+        :filters="[softwareIntentFilter, softwareTargetFilter]"
         default-sort="-created_at"
         item-value="id"
         empty-icon="package"
@@ -289,7 +339,7 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
         data-testid="assignment-list"
       >
         <template #[`item.scope`]="{ item }: { item: SoftwareAssignment }">
-          {{ groupName(item.device_group_id) }}
+          {{ targetName(item) }}
         </template>
         <template #[`item.intent`]="{ item }: { item: SoftwareAssignment }">
           {{ t('software.intent.' + item.intent) }}
@@ -309,7 +359,7 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
         <template #[`item.actions`]="{ item }: { item: SoftwareAssignment }">
           <div class="row-actions">
             <v-btn
-              :aria-label="t('managed.editLabel', { name: groupName(item.device_group_id) })"
+              :aria-label="t('managed.editLabel', { name: targetName(item) })"
               variant="tonal"
               size="small"
               @click="openAssignment(item)"
@@ -317,7 +367,7 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
               {{ t('common.edit') }}
             </v-btn>
             <v-btn
-              :aria-label="t('managed.deleteLabel', { name: groupName(item.device_group_id) })"
+              :aria-label="t('managed.deleteLabel', { name: targetName(item) })"
               color="error"
               size="small"
               :disabled="pending"
@@ -338,37 +388,40 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
         :filters="deviceFilters"
         searchable
         default-sort="hostname"
-        item-value="device_id"
+        item-value="row_key"
         empty-icon="laptop"
         empty-title="software.catalog.devicesEmpty.title"
         empty-description="software.catalog.devicesEmpty.description"
         data-testid="catalog-device-list"
       >
-        <template #[`item.hostname`]="{ item }: { item: SoftwareCatalogDevice }">
+        <template #[`item.hostname`]="{ item }: { item: ScopedRow<SoftwareCatalogDevice> }">
           <RouterLink :to="{ name: 'device-managed-software', params: { id: item.device_id } }">
             {{ item.hostname }}
           </RouterLink>
         </template>
-        <template #[`item.name`]="{ item }: { item: SoftwareCatalogDevice }">
+        <template #[`item.name`]="{ item }: { item: ScopedRow<SoftwareCatalogDevice> }">
           {{ item.name || item.hostname }}
         </template>
-        <template #[`item.state`]="{ item }: { item: SoftwareCatalogDevice }">
+        <template #[`item.state`]="{ item }: { item: ScopedRow<SoftwareCatalogDevice> }">
           <SoftwareStateChip
             :state="item.state"
             :reason="item.reason"
             :error="item.error"
           />
         </template>
-        <template #[`item.intent`]="{ item }: { item: SoftwareCatalogDevice }">
+        <template #[`item.scope`]="{ item }: { item: ScopedRow<SoftwareCatalogDevice> }">
+          {{ t('software.scope.' + item.scope) }}
+        </template>
+        <template #[`item.intent`]="{ item }: { item: ScopedRow<SoftwareCatalogDevice> }">
           {{ t('software.intent.' + item.intent) }}
         </template>
-        <template #[`item.package`]="{ item }: { item: SoftwareCatalogDevice }">
+        <template #[`item.package`]="{ item }: { item: ScopedRow<SoftwareCatalogDevice> }">
           {{ item.package || '–' }}
         </template>
-        <template #[`item.version`]="{ item }: { item: SoftwareCatalogDevice }">
+        <template #[`item.version`]="{ item }: { item: ScopedRow<SoftwareCatalogDevice> }">
           {{ item.version || '–' }}
         </template>
-        <template #[`item.reported_at`]="{ item }: { item: SoftwareCatalogDevice }">
+        <template #[`item.reported_at`]="{ item }: { item: ScopedRow<SoftwareCatalogDevice> }">
           <TimeCell
             v-if="item.reported_at"
             :iso="item.reported_at"
@@ -378,6 +431,42 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
             v-else
             class="pd-muted"
           >–</span>
+        </template>
+      </DataList>
+
+      <h2>{{ t('software.compileWarnings.title') }}</h2>
+      <p class="summary">
+        {{ t('software.compileWarnings.summary') }}
+      </p>
+      <DataList
+        query-prefix="w"
+        :columns="warningColumns"
+        :fetch="fetchWarnings"
+        :filters="[compileWarningCodeFilter]"
+        searchable
+        default-sort="-created_at"
+        item-value="id"
+        empty-icon="package"
+        empty-title="software.compileWarnings.empty.title"
+        empty-description="software.compileWarnings.empty.description"
+        data-testid="compile-warning-list"
+      >
+        <template #[`item.hostname`]="{ item }: { item: CompileWarning }">
+          <RouterLink :to="{ name: 'device-managed-software', params: { id: item.device_id } }">
+            {{ item.hostname }}
+          </RouterLink>
+        </template>
+        <template #[`item.code`]="{ item }: { item: CompileWarning }">
+          {{ warningText(item) }}
+        </template>
+        <template #[`item.assignment`]="{ item }: { item: CompileWarning }">
+          {{ warningTarget(item) }}
+        </template>
+        <template #[`item.created_at`]="{ item }: { item: CompileWarning }">
+          <TimeCell
+            :iso="item.created_at"
+            mode="relative"
+          />
         </template>
       </DataList>
 
@@ -411,6 +500,8 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
               :key="formKey"
               :entry-id="entry.id"
               :groups="groups"
+              :users="users"
+              :user-groups="userGroups"
               :initial="assignmentTarget"
               :problem="assignmentProblem"
               :pending="pending"

@@ -7,14 +7,14 @@ import TimeCell from '../components/TimeCell.vue'
 import type { SoftwareCatalogEntry } from '../api/client'
 import { usePending } from '../composables/usePending'
 import type { ListColumn, ListFilter } from '../lib/listQuery'
-import { allSoftwareSources, catalogCategories, listSoftwareCatalog, saveCatalogEntry, type EntryInput } from '../lib/software'
+import { allSoftwareSources, catalogCategories, listSoftwareCatalog, saveCatalogEntry, type EntryInput, type SourceOption } from '../lib/software'
 import { useSessionStore } from '../stores/session'
 
 const { t } = useI18n()
 const { pending, run } = usePending()
 const session = useSessionStore()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
-const sources = ref<{ id: string; slug: string; name: string }[]>([])
+const sources = ref<SourceOption[]>([])
 const categories = ref<string[]>([])
 const open = ref(false)
 const problem = ref('')

@@ -2113,6 +2113,16 @@
     "empty": {
       "title": "Noch keine Benutzer",
       "description": "Benutzer werden aus dem Verzeichnis synchronisiert oder hier angelegt."
+    },
+    "software": {
+      "title": "Software",
+      "summary": "Anwendungen, die diesem Benutzer direkt oder über eine Benutzergruppe zugewiesen sind. Zuweisungen an alle Geräte oder an Gerätegruppen stehen nicht in dieser Liste.",
+      "via": "Zugewiesen über",
+      "direct": "Direkt",
+      "empty": {
+        "title": "Keine Software für diesen Benutzer",
+        "description": "Keine Zuweisung hat diesen Benutzer oder eine seiner Gruppen als Ziel."
+      }
     }
   },
   "userGroups": {
@@ -3375,7 +3385,7 @@
   "software": {
     "sources": {
       "title": "Paketquellen",
-      "summary": "APT-Repositories von Drittanbietern, aus denen Ihre Geräte installieren dürfen. Jede Quelle hat einen eigenen Signaturschlüssel; sie hinzuzufügen oder zu ändern ist eine Änderung mit Root-Wirkung und verlangt einen Sicherheitsschlüssel.",
+      "summary": "APT-Repositories und Flatpak-Remotes von Drittanbietern, aus denen Ihre Geräte installieren dürfen. Jede Quelle hat einen eigenen Signaturschlüssel; sie hinzuzufügen oder zu ändern ist eine Änderung mit Root-Wirkung und verlangt einen Sicherheitsschlüssel.",
       "create": "Quelle hinzufügen",
       "createTitle": "Paketquelle hinzufügen",
       "editTitle": "Paketquelle bearbeiten",
@@ -3413,7 +3423,15 @@
       },
       "entries": "Einträge",
       "repeated": "Jeder Eintrag darf nur einmal vorkommen.",
-      "inUse": "Diese Quelle wird von einem Katalogeintrag verwendet."
+      "inUse": "Diese Quelle wird von einem Katalogeintrag verwendet.",
+      "kind": "Art",
+      "kindHint": "Ein APT-Repository oder ein Flatpak-Remote; lässt sich später nicht ändern.",
+      "kinds": {
+        "apt": "APT-Repository",
+        "flatpak": "Flatpak-Remote"
+      },
+      "flatpakUri": "Geben Sie genau eine https-Adresse ein, die URL des Flatpak-Remotes.",
+      "flatpakUriHint": "Die https-URL des Flatpak-Remotes, zum Beispiel https://dl.flathub.org/repo/."
     },
     "catalog": {
       "title": "Softwarekatalog",
@@ -3457,7 +3475,11 @@
       "devicesEmpty": {
         "title": "Keine Geräte",
         "description": "Dieser Anwendung ist noch kein aktives Gerät zugewiesen."
-      }
+      },
+      "flatpakRef": "Flatpak-Anwendungs-ID",
+      "flatpakRefHint": "Zum Beispiel org.gimp.GIMP.",
+      "flatpakRefInvalid": "Geben Sie eine Flatpak-Anwendungs-ID aus mindestens drei Teilen ein, zum Beispiel org.gimp.GIMP.",
+      "flatpakRow": "{ref} ({scope})"
     },
     "assignments": {
       "title": "Zuweisungen",
@@ -3477,15 +3499,18 @@
       "deleteConfirm": "Die Zuweisung von {app} für {scope} entfernen? Die Geräte behalten, was installiert ist.",
       "empty": {
         "title": "Noch keine Zuweisungen",
-        "description": "Eine Zuweisung wendet die Anwendung auf eine Gerätegruppe oder auf alle Geräte an."
-      }
+        "description": "Eine Zuweisung wendet die Anwendung auf alle Geräte, eine Gerätegruppe, einen Benutzer oder eine Benutzergruppe an."
+      },
+      "target": "Ziel",
+      "targetRequired": "Wählen Sie das Ziel."
     },
     "intent": {
       "label": "Absicht",
       "required": "Erforderlich",
       "uninstall": "Deinstallieren",
       "hold": "Version festhalten",
-      "forbid": "Verbieten"
+      "forbid": "Verbieten",
+      "available": "Verfügbar"
     },
     "updateRule": {
       "latest": "Neueste",
@@ -3525,6 +3550,45 @@
       "empty": {
         "title": "Keine verwaltete Software",
         "description": "Diesem Gerät ist keine Anwendung des Katalogs zugewiesen."
+      }
+    },
+    "target": {
+      "organization": "Alle Geräte",
+      "device_group": "Gerätegruppe",
+      "user": "Benutzer",
+      "user_group": "Benutzergruppe",
+      "named": {
+        "user": "Benutzer {name}",
+        "user_group": "Benutzergruppe {name}"
+      }
+    },
+    "scope": {
+      "label": "Bereich",
+      "system": "System",
+      "user": "Benutzer"
+    },
+    "compileWarnings": {
+      "title": "Hinweise der Kompilierung",
+      "summary": "Was der Server gegenüber einer Zuweisung aus der Konfiguration eines Geräts weggelassen hat, aus der letzten Kompilierung des Geräts.",
+      "warning": "Hinweis",
+      "entry": "Anwendung",
+      "compiledAt": "Kompiliert",
+      "code": "Hinweis",
+      "openEntry": "Anwendung öffnen",
+      "codes": {
+        "audience_truncated": "Zu viele Benutzer angeboten",
+        "flatpak_forbidden": "Flatpak verboten",
+        "flatpak_users_truncated": "Zu viele Benutzer als Ziel"
+      },
+      "text": {
+        "audience_truncated": "Die Anwendung wird auf diesem Gerät {users} Benutzern angeboten; die Konfiguration enthält die ersten {kept} nach Benutzernamen, den übrigen wird sie nicht angeboten.",
+        "flatpak_forbidden": "{flatpak_ref} fehlt auf diesem Gerät, weil eine Zuweisung Flatpak dort verbietet oder deinstalliert.",
+        "flatpak_users_truncated": "{flatpak_ref} hat auf diesem Gerät {users} Benutzer als Ziel; die Konfiguration enthält die ersten {kept} nach Benutzernamen.",
+        "unknown": "Der Server hat die Konfiguration dieses Geräts gekürzt ({code})."
+      },
+      "empty": {
+        "title": "Keine Hinweise der Kompilierung",
+        "description": "Die letzte Kompilierung hat jede Zuweisung unverändert angewendet."
       }
     }
   }

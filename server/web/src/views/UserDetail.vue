@@ -6,11 +6,12 @@ import DataList from '../components/DataList.vue'
 import EffectiveProfileView from '../components/EffectiveProfileView.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
-import type { Device, UserDetail, UserEffectiveProfile, UserGroup } from '../api/client'
+import type { Device, UserDetail, UserEffectiveProfile, UserGroup, UserSoftware } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { allDevices } from '../lib/devices'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
+import { listUserSoftware, softwareIntentFilter } from '../lib/software'
 import { userLockStatus } from '../lib/status'
 import { allUserGroups } from '../lib/userGroups'
 import type { ListColumn } from '../lib/listQuery'
@@ -41,6 +42,13 @@ const fetchOwned = computed(() => listOwnedDevices(id.value))
 const ownedColumns: ListColumn[] = [
   { key: 'hostname', title: 'devices.hostname', sortable: true },
   { key: 'last_contact_at', title: 'devices.lastContact', sortable: true },
+]
+const fetchSoftware = computed(() => listUserSoftware(id.value))
+const softwareColumns: ListColumn[] = [
+  { key: 'name', title: 'software.catalog.name', sortable: true, role: 'primary' },
+  { key: 'intent', title: 'software.assignments.intent', sortable: true, role: 'status' },
+  { key: 'via', title: 'users.software.via', role: 'meta' },
+  { key: 'reason', title: 'software.assignments.reason', role: 'meta', hideBelow: 'md' },
 ]
 
 async function load(): Promise<void> {
@@ -292,6 +300,47 @@ async function saveEdit(): Promise<void> {
             v-else
             class="pd-muted"
           >{{ t('devices.never') }}</span>
+        </template>
+      </DataList>
+
+      <h2>{{ t('users.software.title') }}</h2>
+      <p class="summary">
+        {{ t('users.software.summary') }}
+      </p>
+      <DataList
+        query-prefix="s"
+        :columns="softwareColumns"
+        :fetch="fetchSoftware"
+        :filters="[softwareIntentFilter]"
+        searchable
+        default-sort="name"
+        item-value="assignment_id"
+        empty-icon="package"
+        empty-title="users.software.empty.title"
+        empty-description="users.software.empty.description"
+        data-testid="user-software"
+      >
+        <template #[`item.name`]="{ item }: { item: UserSoftware }">
+          <RouterLink :to="{ name: 'software-catalog-entry', params: { id: item.catalog_entry_id } }">
+            {{ item.name }}
+          </RouterLink>
+        </template>
+        <template #[`item.intent`]="{ item }: { item: UserSoftware }">
+          {{ t('software.intent.' + item.intent) }}
+        </template>
+        <template #[`item.via`]="{ item }: { item: UserSoftware }">
+          <RouterLink
+            v-if="item.user_group_id"
+            :to="{ name: 'user-group', params: { id: item.user_group_id } }"
+          >
+            {{ item.user_group_name }}
+          </RouterLink>
+          <template v-else>
+            {{ t('users.software.direct') }}
+          </template>
+        </template>
+        <template #[`item.reason`]="{ item }: { item: UserSoftware }">
+          {{ item.reason || '–' }}
         </template>
       </DataList>
 

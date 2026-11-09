@@ -2113,6 +2113,16 @@
     "empty": {
       "title": "No users yet",
       "description": "Users are synchronized from the directory or created here."
+    },
+    "software": {
+      "title": "Software",
+      "summary": "Applications assigned to this user directly or through a user group. Assignments to every device or to device groups are not listed.",
+      "via": "Assigned through",
+      "direct": "Directly",
+      "empty": {
+        "title": "No software for this user",
+        "description": "No assignment targets this user or one of their groups."
+      }
     }
   },
   "userGroups": {
@@ -3375,7 +3385,7 @@
   "software": {
     "sources": {
       "title": "Package sources",
-      "summary": "Third-party APT repositories your devices may install from. Each source has its own signing key; adding or changing one is a root-equivalent change and asks for a security key.",
+      "summary": "Third-party APT repositories and Flatpak remotes your devices may install from. Each source has its own signing key; adding or changing one is a root-equivalent change and asks for a security key.",
       "create": "Add source",
       "createTitle": "Add package source",
       "editTitle": "Edit package source",
@@ -3413,7 +3423,15 @@
       },
       "entries": "Entries",
       "repeated": "Each entry may appear only once.",
-      "inUse": "This source is used by a catalog entry."
+      "inUse": "This source is used by a catalog entry.",
+      "kind": "Kind",
+      "kindHint": "An APT repository or a Flatpak remote; cannot be changed later.",
+      "kinds": {
+        "apt": "APT repository",
+        "flatpak": "Flatpak remote"
+      },
+      "flatpakUri": "Enter exactly one https address, the URL of the Flatpak remote.",
+      "flatpakUriHint": "The https URL of the Flatpak remote, for example https://dl.flathub.org/repo/."
     },
     "catalog": {
       "title": "Software catalog",
@@ -3457,7 +3475,11 @@
       "devicesEmpty": {
         "title": "No devices",
         "description": "No active device is assigned this application yet."
-      }
+      },
+      "flatpakRef": "Flatpak application ID",
+      "flatpakRefHint": "For example org.gimp.GIMP.",
+      "flatpakRefInvalid": "Enter a Flatpak application ID of at least three parts, for example org.gimp.GIMP.",
+      "flatpakRow": "{ref} ({scope})"
     },
     "assignments": {
       "title": "Assignments",
@@ -3477,15 +3499,18 @@
       "deleteConfirm": "Remove the assignment of {app} for {scope}? Devices keep what is installed.",
       "empty": {
         "title": "No assignments yet",
-        "description": "An assignment applies the application to a device group or to every device."
-      }
+        "description": "An assignment applies the application to every device, a device group, a user or a user group."
+      },
+      "target": "Target",
+      "targetRequired": "Choose the target."
     },
     "intent": {
       "label": "Intent",
       "required": "Required",
       "uninstall": "Uninstall",
       "hold": "Hold version",
-      "forbid": "Forbid"
+      "forbid": "Forbid",
+      "available": "Available"
     },
     "updateRule": {
       "latest": "Latest",
@@ -3525,6 +3550,45 @@
       "empty": {
         "title": "No managed software",
         "description": "No catalog application is assigned to this device."
+      }
+    },
+    "target": {
+      "organization": "Every device",
+      "device_group": "Device group",
+      "user": "User",
+      "user_group": "User group",
+      "named": {
+        "user": "User {name}",
+        "user_group": "User group {name}"
+      }
+    },
+    "scope": {
+      "label": "Scope",
+      "system": "System",
+      "user": "User"
+    },
+    "compileWarnings": {
+      "title": "Compile warnings",
+      "summary": "What the server left out of a device's configuration against an assignment, from the device's latest compile.",
+      "warning": "Warning",
+      "entry": "Application",
+      "compiledAt": "Compiled",
+      "code": "Warning",
+      "openEntry": "Open the application",
+      "codes": {
+        "audience_truncated": "Too many users offered",
+        "flatpak_forbidden": "Flatpak forbidden",
+        "flatpak_users_truncated": "Too many users targeted"
+      },
+      "text": {
+        "audience_truncated": "The application is offered to {users} users on this device; the configuration carries the first {kept} by user name, so the others are not offered it.",
+        "flatpak_forbidden": "{flatpak_ref} is left out on this device because an assignment forbids or uninstalls Flatpak there.",
+        "flatpak_users_truncated": "{flatpak_ref} targets {users} users on this device; the configuration carries the first {kept} by user name.",
+        "unknown": "The server shortened the configuration of this device ({code})."
+      },
+      "empty": {
+        "title": "No compile warnings",
+        "description": "The latest compile applied every assignment as it is."
       }
     }
   }
