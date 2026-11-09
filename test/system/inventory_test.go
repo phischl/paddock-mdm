@@ -75,7 +75,7 @@ func gateF1(t *testing.T, d *Device, fleetd string) {
 		!strings.Contains(env, "ORBIT_ENABLE_SCRIPTS=false") || !strings.Contains(env, "ORBIT_FLEET_URL=https://fleet.paddock.localhost:"+portal.HTTPSPort()) {
 		t.Errorf("orbit.env:\n%s", env)
 	}
-	uuid := d.Must("sudo cat /sys/class/dmi/id/product_uuid")
+	uuid := d.MustRoot("cat /sys/class/dmi/id/product_uuid")
 	var host fleetHost
 	Until(t, d.Name+": host enrolled in Fleet", 5*time.Minute, 10*time.Second, nil, func() bool {
 		var ok bool
@@ -126,7 +126,7 @@ func gateF4(t *testing.T, d *Device) {
 	}
 	d.Must(fmt.Sprintf("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades -o DPkg::Lock::Timeout=300 %s=%s", pkg, old))
 	start := time.Now()
-	host, ok := fleetHostByUUID(t, d.Must("sudo cat /sys/class/dmi/id/product_uuid"))
+	host, ok := fleetHostByUUID(t, d.MustRoot("cat /sys/class/dmi/id/product_uuid"))
 	if !ok {
 		t.Fatalf("%s: no Fleet host", d.Name)
 	}

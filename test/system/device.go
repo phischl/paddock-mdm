@@ -264,7 +264,7 @@ func (d *Device) bundleVersion() float64 {
 func (d *Device) State() map[string]any {
 	d.t.Helper()
 	var st map[string]any
-	if err := json.Unmarshal([]byte(d.Must("sudo cat /var/lib/paddock/state/state.json")), &st); err != nil {
+	if err := json.Unmarshal([]byte(d.MustRoot("cat /var/lib/paddock/state/state.json")), &st); err != nil {
 		d.t.Fatal(err)
 	}
 	return st
@@ -321,7 +321,7 @@ print(data.decode().split("\r\n\r\n", 1)[1])
 `
 
 // Health is the agent's health report.
-func (d *Device) Health() string { return d.MustIn([]byte(healthScript), "sudo python3 -") }
+func (d *Device) Health() string { return d.MustRootIn([]byte(healthScript), "python3 -") }
 
 // ownErrors returns the errors of a bundle.applied event that concern this run's resources or the time resource.
 func (d *Device) ownErrors(params map[string]any) []any {

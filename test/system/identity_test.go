@@ -488,7 +488,7 @@ func gateP3(t *testing.T, w *identityWorld) {
 // administrator's membership.
 func gateL6(t *testing.T, w *identityWorld) {
 	t0 := time.Now().UTC()
-	conf := strings.Split(w.Must("sudo cat /etc/himmelblau/himmelblau.conf"), "\n")
+	conf := strings.Split(w.MustRoot("cat /etc/himmelblau/himmelblau.conf"), "\n")
 	for _, line := range []string{"cache_timeout = 2592000", "local_sudo_group = paddock-no-sudo", "local_groups_reconcile_interval = 0"} {
 		if !slices.Contains(conf, line) {
 			t.Fatalf("himmelblau.conf lacks the line %s (PDK-292, PDK-294)", line)

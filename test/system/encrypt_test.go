@@ -31,7 +31,7 @@ func (w *ieWorld) convState(t *testing.T) *conversionState {
 	var st struct {
 		Conversion *conversionState `json:"conversion"`
 	}
-	if err := json.Unmarshal([]byte(w.Must("sudo cat /var/lib/paddock/state/state.json")), &st); err != nil {
+	if err := json.Unmarshal([]byte(w.MustRoot("cat /var/lib/paddock/state/state.json")), &st); err != nil {
 		t.Fatal(err)
 	}
 	return st.Conversion
@@ -40,7 +40,7 @@ func (w *ieWorld) convState(t *testing.T) *conversionState {
 // fsBytes is the size of the root file system from its superblock (block count × block size).
 func (w *ieWorld) fsBytes(t *testing.T) int64 {
 	t.Helper()
-	out := w.Must(`sudo dumpe2fs -h "$(findmnt -no SOURCE /)" 2>/dev/null | awk -F: '/^Block count/{c=$2} /^Block size/{s=$2} END{print c*s}'`)
+	out := w.MustRoot(`dumpe2fs -h "$(findmnt -no SOURCE /)" 2>/dev/null | awk -F: '/^Block count/{c=$2} /^Block size/{s=$2} END{print c*s}'`)
 	n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
 	if err != nil || n <= 0 {
 		t.Fatalf("root file system size %q: %v", out, err)
@@ -71,7 +71,7 @@ func (w *ieWorld) requireFinalDisk(t *testing.T, partition, luksUUID, conversion
 			Requirements json.RawMessage `json:"requirements"`
 		} `json:"config"`
 	}
-	if err := json.Unmarshal([]byte(w.Must("sudo cryptsetup luksDump --dump-json-metadata "+partition)), &md); err != nil {
+	if err := json.Unmarshal([]byte(w.MustRoot("cryptsetup luksDump --dump-json-metadata "+partition)), &md); err != nil {
 		t.Fatal(err)
 	}
 	for id, k := range md.Keyslots {

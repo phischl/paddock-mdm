@@ -208,7 +208,7 @@ func hn1Converged(t *testing.T, d *Device, name string) {
 			Changes []string `json:"changes"`
 		} `json:"resources"`
 	}
-	if err := json.Unmarshal([]byte(d.Must("sudo paddockd plan")), &plan); err != nil {
+	if err := json.Unmarshal([]byte(d.MustRoot("paddockd plan")), &plan); err != nil {
 		t.Fatal(err)
 	}
 	for _, r := range plan.Resources {

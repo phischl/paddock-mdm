@@ -48,7 +48,7 @@ type preflightCheck struct {
 // VMs pass every check: exit code 0 and no check that failed. Stderr goes to a file so that it cannot break the JSON.
 func runPreflight(t *testing.T, vm *VM) map[string]preflightCheck {
 	t.Helper()
-	out := vm.Must(`sudo paddockd preflight --json 2>/tmp/preflight.err; echo "exit=$?"`)
+	out := vm.MustRoot(`paddockd preflight --json 2>/tmp/preflight.err; echo "exit=$?"`)
 	i := strings.LastIndex(out, "exit=")
 	if i < 0 {
 		t.Fatalf("%s: preflight output without exit code: %s", vm.Name, out)
