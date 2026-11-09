@@ -587,11 +587,13 @@ func (r *ActionRunner) RecordOnceInScope(ctx context.Context, scope Scope, spec 
 
 // OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
 // without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
-// login) and reports false. After (optional) runs when the event was recorded.
+// login) and reports false. After (optional) runs when the event was recorded. Refusal (optional) records the event
+// with its outcome and error code, as RecordOnceRefusal does.
 type OnceEntry struct {
-	Spec  ActionSpec
-	Claim func(ctx context.Context, q *pgstore.Queries) (bool, error)
-	After AfterFunc
+	Spec    ActionSpec
+	Claim   func(ctx context.Context, q *pgstore.Queries) (bool, error)
+	After   AfterFunc
+	Refusal error
 }
 
 // RecordOnceBatch is RecordOnce for several events in one transaction, so a batch of device events costs one commit
@@ -621,7 +623,7 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 			if !fresh || recs[i] == nil {
 				continue
 			}
-			if err := r.insertFinished(ctx, q, recs[i], nil); err != nil {
+			if err := r.insertFinished(ctx, q, recs[i], e.Refusal); err != nil {
 				return err
 			}
 			if err := runAfter(ctx, q, recs[i].id, []AfterFunc{e.After}); err != nil {
@@ -646,7 +648,7 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 			}
 			continue
 		}
-		fresh, err := r.RecordOnce(ctx, e.Spec, e.Claim, e.After)
+		fresh, err := r.recordOnceEntry(ctx, e)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("entry %d: %w", i, err))
 			continue
@@ -654,6 +656,14 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 		recorded[i] = fresh
 	}
 	return recorded, errors.Join(errs...)
+}
+
+// recordOnceEntry records one entry of RecordOnceBatch on its own: RecordOnce, or RecordOnceRefusal with its refusal.
+func (r *ActionRunner) recordOnceEntry(ctx context.Context, e OnceEntry) (bool, error) {
+	if e.Refusal != nil {
+		return r.RecordOnceRefusal(ctx, e.Spec, e.Refusal, e.Claim, e.After)
+	}
+	return r.RecordOnce(ctx, e.Spec, e.Claim, e.After)
 }
 
 // RecordOnceRefusal is RecordOnce for an event refused with refusal (recorded with its outcome and error code):

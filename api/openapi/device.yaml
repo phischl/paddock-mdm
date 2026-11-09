@@ -443,8 +443,8 @@ components:
                 The state of the catalog entries the agent manages (plan M13a §3.4). digest is the hex SHA-256 of the
                 canonical JSON of items; items is present when the digest changed or every 24 hours and replaces what
                 the server holds for the device. A heartbeat with a digest only keeps the stored items. The server
-                stores at most 200 items, skips an item whose id is not an entry of the organization, whose state is
-                not one of the listed values or whose package is empty, and cuts version, reason and error. Agents
+                stores at most 200 items, skips an item whose id is the nil UUID (a flatpak runtime) or not an entry of the organization, whose
+                scope is unknown, whose state is not one of the listed values or whose package is empty, and cuts version, reason and error. Agents
                 before M13a leave the object out.
               properties:
                 digest: { type: string }
@@ -462,7 +462,8 @@ components:
                     properties:
                       id: { type: string, description: The catalog entry (a UUID). }
                       package: { type: string }
-                      intent: { type: string, description: "required, uninstall, hold or forbid" }
+                      intent: { type: string, description: "required, available, uninstall, hold or forbid" }
+                      scope: { type: string, enum: [system, user], description: "Empty or absent is system (agents before alpha.10); one row per entry and scope." }
                       state: { type: string, description: "installed, held, absent, pending or failed" }
                       version: { type: string }
                       reason: { type: string, description: "pending: dpkg_locked, deferred_offline or not_yet_applied; failed: the reason of software.apply_failed." }

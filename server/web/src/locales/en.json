@@ -460,6 +460,7 @@
       "software_reinstalled": "The device {target} found {package} removed locally and installed it again ({version})",
       "software_removed": "The device {target} removed {package} {version} ({intent})",
       "software_apply_failed": "The device {target} could not apply a software package or source ({stage}: {reason})",
+      "software_self_service": "{outcome, select, succeeded {{user} {action, select, install {installed} update {updated} remove {removed} other {changed}} an application on the device {target} through self-service} refused {The device {target} refused the self-service {action} of {user} ({reason})} other {The self-service {action} of {user} failed on the device {target} ({reason})}}",
       "stale_warning": "The device {target} has not contacted Paddock for {threshold_h, number} hours (warning)",
       "stale_critical": "The device {target} has not contacted Paddock for {threshold_h, number} hours and is presumed lost",
       "stale_cleared": "The device {target} contacted Paddock again",

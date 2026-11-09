@@ -460,6 +460,7 @@
       "software_reinstalled": "Das Gerät {target} hat festgestellt, dass {package} lokal entfernt wurde, und es erneut installiert ({version})",
       "software_removed": "Das Gerät {target} hat {package} {version} entfernt ({intent})",
       "software_apply_failed": "Das Gerät {target} konnte ein Softwarepaket oder eine Paketquelle nicht anwenden ({stage}: {reason})",
+      "software_self_service": "{outcome, select, succeeded {{user} hat über den Self-Service auf dem Gerät {target} eine Anwendung {action, select, install {installiert} update {aktualisiert} remove {entfernt} other {geändert}}} refused {Das Gerät {target} hat die Self-Service-Aktion {action} von {user} abgelehnt ({reason})} other {Die Self-Service-Aktion {action} von {user} ist auf dem Gerät {target} fehlgeschlagen ({reason})}}",
       "stale_warning": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert (Warnung)",
       "stale_critical": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert und gilt als vermutlich verloren",
       "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert",

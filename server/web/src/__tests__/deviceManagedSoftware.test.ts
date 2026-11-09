@@ -10,10 +10,10 @@ import DeviceManagedSoftware from '../views/DeviceManagedSoftware.vue'
 import type { DeviceManagedSoftware as Row } from '../api/client'
 
 const rows: Row[] = [
-  { catalog_entry_id: 'e1', name: 'Editor', package: 'nano', intent: 'required', state: 'installed', version: '7.2', reason: '', error: '', reported_at: '2026-10-02T00:00:00Z' },
-  { catalog_entry_id: 'e2', name: 'Chat', package: '', intent: 'required', state: 'not_applicable', version: '', reason: '', error: '', reported_at: null },
-  { catalog_entry_id: 'e3', name: 'Browser', package: 'browser', intent: 'forbid', state: 'unknown', version: '', reason: '', error: '', reported_at: null },
-  { catalog_entry_id: 'e4', name: 'Tool', package: 'tool', intent: 'required', state: 'failed', version: '', reason: 'no_candidate', error: 'E: no such package', reported_at: '2026-10-02T00:00:00Z' },
+  { catalog_entry_id: 'e1', name: 'Editor', package: 'nano', intent: 'required', state: 'installed', version: '7.2', reason: '', error: '', scope: 'system', reported_at: '2026-10-02T00:00:00Z' },
+  { catalog_entry_id: 'e2', name: 'Chat', package: '', intent: 'required', state: 'not_applicable', version: '', reason: '', error: '', scope: 'system', reported_at: null },
+  { catalog_entry_id: 'e3', name: 'Browser', package: 'browser', intent: 'forbid', state: 'unknown', version: '', reason: '', error: '', scope: 'system', reported_at: null },
+  { catalog_entry_id: 'e4', name: 'Tool', package: 'tool', intent: 'required', state: 'failed', version: '', reason: 'no_candidate', error: 'E: no such package', scope: 'system', reported_at: '2026-10-02T00:00:00Z' },
 ]
 const truncated = vi.hoisted(() => ({ value: false }))
 
