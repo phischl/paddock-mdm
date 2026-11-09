@@ -117,7 +117,14 @@ services:
     logging: *paddock-logging
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
+    # The image's entrypoint starts as root, owns the data directory (chown/chmod of a volume an older release or a
+    # restore left behind) and drops to postgres via gosu (plan M12h §3.4, ADR 0051 decision 4).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_POSTGRES_MEM_LIMIT:-2g}
     environment:
       POSTGRES_DB: paddock
       POSTGRES_USER: postgres
@@ -214,7 +221,17 @@ services:
     logging: *paddock-logging
     image: ${VALKEY_IMAGE}
     restart: unless-stopped
+    # The entrypoints start as root: they render the ACL file onto the tmpfs and chown it (valkey only), chown /data
+    # and drop to valkey via setpriv (plan M12h §3.4, ADR 0051 decision 4). The chown walks /data/appendonlydir (mode
+    # 0700, owned by valkey), which root may only enter with DAC_READ_SEARCH; without it every restart fails.
+    # Writable: /data and the tmpfs mounts.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
     pids_limit: 256
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_VALKEY_MEM_LIMIT:-512m}
     # One ACL user per role (plan M12h §14): the entrypoint renders /run/valkey/users.acl with hashed passwords.
     entrypoint: ["/usr/local/bin/paddock-entrypoint.sh"]
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
@@ -223,7 +240,7 @@ services:
       - ./valkey/valkey.conf:/etc/valkey/valkey.conf:ro
       - ./valkey/users.acl.tmpl:/etc/valkey/users.acl.tmpl:ro
       - valkey-data:/data
-    tmpfs: [/run/valkey]
+    tmpfs: [/run/valkey, /tmp]
     secrets:
       - valkey_api_password
       - valkey_gateway_password
@@ -285,7 +302,14 @@ services:
     logging: *paddock-logging
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
+    # The image's entrypoint starts as root, owns the data directory (chown/chmod of a volume an older release or a
+    # restore left behind) and drops to postgres via gosu (plan M12h §3.4, ADR 0051 decision 4).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_AUTHENTIK_POSTGRES_MEM_LIMIT:-1g}
     environment:
       POSTGRES_DB: authentik
       POSTGRES_USER: authentik
@@ -391,11 +415,22 @@ services:
     logging: *paddock-logging
     image: ${VALKEY_IMAGE}
     restart: unless-stopped
+    # The entrypoints start as root: they render the ACL file onto the tmpfs and chown it (valkey only), chown /data
+    # and drop to valkey via setpriv (plan M12h §3.4, ADR 0051 decision 4). The chown walks /data/appendonlydir (mode
+    # 0700, owned by valkey), which root may only enter with DAC_READ_SEARCH; without it every restart fails.
+    # Writable: /data and the tmpfs mounts.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
     pids_limit: 256
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_FLEET_REDIS_MEM_LIMIT:-512m}
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
     volumes:
       - ./valkey/fleet-redis.conf:/etc/valkey/valkey.conf:ro
       - fleet-redis-data:/data
+    tmpfs: [/tmp]
     secrets:
       - source: fleet_redis_auth_conf
         target: valkey_auth_conf

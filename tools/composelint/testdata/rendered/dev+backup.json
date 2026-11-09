@@ -1,0 +1,74 @@
+{
+  "name": "composelint",
+  "services": {
+    "paddock-api": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "pids_limit": 256,
+      "mem_limit": "536870912"
+    },
+    "postgres": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "cap_add": [
+        "CHOWN",
+        "SETUID",
+        "SETGID",
+        "DAC_OVERRIDE",
+        "FOWNER"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "pids_limit": 512,
+      "mem_limit": "2147483648"
+    },
+    "paddock-audit-writer": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "pids_limit": 256,
+      "deploy": {
+        "resources": {
+          "limits": {
+            "memory": "268435456"
+          }
+        }
+      }
+    },
+    "audit-postgres": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "cap_add": [
+        "CHOWN",
+        "SETUID",
+        "SETGID",
+        "DAC_OVERRIDE",
+        "FOWNER"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "pids_limit": 512,
+      "mem_limit": "2147483648"
+    },
+    "pgbackrest": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "pids_limit": 128
+    }
+  }
+}

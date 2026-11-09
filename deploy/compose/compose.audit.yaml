@@ -13,7 +13,14 @@ services:
     logging: *paddock-logging
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
+    # The image's entrypoint starts as root, owns the data directory (chown/chmod of a volume an older release or a
+    # restore left behind) and drops to postgres via gosu (plan M12h §3.4, ADR 0051 decision 4).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_AUDIT_POSTGRES_MEM_LIMIT:-1g}
     environment:
       POSTGRES_DB: paddock_audit
       POSTGRES_USER: postgres

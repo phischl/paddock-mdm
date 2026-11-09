@@ -80,7 +80,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run gen'; fi
 
 .PHONY: lint
-lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
@@ -96,6 +96,13 @@ lint-supervisor-budget:
 .PHONY: lint-migrations-frozen
 lint-migrations-frozen:
 	go run ./tools/migrationsfrozen
+
+# Container hardening of every host's Compose file set (ADR 0051 decision 4, plan M12h decision 10): every service
+# drops all capabilities, sets no-new-privileges, a pids and a memory limit and adds no capability, unless
+# deploy/compose/hardening-exceptions.yaml lists it with the setting and a reason. Renders with docker compose.
+.PHONY: lint-compose
+lint-compose:
+	go run ./tools/composelint --compose-dir $(COMPOSE_DIR)
 
 # Regenerates pkg/compat/testdata/<RELEASE>/ (bundles, check-in, events, commands, the audit insert) from the current
 # tree and removes the directories older than two releases (plan M16 decision 2). Run at release time on the release

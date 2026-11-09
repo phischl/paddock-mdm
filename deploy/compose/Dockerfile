@@ -34,6 +34,7 @@ COPY test/acceptance/go.mod test/acceptance/go.sum test/acceptance/
 COPY test/load/go.mod test/load/
 COPY test/system/go.mod test/system/go.sum test/system/
 COPY tools/upstreamwatch/go.mod tools/upstreamwatch/
+COPY tools/composelint/go.mod tools/composelint/go.sum tools/composelint/
 COPY tools/migrationsfrozen/go.mod tools/migrationsfrozen/
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=bind,from=gomodcache,target=/gomodcache \
     cd server && go mod download
