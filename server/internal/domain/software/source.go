@@ -47,9 +47,17 @@ var (
 	architectures    = []string{"amd64", "arm64"}
 )
 
-// SourceInput is a package source as an administrator submits it. SigningKey is the ASCII-armored OpenPGP public key
-// and Fingerprint the fingerprint the administrator typed from the vendor's publication.
+// The kinds of a source (plan M13b decision 5): an APT repository or a Flatpak remote.
+const (
+	SourceKindAPT     = "apt"
+	SourceKindFlatpak = "flatpak"
+)
+
+// SourceInput is a package source as an administrator submits it. Kind is SourceKindAPT when empty. SigningKey is
+// the ASCII-armored OpenPGP public key and Fingerprint the fingerprint the administrator typed from the vendor's
+// publication.
 type SourceInput struct {
+	Kind                                    string
 	Slug, Name                              string
 	URIs, Suites, Components, Architectures []string
 	SigningKey, Fingerprint                 string
@@ -70,8 +78,9 @@ type SourceKey struct {
 	WeakKey bool
 }
 
-// ValidateSource checks a source against plan M13a decision 2 and the signing key policy (KeyPolicy) and returns the
-// checked key. Rule violations wrap ErrSource; a typed fingerprint that differs from the key's wraps ErrFingerprint
+// ValidateSource checks a source against plan M13a decision 2, plan M13b decision 5 and the signing key policy
+// (KeyPolicy) and returns the checked key. A Flatpak remote has exactly one URI and no suites, components or
+// architectures. Rule violations wrap ErrSource; a typed fingerprint that differs from the key's wraps ErrFingerprint
 // and names both values. No signature is verified.
 func ValidateSource(in SourceInput) (SourceKey, error) {
 	if !slugPattern.MatchString(in.Slug) {
@@ -83,8 +92,20 @@ func ValidateSource(in SourceInput) (SourceKey, error) {
 	if err := validateURIs(in.URIs); err != nil {
 		return SourceKey{}, err
 	}
-	if err := validateDistribution(in.Suites, in.Components, in.Architectures); err != nil {
-		return SourceKey{}, err
+	switch in.Kind {
+	case "", SourceKindAPT:
+		if err := validateDistribution(in.Suites, in.Components, in.Architectures); err != nil {
+			return SourceKey{}, err
+		}
+	case SourceKindFlatpak:
+		if len(in.URIs) != 1 {
+			return SourceKey{}, fmt.Errorf("%w: a flatpak source has exactly one entry in uris, the remote's URL", ErrSource)
+		}
+		if len(in.Suites) > 0 || len(in.Components) > 0 || len(in.Architectures) > 0 {
+			return SourceKey{}, fmt.Errorf("%w: a flatpak source has no suites, components or architectures", ErrSource)
+		}
+	default:
+		return SourceKey{}, fmt.Errorf("%w: kind must be apt or flatpak", ErrSource)
 	}
 	return validateSigningKey(in.SigningKey, in.Fingerprint)
 }

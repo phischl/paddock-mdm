@@ -38,7 +38,11 @@ func (h *handlers) ListSoftwareSources(ctx context.Context, req adminapi.ListSof
 func (h *handlers) CreateSoftwareSource(ctx context.Context, req adminapi.CreateSoftwareSourceRequestObject) (adminapi.CreateSoftwareSourceResponseObject, error) {
 	b := req.Body
 	in := software.SourceInput{
-		Slug: b.Slug, Name: b.Name, URIs: b.Uris, Suites: b.Suites, SigningKey: b.SigningKey, Fingerprint: b.Fingerprint,
+		Kind: string(deref(b.Kind, "")), Slug: b.Slug, Name: b.Name, URIs: b.Uris, SigningKey: b.SigningKey,
+		Fingerprint: b.Fingerprint,
+	}
+	if b.Suites != nil {
+		in.Suites = *b.Suites
 	}
 	if b.Components != nil {
 		in.Components = *b.Components
@@ -67,7 +71,7 @@ func (h *handlers) GetSoftwareSource(ctx context.Context, req adminapi.GetSoftwa
 func (h *handlers) UpdateSoftwareSource(ctx context.Context, req adminapi.UpdateSoftwareSourceRequestObject) (adminapi.UpdateSoftwareSourceResponseObject, error) {
 	b := req.Body
 	in := app.SourceUpdate{
-		Slug: b.Slug, Name: b.Name, URIs: b.Uris, Suites: b.Suites, Components: b.Components, SigningKey: b.SigningKey,
+		Kind: (*string)(b.Kind), Slug: b.Slug, Name: b.Name, URIs: b.Uris, Suites: b.Suites, Components: b.Components, SigningKey: b.SigningKey,
 		Fingerprint: b.Fingerprint,
 	}
 	if b.Architectures != nil {
@@ -103,7 +107,7 @@ func toSoftwareSourceSummary(v app.SoftwareSourceView) adminapi.SoftwareSourceSu
 		archs[i] = adminapi.SoftwareArchitecture(a)
 	}
 	return adminapi.SoftwareSourceSummary{
-		Id: s.ID, Slug: s.Slug, Name: s.Name, Uris: s.Uris, Suites: s.Suites, Components: s.Components,
+		Id: s.ID, Kind: adminapi.SoftwareSourceKind(s.Kind), Slug: s.Slug, Name: s.Name, Uris: s.Uris, Suites: s.Suites, Components: s.Components,
 		Architectures: archs, Fingerprint: s.Fingerprint, WeakKey: s.WeakKey, EntryCount: int(v.EntryCount), CreatedAt: s.CreatedAt.UTC(),
 		UpdatedAt: s.UpdatedAt.UTC(),
 	}
@@ -112,7 +116,7 @@ func toSoftwareSourceSummary(v app.SoftwareSourceView) adminapi.SoftwareSourceSu
 func toSoftwareSource(s app.SoftwareSourceView) adminapi.SoftwareSource {
 	sum := toSoftwareSourceSummary(s)
 	return adminapi.SoftwareSource{
-		Id: sum.Id, Slug: sum.Slug, Name: sum.Name, Uris: sum.Uris, Suites: sum.Suites, Components: sum.Components,
+		Id: sum.Id, Kind: sum.Kind, Slug: sum.Slug, Name: sum.Name, Uris: sum.Uris, Suites: sum.Suites, Components: sum.Components,
 		Architectures: sum.Architectures, Fingerprint: sum.Fingerprint, WeakKey: sum.WeakKey, EntryCount: sum.EntryCount, SigningKey: s.SigningKey,
 		CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
 	}
@@ -233,7 +237,17 @@ func (h *handlers) ListSoftwareAssignments(ctx context.Context, req adminapi.Lis
 	if err != nil {
 		return nil, err
 	}
-	query := app.SoftwareAssignmentQuery{Page: params.ListPage(), CatalogEntryID: req.Params.CatalogEntryId, DeviceGroupID: req.Params.DeviceGroupId}
+	query := app.SoftwareAssignmentQuery{
+		Page: params.ListPage(), CatalogEntryID: req.Params.CatalogEntryId, DeviceGroupID: req.Params.DeviceGroupId,
+		UserID: req.Params.UserId, UserGroupID: req.Params.UserGroupId,
+	}
+	if req.Params.Target != nil {
+		if !req.Params.Target.Valid() {
+			return nil, problem.InvalidRequest.WithDetail("unknown target")
+		}
+		target := string(*req.Params.Target)
+		query.Target = &target
+	}
 	if req.Params.Intent != nil {
 		intent := string(*req.Params.Intent)
 		query.Intent = &intent
@@ -252,7 +266,8 @@ func (h *handlers) ListSoftwareAssignments(ctx context.Context, req adminapi.Lis
 func (h *handlers) CreateSoftwareAssignment(ctx context.Context, req adminapi.CreateSoftwareAssignmentRequestObject) (adminapi.CreateSoftwareAssignmentResponseObject, error) {
 	b := req.Body
 	a, err := h.softwareCatalog.CreateAssignment(ctx, app.AssignmentInput{
-		CatalogEntryID: &b.CatalogEntryId, DeviceGroupID: b.DeviceGroupId, Intent: string(b.Intent),
+		CatalogEntryID: &b.CatalogEntryId, DeviceGroupID: b.DeviceGroupId, UserID: b.UserId, UserGroupID: b.UserGroupId,
+		Intent:     string(b.Intent),
 		UpdateRule: string(deref(b.UpdateRule, "")), Version: b.Version, Reason: deref(b.Reason, ""),
 	})
 	if err != nil {
@@ -275,7 +290,8 @@ func (h *handlers) GetSoftwareAssignment(ctx context.Context, req adminapi.GetSo
 func (h *handlers) UpdateSoftwareAssignment(ctx context.Context, req adminapi.UpdateSoftwareAssignmentRequestObject) (adminapi.UpdateSoftwareAssignmentResponseObject, error) {
 	b := req.Body
 	a, err := h.softwareCatalog.UpdateAssignment(ctx, req.Id, app.AssignmentInput{
-		CatalogEntryID: b.CatalogEntryId, DeviceGroupID: b.DeviceGroupId, Intent: string(b.Intent),
+		CatalogEntryID: b.CatalogEntryId, DeviceGroupID: b.DeviceGroupId, UserID: b.UserId, UserGroupID: b.UserGroupId,
+		Intent:     string(b.Intent),
 		UpdateRule: string(deref(b.UpdateRule, "")), Version: b.Version, Reason: deref(b.Reason, ""),
 	})
 	if err != nil {
@@ -294,7 +310,10 @@ func (h *handlers) DeleteSoftwareAssignment(ctx context.Context, req adminapi.De
 func fromPackageRefs(in []adminapi.PackageRef) []software.PackageRef {
 	out := make([]software.PackageRef, len(in))
 	for i, p := range in {
-		out[i] = software.PackageRef{Distribution: p.Distribution, Release: p.Release, Architecture: string(p.Architecture), Package: p.Package}
+		out[i] = software.PackageRef{
+			Distribution: p.Distribution, Release: p.Release, Architecture: string(p.Architecture),
+			Package: deref(p.Package, ""), FlatpakRef: deref(p.FlatpakRef, ""), Scope: string(deref(p.Scope, "")),
+		}
 	}
 	return out
 }
@@ -307,7 +326,12 @@ func toSoftwareCatalogEntry(e app.CatalogEntry) (adminapi.SoftwareCatalogEntry, 
 	packages := make([]adminapi.PackageRef, len(refs))
 	for i, p := range refs {
 		packages[i] = adminapi.PackageRef{
-			Distribution: p.Distribution, Release: p.Release, Architecture: adminapi.PackageRefArchitecture(p.Architecture), Package: p.Package,
+			Distribution: p.Distribution, Release: p.Release, Architecture: adminapi.PackageRefArchitecture(p.Architecture),
+			Package: optString(p.Package), FlatpakRef: optString(p.FlatpakRef),
+		}
+		if p.Scope != "" {
+			scope := adminapi.SoftwareScope(p.Scope)
+			packages[i].Scope = &scope
 		}
 	}
 	var source *uuid.UUID
@@ -322,15 +346,44 @@ func toSoftwareCatalogEntry(e app.CatalogEntry) (adminapi.SoftwareCatalogEntry, 
 }
 
 func toSoftwareAssignment(a app.Assignment) adminapi.SoftwareAssignment {
-	var group *uuid.UUID
-	if a.DeviceGroupID.Valid {
-		group = &a.DeviceGroupID.UUID
-	}
 	return adminapi.SoftwareAssignment{
-		Id: a.ID, AppName: a.AppName, CatalogEntryId: a.CatalogEntryID, DeviceGroupId: group,
+		Id: a.ID, AppName: a.AppName, CatalogEntryId: a.CatalogEntryID, DeviceGroupId: idPtr(a.DeviceGroupID),
+		UserId: idPtr(a.UserID), UserGroupId: idPtr(a.UserGroupID),
 		Intent: adminapi.SoftwareIntent(a.Intent), UpdateRule: adminapi.SoftwareUpdateRule(a.UpdateRule), Version: a.Version,
 		Reason: a.Reason, CreatedAt: a.CreatedAt.UTC(), UpdatedAt: a.UpdatedAt.UTC(),
 	}
+}
+
+// userSoftwareList is the list definition of GET /api/v1/users/{id}/software (plan M13b §6.1).
+var userSoftwareList = listing.Spec{Sort: []string{"name", "intent"}, DefaultSort: "name"}
+
+func (h *handlers) ListUserSoftware(ctx context.Context, req adminapi.ListUserSoftwareRequestObject) (adminapi.ListUserSoftwareResponseObject, error) {
+	params, err := listing.Parse(userSoftwareList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	query := app.UserSoftwareQuery{Page: params.ListPage()}
+	if req.Params.Intent != nil {
+		if !req.Params.Intent.Valid() {
+			return nil, problem.InvalidRequest.WithDetail("unknown intent")
+		}
+		intent := string(*req.Params.Intent)
+		query.Intent = &intent
+	}
+	res, err := h.softwareCatalog.UserSoftware(ctx, req.Id, query)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]adminapi.UserSoftware, len(res.Items))
+	for i, s := range res.Items {
+		items[i] = adminapi.UserSoftware{
+			AssignmentId: s.ID, CatalogEntryId: s.CatalogEntryID, Name: s.Name, Intent: adminapi.SoftwareIntent(s.Intent),
+			UserGroupId: idPtr(s.UserGroupID), UserGroupName: s.UserGroupName, Reason: s.Reason,
+		}
+	}
+	return adminapi.ListUserSoftware200JSONResponse(listing.NewPage(items, params, res.Count)), nil
 }
 
 func (h *handlers) ListDeviceManagedSoftware(ctx context.Context, req adminapi.ListDeviceManagedSoftwareRequestObject) (adminapi.ListDeviceManagedSoftwareResponseObject, error) {

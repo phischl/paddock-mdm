@@ -13,7 +13,7 @@ import { useSessionStore } from '../stores/session'
 import type { SoftwareSourceSummary } from '../api/client'
 
 const vendor: SoftwareSourceSummary = {
-  id: 's1', slug: 'vendor', name: 'Vendor', uris: ['https://repo.example.com/apt'], suites: ['stable'], components: ['main'], architectures: [],
+  id: 's1', kind: 'apt', slug: 'vendor', name: 'Vendor', uris: ['https://repo.example.com/apt'], suites: ['stable'], components: ['main'], architectures: [],
   fingerprint: 'ABCD'.repeat(10), weak_key: false, entry_count: 2, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-02T00:00:00Z',
 }
 

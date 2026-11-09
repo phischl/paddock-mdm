@@ -1,8 +1,8 @@
 -- name: InsertSoftwareSource :one
-INSERT INTO software_source (id, organization_id, slug, name, uris, suites, components, architectures, signing_key,
-  fingerprint, weak_key, created_by)
-VALUES (@id, @organization_id, @slug, @name, @uris, @suites, @components, @architectures, @signing_key, @fingerprint,
-  @weak_key, sqlc.narg(created_by))
+INSERT INTO software_source (id, organization_id, kind, slug, name, uris, suites, components, architectures,
+  signing_key, fingerprint, weak_key, created_by)
+VALUES (@id, @organization_id, @kind, @slug, @name, @uris, @suites, @components, @architectures, @signing_key,
+  @fingerprint, @weak_key, sqlc.narg(created_by))
 RETURNING *;
 
 -- name: GetSoftwareSource :one
@@ -132,10 +132,10 @@ SELECT id, organization_id, name, description, category, source_id, packages, cr
 FROM software_catalog_entry ORDER BY name, id;
 
 -- name: InsertSoftwareAssignment :exec
-INSERT INTO software_assignment (id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version,
-  reason, created_by)
-VALUES (@id, @organization_id, @catalog_entry_id, sqlc.narg(device_group_id), @intent, @update_rule,
-  sqlc.narg(version), @reason, sqlc.narg(created_by));
+INSERT INTO software_assignment (id, organization_id, catalog_entry_id, device_group_id, user_id, user_group_id, intent,
+  update_rule, version, reason, created_by)
+VALUES (@id, @organization_id, @catalog_entry_id, sqlc.narg(device_group_id), sqlc.narg(user_id),
+  sqlc.narg(user_group_id), @intent, @update_rule, sqlc.narg(version), @reason, sqlc.narg(created_by));
 
 -- name: GetSoftwareAssignment :one
 SELECT a.*, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
@@ -158,6 +158,11 @@ SELECT a.*, e.name AS app_name FROM software_assignment a JOIN software_catalog_
 WHERE (sqlc.narg(q_pattern)::text IS NULL OR e.name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
   AND (sqlc.narg(catalog_entry_id)::uuid IS NULL OR a.catalog_entry_id = sqlc.narg(catalog_entry_id)::uuid)
   AND (sqlc.narg(device_group_id)::uuid IS NULL OR a.device_group_id = sqlc.narg(device_group_id)::uuid)
+  AND (sqlc.narg(user_id)::uuid IS NULL OR a.user_id = sqlc.narg(user_id)::uuid)
+  AND (sqlc.narg(user_group_id)::uuid IS NULL OR a.user_group_id = sqlc.narg(user_group_id)::uuid)
+  AND (sqlc.narg(target)::text IS NULL OR sqlc.narg(target)::text = CASE
+    WHEN a.device_group_id IS NOT NULL THEN 'device_group' WHEN a.user_id IS NOT NULL THEN 'user'
+    WHEN a.user_group_id IS NOT NULL THEN 'user_group' ELSE 'organization' END)
   AND (sqlc.narg(intent)::text IS NULL OR a.intent = sqlc.narg(intent)::text)
 ORDER BY
   CASE WHEN @sort::text = 'created_at' THEN a.created_at END ASC,
@@ -175,6 +180,11 @@ SELECT count(*) FROM (
   WHERE (sqlc.narg(q_pattern)::text IS NULL OR e.name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
     AND (sqlc.narg(catalog_entry_id)::uuid IS NULL OR a.catalog_entry_id = sqlc.narg(catalog_entry_id)::uuid)
     AND (sqlc.narg(device_group_id)::uuid IS NULL OR a.device_group_id = sqlc.narg(device_group_id)::uuid)
+    AND (sqlc.narg(user_id)::uuid IS NULL OR a.user_id = sqlc.narg(user_id)::uuid)
+    AND (sqlc.narg(user_group_id)::uuid IS NULL OR a.user_group_id = sqlc.narg(user_group_id)::uuid)
+    AND (sqlc.narg(target)::text IS NULL OR sqlc.narg(target)::text = CASE
+      WHEN a.device_group_id IS NOT NULL THEN 'device_group' WHEN a.user_id IS NOT NULL THEN 'user'
+      WHEN a.user_group_id IS NOT NULL THEN 'user_group' ELSE 'organization' END)
     AND (sqlc.narg(intent)::text IS NULL OR a.intent = sqlc.narg(intent)::text)
   LIMIT @count_limit
 ) matching;
@@ -190,7 +200,7 @@ INSERT INTO device_software_status (device_id, organization_id, catalog_entry_id
 SELECT @device_id, @organization_id, r.id, r.package, r.intent, r.state, r.version, r.reason, r.error, @reported_at
 FROM jsonb_to_recordset(@rows::jsonb) AS r(id uuid, package text, intent text, state text, version text, reason text, error text)
 JOIN software_catalog_entry e ON e.id = r.id AND e.organization_id = @organization_id
-ON CONFLICT (device_id, catalog_entry_id) DO UPDATE SET
+ON CONFLICT (device_id, catalog_entry_id, scope, username) DO UPDATE SET
   package = EXCLUDED.package, intent = EXCLUDED.intent, state = EXCLUDED.state, version = EXCLUDED.version,
   reason = EXCLUDED.reason, error = EXCLUDED.error, reported_at = EXCLUDED.reported_at
 WHERE device_software_status.reported_at <= EXCLUDED.reported_at;
@@ -221,7 +231,7 @@ CROSS JOIN LATERAL (
   SELECT array_agg(DISTINCT a.intent ORDER BY a.intent)::text[] AS intents
   FROM software_assignment a
   WHERE a.catalog_entry_id = e.id
-    AND (a.device_group_id IS NULL
+    AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
       OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = @device_id AND m.device_group_id = a.device_group_id))
 ) t
 WHERE (s.device_id IS NOT NULL OR t.intents IS NOT NULL)
@@ -255,7 +265,7 @@ CROSS JOIN LATERAL (
   SELECT array_agg(DISTINCT a.intent ORDER BY a.intent)::text[] AS intents
   FROM software_assignment a
   WHERE a.catalog_entry_id = @catalog_entry_id
-    AND (a.device_group_id IS NULL
+    AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
       OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = a.device_group_id))
 ) t
 WHERE d.state = 'active' AND t.intents IS NOT NULL
@@ -263,3 +273,33 @@ WHERE d.state = 'active' AND t.intents IS NOT NULL
         SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
   AND (sqlc.narg(q_pattern)::text IS NULL OR d.hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
 ORDER BY d.hostname, d.id;
+
+-- name: ListUserSoftware :many
+-- The assignments that target a user (plan M13b decision 6): directly or through a user group the user is a member
+-- of, with the entry's name and the group's name (empty for a direct target).
+SELECT a.id, a.catalog_entry_id, e.name, a.intent, a.user_group_id, coalesce(g.name, '')::text AS user_group_name,
+       a.reason
+FROM software_assignment a
+JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+LEFT JOIN user_group g ON g.id = a.user_group_id
+WHERE (a.user_id = @user_id
+    OR EXISTS (SELECT 1 FROM user_group_member m WHERE m.group_id = a.user_group_id AND m.user_id = @user_id))
+  AND (sqlc.narg(q_pattern)::text IS NULL OR e.name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+  AND (sqlc.narg(intent)::text IS NULL OR a.intent = sqlc.narg(intent)::text)
+ORDER BY
+  CASE WHEN @sort::text = 'name' THEN e.name END ASC,
+  CASE WHEN @sort::text = '-name' THEN e.name END DESC,
+  CASE WHEN @sort::text = 'intent' THEN a.intent END ASC,
+  CASE WHEN @sort::text = '-intent' THEN a.intent END DESC,
+  a.id
+LIMIT @max_rows OFFSET @skip_rows;
+
+-- name: CountUserSoftware :one
+SELECT count(*) FROM (
+  SELECT 1 FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+  WHERE (a.user_id = @user_id
+      OR EXISTS (SELECT 1 FROM user_group_member m WHERE m.group_id = a.user_group_id AND m.user_id = @user_id))
+    AND (sqlc.narg(q_pattern)::text IS NULL OR e.name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+    AND (sqlc.narg(intent)::text IS NULL OR a.intent = sqlc.narg(intent)::text)
+  LIMIT @count_limit
+) matching;

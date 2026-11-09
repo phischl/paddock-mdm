@@ -505,3 +505,93 @@ func mismatchingFingerprint(fp string) string {
 	}
 	return fp[:len(fp)-1] + string(last)
 }
+
+// TestSoftwareSelfServiceRowsLeftOut (plan M13b §3.2, PDK-798): until the compiler renders them (PDK-799), a user or
+// user-group target, the available intent and a Flatpak source with its entry leave the bundle as it is: a forbid
+// targeted at one user never applies to every device of the organization, and none of these rows fails a bundle.
+func TestSoftwareSelfServiceRowsLeftOut(t *testing.T) {
+	w := newWorld(t)
+	key := loadSoftwareKey(t, "ed25519.asc")
+	user, group := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO app_user (id, organization_id, username, source) VALUES ($1, $2, 'alice@example.org', 'local')", user, w.org)
+	w.exec("INSERT INTO user_group (id, organization_id, slug, name, source) VALUES ($1, $2, 'devs', 'Devs', 'local')", group, w.org)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	vim := w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"})
+	flathub := uuid.Must(uuid.NewV7())
+	w.exec(`INSERT INTO software_source (id, organization_id, kind, slug, name, uris, suites, components, signing_key, fingerprint)
+		VALUES ($1, $2, 'flatpak', 'flathub', 'Flathub', '{https://dl.flathub.org/repo/}', '{}', '{}', $3, $4)`,
+		flathub, w.org, key.armored, key.fingerprint)
+	gimp := uuid.Must(uuid.NewV7())
+	w.exec(`INSERT INTO software_catalog_entry (id, organization_id, name, source_id, packages) VALUES ($1, $2, 'GIMP', $3,
+		'[{"distribution":"ubuntu","release":"*","architecture":"*","flatpak_ref":"org.gimp.GIMP","scope":"system"}]')`,
+		gimp, w.org, flathub)
+	w.exec(`INSERT INTO software_assignment (id, organization_id, catalog_entry_id, user_id, intent) VALUES ($1, $2, $3, $4, 'forbid')`,
+		uuid.Must(uuid.NewV7()), w.org, nano, user)
+	w.exec(`INSERT INTO software_assignment (id, organization_id, catalog_entry_id, user_group_id, intent) VALUES ($1, $2, $3, $4, 'required')`,
+		uuid.Must(uuid.NewV7()), w.org, vim, group)
+	w.assign(vim, nil, "available", "latest", nil)
+	w.assign(gimp, nil, "required", "latest", nil)
+	w.assign(nano, nil, "required", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+
+	s := w.fetch(d).Software
+	if s == nil || len(s.Packages) != 1 || s.Packages[0].Package != "nano" || s.Packages[0].Intent != bundle.SoftwareRequired ||
+		len(s.Sources) != 0 {
+		t.Fatalf("software section %+v, want only the organization's required nano", s)
+	}
+}
+
+// TestSoftwareStrayFlatpakRefFailsClosed (PDK-798 review 1, PDK-697): only a valid entry of a Flatpak source stays out
+// of the bundle until PDK-799. A flatpak_ref stored outside the API on an entry of an APT source or of the
+// distribution's repositories, or a Flatpak entry whose references fail the catalog rules, is invalid: the forbid it
+// carries is not lifted by skipping it, the device keeps its previous bundle and the render failure names the entry.
+func TestSoftwareStrayFlatpakRefFailsClosed(t *testing.T) {
+	cases := []struct {
+		name     string
+		source   func(w *world, key softwareKey) any
+		packages string
+	}{
+		{"distribution repositories", func(*world, softwareKey) any { return nil },
+			`[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano","flatpak_ref":"a.b.C"}]`},
+		{"apt source", func(w *world, key softwareKey) any { return w.source("vendor", key, key.fingerprint) },
+			`[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano","flatpak_ref":"a.b.C"}]`},
+		{"flatpak source without flatpak_ref", func(w *world, key softwareKey) any {
+			id := uuid.Must(uuid.NewV7())
+			w.exec(`INSERT INTO software_source (id, organization_id, kind, slug, name, uris, suites, components, signing_key, fingerprint)
+				VALUES ($1, $2, 'flatpak', 'flathub', 'Flathub', '{https://dl.flathub.org/repo/}', '{}', '{}', $3, $4)`,
+				id, w.org, key.armored, key.fingerprint)
+			return id
+		}, `[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano"}]`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			key := loadSoftwareKey(t, "ed25519.asc")
+			forbidden := w.entry("Nano forbidden", nil, [4]string{"ubuntu", "*", "*", "nano"})
+			w.assign(forbidden, w.g1, "forbid", "latest", nil)
+			w.assign(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+			d := w.v2Device("{1,2}", w.g1)
+			w.ubuntu(d, "amd64")
+			w.mustCompile(statechange.ScopeOrg, w.org)
+			if s := w.fetch(d).Software; s == nil || len(s.Packages) != 1 || s.Packages[0].Intent != bundle.SoftwareForbid {
+				t.Fatalf("before: %+v", s)
+			}
+			before := w.version(d)
+
+			w.exec("UPDATE software_catalog_entry SET source_id = $2, packages = $3::jsonb WHERE id = $1",
+				forbidden, c.source(w, key), c.packages)
+			w.mustCompile(statechange.ScopeOrg, w.org)
+			if w.version(d) != before {
+				t.Fatal("a bundle was published although the entry with a stray flatpak_ref applies to the device")
+			}
+			if s := w.fetch(d).Software; s == nil || len(s.Packages) != 1 || s.Packages[0].Intent != bundle.SoftwareForbid {
+				t.Fatalf("the forbid was lifted: %+v", s)
+			}
+			if n := w.renderFailures(d, forbidden.String()); n != 1 {
+				t.Fatalf("%d render failures naming the entry, want 1", n)
+			}
+		})
+	}
+}

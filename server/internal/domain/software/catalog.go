@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
@@ -37,10 +40,32 @@ const (
 	IntentUninstall = bundle.SoftwareUninstall
 	IntentHold      = bundle.SoftwareHold
 	IntentForbid    = bundle.SoftwareForbid
+	// IntentAvailable offers an application to its target's users to install themselves (plan M13b decision 4). The
+	// bundle constant follows with PDK-799.
+	IntentAvailable = "available"
 
 	UpdateLatest = "latest"
 	UpdatePinned = "pinned"
 )
+
+// The scopes of a Flatpak reference (plan M13b decision 3): installed for the whole system or in the user's
+// installation.
+const (
+	ScopeSystem = "system"
+	ScopeUser   = "user"
+)
+
+// The targets of an assignment (plan M13b decision 1): the whole organization (no target ID), a device group, a user
+// or a user group.
+const (
+	TargetOrganization = "organization"
+	TargetDeviceGroup  = "device_group"
+	TargetUser         = "user"
+	TargetUserGroup    = "user_group"
+)
+
+// MaxFlatpakRefLength bounds a Flatpak application ID.
+const MaxFlatpakRefLength = 255
 
 // Wildcard is the release or architecture of a package reference that matches every release or architecture.
 const Wildcard = "*"
@@ -48,15 +73,31 @@ const Wildcard = "*"
 var (
 	distributionPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 	releasePattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,31}$`)
+	flatpakRefPattern   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*){2,}$`)
 )
 
 // PackageRef names the package that installs an application on one distribution, release and architecture. Release
-// and Architecture may be Wildcard.
+// and Architecture may be Wildcard. A reference names either an APT Package or a Flatpak application (FlatpakRef,
+// plan M13b decision 3) with its Scope; NormalizePackages sets the scope of a Flatpak reference that names none.
 type PackageRef struct {
 	Distribution string `json:"distribution"`
 	Release      string `json:"release"`
 	Architecture string `json:"architecture"`
-	Package      string `json:"package"`
+	Package      string `json:"package,omitempty"`
+	FlatpakRef   string `json:"flatpak_ref,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+}
+
+// NormalizePackages returns the references in their stored form: a Flatpak reference without a scope is a system
+// one.
+func NormalizePackages(packages []PackageRef) []PackageRef {
+	out := slices.Clone(packages)
+	for i := range out {
+		if out[i].FlatpakRef != "" && out[i].Scope == "" {
+			out[i].Scope = ScopeSystem
+		}
+	}
+	return out
 }
 
 // DecodePackages reads the package references of a stored entry.
@@ -86,9 +127,28 @@ func ValidateEntry(name, description, category string, packages []PackageRef) er
 	return ValidatePackageRefs(packages)
 }
 
-// ValidatePackageRefs checks the package references of a catalog entry against plan M13a decision 8: 1 to
-// MaxPackages references, each with a valid distribution, release, architecture and package name, unique per
-// distribution, release and architecture. Violations wrap ErrEntry.
+// ValidatePackages checks the package references of an entry whose source is of sourceKind (SourceKindAPT for the
+// distribution's own repositories) against plan M13b decision 3: ValidatePackageRefs, and the references of a Flatpak
+// source name Flatpak applications only while every other source's name APT packages only. Violations wrap ErrEntry.
+func ValidatePackages(sourceKind string, packages []PackageRef) error {
+	if err := ValidatePackageRefs(packages); err != nil {
+		return err
+	}
+	for _, p := range packages {
+		switch {
+		case sourceKind == SourceKindFlatpak && p.FlatpakRef == "":
+			return fmt.Errorf("%w: the packages of a flatpak source must name a flatpak_ref", ErrEntry)
+		case sourceKind != SourceKindFlatpak && p.FlatpakRef != "":
+			return fmt.Errorf("%w: a flatpak_ref needs a flatpak source", ErrEntry)
+		}
+	}
+	return nil
+}
+
+// ValidatePackageRefs checks the package references of a catalog entry against plan M13a decision 8 and plan M13b
+// decision 3: 1 to MaxPackages references, each with a valid distribution, release and architecture and either a
+// valid package name or a valid Flatpak application ID with its scope, unique per distribution, release and
+// architecture. Violations wrap ErrEntry.
 func ValidatePackageRefs(packages []PackageRef) error {
 	if len(packages) < 1 || len(packages) > MaxPackages {
 		return fmt.Errorf("%w: packages must hold 1 to %d entries", ErrEntry, MaxPackages)
@@ -104,17 +164,42 @@ func ValidatePackageRefs(packages []PackageRef) error {
 		if p.Architecture != Wildcard && p.Architecture != "amd64" && p.Architecture != "arm64" {
 			return fmt.Errorf("%w: architecture must be *, amd64 or arm64", ErrEntry)
 		}
-		if !bundle.ValidPackage(p.Package) {
-			return fmt.Errorf("%w: package must match ^[a-z0-9][a-z0-9+.-]+$ (at most 128 characters)", ErrEntry)
-		}
-		if bundle.EntryRefused(p.Package) {
-			return fmt.Errorf("%w: package %s is part of Paddock or its login stack and cannot be managed", ErrEntry, p.Package)
+		if err := validatePackageName(p); err != nil {
+			return err
 		}
 		key := [3]string{p.Distribution, p.Release, p.Architecture}
 		if seen[key] {
 			return fmt.Errorf("%w: distribution, release and architecture must be unique within packages", ErrEntry)
 		}
 		seen[key] = true
+	}
+	return nil
+}
+
+// validatePackageName checks what a reference installs: an APT package without a scope, or a Flatpak application
+// ID in system or user scope.
+func validatePackageName(p PackageRef) error {
+	switch {
+	case p.Package != "" && p.FlatpakRef != "":
+		return fmt.Errorf("%w: a package reference names either package or flatpak_ref, not both", ErrEntry)
+	case p.FlatpakRef != "":
+		if len(p.FlatpakRef) > MaxFlatpakRefLength || !flatpakRefPattern.MatchString(p.FlatpakRef) {
+			return fmt.Errorf("%w: flatpak_ref must be an application ID such as org.example.App (at most %d characters)",
+				ErrEntry, MaxFlatpakRefLength)
+		}
+		if p.Scope != "" && p.Scope != ScopeSystem && p.Scope != ScopeUser {
+			return fmt.Errorf("%w: scope must be system or user", ErrEntry)
+		}
+		return nil
+	}
+	if p.Scope != "" {
+		return fmt.Errorf("%w: scope applies to a flatpak_ref only", ErrEntry)
+	}
+	if !bundle.ValidPackage(p.Package) {
+		return fmt.Errorf("%w: package must match ^[a-z0-9][a-z0-9+.-]+$ (at most 128 characters)", ErrEntry)
+	}
+	if bundle.EntryRefused(p.Package) {
+		return fmt.Errorf("%w: package %s is part of Paddock or its login stack and cannot be managed", ErrEntry, p.Package)
 	}
 	return nil
 }
@@ -161,8 +246,8 @@ func DefaultUpdateRule(intent string, version *string) string {
 	return UpdateLatest
 }
 
-// ValidateAssignment checks the intent, update rule, version and reason of an assignment (plan M13a decision 9).
-// Violations wrap ErrAssignment.
+// ValidateAssignment checks the intent, update rule, version and reason of an assignment (plan M13a decision 9, plan
+// M13b decision 4). Violations wrap ErrAssignment.
 func ValidateAssignment(intent, updateRule string, version *string, reason string) error {
 	if updateRule != UpdateLatest && updateRule != UpdatePinned {
 		return fmt.Errorf("%w: update_rule must be latest or pinned", ErrAssignment)
@@ -185,23 +270,46 @@ func ValidateAssignment(intent, updateRule string, version *string, reason strin
 		if updateRule != UpdateLatest {
 			return fmt.Errorf("%w: update_rule must be latest for intent hold", ErrAssignment)
 		}
-	case IntentUninstall, IntentForbid:
+	case IntentUninstall, IntentForbid, IntentAvailable:
 		if updateRule != UpdateLatest || version != nil {
 			return fmt.Errorf("%w: intent %s takes no version and no update_rule other than latest", ErrAssignment, intent)
 		}
 	default:
-		return fmt.Errorf("%w: intent must be required, uninstall, hold or forbid", ErrAssignment)
+		return fmt.Errorf("%w: intent must be required, uninstall, hold, forbid or available", ErrAssignment)
 	}
 	return nil
 }
 
+// Target names the target of an assignment with the given target IDs (plan M13b decision 1) and refuses more than
+// one: an assignment applies to the whole organization, a device group, a user or a user group. Violations wrap
+// ErrAssignment.
+func Target(deviceGroupID, userID, userGroupID *uuid.UUID) (string, error) {
+	target, n := TargetOrganization, 0
+	for _, t := range []struct {
+		id   *uuid.UUID
+		name string
+	}{{deviceGroupID, TargetDeviceGroup}, {userID, TargetUser}, {userGroupID, TargetUserGroup}} {
+		if t.id != nil {
+			target, n = t.name, n+1
+		}
+	}
+	if n > 1 {
+		return "", fmt.Errorf("%w: an assignment has at most one of device_group_id, user_id and user_group_id", ErrAssignment)
+	}
+	return target, nil
+}
+
 // ValidateAssignmentTarget refuses an assignment with intent of an entry whose packages the intent must not touch
 // (bundle.RefusedIntent): forbid or uninstall of a package that Paddock depends on, required or hold of one that
-// conflicts with it, and any intent of an entry stored before ValidateEntry refused it. Violations wrap
-// ErrAssignment.
+// conflicts with it, and any intent of an entry stored before ValidateEntry refused it. available counts as required,
+// since a user's install puts the package on the device like a required one. Violations wrap ErrAssignment.
 func ValidateAssignmentTarget(intent string, packages []PackageRef) error {
+	checked := intent
+	if intent == IntentAvailable {
+		checked = IntentRequired
+	}
 	for _, p := range packages {
-		if bundle.RefusedIntent(p.Package, intent) {
+		if p.Package != "" && bundle.RefusedIntent(p.Package, checked) {
 			return fmt.Errorf("%w: intent %s is not allowed for the package %s, which Paddock depends on or conflicts with",
 				ErrAssignment, intent, p.Package)
 		}

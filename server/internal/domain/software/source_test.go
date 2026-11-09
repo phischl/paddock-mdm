@@ -65,6 +65,10 @@ func TestValidateSourceAccepts(t *testing.T) {
 		"highest port":                func(in *software.SourceInput) { in.URIs = []string{"https://a.example:65535/"} },
 		"ed25519 key":                 func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "ed25519.asc"), ed25519FP },
 		"nist p-256 key":              func(in *software.SourceInput) { in.SigningKey, in.Fingerprint = key(t, "nistp256.asc"), nistp256FP },
+		"explicit apt kind":           func(in *software.SourceInput) { in.Kind = software.SourceKindAPT },
+		"flatpak remote": func(in *software.SourceInput) {
+			in.Kind, in.URIs, in.Suites, in.Components = software.SourceKindFlatpak, []string{"https://dl.flathub.org/repo/"}, nil, nil
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -88,6 +92,22 @@ func TestValidateSourceRefuses(t *testing.T) {
 		detail string
 	}{
 		{"empty slug", func(in *software.SourceInput) { in.Slug = "" }, "slug"},
+		{"unknown kind", func(in *software.SourceInput) { in.Kind = "snap" }, "kind"},
+		{"flatpak remote with two uris", func(in *software.SourceInput) {
+			in.Kind, in.URIs, in.Suites, in.Components = software.SourceKindFlatpak, []string{"https://a.example/", "https://b.example/"}, nil, nil
+		}, "exactly one"},
+		{"flatpak remote with a suite", func(in *software.SourceInput) {
+			in.Kind, in.Components = software.SourceKindFlatpak, nil
+		}, "no suites"},
+		{"flatpak remote with a component", func(in *software.SourceInput) {
+			in.Kind, in.Suites = software.SourceKindFlatpak, nil
+		}, "no suites"},
+		{"flatpak remote with an architecture", func(in *software.SourceInput) {
+			in.Kind, in.Suites, in.Components, in.Architectures = software.SourceKindFlatpak, nil, nil, []string{"amd64"}
+		}, "no suites"},
+		{"flatpak remote over http", func(in *software.SourceInput) {
+			in.Kind, in.URIs, in.Suites, in.Components = software.SourceKindFlatpak, []string{"http://dl.flathub.org/repo/"}, nil, nil
+		}, "https"},
 		{"one-character slug", func(in *software.SourceInput) { in.Slug = "a" }, "slug"},
 		{"slug too long", func(in *software.SourceInput) { in.Slug = "a" + strings.Repeat("b", 41) }, "slug"},
 		{"uppercase slug", func(in *software.SourceInput) { in.Slug = "Vendor" }, "slug"},

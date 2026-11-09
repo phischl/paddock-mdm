@@ -36,11 +36,12 @@ type Conflict struct {
 	Chosen   *string
 }
 
-// severity ranks the intents: the highest wins a merge.
-var severity = map[string]int{IntentHold: 1, IntentRequired: 2, IntentUninstall: 3, IntentForbid: 4}
+// severity ranks the intents: the highest wins a merge (plan M13b decision 4).
+var severity = map[string]int{IntentAvailable: 1, IntentHold: 2, IntentRequired: 3, IntentUninstall: 4, IntentForbid: 5}
 
 // MergeIntents merges the assignments that apply to one device (plan M13a decision 10), one result per package,
-// sorted by package. The intent with the highest severity wins: forbid, uninstall, required, hold. When the winner is
+// sorted by package. The intent with the highest severity wins: forbid, uninstall, required, hold, available; an
+// available assignment is dropped whenever another intent applies to its package (plan M13b decision 4). When the winner is
 // required or hold, the versions named by required-pinned and hold assignments are collected; the lexicographically
 // smallest wins (the rule of updates.Merge) and two or more distinct versions are reported as a Conflict. A required
 // winner with a named version is pinned to it. A hold assignment next to a required or hold winner yields a package

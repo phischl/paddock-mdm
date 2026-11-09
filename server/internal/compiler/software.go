@@ -57,11 +57,22 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	if err != nil {
 		return nil, err
 	}
+	// The bundle carries no user targets, no available intent and no Flatpak sources or references until PDK-799
+	// renders them (plan M13b §3.3): such rows stay out of every bundle instead of applying organization-wide or
+	// failing the devices' bundles.
+	assignments = slices.DeleteFunc(assignments, func(a pgstore.SoftwareAssignment) bool {
+		return a.UserID.Valid || a.UserGroupID.Valid || a.Intent == software.IntentAvailable
+	})
 	s := &orgSoftware{sources: map[uuid.UUID]bundle.SoftwareSource{}, bySlug: map[string]bundle.SoftwareSource{},
 		entries: make(map[uuid.UUID]softwareEntry, len(entries)), assignments: assignments,
 		invalidAssignments: map[uuid.UUID]error{}}
+	sourceKinds := make(map[uuid.UUID]string, len(sources))
 	for _, src := range sources {
-		key, err := software.ValidateSource(software.SourceInput{Slug: src.Slug, Name: src.Name, URIs: src.Uris,
+		sourceKinds[src.ID] = src.Kind
+		if src.Kind == software.SourceKindFlatpak {
+			continue
+		}
+		key, err := software.ValidateSource(software.SourceInput{Kind: src.Kind, Slug: src.Slug, Name: src.Name, URIs: src.Uris,
 			Suites: src.Suites, Components: src.Components, Architectures: src.Architectures,
 			SigningKey: src.SigningKey, Fingerprint: src.Fingerprint})
 		if err != nil {
@@ -81,10 +92,19 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	}
 	for _, e := range entries {
 		refs, err := software.DecodePackages(e.Packages)
-		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: refs}
-		if err == nil {
-			err = software.ValidatePackageRefs(refs)
+		kind := software.SourceKindAPT
+		if e.SourceID.Valid {
+			kind = sourceKinds[e.SourceID.UUID]
 		}
+		if err == nil {
+			err = software.ValidatePackages(kind, refs)
+		}
+		// Only a valid entry of a Flatpak source stays out until PDK-799; a flatpak_ref anywhere else is invalid and
+		// fails the devices the entry applies to (PDK-697), so it can never lift a forbid by being skipped.
+		if err == nil && kind == software.SourceKindFlatpak {
+			continue
+		}
+		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: refs}
 		if err != nil {
 			slog.ErrorContext(ctx, "catalog entry fails the catalog rules; the devices it applies to keep their previous bundle",
 				"catalog_entry_id", e.ID, "error", err)
