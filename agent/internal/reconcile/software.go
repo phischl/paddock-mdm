@@ -80,6 +80,10 @@ type Software struct {
 	// next check.
 	unchecked map[string]bool
 	status    *protocol.SoftwareHealth
+	// userScoped is set while the spec has Flatpak applications for listed users; seenSessions are the users with a
+	// session the last pass or NewUserSession saw.
+	userScoped   bool
+	seenSessions []int
 }
 
 type softwareRetry struct {
@@ -125,7 +129,7 @@ func (s *Software) spec(r bundle.Resource) (bundle.SoftwareSpec, error) {
 		return sp, fmt.Errorf("invalid software spec: %w", err)
 	}
 	for _, p := range sp.Packages {
-		if bundle.RefusedIntent(p.Package, p.Intent) {
+		if p.FlatpakRef == "" && bundle.RefusedIntent(p.Package, p.Intent) {
 			return sp, fmt.Errorf("refused: software package %q is protected against intent %s", p.Package, p.Intent)
 		}
 	}
@@ -181,7 +185,7 @@ func sourceKeyring(src bundle.SoftwareSource) ([]byte, error) {
 func forbidden(sp bundle.SoftwareSpec) []string {
 	var out []string
 	for _, p := range sp.Packages {
-		if p.Intent == bundle.SoftwareForbid {
+		if p.Intent == bundle.SoftwareForbid && p.FlatpakRef == "" {
 			out = append(out, p.Package)
 		}
 	}
@@ -197,7 +201,9 @@ func forbidden(sp bundle.SoftwareSpec) []string {
 func (s *Software) unmanaged(sp bundle.SoftwareSpec) []string {
 	named := map[string]bool{himmelblauSource: true, himmelblauKeyring: true}
 	for _, src := range sp.Sources {
-		named[SoftwareSourcePath(src.Slug)], named[SoftwareKeyringPath(src.Slug)] = true, true
+		if !flatpakSource(src) {
+			named[SoftwareSourcePath(src.Slug)], named[SoftwareKeyringPath(src.Slug)] = true, true
+		}
 	}
 	var out []string
 	if emptySection(sp) {
@@ -273,12 +279,15 @@ type softwareOp struct {
 
 func (o softwareOp) line() string { return o.verb + " " + o.target }
 
-// ops returns the package operations of a spec (plan M13a decision 22). A required package without version is
-// installed when missing and never upgraded here: the update runs move it.
+// ops returns the APT package operations of a spec (plan M13a decision 22). A required package without version is
+// installed when missing and never upgraded here: the update runs move it. Flatpak applications are applyFlatpak's.
 func (s *Software) ops(sp bundle.SoftwareSpec) []softwareOp {
 	recorded := s.recorded()
 	var out []softwareOp
 	for _, p := range sp.Packages {
+		if p.FlatpakRef != "" {
+			continue
+		}
 		installed := s.Sys.PackageInstalled(p.Package)
 		switch p.Intent {
 		case bundle.SoftwareRequired:
@@ -315,7 +324,7 @@ func (s *Software) recorded() []string {
 }
 
 // Plan implements Reconciler. It reads files and package states only (report-only devices run Plan alone, plan M11).
-func (s *Software) Plan(_ context.Context, r bundle.Resource) ([]string, error) {
+func (s *Software) Plan(ctx context.Context, r bundle.Resource) ([]string, error) {
 	sp, err := s.spec(r)
 	if err != nil {
 		return nil, err
@@ -326,8 +335,8 @@ func (s *Software) Plan(_ context.Context, r bundle.Resource) ([]string, error) 
 	}
 	for _, src := range sp.Sources {
 		keyring, err := sourceKeyring(src)
-		if err != nil {
-			continue // Apply reports it; nothing of the source is written
+		if err != nil || flatpakSource(src) {
+			continue // Apply reports a key that fails; nothing of the source is written. A remote is planFlatpak's.
 		}
 		if !fileHas(s.Sys, SoftwareSourcePath(src.Slug), renderSoftwareSource(src), 0o644) {
 			changes = append(changes, "source "+src.Slug)
@@ -342,7 +351,7 @@ func (s *Software) Plan(_ context.Context, r bundle.Resource) ([]string, error) 
 	for _, op := range s.ops(sp) {
 		changes = append(changes, op.line())
 	}
-	return changes, nil
+	return append(changes, s.planFlatpak(ctx, sp)...), nil
 }
 
 // softwarePass collects the outcome of one Apply.
@@ -354,6 +363,8 @@ type softwarePass struct {
 	failed  []string
 	// versions are the installed versions before the pass, for the events of removals.
 	versions map[string]string
+	// flatpak is what the pass found of Flatpak; nil without the runtime.
+	flatpak *flatpakPass
 }
 
 func (p *softwarePass) set(pkg, state, reason, msg string) {
@@ -382,7 +393,9 @@ func (s *Software) Apply(ctx context.Context, r bundle.Resource) Result {
 		s.unchecked = map[string]bool{}
 	}
 	for _, p := range sp.Packages {
-		pass.versions[p.Package] = s.Sys.PackageVersion(p.Package)
+		if p.FlatpakRef == "" {
+			pass.versions[p.Package] = s.Sys.PackageVersion(p.Package)
+		}
 	}
 	updated, err := s.writeFiles(sp, pass)
 	if err != nil {
@@ -423,6 +436,9 @@ func (s *Software) Apply(ctx context.Context, r bundle.Resource) Result {
 			}
 		}
 	}
+	if fpErr := s.applyFlatpak(ctx, sp, reachable, pass); fpErr != nil && err == nil {
+		err = fpErr
+	}
 	if recErr := s.writeRecord(sp); recErr != nil && err == nil {
 		err = recErr
 	}
@@ -444,7 +460,7 @@ func (s *Software) Apply(ctx context.Context, r bundle.Resource) Result {
 func (s *Software) abort(id string, sp bundle.SoftwareSpec, pass *softwarePass, err error) Result {
 	if len(sp.Packages) > 0 {
 		for _, p := range sp.Packages {
-			pass.outcome[p.Package] = protocol.SoftwareItem{State: protocol.SoftwareStateFailed, Reason: protocol.SoftwareAptFailed, Error: err.Error()}
+			pass.outcome[softwareKey(p)] = protocol.SoftwareItem{State: protocol.SoftwareStateFailed, Reason: protocol.SoftwareAptFailed, Error: err.Error()}
 		}
 		s.status = s.health(sp, pass)
 	}
@@ -466,7 +482,7 @@ func superseded(sp bundle.SoftwareSpec) string {
 	var pkgs []string
 	for _, p := range sp.Packages {
 		if p.SupersededHold {
-			pkgs = append(pkgs, p.Package)
+			pkgs = append(pkgs, softwareKey(p))
 		}
 	}
 	if len(pkgs) == 0 {
@@ -495,6 +511,9 @@ func (s *Software) writeFiles(sp bundle.SoftwareSpec, pass *softwarePass) (updat
 		pass.changed = true
 	}
 	for _, src := range sp.Sources {
+		if flatpakSource(src) {
+			continue
+		}
 		c, rolledBack := s.conflict[src.Slug]
 		if rolledBack && c.passes > 0 {
 			s.conflict[src.Slug] = softwareRetry{passes: c.passes - 1, err: c.err}
@@ -731,22 +750,23 @@ func (s *Software) updateSources(ctx context.Context, sp bundle.SoftwareSpec, up
 	return nil
 }
 
-// failSource reports a failed source once and fails the required packages of it; its other packages (uninstall,
-// forbid, hold) do not need it.
+// failSource reports a failed source once and fails the required packages and Flatpak applications of it; its other
+// packages (uninstall, forbid, hold) do not need it.
 func (s *Software) failSource(pass *softwarePass, sp bundle.SoftwareSpec, slug, stage, reason, msg string) {
 	s.report("source:"+slug, protocol.SoftwareApplyFailed{Source: slug, Stage: stage, Reason: reason, Error: msg})
 	pass.failed = append(pass.failed, "source "+slug+" ("+reason+")")
 	for _, p := range sp.Packages {
 		if p.Source == slug && p.Intent == bundle.SoftwareRequired {
-			pass.set(p.Package, protocol.SoftwareStateFailed, reason, msg)
+			pass.set(softwareKey(p), protocol.SoftwareStateFailed, reason, msg)
 		}
 	}
 }
 
 // failPackage reports a failed package once per unchanged failure.
 func (s *Software) failPackage(pass *softwarePass, p bundle.SoftwarePackage, stage, reason, msg string) {
-	pass.set(p.Package, protocol.SoftwareStateFailed, reason, msg)
-	s.report("package:"+p.Package, protocol.SoftwareApplyFailed{Package: p.Package, Source: p.Source, Stage: stage, Reason: reason, Error: msg})
+	key := softwareKey(p)
+	pass.set(key, protocol.SoftwareStateFailed, reason, msg)
+	s.report("package:"+key, protocol.SoftwareApplyFailed{Package: key, Source: p.Source, Stage: stage, Reason: reason, Error: msg})
 }
 
 func (s *Software) report(key string, data protocol.SoftwareApplyFailed) {
@@ -1167,7 +1187,7 @@ func except(pkgs, allowed []string) []string {
 func (s *Software) writeRecord(sp bundle.SoftwareSpec) error {
 	var record []string
 	for _, p := range sp.Packages {
-		if p.Intent == bundle.SoftwareRequired && s.Sys.PackageInstalled(p.Package) {
+		if p.FlatpakRef == "" && p.Intent == bundle.SoftwareRequired && s.Sys.PackageInstalled(p.Package) {
 			record = append(record, p.Package)
 		}
 	}
@@ -1189,11 +1209,17 @@ func (s *Software) writeRecord(sp bundle.SoftwareSpec) error {
 func (s *Software) health(sp bundle.SoftwareSpec, pass *softwarePass) *protocol.SoftwareHealth {
 	items := make([]protocol.SoftwareItem, 0, len(sp.Packages))
 	for _, p := range sp.Packages {
+		if p.FlatpakRef != "" {
+			it := s.flatpakItem(p, pass)
+			it.Error = cut(it.Error, softwareItemError)
+			items = append(items, it)
+			continue
+		}
 		it, decided := pass.outcome[p.Package]
 		installed := s.Sys.PackageInstalled(p.Package)
 		if !decided {
 			switch {
-			case p.Intent == bundle.SoftwareRequired && installed:
+			case (p.Intent == bundle.SoftwareRequired || p.Intent == bundle.SoftwareAvailable) && installed:
 				it.State = protocol.SoftwareStateInstalled
 			case p.Intent == bundle.SoftwareHold && installed:
 				it.State = protocol.SoftwareStateHeld
@@ -1226,13 +1252,14 @@ func (s *Software) Status() *protocol.SoftwareHealth {
 }
 
 // Residue reports whether the device has software state Paddock wrote for an earlier section: the files of a recorded
-// source, forbid pins with Paddock's header or the record of installed packages. A bundle without the section then
+// source, forbid pins with Paddock's header, the record of installed packages or of Flatpak remotes and masks. A bundle without the section then
 // still runs the reconciler with an empty section, which removes those files and nothing else (architect decision
 // 2026-11-03); installed packages stay.
 func (s *Software) Residue() bool {
 	empty := bundle.SoftwareSpec{}
 	_, pins := s.forbidPins(empty)
-	return len(s.unmanaged(empty)) > 0 || pins || !s.absent(softwareInstalledRecord) || !s.absent(softwareSourcesRecord)
+	return len(s.unmanaged(empty)) > 0 || pins || !s.absent(softwareInstalledRecord) || !s.absent(softwareSourcesRecord) ||
+		!s.absent(flatpakRemotesRecord) || !s.absent(flatpakMasksRecord)
 }
 
 // cut bounds a message to n characters.

@@ -19,7 +19,7 @@ import (
 func TestPackageCommandKillsTheProcessGroup(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	start := time.Now()
-	_, _, err := reconcile.PackageCommand(context.Background(), time.Second, "sh", "-c",
+	_, _, err := reconcile.PackageCommand(context.Background(), time.Second, nil, "sh", "-c",
 		"sleep 300 & echo $! > "+pidFile+"; wait")
 	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 15*time.Second {
 		t.Fatalf("after %s: %v, want a timeout", time.Since(start), err)
@@ -37,7 +37,7 @@ func TestPackageCommandKillsTheProcessGroup(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	out, exit, err := reconcile.PackageCommand(context.Background(), time.Minute, "sh", "-c", "echo done; exit 3")
+	out, exit, err := reconcile.PackageCommand(context.Background(), time.Minute, nil, "sh", "-c", "echo done; exit 3")
 	if err != nil || exit != 3 || out != "done\n" {
 		t.Fatalf("normal run: %q %d %v", out, exit, err)
 	}
@@ -48,8 +48,17 @@ func TestPackageCommandKillsTheProcessGroup(t *testing.T) {
 func TestPackageCommandRunsInTheCLocale(t *testing.T) {
 	t.Setenv("LANG", "de_DE.UTF-8")
 	t.Setenv("LC_ALL", "de_DE.UTF-8")
-	out, exit, err := reconcile.PackageCommand(context.Background(), time.Minute, "sh", "-c", "echo $LC_ALL $DEBIAN_FRONTEND")
+	out, exit, err := reconcile.PackageCommand(context.Background(), time.Minute, nil, "sh", "-c", "echo $LC_ALL $DEBIAN_FRONTEND")
 	if err != nil || exit != 0 || out != "C noninteractive\n" {
+		t.Fatalf("%q %d %v", out, exit, err)
+	}
+}
+
+// TestPackageCommandPassesStdin (PDK-800): a user-scope Flatpak remote imports its key from the standard input of
+// systemd-run --pipe.
+func TestPackageCommandPassesStdin(t *testing.T) {
+	out, exit, err := reconcile.PackageCommand(context.Background(), time.Minute, []byte("key\n"), "sh", "-c", "cat")
+	if err != nil || exit != 0 || out != "key\n" {
 		t.Fatalf("%q %d %v", out, exit, err)
 	}
 }

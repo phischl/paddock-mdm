@@ -97,6 +97,16 @@ type System struct {
 	// OutputCalls records the command line of every Output call.
 	Outputs     map[string]OutputReply
 	OutputCalls []string
+	// FlatpakSystem is the system installation flatpak manages, FlatpakUsers the user installations by UID (reached
+	// through systemd-run --machine=<uid>@.host --user); flatpak is missing while Packages has no "flatpak".
+	// FlatpakScript answers flatpak and systemd-run calls by their command line ("flatpak install -y …"): the call
+	// returns the reply and changes nothing. FlatpakCalls records the command line of every call, FlatpakStdin the
+	// standard input of every systemd-run call.
+	FlatpakSystem *FlatpakInstallation
+	FlatpakUsers  map[int]*FlatpakInstallation
+	FlatpakScript map[string]OutputReply
+	FlatpakCalls  []string
+	FlatpakStdin  [][]byte
 }
 
 // OutputReply is a scripted Output answer: Data with Exit (non-zero: a *reconcile.ExitError), or Err.

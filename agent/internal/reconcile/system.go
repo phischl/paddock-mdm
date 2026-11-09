@@ -195,7 +195,7 @@ func (o OS) AptGet(ctx context.Context, args ...string) (string, int, error) {
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return packageCommand(ctx, PackageTimeout, "apt-get", args...)
+	return packageCommand(ctx, PackageTimeout, nil, "apt-get", args...)
 }
 
 // AptGetWithin runs apt-get like AptGet with another timeout (`paddockd updates run`, plan M5b decision 6).
@@ -203,7 +203,7 @@ func (o OS) AptGetWithin(ctx context.Context, timeout time.Duration, args ...str
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return packageCommand(ctx, timeout, "apt-get", args...)
+	return packageCommand(ctx, timeout, nil, "apt-get", args...)
 }
 
 // DpkgWithin runs dpkg like Dpkg with another timeout (`paddockd updates run`).
@@ -211,7 +211,7 @@ func (o OS) DpkgWithin(ctx context.Context, timeout time.Duration, args ...strin
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return packageCommand(ctx, timeout, "dpkg", args...)
+	return packageCommand(ctx, timeout, nil, "dpkg", args...)
 }
 
 // AptCache implements System.
@@ -235,13 +235,29 @@ func (o OS) Dpkg(ctx context.Context, args ...string) (string, int, error) {
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return packageCommand(ctx, PackageTimeout, "dpkg", args...)
+	return packageCommand(ctx, PackageTimeout, nil, "dpkg", args...)
+}
+
+// Flatpak implements System.
+func (o OS) Flatpak(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return packageCommand(ctx, PackageTimeout, nil, "flatpak", args...)
+}
+
+// SystemdRun implements System.
+func (o OS) SystemdRun(ctx context.Context, stdin []byte, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return packageCommand(ctx, PackageTimeout, stdin, "systemd-run", args...)
 }
 
 // packageCommand runs a package tool non-interactively in a process group of its own and kills the whole group at
 // timeout: maintainer scripts must not outlive a run the agent gave up on. A timeout is an error that wraps
 // context.DeadlineExceeded.
-func packageCommand(ctx context.Context, timeout time.Duration, name string, args ...string) (string, int, error) {
+func packageCommand(ctx context.Context, timeout time.Duration, stdin []byte, name string, args ...string) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed package tools and arguments
@@ -254,6 +270,9 @@ func packageCommand(ctx context.Context, timeout time.Duration, name string, arg
 	cmd.WaitDelay = 10 * time.Second // children that inherited the output pipes are gone with the group
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		return out.String(), -1, fmt.Errorf("%s: %w", name, ctx.Err())

@@ -33,6 +33,14 @@ func (a *Agent) serverReachable() bool {
 	return age >= 0 && age <= reconcile.RemovalWindow
 }
 
+// softwareSessions runs a drift pass when a user started a session while the bundle has user-scope Flatpak
+// applications: the user gets them at the session start (plan M13b decision 10, Q14).
+func (a *Agent) softwareSessions(ctx context.Context) {
+	if a.d.Software != nil && a.current != nil && a.d.Software.NewUserSession(ctx) {
+		a.drift(ctx)
+	}
+}
+
 // refreshSoftware puts the status of the software reconciler's last pass into the health report.
 func (a *Agent) refreshSoftware() {
 	if a.d.Software == nil {

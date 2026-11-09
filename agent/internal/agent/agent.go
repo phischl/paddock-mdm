@@ -390,6 +390,7 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 		case <-sessionPoll.C:
 			a.trackSessions(ctx)
 			a.tickConversionSessions(ctx)
+			a.softwareSessions(ctx)
 		case <-dms.C:
 			a.tickDMS(ctx)
 		case <-localAdmin.C:
