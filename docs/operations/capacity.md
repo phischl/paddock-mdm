@@ -324,12 +324,25 @@ without a limit yet are listed in `deploy/compose/hardening-exceptions.yaml`.
 | `audit-postgres` | audit | 1 GiB | `PADDOCK_AUDIT_POSTGRES_MEM_LIMIT` | 50–75 MiB |
 | `valkey` | control plane | 512 MiB | `PADDOCK_VALKEY_MEM_LIMIT` | 6–12 MiB |
 | `fleet-redis` | control plane | 512 MiB | `PADDOCK_FLEET_REDIS_MEM_LIMIT` | 4–5 MiB |
+| `fleet-mysql` | control plane | 2 GiB | `PADDOCK_FLEET_MYSQL_MEM_LIMIT` | 645–655 MiB |
+| `rabbitmq` | control plane | 1 GiB | `PADDOCK_RABBITMQ_MEM_LIMIT` | 155–170 MiB |
+| `fleet` | control plane | 3 GiB | `PADDOCK_FLEET_MEM_LIMIT` | 90–120 MiB; 810 MiB during a vulnerability run |
+| `prometheus` | control plane | 1 GiB | `PADDOCK_PROMETHEUS_MEM_LIMIT` | 60–65 MiB |
 
 The snapshot is the resident memory (`docker stats`) of two idle development stacks after their acceptance runs, not
 a peak under load. PostgreSQL's page cache does not count against the limit beyond what the kernel can reclaim, so a
 larger database grows into the host's page cache instead; raise `PADDOCK_POSTGRES_MEM_LIMIT` when you raise
 `shared_buffers` or the number of connections. Valkey holds sessions, device keys, nonces and counters only; a limit
 reached there points to a leak, not to a larger installation.
+
+The vulnerability figure for `fleet` is the cgroup peak (`memory.peak`, page cache included) of one run of
+`fleet vuln_processing` that downloaded every feed into an empty volume (850 MiB on disk), measured on a scratch stack
+without enrolled hosts; matching the software of many hosts adds to it, hence the headroom. RabbitMQ does not see its
+container limit by itself: `rabbitmq.conf` passes `PADDOCK_RABBITMQ_MEM_LIMIT` as its total memory, so its memory
+alarm blocks publishers at 60 % of the limit (the healthcheck `check_local_alarms` then fails) before the kernel would
+kill the broker. The alarm reads the suffixes as decimal units (`1g` = 10⁹ bytes), slightly below Docker's binary
+ones. The limit must be a whole number with an optional unit (`1536m`, not `1.5g`): RabbitMQ ignores any other value
+with a log warning only and sizes the alarm from the host's RAM, so `prod-check` rejects it.
 
 ## Request limits
 

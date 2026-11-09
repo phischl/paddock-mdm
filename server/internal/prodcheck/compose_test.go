@@ -341,7 +341,7 @@ func TestProductionEdge(t *testing.T) {
 		case "edge client address", "role trusted proxies", "container hardening", "networks: caddy on edge only",
 			"networks: no datastore on edge", "networks: fleet, caddy and authentik not on data",
 			"trusted proxies: caddy's address only", "edge: internal ranges are not private_ranges",
-			"rabbitmq: management bound to loopback":
+			"rabbitmq: management bound to loopback", "rabbitmq: memory limit readable by the memory alarm":
 			if !r.OK {
 				t.Errorf("%s:\n%s", r.Item, r.Detail)
 			}
@@ -386,6 +386,7 @@ func TestLabEdge(t *testing.T) {
 		"trusted proxies: caddy's address only":                 false,
 		"edge: internal ranges are not private_ranges":          false,
 		"rabbitmq: management bound to loopback":                false,
+		"rabbitmq: memory limit readable by the memory alarm":   false,
 	}
 	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{Host: prodcheck.HostLab}) {
 		if _, ok := want[r.Item]; !ok {
