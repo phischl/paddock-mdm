@@ -90,7 +90,9 @@ signature from the source's `Signed-By` keyring; apt reads credentials from `/et
 
 Decision 3 has the worker generate the signing key on first use, but the repository row is created earlier by the
 api with the access credential (decision 4). The row's signing columns are therefore nullable with a completeness
-constraint (all set or all `NULL`); the system `paddock` source exists only once the key does. The credential of
+constraint (all set or all `NULL`); the system `paddock` source exists only once the key does. While the key is
+missing, uploads are refused (409 `repository_not_ready`) and nothing is published under `/apt/<org_slug>/`; the
+worker generates the key in the first rebuild job, which the api queues when it creates the row. The credential of
 decision 4 is wrapped with its own derived Transit key `software-repo-credential` (api encrypts, compiler
 decrypts), not with `software-repo-wrap`, so the compiler — which must decrypt the credential for every bundle —
 never gains the ability to decrypt a signing private key; `software-repo-wrap` stays worker-only. Consequence:

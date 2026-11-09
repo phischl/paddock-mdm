@@ -867,9 +867,17 @@ Raised by the PDK-812 implementer; decided by the architect on 2026-11-09. Both 
    (upload, `GET`, `rotate-credential`). `NOT NULL` on `signing_public_key`, `signing_fingerprint` and
    `signing_private_ciphertext` was therefore unsatisfiable. They are nullable, the fingerprint `CHECK` applies when
    set, and the constraint `software_repository_signing_key_complete` keeps the three together (all `NULL` or all
-   set). The system-managed `paddock` `software_source` row is created and rendered only once the key exists
-   (PDK-813); until then the api reports the repository without a signing key and renders no source — never a
-   source without a keyring.
+   set). **While an organization has no signing key, uploads are refused and its repository is not published**
+   (architect lead, A10-21): the api creates the `software_repository` row (credential generated, signing
+   columns `NULL`) on the organization's first `GET /api/v1/software-repository` or first upload attempt and
+   queues `software_repo.rebuild`; the worker's rebuild job generates the key when the signing columns are `NULL`
+   (this is the "first use" of ADR 0050 decision 3) and only then publishes. Until the key exists:
+   `POST /api/v1/software-packages` answers 409 `repository_not_ready` (detail: the signing key is being
+   generated, retry shortly; recorded as a denied attempt by the `ActionRunner`); `GET /apt/<org_slug>/*` answers
+   404 (nothing is published); the system-managed `paddock` `software_source` row does not exist and nothing is
+   rendered into bundles; `GET /api/v1/software-repository` returns `fingerprint: null` and `source: null`.
+   PDK-812 implements the refusal and the row creation; PDK-813 the key generation and the first publish. The
+   problem code `repository_not_ready` is added to the registry and documented in `api/openapi/admin.yaml`.
 2. **Transit key `software-repo-credential`.** The compiler decrypts the basic-auth credential to render
    `software.repository.auth` into bundles. Under one key `software-repo-wrap` it would also hold the power to
    decrypt every organization's signing private key. Two keys, least privilege:
