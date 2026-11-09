@@ -21,7 +21,7 @@ func TestValidateDecisionReason(t *testing.T) {
 		{strings.Repeat("ä", MaxReasonLength), true, true},
 		{strings.Repeat("a", MaxReasonLength+1), true, false},
 		{"bell\a", false, false},
-		{"rtl‮", true, false},
+		{"rtl\u202e", true, false},
 		{"\xff", true, false},
 	}
 	for _, c := range cases {
