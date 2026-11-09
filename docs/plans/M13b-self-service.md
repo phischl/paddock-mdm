@@ -477,3 +477,17 @@ bundle, so none of them applies organization-wide or fails a bundle in between.
   compiler leaves out every Flatpak application of that device, and with them the Flatpak remotes and the runtime
   package; the APT part of the section is unchanged. Each required or available application left out records
   `flatpak_forbidden` (param `flatpak_ref`) for its assignments. The runbook (PDK-805) explains it.
+
+## Amendment 2026-11-09 (architect decision A10-11, PDK-924)
+
+- **A10-11, targeting user-scope Flatpak applications:** a package of the software section with `flatpak_ref`,
+  `scope: user` and intent `required`, `forbid` or `uninstall` may carry `users`: the targeted users on the device
+  (lower-case UPNs, sorted, distinct, 1 to 200, the limits of an audience). The compiler fills it from the owners a
+  user or user-group assignment targets; the assignments of the winning intent merge into the sorted union, and one
+  that targets the whole device (organization or device group), or belongs to a system-scope entry of the same
+  application, leaves the list out. Without `users` the application
+  acts in system scope, never for every user; an empty list is refused by `bundle.ValidateSoftware`. A list over 200
+  keeps the first 200 by user name and records `flatpak_users_truncated` (params `users`, `kept`, `flatpak_ref`) for
+  its assignments. An assignment whose targeted owners all have names a bundle cannot carry does not apply, rather than
+  widening to system scope. The field is additive (ADR 0013); agents before `selfServiceAgent` get no Flatpak
+  application and so never see it (A10-6). PDK-800 acts only for the listed users.

@@ -24,6 +24,10 @@ const (
 	// WarningFlatpakForbidden: an APT entry forbids or uninstalls flatpak on the device, so its required or available
 	// Flatpak application is left out (A10-9).
 	WarningFlatpakForbidden = "flatpak_forbidden"
+	// WarningFlatpakUsersTruncated: a user-scope Flatpak application with intent required, forbid or uninstall
+	// targeted more users on the device than a bundle carries; the first bundle.MaxSoftwareAudience by user name keep
+	// it (architect decision A10-11).
+	WarningFlatpakUsersTruncated = "flatpak_users_truncated"
 )
 
 // maxDeviceWarnings bounds the warnings one compile stores for a device, so a catalog with many assignments cannot

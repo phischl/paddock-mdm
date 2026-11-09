@@ -191,3 +191,38 @@ func TestMergeIntentsSupplierIsOrderIndependent(t *testing.T) {
 		t.Fatalf("%+v vs %+v", one, two)
 	}
 }
+
+// TestMergeIntentsFlatpakUsers (architect decision A10-11): the targeted users of a user-scope Flatpak application
+// merge over the assignments with the winning intent into a sorted union; one of them without users (the whole
+// device) leaves the result without users, so it applies in system scope; a losing intent's users are dropped.
+func TestMergeIntentsFlatpakUsers(t *testing.T) {
+	targetedEff := func(n byte, intent string, users ...string) Effective {
+		e := flatpakEff(eff(n, "", intent, UpdateLatest, nil), "org.gimp.GIMP", "user")
+		e.Users = users
+		return e
+	}
+	for _, tc := range []struct {
+		name string
+		in   []Effective
+		want []string
+	}{
+		{"one user", []Effective{targetedEff(1, IntentRequired, "alice@example.org")}, []string{"alice@example.org"}},
+		{"union", []Effective{targetedEff(2, IntentRequired, "carol@example.org", "bob@example.org"),
+			targetedEff(1, IntentRequired, "alice@example.org", "bob@example.org")},
+			[]string{"alice@example.org", "bob@example.org", "carol@example.org"}},
+		{"whole device wins", []Effective{targetedEff(1, IntentRequired, "alice@example.org"), targetedEff(2, IntentRequired)}, nil},
+		{"forbid users only", []Effective{targetedEff(1, IntentRequired, "alice@example.org"),
+			targetedEff(2, IntentForbid, "bob@example.org")}, []string{"bob@example.org"}},
+		{"system-scope entry of the same application", []Effective{targetedEff(1, IntentForbid, "alice@example.org"),
+			flatpakEff(eff(2, "", IntentForbid, UpdateLatest, nil), "org.gimp.GIMP", "system")}, nil},
+		{"uninstall", []Effective{targetedEff(1, IntentUninstall, "bob@example.org")}, []string{"bob@example.org"}},
+		{"hold carries none", []Effective{targetedEff(1, IntentHold, "bob@example.org")}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _, _ := MergeIntents(tc.in)
+			if len(got) != 1 || !reflect.DeepEqual(got[0].Users, tc.want) {
+				t.Fatalf("resolved = %+v, want users %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -10,7 +10,9 @@ import (
 )
 
 // Effective is one assignment that applies to a device, with the package its entry resolves to on that device: an
-// APT Package, or a FlatpakRef in Scope (plan M13b decision 8). Audience is set for an available assignment.
+// APT Package, or a FlatpakRef in Scope (plan M13b decision 8). Audience is set for an available assignment; Users are
+// the targeted users of a user-scope Flatpak application with intent required, forbid or uninstall, nil when the
+// assignment targets the whole device or is of a system-scope entry (architect decision A10-11).
 type Effective struct {
 	CatalogEntryID uuid.UUID
 	Package        string
@@ -21,10 +23,12 @@ type Effective struct {
 	UpdateRule     string
 	Version        *string
 	Audience       *bundle.SoftwareAudience
+	Users          []string
 }
 
 // Resolved is the software state a device gets for one package after the assignments are merged. A required
-// application with a Version is pinned to it. An available result carries the merged Audience.
+// application with a Version is pinned to it. An available result carries the merged Audience, a Flatpak application
+// with intent required, forbid or uninstall the merged Users.
 type Resolved struct {
 	CatalogEntryID uuid.UUID
 	Package        string
@@ -34,6 +38,7 @@ type Resolved struct {
 	Intent         string
 	Version        *string
 	Audience       *bundle.SoftwareAudience
+	Users          []string
 }
 
 // key names what an assignment installs: an APT package and a Flatpak application of the same name are different
@@ -65,7 +70,10 @@ var severity = map[string]int{IntentAvailable: 1, IntentHold: 2, IntentRequired:
 // with the winning intent the one with the smallest entry ID supplies the source and, for Flatpak, the scope; a Flatpak
 // result carries no version and yields no hold. An
 // available winner's audience merges those of every available assignment of the package: everyone when any names
-// everyone, otherwise the sorted union of the users (plan M13b decision 8).
+// everyone, otherwise the sorted union of the users (plan M13b decision 8). A Flatpak winner with intent required,
+// forbid or uninstall merges the Users of the assignments with that intent the same way: none when any of them targets
+// the whole device or is of a system-scope entry of the same application, otherwise the sorted union (architect
+// decision A10-11; per-user merge: PDK-925).
 func MergeIntents(in []Effective) (out []Resolved, holds []bundle.Hold, conflicts []Conflict) {
 	byPackage := map[string][]Effective{}
 	for _, e := range in {
@@ -103,6 +111,9 @@ func MergeIntents(in []Effective) (out []Resolved, holds []bundle.Hold, conflict
 		if winner == IntentAvailable {
 			r.Audience = mergeAudiences(group)
 		}
+		if r.FlatpakRef != "" && (winner == IntentRequired || winner == IntentForbid || winner == IntentUninstall) {
+			r.Users = mergeUsers(group, winner)
+		}
 		// Versions and holds are apt's (apt-mark and the pin file of the updates section); a Flatpak application has
 		// neither, so it never reaches the updates section.
 		if (winner == IntentRequired || winner == IntentHold) && r.FlatpakRef == "" {
@@ -136,6 +147,23 @@ func mergeAudiences(group []Effective) *bundle.SoftwareAudience {
 	}
 	slices.Sort(users)
 	return &bundle.SoftwareAudience{Users: slices.Compact(users)}
+}
+
+// mergeUsers merges the Users of the assignments with intent in group: nil when one of them has none, since it targets
+// the whole device or belongs to a system-scope entry, and so the result applies in system scope.
+func mergeUsers(group []Effective, intent string) []string {
+	var users []string
+	for _, e := range group {
+		if e.Intent != intent {
+			continue
+		}
+		if len(e.Users) == 0 {
+			return nil
+		}
+		users = append(users, e.Users...)
+	}
+	slices.Sort(users)
+	return slices.Compact(users)
 }
 
 func winningIntent(group []Effective) string {
