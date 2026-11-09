@@ -2170,7 +2170,8 @@ export interface paths {
         /**
          * @description Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment
          *     of the organization or of one of their groups, with what they reported or the derived state not_applicable or
-         *     unknown (see the device's managed software). The search matches the hostname. 404 not_found for another
+         *     unknown (see the device's managed software). A device with a system and a user-scope row for the entry is
+         *     listed once per scope (plan M13b decision 17). The search matches the hostname. 404 not_found for another
          *     organization's entry.
          */
         get: operations["listSoftwareCatalogDevices"];
@@ -3370,8 +3371,9 @@ export interface paths {
          * @description Roles: org_admin, org_operator, org_auditor. The catalog applications the device manages (plan M13a §3.4): what
          *     the device reported for each, and for an application assigned to it that it has not reported on the derived state
          *     not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package
-         *     applies, no report yet). The state and intent filters apply to derived entries too; derived entries have no
-         *     reported_at. 404 not_found for another organization's device.
+         *     applies, no report yet). An application the device reports in system and in user scope is listed once per scope
+         *     (plan M13b decision 17). The state, intent and scope filters apply to derived entries too; derived entries have
+         *     no reported_at. 404 not_found for another organization's device.
          */
         get: operations["listDeviceManagedSoftware"];
         put?: never;
@@ -6917,6 +6919,7 @@ export interface components {
             reason: string;
             /** @description At most 200 characters; may name paths. */
             error: string;
+            scope: components["schemas"]["SoftwareScope"];
             /**
              * Format: date-time
              * @description null for a derived state.
@@ -6952,6 +6955,7 @@ export interface components {
             reason: string;
             /** @description At most 200 characters; may name paths. */
             error: string;
+            scope: components["schemas"]["SoftwareScope"];
             /**
              * Format: date-time
              * @description null for a derived state.
@@ -9068,6 +9072,8 @@ export interface components {
         DeviceManagedSoftwareIntentFilter: components["schemas"]["SoftwareIntent"];
         /** @description Only entries in this state, reported or derived. */
         DeviceSoftwareStateFilter: components["schemas"]["DeviceSoftwareState"];
+        /** @description Only rows of this scope, reported or derived. */
+        DeviceSoftwareScopeFilter: components["schemas"]["SoftwareScope"];
         /** @description Sort field; "-" prefix sorts descending. The row id is the tie-breaker. */
         AttentionSort: "since" | "-since" | "kind" | "-kind" | "hostname" | "-hostname";
         /** @description Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers. */
@@ -13150,6 +13156,8 @@ export interface operations {
                 q?: components["parameters"]["Search"];
                 /** @description Only entries in this state, reported or derived. */
                 state?: components["parameters"]["DeviceSoftwareStateFilter"];
+                /** @description Only rows of this scope, reported or derived. */
+                scope?: components["parameters"]["DeviceSoftwareScopeFilter"];
                 /** @description Only members of this device group. */
                 device_group_id?: string;
             };
@@ -14956,6 +14964,8 @@ export interface operations {
                 state?: components["parameters"]["DeviceSoftwareStateFilter"];
                 /** @description Only entries with this intent, reported or assigned. */
                 intent?: components["parameters"]["DeviceManagedSoftwareIntentFilter"];
+                /** @description Only rows of this scope, reported or derived. */
+                scope?: components["parameters"]["DeviceSoftwareScopeFilter"];
             };
             header?: never;
             path: {

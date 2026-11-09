@@ -728,7 +728,8 @@ type SoftwareHealth struct {
 	Truncated bool            `json:"truncated,omitempty"`
 }
 
-// SoftwareItem is the state of one catalog entry on the device. Error is at most 200 characters.
+// SoftwareItem is the state of one catalog entry on the device. Error is at most 200 characters. Scope is system or
+// user (plan M13b decision 17); empty is system, as agents before alpha.10 report.
 type SoftwareItem struct {
 	CatalogEntryID string `json:"id"`
 	Package        string `json:"package"`
@@ -737,4 +738,5 @@ type SoftwareItem struct {
 	Version        string `json:"version,omitempty"`
 	Reason         string `json:"reason,omitempty"`
 	Error          string `json:"error,omitempty"`
+	Scope          string `json:"scope,omitempty"`
 }

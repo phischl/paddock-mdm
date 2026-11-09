@@ -301,6 +301,8 @@ const (
 	CodeDeviceSoftwareReinstalled Code = "device.software_reinstalled"
 	CodeDeviceSoftwareRemoved     Code = "device.software_removed"
 	CodeDeviceSoftwareApplyFailed Code = "device.software_apply_failed"
+	// A user's self-service operation on a device (plan M13b decision 18, ADR 0049 decision 7).
+	CodeDeviceSoftwareSelfService Code = "device.software_self_service"
 
 	// The backup key (plan M15 §6.4).
 	CodePlatformBackupKeyGenerated Code = "platform.backup_key_generated"
@@ -390,6 +392,7 @@ var deviceEventParams = []string{
 	"command_id", "mode", "local_admin", "tpm", "steps",
 	"conversion_id", "layout", "data_bytes", "duration_s", "init_s", "init_result", "by", "state",
 	"package", "intent", "catalog_entry_id", "source",
+	"user", "entry_id", "flatpak_ref", "scope", "action",
 }
 
 var registry = map[Code]Definition{
@@ -1852,6 +1855,13 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "reason is fingerprint_mismatch, would_remove_dependents, protected_package_affected, no_candidate, source_unreachable, conflicting_source, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
+	},
+	CodeDeviceSoftwareSelfService: {
+		Code: CodeDeviceSoftwareSelfService, Emitted: true,
+		Description: "A user installed, updated or removed an application through the self-service app of a device, or the device refused or failed that operation (actor: the device; user: the user name of the asking account).",
+		Params:      []string{"event_seq", "occurred_at", "user", "entry_id", "package", "flatpak_ref", "scope", "action", "outcome", "reason", "version"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "action is install, update or remove; outcome is the device's: succeeded is recorded as success, failed (error_code self_service_failed) and refused (error_code self_service_refused) as failure. reason is a refusal (required_by_policy, not_in_audience) or a failure reason (interrupted, timeout, or one of device.software_apply_failed). package or flatpak_ref names the application; version is the installed version after a succeeded install or update.",
 	},
 	CodePlatformBackupKeyGenerated: {
 		Code: CodePlatformBackupKeyGenerated, Emitted: true,
