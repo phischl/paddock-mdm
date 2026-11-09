@@ -226,11 +226,25 @@ uc_image_refs() {
 }
 uc_versions_ref() { sed -n "s/^$2=//p" "$1/versions.env" | tail -n 1; }
 
+# uc_manifest_ref <ref>: the reference the registry is asked with, as `docker pull` resolves it. A pinned reference
+# `name:tag@digest` becomes `name@digest`: `docker manifest inspect` resolves name:tag@digest by the tag and then fails
+# the digest check ("manifest verification failed") once the tag moved, which official images do on every rebuild,
+# although the pinned digest is still pullable. A reference without a digest stays as it is.
+uc_manifest_ref() {
+  local ref="$1" name last
+  [[ "$ref" == *@* ]] || { printf '%s\n' "$ref"; return; }
+  name="${ref%%@*}"
+  last="${name##*/}"
+  [[ "$last" != *:* ]] || name="${name%:*}"
+  printf '%s@%s\n' "$name" "${ref#*@}"
+}
+
 # uc_image_bytes <ref>: the compressed size of the image for this machine's architecture, empty when unreadable.
 uc_image_bytes() {
-  local ref="$1" repo out digest arch
+  local ref repo out digest arch
+  ref="$(uc_manifest_ref "$1")"
   repo="${ref%%@*}"
-  repo="${repo%:*}"
+  [[ "${repo##*/}" != *:* ]] || repo="${repo%:*}"
   out="$(docker manifest inspect "$ref" 2>/dev/null)" || return 0
   if grep -q '"manifests"' <<<"$out"; then
     case "$(uname -m)" in aarch64 | arm64) arch=arm64 ;; *) arch=amd64 ;; esac
@@ -245,7 +259,7 @@ uc_image_bytes() {
 uc_item_images() {
   local ref bytes total=0 unreadable=() unpullable=() root avail need
   for ref in "$@"; do
-    if ! docker manifest inspect "$ref" >/dev/null 2>&1; then
+    if ! docker manifest inspect "$(uc_manifest_ref "$ref")" >/dev/null 2>&1; then
       unpullable+=("${ref%%@*}")
       unreadable+=("${ref%%@*}")
       continue

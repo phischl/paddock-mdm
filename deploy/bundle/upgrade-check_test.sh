@@ -21,6 +21,10 @@ cat >"$work/bin/docker" <<'STUB'
 case "$1" in
   manifest)
     [[ -z "${FIXTURE_OFFLINE:-}" ]] || exit 1
+    # As the real CLI once the tag moved past the pin: name:tag@digest is resolved by the tag and fails the digest
+    # check, while name@digest is found.
+    name="${3%%@*}"
+    if [[ "$3" == *@* && "${name##*/}" == *:* ]]; then echo "manifest verification failed for digest ${3#*@}" >&2; exit 1; fi
     printf '{\n "config": {"size": 1000},\n "layers": [{"size": %s}]\n}\n' "${FIXTURE_LAYER_SIZE:-1000000}" ;;
   info) printf '%s\n' "$FIXTURE_ROOT" ;;
   *) exit 1 ;;
@@ -45,6 +49,18 @@ old_bundle() {
 }
 tree_sum() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum); }
 
+# uc_manifest_ref asks the registry by digest when the reference pins one, as docker pull does.
+(
+  # shellcheck source=/dev/null # linted as an input of its own (Makefile lint)
+  . "$here/../compose/scripts/upgrade-check.sh"
+  d=sha256:1111111111111111111111111111111111111111111111111111111111111111
+  for c in "caddy:2.11.7@$d|caddy@$d" "ghcr.io/o/paddock-server:0.1.0@$d|ghcr.io/o/paddock-server@$d" \
+    "registry.example.org:5000/x:1@$d|registry.example.org:5000/x@$d" "registry.example.org:5000/x@$d|registry.example.org:5000/x@$d" \
+    "caddy:2.11.7|caddy:2.11.7"; do
+    got="$(uc_manifest_ref "${c%%|*}")"
+    if [[ "$got" == "${c#*|}" ]]; then echo "ok   manifest reference of ${c%%|*}"; else echo "FAIL manifest reference of ${c%%|*}: $got" >&2; exit 1; fi
+  done
+) || fail "uc_manifest_ref"
 new_bundle "$work/new"
 # Compose files far beyond the pipe buffer: a reader that stops at the first match must still find every missing key.
 for f in "$work"/new/compose*.yaml; do awk 'BEGIN { for (i = 0; i < 20000; i++) print "# padding after the last reference of a setting" }' >>"$f"; done

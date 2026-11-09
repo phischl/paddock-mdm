@@ -133,13 +133,18 @@ finish() {
 
 # --- step helpers ----------------------------------------------------------------------------------------------------
 
-# check_upgrade <json>: no FAIL; a WARN only for the item every run shows (custodians unseal OpenBao) and, for a
-# candidate built from a tree that is no published release (UPGRADE_CANDIDATE_UNRELEASED=1: a pull request, main),
-# the items that judge a published release: its notes and its images in the registry. Output without a single item
-# (empty, not JSON) fails: a check that inspected nothing must not pass.
+# check_upgrade <json>: no FAIL; a WARN only for the item every run shows (custodians unseal OpenBao), for release
+# notes whose Upgrade line announces manual steps (`Upgrade: from <release>: steps: …`, by design for a release that
+# needs them; a missing Upgrade line still fails a published release) and, for a candidate built from a tree that is
+# no published release (UPGRADE_CANDIDATE_UNRELEASED=1: a pull request, main), the items that judge a published
+# release: its notes and its images in the registry. Output without a single item (empty, not JSON) fails: a check
+# that inspected nothing must not pass.
 check_upgrade() {
   local json="$1" allowed=("openbao unseal path") name status bad=() items=0
   if [[ "${UPGRADE_CANDIDATE_UNRELEASED:-}" == 1 ]]; then allowed+=("release notes" "images pullable" "disk"); fi
+  if grep -qE '"name":"release notes","status":"WARN","detail":"Upgrade: from [^":]+: steps: ' <<<"$json"; then
+    allowed+=("release notes")
+  fi
   while IFS=$'\t' read -r name status; do
     items=$((items + 1))
     case "$status" in
