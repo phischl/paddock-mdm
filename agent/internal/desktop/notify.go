@@ -41,6 +41,17 @@ type Result struct {
 // level with the cause (PDK-878: the signed privacy text promises the notice, so a silent failure is not acceptable)
 // and counted as not reached. The error is only that the sessions could not be listed.
 func Notify(ctx context.Context, sys reconcile.System, summary, body string) (Result, error) {
+	return notify(ctx, sys, -1, summary, body)
+}
+
+// NotifyUser is Notify for the sessions of one user only (a self-service operation is told to the user who asked
+// for it, plan M13b decision 13).
+func NotifyUser(ctx context.Context, sys reconcile.System, uid int, summary, body string) (Result, error) {
+	return notify(ctx, sys, uid, summary, body)
+}
+
+// notify shows the notification in the active graphical user sessions, of uid only when uid is not negative.
+func notify(ctx context.Context, sys reconcile.System, uid int, summary, body string) (Result, error) {
 	list, err := sessions.List(ctx, sys.Loginctl)
 	if err != nil {
 		return Result{}, fmt.Errorf("list the sessions: %w", err)
@@ -48,7 +59,7 @@ func Notify(ctx context.Context, sys reconcile.System, summary, body string) (Re
 	var res Result
 	for _, s := range list {
 		if s.Class != "user" || (s.Type != "wayland" && s.Type != "x11") || s.State != "active" || s.User == "" ||
-			s.UID < 0 {
+			s.UID < 0 || (uid >= 0 && s.UID != uid) {
 			continue
 		}
 		res.Sessions++
