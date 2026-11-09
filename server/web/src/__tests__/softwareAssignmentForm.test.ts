@@ -7,14 +7,17 @@ import { updateRuleEnabled, versionEnabled } from '../lib/software'
 
 function mountForm(initial: Record<string, unknown> | null = null) {
   return mount(SoftwareAssignmentForm, {
-    props: { entryId: 'e1', groups: [{ id: 'g1', name: 'Laptops' }], initial: initial as never },
+    props: {
+      entryId: 'e1', groups: [{ id: 'g1', name: 'Laptops' }], users: [{ id: 'u1', username: 'alice@acme.test' }],
+      userGroups: [{ id: 'ug1', name: 'Designers' }], initial: initial as never,
+    },
     global: { plugins: [createPortalI18n(), vuetify] },
     attachTo: document.body,
   })
 }
 
 const base = {
-  id: 'a1', catalog_entry_id: 'e1', app_name: 'Editor', device_group_id: 'g1', reason: '', created_at: '', updated_at: '',
+  id: 'a1', catalog_entry_id: 'e1', app_name: 'Editor', device_group_id: 'g1', user_id: null, user_group_id: null, reason: '', created_at: '', updated_at: '',
 }
 
 function disabled(w: ReturnType<typeof mountForm>, id: string): boolean {
@@ -60,6 +63,46 @@ describe('SoftwareAssignmentForm', () => {
     expect(w.emitted('submit')).toBeUndefined()
     await w.find('#assignment-version').setValue('2.0-1')
     await w.find('form').trigger('submit')
-    expect(w.emitted('submit')).toEqual([[{ entryID: 'e1', groupID: 'g1', intent: 'required', updateRule: 'pinned', version: '2.0-1', reason: '' }]])
+    expect(w.emitted('submit')).toEqual([[{ entryID: 'e1', target: 'device_group', targetID: 'g1', intent: 'required', updateRule: 'pinned', version: '2.0-1', reason: '' }]])
+  })
+
+  it('shows the fixed user group target of a stored assignment and offers the intent available', async () => {
+    const w = mountForm({ ...base, device_group_id: null, user_group_id: 'ug1', intent: 'available', update_rule: 'latest', version: null })
+    expect(w.find('[data-testid="assignment-target"]').text()).toContain('User group')
+    expect(w.find('[data-testid="assignment-target-id"]').text()).toContain('Designers')
+    expect(disabled(w, 'assignment-target')).toBe(true)
+    expect(w.find('[data-testid="assignment-intent"]').text()).toContain('Available')
+    expect(disabled(w, 'assignment-rule')).toBe(true)
+    expect(disabled(w, 'assignment-version')).toBe(true)
+    await w.find('form').trigger('submit')
+    expect(w.emitted('submit')).toEqual([[{
+      entryID: 'e1', target: 'user_group', targetID: 'ug1', intent: 'available', updateRule: 'latest', version: '', reason: '',
+    }]])
+  })
+
+  it('asks for the user of a new user target and then submits exactly that one target', async () => {
+    const w = mountForm()
+    expect(w.find('[data-testid="assignment-target-id"]').exists()).toBe(false)
+    const target = w.findComponent({ name: 'VSelect' })
+    await target.setValue('user')
+    await w.find('form').trigger('submit')
+    expect(w.emitted('submit')).toBeUndefined()
+    expect(w.text()).toContain('Choose the target.')
+    const picker = w.findComponent({ name: 'VAutocomplete' })
+    expect(picker.props('items')).toEqual([{ value: 'u1', title: 'alice@acme.test' }])
+    await picker.setValue('u1')
+    await w.find('form').trigger('submit')
+    expect(w.emitted('submit')).toEqual([[{
+      entryID: 'e1', target: 'user', targetID: 'u1', intent: 'required', updateRule: 'latest', version: '', reason: '',
+    }]])
+  })
+
+  it('drops the picked target when the kind of target changes', async () => {
+    const w = mountForm()
+    const target = w.findComponent({ name: 'VSelect' })
+    await target.setValue('device_group')
+    await w.findComponent({ name: 'VAutocomplete' }).setValue('g1')
+    await target.setValue('user_group')
+    expect(w.findComponent({ name: 'VAutocomplete' }).props('modelValue')).toBeNull()
   })
 })
