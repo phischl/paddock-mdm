@@ -124,6 +124,11 @@ func SyncMembers(ctx context.Context, dir ports.GroupDirectory, groupPK string, 
 	if err != nil {
 		return err
 	}
+	return applyMembers(ctx, dir, groupPK, have, want)
+}
+
+// applyMembers adds and removes members of an Authentik group whose members are have until it has exactly want.
+func applyMembers(ctx context.Context, dir ports.GroupDirectory, groupPK string, have, want []string) error {
 	for _, pk := range want {
 		if pk != "" && !slices.Contains(have, pk) {
 			if err := dir.AddMember(ctx, groupPK, pk); err != nil {

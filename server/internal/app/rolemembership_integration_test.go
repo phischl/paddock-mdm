@@ -175,16 +175,15 @@ func TestRoleMembershipOrganization(t *testing.T) {
 	events = append(events, ev.granted("org_auditor", "carol", auditors, "false"))
 	expect("carol joins the auditors", events...)
 
-	// The operators cannot be read while bob left them: his row stays unmarked, nothing is recorded for the operators,
-	// and the administrators still sync.
+	// The role groups cannot be read while bob left the operators and dave joined the administrators: the three groups
+	// share one listing (PDK-570), so its failure records nothing for any role and bob's row stays unmarked.
 	w.dir.roleGroups[operators] = nil
 	w.dir.roleGroups[admins] = []ports.IdentityUser{alice, dave}
 	w.dir.roleGroupFail = map[string]error{operators: errors.New("authentik: HTTP 503")}
 	if err := w.syncOrganization(ctx); err == nil {
 		t.Fatal("a failing listing did not fail the round")
 	}
-	events = append(events, ev.granted("org_admin", "dave", admins, "false"))
-	expect("operators unreadable", events...)
+	expect("role groups unreadable", events...)
 	if got := rows(" AND role = 'org_operator'"); !slices.Equal(got, []string{"org_operator:bob"}) {
 		t.Fatalf("operator rows after a failed listing: %v", got)
 	}
@@ -195,6 +194,7 @@ func TestRoleMembershipOrganization(t *testing.T) {
 	if err := w.syncOrganization(ctx); err != nil {
 		t.Fatal(err)
 	}
+	events = append(events, ev.granted("org_admin", "dave", admins, "false"))
 	expect("bob missed once", events...)
 	if got := rows(" AND role = 'org_operator'"); !slices.Equal(got, []string{"org_operator:bob?"}) {
 		t.Fatalf("operator rows after one missing listing: %v", got)
@@ -455,7 +455,9 @@ func TestRoleMembershipBlindToken(t *testing.T) {
 }
 
 // TestRoleMembershipBaselinePerRole (review 1, M3): each role's baseline ends with its own first successful
-// comparison; a role that keeps failing neither keeps the other roles in baseline nor is relabelled by them.
+// comparison; a role that is not compared neither keeps the other roles in baseline nor is relabelled by them. The role
+// groups share one listing (PDK-570), whose failure fails every role, so the role left out is one whose group is
+// missing.
 func TestRoleMembershipBaselinePerRole(t *testing.T) {
 	w := newRoleWorld(t)
 	org, slug, ctx := w.organization(t, "rb")
@@ -465,13 +467,13 @@ func TestRoleMembershipBaselinePerRole(t *testing.T) {
 	operators := organization.RoleGroup(slug, organization.GroupOperators)
 	w.dir.roleGroups[admins] = []ports.IdentityUser{{PK: pk + "ann", Username: "ann"}}
 	w.dir.roleGroups[operators] = []ports.IdentityUser{{PK: pk + "otto", Username: "otto"}}
-	w.dir.roleGroupFail = map[string]error{operators: errors.New("authentik: HTTP 503")}
-	if err := w.syncOrganization(ctx); err == nil {
-		t.Fatal("a failing listing did not fail the round")
+	w.dir.roleGroupFail = map[string]error{operators: fmt.Errorf("%s: %w", operators, ports.ErrGroupNotFound)}
+	if err := w.syncOrganization(ctx); err != nil {
+		t.Fatalf("a missing group failed the round: %v", err)
 	}
 	w.dir.roleGroups[admins] = append(w.dir.roleGroups[admins], ports.IdentityUser{PK: pk + "carol", Username: "carol"})
-	if err := w.syncOrganization(ctx); err == nil {
-		t.Fatal("a failing listing did not fail the round")
+	if err := w.syncOrganization(ctx); err != nil {
+		t.Fatalf("a missing group failed the round: %v", err)
 	}
 	w.dir.roleGroupFail = nil
 	if err := w.syncOrganization(ctx); err != nil {

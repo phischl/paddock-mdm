@@ -186,14 +186,6 @@ func (c *Client) OrganizationUsers(ctx context.Context, slug string) ([]ports.Id
 // roleGroupAttempts is how often a role group is listed again when its membership changed during a listing.
 const roleGroupAttempts = 3
 
-// RoleGroupUsers lists the direct members of the role group groupName. Authentik refuses a filter on a group name it
-// does not know with 400 on groups_by_name: ports.ErrGroupNotFound. Pages are numbered, so a member that leaves during
-// the listing shifts the next page and another member could be skipped: the listing is ordered by pk and repeated when
-// the total changed between pages or does not match what was read, and fails if it never settles.
-func (c *Client) RoleGroupUsers(ctx context.Context, groupName string) ([]ports.IdentityUser, error) {
-	return c.groupMembers(ctx, []string{groupName}, groupName)
-}
-
 // roleGroupsQueryBytes bounds the encoded group names of one listing of RoleGroupsUsers, so the request line stays
 // far below the limits of proxies and of Authentik's HTTP server (16 KiB for the request head).
 const roleGroupsQueryBytes = 4096
@@ -204,6 +196,57 @@ const roleGroupsQueryBytes = 4096
 // not exist are skipped (existingGroupsMembers). A user in groups of several batches is listed once per batch.
 func (c *Client) RoleGroupsUsers(ctx context.Context, groupNames []string) ([]ports.IdentityUser, error) {
 	var out []ports.IdentityUser
+	err := c.roleGroupBatches(ctx, groupNames, false, func(users []user, _ []string) error {
+		out = append(out, identities(users)...)
+		return nil
+	})
+	return out, err
+}
+
+// RoleGroupsMembers lists the direct members of the role groups groupNames, keyed by group, with the settled listing
+// of RoleGroupsUsers: an organization's three role groups take one listing instead of three (PDK-570). Each user comes
+// with its direct groups, so a user in several of the groups is a member of each. A group that does not exist has no
+// key; a group that exists without members has an empty one. Pages are numbered, so a member that leaves during the
+// listing shifts the next page and another member could be skipped: the listing is ordered by pk and repeated when
+// the total changed between pages or does not match what was read, and fails if it never settles. A listed user
+// whose direct groups name none of the listed groups fails the listing: the filter returned it as a member, so a
+// missing or changed groups_obj would otherwise read as empty role groups and revoke every admin.
+func (c *Client) RoleGroupsMembers(ctx context.Context, groupNames []string) (map[string][]ports.IdentityUser, error) {
+	out := make(map[string][]ports.IdentityUser, len(groupNames))
+	seen := make(map[string]map[int]bool, len(groupNames))
+	err := c.roleGroupBatches(ctx, groupNames, true, func(users []user, existing []string) error {
+		for _, name := range existing {
+			out[name] = []ports.IdentityUser{}
+			seen[name] = map[int]bool{}
+		}
+		for _, u := range users {
+			credited := false
+			for _, g := range u.GroupsObj {
+				if !slices.Contains(existing, g.Name) {
+					continue
+				}
+				credited = true
+				// The halving in existingGroupsMembers lists a user in groups of both halves twice.
+				if !seen[g.Name][u.PK] {
+					seen[g.Name][u.PK] = true
+					out[g.Name] = append(out[g.Name], u.identity())
+				}
+			}
+			if !credited {
+				return upstream(fmt.Errorf("user %d listed as a role group member without any of the groups %v", u.PK, existing))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// roleGroupBatches lists the members of the groups groupNames batch by batch (roleGroupsQueryBytes) and hands each
+// batch's users and the names of its groups that exist to fn; includeGroups lists every user's direct groups.
+func (c *Client) roleGroupBatches(ctx context.Context, groupNames []string, includeGroups bool, fn func(users []user, existing []string) error) error {
 	for len(groupNames) > 0 {
 		n, size := 0, 0
 		for n < len(groupNames) {
@@ -214,44 +257,50 @@ func (c *Client) RoleGroupsUsers(ctx context.Context, groupNames []string) ([]po
 			size += param
 			n++
 		}
-		users, err := c.existingGroupsMembers(ctx, groupNames[:n])
+		users, existing, err := c.existingGroupsMembers(ctx, groupNames[:n], includeGroups)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		out = append(out, users...)
+		if err := fn(users, existing); err != nil {
+			return err
+		}
 		groupNames = groupNames[n:]
 	}
-	return out, nil
+	return nil
 }
 
-// existingGroupsMembers lists the direct members of the groups names, skipping the groups that do not exist. Authentik
-// names the first unknown group in its refusal: that group is dropped and the rest listed again, so each missing group
-// costs one listing. A refusal that names none of them (a changed message) halves the batch instead.
-func (c *Client) existingGroupsMembers(ctx context.Context, names []string) ([]ports.IdentityUser, error) {
+// existingGroupsMembers lists the direct members of the groups names, skipping the groups that do not exist, and
+// returns the names of those that do. Authentik names the first unknown group in its refusal: that group is dropped
+// and the rest listed again, so each missing group costs one listing. A refusal that names none of them (a changed
+// message) halves the batch instead.
+func (c *Client) existingGroupsMembers(ctx context.Context, names []string, includeGroups bool) ([]user, []string, error) {
 	for len(names) > 0 {
-		users, err := c.groupMembers(ctx, names, fmt.Sprintf("%d role groups from %s", len(names), names[0]))
+		users, err := c.groupMembers(ctx, names, fmt.Sprintf("%d role groups from %s", len(names), names[0]), includeGroups)
 		var missing *missingGroup
 		if !errors.As(err, &missing) {
-			return users, err
+			if err != nil {
+				return nil, nil, err
+			}
+			return users, names, nil
 		}
 		if len(names) == 1 {
-			return nil, nil
+			return nil, nil, nil
 		}
 		if i := slices.IndexFunc(names, func(n string) bool { return strings.Contains(missing.body, " "+n+" ") }); i >= 0 {
 			names = slices.Delete(slices.Clone(names), i, i+1)
 			continue
 		}
-		first, err := c.existingGroupsMembers(ctx, names[:len(names)/2])
+		first, firstNames, err := c.existingGroupsMembers(ctx, names[:len(names)/2], includeGroups)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		second, err := c.existingGroupsMembers(ctx, names[len(names)/2:])
+		second, secondNames, err := c.existingGroupsMembers(ctx, names[len(names)/2:], includeGroups)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return append(first, second...), nil
+		return append(first, second...), append(firstNames, secondNames...), nil
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 // missingGroup is Authentik's refusal of a group name it does not know; body is the refusal, which names the group.
@@ -261,10 +310,11 @@ func (e *missingGroup) Error() string { return e.what + ": " + ports.ErrGroupNot
 
 func (e *missingGroup) Unwrap() error { return ports.ErrGroupNotFound }
 
-// groupMembers lists the direct members of any of the groups names in one settled listing; what names them in an
-// error. Authentik refuses a filter on a group name it does not know with 400 on groups_by_name: ErrGroupNotFound.
-func (c *Client) groupMembers(ctx context.Context, names []string, what string) ([]ports.IdentityUser, error) {
-	out, err := c.settledUsers(ctx, url.Values{"groups_by_name": names}, what)
+// groupMembers lists the direct members of any of the groups names in one settled listing, with their direct groups
+// when includeGroups is set; what names them in an error. Authentik refuses a filter on a group name it does not know
+// with 400 on groups_by_name: ErrGroupNotFound.
+func (c *Client) groupMembers(ctx context.Context, names []string, what string, includeGroups bool) ([]user, error) {
+	out, err := c.settledUsers(ctx, url.Values{"groups_by_name": names, "include_groups": {strconv.FormatBool(includeGroups)}}, what)
 	var st *errStatus
 	if errors.As(err, &st) && st.code == http.StatusBadRequest && strings.Contains(st.body, `"groups_by_name"`) {
 		return nil, &missingGroup{what: what, body: st.body}
@@ -273,9 +323,21 @@ func (c *Client) groupMembers(ctx context.Context, names []string, what string) 
 }
 
 // Superusers lists the users with Authentik superuser rights (is_superuser=true: a member of a group with superuser
-// rights), with the same settled listing as RoleGroupUsers (plan M8b decision 33).
+// rights), with the same settled listing as RoleGroupsMembers (plan M8b decision 33).
 func (c *Client) Superusers(ctx context.Context) ([]ports.IdentityUser, error) {
-	return c.settledUsers(ctx, url.Values{"is_superuser": {"true"}}, "the superusers")
+	users, err := c.settledUsers(ctx, url.Values{"is_superuser": {"true"}}, "the superusers")
+	if err != nil {
+		return nil, err
+	}
+	return identities(users), nil
+}
+
+func identities(users []user) []ports.IdentityUser {
+	out := make([]ports.IdentityUser, 0, len(users))
+	for _, u := range users {
+		out = append(out, u.identity())
+	}
+	return out
 }
 
 // GroupReadable reads the group groupName by name. Authentik validates the groups_by_name filter of a user listing
@@ -310,7 +372,7 @@ func (c *Client) UsersVisible(ctx context.Context) (bool, error) {
 
 // settledUsers lists the users matching filter, repeating the listing when it did not settle; what names the listing
 // in the error.
-func (c *Client) settledUsers(ctx context.Context, filter url.Values, what string) ([]ports.IdentityUser, error) {
+func (c *Client) settledUsers(ctx context.Context, filter url.Values, what string) ([]user, error) {
 	for range roleGroupAttempts {
 		out, settled, err := c.listSettled(ctx, filter, what)
 		if err != nil || settled {
@@ -322,7 +384,7 @@ func (c *Client) settledUsers(ctx context.Context, filter url.Values, what strin
 
 // listSettled reads every page of the users matching filter; settled is false when the total changed between pages or
 // differs from the members read.
-func (c *Client) listSettled(ctx context.Context, filter url.Values, what string) (out []ports.IdentityUser, settled bool, err error) {
+func (c *Client) listSettled(ctx context.Context, filter url.Values, what string) (out []user, settled bool, err error) {
 	q := url.Values{"include_groups": {"false"}, "ordering": {"pk"}, "page_size": {strconv.Itoa(pageSize)}}
 	maps.Copy(q, filter)
 	total := -1
@@ -342,9 +404,7 @@ func (c *Client) listSettled(ctx context.Context, filter url.Values, what string
 			return nil, false, nil
 		}
 		total = res.Pagination.Count
-		for _, u := range res.Results {
-			out = append(out, u.identity())
-		}
+		out = append(out, res.Results...)
 		if res.Pagination.Next == 0 {
 			return out, len(out) == total, nil
 		}
