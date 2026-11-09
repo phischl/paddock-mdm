@@ -462,3 +462,18 @@ bundle, so none of them applies organization-wide or fails a bundle in between.
   (`audience_user_dropped` warning) instead of failing the device's bundle.
 - **Decision 18:** PDK-799 and PDK-800 are coupled. The agent built from a tree with PDK-799 but without PDK-800
   accepts Flatpak and `available` entries it cannot execute, so no agent is released from such a tree.
+
+## Amendment 2026-11-09 (architect decisions A10-9 and A10-10, PDK-918)
+
+- **A10-10, compile warnings:** the compiler persists what it shortens or drops against an assignment in the
+  organization-scoped table `compile_warning` (migration `00116_compile_warning.sql`; ENABLE and FORCE RLS on
+  `paddock.org_id`; compiler `SELECT, INSERT, DELETE`, API `SELECT`). A row names the device, and the assignment and
+  catalog entry it concerns, a stable English code and its params (never user names). Each compile of a device replaces
+  its rows (at most 100 per device); a blocked or unpublished bundle keeps the rows of the current one. The portal
+  (PDK-804) reads them through `GET /api/v1/compile-warnings` (list contract, filters `device_id`, `assignment_id`,
+  `catalog_entry_id`, `code`). Q13's `audience_truncated` is persisted this way, one row per assignment the package's
+  audience came from; `audience_user_dropped` stays a log line.
+- **A10-9, forbid flatpak:** when the `flatpak` package itself resolves to `forbid` or `uninstall` on a device, the
+  compiler leaves out every Flatpak application of that device, and with them the Flatpak remotes and the runtime
+  package; the APT part of the section is unchanged. Each required or available application left out records
+  `flatpak_forbidden` (param `flatpak_ref`) for its assignments. The runbook (PDK-805) explains it.

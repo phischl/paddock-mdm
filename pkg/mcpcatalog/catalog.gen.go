@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "58e854d1a8a50df5b7de1c58157675953463a157ab8adb384502392373f6ae31"
+const Version = "c91f442b3e777a74f9d577409a42b7c31839bb1dfa4c5df3ba3337b6252850e0"
 
 var tools = []Tool{
 	{
@@ -2743,6 +2743,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator, org_auditor. Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: applied_at), q (search over: actor_display).",
 		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"rollout\":{\"description\":\"Repeatable.\",\"items\":{\"description\":\"immediate: every device receives the change at once. staged: the change set started a rollout. urgent: it would have been staged and skipped the rollout with a reason.\",\"enum\":[\"immediate\",\"staged\",\"urgent\"],\"type\":\"string\"},\"type\":\"array\"},\"sort\":{\"default\":\"-applied_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"applied_at\",\"-applied_at\"],\"type\":\"string\"},\"source\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"session\",\"api_token\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
+	},
+	{
+		Name:        "listCompileWarnings",
+		Method:      "GET",
+		Path:        "/api/v1/compile-warnings",
+		Pattern:     "GET /api/v1/compile-warnings",
+		Tag:         "software",
+		Scope:       ScopeOrganization,
+		Class:       ClassRead,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  true,
+		AuditCode:   "",
+		Summary:     "",
+		Description: "Roles: org_admin, org_operator, org_auditor. What the compiler shortened or dropped from a device's bundle against what an administrator assigned (architect decisions A10-9 and A10-10), from the device's latest compile: each compile of a device replaces its warnings, and a device whose bundle was blocked keeps those of its current bundle. Codes are stable English identifiers the portal localizes: audience_truncated (the audience of an available package named more users than a bundle carries; params users, kept) and flatpak_forbidden (an entry forbids or uninstalls the flatpak package on the device, so its required or available Flatpak application is left out; params flatpak_ref). A warning names the assignment and catalog entry it concerns. The search matches the hostname and the code. A device, assignment or entry of another organization matches nothing.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: created_at, hostname, code), q (search over: hostname, code).",
+		InputSchema: json.RawMessage("{\"properties\":{\"assignment_id\":{\"description\":\"Only warnings of this software assignment.\",\"format\":\"uuid\",\"type\":\"string\"},\"catalog_entry_id\":{\"description\":\"Only warnings of this catalog entry.\",\"format\":\"uuid\",\"type\":\"string\"},\"code\":{\"description\":\"Only warnings with this code.\",\"maxLength\":64,\"type\":\"string\"},\"device_id\":{\"description\":\"Only warnings of this device.\",\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"-created_at\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"created_at\",\"-created_at\",\"hostname\",\"-hostname\",\"code\",\"-code\"],\"type\":\"string\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listComponentTargets",

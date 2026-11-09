@@ -284,6 +284,17 @@ type ChangeSet struct {
 	Reason             *string
 }
 
+type CompileWarning struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	AssignmentID   uuid.NullUUID
+	CatalogEntryID uuid.NullUUID
+	Code           string
+	Params         json.RawMessage
+	CreatedAt      time.Time
+}
+
 type ComponentTarget struct {
 	Component string
 	Version   string

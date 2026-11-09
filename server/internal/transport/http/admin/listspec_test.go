@@ -47,6 +47,7 @@ var lists = map[string]struct {
 		"ListNotificationDestinations", `d\.id`},
 	"listPlatformNotificationDestinations": {notificationDestinationList, "postgres/queries/notifications.sql",
 		"ListNotificationDestinations", `d\.id`},
+	"listCompileWarnings": {compileWarningList, "postgres/queries/compile_warning.sql", "ListCompileWarnings", `w\.id`},
 	"listPackageHolds":    {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
 	"listSoftwareSources": {softwareSourceList, "postgres/queries/software.sql", "ListSoftwareSources", "id"},
 	"listSoftwareCatalog": {softwareCatalogList, "postgres/queries/software.sql", "ListSoftwareCatalogEntries", `e\.id`},
@@ -99,6 +100,7 @@ var sortColumns = map[string]map[string]string{
 	},
 	"listSoftwareAssignments": {"created_at": "a.created_at", "updated_at": "a.updated_at", "intent": "a.intent"},
 	"listUserSoftware":        {"name": "e.name", "intent": "a.intent"},
+	"listCompileWarnings":     {"created_at": "w.created_at", "hostname": "d.hostname", "code": "w.code"},
 	"listDeviceDiagnostics":   {"requested_at": "dd.requested_at", "state": "dd.state"},
 	"listDiagnostics":         {"requested_at": "dd.requested_at", "hostname": "d.hostname", "state": "dd.state"},
 	"listFindings": {

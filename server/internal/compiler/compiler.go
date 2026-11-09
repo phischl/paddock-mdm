@@ -150,6 +150,8 @@ type rendered struct {
 	forced bool
 	// rollout is the open configuration rollout whose wave the device is in (plan M11 decision 30).
 	rollout uuid.NullUUID
+	// warnings are the compile warnings of the device (PDK-918), also set when the content is unchanged.
+	warnings []compileWarning
 }
 
 // compileTarget is a device to compile with what decides its schema.
@@ -189,6 +191,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 	var todo []rendered
 	var failures []renderFailure
 	var seen []pgstore.SetDeviceCompiledPlatformParams
+	warnings := map[uuid.UUID]deviceWarnings{}
 	keys, err := c.keys(ctx)
 	if err != nil {
 		return err
@@ -246,6 +249,8 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			}
 			if failure != nil {
 				failures = append(failures, *failure)
+			} else {
+				warnings[row.ID] = deviceWarnings{seq: row.BundleSeq, warnings: r.warnings}
 			}
 			// A blocked device is recorded too: its compile was attempted with these values, and the failure is
 			// recorded once, not on every reconcile round.
@@ -269,8 +274,15 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		seen = slices.DeleteFunc(seen, func(p pgstore.SetDeviceCompiledPlatformParams) bool {
 			return slices.ContainsFunc(todo, func(r rendered) bool { return r.device == p.ID }) && !slices.Contains(committed, p.ID)
 		})
+		for _, r := range todo {
+			if slices.Contains(committed, r.device) {
+				warnings[r.device] = deviceWarnings{seq: r.oldSeq + 1, warnings: r.warnings}
+			} else {
+				delete(warnings, r.device)
+			}
+		}
 	}
-	return errors.Join(publishErr, c.recordPlatform(ctx, seen))
+	return errors.Join(publishErr, c.recordPlatform(ctx, seen), c.recordWarnings(ctx, org, warnings))
 }
 
 // recordPlatform stores the architecture, os-release and agent version the compile of each device read, after its
@@ -421,6 +433,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	var updatesSection *bundle.UpdatesSpec
 	var diskSection *bundle.DiskSpec
 	var softwareSection *bundle.SoftwareSpec
+	var warnings []compileWarning
 	agent := bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}
 	if t.v2 {
 		v2 = keys
@@ -440,7 +453,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 			// Conflicts are dropped as UpdatesSection drops those of the holds (plan M13a decision 10): the smallest
 			// version wins either way. The software holds stay outside the rollout overlay until M13c (plan M11 R2.10).
 			var err error
-			if softwareSection, softwareHolds, _, err = keys.Software.section(ctx, t.id, groups, t.osID, t.versionID, t.arch, t.agent); err != nil {
+			if softwareSection, softwareHolds, _, warnings, err = keys.Software.section(ctx, t.id, groups, t.osID, t.versionID, t.arch, t.agent); err != nil {
 				return rendered{}, false, &renderFailure{device: t.id, reason: err.Error() +
 					"; the device keeps its previous bundle until the catalog is fixed"}, nil
 			}
@@ -482,7 +495,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	switch {
 	case unchanged && !t.forced:
 		metricBundles.WithLabelValues("unchanged").Inc()
-		return rendered{}, false, nil, nil
+		return rendered{device: t.id, warnings: warnings}, false, nil, nil
 	case err != nil && !db.IsNoRows(err):
 		return rendered{}, false, nil, err
 	}
@@ -491,7 +504,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		return rendered{}, false, nil, err
 	}
 	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted,
-		forced: unchanged, rollout: rollout}, true, nil, nil
+		forced: unchanged, rollout: rollout, warnings: warnings}, true, nil, nil
 }
 
 // v2Trust are the key material, the revocation section, the organization's dead man's switch, the inventory section

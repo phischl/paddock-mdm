@@ -2237,6 +2237,33 @@ export interface paths {
         patch: operations["updateSoftwareAssignment"];
         trace?: never;
     };
+    "/api/v1/compile-warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. What the compiler shortened or dropped from a device's bundle
+         *     against what an administrator assigned (architect decisions A10-9 and A10-10), from the device's latest
+         *     compile: each compile of a device replaces its warnings, and a device whose bundle was blocked keeps those of its
+         *     current bundle. Codes are stable English identifiers the portal localizes: audience_truncated (the audience of
+         *     an available package named more users than a bundle carries; params users, kept) and flatpak_forbidden (an
+         *     entry forbids or uninstalls the flatpak package on the device, so its required or available Flatpak
+         *     application is left out; params flatpak_ref). A warning names the assignment and catalog entry it concerns.
+         *     The search matches the hostname and the code. A device, assignment or entry of another organization matches
+         *     nothing.
+         */
+        get: operations["listCompileWarnings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/overview": {
         parameters: {
             query?: never;
@@ -6818,6 +6845,45 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        CompileWarning: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            /**
+             * Format: uuid
+             * @description The software assignment the warning concerns; null when it concerns the device only.
+             */
+            assignment_id: string | null;
+            /**
+             * Format: uuid
+             * @description The catalog entry of that assignment.
+             */
+            catalog_entry_id: string | null;
+            /** @description audience_truncated or flatpak_forbidden; the list of codes may grow. */
+            code: string;
+            /** @description The values of the code (audience_truncated users and kept, flatpak_forbidden flatpak_ref); never user names. */
+            params: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: date-time
+             * @description The compile that recorded the warning.
+             */
+            created_at: string;
+        };
+        CompileWarningPage: {
+            items: components["schemas"]["CompileWarning"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         SoftwareAssignmentPage: {
             items: components["schemas"]["SoftwareAssignment"][];
             page: number;
@@ -8972,6 +9038,8 @@ export interface components {
         SoftwareSourceSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         SoftwareCatalogSort: "name" | "-name" | "category" | "-category" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        CompileWarningSort: "created_at" | "-created_at" | "hostname" | "-hostname" | "code" | "-code";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         SoftwareAssignmentSort: "created_at" | "-created_at" | "updated_at" | "-updated_at" | "intent" | "-intent";
         /** @description Only entries of this category. */
@@ -13263,6 +13331,45 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    listCompileWarnings: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["CompileWarningSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only warnings of this device. */
+                device_id?: string;
+                /** @description Only warnings of this software assignment. */
+                assignment_id?: string;
+                /** @description Only warnings of this catalog entry. */
+                catalog_entry_id?: string;
+                /** @description Only warnings with this code. */
+                code?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of compile warnings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompileWarningPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     getOverview: {
