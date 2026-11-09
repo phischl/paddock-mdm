@@ -97,7 +97,7 @@ func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 		return err
 	}
 	for _, b := range latest {
-		if err := c.cache.PutBundlePointer(ctx, b.DeviceID, pointer(b)); err != nil {
+		if err := c.cache.PutBundlePointer(ctx, b.DeviceID, pointer(ctx, b)); err != nil {
 			return err
 		}
 	}
@@ -129,6 +129,14 @@ func mergeIDs(a, b []uuid.UUID) []uuid.UUID {
 	return a
 }
 
-func pointer(b pgstore.Bundle) devicecache.BundlePointer {
-	return devicecache.BundlePointer{Version: b.Version, SHA256: hex.EncodeToString(b.EnvelopeSha256), ObjectKey: b.ObjectKey}
+// pointer is the bundle pointer of b, with the icons the bundle row recorded (architect decision A10-14).
+func pointer(ctx context.Context, b pgstore.Bundle) devicecache.BundlePointer {
+	var digests map[string]string
+	if err := json.Unmarshal(b.Icons, &digests); err != nil {
+		// The column is a JSON object of strings; anything else only costs the icons, never the bundle.
+		slog.WarnContext(ctx, "bundle icons unreadable; the device shows category glyphs", "device_id", b.DeviceID, "error", err)
+		digests = nil
+	}
+	return devicecache.BundlePointer{Version: b.Version, SHA256: hex.EncodeToString(b.EnvelopeSha256), ObjectKey: b.ObjectKey,
+		Icons: iconKeys(b.OrganizationID, digests)}
 }

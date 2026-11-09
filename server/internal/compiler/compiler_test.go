@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -376,7 +377,7 @@ func TestReconcileRestoresPointers(t *testing.T) {
 	if err := w.comp.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := w.cache.BundlePointer(context.Background(), d); got != want {
+	if got, _, _ := w.cache.BundlePointer(context.Background(), d); !reflect.DeepEqual(got, want) {
 		t.Fatalf("pointer %+v, want %+v", got, want)
 	}
 }

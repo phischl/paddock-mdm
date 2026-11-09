@@ -500,6 +500,13 @@ func TestValidateSoftware(t *testing.T) {
 		"unknown architecture":       {func(s *SoftwareSpec) { s.Sources[0].Architectures = []string{"i386"} }, false},
 		"invalid catalog entry id":   {func(s *SoftwareSpec) { s.Packages[1].CatalogEntryID = "x" }, false},
 		"uppercase catalog entry id": {func(s *SoftwareSpec) { s.Packages[1].CatalogEntryID = strings.ToUpper(s.Packages[1].CatalogEntryID) }, false},
+		// Architect decision A10-14: the digest of the entry's icon.
+		"icon digest":           {func(s *SoftwareSpec) { s.Packages[1].IconSHA256 = strings.Repeat("ab", 32) }, true},
+		"short icon digest":     {func(s *SoftwareSpec) { s.Packages[1].IconSHA256 = strings.Repeat("ab", 31) }, false},
+		"uppercase icon digest": {func(s *SoftwareSpec) { s.Packages[1].IconSHA256 = strings.Repeat("AB", 32) }, false},
+		"runtime with icon digest": {func(s *SoftwareSpec) {
+			s.Packages[1].CatalogEntryID, s.Packages[1].IconSHA256 = SoftwareRuntimeEntryID, strings.Repeat("ab", 32)
+		}, false},
 		// Plan M13b decision 7: available, audiences and Flatpak.
 		"available to all": {func(s *SoftwareSpec) { available(s, &SoftwareAudience{All: true}) }, true},
 		"available to users": {func(s *SoftwareSpec) {

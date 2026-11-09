@@ -131,6 +131,11 @@ SELECT count(*) FROM (
 SELECT id, organization_id, name, description, category, source_id, packages, created_by, created_at, updated_at
 FROM software_catalog_entry ORDER BY name, id;
 
+-- name: ListSoftwareCatalogIcons :many
+-- The icons of the organization's entries (compiler): it validates them, names their digests in the bundles and writes
+-- them to object storage (architect decision A10-14).
+SELECT id, icon::bytea AS icon FROM software_catalog_entry WHERE icon IS NOT NULL ORDER BY id;
+
 -- name: InsertSoftwareAssignment :exec
 INSERT INTO software_assignment (id, organization_id, catalog_entry_id, device_group_id, user_id, user_group_id, intent,
   update_rule, version, reason, created_by)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -118,7 +119,28 @@ func TestGatewayKeys(t *testing.T) {
 	if p, _, _ := cache.BundlePointer(ctx, dev); p.Version != 2 {
 		t.Fatalf("pointer moved back to %d", p.Version)
 	}
-
+	// Architect decision A10-14: the icons travel with the pointer, and a newer bundle replaces them all.
+	entry := uuid.NewString()
+	icons := map[string]string{entry: "org/o/icons/a.png", uuid.NewString(): "org/o/icons/b.png"}
+	if err := cache.PutBundlePointer(ctx, dev, devicecache.BundlePointer{Version: 3, SHA256: "s", ObjectKey: "k", Icons: icons}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := cache.BundlePointer(ctx, dev); p.Version != 3 || p.ObjectKey != "k" || !maps.Equal(p.Icons, icons) {
+		t.Fatalf("pointer with icons %+v", p)
+	}
+	if err := cache.PutBundlePointer(ctx, dev, devicecache.BundlePointer{Version: 4, SHA256: "s", ObjectKey: "k4",
+		Icons: map[string]string{entry: "org/o/icons/c.png"}}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := cache.BundlePointer(ctx, dev); len(p.Icons) != 1 || p.Icons[entry] != "org/o/icons/c.png" {
+		t.Fatalf("icons of the newer bundle %+v", p.Icons)
+	}
+	if err := cache.PutBundlePointer(ctx, dev, devicecache.BundlePointer{Version: 5, SHA256: "s", ObjectKey: "k5"}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := cache.BundlePointer(ctx, dev); p.Icons != nil {
+		t.Fatalf("icons of a bundle without icons %+v", p.Icons)
+	}
 }
 
 // TestSeqAfterCacheLoss (PDK-475): on an emptied Valkey the counter does not restart at 1 below

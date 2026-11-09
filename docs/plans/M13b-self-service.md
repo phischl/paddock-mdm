@@ -491,3 +491,26 @@ bundle, so none of them applies organization-wide or fails a bundle in between.
   its assignments. An assignment whose targeted owners all have names a bundle cannot carry does not apply, rather than
   widening to system scope. The field is additive (ADR 0013); agents before `selfServiceAgent` get no Flatpak
   application and so never see it (A10-6). PDK-800 acts only for the listed users.
+
+## Amendment 2026-11-09 (architect decision A10-14, PDK-935)
+
+- **A10-14, how devices fetch catalog icons:** option (b), object storage with the bundles' path and access model.
+  Decision 16's `GET /v1/catalog/{entry_id}/icon` answers **302** to a presigned GET on the bundles host (validity of a
+  bundle URL, 120 s), not 200 `image/png`; there are no new Valkey keys, no ACL change and no new internal boundary.
+- **Writer:** the compiler, which writes bundles. It reads the organization's icons with the catalog, checks each with
+  `software.ValidateIcon` (the api's upload rules: PNG, 64 KiB, 512 × 512 pixels; a failing icon is left out and the
+  entry shows the glyph) and uploads every icon a published bundle names once per publish batch, content-addressed, to
+  `org/<org>/icons/<sha256>.png` in `paddock-bundles` (`image/png`). A bundle naming an icon whose upload failed is not
+  committed and is retried like a failed bundle upload, so a pointer never names a missing icon.
+- **Resolution in the gateway:** the bundle pointer `bp:<device>` (an existing key) gains one hash field
+  `icon:<entry_id>` = object key per icon its bundle names. The gateway answers only an entry of the requesting
+  device's own pointer whose key lies below `org/<device's organization>/icons/`; anything else is 404 `not_found`.
+  The bundle row records the digests (`bundle.icons`, entry ID → hex SHA-256) so the reconcile loop restores the
+  icon fields with the pointer after a Valkey loss.
+- **Bundle (additive, ADR 0013):** a software package of an entry with a valid icon carries `icon_sha256` (64 lower-case
+  hex; never on the flatpak runtime). A changed icon therefore changes the bundle and moves the pointer; only an agent
+  from `selfServiceAgent` gets the field (A10-6), as an older agent refuses unknown fields.
+- **Device:** the client sends the signed GET without following redirects, then fetches the `Location` with a plain
+  GET (the signed headers never reach the object store) and accepts only 200 `image/png` of at most 64 KiB with the
+  PNG signature; anything else is an error, and the self-service app shows the category glyph (decision 16 unchanged).
+  Re-fetching an icon whose `icon_sha256` changed and checking the digest is a follow-up of the agent's icon cache.

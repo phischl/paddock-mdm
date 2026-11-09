@@ -1,12 +1,10 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image/png"
 	"maps"
 	"slices"
 	"strings"
@@ -680,24 +678,9 @@ func entryFields(old pgstore.GetSoftwareCatalogEntryForUpdateRow, oldPackages []
 	return fields
 }
 
-var pngSignature = []byte("\x89PNG\r\n\x1a\n")
-
-// validateIcon checks the PNG signature and the header: a larger or non-PNG body is invalid_request.
+// validateIcon checks the icon with the catalog's rules: a larger or non-PNG body is invalid_request.
 func validateIcon(icon []byte) error {
-	if len(icon) > software.MaxIconBytes {
-		return problem.InvalidRequest.WithDetail(fmt.Sprintf("icon exceeds %d bytes", software.MaxIconBytes))
-	}
-	if !bytes.HasPrefix(icon, pngSignature) {
-		return problem.InvalidRequest.WithDetail("icon must be a PNG image")
-	}
-	cfg, err := png.DecodeConfig(bytes.NewReader(icon))
-	if err != nil {
-		return problem.InvalidRequest.WithDetail("icon must be a PNG image")
-	}
-	if cfg.Width < 1 || cfg.Height < 1 || cfg.Width > software.MaxIconDimension || cfg.Height > software.MaxIconDimension {
-		return problem.InvalidRequest.WithDetail(fmt.Sprintf("icon must be at most %d by %d pixels", software.MaxIconDimension, software.MaxIconDimension))
-	}
-	return nil
+	return softwareRuleProblem(software.ValidateIcon(icon), software.ErrIcon)
 }
 
 // softwareEntryProblem and softwareAssignmentProblem map a validation error of the domain to invalid_request; the

@@ -263,6 +263,7 @@ type Bundle struct {
 	CreatedAt       time.Time
 	SchemaVersion   int32
 	ConfigRolloutID uuid.NullUUID
+	Icons           json.RawMessage
 }
 
 type ChangeSet struct {

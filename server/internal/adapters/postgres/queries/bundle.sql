@@ -52,9 +52,9 @@ UPDATE device SET bundle_seq = @new_seq WHERE id = @id AND bundle_seq = @old_seq
 
 -- name: InsertBundle :exec
 INSERT INTO bundle (device_id, version, organization_id, content_sha256, envelope_sha256, object_key, schema_version,
-  config_rollout_id)
+  config_rollout_id, icons)
 VALUES (@device_id, @version, @organization_id, @content_sha256, @envelope_sha256, @object_key, @schema_version,
-  sqlc.narg(config_rollout_id));
+  sqlc.narg(config_rollout_id), @icons);
 
 -- name: ListLatestBundles :many
 SELECT DISTINCT ON (device_id) * FROM bundle ORDER BY device_id, version DESC;

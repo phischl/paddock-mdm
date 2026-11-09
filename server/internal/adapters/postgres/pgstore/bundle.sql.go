@@ -7,6 +7,7 @@ package pgstore
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,9 +15,9 @@ import (
 
 const insertBundle = `-- name: InsertBundle :exec
 INSERT INTO bundle (device_id, version, organization_id, content_sha256, envelope_sha256, object_key, schema_version,
-  config_rollout_id)
+  config_rollout_id, icons)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
-  $8)
+  $8, $9)
 `
 
 type InsertBundleParams struct {
@@ -28,6 +29,7 @@ type InsertBundleParams struct {
 	ObjectKey       string
 	SchemaVersion   int32
 	ConfigRolloutID uuid.NullUUID
+	Icons           json.RawMessage
 }
 
 func (q *Queries) InsertBundle(ctx context.Context, arg InsertBundleParams) error {
@@ -40,6 +42,7 @@ func (q *Queries) InsertBundle(ctx context.Context, arg InsertBundleParams) erro
 		arg.ObjectKey,
 		arg.SchemaVersion,
 		arg.ConfigRolloutID,
+		arg.Icons,
 	)
 	return err
 }
@@ -221,7 +224,7 @@ func (q *Queries) ListDevicesWithOutdatedSchema(ctx context.Context) ([]uuid.UUI
 }
 
 const listLatestBundles = `-- name: ListLatestBundles :many
-SELECT DISTINCT ON (device_id) device_id, version, organization_id, content_sha256, envelope_sha256, object_key, created_at, schema_version, config_rollout_id FROM bundle ORDER BY device_id, version DESC
+SELECT DISTINCT ON (device_id) device_id, version, organization_id, content_sha256, envelope_sha256, object_key, created_at, schema_version, config_rollout_id, icons FROM bundle ORDER BY device_id, version DESC
 `
 
 func (q *Queries) ListLatestBundles(ctx context.Context) ([]Bundle, error) {
@@ -243,6 +246,7 @@ func (q *Queries) ListLatestBundles(ctx context.Context) ([]Bundle, error) {
 			&i.CreatedAt,
 			&i.SchemaVersion,
 			&i.ConfigRolloutID,
+			&i.Icons,
 		); err != nil {
 			return nil, err
 		}

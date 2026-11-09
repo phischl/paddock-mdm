@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -120,20 +121,90 @@ func (c *Client) send(ctx context.Context, method, path, device string, seq int6
 		return nil, err
 	}
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		e := &APIError{Status: res.StatusCode}
-		_ = json.Unmarshal(data, &e.Problem)
-		if s, err := strconv.Atoi(res.Header.Get("Retry-After")); err == nil && s > 0 {
-			e.RetryAfter = time.Duration(s) * time.Second
-		}
-		return nil, e
+		return nil, apiError(res, data)
 	}
 	return data, nil
 }
 
-// CatalogIcon fetches the PNG icon of a catalog entry for the self-service app (plan M13b decision 16); an entry
-// without an icon is an *APIError with status 404.
+// apiError is the *APIError of a non-2xx answer with body data.
+func apiError(res *http.Response, data []byte) *APIError {
+	e := &APIError{Status: res.StatusCode}
+	_ = json.Unmarshal(data, &e.Problem)
+	if s, err := strconv.Atoi(res.Header.Get("Retry-After")); err == nil && s > 0 {
+		e.RetryAfter = time.Duration(s) * time.Second
+	}
+	return e
+}
+
+// MaxIconBytes bounds a catalog icon (the server's software.MaxIconBytes).
+const MaxIconBytes = 64 << 10
+
+// ErrInvalidIcon is a catalog icon download that is not 200 image/png of at most MaxIconBytes.
+var ErrInvalidIcon = errors.New("catalog icon: not a PNG of at most 64 KiB")
+
+var pngMagic = []byte("\x89PNG\r\n\x1a\n")
+
+// CatalogIcon fetches the PNG icon of a catalog entry for the self-service app (plan M13b decision 16). The device API
+// answers the signed GET with a redirect to the icon in the bundles bucket (architect decision A10-14); the client
+// follows it with a plain GET, so the signed headers never reach the object store, and returns the icon only if the
+// answer is 200 image/png of at most MaxIconBytes with the PNG signature. An entry without an icon is an *APIError
+// with status 404; any other failure is an error, and the caller shows the category glyph.
 func (c *Client) CatalogIcon(ctx context.Context, deviceID string, seq int64, entryID string) ([]byte, error) {
-	return c.send(ctx, http.MethodGet, "/v1/catalog/"+url.PathEscape(entryID)+"/icon", deviceID, seq, nil, false)
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/v1/catalog/"+url.PathEscape(entryID)+"/icon", nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := protocol.Sign(req, nil, c.key.Private, deviceID, c.key.KeyID, seq, c.now()); err != nil {
+		return nil, err
+	}
+	noFollow := *c.http
+	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	res, err := noFollow.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
+	_ = res.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	switch res.StatusCode {
+	case http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect:
+	default:
+		if res.StatusCode < 200 || res.StatusCode > 299 {
+			return nil, apiError(res, data)
+		}
+		return nil, fmt.Errorf("catalog icon: HTTP %d instead of a redirect", res.StatusCode)
+	}
+	loc, err := res.Location()
+	if err != nil {
+		return nil, fmt.Errorf("catalog icon: %w", err)
+	}
+	get, err := http.NewRequestWithContext(ctx, http.MethodGet, loc.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	icon, err := c.http.Do(get)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = icon.Body.Close() }()
+	if icon.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("catalog icon: object store HTTP %d", icon.StatusCode)
+	}
+	if mt, _, err := mime.ParseMediaType(icon.Header.Get("Content-Type")); err != nil || mt != "image/png" {
+		return nil, ErrInvalidIcon
+	}
+	data, err = io.ReadAll(io.LimitReader(icon.Body, MaxIconBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxIconBytes || !bytes.HasPrefix(data, pngMagic) {
+		return nil, ErrInvalidIcon
+	}
+	return data, nil
 }
 
 // Enroll sends the enrollment request and returns the enrollment ID.

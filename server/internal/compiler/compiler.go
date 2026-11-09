@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -115,6 +116,12 @@ func ObjectKey(org, dev uuid.UUID, version int64) string {
 	return fmt.Sprintf("org/%s/devices/%s/bundles/%d.dsse", org, dev, version)
 }
 
+// IconObjectKey is the content-addressed key of a catalog icon in the bundles bucket, below its organization's prefix
+// (architect decision A10-14); sha256 is the icon's hex SHA-256.
+func IconObjectKey(org uuid.UUID, sha256 string) string {
+	return fmt.Sprintf("org/%s/icons/%s.png", org, sha256)
+}
+
 // Compile recompiles the active devices in the scopes of events, organization by organization.
 func (c *Compiler) Compile(ctx context.Context, events []statechange.Event) error {
 	byOrg := map[uuid.UUID][]statechange.Event{}
@@ -152,6 +159,8 @@ type rendered struct {
 	rollout uuid.NullUUID
 	// warnings are the compile warnings of the device (PDK-918), also set when the content is unchanged.
 	warnings []compileWarning
+	// icons are the catalog icons the bundle names, by entry ID (architect decision A10-14).
+	icons map[string]catalogIcon
 }
 
 // compileTarget is a device to compile with what decides its schema.
@@ -504,7 +513,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		return rendered{}, false, nil, err
 	}
 	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted,
-		forced: unchanged, rollout: rollout, warnings: warnings}, true, nil, nil
+		forced: unchanged, rollout: rollout, warnings: warnings, icons: keys.Software.bundleIcons(b.Software)}, true, nil, nil
 }
 
 // v2Trust are the key material, the revocation section, the organization's dead man's switch, the inventory section
@@ -575,10 +584,16 @@ func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) 
 	}
 	var errs []error
 	var committed []uuid.UUID
+	iconErrs := c.uploadIcons(ctx, org, todo)
 	for i, r := range todo {
 		env, err := dsse.New(bundle.PayloadType, r.payload, dsse.Signature{
 			KeyID: bundlesign.KeyID(sigs[i].KeyVersion), Sig: base64.StdEncoding.EncodeToString(sigs[i].Value),
 		}).Encode()
+		for _, ic := range r.icons {
+			if err == nil {
+				err = iconErrs[ic.sha256]
+			}
+		}
 		if err == nil {
 			err = c.commit(ctx, org, r, env)
 		}
@@ -598,12 +613,40 @@ func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) 
 	return committed, errors.Join(errs...)
 }
 
+// uploadIcons writes each catalog icon the bundles of todo name once to the bundles bucket, content-addressed, so that
+// a bundle's pointer only ever names uploaded icons (architect decision A10-14). It returns the upload errors by icon
+// digest; a bundle naming a failed icon is not committed and is retried like a failed bundle upload.
+func (c *Compiler) uploadIcons(ctx context.Context, org uuid.UUID, todo []rendered) map[string]error {
+	done := map[string]error{}
+	for _, r := range todo {
+		for _, ic := range r.icons {
+			if _, ok := done[ic.sha256]; ok {
+				continue
+			}
+			err := c.store.Put(ctx, IconObjectKey(org, ic.sha256), "image/png", "private, max-age=86400", ic.data)
+			if err != nil {
+				err = fmt.Errorf("upload catalog icon %s: %w", ic.sha256, err)
+			}
+			done[ic.sha256] = err
+		}
+	}
+	return done
+}
+
 // commit records and uploads one bundle and updates its pointer.
 func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelope []byte) error {
 	version := r.oldSeq + 1
 	key := ObjectKey(org, r.device, version)
 	sum := sha256.Sum256(envelope)
-	err := c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	digests := make(map[string]string, len(r.icons))
+	for entry, ic := range r.icons {
+		digests[entry] = ic.sha256
+	}
+	icons, err := json.Marshal(digests)
+	if err != nil {
+		return err
+	}
+	err = c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		n, err := q.SetDeviceBundleSeq(ctx, pgstore.SetDeviceBundleSeqParams{ID: r.device, OldSeq: r.oldSeq, NewSeq: version})
 		if err != nil {
 			return err
@@ -614,7 +657,7 @@ func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelo
 		if err := q.InsertBundle(ctx, pgstore.InsertBundleParams{
 			DeviceID: r.device, Version: version, OrganizationID: org, ContentSha256: r.content[:],
 			EnvelopeSha256: sum[:], ObjectKey: key, SchemaVersion: int32(r.schema), //nolint:gosec // 1 or 2
-			ConfigRolloutID: r.rollout,
+			ConfigRolloutID: r.rollout, Icons: icons,
 		}); err != nil {
 			return err
 		}
@@ -624,7 +667,7 @@ func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelo
 		return err
 	}
 	if err := c.cache.PutBundlePointer(ctx, r.device, devicecache.BundlePointer{
-		Version: version, SHA256: hex.EncodeToString(sum[:]), ObjectKey: key,
+		Version: version, SHA256: hex.EncodeToString(sum[:]), ObjectKey: key, Icons: iconKeys(org, digests),
 	}); err != nil {
 		// Committed and uploaded; the reconcile loop sets the pointer.
 		slog.WarnContext(ctx, "setting bundle pointer failed; the reconcile loop repairs it", "device_id", r.device, "error", err)
