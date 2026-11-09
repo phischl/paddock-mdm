@@ -85,7 +85,7 @@ func TestOrganizationIsolation(t *testing.T) {
 		t.Run(op, func(t *testing.T) {
 			fx, ok := isolationFixtures[op]
 			if !ok {
-				t.Fatalf("operation %s has no fixture mapping in isolation_fixtures.go", op)
+				t.Fatalf("operation %s has no fixture mapping in isolation_fixtures_test.go", op)
 			}
 			method := strings.SplitN(op, " ", 2)[0]
 			path, body := fx.request(t, w)
@@ -288,7 +288,7 @@ func mcpIsolationSweep(t *testing.T, w *isolationWorld, acme uuid.UUID, ops []st
 			if offered[op] {
 				fx, ok := isolationFixtures[op]
 				if !ok {
-					t.Fatalf("operation %s has no fixture mapping in isolation_fixtures.go", op)
+					t.Fatalf("operation %s has no fixture mapping in isolation_fixtures_test.go", op)
 				}
 				target, body := fx.request(t, w)
 				res = mcpCallRetrying(t, mp, method, target, body)
