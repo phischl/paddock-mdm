@@ -441,6 +441,8 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventSoftwareRemoved:     audit.CodeDeviceSoftwareRemoved,
 	protocol.EventSoftwareApplyFailed: audit.CodeDeviceSoftwareApplyFailed,
 	protocol.EventSoftwareSelfService: audit.CodeDeviceSoftwareSelfService,
+	// The worker opens the request in the event's claim (plan M13c decision 9, softwareRequestEntry).
+	protocol.EventSoftwareRequest: audit.CodeDeviceSoftwareRequested,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -449,7 +451,9 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 	if ev.Type == protocol.EventSessionLogin {
 		return true, d.recordSessionLogin(ctx, deviceID, ev)
 	}
-	entry, ok := eventEntry(deviceID, ev, d.now())
+	now := d.now()
+	entry, ok := eventEntry(deviceID, ev, now)
+	entry = d.softwareRequestEntry(entry, deviceID, ev, now)
 	if !ok {
 		return false, nil // the gateway admits only known types; anything else is ignored
 	}
@@ -467,6 +471,7 @@ func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, re
 	entries := make([]OnceEntry, 0, len(events))
 	for _, ev := range events {
 		entry, ok := eventEntry(deviceID, ev, receivedAt)
+		entry = d.softwareRequestEntry(entry, deviceID, ev, receivedAt)
 		if ev.Type == protocol.EventSessionLogin {
 			entry, ok = sessionLoginEntry(deviceID, ev, receivedAt, d.now()), true
 		}

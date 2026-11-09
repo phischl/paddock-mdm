@@ -53,6 +53,9 @@ func loadSoftwareConfig(ctx context.Context, q *pgstore.Queries, st *configState
 		}
 		item := declarative.SoftwareCatalogEntry{Name: e.Name, Description: e.Description, Category: e.Category,
 			Packages: packages}
+		if e.Approval != software.ApprovalNone {
+			item.Approval = e.Approval
+		}
 		if e.SourceID.Valid {
 			slug := sourceSlugs[e.SourceID.UUID]
 			item.Source = &slug
@@ -104,6 +107,9 @@ func normalizeSoftware(doc *declarative.Document) {
 		for i, e := range *doc.SoftwareCatalog {
 			e.Name, e.Category = software.NormalizeName(e.Name), software.NormalizeCategory(e.Category)
 			e.Packages = software.NormalizePackages(e.Packages)
+			if e.Approval == software.ApprovalNone {
+				e.Approval = ""
+			}
 			(*doc.SoftwareCatalog)[i] = e
 		}
 	}
@@ -205,6 +211,13 @@ func (ex *configExec) softwareEntry(ctx context.Context, c declarative.Change) e
 	if err := software.ValidateEntry(e.Name, e.Description, e.Category, e.Packages); err != nil {
 		return softwareEntryProblem(err)
 	}
+	approval := software.ApprovalNone
+	if e.Approval != "" {
+		approval = e.Approval
+	}
+	if !software.ValidApproval(approval) {
+		return problem.InvalidRequest.WithDetail("approval of catalog entry " + strconv.Quote(e.Name) + " must be none or required")
+	}
 	var source *uuid.UUID
 	if e.Source != nil {
 		id, ok := ex.st.sources[*e.Source]
@@ -228,7 +241,8 @@ func (ex *configExec) softwareEntry(ctx context.Context, c declarative.Change) e
 		id := uuid.Must(uuid.NewV7())
 		err = ex.q.InsertSoftwareCatalogEntry(ctx, pgstore.InsertSoftwareCatalogEntryParams{
 			ID: id, OrganizationID: ex.p.OrganizationID, Name: e.Name, Description: e.Description, Category: e.Category,
-			SourceID: nullID(source), Packages: packages, CreatedBy: uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.ID != uuid.Nil},
+			SourceID: nullID(source), Packages: packages, Approval: approval,
+			CreatedBy: uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.ID != uuid.Nil},
 		})
 		if err == nil {
 			ex.st.entries[e.Name] = id
@@ -249,6 +263,7 @@ func (ex *configExec) softwareEntry(ctx context.Context, c declarative.Change) e
 		}
 		_, err = ex.q.UpdateSoftwareCatalogEntry(ctx, pgstore.UpdateSoftwareCatalogEntryParams{
 			ID: id, Name: e.Name, Description: e.Description, Category: e.Category, SourceID: nullID(source), Packages: packages,
+			Approval: approval,
 		})
 	}
 	if db.IsUniqueViolation(err, "") {

@@ -105,6 +105,7 @@ export function attentionStatus(kind: AttentionKind): StatusView {
       return { status: 'warn', label }
     case 'revocation_pending':
     case 'report_only':
+    case 'software_requests_open':
       return { status: 'info', label }
   }
 }

@@ -101,6 +101,39 @@ func TestDeclarativeSoftwareRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDeclarativeSoftwareApproval (plan M13c decision 8): an entry's approval is part of the software_catalog section:
+// required is applied and exported, none is the absent field (a document without approvals keeps its plan), and an
+// unknown value fails the document schema.
+func TestDeclarativeSoftwareApproval(t *testing.T) {
+	h := newConfigHarness(t)
+	ctx := principal.With(context.Background(), h.account(t, principal.RoleOrgAdmin, true))
+	if _, _, err := h.config.Apply(ctx, raw(t, softwareConfig(t)), ""); err != nil {
+		t.Fatal(err)
+	}
+	gated := softwareConfig(t)
+	(*gated.SoftwareCatalog)[0].Approval = "required"
+	_, plan, err := h.config.Apply(ctx, raw(t, gated), "")
+	if err != nil || plan.Updated != 1 {
+		t.Fatalf("plan %+v, %v", plan, err)
+	}
+	if got := (*h.export(t, h.account(t, principal.RoleOrgAuditor, false)).SoftwareCatalog)[0].Approval; got != "required" {
+		t.Fatalf("export approval %q", got)
+	}
+	none := softwareConfig(t)
+	(*none.SoftwareCatalog)[0].Approval = "none"
+	if _, plan, err = h.config.Apply(ctx, raw(t, none), ""); err != nil || plan.Updated != 1 {
+		t.Fatalf("back to none: %+v, %v", plan, err)
+	}
+	if p, err := h.config.Plan(ctx, raw(t, softwareConfig(t))); err != nil || len(p.Changes) != 0 {
+		t.Fatalf("a document without approval after none: %+v, %v", p.Changes, err)
+	}
+	bogus := softwareConfig(t)
+	(*bogus.SoftwareCatalog)[0].Approval = "maybe"
+	if _, _, err := h.config.Apply(ctx, raw(t, bogus), ""); !errors.Is(err, problem.InvalidDocument) {
+		t.Fatalf("unknown approval: %v", err)
+	}
+}
+
 // TestDeclarativeSoftwareEntryUpdateFailureIsReported: a failing update of a catalog entry fails the apply and changes
 // nothing. A category with trailing blanks passes validation (it is trimmed for the length check) but exceeds the
 // column's limit as stored, so the UPDATE itself is refused.

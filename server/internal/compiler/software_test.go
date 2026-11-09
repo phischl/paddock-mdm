@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/compat"
 	"github.com/phischl/paddock-mdm/pkg/openpgpkey"
+	"github.com/phischl/paddock-mdm/server/internal/compiler"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 )
 
@@ -1112,5 +1113,152 @@ func TestSoftwareAudienceUserNames(t *testing.T) {
 	}
 	if p := pkgOf(s, "vim"); p == nil || p.Intent != bundle.SoftwareRequired {
 		t.Fatalf("a required package of the owner with the uncarried name: %+v", p)
+	}
+}
+
+// approveRequest records a decided software request of user for entry on dev in state.
+func (w *world) approveRequest(entry, dev, user uuid.UUID, state string) {
+	w.t.Helper()
+	w.exec(`INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state,
+		requested_at, expires_at, decided_at) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now() + interval '30 days', now())`,
+		uuid.Must(uuid.NewV7()), w.org, entry, dev, user, w.username(user), state)
+}
+
+// approvalOf is how a test reads a package's approval: "" or "required" with the approved users after a colon.
+func approvalOf(p *bundle.SoftwarePackage) string {
+	if p == nil {
+		return "missing"
+	}
+	if p.Approved == nil {
+		return p.Approval
+	}
+	return p.Approval + ":" + strings.Join(*p.Approved, ",")
+}
+
+// TestSoftwareApproval (plan M13c decision 9): an available package whose entry requires approval carries approval
+// required and the audience's users approved on that device; approvals of another device, of a user outside the
+// audience or not (yet) approved stay out; once every audience member is approved, both are omitted; an entry without
+// approval carries neither; an audience of everyone keeps the approval with the approved users.
+func TestSoftwareApproval(t *testing.T) {
+	w := newWorld(t)
+	alice, bob, carol := w.user("alice", false), w.user("bob", false), w.user("carol", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	vim := w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_group_id", w.userGroup("devs", alice, bob), "available")
+	w.assignTo(vim, "user_group_id", w.userGroup("all", alice, bob), "available")
+	d, other := w.v2Device("{1,2}", w.g1), w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.ubuntu(other, "amd64")
+	w.own(d, alice, bob)
+	w.own(other, alice, bob)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := approvalOf(pkgOf(w.fetch(d).Software, "nano")); got != "required" {
+		t.Fatalf("before any approval: %q", got)
+	}
+	if got := approvalOf(pkgOf(w.fetch(d).Software, "vim")); got != "" {
+		t.Fatalf("an entry without approval: %q", got)
+	}
+
+	w.approveRequest(nano, d, alice, "approved")
+	w.approveRequest(nano, d, carol, "approved")
+	w.approveRequest(nano, d, bob, "denied")
+	w.approveRequest(nano, other, bob, "approved")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got, want := approvalOf(pkgOf(w.fetch(d).Software, "nano")), "required:"+w.username(alice); got != want {
+		t.Fatalf("approved alice: %q, want %q", got, want)
+	}
+	if got, want := approvalOf(pkgOf(w.fetch(other).Software, "nano")), "required:"+w.username(bob); got != want {
+		t.Fatalf("the other device: %q, want %q", got, want)
+	}
+
+	w.approveRequest(nano, d, bob, "approved")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := approvalOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("every audience member approved: %q", got)
+	}
+
+	w.exec("DELETE FROM software_assignment WHERE catalog_entry_id = $1", nano)
+	w.assign(nano, nil, "available", "latest", nil)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got, want := approvalOf(pkgOf(w.fetch(d).Software, "nano")), "required:"+w.username(alice)+","+w.username(bob)+","+w.username(carol); got != want {
+		t.Fatalf("an audience of everyone: %q, want %q", got, want)
+	}
+
+	w.exec("UPDATE software_catalog_entry SET approval = 'none' WHERE id = $1", nano)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := approvalOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("the entry no longer requires approval: %q", got)
+	}
+}
+
+// TestWithheldForApproval (architect decision A10-17): only an available package whose entry requires approval is left
+// out, and only for a release before the gate; a development build is never older. The gate is checked against a later
+// release than compiler.ApprovalAgent too, so the rule holds when PDK-811 ships after the self-service app.
+func TestWithheldForApproval(t *testing.T) {
+	cases := []struct {
+		intent, approval, agent, gate string
+		want                          bool
+	}{
+		{"available", "required", "0.1.0-alpha.9", compiler.ApprovalAgent, true},
+		{"available", "required", compiler.ApprovalAgent, compiler.ApprovalAgent, false},
+		{"available", "required", "0.1.0-alpha.11", compiler.ApprovalAgent, false},
+		{"available", "required", "0.1.0-alpha.10", "0.1.0-alpha.11", true},
+		{"available", "required", "0.1.0-alpha.10+build.7", "0.1.0-alpha.11", true},
+		{"available", "required", "0.0.0-dev", "0.1.0-alpha.11", false},
+		{"available", "none", "0.1.0-alpha.9", compiler.ApprovalAgent, false},
+		{"required", "required", "0.1.0-alpha.9", compiler.ApprovalAgent, false},
+		{"forbid", "required", "0.1.0-alpha.9", compiler.ApprovalAgent, false},
+	}
+	for _, c := range cases {
+		if got := compiler.WithheldForApproval(c.intent, c.approval, c.agent, c.gate); got != c.want {
+			t.Errorf("%+v: %v", c, got)
+		}
+	}
+}
+
+// TestSoftwareApprovalGated (architect decision A10-17 with A10-6): an alpha.9 agent never gets a package whose entry
+// requires approval, in a section the frozen alpha.9 rules accept (checked against the alpha.9 compat fixture); the
+// first agent with the approval flow gets it with approval required. A forbid of the same package wins over the
+// available assignment, so no approval is rendered for it.
+func TestSoftwareApprovalGated(t *testing.T) {
+	if err := alpha9Accepts(alpha9FixtureSoftware(t)); err != nil {
+		t.Fatalf("the alpha.9 check refuses the alpha.9 fixture: %v", err)
+	}
+	w := newWorld(t)
+	gated := w.entry("Gated", nil, [4]string{"ubuntu", "*", "*", "gated"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", gated)
+	w.assign(gated, nil, "available", "latest", nil)
+	w.assign(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	blocked := w.entry("Blocked", nil, [4]string{"ubuntu", "*", "*", "blocked"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", blocked)
+	w.assign(blocked, nil, "available", "latest", nil)
+	w.assign(blocked, w.g1, "forbid", "latest", nil)
+	devices := map[string]uuid.UUID{}
+	for _, v := range []string{"0.1.0-alpha.9", compiler.ApprovalAgent} {
+		d := w.v2Device("{1,2}", w.g1)
+		w.ubuntu(d, "amd64")
+		w.agentAt(d, v)
+		devices[v] = d
+	}
+	w.mustCompile(statechange.ScopeOrg, w.org)
+
+	old := w.fetch(devices["0.1.0-alpha.9"]).Software
+	raw, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkgOf(old, "gated") != nil || pkgOf(old, "nano") == nil {
+		t.Errorf("alpha.9 section %s", raw)
+	}
+	if err := alpha9Accepts(raw); err != nil {
+		t.Errorf("the alpha.9 agent refuses the section: %v", err)
+	}
+	s := w.fetch(devices[compiler.ApprovalAgent]).Software
+	if got := approvalOf(pkgOf(s, "gated")); got != "required" {
+		t.Errorf("%s: gated %q", compiler.ApprovalAgent, got)
+	}
+	if p := pkgOf(s, "blocked"); p == nil || p.Intent != bundle.SoftwareForbid || p.Approval != "" || p.Approved != nil {
+		t.Errorf("%s: forbid did not win: %+v", compiler.ApprovalAgent, p)
 	}
 }

@@ -1130,6 +1130,22 @@ type SoftwareCatalogEntry struct {
 	CreatedBy      uuid.NullUUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Approval       string
+}
+
+type SoftwareRequest struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	DeviceID       uuid.UUID
+	UserID         uuid.NullUUID
+	Username       string
+	State          string
+	RequestedAt    time.Time
+	ExpiresAt      time.Time
+	DecidedBy      *string
+	DecidedAt      *time.Time
+	DecisionReason *string
 }
 
 type SoftwareSource struct {

@@ -3632,6 +3632,123 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-requests:
+    get:
+      operationId: listSoftwareRequests
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The users' requests for available applications whose catalog
+        entry requires approval (plan M13c decision 10), with their state: requested (waiting for a decision),
+        approved, denied, expired (30 days without a decision, or the entry no longer requires approval) or
+        withdrawn. The user's justification is not stored.
+      x-paddock-list:
+        sort: [requested_at, username, state, expires_at]
+        default_sort: -requested_at
+        search: [username]
+        filters: [state, catalog_entry_id, device_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/SoftwareRequestSort"
+        - $ref: "#/components/parameters/Search"
+        - name: state
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/SoftwareRequestState" }
+        - name: catalog_entry_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: device_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: One page of software requests.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareRequestPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-requests/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getSoftwareRequest
+      tags: [software]
+      description: "Roles: org_admin, org_operator, org_auditor. 404 not_found for another organization's request."
+      responses:
+        "200":
+          description: The software request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareRequest" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-requests/{id}/approve:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: approveSoftwareRequest
+      tags: [software]
+      description: |
+        Roles: org_admin. Approves an open request, optionally with a reason; no step-up of its own (the entry's source
+        needed one). The device's next bundle lets the user install the application. 409 invalid_state unless the
+        request is open, 404 not_found for another organization's request.
+      x-paddock-audit: software_request.approved
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SoftwareRequestDecision" }
+      responses:
+        "200":
+          description: The approved request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareRequest" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-requests/{id}/deny:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: denySoftwareRequest
+      tags: [software]
+      description: |
+        Roles: org_admin. Denies an open request with a reason, which the user sees; no step-up of its own. The user
+        may ask again after 24 hours. 400 invalid_request without a reason, 409 invalid_state unless the request is
+        open, 404 not_found for another organization's request.
+      x-paddock-audit: software_request.denied
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SoftwareRequestDenial" }
+      responses:
+        "200":
+          description: The denied request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareRequest" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/v1/compile-warnings:
     get:
       operationId: listCompileWarnings
@@ -7655,6 +7772,14 @@ components:
         type: string
         enum: [name, -name, created_at, -created_at, updated_at, -updated_at]
         default: name
+    SoftwareRequestSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [requested_at, -requested_at, username, -username, state, -state, expires_at, -expires_at]
+        default: -requested_at
     SoftwareCatalogSort:
       name: sort
       in: query
@@ -10004,6 +10129,7 @@ components:
         category: { type: string, maxLength: 64, description: May be empty. }
         source_id: { type: string, format: uuid, nullable: true, description: Omit or null for the distribution's own repositories. }
         packages: { type: array, minItems: 1, maxItems: 20, items: { $ref: "#/components/schemas/PackageRef" }, description: "Unique by distribution, release and architecture; the most specific reference wins on a device." }
+        approval: { $ref: "#/components/schemas/SoftwareApproval" }
     SoftwareCatalogEntryUpdate:
       type: object
       required: [name, packages]
@@ -10014,9 +10140,13 @@ components:
         category: { type: string, maxLength: 64 }
         source_id: { type: string, format: uuid, nullable: true, description: Omit or null for the distribution's own repositories. }
         packages: { type: array, minItems: 1, maxItems: 20, items: { $ref: "#/components/schemas/PackageRef" } }
+        approval:
+          allOf:
+            - $ref: "#/components/schemas/SoftwareApproval"
+          description: Omit to keep the stored approval.
     SoftwareCatalogEntry:
       type: object
-      required: [id, name, description, category, source_id, source_slug, packages, has_icon, assignment_count, created_at, updated_at]
+      required: [id, name, description, category, source_id, source_slug, packages, approval, has_icon, assignment_count, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -10025,10 +10155,64 @@ components:
         source_id: { type: string, format: uuid, nullable: true }
         source_slug: { type: string, description: Empty for the distribution's own repositories. }
         packages: { type: array, items: { $ref: "#/components/schemas/PackageRef" } }
+        approval: { $ref: "#/components/schemas/SoftwareApproval" }
         has_icon: { type: boolean }
         assignment_count: { type: integer }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    SoftwareRequestState:
+      type: string
+      enum: [requested, approved, denied, expired, withdrawn]
+      # Explicit names: the bare values collide with other enums, which would rename every constant of the package.
+      x-enum-varnames: [SoftwareRequestRequested, SoftwareRequestApproved, SoftwareRequestDenied, SoftwareRequestExpired,
+        SoftwareRequestWithdrawn]
+    SoftwareApproval:
+      type: string
+      enum: [none, required]
+      x-enum-varnames: [SoftwareApprovalNone, SoftwareApprovalRequired]
+      description: required makes the users of an available assignment ask an administrator before they install the application.
+    SoftwareRequest:
+      type: object
+      required: [id, catalog_entry_id, entry_name, entry_approval, device_id, hostname, user_id, username, state, requested_at,
+        expires_at, decided_by, decided_at, decision_reason]
+      properties:
+        id: { type: string, format: uuid }
+        catalog_entry_id: { type: string, format: uuid }
+        entry_name: { type: string }
+        entry_approval: { $ref: "#/components/schemas/SoftwareApproval" }
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        user_id: { type: string, format: uuid, nullable: true, description: Null when no directory user has the user name. }
+        username: { type: string }
+        state: { $ref: "#/components/schemas/SoftwareRequestState" }
+        requested_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: When an open request expires without a decision. }
+        decided_by: { type: string, nullable: true, description: The deciding administrator's display name. }
+        decided_at: { type: string, format: date-time, nullable: true, description: When it was decided or expired. }
+        decision_reason: { type: string, nullable: true }
+    SoftwareRequestPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SoftwareRequest" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    SoftwareRequestDecision:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string, maxLength: 500, description: Optional; trimmed. }
+    SoftwareRequestDenial:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500, description: "Required: the user sees it. Trimmed; must not be empty." }
     SoftwareCatalogEntryPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -10262,7 +10446,8 @@ components:
       type: string
       enum: [stale_warning, stale_critical, presumed_lost, quarantined, disk_not_compliant, agent_outdated,
              login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired, agent_rollback_pending,
-             agent_not_running, uninstall_pending, config_behind, disk_conversion_failed, clock_drift, event_gap, report_only]
+             agent_not_running, uninstall_pending, config_behind, disk_conversion_failed, clock_drift, event_gap, report_only,
+             software_requests_open]
     Attention:
       type: object
       required: [id, kind, device_id, hostname, since, detail, finding]
@@ -10276,10 +10461,10 @@ components:
         kind: { $ref: "#/components/schemas/AttentionKind" }
         device_id: { type: string, format: uuid }
         hostname: { type: string }
-        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled). }
+        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled; for software_requests_open when the oldest open request was made). }
         detail:
           type: string
-          description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as \"<applied> < <newest>\"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as \"<seconds> s\" (server time minus device time); event_gap: the missing event sequence numbers as \"<from>-<to>\"; report_only: the enrollment method; otherwise empty."
+          description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as \"<applied> < <newest>\"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as \"<seconds> s\" (server time minus device time); event_gap: the missing event sequence numbers as \"<from>-<to>\"; report_only: the enrollment method; software_requests_open: the number of the device's open software requests; otherwise empty."
     FindingKind:
       type: string
       enum: [tamper, attention]

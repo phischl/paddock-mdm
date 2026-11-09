@@ -231,18 +231,22 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 
 | Tool | Class | Destructive | Summary |
 | --- | --- | --- | --- |
+| `approveSoftwareRequest` | write | no | Approves an open request, optionally with a reason; no step-up of its own (the entry's source needed one). |
 | `createSoftwareAssignment` | write | no | Assigns a catalog entry with an intent to one target: every device of the organization (no target ID), a device group (device_group_id), a user (user_id) or a user group (user_group_id); more than one target ID is 400 invalid_request. |
 | `createSoftwareCatalogEntry` | write | no | Adds an application with its package names per distribution, release and architecture (1 to 20 references; release and architecture may be "*"; the tuple is unique within the entry). |
 | `deleteSoftwareAssignment` | write | yes | The devices stop enforcing the assignment with their next bundle; installed software stays. |
 | `deleteSoftwareCatalogEntry` | write | yes | Removes an entry that has no assignments; it changes nothing on any device. |
+| `denySoftwareRequest` | write | no | Denies an open request with a reason, which the user sees; no step-up of its own. |
 | `getSoftwareAssignment` | read | no | GET /api/v1/software-assignments/{id} |
 | `getSoftwareCatalogEntry` | read | no | GET /api/v1/software-catalog/{id} |
+| `getSoftwareRequest` | read | no | GET /api/v1/software-requests/{id} |
 | `getSoftwareSource` | read | no | One source with its signing key (a public key); 404 not_found for another organization's. |
 | `listCompileWarnings` | read | no | What the compiler shortened or dropped from a device's bundle against what an administrator assigned (architect decisions A10-9 and A10-10), from the device's latest compile: each compile of a device replaces its warnings, and a device whose bundle was blocked keeps those of its current bundle. |
 | `listDeviceManagedSoftware` | read | no | The catalog applications the device manages (plan M13a §3.4): what the device reported for each, and for an application assigned to it that it has not reported on the derived state not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package applies, no report yet). |
 | `listSoftwareAssignments` | read | no | The assignments of catalog entries to the organization, device groups, users or user groups; the search matches the entry's name. |
 | `listSoftwareCatalog` | read | no | The applications of the organization's software catalog (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one. |
 | `listSoftwareCatalogDevices` | read | no | The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, with what they reported or the derived state not_applicable or unknown (see the device's managed software). |
+| `listSoftwareRequests` | read | no | The users' requests for available applications whose catalog entry requires approval (plan M13c decision 10), with their state: requested (waiting for a decision), approved, denied, expired (30 days without a decision, or the entry no longer requires approval) or withdrawn. |
 | `listSoftwareSources` | read | no | The organization's APT package sources (plan M13a decision 1); the list never contains the signing key. |
 | `updateSoftwareAssignment` | write | no | Replaces intent, update_rule, version and reason with the submitted values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the same rules as on creation apply. |
 | `updateSoftwareCatalogEntry` | write | no | Replaces the entry's name, description, category, source and package references with the submitted values (an absent description or category becomes empty, an absent or null source_id selects the distribution's own repositories); the icon is changed with its own operation. |

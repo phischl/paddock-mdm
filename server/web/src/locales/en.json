@@ -461,6 +461,7 @@
       "software_removed": "The device {target} removed {package} {version} ({intent})",
       "software_apply_failed": "The device {target} could not apply a software package or source ({stage}: {reason})",
       "software_self_service": "{outcome, select, succeeded {{user} {action, select, install {installed} update {updated} remove {removed} other {changed}} an application on the device {target} through self-service} refused {The device {target} refused the self-service {action} of {user} ({reason})} other {The self-service {action} of {user} failed on the device {target} ({reason})}}",
+      "software_requested": "{user} asked on the device {target} for an application that needs approval",
       "stale_warning": "The device {target} has not contacted Paddock for {threshold_h, number} hours (warning)",
       "stale_critical": "The device {target} has not contacted Paddock for {threshold_h, number} hours and is presumed lost",
       "stale_cleared": "The device {target} contacted Paddock again",
@@ -605,6 +606,12 @@
       "created": "{actor} added {name} to the software catalog",
       "updated": "{actor} changed {name} in the software catalog",
       "deleted": "{actor} removed {name} from the software catalog with {assignment_count, plural, one {# assignment} other {# assignments}}"
+    },
+    "software_request": {
+      "opened": "{user} asked for {app} on {hostname}; the request waits for a decision",
+      "approved": "{actor} approved the request of {user} for {app} on {hostname}",
+      "denied": "{actor} denied the request of {user} for {app} on {hostname}: {reason}",
+      "expired": "The request of {user} expired without a decision ({cause})"
     },
     "software_assignment": {
       "created": "{actor} assigned {app} with the intent {intent}",
@@ -2558,7 +2565,8 @@
       "disk_conversion_failed": "In-place encryption failed",
       "clock_drift": "Clock drift",
       "event_gap": "Event gap",
-      "report_only": "Report-only, waiting for enforcement"
+      "report_only": "Report-only, waiting for enforcement",
+      "software_requests_open": "Software requests waiting"
     },
     "action": {
       "stale_warning": "Open device",
@@ -2578,7 +2586,8 @@
       "disk_conversion_failed": "Open device",
       "clock_drift": "Open device",
       "event_gap": "Open device",
-      "report_only": "Open device"
+      "report_only": "Open device",
+      "software_requests_open": "Open device"
     },
     "more": "+{count}",
     "empty": {

@@ -119,6 +119,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	eventGaps := worker.NewEventGaps(app.NewEventGaps(runner, pool), pool, platformPool, min(worker.StalenessInterval, stalenessUnit/4))
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	configRollouts := worker.NewConfigRollouts(app.NewConfigRollouts(runner, pool), pool, platformPool)
+	softwareRequests := worker.NewSoftwareRequests(app.NewSoftwareRequests(runner, pool), pool, platformPool, worker.SoftwareRequestInterval)
 	ak := authentik.New(authentikURL, authentikToken)
 	reconcileAK := authentik.New(authentikURL, authentikToken).WithMaxConcurrent(worker.ReconcileAuthentikConcurrency)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, reconcileAK, ak, ak),
@@ -164,6 +165,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		retention.Run,
 		rollouts.Run,
 		configRollouts.Run,
+		softwareRequests.Run,
 		identity.RunSync,
 		identity.RunReconcile,
 		identity.RunAdminAccounts,

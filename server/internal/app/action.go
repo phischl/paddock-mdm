@@ -585,6 +585,18 @@ func (r *ActionRunner) RecordOnceInScope(ctx context.Context, scope Scope, spec 
 	return recorded, nil
 }
 
+// recordInTx records spec as one more successful event of the system principal of ctx, in the transaction of q, for a
+// transition that an event recorded once caused in the same transaction (a device's software.request opens a request:
+// software_request.opened, plan M13c decision 10). It is called from an AfterFunc only, so it is recorded exactly when
+// the causing event is.
+func (r *ActionRunner) recordInTx(ctx context.Context, q *pgstore.Queries, spec ActionSpec) error {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindSystem {
+		return problem.Unauthenticated
+	}
+	return r.insertFinished(ctx, q, r.newRecorder(ctx, p, ScopeOrg, spec), nil)
+}
+
 // OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
 // without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
 // login) and reports false. After (optional) runs when the event was recorded. Refusal (optional) records the event

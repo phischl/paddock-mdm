@@ -71,6 +71,8 @@ type Deps struct {
 	SoftwareSources *app.SoftwareSources
 	// SoftwareCatalog are the catalog entries and assignments of organizations (plan M13a decisions 7–11).
 	SoftwareCatalog *app.SoftwareCatalog
+	// SoftwareRequests are the requests for entries that require approval (plan M13c decisions 9 and 10).
+	SoftwareRequests *app.SoftwareRequests
 	// SoftwareStatus lists what devices report about the catalog's applications (plan M13a §3.4).
 	SoftwareStatus *app.SoftwareStatus
 	// CompileWarnings lists what the compiler shortened or dropped from devices' bundles (PDK-918).
@@ -281,6 +283,8 @@ var privileged = map[string]struct {
 	"PATCH /api/v1/software-catalog/{id}":                                  {app.ScopeOrg, app.SpecSoftwareCatalogEntryUpdate},
 	"DELETE /api/v1/software-catalog/{id}":                                 {app.ScopeOrg, app.SpecSoftwareCatalogEntryDelete},
 	"PUT /api/v1/software-catalog/{id}/icon":                               {app.ScopeOrg, app.SpecSoftwareCatalogEntryUpdate},
+	"POST /api/v1/software-requests/{id}/approve":                          {app.ScopeOrg, app.SpecSoftwareRequestApprove},
+	"POST /api/v1/software-requests/{id}/deny":                             {app.ScopeOrg, app.SpecSoftwareRequestDeny},
 	"POST /api/v1/software-assignments":                                    {app.ScopeOrg, app.SpecSoftwareAssignmentCreate},
 	"PATCH /api/v1/software-assignments/{id}":                              {app.ScopeOrg, app.SpecSoftwareAssignmentUpdate},
 	"DELETE /api/v1/software-assignments/{id}":                             {app.ScopeOrg, app.SpecSoftwareAssignmentDelete},
@@ -329,7 +333,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus, compileWarnings: d.CompileWarnings, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns, backupRestorePlans: d.BackupRestorePlans,
+		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareRequests: d.SoftwareRequests, softwareStatus: d.SoftwareStatus, compileWarnings: d.CompileWarnings, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns, backupRestorePlans: d.BackupRestorePlans,
 		securityReview: d.SecurityReview,
 		accessReview:   d.AccessReview,
 		diagnostics:    d.Diagnostics,

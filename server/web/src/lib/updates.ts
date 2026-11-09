@@ -176,7 +176,7 @@ export const attentionKinds: AttentionKind[] = [
   'presumed_lost', 'stale_critical', 'stale_warning', 'quarantined', 'revocation_pending', 'revocation_expired',
   'disk_not_compliant', 'login_apply_failed', 'sudo_apply_failed', 'agent_rollback_pending', 'agent_not_running',
   'config_behind', 'agent_outdated', 'uninstall_pending', 'disk_conversion_failed', 'clock_drift', 'event_gap',
-  'report_only',
+  'report_only', 'software_requests_open',
 ]
 
 export const attentionFilter: ListFilter = {

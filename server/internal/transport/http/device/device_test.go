@@ -1085,6 +1085,10 @@ func TestEvents(t *testing.T) {
 	if msg.RoutingKey != "ingest.event."+e.org.String() || len(batch.Events) != 2 || batch.DeviceID != id {
 		t.Fatalf("published %s %+v", msg.RoutingKey, batch)
 	}
+	// The gateway admits software.request (plan M13c decision 9); its worker path opens the request.
+	if r := post([]protocol.Event{ev(protocol.EventSoftwareRequest)}, false); r.status != http.StatusAccepted {
+		t.Fatalf("software.request: %d %s", r.status, r.body)
+	}
 	e.expectProblem(post([]protocol.Event{ev("bundle.applied"), ev("rm -rf")}, true), http.StatusBadRequest, "unknown_event_type")
 	many := make([]protocol.Event, 501)
 	for i := range many {

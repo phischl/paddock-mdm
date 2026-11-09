@@ -78,6 +78,8 @@ type handlers struct {
 	softwareSources *app.SoftwareSources
 	// softwareCatalog are the catalog entries and their assignments (plan M13a decisions 7–11).
 	softwareCatalog *app.SoftwareCatalog
+	// softwareRequests are the users' requests for entries that require approval (plan M13c decisions 9 and 10).
+	softwareRequests *app.SoftwareRequests
 	// softwareStatus lists what devices report about the catalog's applications (plan M13a §3.4).
 	softwareStatus *app.SoftwareStatus
 	// compileWarnings are the compile warnings of the organization's devices (PDK-918).

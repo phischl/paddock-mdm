@@ -60,12 +60,12 @@ SELECT * FROM software_source WHERE id = @id FOR UPDATE;
 SELECT count(*) FROM software_catalog_entry WHERE source_id = @source_id;
 
 -- name: InsertSoftwareCatalogEntry :exec
-INSERT INTO software_catalog_entry (id, organization_id, name, description, category, source_id, packages, created_by)
-VALUES (@id, @organization_id, @name, @description, @category, sqlc.narg(source_id), @packages, sqlc.narg(created_by));
+INSERT INTO software_catalog_entry (id, organization_id, name, description, category, source_id, packages, approval, created_by)
+VALUES (@id, @organization_id, @name, @description, @category, sqlc.narg(source_id), @packages, @approval, sqlc.narg(created_by));
 
 -- name: GetSoftwareCatalogEntry :one
 -- An entry as the API shows it: the icon itself stays out, has_icon says whether there is one.
-SELECT e.id, e.organization_id, e.name, e.description, e.category, e.source_id, e.packages, e.created_by,
+SELECT e.id, e.organization_id, e.name, e.description, e.category, e.source_id, e.packages, e.approval, e.created_by,
   e.created_at, e.updated_at, (e.icon IS NOT NULL)::boolean AS has_icon, coalesce(s.slug, '')::text AS source_slug,
   (SELECT count(*) FROM software_assignment a WHERE a.catalog_entry_id = e.id)::bigint AS assignment_count
 FROM software_catalog_entry e LEFT JOIN software_source s ON s.id = e.source_id
@@ -74,7 +74,7 @@ WHERE e.id = @id;
 -- name: GetSoftwareCatalogEntryForUpdate :one
 -- The entry locked for the rest of the transaction: an update writes every column back and a delete counts the
 -- assignments it removes, so a concurrent write must not interleave.
-SELECT id, organization_id, name, description, category, source_id, packages, created_by, created_at, updated_at
+SELECT id, organization_id, name, description, category, source_id, packages, approval, created_by, created_at, updated_at
 FROM software_catalog_entry WHERE id = @id FOR UPDATE;
 
 -- name: ListSoftwareAssignmentIntentsOfEntry :many
@@ -83,7 +83,7 @@ SELECT DISTINCT intent FROM software_assignment WHERE catalog_entry_id = @catalo
 
 -- name: UpdateSoftwareCatalogEntry :execrows
 UPDATE software_catalog_entry SET name = @name, description = @description, category = @category,
-  source_id = sqlc.narg(source_id), packages = @packages, updated_at = now()
+  source_id = sqlc.narg(source_id), packages = @packages, approval = @approval, updated_at = now()
 WHERE id = @id;
 
 -- name: SetSoftwareCatalogEntryIcon :execrows
@@ -96,7 +96,7 @@ SELECT icon FROM software_catalog_entry WHERE id = @id AND icon IS NOT NULL;
 DELETE FROM software_catalog_entry WHERE id = @id;
 
 -- name: ListSoftwareCatalogEntries :many
-SELECT e.id, e.organization_id, e.name, e.description, e.category, e.source_id, e.packages, e.created_by,
+SELECT e.id, e.organization_id, e.name, e.description, e.category, e.source_id, e.packages, e.approval, e.created_by,
   e.created_at, e.updated_at, (e.icon IS NOT NULL)::boolean AS has_icon, coalesce(s.slug, '')::text AS source_slug,
   (SELECT count(*) FROM software_assignment a WHERE a.catalog_entry_id = e.id)::bigint AS assignment_count
 FROM software_catalog_entry e LEFT JOIN software_source s ON s.id = e.source_id
@@ -128,7 +128,7 @@ SELECT count(*) FROM (
 
 -- name: ListAllSoftwareCatalogEntries :many
 -- Every entry of the organization (compiler), in a stable order, without the icons the bundles do not carry.
-SELECT id, organization_id, name, description, category, source_id, packages, created_by, created_at, updated_at
+SELECT id, organization_id, name, description, category, source_id, packages, approval, created_by, created_at, updated_at
 FROM software_catalog_entry ORDER BY name, id;
 
 -- name: ListSoftwareCatalogIcons :many

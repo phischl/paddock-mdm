@@ -15,3 +15,11 @@ func (c *Compiler) RecordWarningsAt(ctx context.Context, org, device uuid.UUID, 
 	}
 	return c.recordWarnings(systemContext(ctx, org), org, map[uuid.UUID]deviceWarnings{device: {seq: seq, warnings: ws}})
 }
+
+// ApprovalAgent is approvalAgent for the tests of the approval gate (A10-17).
+const ApprovalAgent = approvalAgent
+
+// WithheldForApproval is withheldForApproval for the tests of the approval gate.
+func WithheldForApproval(intent, approval, agent, gate string) bool {
+	return withheldForApproval(intent, approval, agent, gate)
+}

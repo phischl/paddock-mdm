@@ -493,7 +493,18 @@ type SoftwarePackage struct {
 	// icon thereby changes the bundle (architect decision A10-14, PDK-935); additive to schema 2 (ADR 0013), and only an
 	// agent from the compiler's self-service gate gets it.
 	IconSHA256 string `json:"icon_sha256,omitempty"`
+	// Approval is SoftwareApprovalRequired for an available package whose users must ask an administrator before they
+	// install it (plan M13c decision 9); absent otherwise. Additive to schema 2 (ADR 0013): only a server that knows
+	// approvals renders it, and an agent before the compiler's self-service gate never gets an available package.
+	Approval string `json:"approval,omitempty"`
+	// Approved are the users of the audience an administrator approved (lower-case UPNs, sorted, 1 to
+	// MaxSoftwareAudience, ValidAudienceUser); only with Approval. A pointer like Audience, so SoftwarePackage stays
+	// comparable.
+	Approved *[]string `json:"approved,omitempty"`
 }
+
+// SoftwareApprovalRequired is the only value of SoftwarePackage.Approval (plan M13c decision 9).
+const SoftwareApprovalRequired = "required"
 
 // Limits of the software section (plan M13a decisions 2 and 8).
 const (
@@ -531,7 +542,8 @@ const (
 // Sources. A package names either an APT package or a Flatpak application (of a Flatpak source when it is required or
 // available); an available package has an audience of everyone or of 1 to MaxSoftwareAudience sorted user names
 // (ValidAudienceUser), and no other package has one (plan M13b decision 7); a user-scope Flatpak application with
-// intent required, forbid or uninstall may name Users with the same limits, and no other package does (A10-11). It does not compare a keyring with its
+// intent required, forbid or uninstall may name Users with the same limits, and no other package does (A10-11); only an
+// available package requires approval and lists its approved users with the same limits (plan M13c decision 9). It does not compare a keyring with its
 // fingerprint; the agent does that per source.
 func ValidateSoftware(s SoftwareSpec) error {
 	kinds := make(map[string]string, len(s.Sources))
@@ -570,6 +582,9 @@ func ValidateSoftware(s SoftwareSpec) error {
 			return err
 		}
 		if err := validateUsers(p, name); err != nil {
+			return err
+		}
+		if err := validateApproval(p, name); err != nil {
 			return err
 		}
 		if p.FlatpakRef == "" && RefusedIntent(p.Package, p.Intent) {
@@ -670,6 +685,31 @@ func validateUsers(p SoftwarePackage, name string) error {
 	for i, u := range users {
 		if !ValidAudienceUser(u) || i > 0 && users[i-1] >= u {
 			return fmt.Errorf("bundle: the users of software package %q have an invalid or unsorted user %q", name, u)
+		}
+	}
+	return nil
+}
+
+// validateApproval checks the approval of a package: only an available package requires approval, and only such a
+// package lists the approved users, as 1 to MaxSoftwareAudience distinct user names in ascending order (plan M13c
+// decision 9).
+func validateApproval(p SoftwarePackage, name string) error {
+	switch {
+	case p.Approval != "" && p.Approval != SoftwareApprovalRequired:
+		return fmt.Errorf("bundle: software package %q has an invalid approval %q", name, p.Approval)
+	case p.Approval != "" && p.Intent != SoftwareAvailable:
+		return fmt.Errorf("bundle: software package %q with intent %s must not require approval", name, p.Intent)
+	case p.Approved == nil:
+		return nil
+	case p.Approval == "":
+		return fmt.Errorf("bundle: software package %q lists approved users without requiring approval", name)
+	case len(*p.Approved) == 0 || len(*p.Approved) > MaxSoftwareAudience:
+		return fmt.Errorf("bundle: software package %q must have 1 to %d approved users", name, MaxSoftwareAudience)
+	}
+	approved := *p.Approved
+	for i, u := range approved {
+		if !ValidAudienceUser(u) || i > 0 && approved[i-1] >= u {
+			return fmt.Errorf("bundle: the approved users of software package %q have an invalid or unsorted user %q", name, u)
 		}
 	}
 	return nil

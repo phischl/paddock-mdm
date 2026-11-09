@@ -12,7 +12,7 @@ import type { SoftwareCatalogEntry } from '../api/client'
 import type { EntryInput } from '../lib/software'
 
 const entry: SoftwareCatalogEntry = {
-  id: 'e1', name: 'Editor', description: '', category: 'Tools', source_id: null, source_slug: '', has_icon: false,
+  id: 'e1', name: 'Editor', description: '', category: 'Tools', source_id: null, source_slug: '', has_icon: false, approval: 'none',
   packages: [{ distribution: 'ubuntu', release: '*', architecture: '*', package: 'nano' }], assignment_count: 3,
   created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
 }

@@ -472,3 +472,46 @@ entry's deletion. Outside that revert, the guard is unchanged.
   unchanged); the step-up is checked once for the whole apply before anything is written.
 - **Per-resource writes** of sources, entries and assignments record change sets; they take no urgent opt-out yet
   (an urgent assignment change goes through `PUT /api/v1/config?urgent=true`).
+
+## Amendment 2026-11-09 (PDK-810, implementer choices within §13)
+
+- **Migration `00120_software_requests.sql`** (the numbers `00111` and `00117`–`00119` were taken). It creates the table
+  of decision 8 **without `justification`**: whether the user's text may be stored, sent and shown is pending with the
+  maintainer (§12 Q4). The event `software.request` carries `{user, entry_id}` only. The server drops any other field
+  a device sends, so it never reaches the audit log. A later migration can add the column, and an additive event field
+  can carry the text.
+- **An approval is per device.** A request names its device. The compiler renders `approved[]` for a package from the
+  approved requests of that device and entry only, restricted to the package's audience. It renders after the rollout
+  overlay chose the package, so an approval never reaches a device by another path (A10-12). An approval changes only
+  the request row and queues a compile of its device. It is no change set and stages nothing: it affects one user on
+  one device, and staging it would make every decision wait for an open software rollout.
+- **Expiry runs in a round of its own** (`worker.SoftwareRequests`, every 10 minutes), not in the retention round. The
+  retention round purges stores with `retention.purged` evidence (ADR 0032). An expiry is a state transition with its
+  own event, `software_request.expired`, whose `cause` is `validity_ended` or `approval_removed` (§3.8 L4). That code
+  is added to the registry next to the codes of §6.
+- **A request opens nothing when** the entry is not the organization's or does not require approval, the user name is
+  not a valid audience name, or a denial of the same device, entry and user is less than 24 hours old (§3.7). The
+  device's event is still recorded as `device.software_requested`. `software_request.opened` is recorded in the same
+  transaction only when a row was inserted.
+- **The attention kind `software_requests_open`** is one row per active device with open requests: `detail` is their
+  number, `since` the oldest. The attention view lists per device, so the organization's total is the sum of the rows.
+- **The catalog entry's `approval`** is optional on `PATCH /api/v1/software-catalog/{id}`: when it is absent, the
+  stored value is kept, so a client that does not know the field never clears it. In the declarative
+  `software_catalog` section it is optional, and an absent value means `none`. Withdrawal by the user (`withdrawn`)
+  needs a device-side signal that the plan does not define yet; the state exists, and PDK-811 defines the signal.
+
+### Clarification 2026-11-09: approvals (architect decision A10-17)
+
+- An approval is not a staged change set (confirmed). The entry and its available assignment went through the staged
+  rollout path already; an approval only lets the requesting device install what was offered, like a self-service
+  install. A forbid of the same package still wins (A10-9), so no approval is rendered for it, and the device's
+  maintenance windows apply to the install as to any self-service install (agent side, PDK-809/PDK-811).
+- An approval holds only while its entry and an available assignment of it exist. The entry's deletion removes its
+  requests (foreign key). When the entry has no available assignment left, the request round expires its open and
+  approved requests with cause `assignment_removed`. For this, the worker reads `catalog_entry_id` and `intent` of
+  `software_assignment` (column grant, `00120`).
+- Expiry in a round of its own is confirmed.
+- **Agent gate (PDK-942, done in PDK-810).** The compiler leaves out an available package whose entry requires approval
+  for an agent release before `approvalAgent`, the first release with PDK-811 (`0.1.0-alpha.10`). This is the A10-6
+  mechanism, tested against the alpha.9 compat fixture. It is a constant of its own, so it moves if PDK-811 ships
+  later than the self-service app. No agent release may come from a tree that has PDK-810 without PDK-811.
