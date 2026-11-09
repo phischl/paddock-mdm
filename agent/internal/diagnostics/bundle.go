@@ -16,7 +16,8 @@ const bundleNote = "Redacted rendering of the applied bundle.dsse: every field t
 // 2026-11-05): a path of JSON names from the payload root, array elements share the path of their array, ".*" stands
 // for every key of a map and "resources.spec:<type>" for the spec of a resource of that type. The server is ahead of
 // the agent during every staged rollout, so a field this agent does not know — a new secret among them — must fail
-// closed. inventory.enroll_secret and resources.spec:file.content are deliberately absent.
+// closed. inventory.enroll_secret, software.repository.password and resources.spec:file.content are deliberately
+// absent.
 func publicBundleFields() map[string]bool {
 	fields := []string{
 		"schema_version", "bundle_version", "device_id", "organization_id", "issued_at", "mode",
@@ -45,6 +46,9 @@ func publicBundleFields() map[string]bool {
 		"software.packages.approved",
 		"software.packages.urgent", "software.windows.days", "software.windows.start_minute",
 		"software.windows.duration_minutes", "software.windows.timezone",
+		// The repository user is the same constant for every organization (app.RepositoryUsername), so it reveals
+		// nothing; software.repository.password is the organization's read credential and is deliberately absent.
+		"software.repository.host", "software.repository.username",
 		"resources.spec:time.ntp",
 		"resources.spec:file.path", "resources.spec:file.mode", "resources.spec:file.owner", "resources.spec:file.group",
 		"resources.spec:file.content_sha256",

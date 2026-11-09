@@ -300,11 +300,60 @@ day; the portal shows when it was reported (RR-82).
 When a device manages more applications than fit into its check-in, it leaves out applied items first (never a failed
 one) and the device's managed software is marked as truncated.
 
+## Packages stored in Paddock
+
+An organization without an APT repository of its own uploads its `.deb` packages to Paddock (ADR 0050). Paddock keeps
+one repository per organization at `https://bundles.<domain>/apt/<organization slug>/` (suite `paddock`, component
+`main`); its system source (kind `paddock`, slug `paddock`) is maintained by Paddock and cannot be changed or deleted
+through the API or the declarative configuration, which leaves it out of the export and names it by its slug in
+catalog entries.
+
+1. **The repository.** The first `GET /api/v1/software-repository` (any role) or the first upload attempt creates the
+   repository with a random read credential and queues the generation of its signing key. Until the key exists the
+   state is `disabled`: `source` and `fingerprint` are `null`, an upload is refused with 409 `repository_not_ready`
+   (recorded as `denied`) and the repository publishes nothing (404).
+2. **Uploading.** `POST /api/v1/software-packages` (multipart form field `file`, at most 256 MiB; optional `package`,
+   `version`, `architecture`, which must equal the package's control file), `org_admin` with a step-up (API tokens
+   never). **Uploading a package is root-equivalent on every device it is assigned to:** its maintainer scripts run as
+   root, and Paddock scans nothing inside it (RR-114). The api reads only the archive structure and the control file
+   and never runs anything from the package. It accepts an `ar` archive of exactly `debian-binary` (`2.0`),
+   `control.tar`, `control.tar.gz` or `control.tar.zst` and `data.tar.*`, with a control file of one paragraph whose
+   `Package`, `Version` and `Architecture` (`amd64`, `arm64` or `all`) pass the Debian rules and which sets none of
+   the index fields `Filename`, `Size`, `MD5sum`, `SHA1`, `SHA256`, `SHA512` or `Description-md5`. A control archive in
+   xz (`dpkg-deb -Zxz`) or any other compression is refused with 415 `unsupported_compression`: build with `dpkg-deb
+   -Zgzip` or `-Zzstd` (the default of Ubuntu 21.10 and later). The same name, version and architecture again is 409
+   `already_exists`. The audit event `software_package.uploaded` records the package, version, architecture, size and
+   the SHA-256 of the file. The file is stored as `pool/main/<p>/<package>/<package>_<version>_<arch>.deb` of the
+   repository (the version without its epoch) and the repository is rebuilt in the background.
+3. **Assigning.** A catalog entry whose source is the `paddock` source names the uploaded package names; it is
+   assigned like any other entry.
+4. **Deleting.** `DELETE /api/v1/software-packages/{id}` (`org_admin`, step-up; `software_package.deleted`). While a
+   catalog entry of the `paddock` source names the package, every stored version of it is kept (409 `in_use`): an
+   assignment may pin any of them. Change or delete the entry first.
+5. **The read credential.** apt reads the repository with HTTP basic authentication, user `paddock`. Every device whose
+   bundle names the `paddock` source receives the credential with its bundle and keeps it in
+   `/etc/apt/auth.conf.d/paddock-repo.conf` (mode 0600, root). That file is protected: a change, a looser mode or its
+   removal is reverted at the next drift pass and reported as `tamper.protected_file_changed`; a bundle without the
+   repository removes it, and so does the removal of Paddock. The secret never appears in an event, the log or the
+   health report. `POST /api/v1/software-repository/rotate-credential` (`org_admin`, step-up;
+   `software_repository.credential_rotated`) replaces it and shows the new secret once; every device's bundle changes,
+   and the previous secret stays valid for 24 hours (`previous_credential_valid_until`). A device that stays offline
+   longer fails `apt-get update` for the repository with 401 (`source_unreachable`) until its next check-in. The
+   credential is one per organization, not per device (RR-115).
+6. **Serving.** On the bundles host, `GET /apt/<slug>/<path>` answers 401 with a `Basic` challenge without the
+   credential, 302 to a presigned download URL (valid for 10 minutes) with it, and 404 for a path the repository does
+   not have. At most `PADDOCK_RATELIMIT_BUNDLES_APT` requests a minute (default 60) per client address are answered;
+   more get 429. Many devices behind one address can exceed it during a package roll-out: raise the limit then.
+
+To read the repository by hand: `curl -u paddock:<secret> -I https://bundles.<domain>/apt/<slug>/pool/main/…` answers
+302.
+
 ## Uninstalling Paddock
 
 The removal of Paddock from a device (both modes, `leave` and `reset`, `docs/operations/uninstall.md`) removes every
 `/etc/apt/sources.list.d/paddock-*.sources`, every `/etc/apt/keyrings/paddock-*.gpg` and
-`/etc/apt/preferences.d/51paddock-software`, then refreshes the package lists. **Installed applications stay
+`/etc/apt/preferences.d/51paddock-software` and `/etc/apt/auth.conf.d/paddock-repo.conf`, then refreshes the package
+lists. **Installed applications stay
 installed.** The summary names the step `software_sources`.
 
 ## Troubleshooting
@@ -325,6 +374,7 @@ On the device:
 | Symptom | Cause and fix |
 | --- | --- |
 | `failed`, `source_unreachable`, error with `NO_PUBKEY`, `Missing key` or `No good signature` | the vendor signs with a new key: verify the new fingerprint out of band and change the source's key |
+| `failed`, `source_unreachable` for the `paddock` source with `401` | the device's credential is older than the overlap of a rotation, or `/etc/apt/auth.conf.d/paddock-repo.conf` is missing; it is restored with the device's next bundle or drift pass |
 | `failed`, `source_unreachable`, certificate error | the device does not trust the repository's TLS certificate; fix the certificate or the device's trust store |
 | `failed`, `no_candidate` for a pinned version | the repository no longer offers the version (RR-83); pin another version or switch to `latest` |
 | `failed`, `would_remove_dependents` | another installed package depends on the package (removal) or conflicts with it (install); resolve it on the device or change the assignment |

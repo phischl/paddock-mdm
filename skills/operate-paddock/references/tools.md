@@ -242,6 +242,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `denySoftwareRequest` | write | no | Denies an open request with a reason, which the user sees; no step-up of its own. |
 | `getSoftwareAssignment` | read | no | GET /api/v1/software-assignments/{id} |
 | `getSoftwareCatalogEntry` | read | no | GET /api/v1/software-catalog/{id} |
+| `getSoftwareRepository` | read | no | The organization's Paddock repository (ADR 0050): its state, the system source and the signing key's fingerprint once the key exists, the build and the stored packages. |
 | `getSoftwareRequest` | read | no | GET /api/v1/software-requests/{id} |
 | `getSoftwareSource` | read | no | One source with its signing key (a public key); 404 not_found for another organization's. |
 | `listCompileWarnings` | read | no | What the compiler shortened or dropped from a device's bundle against what an administrator assigned (architect decisions A10-9 and A10-10), from the device's latest compile: each compile of a device replaces its warnings, and a device whose bundle was blocked keeps those of its current bundle. |
@@ -249,6 +250,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `listSoftwareAssignments` | read | no | The assignments of catalog entries to the organization, device groups, users or user groups; the search matches the entry's name. |
 | `listSoftwareCatalog` | read | no | The applications of the organization's software catalog (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one. |
 | `listSoftwareCatalogDevices` | read | no | The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, with what they reported or the derived state not_applicable or unknown (see the device's managed software). |
+| `listSoftwarePackages` | read | no | The Debian packages stored in the organization's Paddock repository (plan M13c decision 12, ADR 0050). |
 | `listSoftwareRequests` | read | no | The users' requests for available applications whose catalog entry requires approval (plan M13c decision 10), with their state: requested (waiting for a decision), approved, denied, expired (30 days without a decision, or the entry no longer requires approval) or withdrawn. |
 | `listSoftwareSources` | read | no | The organization's APT package sources (plan M13a decision 1); the list never contains the signing key. |
 | `updateSoftwareAssignment` | write | no | Replaces intent, update_rule, version, reason and urgent with the submitted values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty, an absent urgent is false); the same rules as on creation apply, so keeping or setting urgent needs a reason and a step-up again. |
@@ -316,6 +318,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
 | `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |
 | `deletePlatformNotificationDestination` | platform | Deletes the destination with its delivery state and history. |
+| `deleteSoftwarePackage` | software | Removes a stored package from the repository, which is rebuilt without it. |
 | `deleteSoftwareSource` | software | Removes the source; the devices remove its source file and keyring with their next bundle. |
 | `destroyDevice` | revocation | POST /api/v1/devices/{id}/destroy |
 | `disableAutoUnseal` | platform | Disables the setting: the unsealer stops unsealing at once; the shares stay on the host until the operator runs ./paddock auto-unseal disable. |
@@ -341,6 +344,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `revealDeviceRecoveryKey` | devices | Returns the newest stored recovery key of the device; confirm_hostname must equal the device's hostname. |
 | `rotateNotificationDestinationSecret` | notifications | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
 | `rotatePlatformNotificationDestinationSecret` | platform | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
+| `rotateSoftwareRepositoryCredential` | software | Replaces the repository's read credential (HTTP basic authentication, user paddock) with a new random secret and returns it once; it is never shown again and never recorded. |
 | `testBackupTarget` | platform | Requests a connection test. |
 | `testNotificationDestination` | notifications | Requests a test delivery. |
 | `testPlatformNotificationDestination` | platform | Requests a test delivery. |
@@ -354,6 +358,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `updatePlatformNotificationDestination` | platform | Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. |
 | `updateSoftwareSource` | software | Changes the given fields; absent fields keep their value. |
 | `updateWatchedUnits` | settings | Replaces the watched units: at most 32 services (names ending in .service), a duplicate is 400 invalid_request, a reserved unit (paddock, himmelblau, fleet, orbit, ssh, gdm, systemd- prefixes) or a name that is not a service is 422 unit_not_allowed naming it. |
+| `uploadSoftwarePackage` | software | Uploads a binary Debian package (at most 256 MiB) into the organization's Paddock repository. |
 
 ## Other operations the MCP does not offer
 

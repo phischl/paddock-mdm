@@ -294,6 +294,11 @@ const (
 	CodeSoftwareSourceUpdated Code = "software_source.updated"
 	CodeSoftwareSourceDeleted Code = "software_source.deleted"
 
+	// Packages stored in Paddock (plan M13c decision 12, ADR 0050).
+	CodeSoftwarePackageUploaded             Code = "software_package.uploaded"
+	CodeSoftwarePackageDeleted              Code = "software_package.deleted"
+	CodeSoftwareRepositoryCredentialRotated Code = "software_repository.credential_rotated"
+
 	// Software catalog entries and assignments (plan M13a §6.3).
 	CodeSoftwareCatalogEntryCreated Code = "software_catalog_entry.created"
 	CodeSoftwareCatalogEntryUpdated Code = "software_catalog_entry.updated"
@@ -1823,6 +1828,27 @@ var registry = map[Code]Definition{
 		Params:      []string{"kind", "name", "slug", "fingerprint", "weak_key"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with in_use while a catalog entry references the source.",
+	},
+	CodeSoftwarePackageUploaded: {
+		Code: CodeSoftwarePackageUploaded, Emitted: true,
+		Description: "An organization administrator uploaded a Debian package into the organization's Paddock repository; the SHA-256 and size of the file are recorded. Uploading a package is root-equivalent on every device it is assigned to: its maintainer scripts run as root, and Paddock scans nothing inside it (RR-114).",
+		Params:      []string{"package", "version", "architecture", "sha256", "size"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role, repository_not_ready while the repository's signing key is being generated; failure with invalid_request for a file that is no Debian package or whose control fields fail the rules or differ from the request, unsupported_compression for a control archive in xz or another compression than gzip or zstd, already_exists for a package with the same name, version and architecture.",
+	},
+	CodeSoftwarePackageDeleted: {
+		Code: CodeSoftwarePackageDeleted, Emitted: true,
+		Description: "An organization administrator deleted a package from the organization's Paddock repository; the repository is rebuilt without it.",
+		Params:      []string{"package", "version", "architecture", "sha256"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with in_use while a catalog entry of the Paddock source names the package, not_found for another organization's package.",
+	},
+	CodeSoftwareRepositoryCredentialRotated: {
+		Code: CodeSoftwareRepositoryCredentialRotated, Emitted: true,
+		Description: "An organization administrator replaced the read credential of the organization's Paddock repository; every device receives the new one with its next bundle, and the previous one stays valid until previous_valid_until (24 hours). The secret is shown once in the answer and never recorded.",
+		Params:      []string{"previous_valid_until"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role.",
 	},
 	CodeSoftwareCatalogEntryCreated: {
 		Code: CodeSoftwareCatalogEntryCreated, Emitted: true,

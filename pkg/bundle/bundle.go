@@ -419,6 +419,19 @@ type SoftwareSpec struct {
 	// 5 and Q17). Absent means no window: the policy applies at any time. Additive to schema 2 (ADR 0013): an agent
 	// before PDK-809 ignores it and applies at once.
 	Windows []SoftwareWindow `json:"windows,omitempty"`
+	// Repository is the read credential of the organization's Paddock repository (plan M13c decision 15, ADR 0050
+	// decision 4), present while a source of the section is that repository. The agent writes it to
+	// /etc/apt/auth.conf.d/paddock-repo.conf. Additive to schema 2 (ADR 0013): an agent before PDK-812 ignores it, and
+	// apt then fails that source with 401 (source_unreachable) and nothing else.
+	Repository *SoftwareRepositoryAuth `json:"repository,omitempty"`
+}
+
+// SoftwareRepositoryAuth is an apt basic-auth entry: Host is the machine of apt's auth.conf, the source URI without
+// its https:// scheme (host, optional port and path, ending in "/").
+type SoftwareRepositoryAuth struct {
+	Host     string `json:"host"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // SoftwareSource is an APT source the device writes as a deb822 file with its keyring, or a Flatpak remote (Kind
@@ -532,9 +545,13 @@ var (
 	sourceSuite       = regexp.MustCompile(`^[A-Za-z0-9./_-]{1,64}$`)
 	sourceComponent   = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 	sourceFingerprint = regexp.MustCompile(`^[0-9A-F]{40}$`)
-	catalogEntryID    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	iconSHA256        = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	flatpakRef        = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*){2,}$`)
+	// The parts of a repository credential become one line of apt's auth.conf: no white space, no quotes.
+	repositoryHost     = regexp.MustCompile(`^[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)*/$`)
+	repositoryUser     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	repositoryPassword = regexp.MustCompile(`^[A-Za-z0-9_-]{32,128}$`)
+	catalogEntryID     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	iconSHA256         = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	flatpakRef         = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*){2,}$`)
 )
 
 // Limits of a Flatpak application ID and of an audience's user name (plan M13b decisions 3 and 7). The user name
@@ -571,6 +588,9 @@ func ValidateSoftware(s SoftwareSpec) error {
 			return fmt.Errorf("bundle: duplicate software source %q", src.Slug)
 		}
 		kinds[src.Slug] = src.Kind
+	}
+	if err := validateRepositoryAuth(s); err != nil {
+		return err
 	}
 	var names []string
 	for _, p := range s.Packages {
@@ -617,6 +637,24 @@ func ValidateSoftware(s SoftwareSpec) error {
 		}
 	}
 	return nil
+}
+
+// validateRepositoryAuth checks the repository credential: it names the host and path of an APT source of the section,
+// so the agent never writes a credential for a host no source fetches from.
+func validateRepositoryAuth(s SoftwareSpec) error {
+	r := s.Repository
+	if r == nil {
+		return nil
+	}
+	if !repositoryHost.MatchString(r.Host) || !repositoryUser.MatchString(r.Username) || !repositoryPassword.MatchString(r.Password) {
+		return errors.New("bundle: invalid software repository credential")
+	}
+	for _, src := range s.Sources {
+		if src.Kind != SoftwareSourceFlatpak && slices.Contains(src.URIs, "https://"+r.Host) {
+			return nil
+		}
+	}
+	return errors.New("bundle: the software repository credential names no source of the section")
 }
 
 // validateSoftwareName checks what a package installs and from which source, and returns its name for messages and

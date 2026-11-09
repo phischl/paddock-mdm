@@ -62,6 +62,18 @@ bundles.{$PADDOCK_DOMAIN} {
 		import body_limit 1MiB 1048576
 		reverse_proxy rustfs:9000
 	}
+	# The Paddock repositories of the organizations (plan M13c decision 14, ADR 0050): the api checks the basic-auth
+	# credential and redirects apt to a presigned GET of paddock-bundles (served by @read above).
+	@apt {
+		method GET HEAD
+		path /apt/*
+	}
+	handle @apt {
+		import body_limit 1MiB 1048576
+		reverse_proxy paddock-api:8080 {
+			header_up X-Paddock-Client-IP {client_ip}
+		}
+	}
 	# Devices upload escrowed LUKS headers with presigned PUTs (plan M4b decision 10); the signature fixes the key.
 	@escrow {
 		method PUT

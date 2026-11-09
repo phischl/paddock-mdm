@@ -93,6 +93,8 @@ services:
       - rustfs_artifacts_api_secret_key
       - rustfs_escrow_api_access_key
       - rustfs_escrow_api_secret_key
+      - rustfs_bundles_api_access_key
+      - rustfs_bundles_api_secret_key
       - db_paddock_api_url
       - db_paddock_platform_url
       # postgres://…@<audit host>:5432/paddock_audit?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca_bundle

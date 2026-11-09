@@ -69,6 +69,13 @@ type Deps struct {
 	Notifications *app.Notifications
 	// SoftwareSources are the APT package sources of organizations (plan M13a decisions 1–6).
 	SoftwareSources *app.SoftwareSources
+	// SoftwarePackages are the packages stored in Paddock and the organizations' repositories (plan M13c decisions
+	// 11, 12, 14 and 15, ADR 0050).
+	SoftwarePackages *app.SoftwarePackages
+	// BundlesHost is the host (with port, as requests name it) of PADDOCK_BUNDLES_PUBLIC_URL: requests for it reach
+	// only the repository route group (bundlesHost), answered by Repositories; "" mounts none.
+	BundlesHost  string
+	Repositories RepositoryLocator
 	// SoftwareCatalog are the catalog entries and assignments of organizations (plan M13a decisions 7–11).
 	SoftwareCatalog *app.SoftwareCatalog
 	// SoftwareRequests are the requests for entries that require approval (plan M13c decisions 9 and 10).
@@ -281,6 +288,9 @@ var privileged = map[string]struct {
 	"POST /api/v1/software-sources":                                        {app.ScopeOrg, app.SpecSoftwareSourceCreate},
 	"PATCH /api/v1/software-sources/{id}":                                  {app.ScopeOrg, app.SpecSoftwareSourceUpdate},
 	"DELETE /api/v1/software-sources/{id}":                                 {app.ScopeOrg, app.SpecSoftwareSourceDelete},
+	"POST /api/v1/software-packages":                                       {app.ScopeOrg, app.SpecSoftwarePackageUpload},
+	"DELETE /api/v1/software-packages/{id}":                                {app.ScopeOrg, app.SpecSoftwarePackageDelete},
+	"POST /api/v1/software-repository/rotate-credential":                   {app.ScopeOrg, app.SpecSoftwareRepositoryRotate},
 	"POST /api/v1/software-catalog":                                        {app.ScopeOrg, app.SpecSoftwareCatalogEntryCreate},
 	"PATCH /api/v1/software-catalog/{id}":                                  {app.ScopeOrg, app.SpecSoftwareCatalogEntryUpdate},
 	"DELETE /api/v1/software-catalog/{id}":                                 {app.ScopeOrg, app.SpecSoftwareCatalogEntryDelete},
@@ -335,7 +345,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareRequests: d.SoftwareRequests, softwareStatus: d.SoftwareStatus, compileWarnings: d.CompileWarnings, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns, backupRestorePlans: d.BackupRestorePlans,
+		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwarePackages: d.SoftwarePackages, softwareCatalog: d.SoftwareCatalog, softwareRequests: d.SoftwareRequests, softwareStatus: d.SoftwareStatus, compileWarnings: d.CompileWarnings, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns, backupRestorePlans: d.BackupRestorePlans,
 		securityReview: d.SecurityReview,
 		accessReview:   d.AccessReview,
 		diagnostics:    d.Diagnostics,
@@ -388,7 +398,8 @@ func NewHandler(d Deps) http.Handler {
 		// session, a token or a use case (plan M7a decision 17).
 		guarded = d.IPGuard.Middleware(guarded)
 	}
-	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(securityHeaders(guarded)))))
+	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(securityHeaders(
+		s.bundlesHost(guarded))))))
 }
 
 type server struct {
@@ -545,13 +556,16 @@ const artifactUploadDeadline = 30 * time.Minute
 
 // limitBody bounds request bodies one byte above their limit, so that a larger body is refused while it is read
 // (400 invalid_request, audited by rejected) and a body of exactly the limit reaches the use case: PUT /api/v1/config
-// at app.MaxDocumentBytes, the artifact uploads not at all, every other request at maxBodyBytes.
+// at app.MaxDocumentBytes, the artifact uploads not at all, a package upload at maxPackageUploadBytes, every other
+// request at maxBodyBytes.
 func limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/config":
 			r.Body = http.MaxBytesReader(w, r.Body, app.MaxDocumentBytes+1)
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, artifactUploadPrefix):
+		case r.Method == http.MethodPost && r.URL.Path == packageUploadPath:
+			r.Body = http.MaxBytesReader(w, r.Body, maxPackageUploadBytes+1)
 		default:
 			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes+1)
 		}
@@ -559,10 +573,10 @@ func limitBody(next http.Handler) http.Handler {
 	})
 }
 
-// uploadDeadlines extends the read and write deadlines of the agent release uploads before their handlers read the
-// body: a 128 MiB artifact over a slow link takes longer than the server's timeouts allow.
+// uploadDeadlines extends the read and write deadlines of the agent release and package uploads before their handlers
+// read the body: a 128 MiB artifact or a 256 MiB package over a slow link takes longer than the server's timeouts allow.
 func uploadDeadlines(f adminapi.StrictHandlerFunc, operationID string) adminapi.StrictHandlerFunc {
-	if operationID != "UploadAgentArtifact" && operationID != "UploadAgentPackage" {
+	if operationID != "UploadAgentArtifact" && operationID != "UploadAgentPackage" && operationID != "UploadSoftwarePackage" {
 		return f
 	}
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {

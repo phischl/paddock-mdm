@@ -34,8 +34,13 @@ func loadSoftwareConfig(ctx context.Context, q *pgstore.Queries, st *configState
 		item := declarative.SoftwareSource{Slug: s.Slug, Kind: s.Kind, Name: s.Name, URIs: nonNil(s.Uris),
 			Suites: nonNil(s.Suites), Components: nonNil(s.Components), Architectures: nonNil(s.Architectures),
 			SigningKey: s.SigningKey, Fingerprint: s.Fingerprint}
-		st.ids[declarative.SectionSoftwareSources][item.Key().String()] = s.ID
 		st.sources[s.Slug], sourceSlugs[s.ID] = s.ID, s.Slug
+		// The system source of the Paddock repository is no part of the document: Paddock maintains it, and catalog
+		// entries name it by its slug (plan M13c decision 11).
+		if s.Kind == software.SourceKindPaddock {
+			continue
+		}
+		st.ids[declarative.SectionSoftwareSources][item.Key().String()] = s.ID
 		srcs = append(srcs, item)
 	}
 	doc.SoftwareSources = &srcs

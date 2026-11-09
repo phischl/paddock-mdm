@@ -77,12 +77,13 @@ func (h *Helper) updateConfiguration(ctx context.Context) string {
 	return stepDone
 }
 
-// softwareSources removes the APT sources, keyrings and forbid pins of the software catalog and Paddock's system
-// Flatpak remotes and masks, and refreshes the package lists (plan M13a decision 29, plan M13b decision 10). The installed
-// applications stay; the Himmelblau source and keyring are the himmelblau step's.
+// softwareSources removes the APT sources, keyrings, forbid pins and the Paddock repository's credential (plan M13c
+// decision 15) of the software catalog and Paddock's system Flatpak remotes and masks, and refreshes the package lists
+// (plan M13a decision 29, plan M13b decision 10). The installed applications stay; the Himmelblau source and keyring
+// are the himmelblau step's.
 func (h *Helper) softwareSources(ctx context.Context) string {
 	var errs []string
-	files := []string{reconcile.SoftwareForbidFile}
+	files := []string{reconcile.SoftwareForbidFile, reconcile.SoftwareAuthFile}
 	for _, d := range []struct{ dir, suffix string }{{reconcile.SoftwareSourceDir, ".sources"}, {reconcile.SoftwareKeyringDir, ".gpg"}} {
 		entries, _ := os.ReadDir(h.path(d.dir)) // a missing directory has nothing to remove
 		for _, e := range entries {

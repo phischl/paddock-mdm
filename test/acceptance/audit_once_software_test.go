@@ -53,6 +53,84 @@ func sourceItemCases(code, method string, success int, body func() any) []auditC
 
 // softwareAuditCases are the cases of the software source operations (plan M13a §6.3, ticket PDK-408).
 var softwareAuditCases = map[string][]auditCase{
+	// Packages stored in Paddock (plan M13c decision 12, PDK-812): an upload succeeds once the repository's signing
+	// key exists and is refused as repository_not_ready before (A10-21).
+	"POST /api/v1/software-packages": {
+		{"success or not ready", func(t *testing.T, w *auditWorld) {
+			s := adminStepper(adminUser(t, "a3-package"))
+			s.stepUp(t)
+			res := uploadStoredPackage(t, s.Portal, gateDeb("a3-pkg-"+uniqueSuffix(), "1.0", "amd64", "control.tar.gz"), nil)
+			switch res.Status {
+			case http.StatusCreated:
+				expectOneEvent(t, w.alice, res.RequestID, "software_package.uploaded", "success")
+				id := responseID(t, res).String()
+				t.Cleanup(func() {
+					s.stepUp(t)
+					call(t, s.Portal, http.MethodDelete, softwarePackages+"/"+id, nil)
+				})
+			case http.StatusConflict:
+				expectStatus(t, res, http.StatusConflict, "repository_not_ready")
+				expectOneEvent(t, w.alice, res.RequestID, "software_package.uploaded", "denied")
+			default:
+				t.Fatalf("upload: HTTP %d %s", res.Status, res.Body)
+			}
+		}},
+		{"malformed form", func(t *testing.T, w *auditWorld) {
+			s := adminStepper(adminUser(t, "a3-package"))
+			s.stepUp(t)
+			res := uploadStoredPackage(t, s.Portal, gateDeb("a3-pkg", "1.0", "amd64", "control.tar.gz"), map[string]string{"note": "x"})
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "software_package.uploaded", "failure")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := uploadStoredPackage(t, w.bob, gateDeb("a3-pkg", "1.0", "amd64", "control.tar.gz"), nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "software_package.uploaded", "denied")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := uploadStoredPackage(t, login(t, env.Alice), gateDeb("a3-pkg", "1.0", "amd64", "control.tar.gz"), nil)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "software_package.uploaded", "denied")
+		}},
+	},
+	"DELETE /api/v1/software-packages/{id}": {
+		{"not found", func(t *testing.T, w *auditWorld) {
+			s := adminStepper(adminUser(t, "a3-package"))
+			s.stepUp(t)
+			res := call(t, s.Portal, http.MethodDelete, softwarePackages+"/"+uuid.NewString(), nil)
+			expectStatus(t, res, http.StatusNotFound, "not_found")
+			expectOneEvent(t, w.alice, res.RequestID, "software_package.deleted", "failure")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodDelete, softwarePackages+"/"+uuid.NewString(), nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "software_package.deleted", "denied")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.Alice), http.MethodDelete, softwarePackages+"/"+uuid.NewString(), nil)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "software_package.deleted", "denied")
+		}},
+	},
+	"POST /api/v1/software-repository/rotate-credential": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			s := adminStepper(adminUser(t, "a3-repo"))
+			s.stepUp(t)
+			res := call(t, s.Portal, http.MethodPost, softwareRepository+"/rotate-credential", nil)
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, "software_repository.credential_rotated", "success")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodPost, softwareRepository+"/rotate-credential", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "software_repository.credential_rotated", "denied")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.Alice), http.MethodPost, softwareRepository+"/rotate-credential", nil)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "software_repository.credential_rotated", "denied")
+		}},
+	},
 	"POST /api/v1/software-sources": {
 		{"success", func(t *testing.T, w *auditWorld) {
 			s := adminStepper(adminUser(t, "a3-source"))
