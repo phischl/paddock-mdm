@@ -14,8 +14,8 @@
 #    6  restore drill, backup: a confirmed backup key, the local target, ./paddock backup now --label ci --wait;
 #    7  restore drill, loss and restore: ./paddock down --volumes, ./paddock secrets, ./paddock restore --from --at;
 #    8  probes again;
-#    9  ./paddock rollback --yes on the control plane, then on the audit host (the candidate's audit writer reads what
-#       the previous control plane sends, never the other way round);
+#    9  ./paddock rollback --yes on the control plane (the backup key on stdin), then on the audit host (the
+#       candidate's audit writer reads what the previous control plane sends, never the other way round);
 #   10  probes on the previous release: the pre-upgrade set.
 # From 0.1.0-alpha.8, which backs up to S3, the previous release's bucket is the audit project's RustFS behind the CI
 # project paddock-ci-s3 (compose.ci-s3.yaml, compose.ci-alpha8.yaml), and step 9 is that release's legacy restore
@@ -269,6 +269,18 @@ drill_point() {
   fail "the local target holds no backup set with the WAL past $drill_at (${want[*]}) within 10 minutes"
 }
 
+# rollback_host <cp|audit>: step 9, ./paddock rollback --yes with on stdin what an operator types, never on a command
+# line. --yes answers the confirmations. The control plane's rollback to a release with scripts/restore.sh restores the
+# pre-upgrade set and asks for the backup key that made it: the key of step 2, which step 6 kept. 0.1.0-alpha.8's
+# procedure (legacy) reads its key file from the old directory, and the audit host restores nothing.
+rollback_host() {
+  local input=/dev/null
+  if [[ "$1" == cp ]] && ! $legacy; then input="$W/seed/backup.key"; fi
+  if [[ "$1" == cp ]]; then cp_paddock rollback "$W/prev/cp" --yes <"$input"; else
+    audit_paddock rollback "$W/prev/audit" --yes <"$input"
+  fi
+}
+
 # install_traps: finish on every exit. A TERM (the workflow's timeout) or an INT exits non-zero through finish, which
 # collects the logs; without these traps bash would run finish with the status 0 of the interrupted command and report
 # a pass.
@@ -430,9 +442,9 @@ device_checks_in "$W/bin/upgradesim-prev" /etc/paddock-ci/upgrade.conf
 step "9.1 rollback: control plane"
 phase=rollback
 legacy_overlay
-cp_paddock rollback "$W/prev/cp" --yes </dev/null
+rollback_host cp
 step "9.2 rollback: audit host"
-audit_paddock rollback "$W/prev/audit" --yes </dev/null
+rollback_host audit
 
 # --- 10 probes on the previous release -------------------------------------------------------------------------------
 step "10.1 previous again: hosts"
