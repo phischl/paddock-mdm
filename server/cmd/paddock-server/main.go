@@ -66,7 +66,9 @@ commands:
   backup target-export <name|id>   (prints the S3 target with its credentials; ./paddock backup-target export)
   prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online]
         [--backup-revisions-file <list> --backup-revisions-db <list>]
-        [--docker-networks [--docker-network <name>=<subnet>[,<subnet>...]]...] < config.json
+        [--docker-networks [--docker-network <name>=<subnet>[,<subnet>...]]...]
+        [--containers <docker inspect file> [--hardening-exceptions FILE]] < config.json
+  check-containers [--exceptions FILE] < inspect.json   (the online container matrix of prod-check)
   healthcheck
   version
 
@@ -142,6 +144,8 @@ func runOne(ctx context.Context, args []string) int {
 		err = runBackup(ctx, l, args[1:])
 	case "prod-check":
 		err = runProdCheck(ctx, args[1:], os.Stdin, os.Stdout)
+	case "check-containers":
+		err = runCheckContainers(args[1:], os.Stdin, os.Stdout)
 	case "admin":
 		err = runAdmin(ctx, l, args[1:])
 	case "provision":

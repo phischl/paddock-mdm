@@ -408,6 +408,10 @@ accepts it with the conditions below.
   text, `/readyz` the dependency error texts (PostgreSQL errors omit the password, OpenBao errors carry URL and status,
   not the request body), and `/metrics` counters and gauges labelled by status, store, route, code, host and reason;
   none carries a secret.
+  - *Closed 2026-11-09 (PDK-824, PDK-825):* `fleet` (PDK-824) and `authentik-server` (PDK-825) run with
+    `cap_drop: [ALL]` and `no-new-privileges`; a container of each image shows CapPrm, CapEff and CapBnd 0. `rustfs`
+    keeps Docker's default capabilities until PDK-823, but it is on `data` as well, so its `edge` interface adds no
+    path to the `data`-bound port 9090; it is outside this risk.
 - `prometheus` is on `data` only, not `data` + `edge`: it scrapes no Caddy target. The k6 load generator joins
   `data` beside `edge` to read the queue backlog.
 - `edge` gets the pool of dynamic addresses `PADDOCK_EDGE_IP_RANGE` (default `172.28.0.128/25`), and Caddy's fixed
@@ -804,3 +808,12 @@ The `cap_add` of the Valkey container is exactly `CHOWN`, `SETUID`, `SETGID` and
 - Reference: PDK-824 (`fleet-redis`) and PDK-825 (the hardening and prod-check matrix) use this four-capability set
   as the Valkey reference. `tools/composelint` pins it: any extra or missing capability for `valkey` in any host file
   set fails `make lint-compose` and its tests.
+
+## Amendment 2026-11-09 (architect-lead decision A10-8, PDK-825)
+
+§3.4 decision 9 named a memory limit of 1g for each Authentik container. Decision A10-8 (`decisions-alpha10.md` §17)
+sets `authentik-server` to 2g, based on the measurement in PDK-825: 860 MiB to 1.05 GiB idle with four web workers
+and a 1.08 GiB peak at the first start, so 1g would let the kernel kill a web worker during normal operation.
+`authentik-worker` keeps 1g (measured 265–330 MiB, 370 MiB peak at the first start). Both values are overridable per
+installation (`PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT`, `PADDOCK_AUTHENTIK_WORKER_MEM_LIMIT`) and listed in
+`docs/operations/capacity.md`.

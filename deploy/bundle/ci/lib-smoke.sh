@@ -225,13 +225,18 @@ smoke_start() {
     fail "./paddock ps does not list paddock-notifier as healthy"
 }
 
-# smoke_probes: the portal, Authentik and the device API through Caddy, and the container hardening.
+# smoke_probes: the portal, Authentik and the device API through Caddy.
 smoke_probes() {
   expect_status 200 admin.paddock.localhost GET /
   expect_status 200 auth.paddock.localhost GET /-/health/ready/
   expect_status '4[0-9][0-9]' device.paddock.localhost POST /v1/checkin
   # The probes above prove Caddy's bind to 443 with NET_BIND_SERVICE as its only capability. Port 80 is not probed: the
   # CI overlay runs the development Caddyfile, which has no HTTP listener (auto_https disable_redirects).
+}
+
+# smoke_hardening: every container of both projects matches this tree's hardening matrix (plan M12h decision 11). Only
+# for the candidate's stack: the matrix of hardening-exceptions.yaml does not describe an earlier release.
+smoke_hardening() {
   "$SMOKE_LIB_DIR/assert-hardening.sh" paddock-cp paddock-audit
 }
 

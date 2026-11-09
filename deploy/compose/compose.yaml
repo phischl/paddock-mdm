@@ -343,7 +343,15 @@ services:
     logging: *paddock-logging
     image: ${AUTHENTIK_IMAGE}
     restart: unless-stopped
+    # Runs as the image's authentik user from the start and needs no capability; dropping NET_RAW also keeps the
+    # internet-facing server from crafting packets on edge (plan M12h amendment A10-1). No read_only: Authentik writes
+    # media, generated templates and blueprint state below /data and its own directories (plan M12h §3.4, ADR 0051
+    # decision 4; hardening-exceptions.yaml).
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits"); about 250 MiB per web worker.
+    mem_limit: ${PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT:-2g}
     entrypoint: ["/bin/sh", "/paddock/entrypoint.sh"]
     command: ["server"]
     environment: &authentik-env
@@ -390,6 +398,7 @@ services:
     <<: *authentik
     command: ["worker"]
     pids_limit: 1024
+    mem_limit: ${PADDOCK_AUTHENTIK_WORKER_MEM_LIMIT:-1g}
     # Its database only: the internal network authentik has no route out and no Paddock service.
     networks: [authentik]
     depends_on:
