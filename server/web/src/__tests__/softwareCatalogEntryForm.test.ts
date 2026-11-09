@@ -77,4 +77,20 @@ describe('SoftwareCatalogEntryForm', () => {
     const input = (w.emitted('submit') as unknown[][])[0][0] as { packages: { flatpak_ref?: string; scope?: string }[] }
     expect(input.packages[1]).toMatchObject({ flatpak_ref: 'org.inkscape.Inkscape', scope: 'system' })
   })
+  it('sends the approval switch and keeps a stored required approval (plan M13c decision 8)', async () => {
+    const w = mountForm()
+    await w.find('#entry-name').setValue('GIMP')
+    await w.find('[data-testid="package-name-0"] input').setValue('gimp')
+    await w.find('form').trigger('submit')
+    expect(((w.emitted('submit') as unknown[][])[0][0] as { approval: string }).approval).toBe('none')
+    await w.find('#entry-approval').setValue(true)
+    await w.find('form').trigger('submit')
+    expect(((w.emitted('submit') as unknown[][])[1][0] as { approval: string }).approval).toBe('required')
+
+    const stored = mountForm({
+      id: 'e1', name: 'GIMP', description: '', category: '', source_id: null, source_slug: '', approval: 'required', has_icon: false,
+      assignment_count: 0, packages: [{ distribution: 'ubuntu', release: '*', architecture: '*', package: 'gimp' }], created_at: '', updated_at: '',
+    })
+    expect((stored.find('#entry-approval').element as HTMLInputElement).checked).toBe(true)
+  })
 })

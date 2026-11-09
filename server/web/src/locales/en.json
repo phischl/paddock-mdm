@@ -164,7 +164,8 @@
     "softwareSources": "Package sources",
     "softwareCatalog": "Software catalog",
     "accessReview": "Access review",
-    "platformAccessReview": "Platform access review"
+    "platformAccessReview": "Platform access review",
+    "softwareRequests": "Software requests"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -3491,7 +3492,14 @@
       "flatpakRef": "Flatpak application ID",
       "flatpakRefHint": "For example org.gimp.GIMP.",
       "flatpakRefInvalid": "Enter a Flatpak application ID of at least three parts, for example org.gimp.GIMP.",
-      "flatpakRow": "{ref} ({scope})"
+      "flatpakRow": "{ref} ({scope})",
+      "approval": "Approval",
+      "approvals": {
+        "none": "Not required",
+        "required": "Required"
+      },
+      "approvalRequired": "Users need approval",
+      "approvalHint": "Users of an available assignment ask an administrator before they install the application."
     },
     "assignments": {
       "title": "Assignments",
@@ -3514,7 +3522,12 @@
         "description": "An assignment applies the application to every device, a device group, a user or a user group."
       },
       "target": "Target",
-      "targetRequired": "Choose the target."
+      "targetRequired": "Choose the target.",
+      "urgent": "Urgent: apply outside maintenance windows",
+      "urgentHint": "Devices apply this assignment at once, even outside their maintenance windows. Needs a reason and a fresh sign-in confirmation on every save.",
+      "urgentReasonRequired": "Enter a reason of 2 to 500 characters for an urgent assignment.",
+      "urgentChip": "Urgent",
+      "rollout": "Rollout"
     },
     "intent": {
       "label": "Intent",
@@ -3604,5 +3617,87 @@
         "description": "The latest compile applied every assignment as it is."
       }
     }
+  },
+  "softwareRequests": {
+    "title": "Software requests",
+    "summary": "Users ask for applications whose catalog entry requires approval. An organization administrator approves or denies each request; a request without a decision expires after 30 days.",
+    "application": "Application",
+    "user": "User",
+    "state": "State",
+    "requestedAt": "Requested",
+    "expiresAt": "Expires",
+    "decision": "Decision",
+    "decidedBy": "by {name}",
+    "states": {
+      "requested": "Waiting",
+      "approved": "Approved",
+      "denied": "Denied",
+      "expired": "Expired",
+      "withdrawn": "Withdrawn"
+    },
+    "empty": {
+      "title": "No software requests",
+      "description": "Requests appear here when users ask for an application that requires approval."
+    },
+    "approve": {
+      "title": "Approve request",
+      "label": "Approve",
+      "confirm": "Let {user} install {app} on {hostname}?",
+      "reason": "Reason (optional)",
+      "reasonHint": "Recorded with the decision.",
+      "done": "{app} is approved for {user}.",
+      "aria": "Approve {app} for {user}"
+    },
+    "deny": {
+      "title": "Deny request",
+      "label": "Deny",
+      "confirm": "Deny {user} the installation of {app} on {hostname}? The user may ask again after 24 hours.",
+      "reason": "Reason",
+      "reasonHint": "The user sees this reason.",
+      "done": "The request of {user} for {app} is denied.",
+      "aria": "Deny {app} for {user}"
+    }
+  },
+  "maintenanceWindow": {
+    "title": "Maintenance window",
+    "set": "Set window",
+    "edit": "Edit window",
+    "remove": "Remove window",
+    "formTitle": "Maintenance window",
+    "removeTitle": "Remove maintenance window",
+    "removeConfirm": "Remove the maintenance window of {name}? Its devices apply their software changes at the next pass unless another of their groups has a window.",
+    "none": "No window: the devices of this group apply software changes at any time unless another of their groups has a window.",
+    "explain": "Devices install and remove the software of their policy only inside the union of the windows of their groups. Urgent assignments, users' own installations and source files do not wait.",
+    "summary": "{days}, from {start} for {duration} ({timezone})",
+    "durationValue": "{hours, plural, =0 {} one {# hour} other {# hours}}{minutes, plural, =0 {} one { # minute} other { # minutes}}",
+    "days": "Days",
+    "start": "Start (local time)",
+    "duration": "Length",
+    "durationHint": "30 to 1440 minutes; a window may run past midnight.",
+    "minutes": "min",
+    "timezone": "Timezone",
+    "timezoneHint": "An IANA name such as Europe/Berlin.",
+    "weekdays": {
+      "1": "Monday",
+      "2": "Tuesday",
+      "3": "Wednesday",
+      "4": "Thursday",
+      "5": "Friday",
+      "6": "Saturday",
+      "7": "Sunday"
+    },
+    "weekdaysShort": {
+      "1": "Mon",
+      "2": "Tue",
+      "3": "Wed",
+      "4": "Thu",
+      "5": "Fri",
+      "6": "Sat",
+      "7": "Sun"
+    },
+    "daysRequired": "Choose at least one day.",
+    "startInvalid": "Enter a time as HH:MM.",
+    "durationInvalid": "Enter 30 to 1440 minutes.",
+    "timezoneInvalid": "Enter a timezone name of at most 64 characters."
   }
 }

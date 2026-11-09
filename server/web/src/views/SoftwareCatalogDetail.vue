@@ -7,10 +7,12 @@ import PdIcon from '../components/PdIcon'
 import SoftwareAssignmentForm from '../components/SoftwareAssignmentForm.vue'
 import SoftwareCatalogEntryForm from '../components/SoftwareCatalogEntryForm.vue'
 import SoftwareStateChip from '../components/SoftwareStateChip.vue'
+import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import type { CompileWarning, PackageRef, SoftwareAssignment, SoftwareCatalogDevice, SoftwareCatalogEntry } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { usePending } from '../composables/usePending'
+import { openRolloutStagedKeys, type StagedKey } from '../lib/configRollouts'
 import { allGroups, groupFilter } from '../lib/devices'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
@@ -18,8 +20,9 @@ import {
   allSoftwareAssignments, allSoftwareSources, assignmentTarget as targetOf, compileWarningCodeFilter, compileWarningMessage, deleteCatalogEntry,
   deleteSoftwareAssignment, getCatalogEntry, iconFileProblem, iconUrl, listCompileWarnings, listSoftwareAssignments,
   listSoftwareCatalogDevices, saveCatalogEntry, saveSoftwareAssignment, setCatalogIcon, softwareIntentFilter, softwareScopeFilter,
-  softwareStateFilter, softwareTargetFilter, type AssignmentInput, type EntryInput, type ScopedRow, type SourceOption,
+  softwareStateFilter, softwareTargetFilter, stagingRollout, type AssignmentInput, type EntryInput, type ScopedRow, type SourceOption,
 } from '../lib/software'
+import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { allUserGroups } from '../lib/userGroups'
 import { allUsers } from '../lib/users'
 import { useSessionStore } from '../stores/session'
@@ -36,7 +39,8 @@ const entry = ref<SoftwareCatalogEntry | null>(null)
 const problem = ref('')
 const groups = ref<{ id: string; name: string }[]>([])
 const users = ref<{ id: string; username: string }[]>([])
-const userGroups = ref<{ id: string; name: string }[]>([])
+const userGroups = ref<{ id: string; name: string; slug?: string }[]>([])
+const staged = ref<StagedKey[]>([])
 const entryAssignments = ref<SoftwareAssignment[]>([])
 const sources = ref<SourceOption[]>([])
 const iconVersion = ref(0)
@@ -58,6 +62,7 @@ const assignmentColumns = computed<ListColumn[]>(() => [
   { key: 'intent', title: 'software.assignments.intent', sortable: true, role: 'status' },
   { key: 'update_rule', title: 'software.assignments.updateRule', role: 'meta' },
   { key: 'version', title: 'software.assignments.version', role: 'meta', mono: true },
+  { key: 'rollout', title: 'software.assignments.rollout', role: 'meta' },
   { key: 'reason', title: 'software.assignments.reason', role: 'meta', hideBelow: 'md' },
   { key: 'updated_at', title: 'common.updatedAt', sortable: true, role: 'meta' },
   ...(session.canWrite ? [{ key: 'actions', title: 'common.actions', role: 'actions' as const }] : []),
@@ -113,7 +118,13 @@ function warningText(w: CompileWarning): string {
 }
 
 async function loadAssignments(): Promise<void> {
-  entryAssignments.value = await allSoftwareAssignments(id.value).catch(() => [])
+  const [a, k] = await Promise.all([allSoftwareAssignments(id.value).catch(() => []), openRolloutStagedKeys('software_assignments')])
+  entryAssignments.value = a
+  staged.value = k
+}
+
+function rolloutOf(item: SoftwareAssignment): string | null {
+  return stagingRollout(item, staged.value, { groups: groups.value, users: users.value, userGroups: userGroups.value })
 }
 
 async function load(): Promise<void> {
@@ -136,7 +147,26 @@ onMounted(async () => {
   sources.value = s
   users.value = u
   userGroups.value = ug
+  await resumeAssignment()
 })
+
+/** A save of an urgent assignment waits for the step-up; the edited assignment's ID travels with the input. */
+interface PendingAssignment { id: string | null; input: AssignmentInput }
+const stepUpAction = 'software-assignment'
+
+async function resumeAssignment(): Promise<void> {
+  const resumed = resumeStepUp<PendingAssignment>(stepUpAction, id.value)
+  if (!resumed) return
+  await router.replace(withoutStepUpParam())
+  if (resumed.failed) {
+    problem.value = 'step_up_failed'
+    return
+  }
+  const code = await saveSoftwareAssignment(resumed.payload.id, resumed.payload.input)
+  await Promise.all([assignments.value?.reload(), devices.value?.reload(), load(), loadAssignments()])
+  // After the reloads: load() clears the page alert, and the dialog is closed, so this alert is the only feedback.
+  if (code) problem.value = code
+}
 
 function openEntry(): void {
   entryProblem.value = ''
@@ -197,7 +227,12 @@ function openAssignment(item: SoftwareAssignment | null): void {
 }
 
 async function submitAssignment(input: AssignmentInput): Promise<void> {
-  assignmentProblem.value = (await saveSoftwareAssignment(assignmentTarget.value?.id ?? null, input)) ?? ''
+  const assignmentID = assignmentTarget.value?.id ?? null
+  assignmentProblem.value = (await saveSoftwareAssignment(assignmentID, input)) ?? ''
+  if (assignmentProblem.value === stepUpRequired) {
+    startStepUp(stepUpAction, id.value, { id: assignmentID, input } satisfies PendingAssignment)
+    return
+  }
   if (assignmentProblem.value) return
   assignmentOpen.value = false
   await Promise.all([assignments.value?.reload(), devices.value?.reload(), load(), loadAssignments()])
@@ -277,6 +312,10 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
         <dd>{{ entry.category || '–' }}</dd>
         <dt>{{ t('software.catalog.source') }}</dt>
         <dd>{{ entry.source_slug || t('software.catalog.distributionRepositories') }}</dd>
+        <dt>{{ t('software.catalog.approval') }}</dt>
+        <dd data-testid="entry-approval">
+          {{ t('software.catalog.approvals.' + entry.approval) }}
+        </dd>
         <dt>{{ t('software.catalog.packages') }}</dt>
         <dd>
           <ul class="mono">
@@ -343,6 +382,29 @@ async function removeAssignment(item: SoftwareAssignment): Promise<void> {
         </template>
         <template #[`item.intent`]="{ item }: { item: SoftwareAssignment }">
           {{ t('software.intent.' + item.intent) }}
+          <StatusChip
+            v-if="item.urgent"
+            status="warn"
+            :label="t('software.assignments.urgentChip')"
+            :title="t('software.assignments.urgentHint')"
+            data-testid="assignment-urgent-chip"
+          />
+        </template>
+        <template #[`item.rollout`]="{ item }: { item: SoftwareAssignment }">
+          <RouterLink
+            v-if="rolloutOf(item)"
+            :to="{ name: 'config-rollout', params: { id: rolloutOf(item) ?? '' } }"
+            data-testid="assignment-rollout"
+          >
+            <StatusChip
+              status="info"
+              :label="t('configRollouts.modes.staged')"
+            />
+          </RouterLink>
+          <span
+            v-else
+            class="pd-muted"
+          >–</span>
         </template>
         <template #[`item.update_rule`]="{ item }: { item: SoftwareAssignment }">
           {{ t('software.updateRule.' + item.update_rule) }}

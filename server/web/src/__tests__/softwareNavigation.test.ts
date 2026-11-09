@@ -24,4 +24,8 @@ describe('software navigation (plan M13a decision 31)', () => {
       expect(p.indexOf('/software-catalog')).toBeLessThan(p.indexOf('/package-holds'))
     }
   })
+
+  it('shows the software requests to every reader of the organization (plan M13c decision 10)', () => {
+    for (const role of ['org_admin', 'org_operator', 'org_auditor'] as const) expect(paths(role)).toContain('/software-requests')
+  })
 })

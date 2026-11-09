@@ -1,11 +1,12 @@
 import {
   api, listPage, problemCode, type CompileWarning, type CompileWarningSort, type DeviceManagedSoftware, type DeviceManagedSoftwareSort,
-  type DeviceSoftwareState, type PackageRef, type SoftwareArchitecture, type SoftwareAssignment, type SoftwareAssignmentSort,
+  type DeviceSoftwareState, type PackageRef, type SoftwareApproval, type SoftwareArchitecture, type SoftwareAssignment, type SoftwareAssignmentSort,
   type SoftwareCatalogDevice, type SoftwareCatalogDeviceSort, type SoftwareCatalogEntry, type SoftwareCatalogSort, type SoftwareIntent,
   type SoftwareScope, type SoftwareSource, type SoftwareSourceKind, type SoftwareSourceSort, type SoftwareSourceSummary,
   type SoftwareTarget, type SoftwareUpdateRule, type UserSoftware, type UserSoftwareSort,
 } from '../api/client'
 import type { ListFilter, ListParams, Page } from './listQuery'
+import { urgentReasonMin, type StagedKey } from './configRollouts'
 import type { StatusView } from './status'
 import { validPackage, validPackageVersion } from './updates'
 
@@ -254,6 +255,8 @@ export interface EntryInput {
   category: string
   sourceID: string | null
   packages: PackageRef[]
+  /** required: the users of an available assignment ask an administrator first (plan M13c decision 8). */
+  approval: SoftwareApproval
 }
 
 export interface EntryErrors {
@@ -352,6 +355,7 @@ export async function getCatalogEntry(id: string): Promise<SoftwareCatalogEntry 
 export async function saveCatalogEntry(id: string | null, e: EntryInput): Promise<string | null> {
   const body = {
     name: e.name.trim(), description: e.description, category: e.category.trim(), source_id: e.sourceID, packages: e.packages,
+    approval: e.approval,
   }
   const { error } = id
     ? await api.PATCH('/api/v1/software-catalog/{id}', { params: { path: { id }, header: csrf }, body })
@@ -398,6 +402,11 @@ export interface AssignmentInput {
   updateRule: SoftwareUpdateRule
   version: string
   reason: string
+  /**
+   * The devices apply the assignment outside their maintenance windows (plan M13c decision 7): it needs a reason of
+   * 2 to 500 characters and a fresh step-up.
+   */
+  urgent: boolean
 }
 
 /** Whether the update rule can be chosen: only a required application is either latest or pinned (plan M13a decision 9). */
@@ -433,6 +442,7 @@ export function validateAssignment(input: AssignmentInput): { target?: string; v
   if (a.intent === 'required' && a.updateRule === 'pinned' && a.version === '') out.version = 'software.assignments.versionRequired'
   else if (a.version !== '' && !validPackageVersion(a.version)) out.version = 'software.assignments.versionInvalid'
   if ([...a.reason].length > 500) out.reason = 'software.assignments.reasonInvalid'
+  else if (a.urgent && [...a.reason.trim()].length < urgentReasonMin) out.reason = 'software.assignments.urgentReasonRequired'
   return out
 }
 
@@ -464,14 +474,17 @@ export async function allSoftwareAssignments(entryID: string): Promise<SoftwareA
   return out
 }
 
-/** Creates (id null) or changes an assignment; null or the problem code. The entry and the target of an assignment are fixed. */
+/**
+ * Creates (id null) or changes an assignment; null or the problem code. The entry and the target of an assignment are
+ * fixed. An urgent assignment the server refuses with step_up_required is repeated by the page after the step-up.
+ */
 export async function saveSoftwareAssignment(id: string | null, input: AssignmentInput): Promise<string | null> {
   const a = normalizeAssignment(input)
   const version = a.version === '' ? null : a.version
   const { error } = id
     ? await api.PATCH('/api/v1/software-assignments/{id}', {
       params: { path: { id }, header: csrf },
-      body: { intent: a.intent, update_rule: a.updateRule, version, reason: a.reason },
+      body: { intent: a.intent, update_rule: a.updateRule, version, reason: a.reason, urgent: a.urgent },
     })
     : await api.POST('/api/v1/software-assignments', {
       params: { header: csrf },
@@ -480,10 +493,49 @@ export async function saveSoftwareAssignment(id: string | null, input: Assignmen
         device_group_id: a.target === 'device_group' ? a.targetID : null,
         user_id: a.target === 'user' ? a.targetID : null,
         user_group_id: a.target === 'user_group' ? a.targetID : null,
-        intent: a.intent, update_rule: a.updateRule, version, reason: a.reason,
+        intent: a.intent, update_rule: a.updateRule, version, reason: a.reason, urgent: a.urgent,
       },
     })
   return error ? problemCode(error) : null
+}
+
+/** The names an assignment's natural key uses: the device group's name, the user's username, the user group's slug. */
+export interface TargetNames {
+  groups: { id: string; name: string }[]
+  users: { id: string; username: string }[]
+  userGroups: { id: string; slug?: string }[]
+}
+
+/**
+ * The parts of an assignment's natural key as plans show it (declarative SoftwareAssignment.Key): the device group or
+ * null, the entry's name, the target type and the username or user group slug or null. Null when a name is unknown.
+ */
+export function assignmentKeyParts(a: SoftwareAssignment, names: TargetNames): unknown[] | null {
+  const { target, targetID } = assignmentTarget(a)
+  switch (target) {
+    case 'device_group': {
+      const group = names.groups.find((g) => g.id === targetID)?.name
+      return group ? [group, a.app_name, target, null] : null
+    }
+    case 'user': {
+      const user = names.users.find((u) => u.id === targetID)?.username
+      return user ? [null, a.app_name, target, user] : null
+    }
+    case 'user_group': {
+      const slug = names.userGroups.find((g) => g.id === targetID)?.slug
+      return slug ? [null, a.app_name, target, slug] : null
+    }
+    default:
+      return [null, a.app_name, target, null]
+  }
+}
+
+/** The open rollout that stages a change of the assignment, or null (the chip on the assignment list). */
+export function stagingRollout(a: SoftwareAssignment, staged: StagedKey[], names: TargetNames): string | null {
+  const parts = assignmentKeyParts(a, names)
+  if (!parts) return null
+  const hit = staged.find((k) => k.parts.length === parts.length && k.parts.every((p, i) => p === parts[i]))
+  return hit?.rolloutID ?? null
 }
 
 /** Removes an assignment; null or the problem code. */

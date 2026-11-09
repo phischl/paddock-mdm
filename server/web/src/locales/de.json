@@ -164,7 +164,8 @@
     "softwareSources": "Paketquellen",
     "softwareCatalog": "Softwarekatalog",
     "accessReview": "Zugriffsprüfung",
-    "platformAccessReview": "Plattform-Zugriffsprüfung"
+    "platformAccessReview": "Plattform-Zugriffsprüfung",
+    "softwareRequests": "Softwareanfragen"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -3491,7 +3492,14 @@
       "flatpakRef": "Flatpak-Anwendungs-ID",
       "flatpakRefHint": "Zum Beispiel org.gimp.GIMP.",
       "flatpakRefInvalid": "Geben Sie eine Flatpak-Anwendungs-ID aus mindestens drei Teilen ein, zum Beispiel org.gimp.GIMP.",
-      "flatpakRow": "{ref} ({scope})"
+      "flatpakRow": "{ref} ({scope})",
+      "approval": "Freigabe",
+      "approvals": {
+        "none": "Nicht erforderlich",
+        "required": "Erforderlich"
+      },
+      "approvalRequired": "Benutzer brauchen eine Freigabe",
+      "approvalHint": "Benutzer einer verfügbaren Zuweisung fragen eine Administratorin oder einen Administrator, bevor sie die Anwendung installieren."
     },
     "assignments": {
       "title": "Zuweisungen",
@@ -3514,7 +3522,12 @@
         "description": "Eine Zuweisung wendet die Anwendung auf alle Geräte, eine Gerätegruppe, einen Benutzer oder eine Benutzergruppe an."
       },
       "target": "Ziel",
-      "targetRequired": "Wählen Sie das Ziel."
+      "targetRequired": "Wählen Sie das Ziel.",
+      "urgent": "Dringend: auch außerhalb von Wartungsfenstern anwenden",
+      "urgentHint": "Geräte wenden diese Zuweisung sofort an, auch außerhalb ihrer Wartungsfenster. Verlangt eine Begründung und bei jedem Speichern eine erneute Anmeldebestätigung.",
+      "urgentReasonRequired": "Geben Sie für eine dringende Zuweisung eine Begründung mit 2 bis 500 Zeichen ein.",
+      "urgentChip": "Dringend",
+      "rollout": "Rollout"
     },
     "intent": {
       "label": "Absicht",
@@ -3604,5 +3617,87 @@
         "description": "Die letzte Kompilierung hat jede Zuweisung unverändert angewendet."
       }
     }
+  },
+  "softwareRequests": {
+    "title": "Softwareanfragen",
+    "summary": "Benutzer fragen Anwendungen an, deren Katalogeintrag eine Freigabe verlangt. Eine Organisationsadministratorin oder ein Organisationsadministrator gibt jede Anfrage frei oder lehnt sie ab; eine Anfrage ohne Entscheidung verfällt nach 30 Tagen.",
+    "application": "Anwendung",
+    "user": "Benutzer",
+    "state": "Status",
+    "requestedAt": "Angefragt",
+    "expiresAt": "Verfällt",
+    "decision": "Entscheidung",
+    "decidedBy": "von {name}",
+    "states": {
+      "requested": "Wartet",
+      "approved": "Freigegeben",
+      "denied": "Abgelehnt",
+      "expired": "Verfallen",
+      "withdrawn": "Zurückgezogen"
+    },
+    "empty": {
+      "title": "Keine Softwareanfragen",
+      "description": "Anfragen erscheinen hier, wenn Benutzer eine Anwendung anfragen, die eine Freigabe verlangt."
+    },
+    "approve": {
+      "title": "Anfrage freigeben",
+      "label": "Freigeben",
+      "confirm": "{user} darf {app} auf {hostname} installieren?",
+      "reason": "Begründung (optional)",
+      "reasonHint": "Wird mit der Entscheidung gespeichert.",
+      "done": "{app} ist für {user} freigegeben.",
+      "aria": "{app} für {user} freigeben"
+    },
+    "deny": {
+      "title": "Anfrage ablehnen",
+      "label": "Ablehnen",
+      "confirm": "Die Installation von {app} auf {hostname} für {user} ablehnen? Der Benutzer kann nach 24 Stunden erneut anfragen.",
+      "reason": "Begründung",
+      "reasonHint": "Der Benutzer sieht diese Begründung.",
+      "done": "Die Anfrage von {user} für {app} ist abgelehnt.",
+      "aria": "{app} für {user} ablehnen"
+    }
+  },
+  "maintenanceWindow": {
+    "title": "Wartungsfenster",
+    "set": "Fenster festlegen",
+    "edit": "Fenster bearbeiten",
+    "remove": "Fenster entfernen",
+    "formTitle": "Wartungsfenster",
+    "removeTitle": "Wartungsfenster entfernen",
+    "removeConfirm": "Das Wartungsfenster von {name} entfernen? Die Geräte wenden ihre Softwareänderungen beim nächsten Durchlauf an, sofern keine andere ihrer Gruppen ein Fenster hat.",
+    "none": "Kein Fenster: Die Geräte dieser Gruppe wenden Softwareänderungen jederzeit an, sofern keine andere ihrer Gruppen ein Fenster hat.",
+    "explain": "Geräte installieren und entfernen die Software ihrer Richtlinie nur innerhalb der Vereinigung der Fenster ihrer Gruppen. Dringende Zuweisungen, eigene Installationen der Benutzer und Quelldateien warten nicht.",
+    "summary": "{days}, ab {start} für {duration} ({timezone})",
+    "durationValue": "{hours, plural, =0 {} one {# Stunde} other {# Stunden}}{minutes, plural, =0 {} one { # Minute} other { # Minuten}}",
+    "days": "Tage",
+    "start": "Beginn (Ortszeit)",
+    "duration": "Dauer",
+    "durationHint": "30 bis 1440 Minuten; ein Fenster darf über Mitternacht reichen.",
+    "minutes": "Min.",
+    "timezone": "Zeitzone",
+    "timezoneHint": "Ein IANA-Name wie Europe/Berlin.",
+    "weekdays": {
+      "1": "Montag",
+      "2": "Dienstag",
+      "3": "Mittwoch",
+      "4": "Donnerstag",
+      "5": "Freitag",
+      "6": "Samstag",
+      "7": "Sonntag"
+    },
+    "weekdaysShort": {
+      "1": "Mo",
+      "2": "Di",
+      "3": "Mi",
+      "4": "Do",
+      "5": "Fr",
+      "6": "Sa",
+      "7": "So"
+    },
+    "daysRequired": "Wählen Sie mindestens einen Tag.",
+    "startInvalid": "Geben Sie eine Uhrzeit als HH:MM ein.",
+    "durationInvalid": "Geben Sie 30 bis 1440 Minuten ein.",
+    "timezoneInvalid": "Geben Sie einen Zeitzonennamen mit höchstens 64 Zeichen ein."
   }
 }

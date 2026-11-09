@@ -63,6 +63,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/settings/managed-files', label: 'nav.operatorRoots', icon: 'folder', visible: orgReader },
       { to: '/software-sources', label: 'nav.softwareSources', icon: 'shield-check', visible: orgAdmin, testid: 'nav-software-sources' },
       { to: '/software-catalog', label: 'nav.softwareCatalog', icon: 'package', visible: orgReader, testid: 'nav-software-catalog' },
+      { to: '/software-requests', label: 'nav.softwareRequests', icon: 'package', visible: orgReader, testid: 'nav-software-requests' },
       { to: '/package-holds', label: 'nav.packageHolds', icon: 'package', visible: orgReader },
       { to: '/change-sets', label: 'nav.changeSets', icon: 'diff', visible: orgReader },
       { to: '/config-rollouts', label: 'nav.configRollouts', icon: 'rocket', visible: orgReader },

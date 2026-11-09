@@ -12,7 +12,9 @@ import { hasErrors } from '../lib/validation'
  * Create and edit form of an assignment: target, intent, update rule, version and reason. The target is the whole
  * organization, one device group, one user or one user group (plan M13b decision 1); the pickers search the names. The
  * update rule and the version follow the rules of plan M13a decision 9; a field the intent does not allow is disabled
- * and sent empty. The target of a stored assignment is fixed.
+ * and sent empty. The target of a stored assignment is fixed. Urgent (plan M13c decision 7) makes the devices apply the
+ * assignment outside their maintenance windows; it needs a reason, and the server asks for a step-up on every save
+ * that keeps or sets it.
  */
 const props = withDefaults(
   defineProps<{
@@ -37,6 +39,7 @@ const intent = ref<SoftwareIntent>(props.initial?.intent ?? 'required')
 const updateRule = ref<SoftwareUpdateRule>(props.initial?.update_rule ?? 'latest')
 const version = ref(props.initial?.version ?? '')
 const reason = ref(props.initial?.reason ?? '')
+const urgent = ref(props.initial?.urgent ?? false)
 const touched = ref(false)
 
 const ruleEnabled = computed(() => updateRuleEnabled(intent.value))
@@ -44,6 +47,7 @@ const versionOn = computed(() => versionEnabled(intent.value, ruleEnabled.value 
 const input = computed<AssignmentInput>(() => ({
   entryID: props.entryId, target: target.value, targetID: target.value === 'organization' ? null : targetID.value,
   intent: intent.value, updateRule: updateRule.value, version: version.value, reason: reason.value,
+  urgent: urgent.value,
 }))
 const errors = computed(() => validateAssignment(input.value))
 const targetItems = computed(() => {
@@ -131,6 +135,15 @@ function submit(): void {
       counter="500"
       :error-messages="touched && errors.reason ? [t(errors.reason)] : []"
       data-testid="assignment-reason"
+    />
+    <v-checkbox
+      id="assignment-urgent"
+      v-model="urgent"
+      :label="t('software.assignments.urgent')"
+      :hint="t('software.assignments.urgentHint')"
+      persistent-hint
+      density="comfortable"
+      data-testid="assignment-urgent"
     />
     <p
       v-if="problem"
