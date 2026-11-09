@@ -1173,6 +1173,37 @@ func (q *Queries) ListSoftwareCatalogEntryIDsByName(ctx context.Context, names [
 	return items, nil
 }
 
+const listSoftwareCatalogIcons = `-- name: ListSoftwareCatalogIcons :many
+SELECT id, icon::bytea AS icon FROM software_catalog_entry WHERE icon IS NOT NULL ORDER BY id
+`
+
+type ListSoftwareCatalogIconsRow struct {
+	ID   uuid.UUID
+	Icon []byte
+}
+
+// The icons of the organization's entries (compiler): it validates them, names their digests in the bundles and writes
+// them to object storage (architect decision A10-14).
+func (q *Queries) ListSoftwareCatalogIcons(ctx context.Context) ([]ListSoftwareCatalogIconsRow, error) {
+	rows, err := q.db.Query(ctx, listSoftwareCatalogIcons)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSoftwareCatalogIconsRow{}
+	for rows.Next() {
+		var i ListSoftwareCatalogIconsRow
+		if err := rows.Scan(&i.ID, &i.Icon); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSoftwareSources = `-- name: ListSoftwareSources :many
 SELECT s.id, s.organization_id, s.slug, s.name, s.uris, s.suites, s.components, s.architectures, s.signing_key, s.fingerprint, s.weak_key, s.created_by, s.created_at, s.updated_at, s.kind, coalesce(c.entry_count, 0)::bigint AS entry_count
 FROM software_source s

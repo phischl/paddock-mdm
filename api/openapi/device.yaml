@@ -229,6 +229,39 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "429": { $ref: "#/components/responses/RateLimited" }
+  /v1/catalog/{entry_id}/icon:
+    get:
+      operationId: getCatalogIcon
+      summary: PNG icon of a catalog entry for the self-service app
+      description: |
+        Plan M13b decision 16, architect decision A10-14. Resolves only an entry the device's current bundle names with
+        an icon (its icon_sha256), which keeps the request inside the device's own organization; any other entry is 404
+        not_found. The icon lies content-addressed in the bundles bucket, and the answer is a redirect to a presigned
+        GET of the same validity as a bundle URL. The device follows it without the request headers of this endpoint,
+        expects 200 image/png of at most 64 KiB, and shows the category glyph on any failure.
+      parameters:
+        - name: entry_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentSHA256"
+        - $ref: "#/components/parameters/Seq"
+        - $ref: "#/components/parameters/Signature"
+      responses:
+        "302":
+          description: Redirect to the presigned GET of the icon (200 image/png from the bundles host).
+          headers:
+            Location:
+              required: true
+              schema: { type: string, format: uri }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Problem" }
   /v1/diagnostics:
     post:
       operationId: postDiagnostics

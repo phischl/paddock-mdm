@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,17 +31,38 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/valkeytest"
 )
 
-// flakyStore fails uploads while broken is set.
+// flakyStore fails uploads while broken is set and counts the uploads by key.
 type flakyStore struct {
 	store  *objectstore.Store
 	broken atomic.Bool
+	mu     sync.Mutex
+	puts   map[string]int
 }
 
 func (f *flakyStore) Put(ctx context.Context, key, contentType, cacheControl string, body []byte) error {
 	if f.broken.Load() {
 		return errors.New("injected upload failure")
 	}
+	f.mu.Lock()
+	if f.puts == nil {
+		f.puts = map[string]int{}
+	}
+	f.puts[key]++
+	f.mu.Unlock()
 	return f.store.Put(ctx, key, contentType, cacheControl, body)
+}
+
+func (f *flakyStore) Size(ctx context.Context, key string) (int64, bool, error) {
+	if f.broken.Load() {
+		return 0, false, errors.New("injected store failure")
+	}
+	return f.store.Size(ctx, key)
+}
+
+func (f *flakyStore) putCount(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.puts[key]
 }
 
 type world struct {
@@ -376,7 +398,7 @@ func TestReconcileRestoresPointers(t *testing.T) {
 	if err := w.comp.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := w.cache.BundlePointer(context.Background(), d); got != want {
+	if got, _, _ := w.cache.BundlePointer(context.Background(), d); !reflect.DeepEqual(got, want) {
 		t.Fatalf("pointer %+v, want %+v", got, want)
 	}
 }

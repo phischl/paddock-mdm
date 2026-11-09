@@ -488,6 +488,11 @@ type SoftwarePackage struct {
 	// Absent otherwise; additive to schema 2 (ADR 0013), and an agent before the compiler's self-service gate never
 	// gets a Flatpak application (A10-6). A pointer like Audience, so SoftwarePackage stays comparable.
 	Users *[]string `json:"users,omitempty"`
+	// IconSHA256 is the hex SHA-256 of the catalog entry's PNG icon, which the device fetches through GET
+	// /v1/catalog/{entry_id}/icon and may check against it; absent when the entry has no icon. A content change of the
+	// icon thereby changes the bundle (architect decision A10-14, PDK-935); additive to schema 2 (ADR 0013), and only an
+	// agent from the compiler's self-service gate gets it.
+	IconSHA256 string `json:"icon_sha256,omitempty"`
 }
 
 // Limits of the software section (plan M13a decisions 2 and 8).
@@ -509,6 +514,7 @@ var (
 	sourceComponent   = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 	sourceFingerprint = regexp.MustCompile(`^[0-9A-F]{40}$`)
 	catalogEntryID    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	iconSHA256        = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	flatpakRef        = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*){2,}$`)
 )
 
@@ -574,6 +580,9 @@ func ValidateSoftware(s SoftwareSpec) error {
 		}
 		if !catalogEntryID.MatchString(p.CatalogEntryID) {
 			return fmt.Errorf("bundle: invalid catalog_entry_id of software package %q", name)
+		}
+		if p.IconSHA256 != "" && (!iconSHA256.MatchString(p.IconSHA256) || p.CatalogEntryID == SoftwareRuntimeEntryID) {
+			return fmt.Errorf("bundle: invalid icon_sha256 of software package %q", name)
 		}
 	}
 	return nil

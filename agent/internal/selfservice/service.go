@@ -191,7 +191,7 @@ func New(cfg Config) *Service {
 		}
 	}
 	return &Service{cfg: cfg, record: loadRecord(cfg.Sys), ops: map[string]*operation{}, installed: map[string]probe{},
-		failed: map[string]*operation{}, rate: map[int]*window{}, notices: map[int][]time.Time{}, icons: iconCache{tried: map[string]bool{}},
+		failed: map[string]*operation{}, rate: map[int]*window{}, notices: map[int][]time.Time{}, icons: iconCache{tried: map[string]bool{}, gap: iconGap},
 		wake: make(chan struct{}, 1), iconWake: make(chan struct{}, 1), events: make(chan protocol.SoftwareSelfService, 64)}
 }
 

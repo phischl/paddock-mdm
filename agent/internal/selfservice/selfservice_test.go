@@ -80,6 +80,7 @@ func newFixture(t *testing.T) *fixture {
 			f.notes.calls = append(f.notes.calls, itoa(uid)+" "+body)
 			f.notes.mu.Unlock()
 		}})
+	f.svc.icons.gap = 0
 	return f
 }
 
@@ -531,8 +532,18 @@ func TestNoEventWithoutSelfServiceBundle(t *testing.T) {
 	}
 }
 
-// TestIcons: icons come from the server once per entry, are served for visible entries only and leave the cache with
-// their entry.
+// withIcons gives the entries ids an icon digest.
+func withIcons(sp bundle.SoftwareSpec, ids ...string) bundle.SoftwareSpec {
+	for i := range sp.Packages {
+		if slices.Contains(ids, sp.Packages[i].CatalogEntryID) {
+			sp.Packages[i].IconSHA256 = strings.Repeat("ab", 32)
+		}
+	}
+	return sp
+}
+
+// TestIcons: icons come from the server once per entry that has a digest, are served for visible entries only and
+// leave the cache with their entry.
 func TestIcons(t *testing.T) {
 	f := newFixture(t)
 	var mu sync.Mutex
@@ -547,12 +558,13 @@ func TestIcons(t *testing.T) {
 		return nil, &client.APIError{Status: http.StatusNotFound}
 	}
 	f.sys.Files[IconDir+"/bbbbbbbb-0000-4000-8000-000000000099.png"] = &fakesys.File{Data: []byte(pngData)}
-	f.svc.SetBundle(softwareBundle(spec()), fetch)
+	sp := withIcons(spec(), entryA, entryB, entryC)
+	f.svc.SetBundle(softwareBundle(sp), fetch)
 	f.start(t)
 	eventually(t, func() bool {
 		f.svc.icons.mu.Lock()
 		defer f.svc.icons.mu.Unlock()
-		return len(f.svc.icons.tried) == 5
+		return len(f.svc.icons.tried) == 3
 	})
 	req := httptest.NewRequest(http.MethodGet, "http://selfservice/v1/apps/"+entryB+"/icon", nil)
 	req = req.WithContext(withPeer(req.Context(), peer{uid: carol}))
@@ -570,13 +582,86 @@ func TestIcons(t *testing.T) {
 	if _, ok := f.sys.Files[IconDir+"/bbbbbbbb-0000-4000-8000-000000000099.png"]; ok {
 		t.Error("the icon of a gone entry stayed")
 	}
-	f.svc.SetBundle(softwareBundle(spec()), fetch)
+	f.svc.SetBundle(softwareBundle(sp), fetch)
 	f.waitRefreshed(t)
 	time.Sleep(50 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
 	if fetched[entryB] != 1 || fetched[entryC] != 1 || fetched[bundle.SoftwareRuntimeEntryID] != 0 {
 		t.Errorf("fetched %v", fetched)
+	}
+	// An entry without a digest has no icon; asking for it would spend the device key's rate budget on a 404.
+	if fetched[entryD] != 0 || fetched[entryE] != 0 {
+		t.Errorf("entries without an icon digest were fetched: %v", fetched)
+	}
+}
+
+// TestIconsStopOn429: a 429 ends the icon round without marking the entry, and no fetch goes before Retry-After has
+// passed, so icons never crowd check-in and events out of the device key's rate budget.
+func TestIconsStopOn429(t *testing.T) {
+	f := newFixture(t)
+	var mu sync.Mutex
+	calls, limited := 0, true
+	fetch := func(_ context.Context, _ string) ([]byte, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if limited {
+			return nil, &client.APIError{Status: http.StatusTooManyRequests, RetryAfter: 30 * time.Second}
+		}
+		return []byte(pngData), nil
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+	b := softwareBundle(withIcons(spec(), entryA, entryB, entryC))
+	f.svc.SetBundle(b, fetch)
+	f.start(t)
+	eventually(t, func() bool { return count() == 1 })
+	f.svc.SetBundle(b, fetch)
+	f.waitRefreshed(t)
+	time.Sleep(50 * time.Millisecond)
+	if n := count(); n != 1 {
+		t.Fatalf("fetches after a 429: %d, want 1", n)
+	}
+	f.svc.icons.mu.Lock()
+	tried := len(f.svc.icons.tried)
+	f.svc.icons.mu.Unlock()
+	if tried != 0 {
+		t.Fatalf("a limited entry counts as tried (%d)", tried)
+	}
+	mu.Lock()
+	limited = false
+	mu.Unlock()
+	f.now = f.now.Add(31 * time.Second)
+	f.svc.SetBundle(b, fetch)
+	eventually(t, func() bool { return f.svc.icons.has(entryA) && f.svc.icons.has(entryB) && f.svc.icons.has(entryC) })
+}
+
+// TestIconsPaced: icon fetches keep the gap between them.
+func TestIconsPaced(t *testing.T) {
+	f := newFixture(t)
+	const gap = 40 * time.Millisecond
+	f.svc.icons.gap = gap
+	var mu sync.Mutex
+	var at []time.Time
+	fetch := func(_ context.Context, _ string) ([]byte, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		at = append(at, time.Now())
+		return []byte(pngData), nil
+	}
+	f.svc.SetBundle(softwareBundle(withIcons(spec(), entryA, entryB, entryC)), fetch)
+	f.start(t)
+	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(at) == 3 })
+	mu.Lock()
+	defer mu.Unlock()
+	for i := 1; i < len(at); i++ {
+		if d := at[i].Sub(at[i-1]); d < gap {
+			t.Errorf("fetch %d came %v after the one before, want at least %v", i, d, gap)
+		}
 	}
 }
 

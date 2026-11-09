@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/client"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
@@ -19,6 +20,13 @@ const IconDir = "/var/lib/paddock/cache/icons"
 
 // maxIcon is the server's limit of a catalog icon (software.MaxIconBytes).
 const maxIcon = 65536
+
+// iconGap is the least time between two icon fetches. Every fetch counts against the device key's rate budget of 30
+// requests a minute that check-in, events and command results share, so icons take at most half of it.
+const iconGap = 4 * time.Second
+
+// iconBackoff is the pause after a 429 without Retry-After.
+const iconBackoff = time.Minute
 
 var (
 	pngMagic = []byte("\x89PNG\r\n\x1a\n")
@@ -32,6 +40,11 @@ type iconCache struct {
 	mu     sync.Mutex
 	cached map[string]bool
 	tried  map[string]bool
+	// gap is iconGap; last is when the previous fetch started (wall clock, it paces real requests).
+	gap  time.Duration
+	last time.Time
+	// notBefore is when the server's last 429 lets the next fetch go (cfg.Now).
+	notBefore time.Time
 }
 
 func (c *iconCache) has(id string) bool {
@@ -82,7 +95,9 @@ func (s *Service) fillIcons(ctx context.Context) {
 func (s *Service) syncIcons(ctx context.Context, sp bundle.SoftwareSpec, fetch IconFetch) {
 	ids := map[string]bool{}
 	for _, p := range sp.Packages {
-		if p.CatalogEntryID != bundle.SoftwareRuntimeEntryID && entryID.MatchString(p.CatalogEntryID) {
+		// Only an entry with a digest has an icon (plan M13b decision 16); asking for the others would spend the
+		// device's rate budget on a 404.
+		if p.IconSHA256 != "" && p.CatalogEntryID != bundle.SoftwareRuntimeEntryID && entryID.MatchString(p.CatalogEntryID) {
 			ids[p.CatalogEntryID] = true
 		}
 	}
@@ -113,12 +128,25 @@ func (s *Service) syncIcons(ctx context.Context, sp bundle.SoftwareSpec, fetch I
 		if skip {
 			continue
 		}
+		if !s.paceIcon(ctx) {
+			return
+		}
 		data, err := fetch(ctx, id)
 		var apiErr *client.APIError
 		switch {
 		case errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound:
 			s.markTried(id)
 			continue
+		case errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests:
+			wait := apiErr.RetryAfter
+			if wait <= 0 {
+				wait = iconBackoff
+			}
+			s.icons.mu.Lock()
+			s.icons.notBefore = s.cfg.Now().Add(wait)
+			s.icons.mu.Unlock()
+			slog.DebugContext(ctx, "the server limits icon fetches; resuming with a later bundle", "retry_after", wait)
+			return
 		case err != nil:
 			slog.DebugContext(ctx, "fetching a catalog icon failed; retrying with the next bundle", "entry_id", id, "error", err)
 			continue
@@ -135,6 +163,30 @@ func (s *Service) syncIcons(ctx context.Context, sp bundle.SoftwareSpec, fetch I
 		cached[id] = true
 		s.setCached(cached)
 	}
+}
+
+// paceIcon waits until the next icon fetch may go; false when the server's last 429 still holds or ctx ends.
+func (s *Service) paceIcon(ctx context.Context) bool {
+	s.icons.mu.Lock()
+	limited := s.cfg.Now().Before(s.icons.notBefore)
+	wait := time.Until(s.icons.last.Add(s.icons.gap))
+	s.icons.mu.Unlock()
+	if limited {
+		return false
+	}
+	if wait > 0 {
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+		}
+	}
+	s.icons.mu.Lock()
+	s.icons.last = time.Now()
+	s.icons.mu.Unlock()
+	return true
 }
 
 func (s *Service) setCached(cached map[string]bool) {

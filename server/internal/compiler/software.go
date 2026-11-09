@@ -2,7 +2,9 @@ package compiler
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -31,6 +33,14 @@ type orgSoftware struct {
 	// user-group assignment applies to a device through its owners (plan M13b decision 8).
 	owners  map[uuid.UUID][]deviceOwner
 	members map[uuid.UUID][]uuid.UUID
+	// icons are the entries' icons that pass software.ValidateIcon, by entry ID (architect decision A10-14).
+	icons map[uuid.UUID]catalogIcon
+}
+
+// catalogIcon is a validated catalog icon with the hex SHA-256 that names it in bundles and object storage.
+type catalogIcon struct {
+	sha256 string
+	data   []byte
 }
 
 // deviceOwner is an owner of a device with the user name (lower-case UPN) an audience names.
@@ -76,9 +86,24 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	if err != nil {
 		return nil, err
 	}
+	icons, err := q.ListSoftwareCatalogIcons(ctx)
+	if err != nil {
+		return nil, err
+	}
 	s := &orgSoftware{sources: map[uuid.UUID]bundle.SoftwareSource{}, bySlug: map[string]bundle.SoftwareSource{},
 		entries: make(map[uuid.UUID]softwareEntry, len(entries)), assignments: assignments,
-		invalidAssignments: map[uuid.UUID]error{}, owners: map[uuid.UUID][]deviceOwner{}, members: map[uuid.UUID][]uuid.UUID{}}
+		invalidAssignments: map[uuid.UUID]error{}, owners: map[uuid.UUID][]deviceOwner{}, members: map[uuid.UUID][]uuid.UUID{},
+		icons: make(map[uuid.UUID]catalogIcon, len(icons))}
+	for _, ic := range icons {
+		// The api checked the icon on upload; a row changed outside it must not reach object storage, so the entry then
+		// shows the category glyph.
+		if err := software.ValidateIcon(ic.Icon); err != nil {
+			slog.ErrorContext(ctx, "catalog icon left out of bundles: it fails the icon rules", "catalog_entry_id", ic.ID, "error", err)
+			continue
+		}
+		sum := sha256.Sum256(ic.Icon)
+		s.icons[ic.ID] = catalogIcon{sha256: hex.EncodeToString(sum[:]), data: ic.Icon}
+	}
 	for _, o := range owners {
 		s.owners[o.DeviceID] = append(s.owners[o.DeviceID], deviceOwner{user: o.UserID, username: o.Username})
 	}
@@ -230,6 +255,10 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 		}
 		p := bundle.SoftwarePackage{Package: r.Package, FlatpakRef: r.FlatpakRef, Scope: r.Scope, Intent: r.Intent,
 			Version: r.Version, CatalogEntryID: r.CatalogEntryID.String(), Audience: r.Audience}
+		// Only the self-service app shows icons, and an agent before the gate refuses a field it does not know.
+		if ic, ok := s.icons[r.CatalogEntryID]; ok && selfService {
+			p.IconSHA256 = ic.sha256
+		}
 		// The supplier's scope decides: a system-scope result never carries the users of another entry's user scope.
 		if r.Scope == bundle.SoftwareScopeUser && r.Users != nil {
 			p.Users = &r.Users
@@ -426,4 +455,40 @@ func softwareFailure(device uuid.UUID, spec *bundle.SoftwareSpec) *renderFailure
 			"); the device keeps its previous bundle until the catalog is fixed"}
 	}
 	return nil
+}
+
+// bundleIcons returns the icons the software section names, by catalog entry ID.
+func (s *orgSoftware) bundleIcons(spec *bundle.SoftwareSpec) map[string]catalogIcon {
+	if spec == nil {
+		return nil
+	}
+	var icons map[string]catalogIcon
+	for _, p := range spec.Packages {
+		if p.IconSHA256 == "" {
+			continue
+		}
+		id, err := uuid.Parse(p.CatalogEntryID)
+		if err != nil {
+			continue
+		}
+		if ic, ok := s.icons[id]; ok {
+			if icons == nil {
+				icons = map[string]catalogIcon{}
+			}
+			icons[p.CatalogEntryID] = ic
+		}
+	}
+	return icons
+}
+
+// iconKeys maps the icon digests of a bundle, by catalog entry ID, to their object keys for the bundle pointer.
+func iconKeys(org uuid.UUID, digests map[string]string) map[string]string {
+	if len(digests) == 0 {
+		return nil
+	}
+	keys := make(map[string]string, len(digests))
+	for entry, sum := range digests {
+		keys[entry] = IconObjectKey(org, sum)
+	}
+	return keys
 }

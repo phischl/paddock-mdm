@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -131,9 +132,16 @@ type BundlePointer struct {
 	Version   int64
 	SHA256    string // hex SHA-256 of the envelope object
 	ObjectKey string
+	// Icons are the object keys of the catalog icons the bundle names, by catalog entry ID (architect decision A10-14):
+	// the gateway answers GET /v1/catalog/{entry_id}/icon from them, so a device reaches only the icons of its own
+	// bundle and organization. Stored as the hash fields icon:<entry_id>.
+	Icons map[string]string
 }
 
 func bundleKey(device uuid.UUID) string { return "bp:" + device.String() }
+
+// iconField prefixes the catalog entry ID of an icon field of bp:<device>.
+const iconField = "icon:"
 
 // PutBundlePointer replaces bp:<device> unless the cached version is newer (out-of-order writers never move the
 // pointer back).
@@ -145,9 +153,11 @@ func (c *Cache) PutBundlePointer(ctx context.Context, device uuid.UUID, p Bundle
 	if ok && cur.Version > p.Version {
 		return nil
 	}
-	return c.putHash(ctx, bundleKey(device), time.Time{}, map[string]string{
-		"version": strconv.FormatInt(p.Version, 10), "sha256": p.SHA256, "object_key": p.ObjectKey,
-	})
+	fields := map[string]string{"version": strconv.FormatInt(p.Version, 10), "sha256": p.SHA256, "object_key": p.ObjectKey}
+	for entry, key := range p.Icons {
+		fields[iconField+entry] = key
+	}
+	return c.putHash(ctx, bundleKey(device), time.Time{}, fields)
 }
 
 // BundlePointer reads bp:<device>.
@@ -160,7 +170,16 @@ func (c *Cache) BundlePointer(ctx context.Context, device uuid.UUID) (BundlePoin
 	if err != nil {
 		return BundlePointer{}, false, fmt.Errorf("devicecache: corrupt bundle pointer: %w", err)
 	}
-	return BundlePointer{Version: v, SHA256: m["sha256"], ObjectKey: m["object_key"]}, true, nil
+	p := BundlePointer{Version: v, SHA256: m["sha256"], ObjectKey: m["object_key"]}
+	for f, key := range m {
+		if entry, ok := strings.CutPrefix(f, iconField); ok {
+			if p.Icons == nil {
+				p.Icons = map[string]string{}
+			}
+			p.Icons[entry] = key
+		}
+	}
+	return p, true, nil
 }
 
 // HeartbeatInterval coalesces device_status writes to one per device and interval (plan M2a decision 12).

@@ -37,7 +37,7 @@ func publicBundleFields() map[string]bool {
 		"software.sources.slug", "software.sources.uris", "software.sources.suites", "software.sources.components",
 		"software.sources.architectures", "software.sources.keyring", "software.sources.fingerprint", "software.sources.kind",
 		"software.packages.package", "software.packages.intent", "software.packages.version", "software.packages.source",
-		"software.packages.catalog_entry_id", "software.packages.superseded_hold",
+		"software.packages.catalog_entry_id", "software.packages.superseded_hold", "software.packages.icon_sha256",
 		// The audience and the users of a user-scope Flatpak application name user names as
 		// resources.spec:sudo.entries.username and login.locked_users do (plan M13b decision 7, A10-11).
 		"software.packages.flatpak_ref", "software.packages.scope", "software.packages.audience.all",
