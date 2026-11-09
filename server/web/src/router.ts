@@ -63,6 +63,7 @@ export const router = createRouter({
     { path: '/software-sources', name: 'software-sources', component: () => import('./views/SoftwareSources.vue') },
     { path: '/software-catalog', name: 'software-catalog', component: () => import('./views/SoftwareCatalog.vue') },
     { path: '/software-catalog/:id', name: 'software-catalog-entry', component: () => import('./views/SoftwareCatalogDetail.vue') },
+    { path: '/software-requests', name: 'software-requests', component: () => import('./views/SoftwareRequests.vue') },
     { path: '/package-holds', name: 'package-holds', component: () => import('./views/PackageHolds.vue') },
     { path: '/revocations', name: 'revocations', component: () => import('./views/RevocationRequests.vue') },
     { path: '/audit', name: 'audit', component: () => import('./views/Audit.vue') },

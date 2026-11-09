@@ -17,7 +17,8 @@ function mountForm(initial: Record<string, unknown> | null = null) {
 }
 
 const base = {
-  id: 'a1', catalog_entry_id: 'e1', app_name: 'Editor', device_group_id: 'g1', user_id: null, user_group_id: null, reason: '', created_at: '', updated_at: '',
+  id: 'a1', catalog_entry_id: 'e1', app_name: 'Editor', device_group_id: 'g1', user_id: null, user_group_id: null, reason: '', urgent: false,
+  created_at: '', updated_at: '',
 }
 
 function disabled(w: ReturnType<typeof mountForm>, id: string): boolean {
@@ -63,7 +64,7 @@ describe('SoftwareAssignmentForm', () => {
     expect(w.emitted('submit')).toBeUndefined()
     await w.find('#assignment-version').setValue('2.0-1')
     await w.find('form').trigger('submit')
-    expect(w.emitted('submit')).toEqual([[{ entryID: 'e1', target: 'device_group', targetID: 'g1', intent: 'required', updateRule: 'pinned', version: '2.0-1', reason: '' }]])
+    expect(w.emitted('submit')).toEqual([[{ entryID: 'e1', target: 'device_group', targetID: 'g1', intent: 'required', updateRule: 'pinned', version: '2.0-1', reason: '', urgent: false }]])
   })
 
   it('shows the fixed user group target of a stored assignment and offers the intent available', async () => {
@@ -76,7 +77,7 @@ describe('SoftwareAssignmentForm', () => {
     expect(disabled(w, 'assignment-version')).toBe(true)
     await w.find('form').trigger('submit')
     expect(w.emitted('submit')).toEqual([[{
-      entryID: 'e1', target: 'user_group', targetID: 'ug1', intent: 'available', updateRule: 'latest', version: '', reason: '',
+      entryID: 'e1', target: 'user_group', targetID: 'ug1', intent: 'available', updateRule: 'latest', version: '', reason: '', urgent: false,
     }]])
   })
 
@@ -93,7 +94,7 @@ describe('SoftwareAssignmentForm', () => {
     await picker.setValue('u1')
     await w.find('form').trigger('submit')
     expect(w.emitted('submit')).toEqual([[{
-      entryID: 'e1', target: 'user', targetID: 'u1', intent: 'required', updateRule: 'latest', version: '', reason: '',
+      entryID: 'e1', target: 'user', targetID: 'u1', intent: 'required', updateRule: 'latest', version: '', reason: '', urgent: false,
     }]])
   })
 
@@ -104,5 +105,22 @@ describe('SoftwareAssignmentForm', () => {
     await w.findComponent({ name: 'VAutocomplete' }).setValue('g1')
     await target.setValue('user_group')
     expect(w.findComponent({ name: 'VAutocomplete' }).props('modelValue')).toBeNull()
+  })
+  it('asks for a reason of an urgent assignment and submits urgent with it (plan M13c decision 7)', async () => {
+    const w = mountForm({ ...base, intent: 'required', update_rule: 'latest', version: null })
+    await w.find('[data-testid="assignment-urgent"] input').setValue(true)
+    await w.find('form').trigger('submit')
+    expect(w.emitted('submit')).toBeUndefined()
+    expect(w.text()).toContain('Enter a reason of 2 to 500 characters for an urgent assignment.')
+    await w.find('#assignment-reason').setValue('CVE fix')
+    await w.find('form').trigger('submit')
+    expect(w.emitted('submit')).toEqual([[{
+      entryID: 'e1', target: 'device_group', targetID: 'g1', intent: 'required', updateRule: 'latest', version: '', reason: 'CVE fix', urgent: true,
+    }]])
+  })
+
+  it('keeps the urgent flag of a stored urgent assignment checked', () => {
+    const w = mountForm({ ...base, intent: 'required', update_rule: 'latest', version: null, reason: 'CVE fix', urgent: true })
+    expect((w.find('[data-testid="assignment-urgent"] input').element as HTMLInputElement).checked).toBe(true)
   })
 })

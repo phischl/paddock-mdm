@@ -112,3 +112,77 @@ test('Flatpak source form asks for one remote URL and no APT fields', async ({ p
   await expect(page).toHaveURL(/\/software-sources$/)
   await expectAccessible(page)
 })
+
+// Plan M13c decisions 4, 7 and 8 (PDK-816): an administrator requires approval on an entry, asks for a reason before an
+// urgent assignment is sent (nothing is sent, so no step-up starts), and sets and removes a device group's maintenance
+// window; the removal waits for the modal confirmation. An auditor reads the window without write controls.
+test('administrator sets approval, the urgent reason and a maintenance window', async ({ page, cleanup }) => {
+  test.setTimeout(180_000)
+  const csp = watchCSP(page)
+  await login(page, 'alice@acme.test', 'dev_alice_password')
+  const stamp = Date.now()
+  const app = `E2E Approval ${stamp}`
+  const groupName = `E2E Window ${stamp}`
+  cleanup.remove('/api/v1/software-catalog', app)
+  cleanup.remove('/api/v1/device-groups', groupName)
+
+  await page.goto('/software-catalog')
+  await page.getByTestId('create-entry').click()
+  const entryDialog = page.getByRole('dialog')
+  await entryDialog.getByRole('textbox', { name: 'Name' }).fill(app)
+  await entryDialog.getByTestId('package-name-0').locator('input').fill('nano')
+  await entryDialog.getByRole('checkbox', { name: 'Users need approval' }).check()
+  await entryDialog.getByTestId('save-entry').click()
+  await expect(entryDialog).toBeHidden()
+  await page.getByTestId('catalog-list').getByRole('link', { name: app }).click()
+  await expect(page.getByTestId('entry-approval')).toHaveText('Required')
+
+  await page.getByTestId('create-assignment').click()
+  const assignmentDialog = page.getByRole('dialog')
+  await assignmentDialog.getByRole('checkbox', { name: 'Urgent: apply outside maintenance windows' }).check()
+  await assignmentDialog.getByTestId('save-assignment').click()
+  await expect(assignmentDialog.getByText('Enter a reason of 2 to 500 characters for an urgent assignment.')).toBeVisible()
+  await expect(page).toHaveURL(/\/software-catalog\//)
+  await assignmentDialog.getByRole('button', { name: 'Cancel' }).click()
+  await expectAccessible(page)
+
+  const group = await page.request.post('/api/v1/device-groups', { headers: csrf, data: { name: groupName } })
+  expect(group.status()).toBe(201)
+  const groupID = (await group.json()).id as string
+  await page.goto(`/device-groups/${groupID}`)
+  await expect(page.getByTestId('window-summary')).toContainText('No window')
+  await page.getByTestId('edit-window').click()
+  const windowDialog = page.getByRole('dialog')
+  await windowDialog.getByTestId('window-day-6').locator('input').uncheck()
+  await windowDialog.getByTestId('window-day-7').locator('input').uncheck()
+  await windowDialog.getByTestId('window-start').locator('input').fill('21:30')
+  await windowDialog.getByTestId('window-duration').locator('input').fill('29')
+  await windowDialog.getByTestId('save-window').click()
+  await expect(windowDialog.getByText('Enter 30 to 1440 minutes.')).toBeVisible()
+  await windowDialog.getByTestId('window-duration').locator('input').fill('90')
+  await windowDialog.getByTestId('save-window').click()
+  await expect(windowDialog).toBeHidden()
+  await expect(page.getByTestId('window-summary')).toContainText('Mon, Tue, Wed, Thu, Fri, from 21:30 for 1 hour 30 minutes')
+  await expectAccessible(page)
+
+  const auditor = await tempUser('e2e-window-auditor', 'paddock.acme.auditors')
+  try {
+    await page.context().clearCookies()
+    await loginWithPassword(page, auditor.username, auditor.password)
+    await page.goto(`/device-groups/${groupID}`)
+    await expect(page.getByTestId('window-summary')).toContainText('from 21:30')
+    await expect(page.getByTestId('edit-window')).toHaveCount(0)
+    await expect(page.getByTestId('remove-window')).toHaveCount(0)
+  } finally {
+    await auditor.remove()
+    await page.context().clearCookies()
+    await login(page, 'alice@acme.test', 'dev_alice_password')
+  }
+
+  await page.goto(`/device-groups/${groupID}`)
+  await page.getByTestId('remove-window').click()
+  await expect(page.getByTestId('confirm-dialog')).toContainText(groupName)
+  await page.getByTestId('confirm-accept').click()
+  await expect(page.getByTestId('window-summary')).toContainText('No window')
+  expect(csp).toEqual([])
+})

@@ -9,7 +9,8 @@ import {
 
 /**
  * Create and edit form of a catalog entry with the editor of its package rows (plan M13a decision 8). For a Flatpak
- * source a row names a Flatpak application and its scope instead of an APT package (plan M13b decision 3).
+ * source a row names a Flatpak application and its scope instead of an APT package (plan M13b decision 3). With
+ * approval required, the users of an available assignment ask an administrator before they install (plan M13c decision 8).
  */
 const props = withDefaults(
   defineProps<{ sources: Pick<SourceOption, 'id' | 'name' | 'kind'>[]; initial?: SoftwareCatalogEntry | null; problem?: string; pending?: boolean }>(),
@@ -23,12 +24,14 @@ const name = ref(props.initial?.name ?? '')
 const description = ref(props.initial?.description ?? '')
 const category = ref(props.initial?.category ?? '')
 const sourceID = ref<string | null>(props.initial?.source_id ?? null)
+const approvalRequired = ref(props.initial?.approval === 'required')
 const packages = ref<PackageRef[]>(props.initial ? props.initial.packages.map((p) => ({ ...p })) : [emptyPackageRef()])
 const touched = ref(false)
 const flatpak = computed(() => props.sources.find((s) => s.id === sourceID.value)?.kind === 'flatpak')
 const input = computed<EntryInput>(() => ({
   name: name.value, description: description.value, category: category.value, sourceID: sourceID.value,
   packages: packagesForSource(packages.value, flatpak.value),
+  approval: approvalRequired.value ? 'required' : 'none',
 }))
 const errors = computed(() => validateEntry(input.value, flatpak.value))
 const scopes = computed(() => softwareScopes.map((value) => ({ value, title: t('software.scope.' + value) })))
@@ -93,6 +96,16 @@ function message(key: string | undefined): string[] {
       persistent-hint
       :items="[{ value: null, title: t('software.catalog.distributionRepositories') }, ...props.sources.map((s) => ({ value: s.id, title: s.name }))]"
       data-testid="entry-source"
+    />
+    <v-switch
+      id="entry-approval"
+      v-model="approvalRequired"
+      :label="t('software.catalog.approvalRequired')"
+      :hint="t('software.catalog.approvalHint')"
+      persistent-hint
+      color="primary"
+      inset
+      data-testid="entry-approval"
     />
     <fieldset class="entry-packages">
       <legend>{{ t('software.catalog.packages') }}</legend>

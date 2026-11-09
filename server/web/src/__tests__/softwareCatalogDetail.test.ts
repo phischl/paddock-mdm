@@ -32,7 +32,7 @@ const assignment = (over: Partial<SoftwareAssignment>): SoftwareAssignment => ({
 })
 const assignments = [
   assignment({ id: 'a1', user_id: 'u1' }), assignment({ id: 'a2', user_group_id: 'ug1' }), assignment({ id: 'a3', device_group_id: 'g1', intent: 'required' }),
-  assignment({ id: 'a4', intent: 'forbid' }),
+  assignment({ id: 'a4', intent: 'forbid', urgent: true, reason: 'CVE fix' }),
 ]
 const warnings: CompileWarning[] = [
   { id: 'w1', device_id: 'd1', hostname: 'lap-0421', assignment_id: 'a2', catalog_entry_id: 'e1', code: 'audience_truncated', params: { users: 250, kept: 200 }, created_at: '2026-10-02T00:00:00Z' },
@@ -40,6 +40,7 @@ const warnings: CompileWarning[] = [
 ]
 const page = <T>(items: T[], sort: string) => Promise.resolve({ items, page: 1, page_size: 25, total: items.length, total_capped: false, sort })
 const confirmed = vi.hoisted(() => ({ options: [] as { message: string }[] }))
+const stepUp = vi.hoisted(() => ({ started: [] as unknown[][], resumed: null as unknown }))
 
 vi.mock('../lib/software', async (original) => ({
   ...(await original<typeof import('../lib/software')>()),
@@ -54,6 +55,20 @@ vi.mock('../lib/software', async (original) => ({
   listSoftwareCatalogDevices: () => () => {
     deviceFetch()
     return page(rows, 'hostname')
+  },
+}))
+vi.mock('../lib/configRollouts', async (original) => ({
+  ...(await original<typeof import('../lib/configRollouts')>()),
+  openRolloutStagedKeys: () => Promise.resolve([{ parts: ['Laptops', 'Editor', 'device_group', null], rolloutID: 'r1' }]),
+}))
+vi.mock('../lib/stepUp', async (original) => ({
+  ...(await original<typeof import('../lib/stepUp')>()),
+  startStepUp: (...args: unknown[]) => stepUp.started.push(args),
+  withoutStepUpParam: () => '/software-catalog/e1',
+  resumeStepUp: () => {
+    const r = stepUp.resumed
+    stepUp.resumed = null
+    return r
   },
 }))
 vi.mock('../lib/users', async (original) => ({
@@ -92,6 +107,7 @@ async function mountDetail(role: string): Promise<void> {
       { path: '/software-catalog/:id', name: 'software-catalog-entry', component: { render: () => null } },
       { path: '/software-catalog', name: 'software-catalog', component: { render: () => null } },
       { path: '/devices/:id/managed-software', name: 'device-managed-software', component: { render: () => null } },
+      { path: '/config-rollouts/:id', name: 'config-rollout', component: { render: () => null } },
     ],
   })
   await router.push('/software-catalog/e1')
@@ -209,5 +225,56 @@ describe('SoftwareCatalogDetail assignment targets (plan M13b decision 19)', () 
     expect(rowsShown[0]).toContain('User group Designers')
     expect(rowsShown[1]).toContain('org.gimp.GIMP is left out on this device')
     expect(rowsShown[1]).toContain('User alice@acme.test')
+  })
+})
+
+describe('SoftwareCatalogDetail approvals, urgent assignments and rollouts (plan M13c)', () => {
+  it('shows whether the entry needs approval', async () => {
+    await mountDetail('org_auditor')
+    expect(document.querySelector('[data-testid="entry-approval"]')?.textContent).toContain('Not required')
+  })
+
+  it('marks an urgent assignment and links an assignment the open rollout stages', async () => {
+    await mountDetail('org_auditor')
+    const rowsShown = [...document.body.querySelectorAll('[data-testid="assignment-list"] tbody tr')]
+    const laptops = rowsShown.find((r) => r.textContent?.includes('Laptops'))
+    expect(laptops?.querySelector('[data-testid="assignment-rollout"]')?.getAttribute('href')).toBe('/config-rollouts/r1')
+    expect(laptops?.textContent).toContain('Staged')
+    const forbid = rowsShown.find((r) => r.textContent?.includes('All devices'))
+    expect(forbid?.querySelector('[data-testid="assignment-urgent-chip"]')?.textContent).toContain('Urgent')
+    expect(forbid?.querySelector('[data-testid="assignment-rollout"]')).toBeNull()
+  })
+
+  it('starts the step-up when the server asks for it on an urgent save and repeats the save after it', async () => {
+    saveAssignment.mockReset()
+    saveAssignment.mockResolvedValue('step_up_required')
+    stepUp.started.length = 0
+    await mountDetail('org_operator')
+    ;(document.querySelector('[data-testid="create-assignment"]') as HTMLElement).click()
+    await flushPromises()
+    ;(document.querySelector('.v-dialog form') as HTMLFormElement).dispatchEvent(new Event('submit'))
+    await flushPromises()
+    expect(stepUp.started).toHaveLength(1)
+    expect(stepUp.started[0][0]).toBe('software-assignment')
+    expect(stepUp.started[0][1]).toBe('e1')
+    const pending = stepUp.started[0][2] as { id: string | null; input: { entryID: string } }
+    expect(pending.id).toBeNull()
+
+    wrapper?.unmount()
+    wrapper = null
+    saveAssignment.mockReset()
+    saveAssignment.mockResolvedValue(null)
+    stepUp.resumed = { failed: false, payload: pending }
+    await mountDetail('org_operator')
+    expect(saveAssignment).toHaveBeenCalledWith(null, pending.input)
+  })
+
+  it('shows the refusal of the save repeated after the step-up', async () => {
+    saveAssignment.mockReset()
+    saveAssignment.mockResolvedValue('rollout_conflict')
+    stepUp.resumed = { failed: false, payload: { id: 'a1', input: { entryID: 'e1' } } }
+    await mountDetail('org_operator')
+    expect(saveAssignment).toHaveBeenCalledWith('a1', { entryID: 'e1' })
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('A running or halted rollout stages this item.')
   })
 })
