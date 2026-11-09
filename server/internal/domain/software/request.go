@@ -27,8 +27,9 @@ const (
 // RequestStates are the states of a software request, in their order of the state table.
 var RequestStates = []string{RequestRequested, RequestApproved, RequestDenied, RequestExpired, RequestWithdrawn}
 
-// Why the worker expired a request: its validity ended, its entry no longer requires approval (§3.8 L4), or its
-// entry has no available assignment left, so an approval no longer holds either (architect decision A10-17).
+// Why the worker expired a request: its validity ended, its entry no longer requires approval or changed its approval
+// since the request was opened (§3.8 L4), or no available assignment of its entry offers it to the device and user any
+// longer, so an approval no longer holds either (architect decision A10-17).
 const (
 	ExpiryValidityEnded     = "validity_ended"
 	ExpiryApprovalRemoved   = "approval_removed"

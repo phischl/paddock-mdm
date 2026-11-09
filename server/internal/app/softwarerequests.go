@@ -114,7 +114,8 @@ func (s *SoftwareRequests) decide(ctx context.Context, spec ActionSpec, id uuid.
 	spec.Target = &audit.Target{Type: "software_request", ID: id.String()}
 	spec.Params = map[string]any{"reason": software.DisplayParam(reason, software.MaxReasonLength)}
 	err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		if _, err := q.GetSoftwareRequestForUpdate(ctx, id); err != nil {
+		locked, err := q.GetSoftwareRequestForUpdate(ctx, id)
+		if err != nil {
 			return notFound(err)
 		}
 		cur, err := q.GetSoftwareRequest(ctx, id)
@@ -130,9 +131,17 @@ func (s *SoftwareRequests) decide(ctx context.Context, spec ActionSpec, id uuid.
 		if cur.State != software.RequestRequested {
 			return problem.InvalidState.WithDetail("the request is " + cur.State + ", not open")
 		}
+		now := s.now()
+		// The expiry round may not have run yet: a request past its validity, or of an entry that no longer requires
+		// approval or changed it since, is decided as the round would expire it, so no approval outlives either.
+		if !now.Before(locked.ExpiresAt) {
+			return problem.InvalidState.WithDetail("the request's validity ended")
+		}
+		if cur.EntryApproval != software.ApprovalRequired || !locked.Current {
+			return problem.InvalidState.WithDetail("the entry no longer requires approval as it did when the request was opened")
+		}
 		p, _ := principal.From(ctx)
 		decidedBy := software.DisplayParam(p.Display, 256)
-		now := s.now()
 		var why *string
 		if reason != "" {
 			why = &reason
@@ -166,11 +175,11 @@ func requestParams(r SoftwareRequest) map[string]any {
 // expireBatch bounds the requests one expiry pass handles per organization; the next round takes the rest.
 const expireBatch = 500
 
-// Expire expires the context's organization's open requests whose validity ended at now or whose entry no longer
-// requires approval (system principal, plan M13c §3.7 and §3.8 L4), and the open and approved requests of an entry
-// without an available assignment, whose approval no longer holds (architect decision A10-17); each with one
-// software_request.expired event. A request a decision or another replica ended first is skipped. It returns the
-// number of expired requests.
+// Expire expires the context's organization's open requests whose validity ended at now (system principal, plan M13c
+// §3.7), and its open and approved requests whose entry no longer requires approval or changed its approval since
+// (§3.8 L4) or that no available assignment of the entry offers to the device and user any longer, so the approval no
+// longer holds (architect decision A10-17); each with one software_request.expired event. A request a decision or
+// another replica ended first, or whose cause no longer holds, is skipped. It returns the number of expired requests.
 func (s *SoftwareRequests) Expire(ctx context.Context, now time.Time) (int, error) {
 	if p, ok := principal.From(ctx); !ok || p.Kind != principal.KindSystem {
 		return 0, problem.Unauthenticated
@@ -193,8 +202,8 @@ func (s *SoftwareRequests) Expire(ctx context.Context, now time.Time) (int, erro
 				"user": r.Username, "cause": r.Cause},
 		}
 		done, err := s.runner.RecordOnceInScope(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) (bool, error) {
-			n, err := q.ExpireSoftwareRequest(ctx, pgstore.ExpireSoftwareRequestParams{ID: r.ID, DecidedAt: &now,
-				ApprovedToo: r.Cause == software.ExpiryAssignmentRemoved})
+			n, err := q.ExpireSoftwareRequest(ctx, pgstore.ExpireSoftwareRequestParams{ID: r.ID, DecidedAt: &now, Now: now,
+				Cause: r.Cause})
 			return n == 1, err
 		})
 		if err != nil {
@@ -215,8 +224,10 @@ type openedRequest struct {
 
 // openSoftwareRequest opens the request a software.request event of the device reports, received at receivedAt (plan
 // M13c decision 9), in the transaction of its claim: one per device, entry and user while it is open. It opens none
-// — and returns nil — for malformed data, an entry that is not the organization's or does not require approval, a
-// repeat while the request is open, or a request within software.RerequestAfterDenial of a denial (§3.7).
+// — and returns nil — for malformed data, an entry that is not the organization's or does not require approval, an
+// entry no available assignment offers to the user on the device (architect decision A10-17), a user who holds an
+// approval of it on the device already, a repeat while the request is open, or a request within
+// software.RerequestAfterDenial of a denial (§3.7).
 func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID uuid.UUID, data json.RawMessage,
 	receivedAt time.Time) (*openedRequest, error) {
 	var ev protocol.SoftwareRequest
@@ -228,10 +239,23 @@ func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID 
 		return nil, nil //nolint:nilerr // a malformed entry ID opens nothing; the event itself is still recorded
 	}
 	approval, err := q.GetSoftwareCatalogEntryApproval(ctx, entry)
-	if db.IsNoRows(err) || err == nil && approval != software.ApprovalRequired {
+	if db.IsNoRows(err) || err == nil && approval.Approval != software.ApprovalRequired {
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	offered, err := q.SoftwareRequestOffered(ctx, pgstore.SoftwareRequestOfferedParams{
+		CatalogEntryID: entry, DeviceID: deviceID, Username: ev.User,
+	})
+	if err != nil || !offered {
+		return nil, err
+	}
+	// A second request beside an approval could be denied while the approval still holds.
+	holds, err := q.SoftwareRequestApprovalHolds(ctx, pgstore.SoftwareRequestApprovalHoldsParams{
+		DeviceID: deviceID, CatalogEntryID: entry, Username: ev.User,
+	})
+	if err != nil || holds {
 		return nil, err
 	}
 	denied, err := q.LastSoftwareRequestDenial(ctx, pgstore.LastSoftwareRequestDenialParams{
@@ -252,6 +276,7 @@ func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID 
 	n, err := q.InsertSoftwareRequest(ctx, pgstore.InsertSoftwareRequestParams{
 		ID: id, OrganizationID: org, CatalogEntryID: entry, DeviceID: deviceID,
 		UserID: uuid.NullUUID{UUID: user, Valid: user != uuid.Nil}, Username: ev.User, RequestedAt: receivedAt, ExpiresAt: expires,
+		ApprovalEpoch: approval.ApprovalEpoch,
 	})
 	if err != nil || n != 1 {
 		return nil, err

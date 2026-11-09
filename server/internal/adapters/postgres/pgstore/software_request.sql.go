@@ -73,18 +73,40 @@ func (q *Queries) DecideSoftwareRequest(ctx context.Context, arg DecideSoftwareR
 }
 
 const expireSoftwareRequest = `-- name: ExpireSoftwareRequest :execrows
-UPDATE software_request SET state = 'expired', decided_at = $1
-WHERE id = $2 AND (state = 'requested' OR state = 'approved' AND $3::boolean)
+UPDATE software_request r SET state = 'expired', decided_at = $1
+FROM software_catalog_entry e
+WHERE r.id = $2 AND e.id = r.catalog_entry_id AND r.state IN ('requested', 'approved')
+  AND (CASE WHEN NOT EXISTS (
+           SELECT 1 FROM software_assignment a
+           WHERE a.catalog_entry_id = r.catalog_entry_id AND a.intent = 'available'
+             AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
+               OR a.device_group_id IN (SELECT m.device_group_id FROM device_group_member m WHERE m.device_id = r.device_id)
+               OR a.user_id IN (SELECT o.user_id FROM device_owner o JOIN app_user u ON u.id = o.user_id
+                                WHERE o.device_id = r.device_id AND u.username = r.username)
+               OR a.user_group_id IN (SELECT g.group_id FROM user_group_member g JOIN device_owner o ON o.user_id = g.user_id
+                                      JOIN app_user u ON u.id = o.user_id
+                                      WHERE o.device_id = r.device_id AND u.username = r.username))
+         ) THEN 'assignment_removed'
+         WHEN e.approval = 'none' OR r.approval_epoch <> e.approval_epoch THEN 'approval_removed'
+         WHEN r.state = 'approved' THEN NULL
+         WHEN r.expires_at <= $3 THEN 'validity_ended' END) = $4::text
 `
 
 type ExpireSoftwareRequestParams struct {
-	DecidedAt   *time.Time
-	ID          uuid.UUID
-	ApprovedToo bool
+	DecidedAt *time.Time
+	ID        uuid.UUID
+	Now       time.Time
+	Cause     string
 }
 
+// Expires the request only while the cause the list named still holds, so a request covered again in between stays.
 func (q *Queries) ExpireSoftwareRequest(ctx context.Context, arg ExpireSoftwareRequestParams) (int64, error) {
-	result, err := q.db.Exec(ctx, expireSoftwareRequest, arg.DecidedAt, arg.ID, arg.ApprovedToo)
+	result, err := q.db.Exec(ctx, expireSoftwareRequest,
+		arg.DecidedAt,
+		arg.ID,
+		arg.Now,
+		arg.Cause,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -93,17 +115,22 @@ func (q *Queries) ExpireSoftwareRequest(ctx context.Context, arg ExpireSoftwareR
 
 const getSoftwareCatalogEntryApproval = `-- name: GetSoftwareCatalogEntryApproval :one
 
-SELECT approval FROM software_catalog_entry WHERE id = $1
+SELECT approval, approval_epoch FROM software_catalog_entry WHERE id = $1
 `
+
+type GetSoftwareCatalogEntryApprovalRow struct {
+	Approval      string
+	ApprovalEpoch int32
+}
 
 // Software requests (plan M13c decisions 8 to 10): a user's request for an available entry that requires approval,
 // opened by the worker from the device's software.request, decided by an administrator, expired by the worker.
-// The approval of an entry of the organization (worker: the event path checks the entry a device names).
-func (q *Queries) GetSoftwareCatalogEntryApproval(ctx context.Context, id uuid.UUID) (string, error) {
+// The approval and its epoch of an entry of the organization (worker: the event path checks the entry a device names).
+func (q *Queries) GetSoftwareCatalogEntryApproval(ctx context.Context, id uuid.UUID) (GetSoftwareCatalogEntryApprovalRow, error) {
 	row := q.db.QueryRow(ctx, getSoftwareCatalogEntryApproval, id)
-	var approval string
-	err := row.Scan(&approval)
-	return approval, err
+	var i GetSoftwareCatalogEntryApprovalRow
+	err := row.Scan(&i.Approval, &i.ApprovalEpoch)
+	return i, err
 }
 
 const getSoftwareRequest = `-- name: GetSoftwareRequest :one
@@ -156,7 +183,10 @@ func (q *Queries) GetSoftwareRequest(ctx context.Context, id uuid.UUID) (GetSoft
 }
 
 const getSoftwareRequestForUpdate = `-- name: GetSoftwareRequestForUpdate :one
-SELECT id, state, catalog_entry_id, device_id, username FROM software_request WHERE id = $1 FOR UPDATE
+SELECT r.id, r.state, r.catalog_entry_id, r.device_id, r.username, r.expires_at,
+  (r.approval_epoch = e.approval_epoch)::boolean AS current
+FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id
+WHERE r.id = $1 FOR UPDATE OF r
 `
 
 type GetSoftwareRequestForUpdateRow struct {
@@ -165,9 +195,12 @@ type GetSoftwareRequestForUpdateRow struct {
 	CatalogEntryID uuid.UUID
 	DeviceID       uuid.UUID
 	Username       string
+	ExpiresAt      time.Time
+	Current        bool
 }
 
 // The request locked for the rest of the transaction: a decision must not interleave with another or with the expiry.
+// current says whether it was opened under the entry's current approval epoch.
 func (q *Queries) GetSoftwareRequestForUpdate(ctx context.Context, id uuid.UUID) (GetSoftwareRequestForUpdateRow, error) {
 	row := q.db.QueryRow(ctx, getSoftwareRequestForUpdate, id)
 	var i GetSoftwareRequestForUpdateRow
@@ -177,6 +210,8 @@ func (q *Queries) GetSoftwareRequestForUpdate(ctx context.Context, id uuid.UUID)
 		&i.CatalogEntryID,
 		&i.DeviceID,
 		&i.Username,
+		&i.ExpiresAt,
+		&i.Current,
 	)
 	return i, err
 }
@@ -194,9 +229,9 @@ func (q *Queries) GetUserIDByUsername(ctx context.Context, username string) (uui
 
 const insertSoftwareRequest = `-- name: InsertSoftwareRequest :execrows
 INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state, requested_at,
-  expires_at)
+  expires_at, approval_epoch)
 VALUES ($1, $2, $3, $4, $5, $6, 'requested', $7,
-  $8)
+  $8, $9)
 ON CONFLICT (device_id, catalog_entry_id, username) WHERE state = 'requested' DO NOTHING
 `
 
@@ -209,6 +244,7 @@ type InsertSoftwareRequestParams struct {
 	Username       string
 	RequestedAt    time.Time
 	ExpiresAt      time.Time
+	ApprovalEpoch  int32
 }
 
 // Opens a request; none while one of the device, entry and user is open (software_request_open_idx).
@@ -222,6 +258,7 @@ func (q *Queries) InsertSoftwareRequest(ctx context.Context, arg InsertSoftwareR
 		arg.Username,
 		arg.RequestedAt,
 		arg.ExpiresAt,
+		arg.ApprovalEpoch,
 	)
 	if err != nil {
 		return 0, err
@@ -251,8 +288,10 @@ func (q *Queries) LastSoftwareRequestDenial(ctx context.Context, arg LastSoftwar
 }
 
 const listApprovedSoftwareRequests = `-- name: ListApprovedSoftwareRequests :many
-SELECT device_id, catalog_entry_id, username FROM software_request WHERE state = 'approved'
-ORDER BY device_id, catalog_entry_id, username
+SELECT r.device_id, r.catalog_entry_id, r.username
+FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id
+WHERE r.state = 'approved' AND e.approval = 'required' AND r.approval_epoch = e.approval_epoch
+ORDER BY r.device_id, r.catalog_entry_id, r.username
 `
 
 type ListApprovedSoftwareRequestsRow struct {
@@ -261,7 +300,9 @@ type ListApprovedSoftwareRequestsRow struct {
 	Username       string
 }
 
-// The approved users per device and entry (compiler, plan M13c decision 9), sorted by user name.
+// The approved users per device and entry (compiler, plan M13c decision 9), sorted by user name: only approvals of an
+// entry that requires approval, decided within its current approval epoch, so one never comes back after a change to
+// none, even before the worker expired it.
 func (q *Queries) ListApprovedSoftwareRequests(ctx context.Context) ([]ListApprovedSoftwareRequestsRow, error) {
 	rows, err := q.db.Query(ctx, listApprovedSoftwareRequests)
 	if err != nil {
@@ -384,10 +425,19 @@ func (q *Queries) ListSoftwareRequests(ctx context.Context, arg ListSoftwareRequ
 const listSoftwareRequestsToExpire = `-- name: ListSoftwareRequestsToExpire :many
 SELECT id, catalog_entry_id, device_id, username, cause::text AS cause FROM (
   SELECT r.id, r.catalog_entry_id, r.device_id, r.username, r.requested_at,
-    CASE WHEN NOT EXISTS (SELECT 1 FROM software_assignment a WHERE a.catalog_entry_id = r.catalog_entry_id
-                            AND a.intent = 'available') THEN 'assignment_removed'
+    CASE WHEN NOT EXISTS (
+           SELECT 1 FROM software_assignment a
+           WHERE a.catalog_entry_id = r.catalog_entry_id AND a.intent = 'available'
+             AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
+               OR a.device_group_id IN (SELECT m.device_group_id FROM device_group_member m WHERE m.device_id = r.device_id)
+               OR a.user_id IN (SELECT o.user_id FROM device_owner o JOIN app_user u ON u.id = o.user_id
+                                WHERE o.device_id = r.device_id AND u.username = r.username)
+               OR a.user_group_id IN (SELECT g.group_id FROM user_group_member g JOIN device_owner o ON o.user_id = g.user_id
+                                      JOIN app_user u ON u.id = o.user_id
+                                      WHERE o.device_id = r.device_id AND u.username = r.username))
+         ) THEN 'assignment_removed'
+         WHEN e.approval = 'none' OR r.approval_epoch <> e.approval_epoch THEN 'approval_removed'
          WHEN r.state = 'approved' THEN NULL
-         WHEN e.approval = 'none' THEN 'approval_removed'
          WHEN r.expires_at <= $1 THEN 'validity_ended' END AS cause
   FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id
   WHERE r.state IN ('requested', 'approved')
@@ -410,8 +460,10 @@ type ListSoftwareRequestsToExpireRow struct {
 	Cause          string
 }
 
-// The requests to expire, oldest first: open or approved ones whose entry has no available assignment left (A10-17),
-// and open ones whose entry no longer requires approval (§3.8 L4) or whose validity ended at now.
+// The requests to expire, oldest first, with the cause: open or approved ones no available assignment of the entry
+// offers to the device and user any longer (A10-17; the predicate of SoftwareRequestOffered), open or approved ones
+// whose entry no longer requires approval or changed its approval since (§3.8 L4: an approval never outlives a change to
+// none), and open ones whose validity ended at now.
 func (q *Queries) ListSoftwareRequestsToExpire(ctx context.Context, arg ListSoftwareRequestsToExpireParams) ([]ListSoftwareRequestsToExpireRow, error) {
 	rows, err := q.db.Query(ctx, listSoftwareRequestsToExpire, arg.Now, arg.MaxRows)
 	if err != nil {
@@ -436,4 +488,55 @@ func (q *Queries) ListSoftwareRequestsToExpire(ctx context.Context, arg ListSoft
 		return nil, err
 	}
 	return items, nil
+}
+
+const softwareRequestApprovalHolds = `-- name: SoftwareRequestApprovalHolds :one
+SELECT EXISTS (
+  SELECT 1 FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id
+  WHERE r.device_id = $1 AND r.catalog_entry_id = $2 AND r.username = $3
+    AND r.state = 'approved' AND r.approval_epoch = e.approval_epoch
+)::boolean AS holds
+`
+
+type SoftwareRequestApprovalHoldsParams struct {
+	DeviceID       uuid.UUID
+	CatalogEntryID uuid.UUID
+	Username       string
+}
+
+// Whether the user holds an approval of the entry on the device within the entry's current approval epoch.
+func (q *Queries) SoftwareRequestApprovalHolds(ctx context.Context, arg SoftwareRequestApprovalHoldsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, softwareRequestApprovalHolds, arg.DeviceID, arg.CatalogEntryID, arg.Username)
+	var holds bool
+	err := row.Scan(&holds)
+	return holds, err
+}
+
+const softwareRequestOffered = `-- name: SoftwareRequestOffered :one
+SELECT EXISTS (
+  SELECT 1 FROM software_assignment a
+  WHERE a.catalog_entry_id = $1 AND a.intent = 'available'
+    AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
+      OR a.device_group_id IN (SELECT m.device_group_id FROM device_group_member m WHERE m.device_id = $2)
+      OR a.user_id IN (SELECT o.user_id FROM device_owner o JOIN app_user u ON u.id = o.user_id
+                       WHERE o.device_id = $2 AND u.username = $3)
+      OR a.user_group_id IN (SELECT g.group_id FROM user_group_member g JOIN device_owner o ON o.user_id = g.user_id
+                             JOIN app_user u ON u.id = o.user_id WHERE o.device_id = $2 AND u.username = $3))
+)::boolean AS offered
+`
+
+type SoftwareRequestOfferedParams struct {
+	CatalogEntryID uuid.UUID
+	DeviceID       uuid.UUID
+	Username       string
+}
+
+// Whether an available assignment of the entry offers it to the user on the device (architect decision A10-17), as the
+// compiler resolves targets: the whole organization or a device group of the device offers it to every user, a user or
+// user-group target to the device's owners it names. ListSoftwareRequestsToExpire repeats the predicate.
+func (q *Queries) SoftwareRequestOffered(ctx context.Context, arg SoftwareRequestOfferedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, softwareRequestOffered, arg.CatalogEntryID, arg.DeviceID, arg.Username)
+	var offered bool
+	err := row.Scan(&offered)
+	return offered, err
 }

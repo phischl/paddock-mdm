@@ -475,7 +475,7 @@ entry's deletion. Outside that revert, the guard is unchanged.
 
 ## Amendment 2026-11-09 (PDK-810, implementer choices within §13)
 
-- **Migration `00120_software_requests.sql`** (the numbers `00111` and `00117`–`00119` were taken). It creates the table
+- **Migration `00119_software_requests.sql`** (the numbers `00111`, `00117` and `00118` were taken; landed before PDK-809, which takes `00120`). It creates the table
   of decision 8 **without `justification`**: whether the user's text may be stored, sent and shown is pending with the
   maintainer (§12 Q4). The event `software.request` carries `{user, entry_id}` only. The server drops any other field
   a device sends, so it never reaches the audit log. A later migration can add the column, and an additive event field
@@ -509,7 +509,7 @@ entry's deletion. Outside that revert, the guard is unchanged.
 - An approval holds only while its entry and an available assignment of it exist. The entry's deletion removes its
   requests (foreign key). When the entry has no available assignment left, the request round expires its open and
   approved requests with cause `assignment_removed`. For this, the worker reads `catalog_entry_id` and `intent` of
-  `software_assignment` (column grant, `00120`).
+  `software_assignment` (column grant, `00119`).
 - Expiry in a round of its own is confirmed.
 - **Agent gate (PDK-942, done in PDK-810).** The compiler leaves out an available package whose entry requires approval
   for an agent release before `approvalAgent`, the first release with PDK-811 (`0.1.0-alpha.10`). This is the A10-6

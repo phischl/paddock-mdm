@@ -11,7 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -25,7 +27,9 @@ type requestHarness struct {
 	reports  *app.DeviceReports
 	worker   *app.SoftwareRequests
 	api      *app.SoftwareRequests
+	catalog  *app.SoftwareCatalog
 	apiPool  *db.OrgPool
+	workPool *db.OrgPool
 	super    *pgx.Conn
 	org, dev uuid.UUID
 }
@@ -57,7 +61,8 @@ func newRequestHarness(t *testing.T) requestHarness {
 	apiRunner := app.NewActionRunner(apiPool, platform, httpx.RequestID)
 	h := requestHarness{
 		reports: app.NewDeviceReports(workerRunner, workerPool), worker: app.NewSoftwareRequests(workerRunner, workerPool),
-		api: app.NewSoftwareRequests(apiRunner, apiPool), apiPool: apiPool, super: super,
+		api: app.NewSoftwareRequests(apiRunner, apiPool), catalog: app.NewSoftwareCatalog(apiRunner, apiPool),
+		apiPool: apiPool, workPool: workerPool, super: super,
 	}
 	h.org, h.dev = h.orgWithDevice(t)
 	return h
@@ -81,12 +86,60 @@ func (h requestHarness) orgWithDevice(t *testing.T) (org, dev uuid.UUID) {
 // entry adds a catalog entry of org with approval, available to the whole organization.
 func (h requestHarness) entry(t *testing.T, org uuid.UUID, approval string) uuid.UUID {
 	t.Helper()
-	id := uuid.Must(uuid.NewV7())
-	h.exec(t, `INSERT INTO software_catalog_entry (id, organization_id, name, packages, approval) VALUES ($1, $2, $3,
-		'[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano"}]', $4)`, id, org, "E "+id.String(), approval)
+	id := h.bareEntry(t, org, approval)
 	h.exec(t, `INSERT INTO software_assignment (id, organization_id, catalog_entry_id, intent) VALUES ($1, $2, $3, 'available')`,
 		uuid.Must(uuid.NewV7()), org, id)
 	return id
+}
+
+// bareEntry adds a catalog entry of org with approval and no assignment.
+func (h requestHarness) bareEntry(t *testing.T, org uuid.UUID, approval string) uuid.UUID {
+	t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	h.exec(t, `INSERT INTO software_catalog_entry (id, organization_id, name, packages, approval) VALUES ($1, $2, $3,
+		'[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano"}]', $4)`, id, org, "E "+id.String(), approval)
+	return id
+}
+
+// setApproval changes the approval of the harness organization's entry through the catalog use case, as the API does.
+func (h requestHarness) setApproval(t *testing.T, entry uuid.UUID, approval string) {
+	t.Helper()
+	nano := []software.PackageRef{{Distribution: "ubuntu", Release: "*", Architecture: "*", Package: "nano"}}
+	if _, err := h.catalog.Update(adminCtx(h.org, principal.RoleOrgAdmin, "a"), entry, app.EntryInput{
+		Name: "E " + entry.String(), Packages: nano, Approval: &approval}); err != nil {
+		t.Fatalf("set approval %s: %v", approval, err)
+	}
+}
+
+// request returns the ID and state of the user's latest request of the entry on the harness device.
+func (h requestHarness) request(t *testing.T, entry uuid.UUID, user string) (uuid.UUID, string) {
+	t.Helper()
+	var id uuid.UUID
+	var state string
+	if err := h.super.QueryRow(context.Background(), `SELECT id, state FROM software_request WHERE device_id = $1
+		AND catalog_entry_id = $2 AND username = $3 ORDER BY requested_at DESC, id DESC LIMIT 1`, h.dev, entry, user).
+		Scan(&id, &state); err != nil {
+		t.Fatalf("request of %s: %v", user, err)
+	}
+	return id, state
+}
+
+// approved returns the approved users of the entry on the harness device as the compiler reads them.
+func (h requestHarness) approved(t *testing.T, entry uuid.UUID) []string {
+	t.Helper()
+	var out []string
+	if err := h.workPool.InOrg(systemCtx(h.org), func(ctx context.Context, q *pgstore.Queries) error {
+		rows, err := q.ListApprovedSoftwareRequests(ctx)
+		for _, r := range rows {
+			if r.DeviceID == h.dev && r.CatalogEntryID == entry {
+				out = append(out, r.Username)
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 func (h requestHarness) user(t *testing.T, org uuid.UUID, username string) uuid.UUID {
@@ -324,5 +377,242 @@ func TestSoftwareRequestExpiry(t *testing.T) {
 	}
 	if got := attention(); len(got) != 0 {
 		t.Fatalf("attention after the expiry %v", got)
+	}
+}
+
+// TestSoftwareRequestOfferedOnly (architect decision A10-17): a request opens only for a device and user an available
+// assignment of the entry offers it to — by device group or by an owner the user or user-group target names — and an
+// approval expires with assignment_removed once no assignment covers the device and user any longer, while another
+// organization-wide entry stays untouched. A cause that no longer holds when the round updates expires nothing.
+func TestSoftwareRequestOfferedOnly(t *testing.T) {
+	h := newRequestHarness(t)
+	suffix := h.org.String()[24:]
+	alice, bob := "alice-"+suffix+"@acme.test", "bob-"+suffix+"@acme.test"
+	aliceID, bobID := h.user(t, h.org, alice), h.user(t, h.org, bob)
+	h.exec(t, "INSERT INTO device_owner (organization_id, device_id, user_id) VALUES ($1, $2, $3), ($1, $2, $4)",
+		h.org, h.dev, aliceID, bobID)
+	devGroup, userGroup := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	h.exec(t, "INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'G')", devGroup, h.org)
+	h.exec(t, "INSERT INTO user_group (id, organization_id, slug, name, source) VALUES ($1, $2, 'ug', 'UG', 'local')", userGroup, h.org)
+	h.exec(t, "INSERT INTO user_group_member (organization_id, group_id, user_id) VALUES ($1, $2, $3)", h.org, userGroup, bobID)
+	byGroup, byUsers := h.bareEntry(t, h.org, "required"), h.bareEntry(t, h.org, "required")
+	h.exec(t, `INSERT INTO software_assignment (id, organization_id, catalog_entry_id, intent, device_group_id)
+		VALUES ($1, $2, $3, 'available', $4)`, uuid.Must(uuid.NewV7()), h.org, byGroup, devGroup)
+	h.exec(t, `INSERT INTO software_assignment (id, organization_id, catalog_entry_id, intent, user_group_id)
+		VALUES ($1, $2, $3, 'available', $4)`, uuid.Must(uuid.NewV7()), h.org, byUsers, userGroup)
+	everyone := h.entry(t, h.org, "required")
+	opens := func() int {
+		return h.count(t, "SELECT count(*) FROM software_request WHERE device_id = $1", h.dev)
+	}
+
+	if err := h.reports.RecordEvents(systemCtx(h.org), h.dev, time.Now(), []protocol.Event{
+		requestEvent(1, alice, byGroup), requestEvent(2, alice, byUsers), requestEvent(3, "nobody@acme.test", byUsers)}); err != nil {
+		t.Fatal(err)
+	}
+	if n := opens(); n != 0 {
+		t.Fatalf("requests of entries never offered to the device or user: %d rows", n)
+	}
+	h.exec(t, "INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)", h.org, devGroup, h.dev)
+	if err := h.reports.RecordEvents(systemCtx(h.org), h.dev, time.Now(), []protocol.Event{
+		requestEvent(4, alice, byGroup), requestEvent(5, bob, byUsers), requestEvent(6, alice, byUsers),
+		requestEvent(7, alice, everyone)}); err != nil {
+		t.Fatal(err)
+	}
+	if n := opens(); n != 3 {
+		t.Fatalf("offered requests: %d rows, want alice by group, bob by user group and alice for everyone", n)
+	}
+	admin := adminCtx(h.org, principal.RoleOrgAdmin, "Ada Admin")
+	for _, r := range []struct {
+		entry uuid.UUID
+		user  string
+	}{{byGroup, alice}, {byUsers, bob}, {everyone, alice}} {
+		id, _ := h.request(t, r.entry, r.user)
+		if _, err := h.api.Approve(admin, id, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	expireAs := func(id uuid.UUID, cause string) int64 {
+		var n int64
+		if err := h.workPool.InOrg(systemCtx(h.org), func(ctx context.Context, q *pgstore.Queries) error {
+			now := time.Now()
+			var err error
+			n, err = q.ExpireSoftwareRequest(ctx, pgstore.ExpireSoftwareRequestParams{ID: id, DecidedAt: &now, Now: now, Cause: cause})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	bobReq, _ := h.request(t, byUsers, bob)
+	if n := expireAs(bobReq, software.ExpiryAssignmentRemoved); n != 0 {
+		t.Fatalf("a covered approval expired as assignment_removed: %d rows", n)
+	}
+
+	h.exec(t, "DELETE FROM device_group_member WHERE device_group_id = $1", devGroup)
+	h.exec(t, "DELETE FROM user_group_member WHERE group_id = $1", userGroup)
+	n, err := h.worker.Expire(systemCtx(h.org), time.Now())
+	if err != nil || n != 2 {
+		t.Fatalf("expired %d, %v; want the two approvals no assignment covers", n, err)
+	}
+	for _, r := range []struct {
+		entry uuid.UUID
+		user  string
+		want  string
+	}{{byGroup, alice, "expired"}, {byUsers, bob, "expired"}, {everyone, alice, "approved"}} {
+		if _, state := h.request(t, r.entry, r.user); state != r.want {
+			t.Fatalf("%s of %s: %s, want %s", r.user, r.entry, state, r.want)
+		}
+	}
+	if n := h.count(t, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'software_request.expired'
+		AND params->>'cause' = 'assignment_removed'`, h.org); n != 2 {
+		t.Fatalf("assignment_removed events: %d", n)
+	}
+	h.exec(t, "INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)", h.org, devGroup, h.dev)
+	if got := h.approved(t, byGroup); len(got) != 0 {
+		t.Fatalf("an approval came back when the device rejoined the group: %v", got)
+	}
+}
+
+// TestSoftwareRequestOfferedToTargetedUser (A10-17): an available assignment that targets one user offers the entry
+// only to a device owner of that user, and the approval expires with assignment_removed once that owner is gone.
+func TestSoftwareRequestOfferedToTargetedUser(t *testing.T) {
+	h := newRequestHarness(t)
+	suffix := h.org.String()[24:]
+	alice, bob := "alice-"+suffix+"@acme.test", "bob-"+suffix+"@acme.test"
+	aliceID, bobID := h.user(t, h.org, alice), h.user(t, h.org, bob)
+	h.exec(t, "INSERT INTO device_owner (organization_id, device_id, user_id) VALUES ($1, $2, $3), ($1, $2, $4)",
+		h.org, h.dev, aliceID, bobID)
+	entry := h.bareEntry(t, h.org, "required")
+	h.exec(t, `INSERT INTO software_assignment (id, organization_id, catalog_entry_id, intent, user_id)
+		VALUES ($1, $2, $3, 'available', $4)`, uuid.Must(uuid.NewV7()), h.org, entry, aliceID)
+	opens := func() int {
+		return h.count(t, "SELECT count(*) FROM software_request WHERE device_id = $1", h.dev)
+	}
+
+	if err := h.reports.RecordEvents(systemCtx(h.org), h.dev, time.Now(), []protocol.Event{
+		requestEvent(1, bob, entry), requestEvent(2, "nobody@acme.test", entry)}); err != nil {
+		t.Fatal(err)
+	}
+	if n := opens(); n != 0 {
+		t.Fatalf("requests of users the assignment does not target: %d rows", n)
+	}
+	if err := h.reports.RecordEvents(systemCtx(h.org), h.dev, time.Now(), []protocol.Event{requestEvent(3, alice, entry)}); err != nil {
+		t.Fatal(err)
+	}
+	if n := opens(); n != 1 {
+		t.Fatalf("requests of the targeted user: %d rows, want 1", n)
+	}
+	id, _ := h.request(t, entry, alice)
+	if _, err := h.api.Approve(adminCtx(h.org, principal.RoleOrgAdmin, "Ada Admin"), id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := h.worker.Expire(systemCtx(h.org), time.Now()); err != nil || n != 0 {
+		t.Fatalf("expired %d, %v; the targeted owner still covers the approval", n, err)
+	}
+
+	h.exec(t, "DELETE FROM device_owner WHERE device_id = $1 AND user_id = $2", h.dev, aliceID)
+	if n, err := h.worker.Expire(systemCtx(h.org), time.Now()); err != nil || n != 1 {
+		t.Fatalf("expired %d, %v; want the approval of the removed owner", n, err)
+	}
+	if _, state := h.request(t, entry, alice); state != "expired" {
+		t.Fatalf("request state %s, want expired", state)
+	}
+	if n := h.count(t, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'software_request.expired'
+		AND params->>'cause' = 'assignment_removed'`, h.org); n != 1 {
+		t.Fatalf("assignment_removed events: %d", n)
+	}
+}
+
+// TestSoftwareRequestApprovalFlip (§3.8 L4, A10-17): changing an entry's approval to none and back to required ends
+// its approvals and open requests, even when the expiry round did not run in between: the compiler no longer renders
+// the approval, a decision on the open request is refused, and the round expires both with approval_removed. The user
+// may then ask again under the new approval.
+func TestSoftwareRequestApprovalFlip(t *testing.T) {
+	h := newRequestHarness(t)
+	entry := h.entry(t, h.org, "required")
+	alice, bob := "alice@acme.test", "bob@acme.test"
+	if err := h.reports.RecordEvents(systemCtx(h.org), h.dev, time.Now(), []protocol.Event{
+		requestEvent(1, alice, entry), requestEvent(2, bob, entry)}); err != nil {
+		t.Fatal(err)
+	}
+	admin := adminCtx(h.org, principal.RoleOrgAdmin, "Ada Admin")
+	aliceReq, _ := h.request(t, entry, alice)
+	bobReq, _ := h.request(t, entry, bob)
+	if _, err := h.api.Approve(admin, aliceReq, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.approved(t, entry); len(got) != 1 || got[0] != alice {
+		t.Fatalf("approved before the flip %v", got)
+	}
+
+	h.setApproval(t, entry, software.ApprovalNone)
+	h.setApproval(t, entry, software.ApprovalRequired)
+	if got := h.approved(t, entry); len(got) != 0 {
+		t.Fatalf("an approval came back after required, none, required: %v", got)
+	}
+	if _, err := h.api.Approve(admin, bobReq, ""); !errors.Is(err, problem.InvalidState) {
+		t.Fatalf("approval of a request opened before the flip: %v", err)
+	}
+	n, err := h.worker.Expire(systemCtx(h.org), time.Now())
+	if err != nil || n != 2 {
+		t.Fatalf("expired %d, %v", n, err)
+	}
+	if n := h.count(t, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'software_request.expired'
+		AND params->>'cause' = 'approval_removed'`, h.org); n != 2 {
+		t.Fatalf("approval_removed events: %d", n)
+	}
+	if n := h.count(t, "SELECT count(*) FROM software_request WHERE device_id = $1 AND state IN ('requested', 'approved')", h.dev); n != 0 {
+		t.Fatalf("live requests after the flip: %d", n)
+	}
+	if err := h.reports.RecordEvents(systemCtx(h.org), h.dev, time.Now(), []protocol.Event{requestEvent(3, alice, entry)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, state := h.request(t, entry, alice); state != "requested" {
+		t.Fatalf("a new request under the new approval: %s", state)
+	}
+}
+
+// TestSoftwareRequestDecisionGuards: a request past its validity, or of an entry that no longer requires approval, is
+// refused with invalid_state before the expiry round ran, each attempt one audit event; a user who holds an approval
+// opens no second request beside it.
+func TestSoftwareRequestDecisionGuards(t *testing.T) {
+	h := newRequestHarness(t)
+	entry, freed := h.entry(t, h.org, "required"), h.entry(t, h.org, "required")
+	alice, bob := "alice@acme.test", "bob@acme.test"
+	if err := h.reports.RecordEvents(systemCtx(h.org), h.dev, time.Now(), []protocol.Event{
+		requestEvent(1, alice, entry), requestEvent(2, bob, entry), requestEvent(3, alice, freed)}); err != nil {
+		t.Fatal(err)
+	}
+	admin := adminCtx(h.org, principal.RoleOrgAdmin, "Ada Admin")
+	aliceReq, _ := h.request(t, entry, alice)
+	bobReq, _ := h.request(t, entry, bob)
+	freedReq, _ := h.request(t, freed, alice)
+
+	h.exec(t, "UPDATE software_request SET expires_at = now() - interval '1 second' WHERE id = $1", bobReq)
+	if _, err := h.api.Approve(admin, bobReq, ""); !errors.Is(err, problem.InvalidState) {
+		t.Fatalf("approval past the validity: %v", err)
+	}
+	h.setApproval(t, freed, software.ApprovalNone)
+	if _, err := h.api.Approve(admin, freedReq, ""); !errors.Is(err, problem.InvalidState) {
+		t.Fatalf("approval of an entry without approval: %v", err)
+	}
+	if n := h.count(t, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'software_request.approved'
+		AND outcome = 'failure' AND error_code = 'invalid_state'`, h.org); n != 2 {
+		t.Fatalf("refused decisions recorded %d events, want 2", n)
+	}
+	if _, state := h.request(t, entry, bob); state != "requested" {
+		t.Fatalf("a refused decision changed the request: %s", state)
+	}
+
+	if _, err := h.api.Approve(admin, aliceReq, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.reports.RecordEvents(systemCtx(h.org), h.dev, time.Now(), []protocol.Event{requestEvent(4, alice, entry)}); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.count(t, "SELECT count(*) FROM software_request WHERE device_id = $1 AND catalog_entry_id = $2 AND username = $3",
+		h.dev, entry, alice); n != 1 {
+		t.Fatalf("a request beside an approval: %d rows", n)
 	}
 }

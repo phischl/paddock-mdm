@@ -1131,6 +1131,7 @@ type SoftwareCatalogEntry struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	Approval       string
+	ApprovalEpoch  int32
 }
 
 type SoftwareRequest struct {
@@ -1143,6 +1144,7 @@ type SoftwareRequest struct {
 	State          string
 	RequestedAt    time.Time
 	ExpiresAt      time.Time
+	ApprovalEpoch  int32
 	DecidedBy      *string
 	DecidedAt      *time.Time
 	DecisionReason *string

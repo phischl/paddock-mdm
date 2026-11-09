@@ -1120,7 +1120,8 @@ func TestSoftwareAudienceUserNames(t *testing.T) {
 func (w *world) approveRequest(entry, dev, user uuid.UUID, state string) {
 	w.t.Helper()
 	w.exec(`INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state,
-		requested_at, expires_at, decided_at) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now() + interval '30 days', now())`,
+		requested_at, expires_at, decided_at, approval_epoch) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now() + interval '30 days',
+		now(), (SELECT approval_epoch FROM software_catalog_entry WHERE id = $3))`,
 		uuid.Must(uuid.NewV7()), w.org, entry, dev, user, w.username(user), state)
 }
 

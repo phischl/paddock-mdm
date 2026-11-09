@@ -5,18 +5,23 @@
 -- after expires_at or once the entry no longer requires approval (§3.8 L4). The compiler renders the approved users
 -- into the device's bundle. The plan's justification column is left out until the maintainer decides whether the
 -- user's text may be stored (plan §12 Q4); a later migration adds it. decided_by is the deciding administrator's display
--- name. The worker reads an entry's approval (column grant) and which entries still have an available assignment
--- (catalog_entry_id and intent only): an approval holds only while its entry and assignment exist (architect decision
--- A10-17), so the worker expires the requests of an entry that lost them. The attention view gains software_requests_open, one row
+-- name. An entry's approval_epoch counts its approval changes, and a request keeps the epoch it was opened under: a
+-- request, open or approved, holds only within that epoch, so an approval never comes back after required, none and
+-- required again, whether or not the worker ran in between. The worker reads an entry's approval and epoch (column
+-- grants) and an assignment's entry, intent and target: a request is opened only for a device and user an available
+-- assignment of the entry offers it to, and an approval holds only while one still does (architect decision A10-17), so
+-- the worker expires the open and approved requests it no longer covers. The attention view gains software_requests_open, one row
 -- per device with open requests; its columns, grants and every other branch stay as in 00094. The plan names this file
 -- 00111; that number was taken. Forward-only: there is no Down migration.
 -- +goose Up
 ALTER TABLE software_catalog_entry
-  ADD COLUMN approval text NOT NULL DEFAULT 'none' CHECK (approval IN ('none', 'required'));
-GRANT SELECT (approval) ON software_catalog_entry TO paddock_worker;
+  ADD COLUMN approval text NOT NULL DEFAULT 'none' CHECK (approval IN ('none', 'required')),
+  ADD COLUMN approval_epoch integer NOT NULL DEFAULT 0;
+GRANT SELECT (approval, approval_epoch) ON software_catalog_entry TO paddock_worker;
 CREATE POLICY tenant_worker ON software_assignment FOR SELECT TO paddock_worker
   USING (organization_id = current_setting('paddock.org_id')::uuid);
-GRANT SELECT (organization_id, catalog_entry_id, intent) ON software_assignment TO paddock_worker;
+GRANT SELECT (organization_id, catalog_entry_id, intent, device_group_id, user_id, user_group_id) ON software_assignment
+  TO paddock_worker;
 
 CREATE TABLE software_request (
   id uuid PRIMARY KEY,
@@ -28,6 +33,7 @@ CREATE TABLE software_request (
   state text NOT NULL CHECK (state IN ('requested', 'approved', 'denied', 'expired', 'withdrawn')),
   requested_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL,
+  approval_epoch integer NOT NULL,
   decided_by text CHECK (char_length(decided_by) <= 256),
   decided_at timestamptz,
   decision_reason text CHECK (char_length(decision_reason) <= 500),

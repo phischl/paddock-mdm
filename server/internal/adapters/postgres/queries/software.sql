@@ -82,8 +82,10 @@ FROM software_catalog_entry WHERE id = @id FOR UPDATE;
 SELECT DISTINCT intent FROM software_assignment WHERE catalog_entry_id = @catalog_entry_id ORDER BY intent;
 
 -- name: UpdateSoftwareCatalogEntry :execrows
+-- A change of the approval starts a new approval epoch: the requests and approvals of the old one no longer hold.
 UPDATE software_catalog_entry SET name = @name, description = @description, category = @category,
-  source_id = sqlc.narg(source_id), packages = @packages, approval = @approval, updated_at = now()
+  source_id = sqlc.narg(source_id), packages = @packages, approval = @approval,
+  approval_epoch = approval_epoch + CASE WHEN approval = @approval THEN 0 ELSE 1 END, updated_at = now()
 WHERE id = @id;
 
 -- name: SetSoftwareCatalogEntryIcon :execrows

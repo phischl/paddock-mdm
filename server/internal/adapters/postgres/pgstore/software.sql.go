@@ -1440,7 +1440,8 @@ func (q *Queries) UpdateSoftwareAssignment(ctx context.Context, arg UpdateSoftwa
 
 const updateSoftwareCatalogEntry = `-- name: UpdateSoftwareCatalogEntry :execrows
 UPDATE software_catalog_entry SET name = $1, description = $2, category = $3,
-  source_id = $4, packages = $5, approval = $6, updated_at = now()
+  source_id = $4, packages = $5, approval = $6,
+  approval_epoch = approval_epoch + CASE WHEN approval = $6 THEN 0 ELSE 1 END, updated_at = now()
 WHERE id = $7
 `
 
@@ -1454,6 +1455,7 @@ type UpdateSoftwareCatalogEntryParams struct {
 	ID          uuid.UUID
 }
 
+// A change of the approval starts a new approval epoch: the requests and approvals of the old one no longer hold.
 func (q *Queries) UpdateSoftwareCatalogEntry(ctx context.Context, arg UpdateSoftwareCatalogEntryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateSoftwareCatalogEntry,
 		arg.Name,
