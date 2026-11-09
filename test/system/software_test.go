@@ -30,7 +30,9 @@ type softwareGate struct {
 // TestSoftwareGates runs the device gates of plan M13a §9 on the VMs in parallel, each from a fresh base-installed
 // with its own signed local repository, source and catalog entry (every server object carries the run's suffix):
 // SW1 required install, SW2 reinstall after a local removal, SW3 forbid, SW4 hold, SW5 no removal while the server
-// is unreachable, SW6 dpkg lock, SW7 source key change, SW8 tamper. The gates build on each other in this order.
+// is unreachable, SW6 dpkg lock, SW7 source key change, SW8 tamper, and of plan M13c §9 SW10 maintenance window. The
+// gates build on each other in this order. SW9 (an uploaded package through the Paddock repository) waits for PDK-812
+// and PDK-813, SW11 (the request flow from the real app) for PDK-811.
 func TestSoftwareGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Gate(t, "software")
@@ -47,7 +49,7 @@ func TestSoftwareGates(t *testing.T) {
 		}{
 			{"SW1 required install", gateSW1}, {"SW2 local removal", gateSW2}, {"SW3 forbid", gateSW3},
 			{"SW4 hold", gateSW4}, {"SW5 server unreachable", gateSW5}, {"SW6 dpkg lock", gateSW6},
-			{"SW7 source key change", gateSW7}, {"SW8 tamper", gateSW8},
+			{"SW7 source key change", gateSW7}, {"SW8 tamper", gateSW8}, {"SW10 maintenance window", gateSW10},
 		} {
 			if !t.Run(gate.name, func(t *testing.T) { d.Bind(t); gate.fn(t, d, g) }) {
 				t.FailNow()
@@ -381,4 +383,55 @@ func gateSW8(t *testing.T, d *Device, g *softwareGate) {
 	for _, f := range []string{source, rogue} {
 		d.waitNewEvent(t, "device.tamper_protected_file_changed", seen, 5*time.Minute, func(p map[string]any) bool { return p["file"] == f })
 	}
+}
+
+// windowAt is a maintenance window of every day in UTC that opens at minute start of the day (wrapped into 0..1439).
+func windowAt(start, duration int) map[string]any {
+	return map[string]any{"days": []int{1, 2, 3, 4, 5, 6, 7}, "start_minute": ((start % 1440) + 1440) % 1440,
+		"duration_minutes": duration, "timezone": "UTC"}
+}
+
+// minuteOfDay is the UTC minute of the day of now.
+func minuteOfDay(now time.Time) int { u := now.UTC(); return u.Hour()*60 + u.Minute() }
+
+// gateSW10 (plan M13c decision 6, C2): outside the window of its group the device defers the removal of a forbidden
+// package and the install of a required one as pending/outside_window through several drift passes; a window that
+// opens lets the next pass remove the package; an urgent assignment, set with a reason and a step-up, installs outside
+// the window. The window is put before each assignment change, so every bundle with the change carries the window.
+// The VM's clock is synchronized; the closed window opens six hours from now, the open one began ten minutes ago.
+func gateSW10(t *testing.T, d *Device, g *softwareGate) {
+	window := "/api/v1/device-groups/" + d.Group + "/maintenance-window"
+	closed := func() map[string]any { return windowAt(minuteOfDay(time.Now())+360, 30) }
+	d.s.Call(t, http.MethodPut, window, closed(), http.StatusOK)
+	d.s.DeleteOnCleanup(t, window)
+
+	g.removed = d.eventIDs("device.software_removed")
+	d.reassign(g.assignment, "forbid", "")
+	softwareState(t, d, gateApp, "pending", "outside_window", 6*time.Minute, d.Checkin)
+	time.Sleep(2*driftInterval + 10*time.Second)
+	if v := d.installedVersion(gateApp); v != "1.1" {
+		t.Fatalf("forbidden %s removed outside the window (%q)", gateApp, v)
+	}
+	softwareState(t, d, gateApp, "pending", "outside_window", time.Minute, nil)
+
+	d.s.Call(t, http.MethodPut, window, windowAt(minuteOfDay(time.Now())-10, 120), http.StatusOK)
+	waitVersion(t, d, gateApp, "", 6*time.Minute, true)
+	d.waitNewEvent(t, "device.software_removed", g.removed, 5*time.Minute, intentIs("forbid"))
+	g.removed = d.eventIDs("device.software_removed")
+
+	d.s.Call(t, http.MethodPut, window, closed(), http.StatusOK)
+	g.installed = d.eventIDs("device.software_installed")
+	d.reassign(g.assignment, "required", "1.1")
+	softwareState(t, d, gateApp, "pending", "outside_window", 6*time.Minute, d.Checkin)
+	time.Sleep(2*driftInterval + 10*time.Second)
+	if v := d.installedVersion(gateApp); v != "" {
+		t.Fatalf("required %s installed outside the window at %s", gateApp, v)
+	}
+
+	d.s.StepUp(t)
+	urgent := assignmentBody("required", "1.1")
+	urgent["urgent"], urgent["reason"] = true, "system test SW10 "+d.run
+	d.s.Call(t, http.MethodPatch, "/api/v1/software-assignments/"+g.assignment, urgent, http.StatusOK)
+	waitVersion(t, d, gateApp, "1.1", 6*time.Minute, true)
+	d.waitNewEvent(t, "device.software_installed", g.installed, 5*time.Minute, intentIs("required"))
 }

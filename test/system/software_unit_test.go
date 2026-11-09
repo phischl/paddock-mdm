@@ -3,6 +3,7 @@ package system
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestSoftwareHelpersUnit pins the parsers of the software gate: a parser that silently found nothing would make
@@ -105,5 +106,18 @@ func TestSoftwareDpkgLockUnit(t *testing.T) {
 		if got := lockHolder(c.out); got != c.pid {
 			t.Errorf("%s: lockHolder = %q, want %q", name, got, c.pid)
 		}
+	}
+}
+
+// TestWindowAt: the SW10 windows wrap their start into the day, so a window that began ten minutes before midnight
+// starts at 23:50 and one six hours after 20:00 at 02:00.
+func TestWindowAt(t *testing.T) {
+	for start, want := range map[int]int{-10: 1430, 0: 0, 1439: 1439, 1200 + 360: 120, 1440 + 5: 5} {
+		if got := windowAt(start, 30)["start_minute"]; got != want {
+			t.Errorf("windowAt(%d) start_minute %v, want %d", start, got, want)
+		}
+	}
+	if got := minuteOfDay(time.Date(2026, 11, 9, 23, 59, 30, 0, time.FixedZone("CET", 3600))); got != 22*60+59 {
+		t.Errorf("minuteOfDay %d, want the UTC minute %d", got, 22*60+59)
 	}
 }

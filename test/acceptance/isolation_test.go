@@ -44,6 +44,7 @@ func TestOrganizationIsolation(t *testing.T) {
 	seedGlobexNotification(t, w)
 	seedGlobexSoftwareSource(t, w)
 	seedGlobexSoftwareCatalog(t, w)
+	seedGlobexSoftwareRequest(t, w)
 	seedGlobexFinding(t, w)
 	seedGlobexConfigStatus(t, w)
 	ctx := testContext(t, time.Minute)

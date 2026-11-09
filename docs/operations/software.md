@@ -7,9 +7,11 @@ and reports what it did per application (ADR 0042, plan M13a). This page covers 
 what each intent does on the device, the states and reasons the device reports, and troubleshooting.
 
 In the portal: *Package sources* (organization administrators), *Software catalog* with an entry's assignments and
-devices, and the *Managed software* tab of a device. The admin API: `/api/v1/software-sources`,
-`/api/v1/software-catalog`, `/api/v1/software-catalog/{id}/devices`, `/api/v1/software-assignments` and
-`/api/v1/devices/{id}/managed-software`.
+devices, *Software requests*, and the *Managed software* tab of a device. The admin API: `/api/v1/software-sources`,
+`/api/v1/software-catalog`, `/api/v1/software-catalog/{id}/devices`, `/api/v1/software-assignments`,
+`/api/v1/software-requests`, `/api/v1/device-groups/{id}/maintenance-window` and
+`/api/v1/devices/{id}/managed-software`. Changes to assignments roll out in waves (*Waves*), devices apply them inside
+their maintenance windows (*Maintenance windows*), and an entry can require an administrator's approval (*Approvals*).
 
 ## Adding a package source
 
@@ -153,6 +155,31 @@ The source files, keyrings and the forbid pin file are a **protected area**: an 
 `device.tamper_protected_file_changed` naming the file (RR-80). The Himmelblau source and keyring belong to the login
 configuration and are never touched by the catalog.
 
+## Waves
+
+With configuration rollouts switched on (*Settings* → *Rollouts*, [configuration rollouts](configuration-rollouts.md)),
+an **assignment change** is staged like a managed file: it reaches the devices wave by wave, a device outside the
+current wave keeps the assignments it had, and a `failed` software status of the staged entry on a device of the wave
+counts as the failed resource `software:<entry id>` toward the rollout's failure threshold. The rollout halts itself at
+the threshold; the revert of its change set brings the previous assignments back and ends it. **Catalog entries and
+package sources are never staged**: a new or changed entry reaches no device on its own, only its assignments do.
+
+Deleting a catalog entry follows from that:
+
+- An entry that still has assignments is not deleted (409 `in_use`, naming the first ten assignments by target, for
+  example `device group "Laptops"`). This holds for `DELETE /api/v1/software-catalog/{id}` and for a declarative
+  document that deletes the entry, even when the same document deletes its assignments. Remove the assignments first;
+  that removal rolls out in waves like every assignment change.
+- While that removal, or any other staged change of the entry's assignments, rolls out, the entry can neither be
+  deleted nor renamed (409 `rollout_conflict`). Delete it once the rollout has completed; the deletion then changes
+  nothing on any device. `software_catalog_entry.deleted` carries `assignment_count` (0 on success).
+- Renaming an assigned entry through the API keeps its assignments and stages nothing.
+- The revert of the open rollout is always possible: when its change set created an entry and its assignments, the
+  revert removes the assignments and then the entry.
+
+How waves advance when devices wait for their maintenance window is under *Maintenance windows*, *Staged rollouts and
+windows*.
+
 ## Maintenance windows
 
 A device group can have one maintenance window (`GET`, `PUT`, `DELETE /api/v1/device-groups/{id}/maintenance-window`,
@@ -210,6 +237,36 @@ hand or make the assignment `urgent`. Details: [configuration rollouts](configur
 in UTC and names the zone in the software resource's status message (`window_timezone_unknown: <zone> (evaluated in
 UTC)`); the agent's log has it once per bundle. Install the `tzdata` package on the device to fix it. An agent before
 0.1.0-alpha.10 does not know windows and applies at once.
+
+## Approvals
+
+A catalog entry can require an administrator's approval (`approval: required` on the entry, or in the declarative
+`software_catalog` section; absent means `none`). It matters for `available` assignments: the user of a device asks
+for the application, and an organization administrator decides.
+
+1. The user asks on the device. The device reports the request (`device.software_requested`, with the user name and
+   the entry). The server opens a request when an available assignment of the entry offers it to that device and user
+   (the organization, a device group of the device, or a user or user group the device's owner belongs to). It opens
+   none for a repeat while one is open, for a user who already holds an approval of it on the device, or within 24
+   hours of a denial. An opened request records `software_request.opened` (a notification code for destinations with
+   `all` or a custom list; not in the security preset) and shows in the attention list as `software_requests_open`.
+2. The administrator decides in the portal (*Software requests*) or with `POST
+   /api/v1/software-requests/{id}/approve` (an optional reason) or `…/deny` (a reason the user sees, 1 to 500
+   characters). Deciding needs `org_admin` and no step-up of its own: trusting the entry's source needed one.
+   Operators and auditors read the requests (`GET /api/v1/software-requests`, filters `state`, `catalog_entry_id`,
+   `device_id`, search by user name). A request that is no longer open, whose 30 days have run out, or whose entry
+   changed its approval since cannot be decided (409 `invalid_state`).
+3. An approval lets that user install the application on that device; it takes effect with the device's next bundle,
+   after the rollout's overlay; like any self-service install it does not wait for a maintenance window. A `forbid`
+   of the same package still wins. An approval is no configuration change: it stages nothing and has no change set.
+4. The worker's request round (every 10 minutes) expires an open request after 30 days (`validity_ended`), and open
+   and approved requests whose entry no longer requires approval (`approval_removed`) or that no available assignment
+   offers any longer (`assignment_removed`), each with `software_request.expired`.
+
+**Agents.** An approval-required package reaches no agent before the release with the request flow on the device
+(PDK-811); until then the users of such an entry see nothing of it, so nobody installs it without an approval. The
+user's justification text is not stored yet; it follows with the request flow on the device (see
+[privacy](../compliance/privacy.md)).
 
 ## States and reasons
 

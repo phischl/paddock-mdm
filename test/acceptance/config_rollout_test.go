@@ -160,7 +160,8 @@ type configRollout struct {
 	EndedAt          *string `json:"ended_at"`
 	EndedReason      *string `json:"ended_reason"`
 	Counts           struct {
-		Eligible, Applied, Failed, Pending int
+		Eligible, Applied, Failed, Pending, Waiting int
+		AwaitingRetry                               int `json:"awaiting_retry"`
 	} `json:"counts"`
 }
 
@@ -304,6 +305,8 @@ type rolloutDevice struct {
 	CarriesRollout    bool     `json:"carries_rollout"`
 	ReportOutcome     string   `json:"report_outcome"`
 	FailedResourceIDs []string `json:"failed_resource_ids"`
+	WaitingForWindow  bool     `json:"waiting_for_window"`
+	AwaitingRetry     bool     `json:"awaiting_retry"`
 }
 
 func rolloutDevices(t *testing.T, p *env.Portal, id string) map[string]rolloutDevice {
