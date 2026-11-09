@@ -409,8 +409,9 @@ func (d *Devices) SetGroups(ctx context.Context, id uuid.UUID, groupIDs []uuid.U
 	return out, err
 }
 
-// SetOwners replaces the owners of a device (audited: device.owners_changed). Owners carry no login or sudo rights and
-// are not part of the bundle, so nothing is recompiled (ADR 0037 decision 5).
+// SetOwners replaces the owners of a device (audited: device.owners_changed). Owners carry no login or sudo rights
+// (ADR 0037 decision 5), but software assignments to users and user groups apply through them and the audience of an
+// available package names them (plan M13b decision 8), so a change recompiles the device.
 func (d *Devices) SetOwners(ctx context.Context, id uuid.UUID, userIDs []uuid.UUID) (DeviceDetail, error) {
 	var out DeviceDetail
 	spec := SpecDeviceSetOwners
@@ -469,6 +470,9 @@ func (d *Devices) SetOwners(ctx context.Context, id uuid.UUID, userIDs []uuid.UU
 		slices.Sort(added)
 		slices.Sort(removed)
 		slices.Sort(owners)
+		if len(added) > 0 || len(removed) > 0 {
+			rec.StateChanged(statechange.ScopeDevice, id)
+		}
 		rec.SetParam("added", added)
 		rec.SetParam("removed", removed)
 		rec.SetParam("owners", owners)

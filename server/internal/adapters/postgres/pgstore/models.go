@@ -339,6 +339,7 @@ type Device struct {
 	CompiledArch                string
 	CompiledOsID                string
 	CompiledOsVersionID         string
+	CompiledAgentVersion        string
 }
 
 type DeviceAlert struct {

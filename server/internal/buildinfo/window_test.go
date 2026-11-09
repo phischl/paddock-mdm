@@ -57,6 +57,25 @@ func TestOutside(t *testing.T) {
 	}
 }
 
+// TestOlderRelease: release versions compare by SemVer precedence (alpha.10 after alpha.9), build metadata ignored;
+// development builds are never older.
+func TestOlderRelease(t *testing.T) {
+	for v, want := range map[string]bool{
+		"0.1.0-alpha.9":        true,
+		"0.1.0-alpha.9+build":  true,
+		"0.1.0-alpha.10":       false,
+		"0.1.0-alpha.10+build": false,
+		"0.1.0-alpha.11":       false,
+		"0.1.0":                false,
+		"0.0.0-dev":            false,
+		"":                     false,
+	} {
+		if got := OlderRelease(v, "0.1.0-alpha.10"); got != want {
+			t.Errorf("OlderRelease(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
 // TestReleaseSequence: the generated list is ordered, ends with the release under development and holds every
 // release section of CHANGELOG.md (a stale list fails here: run make gen).
 func TestReleaseSequence(t *testing.T) {

@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/compat"
 	"github.com/phischl/paddock-mdm/pkg/openpgpkey"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 )
@@ -506,40 +509,260 @@ func mismatchingFingerprint(fp string) string {
 	return fp[:len(fp)-1] + string(last)
 }
 
-// TestSoftwareSelfServiceRowsLeftOut (plan M13b §3.2, PDK-798): until the compiler renders them (PDK-799), a user or
-// user-group target, the available intent and a Flatpak source with its entry leave the bundle as it is: a forbid
-// targeted at one user never applies to every device of the organization, and none of these rows fails a bundle.
-func TestSoftwareSelfServiceRowsLeftOut(t *testing.T) {
-	w := newWorld(t)
-	key := loadSoftwareKey(t, "ed25519.asc")
-	user, group := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
-	w.exec("INSERT INTO app_user (id, organization_id, username, source) VALUES ($1, $2, 'alice@example.org', 'local')", user, w.org)
-	w.exec("INSERT INTO user_group (id, organization_id, slug, name, source) VALUES ($1, $2, 'devs', 'Devs', 'local')", group, w.org)
-	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
-	vim := w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"})
-	flathub := uuid.Must(uuid.NewV7())
+// userGroup inserts a user group with the given members.
+func (w *world) userGroup(slug string, members ...uuid.UUID) uuid.UUID {
+	w.t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO user_group (id, organization_id, slug, name, source) VALUES ($1, $2, $3, $3, 'local')", id, w.org, slug)
+	for _, m := range members {
+		w.exec("INSERT INTO user_group_member (organization_id, group_id, user_id) VALUES ($1, $2, $3)", w.org, id, m)
+	}
+	return id
+}
+
+// own makes users owners of dev.
+func (w *world) own(dev uuid.UUID, users ...uuid.UUID) {
+	w.t.Helper()
+	for _, u := range users {
+		w.exec("INSERT INTO device_owner (organization_id, device_id, user_id) VALUES ($1, $2, $3)", w.org, dev, u)
+	}
+}
+
+// assignTo inserts an assignment of entry to a user (column user_id) or a user group (column user_group_id).
+func (w *world) assignTo(entry uuid.UUID, column string, target uuid.UUID, intent string) {
+	w.t.Helper()
+	w.exec(`INSERT INTO software_assignment (id, organization_id, catalog_entry_id, `+column+`, intent) VALUES ($1, $2, $3, $4, $5)`,
+		uuid.Must(uuid.NewV7()), w.org, entry, target, intent)
+}
+
+// flathub inserts a Flatpak source with key k.
+func (w *world) flathub(k softwareKey) uuid.UUID {
+	w.t.Helper()
+	id := uuid.Must(uuid.NewV7())
 	w.exec(`INSERT INTO software_source (id, organization_id, kind, slug, name, uris, suites, components, signing_key, fingerprint)
 		VALUES ($1, $2, 'flatpak', 'flathub', 'Flathub', '{https://dl.flathub.org/repo/}', '{}', '{}', $3, $4)`,
-		flathub, w.org, key.armored, key.fingerprint)
+		id, w.org, k.armored, k.fingerprint)
+	return id
+}
+
+// pkgOf returns the package or Flatpak application name of dev's software section, nil when absent.
+func pkgOf(s *bundle.SoftwareSpec, name string) *bundle.SoftwarePackage {
+	if s == nil {
+		return nil
+	}
+	for i, p := range s.Packages {
+		if p.Package == name || p.FlatpakRef == name {
+			return &s.Packages[i]
+		}
+	}
+	return nil
+}
+
+// audienceString renders an audience for comparison: "all", the sorted user names joined by ",", or "-" for none.
+func audienceString(a *bundle.SoftwareAudience) string {
+	switch {
+	case a == nil:
+		return "-"
+	case a.All:
+		return "all"
+	}
+	return strings.Join(a.Users, ",")
+}
+
+// TestSoftwareTargets (plan M13b decision 8, PDK-799): an organization or device-group target applies to the device
+// with the audience everyone; a user target applies when the user owns the device, a user-group target when an owner
+// is a member, with the audience of those owners only; a device without owners gets no user-targeted package; two
+// assignments of one entry merge into the union or everyone; a required package through a user target applies to the
+// device; an available package that loses against another intent carries no audience.
+func TestSoftwareTargets(t *testing.T) {
+	type assignment struct {
+		target string // organization, g1, g2, alice, bob, carol, devs
+		intent string
+	}
+	cases := []struct {
+		name    string
+		assign  []assignment
+		owned   string // the owned device's intent and audience, "" when the package is absent
+		unowned string // the same for the device without owners
+	}{
+		{"organization available", []assignment{{"organization", "available"}}, "available all", "available all"},
+		{"device group available", []assignment{{"g1", "available"}}, "available all", "available all"},
+		{"other device group available", []assignment{{"g2", "available"}}, "", ""},
+		{"owner available", []assignment{{"alice", "available"}}, "available alice", ""},
+		{"non-owner available", []assignment{{"bob", "available"}}, "", ""},
+		{"user group available", []assignment{{"devs", "available"}}, "available alice", ""},
+		{"user and group union", []assignment{{"carol", "available"}, {"devs", "available"}}, "available alice,carol", ""},
+		{"organization wins the union", []assignment{{"alice", "available"}, {"organization", "available"}}, "available all", "available all"},
+		{"owner required", []assignment{{"alice", "required"}}, "required -", ""},
+		{"user group forbid", []assignment{{"devs", "forbid"}}, "forbid -", ""},
+		{"forbid beats available", []assignment{{"alice", "available"}, {"g1", "forbid"}}, "forbid -", "forbid -"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			alice, bob, carol := w.user("alice", false), w.user("bob", false), w.user("carol", false)
+			devs := w.userGroup("devs", alice, bob)
+			names := map[string]string{w.username(alice): "alice", w.username(carol): "carol", w.username(bob): "bob"}
+			e := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+			for _, a := range c.assign {
+				switch a.target {
+				case "organization":
+					w.assign(e, nil, a.intent, "latest", nil)
+				case "g1":
+					w.assign(e, w.g1, a.intent, "latest", nil)
+				case "g2":
+					w.assign(e, w.g2, a.intent, "latest", nil)
+				case "devs":
+					w.assignTo(e, "user_group_id", devs, a.intent)
+				default:
+					w.assignTo(e, "user_id", map[string]uuid.UUID{"alice": alice, "bob": bob, "carol": carol}[a.target], a.intent)
+				}
+			}
+			owned, unowned := w.v2Device("{1,2}", w.g1), w.v2Device("{1,2}", w.g1)
+			w.ubuntu(owned, "amd64")
+			w.ubuntu(unowned, "amd64")
+			w.own(owned, alice, carol)
+			w.mustCompile(statechange.ScopeOrg, w.org)
+			for _, d := range []struct {
+				id   uuid.UUID
+				want string
+			}{{owned, c.owned}, {unowned, c.unowned}} {
+				got := ""
+				if p := pkgOf(w.fetch(d.id).Software, "nano"); p != nil {
+					var users []string
+					if p.Audience != nil {
+						for _, u := range p.Audience.Users {
+							users = append(users, names[u])
+						}
+					}
+					aud := audienceString(p.Audience)
+					if len(users) > 0 {
+						aud = strings.Join(users, ",")
+					}
+					got = p.Intent + " " + aud
+				}
+				if got != d.want {
+					t.Errorf("device %s: %q, want %q", d.id, got, d.want)
+				}
+			}
+		})
+	}
+}
+
+// TestSoftwareAudienceChangePublishes (plan M13b decision 7): a new owner changes the audience of an available
+// package, so the recompiled bundle is a new version; a recompile without a change is not.
+func TestSoftwareAudienceChangePublishes(t *testing.T) {
+	w := newWorld(t)
+	alice, bob := w.user("alice", false), w.user("bob", false)
+	devs := w.userGroup("devs", alice, bob)
+	w.assignTo(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), "user_group_id", devs, "available")
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	before := w.version(d)
+	w.mustCompile(statechange.ScopeDevice, d)
+	if w.version(d) != before {
+		t.Fatal("a recompile without a change published a new bundle")
+	}
+	w.own(d, bob)
+	w.mustCompile(statechange.ScopeDevice, d)
+	if w.version(d) == before {
+		t.Fatal("a changed audience did not publish a new bundle")
+	}
+	if p := pkgOf(w.fetch(d).Software, "nano"); p == nil || audienceString(p.Audience) != w.username(alice)+","+w.username(bob) {
+		t.Fatalf("package %+v", p)
+	}
+}
+
+// TestSoftwareAudienceTruncated (plan M13b R2, decision Q13): an audience over bundle.MaxSoftwareAudience users keeps
+// the first ones by user name, and the bundle is still published.
+func TestSoftwareAudienceTruncated(t *testing.T) {
+	w := newWorld(t)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	users := make([]uuid.UUID, bundle.MaxSoftwareAudience+1)
+	for i := range users {
+		users[i] = w.user(fmt.Sprintf("u%03d", i), false)
+	}
+	w.own(d, users...)
+	w.assignTo(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), "user_group_id", w.userGroup("all", users...), "available")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	p := pkgOf(w.fetch(d).Software, "nano")
+	if p == nil || p.Audience == nil || len(p.Audience.Users) != bundle.MaxSoftwareAudience ||
+		p.Audience.Users[0] != w.username(users[0]) || slices.Contains(p.Audience.Users, w.username(users[bundle.MaxSoftwareAudience])) {
+		t.Fatalf("package %+v", p)
+	}
+}
+
+// TestSoftwareFlatpak (plan M13b decisions 8 and 9, decision Q12): a Flatpak application renders flatpak_ref, scope
+// and its remote; the section then requires the flatpak package once from the distribution's repositories with the
+// nil entry ID, unless an entry names the package itself.
+func TestSoftwareFlatpak(t *testing.T) {
+	w := newWorld(t)
+	key := loadSoftwareKey(t, "ed25519.asc")
+	flathub := w.flathub(key)
 	gimp := uuid.Must(uuid.NewV7())
 	w.exec(`INSERT INTO software_catalog_entry (id, organization_id, name, source_id, packages) VALUES ($1, $2, 'GIMP', $3,
-		'[{"distribution":"ubuntu","release":"*","architecture":"*","flatpak_ref":"org.gimp.GIMP","scope":"system"}]')`,
+		'[{"distribution":"ubuntu","release":"*","architecture":"*","flatpak_ref":"org.gimp.GIMP","scope":"user"}]')`,
 		gimp, w.org, flathub)
-	w.exec(`INSERT INTO software_assignment (id, organization_id, catalog_entry_id, user_id, intent) VALUES ($1, $2, $3, $4, 'forbid')`,
-		uuid.Must(uuid.NewV7()), w.org, nano, user)
-	w.exec(`INSERT INTO software_assignment (id, organization_id, catalog_entry_id, user_group_id, intent) VALUES ($1, $2, $3, $4, 'required')`,
-		uuid.Must(uuid.NewV7()), w.org, vim, group)
-	w.assign(vim, nil, "available", "latest", nil)
-	w.assign(gimp, nil, "required", "latest", nil)
-	w.assign(nano, nil, "required", "latest", nil)
+	inkscape := uuid.Must(uuid.NewV7())
+	w.exec(`INSERT INTO software_catalog_entry (id, organization_id, name, source_id, packages) VALUES ($1, $2, 'Inkscape', $3,
+		'[{"distribution":"ubuntu","release":"*","architecture":"*","flatpak_ref":"org.inkscape.Inkscape"}]')`,
+		inkscape, w.org, flathub)
+	w.assign(gimp, nil, "available", "latest", nil)
+	w.assign(inkscape, w.g1, "required", "latest", nil)
 	d := w.v2Device("{1,2}", w.g1)
 	w.ubuntu(d, "amd64")
 	w.mustCompile(statechange.ScopeOrg, w.org)
 
 	s := w.fetch(d).Software
-	if s == nil || len(s.Packages) != 1 || s.Packages[0].Package != "nano" || s.Packages[0].Intent != bundle.SoftwareRequired ||
-		len(s.Sources) != 0 {
-		t.Fatalf("software section %+v, want only the organization's required nano", s)
+	if s == nil || len(s.Sources) != 1 || s.Sources[0].Slug != "flathub" || s.Sources[0].Kind != bundle.SoftwareSourceFlatpak ||
+		len(s.Sources[0].URIs) != 1 || len(s.Sources[0].Suites) != 0 || s.Sources[0].Fingerprint != key.fingerprint {
+		t.Fatalf("sources %+v", s)
+	}
+	if p := pkgOf(s, "org.gimp.GIMP"); p == nil || p.Package != "" || p.Scope != "user" || p.Source != "flathub" ||
+		p.Intent != bundle.SoftwareAvailable || audienceString(p.Audience) != "all" || p.CatalogEntryID != gimp.String() {
+		t.Fatalf("gimp %+v", p)
+	}
+	if p := pkgOf(s, "org.inkscape.Inkscape"); p == nil || p.Scope != "system" || p.Source != "flathub" || p.Intent != bundle.SoftwareRequired {
+		t.Fatalf("inkscape %+v", p)
+	}
+	runtimes := 0
+	for _, p := range s.Packages {
+		if p.Package == "flatpak" {
+			runtimes++
+			if p.Intent != bundle.SoftwareRequired || p.Source != "" || p.CatalogEntryID != bundle.SoftwareRuntimeEntryID || p.Version != nil {
+				t.Fatalf("runtime %+v", p)
+			}
+		}
+	}
+	if runtimes != 1 || len(s.Packages) != 3 {
+		t.Fatalf("%d flatpak runtime packages in %+v, want 1 of 3 packages", runtimes, s.Packages)
+	}
+	if hb := holdsOf(w.fetch(d)); len(hb) != 0 {
+		t.Fatalf("holds %v", hb)
+	}
+
+	own := w.entry("Flatpak", nil, [4]string{"ubuntu", "*", "*", "flatpak"})
+	w.assign(own, nil, "required", "latest", nil)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := pkgOf(w.fetch(d).Software, "flatpak"); p == nil || p.CatalogEntryID != own.String() || len(w.fetch(d).Software.Packages) != 3 {
+		t.Fatalf("an entry naming flatpak: %+v", p)
+	}
+}
+
+// TestSoftwareNoFlatpakRuntimeWithoutFlatpak: a section without a Flatpak source does not get the flatpak package,
+// even when the organization has a Flatpak source that no package of the device needs.
+func TestSoftwareNoFlatpakRuntimeWithoutFlatpak(t *testing.T) {
+	w := newWorld(t)
+	w.flathub(loadSoftwareKey(t, "ed25519.asc"))
+	w.assign(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if s := w.fetch(d).Software; s == nil || len(s.Packages) != 1 || len(s.Sources) != 0 {
+		t.Fatalf("software section %+v", s)
 	}
 }
 
@@ -593,5 +816,301 @@ func TestSoftwareStrayFlatpakRefFailsClosed(t *testing.T) {
 				t.Fatalf("%d render failures naming the entry, want 1", n)
 			}
 		})
+	}
+}
+
+// flatpakEntry inserts a catalog entry of the Flatpak source src with application ref in the system scope.
+func (w *world) flatpakEntry(name string, src uuid.UUID, ref string) uuid.UUID {
+	w.t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	w.exec(`INSERT INTO software_catalog_entry (id, organization_id, name, source_id, packages) VALUES ($1, $2, $3, $4,
+		jsonb_build_array(jsonb_build_object('distribution', 'ubuntu', 'release', '*', 'architecture', '*', 'flatpak_ref', $5::text)))`,
+		id, w.org, name, src, ref)
+	return id
+}
+
+// agentAt makes dev report agent version v.
+func (w *world) agentAt(dev uuid.UUID, v string) {
+	w.t.Helper()
+	w.exec("UPDATE device_status SET agent_version = $2 WHERE device_id = $1", dev, v)
+}
+
+// alpha9Software is the software section as the alpha.9 agent decodes it (pkg/bundle at v0.1.0-alpha.9), frozen
+// here: a field outside it is one the alpha.9 agent does not know.
+type alpha9Software struct {
+	Sources []struct {
+		Slug          string   `json:"slug"`
+		URIs          []string `json:"uris"`
+		Suites        []string `json:"suites"`
+		Components    []string `json:"components"`
+		Architectures []string `json:"architectures"`
+		Keyring       string   `json:"keyring"`
+		Fingerprint   string   `json:"fingerprint"`
+	} `json:"sources"`
+	Packages []struct {
+		Package        string  `json:"package"`
+		Intent         string  `json:"intent"`
+		Version        *string `json:"version"`
+		Source         string  `json:"source"`
+		CatalogEntryID string  `json:"catalog_entry_id"`
+		SupersededHold bool    `json:"superseded_hold,omitempty"`
+	} `json:"packages"`
+}
+
+// alpha9Accepts reports why the alpha.9 agent would refuse a software section, nil when it accepts it. The section
+// must carry only the fields of alpha9Software, and those must pass a9ValidateSoftware, the alpha.9
+// bundle.ValidateSoftware frozen in alpha9_software_test.go.
+func alpha9Accepts(raw []byte) error {
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	var old alpha9Software
+	if err := dec.Decode(&old); err != nil {
+		return fmt.Errorf("decode as alpha.9: %w", err)
+	}
+	return a9ValidateSoftware(old)
+}
+
+// alpha9FixtureSoftware is the software section of the alpha.9 compat fixture's schema-2 bundle (pkg/compat), what
+// the alpha.9 server put on the wire.
+func alpha9FixtureSoftware(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile("../../../pkg/compat/testdata/0.1.0-alpha.9/" + compat.BundleFile(bundle.SchemaVersion2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env struct {
+		Payload []byte `json:"payload"`
+	}
+	var b struct {
+		Software json.RawMessage `json:"software"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(env.Payload, &b); err != nil || len(b.Software) == 0 {
+		t.Fatalf("fixture software section: %v", err)
+	}
+	return b.Software
+}
+
+// TestSoftwareOlderAgentGated (architect decision A10-6, plan M13b C5): an agent release before the first one that
+// reads available packages and Flatpak gets neither, nor a Flatpak remote or the flatpak runtime, and keeps its
+// required, forbid and uninstall APT packages, in a section the frozen alpha.9 bundle.ValidateSoftware accepts (checked
+// against the alpha.9 compat fixture); the newer agent gets everything, which alpha.9 would refuse.
+func TestSoftwareOlderAgentGated(t *testing.T) {
+	fixture := alpha9FixtureSoftware(t)
+	if err := alpha9Accepts(fixture); err != nil {
+		t.Fatalf("the alpha.9 check refuses the alpha.9 fixture: %v", err)
+	}
+
+	w := newWorld(t)
+	key := loadSoftwareKey(t, "ed25519.asc")
+	vendor := w.source("vendor", key, key.fingerprint)
+	flathub := w.flathub(key)
+	w.assign(w.entry("Nano", vendor, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	w.assign(w.entry("Telnet", nil, [4]string{"ubuntu", "*", "*", "telnet"}), nil, "forbid", "latest", nil)
+	w.assign(w.entry("Ftp", nil, [4]string{"ubuntu", "*", "*", "ftp"}), nil, "uninstall", "latest", nil)
+	w.assign(w.entry("Htop", vendor, [4]string{"ubuntu", "*", "*", "htop"}), nil, "available", "latest", nil)
+	w.assign(w.flatpakEntry("GIMP", flathub, "org.gimp.GIMP"), nil, "required", "latest", nil)
+	w.assign(w.flatpakEntry("Inkscape", flathub, "org.inkscape.Inkscape"), nil, "available", "latest", nil)
+	w.assign(w.flatpakEntry("Steam", flathub, "com.valvesoftware.Steam"), nil, "forbid", "latest", nil)
+	devices := map[string]uuid.UUID{}
+	for _, v := range []string{"0.1.0-alpha.8", "0.1.0-alpha.9", "0.1.0-alpha.9+build.1", "0.1.0-alpha.10", "0.1.0-alpha.11"} {
+		d := w.v2Device("{1,2}", w.g1)
+		w.ubuntu(d, "amd64")
+		w.agentAt(d, v)
+		devices[v] = d
+	}
+	w.mustCompile(statechange.ScopeOrg, w.org)
+
+	names := func(s *bundle.SoftwareSpec) (string, string) {
+		var pkgs, srcs []string
+		for _, p := range s.Packages {
+			pkgs = append(pkgs, p.Package+p.FlatpakRef+"="+p.Intent)
+		}
+		for _, src := range s.Sources {
+			srcs = append(srcs, src.Slug)
+		}
+		return strings.Join(pkgs, " "), strings.Join(srcs, " ")
+	}
+	const (
+		oldPackages = "ftp=uninstall nano=required telnet=forbid"
+		newPackages = "flatpak=required com.valvesoftware.Steam=forbid org.gimp.GIMP=required org.inkscape.Inkscape=available " +
+			"ftp=uninstall htop=available nano=required telnet=forbid"
+	)
+	for v, d := range devices {
+		s := w.fetch(d).Software
+		if s == nil {
+			t.Fatalf("%s: no software section", v)
+		}
+		raw, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pkgs, srcs := names(s)
+		if v == "0.1.0-alpha.10" || v == "0.1.0-alpha.11" {
+			if pkgs != newPackages || srcs != "flathub vendor" {
+				t.Errorf("%s: packages %q sources %q, want everything", v, pkgs, srcs)
+			}
+			if alpha9Accepts(raw) == nil {
+				t.Errorf("%s: the alpha.9 check accepts the full section; it no longer proves the gate", v)
+			}
+			continue
+		}
+		if pkgs != oldPackages || srcs != "vendor" {
+			t.Errorf("%s: packages %q sources %q, want %q from vendor", v, pkgs, srcs, oldPackages)
+		}
+		if err := alpha9Accepts(raw); err != nil {
+			t.Errorf("%s: the alpha.9 agent refuses the section: %v", v, err)
+		}
+	}
+}
+
+// TestSoftwareReconcileFollowsAgentGate (A10-6, review 2 of PDK-799): the reconcile loop recompiles a device whose
+// agent version changed since its latest compile, so an upgrade past the gate gains the available and Flatpak content
+// and a rollback below it drops them again, in a section the frozen alpha.9 rules accept. An unchanged version
+// recompiles nothing.
+func TestSoftwareReconcileFollowsAgentGate(t *testing.T) {
+	w := newWorld(t)
+	key := loadSoftwareKey(t, "ed25519.asc")
+	vendor := w.source("vendor", key, key.fingerprint)
+	flathub := w.flathub(key)
+	w.assign(w.entry("Nano", vendor, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	w.assign(w.entry("Htop", vendor, [4]string{"ubuntu", "*", "*", "htop"}), nil, "available", "latest", nil)
+	w.assign(w.flatpakEntry("GIMP", flathub, "org.gimp.GIMP"), nil, "required", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.agentAt(d, "0.1.0-alpha.9")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+
+	reconcile := func() {
+		t.Helper()
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(when string, full bool) {
+		t.Helper()
+		s := w.fetch(d).Software
+		if s == nil {
+			t.Fatalf("%s: no software section", when)
+		}
+		raw, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gained := pkgOf(s, "htop") != nil && pkgOf(s, "org.gimp.GIMP") != nil && pkgOf(s, "flatpak") != nil
+		if full != gained || pkgOf(s, "nano") == nil {
+			t.Fatalf("%s: packages %+v, want self-service content %v", when, s.Packages, full)
+		}
+		if accepted := alpha9Accepts(raw) == nil; accepted == full {
+			t.Fatalf("%s: the alpha.9 agent accepts the section: %v, want %v", when, accepted, !full)
+		}
+	}
+	check("compiled at alpha.9", false)
+	version := w.version(d)
+	reconcile()
+	if w.version(d) != version {
+		t.Fatal("a reconcile without an agent change published a bundle")
+	}
+
+	w.agentAt(d, "0.1.0-alpha.10")
+	reconcile()
+	check("upgraded to alpha.10", true)
+	if w.version(d) != version+1 {
+		t.Fatalf("upgrade: version %d, want %d", w.version(d), version+1)
+	}
+	reconcile()
+	if w.version(d) != version+1 {
+		t.Fatal("the upgrade is recompiled again")
+	}
+
+	w.agentAt(d, "0.1.0-alpha.9")
+	reconcile()
+	check("rolled back to alpha.9", false)
+	if w.version(d) != version+2 {
+		t.Fatalf("rollback: version %d, want %d", w.version(d), version+2)
+	}
+}
+
+// TestSoftwareFlatpakRemovalBringsNoRemote (architect decision A10-7): a Flatpak forbid or uninstall acts only where
+// Flatpak is present: it names no source, and the section has neither the remote nor the flatpak runtime. A Flatpak
+// source that fails the source rules does not lift the forbid.
+func TestSoftwareFlatpakRemovalBringsNoRemote(t *testing.T) {
+	w := newWorld(t)
+	key := loadSoftwareKey(t, "ed25519.asc")
+	flathub := w.flathub(key)
+	steam := w.flatpakEntry("Steam", flathub, "com.valvesoftware.Steam")
+	w.assign(steam, nil, "forbid", "latest", nil)
+	w.assign(w.flatpakEntry("GIMP", flathub, "org.gimp.GIMP"), w.g1, "uninstall", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	check := func(when string) {
+		t.Helper()
+		s := w.fetch(d).Software
+		if s == nil || len(s.Sources) != 0 || len(s.Packages) != 2 || pkgOf(s, "flatpak") != nil {
+			t.Fatalf("%s: software section %+v", when, s)
+		}
+		for ref, intent := range map[string]string{"com.valvesoftware.Steam": bundle.SoftwareForbid, "org.gimp.GIMP": bundle.SoftwareUninstall} {
+			if p := pkgOf(s, ref); p == nil || p.Intent != intent || p.Source != "" {
+				t.Fatalf("%s: %s %+v", when, ref, p)
+			}
+		}
+	}
+	check("valid source")
+
+	before := w.version(d)
+	w.exec("UPDATE software_source SET fingerprint = $2 WHERE id = $1", flathub, mismatchingFingerprint(key.fingerprint))
+	w.assign(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if w.version(d) == before {
+		t.Fatal("a failed Flatpak source blocked the bundle of a device with a Flatpak forbid")
+	}
+	if p := pkgOf(w.fetch(d).Software, "nano"); p == nil {
+		t.Fatal("the recompiled bundle lacks nano")
+	}
+	if p := pkgOf(w.fetch(d).Software, "com.valvesoftware.Steam"); p == nil || p.Intent != bundle.SoftwareForbid {
+		t.Fatalf("the failed source lifted the forbid: %+v", p)
+	}
+}
+
+// namedUser inserts a user with user name username.
+func (w *world) namedUser(username string) uuid.UUID {
+	w.t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO app_user (id, organization_id, authentik_pk, username, source) VALUES ($1, $2, $3, $4, 'local')",
+		id, w.org, "pk-"+id.String(), username)
+	return id
+}
+
+// TestSoftwareAudienceUserNames (PDK-799 review 1): an owner with a 256-character UPN, the longest app_user allows,
+// is in the audience; an owner whose stored name an audience cannot carry is left out instead of failing the bundle,
+// and an available package whose audience is left with nobody is not offered. The device's bundle is published.
+func TestSoftwareAudienceUserNames(t *testing.T) {
+	w := newWorld(t)
+	long := strings.Repeat("a", 256-len("@c.test")) + "@c.test"
+	alice, spaced, bob := w.namedUser(long), w.namedUser("bad user@c.test"), w.namedUser("bob@c.test")
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.assignTo(nano, "user_group_id", w.userGroup("devs", alice, spaced), "available")
+	w.assignTo(w.entry("Htop", nil, [4]string{"ubuntu", "*", "*", "htop"}), "user_id", spaced, "available")
+	w.assignTo(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), "user_id", spaced, "required")
+	w.assign(w.entry("Tree", nil, [4]string{"ubuntu", "*", "*", "tree"}), nil, "required", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice, spaced, bob)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if w.version(d) == 0 {
+		t.Fatal("no bundle was published")
+	}
+	s := w.fetch(d).Software
+	if p := pkgOf(s, "nano"); p == nil || audienceString(p.Audience) != long {
+		t.Fatalf("nano %+v", p)
+	}
+	if p := pkgOf(s, "htop"); p != nil {
+		t.Fatalf("htop is offered to nobody but rendered: %+v", p)
+	}
+	if p := pkgOf(s, "vim"); p == nil || p.Intent != bundle.SoftwareRequired {
+		t.Fatalf("a required package of the owner with the uncarried name: %+v", p)
 	}
 }

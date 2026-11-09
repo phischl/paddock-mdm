@@ -8,6 +8,23 @@ import (
 	"github.com/google/uuid"
 )
 
+// TestResolveRef (plan M13b decision 8): the winning reference keeps a Flatpak application's ID and scope.
+func TestResolveRef(t *testing.T) {
+	pkgs := []PackageRef{
+		{Distribution: "ubuntu", Release: "*", Architecture: "*", FlatpakRef: "org.gimp.GIMP", Scope: ScopeUser},
+		{Distribution: "ubuntu", Release: "24.04", Architecture: "*", FlatpakRef: "org.gimp.GIMP2", Scope: ScopeSystem},
+	}
+	if ref, ok := ResolveRef(pkgs, "ubuntu", "26.04", "amd64"); !ok || ref.FlatpakRef != "org.gimp.GIMP" || ref.Scope != ScopeUser {
+		t.Fatalf("26.04: %+v %v", ref, ok)
+	}
+	if ref, ok := ResolveRef(pkgs, "ubuntu", "24.04", "amd64"); !ok || ref.FlatpakRef != "org.gimp.GIMP2" || ref.Scope != ScopeSystem {
+		t.Fatalf("24.04: %+v %v", ref, ok)
+	}
+	if _, ok := ResolveRef(pkgs, "debian", "12", "amd64"); ok {
+		t.Fatal("another distribution resolved")
+	}
+}
+
 func TestResolve(t *testing.T) {
 	pkgs := []PackageRef{
 		{Distribution: "ubuntu", Release: "24.04", Architecture: "amd64", Package: "a"}, {Distribution: "ubuntu", Release: "24.04", Architecture: "*", Package: "b"},

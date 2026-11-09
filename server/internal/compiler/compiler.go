@@ -249,7 +249,8 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			}
 			// A blocked device is recorded too: its compile was attempted with these values, and the failure is
 			// recorded once, not on every reconcile round.
-			seen = append(seen, pgstore.SetDeviceCompiledPlatformParams{ID: row.ID, Arch: row.Arch, OsID: row.OsID, OsVersionID: row.OsVersionID})
+			seen = append(seen, pgstore.SetDeviceCompiledPlatformParams{ID: row.ID, Arch: row.Arch, OsID: row.OsID, OsVersionID: row.OsVersionID,
+				AgentVersion: row.AgentVersion})
 			if changed {
 				todo = append(todo, r)
 			}
@@ -272,8 +273,8 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 	return errors.Join(publishErr, c.recordPlatform(ctx, seen))
 }
 
-// recordPlatform stores the architecture and os-release the compile of each device read, after its bundle is
-// published, so that a failed publish is retried by the reconcile loop (PDK-695). They are the values of the
+// recordPlatform stores the architecture, os-release and agent version the compile of each device read, after its
+// bundle is published, so that a failed publish is retried by the reconcile loop (PDK-695, PDK-799). They are the values of the
 // compile's snapshot, not the current ones: a change after the snapshot stays visible to the next reconcile.
 func (c *Compiler) recordPlatform(ctx context.Context, seen []pgstore.SetDeviceCompiledPlatformParams) error {
 	if len(seen) == 0 {
@@ -439,7 +440,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 			// Conflicts are dropped as UpdatesSection drops those of the holds (plan M13a decision 10): the smallest
 			// version wins either way. The software holds stay outside the rollout overlay until M13c (plan M11 R2.10).
 			var err error
-			if softwareSection, softwareHolds, _, err = keys.Software.section(groups, t.osID, t.versionID, t.arch); err != nil {
+			if softwareSection, softwareHolds, _, err = keys.Software.section(ctx, t.id, groups, t.osID, t.versionID, t.arch, t.agent); err != nil {
 				return rendered{}, false, &renderFailure{device: t.id, reason: err.Error() +
 					"; the device keeps its previous bundle until the catalog is fixed"}, nil
 			}

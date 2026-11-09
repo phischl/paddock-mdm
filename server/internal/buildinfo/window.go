@@ -50,9 +50,16 @@ func windowOf(seq []string, target string) []string {
 // outside: they are development builds, and degrading them would take bundles from every development stack. A
 // version newer than the window (an agent updated before the server, RR-36) is inside.
 func Outside(window []string, agentVersion string) bool {
-	if len(window) == 0 || !releasePattern.MatchString(agentVersion) {
+	return len(window) > 0 && OlderRelease(agentVersion, window[0])
+}
+
+// OlderRelease reports whether agentVersion is a release version older than release, build metadata ignored. As in
+// Outside, a version that is no release version (a development build) is never older: it is built from a current
+// tree.
+func OlderRelease(agentVersion, release string) bool {
+	if !releasePattern.MatchString(agentVersion) {
 		return false
 	}
 	v, _, _ := strings.Cut(agentVersion, "+")
-	return semver.Compare(v, window[0]) < 0
+	return semver.Compare(v, release) < 0
 }

@@ -443,3 +443,22 @@ update rule `latest` and no version. A source of kind `flatpak` is checked in th
 components or architectures), and the status upsert keys on the new primary key. Until PDK-799 renders them, the
 compiler leaves user and user-group targets, the `available` intent and Flatpak sources and entries out of every
 bundle, so none of them applies organization-wide or fails a bundle in between.
+
+## Amendment 2026-11-09 (architect decisions A10-6, A10-7 and 18, PDK-799 review 1)
+
+- **C5, A10-6:** C5 is met through compiler gating; there is no schema v3. An agent release older than the first
+  alpha.10 agent, the first that contains PDK-800 (`0.1.0-alpha.10`, the compiler's `selfServiceAgent`), gets no
+  `available` packages, no Flatpak sources or applications and no `flatpak` runtime package. Its required, forbid,
+  uninstall and hold APT packages stay complete. A compiler test checks that section against the alpha.9
+  `ValidateSoftware` as the alpha.9 compat fixture (`pkg/compat`) decodes it. Development builds that are no release
+  version get everything, as in the support window.
+- **Decisions 7 and 9, A10-7:** only `required` and `available` Flatpak applications name their source and bring the
+  remote and the `flatpak` runtime package. `forbid`, `uninstall` and `hold` of an application name no source and act
+  only where Flatpak is present; they never install it. `ValidateSoftware` accordingly requires a Flatpak source only
+  for a required or available application, and a Flatpak source that fails the source rules no longer blocks a
+  device with a Flatpak forbid.
+- **Audience user names:** an audience carries user names of up to 256 characters, the limit of
+  `app_user.username`. The compiler leaves out an owner whose stored name an audience cannot carry
+  (`audience_user_dropped` warning) instead of failing the device's bundle.
+- **Decision 18:** PDK-799 and PDK-800 are coupled. The agent built from a tree with PDK-799 but without PDK-800
+  accepts Flatpak and `available` entries it cannot execute, so no agent is released from such a tree.

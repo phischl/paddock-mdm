@@ -129,7 +129,7 @@ func (q *Queries) DeviceContact(ctx context.Context, id uuid.UUID) (string, erro
 
 const enforceDevice = `-- name: EnforceDevice :one
 UPDATE device SET config_mode = 'enforce', config_mode_changed_at = now()
-WHERE id = $1 AND config_mode = 'report_only' RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id
+WHERE id = $1 AND config_mode = 'report_only' RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version
 `
 
 // Ends report-only mode (plan M11 decision 42): the device's next bundle is enforced.
@@ -163,6 +163,7 @@ func (q *Queries) EnforceDevice(ctx context.Context, id uuid.UUID) (Device, erro
 		&i.CompiledArch,
 		&i.CompiledOsID,
 		&i.CompiledOsVersionID,
+		&i.CompiledAgentVersion,
 	)
 	return i, err
 }
@@ -181,7 +182,7 @@ func (q *Queries) ExpireAgentUpdateRequests(ctx context.Context, before time.Tim
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id FROM device WHERE id = $1
+SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version FROM device WHERE id = $1
 `
 
 func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -214,6 +215,7 @@ func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
 		&i.CompiledArch,
 		&i.CompiledOsID,
 		&i.CompiledOsVersionID,
+		&i.CompiledAgentVersion,
 	)
 	return i, err
 }
@@ -296,7 +298,7 @@ INSERT INTO device (id, organization_id, hostname, state, hardware_uuid, machine
                     enrollment_method, config_mode)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
         $8, $9, $10)
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version
 `
 
 type InsertDeviceParams struct {
@@ -353,6 +355,7 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 		&i.CompiledArch,
 		&i.CompiledOsID,
 		&i.CompiledOsVersionID,
+		&i.CompiledAgentVersion,
 	)
 	return i, err
 }
@@ -594,7 +597,7 @@ func (q *Queries) ListDeviceIdentityKeys(ctx context.Context, deviceID uuid.UUID
 
 const listDevices = `-- name: ListDevices :many
 
-SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device.agent_update_requested_version, device.agent_update_requested_at, device.uninstall_requested_at, device.uninstall_mode, device.uninstall_command_id, device.uninstalled_at, device.retired_reason, device.name, device.enrollment_method, device.config_mode, device.config_mode_changed_at, device.compiled_arch, device.compiled_os_id, device.compiled_os_version_id, device_status.last_contact_at, device_status.applied_bundle_version,
+SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device.agent_update_requested_version, device.agent_update_requested_at, device.uninstall_requested_at, device.uninstall_mode, device.uninstall_command_id, device.uninstalled_at, device.retired_reason, device.name, device.enrollment_method, device.config_mode, device.config_mode_changed_at, device.compiled_arch, device.compiled_os_id, device.compiled_os_version_id, device.compiled_agent_version, device_status.last_contact_at, device_status.applied_bundle_version,
        device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
        paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact,
        -- The owners as UserRef objects for the list column (plan M8d decision 3).
@@ -732,6 +735,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 			&i.Device.CompiledArch,
 			&i.Device.CompiledOsID,
 			&i.Device.CompiledOsVersionID,
+			&i.Device.CompiledAgentVersion,
 			&i.LastContactAt,
 			&i.AppliedBundleVersion,
 			&i.AgentVersion,
@@ -758,7 +762,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 }
 
 const lockDevice = `-- name: LockDevice :one
-SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id FROM device WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version FROM device WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -791,6 +795,7 @@ func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) 
 		&i.CompiledArch,
 		&i.CompiledOsID,
 		&i.CompiledOsVersionID,
+		&i.CompiledAgentVersion,
 	)
 	return i, err
 }
@@ -821,7 +826,7 @@ func (q *Queries) SetAgentUpdateRequest(ctx context.Context, arg SetAgentUpdateR
 }
 
 const setDeviceName = `-- name: SetDeviceName :one
-UPDATE device SET name = $1 WHERE id = $2 RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id
+UPDATE device SET name = $1 WHERE id = $2 RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version
 `
 
 type SetDeviceNameParams struct {
@@ -860,6 +865,7 @@ func (q *Queries) SetDeviceName(ctx context.Context, arg SetDeviceNameParams) (D
 		&i.CompiledArch,
 		&i.CompiledOsID,
 		&i.CompiledOsVersionID,
+		&i.CompiledAgentVersion,
 	)
 	return i, err
 }
@@ -867,7 +873,7 @@ func (q *Queries) SetDeviceName(ctx context.Context, arg SetDeviceNameParams) (D
 const setDeviceState = `-- name: SetDeviceState :one
 UPDATE device SET state = $1, state_changed_at = now()
 WHERE id = $2 AND state = $3
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version
 `
 
 type SetDeviceStateParams struct {
@@ -906,6 +912,7 @@ func (q *Queries) SetDeviceState(ctx context.Context, arg SetDeviceStateParams) 
 		&i.CompiledArch,
 		&i.CompiledOsID,
 		&i.CompiledOsVersionID,
+		&i.CompiledAgentVersion,
 	)
 	return i, err
 }

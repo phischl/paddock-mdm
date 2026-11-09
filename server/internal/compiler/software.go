@@ -12,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 )
 
@@ -26,6 +27,16 @@ type orgSoftware struct {
 	assignments []pgstore.SoftwareAssignment
 	// invalidAssignments are the assignments that fail the assignment rules, with the reason.
 	invalidAssignments map[uuid.UUID]error
+	// owners are the owners of the organization's devices by device, members the users of each user group: a user or
+	// user-group assignment applies to a device through its owners (plan M13b decision 8).
+	owners  map[uuid.UUID][]deviceOwner
+	members map[uuid.UUID][]uuid.UUID
+}
+
+// deviceOwner is an owner of a device with the user name (lower-case UPN) an audience names.
+type deviceOwner struct {
+	user     uuid.UUID
+	username string
 }
 
 // softwareEntry is a catalog entry as the compiler needs it: its name, source and package references, and invalid,
@@ -57,21 +68,26 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	if err != nil {
 		return nil, err
 	}
-	// The bundle carries no user targets, no available intent and no Flatpak sources or references until PDK-799
-	// renders them (plan M13b §3.3): such rows stay out of every bundle instead of applying organization-wide or
-	// failing the devices' bundles.
-	assignments = slices.DeleteFunc(assignments, func(a pgstore.SoftwareAssignment) bool {
-		return a.UserID.Valid || a.UserGroupID.Valid || a.Intent == software.IntentAvailable
-	})
+	owners, err := q.ListDeviceOwnersWithUsernames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	members, err := q.ListAllUserGroupMembers(ctx)
+	if err != nil {
+		return nil, err
+	}
 	s := &orgSoftware{sources: map[uuid.UUID]bundle.SoftwareSource{}, bySlug: map[string]bundle.SoftwareSource{},
 		entries: make(map[uuid.UUID]softwareEntry, len(entries)), assignments: assignments,
-		invalidAssignments: map[uuid.UUID]error{}}
+		invalidAssignments: map[uuid.UUID]error{}, owners: map[uuid.UUID][]deviceOwner{}, members: map[uuid.UUID][]uuid.UUID{}}
+	for _, o := range owners {
+		s.owners[o.DeviceID] = append(s.owners[o.DeviceID], deviceOwner{user: o.UserID, username: o.Username})
+	}
+	for _, m := range members {
+		s.members[m.GroupID] = append(s.members[m.GroupID], m.UserID)
+	}
 	sourceKinds := make(map[uuid.UUID]string, len(sources))
 	for _, src := range sources {
 		sourceKinds[src.ID] = src.Kind
-		if src.Kind == software.SourceKindFlatpak {
-			continue
-		}
 		key, err := software.ValidateSource(software.SourceInput{Kind: src.Kind, Slug: src.Slug, Name: src.Name, URIs: src.Uris,
 			Suites: src.Suites, Components: src.Components, Architectures: src.Architectures,
 			SigningKey: src.SigningKey, Fingerprint: src.Fingerprint})
@@ -80,7 +96,11 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 				"source_id", src.ID, "slug", src.Slug, "error", err)
 			continue
 		}
-		b := bundle.SoftwareSource{Slug: src.Slug, URIs: src.Uris, Suites: src.Suites,
+		kind := ""
+		if src.Kind == software.SourceKindFlatpak {
+			kind = bundle.SoftwareSourceFlatpak
+		}
+		b := bundle.SoftwareSource{Slug: src.Slug, Kind: kind, URIs: src.Uris, Suites: src.Suites,
 			Components: src.Components, Architectures: src.Architectures,
 			Keyring: base64.StdEncoding.EncodeToString(key.Keyring), Fingerprint: key.Fingerprint}
 		if err := bundle.ValidateSoftware(bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{b}}); err != nil {
@@ -99,12 +119,7 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 		if err == nil {
 			err = software.ValidatePackages(kind, refs)
 		}
-		// Only a valid entry of a Flatpak source stays out until PDK-799; a flatpak_ref anywhere else is invalid and
-		// fails the devices the entry applies to (PDK-697), so it can never lift a forbid by being skipped.
-		if err == nil && kind == software.SourceKindFlatpak {
-			continue
-		}
-		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: refs}
+		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: software.NormalizePackages(refs)}
 		if err != nil {
 			slog.ErrorContext(ctx, "catalog entry fails the catalog rules; the devices it applies to keep their previous bundle",
 				"catalog_entry_id", e.ID, "error", err)
@@ -122,17 +137,23 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	return s, nil
 }
 
-// section returns the software section of a device in groups with the given os-release ID, VERSION_ID and
-// architecture, the package holds its assignments add to the updates section, and the packages whose assignments
-// name different versions. Assignments of the organization and of the device's groups apply; each resolves through
-// its entry to the device's package and the results merge per package (software.MergeIntents). Only required packages
-// name their source, and Sources lists exactly those. The section is nil when no package resolves. err names an entry
-// that fails the current rules and has an assignment whose scope covers the device, or such an assignment whose entry
-// resolves on the device; the device's bundle must then not be published.
-func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) (*bundle.SoftwareSpec, []bundle.Hold, []software.Conflict, error) {
+// section returns the software section of the device with the given ID, in groups, with the given os-release ID,
+// VERSION_ID, architecture and agent version, the package holds its assignments add to the updates section, and the
+// packages whose assignments name different versions. Assignments of the organization and of the device's groups
+// apply, and those of a user or user group that owns the device (plan M13b decision 8); each resolves through its
+// entry to the device's package and the results merge per package (software.MergeIntents). An available package
+// carries its audience: everyone for an organization or device-group target, otherwise the user names of the targeted
+// owners, capped at bundle.MaxSoftwareAudience. Required and available packages name their source, and Sources lists
+// exactly those; a section with a Flatpak source also requires the flatpak runtime package (plan M13b decision 9), so
+// a Flatpak forbid, uninstall or hold alone never installs Flatpak (architect decision A10-7). For an agent release
+// before selfServiceAgent, available packages and Flatpak applications are left out (A10-6). The section is nil when
+// no package resolves. err names an entry that fails the current rules and has an assignment whose scope covers the
+// device, or such an assignment whose entry resolves on the device; the device's bundle must then not be published.
+func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uuid.UUID, osID, versionID, arch, agent string) (*bundle.SoftwareSpec, []bundle.Hold, []software.Conflict, error) {
 	var effective []software.Effective
 	for _, a := range s.assignments {
-		if a.DeviceGroupID.Valid && !slices.Contains(groups, a.DeviceGroupID.UUID) {
+		audience, applies := s.audience(ctx, a, device, groups)
+		if !applies {
 			continue
 		}
 		e, ok := s.entries[a.CatalogEntryID]
@@ -145,7 +166,7 @@ func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) 
 			return nil, nil, nil, fmt.Errorf("catalog entry %s (%s) fails the catalog rules: %w", a.CatalogEntryID,
 				software.DisplayParam(e.name, 100), e.invalid)
 		}
-		pkg, ok := software.Resolve(e.packages, osID, versionID, arch)
+		ref, ok := software.ResolveRef(e.packages, osID, versionID, arch)
 		if !ok {
 			continue
 		}
@@ -156,40 +177,143 @@ func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) 
 		slug := ""
 		if e.source.Valid {
 			src, ok := s.sources[e.source.UUID]
-			if !ok && a.Intent == software.IntentRequired {
+			if !ok && (a.Intent == software.IntentRequired || a.Intent == software.IntentAvailable) {
+				// Safe to leave out: the package is then just not installed (plan M13a decision 14).
 				continue
 			}
+			// A forbid, uninstall or hold needs no source, also for a Flatpak application (architect decision A10-7),
+			// so a failed source never lifts it.
 			slug = src.Slug
 		}
-		effective = append(effective, software.Effective{CatalogEntryID: a.CatalogEntryID, Package: pkg, Source: slug,
-			Intent: a.Intent, UpdateRule: a.UpdateRule, Version: a.Version})
+		effective = append(effective, software.Effective{CatalogEntryID: a.CatalogEntryID, Package: ref.Package,
+			FlatpakRef: ref.FlatpakRef, Scope: ref.Scope, Source: slug, Intent: a.Intent, UpdateRule: a.UpdateRule,
+			Version: a.Version, Audience: audience})
 	}
 	resolved, mergeHolds, conflicts := software.MergeIntents(effective)
 	if len(resolved) == 0 {
 		return nil, nil, conflicts, nil
 	}
-	spec := &bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{}, Packages: make([]bundle.SoftwarePackage, 0, len(resolved))}
+	selfService := !buildinfo.OlderRelease(agent, selfServiceAgent)
+	spec := &bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{}, Packages: make([]bundle.SoftwarePackage, 0, len(resolved)+1)}
 	var holds []bundle.Hold
 	for _, r := range resolved {
-		p := bundle.SoftwarePackage{Package: r.Package, Intent: r.Intent, Version: r.Version,
-			CatalogEntryID: r.CatalogEntryID.String()}
-		if r.Intent == software.IntentRequired && r.Source != "" {
+		if !selfService && (r.FlatpakRef != "" || r.Intent == software.IntentAvailable) {
+			continue
+		}
+		p := bundle.SoftwarePackage{Package: r.Package, FlatpakRef: r.FlatpakRef, Scope: r.Scope, Intent: r.Intent,
+			Version: r.Version, CatalogEntryID: r.CatalogEntryID.String(), Audience: r.Audience}
+		if r.Source != "" && (r.Intent == software.IntentRequired || r.Intent == software.IntentAvailable) {
 			p.Source = r.Source
 			if !slices.ContainsFunc(spec.Sources, func(x bundle.SoftwareSource) bool { return x.Slug == r.Source }) {
 				spec.Sources = append(spec.Sources, s.bySlug[r.Source])
 			}
+		}
+		if a := p.Audience; a != nil && len(a.Users) > bundle.MaxSoftwareAudience {
+			slog.WarnContext(ctx, "audience_truncated: the audience of an available package names more users than a bundle carries; "+
+				"the first ones by user name keep it", "device_id", device, "catalog_entry_id", r.CatalogEntryID,
+				"users", len(a.Users), "kept", bundle.MaxSoftwareAudience)
+			a.Users = a.Users[:bundle.MaxSoftwareAudience]
 		}
 		spec.Packages = append(spec.Packages, p)
 		// ADR 0042 decision 3: a hold and a required pinned package are held by the updates reconciler, the single
 		// owner of apt-mark and the pin file.
 		pinned := r.Intent == software.IntentRequired &&
 			(r.Version != nil || slices.ContainsFunc(mergeHolds, func(h bundle.Hold) bool { return h.Package == r.Package }))
-		if r.Intent == software.IntentHold || pinned {
+		if r.FlatpakRef == "" && (r.Intent == software.IntentHold || pinned) {
 			holds = append(holds, bundle.Hold{Package: r.Package, Version: r.Version})
 		}
 	}
+	if len(spec.Packages) == 0 {
+		return nil, nil, conflicts, nil
+	}
+	addFlatpakRuntime(spec)
 	slices.SortFunc(spec.Sources, func(a, b bundle.SoftwareSource) int { return strings.Compare(a.Slug, b.Slug) })
 	return spec, holds, conflicts, nil
+}
+
+// selfServiceAgent is the first agent release that reads what plan M13b added to the software section: available
+// packages with their audience, Flatpak sources and applications, and so the flatpak runtime package. It is the first
+// alpha.10 release, the first that contains PDK-800 (architect decisions A10-6 and 18). Releases before it validate
+// the whole section with their own bundle.ValidateSoftware and refuse it for any of these, so the compiler leaves
+// them out for an older agent and keeps its required, forbid, uninstall and hold APT packages (plan M13b C5).
+const selfServiceAgent = "0.1.0-alpha.10"
+
+// flatpakRuntime is the distribution package that provides the flatpak command.
+const flatpakRuntime = "flatpak"
+
+// addFlatpakRuntime requires the flatpak package from the distribution's repositories when the section has a Flatpak
+// source and no entry names the package itself (plan M13b decision 9, architect-lead decision Q12). It carries the nil
+// entry ID: it is not an entry of the organization, and the agent reports it as system-managed.
+func addFlatpakRuntime(spec *bundle.SoftwareSpec) {
+	if !slices.ContainsFunc(spec.Sources, func(x bundle.SoftwareSource) bool { return x.Kind == bundle.SoftwareSourceFlatpak }) ||
+		slices.ContainsFunc(spec.Packages, func(p bundle.SoftwarePackage) bool { return p.Package == flatpakRuntime }) {
+		return
+	}
+	i, _ := slices.BinarySearchFunc(spec.Packages, flatpakRuntime, func(p bundle.SoftwarePackage, name string) int {
+		return strings.Compare(packageKey(p), name)
+	})
+	spec.Packages = slices.Insert(spec.Packages, i, bundle.SoftwarePackage{Package: flatpakRuntime,
+		Intent: bundle.SoftwareRequired, CatalogEntryID: bundle.SoftwareRuntimeEntryID})
+}
+
+// packageKey is the order of the section's packages, the one software.MergeIntents returns them in.
+func packageKey(p bundle.SoftwarePackage) string {
+	if p.FlatpakRef != "" {
+		return "flatpak:" + p.FlatpakRef
+	}
+	return p.Package
+}
+
+// audience reports whether assignment a applies to the device in groups and, for an available assignment, its
+// audience on the device (plan M13b decision 8): everyone for the organization or a device group of the device; the
+// targeted user when they own the device; the owners who are members of a targeted user group. A user or user-group
+// assignment applies only when it names at least one owner, so a device without owners gets none of them; an
+// available one only when one of them has a user name an audience can carry (bundle.ValidAudienceUser).
+func (s *orgSoftware) audience(ctx context.Context, a pgstore.SoftwareAssignment, device uuid.UUID, groups []uuid.UUID) (*bundle.SoftwareAudience, bool) {
+	var owners []deviceOwner
+	switch {
+	case a.DeviceGroupID.Valid && !slices.Contains(groups, a.DeviceGroupID.UUID):
+		return nil, false
+	case a.UserID.Valid:
+		for _, o := range s.owners[device] {
+			if o.user == a.UserID.UUID {
+				owners = append(owners, o)
+			}
+		}
+	case a.UserGroupID.Valid:
+		for _, o := range s.owners[device] {
+			if slices.Contains(s.members[a.UserGroupID.UUID], o.user) {
+				owners = append(owners, o)
+			}
+		}
+	default:
+		if a.Intent != software.IntentAvailable {
+			return nil, true
+		}
+		return &bundle.SoftwareAudience{All: true}, true
+	}
+	if len(owners) == 0 {
+		return nil, false
+	}
+	if a.Intent != software.IntentAvailable {
+		return nil, true
+	}
+	users := make([]string, 0, len(owners))
+	for _, o := range owners {
+		// app_user allows names an audience cannot carry (white space, a lower case Go and PostgreSQL disagree on):
+		// one such owner must not fail the device's bundle (PDK-799 review 1).
+		if !bundle.ValidAudienceUser(o.username) {
+			slog.WarnContext(ctx, "audience_user_dropped: an owner's user name cannot be carried in an audience; the owner "+
+				"is not offered the available package", "device_id", device, "user_id", o.user, "catalog_entry_id", a.CatalogEntryID)
+			continue
+		}
+		users = append(users, o.username)
+	}
+	if len(users) == 0 {
+		return nil, false
+	}
+	slices.Sort(users)
+	return &bundle.SoftwareAudience{Users: slices.Compact(users)}, true
 }
 
 // alignWithHolds makes the software section and the device's merged holds (updates section) agree, as ADR 0042

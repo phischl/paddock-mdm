@@ -115,7 +115,7 @@ func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 	for i, d := range outdated {
 		events[i] = statechange.Event{OrganizationID: org.OrganizationID, Scope: statechange.ScopeDevice, ID: d}
 	}
-	slog.InfoContext(ctx, "recompiling devices whose agent schema, architecture or os-release changed", "devices", len(outdated))
+	slog.InfoContext(ctx, "recompiling devices whose agent schema, agent version, architecture or os-release changed", "devices", len(outdated))
 	return c.compileOrg(ctx, org.OrganizationID, events)
 }
 
