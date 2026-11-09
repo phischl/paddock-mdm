@@ -226,7 +226,7 @@ func (s *Service) Handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		_, _ = w.Write(data)
+		_, _ = w.Write(data) //nolint:gosec // G705 false positive: a cached icon checked for the PNG magic and 64 KiB at fetch, served as image/png with nosniff, no request data
 	}))
 	for _, action := range []string{protocol.SelfServiceInstall, protocol.SelfServiceRemove, protocol.SelfServiceUpdate} {
 		mux.HandleFunc("POST /v1/apps/{id}/"+action, s.authed(func(w http.ResponseWriter, r *http.Request, p Principal) {
