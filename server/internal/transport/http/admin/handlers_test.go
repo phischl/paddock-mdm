@@ -1058,6 +1058,9 @@ func TestStaticPortalAndHeaders(t *testing.T) {
 	if csp := rec.Header().Get("Content-Security-Policy"); csp != defaultCSP {
 		t.Fatalf("API CSP %q", csp)
 	}
+	if hsts := rec.Header().Get("Strict-Transport-Security"); hsts != "max-age=31536000; includeSubDomains" {
+		t.Fatalf("HSTS %q, want includeSubDomains (plan M12h decision 16)", hsts)
+	}
 	login := httptest.NewRequest("GET", "https://admin.test/api/auth/login?return_to=//evil", nil)
 	rec = httptest.NewRecorder()
 	e.handler.ServeHTTP(rec, login)

@@ -532,8 +532,8 @@ const maxBodyBytes = 256 << 10
 const artifactUploadPrefix = "/api/platform/v1/agent-releases/"
 
 // artifactUploadDeadline is how long an agent release upload may take to read its body and write the answer, in place
-// of the server's read and write timeouts (plan M8s decision 33).
-const artifactUploadDeadline = 10 * time.Minute
+// of the server's read and write timeouts (plan M8s decision 33, plan M12h decision 15).
+const artifactUploadDeadline = 30 * time.Minute
 
 // limitBody bounds request bodies one byte above their limit, so that a larger body is refused while it is read
 // (400 invalid_request, audited by rejected) and a body of exactly the limit reaches the use case: PUT /api/v1/config
@@ -586,7 +586,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Strict-Transport-Security", "max-age=31536000")
+		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		next.ServeHTTP(w, r)
 	})
 }

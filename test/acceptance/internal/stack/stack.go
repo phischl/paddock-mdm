@@ -135,6 +135,11 @@ func BundlesURL() string {
 	return Env("PADDOCK_TEST_BUNDLES_URL", publicURL("bundles", "PADDOCK_HTTPS_PORT", "8443"))
 }
 
+// DeviceURL is the public device API host (PADDOCK_TEST_DEVICE_URL overrides).
+func DeviceURL() string {
+	return Env("PADDOCK_TEST_DEVICE_URL", publicURL("device", "PADDOCK_HTTPS_PORT", "8443"))
+}
+
 // FleetURL is Fleet's public device host (PADDOCK_TEST_FLEET_URL overrides).
 func FleetURL() string {
 	return Env("PADDOCK_TEST_FLEET_URL", publicURL("fleet", "PADDOCK_HTTPS_PORT", "8443"))
