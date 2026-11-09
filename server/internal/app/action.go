@@ -335,7 +335,8 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 		errors.Is(err, problem.RevocationFrozen) || errors.Is(err, problem.RevocationRejected) ||
 		errors.Is(err, problem.IPNotAllowed) ||
 		errors.Is(err, problem.MCPDisabled) || errors.Is(err, problem.MCPToolNotAllowed) ||
-		errors.Is(err, problem.MCPWriteNotEnabled) || errors.Is(err, problem.RateLimited) {
+		errors.Is(err, problem.MCPWriteNotEnabled) || errors.Is(err, problem.RateLimited) ||
+		errors.Is(err, problem.RepositoryNotReady) {
 		return audit.OutcomeDenied, p.Code
 	}
 	return audit.OutcomeFailure, p.Code

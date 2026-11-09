@@ -34,8 +34,8 @@ func (s *server) limitAuth(next http.Handler) http.Handler {
 }
 
 // limitPrincipal applies the per-principal classes after authentication and before the handlers (plan M12h decision
-// 8): agent artifact and package uploads count as platform_upload, reads as admin_read, every other method as
-// admin_write.
+// 8): agent artifact and package uploads and the upload of a stored package (plan M13c decision 12) count as
+// platform_upload, reads as admin_read, every other method as admin_write.
 func (s *server) limitPrincipal(next http.Handler) http.Handler {
 	if s.d.RateLimiter == nil {
 		return next
@@ -56,6 +56,10 @@ func principalClass(r *http.Request) ratelimit.Class {
 		return ratelimit.AdminRead
 	case http.MethodPut:
 		if isAgentUpload(r.URL.Path) {
+			return ratelimit.PlatformUpload
+		}
+	case http.MethodPost:
+		if r.URL.Path == packageUploadPath {
 			return ratelimit.PlatformUpload
 		}
 	}

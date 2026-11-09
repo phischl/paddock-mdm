@@ -50,6 +50,7 @@ var lists = map[string]struct {
 	"listCompileWarnings":  {compileWarningList, "postgres/queries/compile_warning.sql", "ListCompileWarnings", `w\.id`},
 	"listPackageHolds":     {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
 	"listSoftwareSources":  {softwareSourceList, "postgres/queries/software.sql", "ListSoftwareSources", "id"},
+	"listSoftwarePackages": {softwarePackageList, "postgres/queries/software_repository.sql", "ListSoftwarePackages", "id"},
 	"listSoftwareCatalog":  {softwareCatalogList, "postgres/queries/software.sql", "ListSoftwareCatalogEntries", `e\.id`},
 	"listSoftwareRequests": {softwareRequestList, "postgres/queries/software_request.sql", "ListSoftwareRequests", "id"},
 	"listSoftwareAssignments": {softwareAssignmentList, "postgres/queries/software.sql", "ListSoftwareAssignments",

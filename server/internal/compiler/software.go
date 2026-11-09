@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -14,9 +15,11 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/domain/devicegroup"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 )
 
 // orgSoftware are the organization's package sources, catalog entries and software assignments, loaded once per
@@ -42,6 +45,15 @@ type orgSoftware struct {
 	approvalGate string
 	// windows are the maintenance windows by device group (plan M13c decision 4) that pass the bundle rules.
 	windows map[uuid.UUID]bundle.SoftwareWindow
+	// repository is the read credential of the organization's Paddock repository with the slug of its source (plan
+	// M13c decision 15); nil without that source.
+	repository *repositoryAuth
+}
+
+// repositoryAuth is the credential a section carries while it names the source slug.
+type repositoryAuth struct {
+	slug string
+	auth bundle.SoftwareRepositoryAuth
 }
 
 // catalogIcon is a validated catalog icon with the hex SHA-256 that names it in bundles and object storage.
@@ -73,7 +85,7 @@ type softwareEntry struct {
 // required package from it is then not installed, which is safe); a failing entry or assignment is kept with its
 // reason, and section fails every device it applies to (architect decision 2026-11-02, PDK-697): skipping it could
 // lift a forbid or let a competing intent win.
-func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error) {
+func loadSoftware(ctx context.Context, q *pgstore.Queries, org uuid.UUID, creds CredentialDecrypter) (*orgSoftware, error) {
 	sources, err := q.ListAllSoftwareSources(ctx)
 	if err != nil {
 		return nil, err
@@ -147,7 +159,19 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	sourceKinds := make(map[uuid.UUID]string, len(sources))
 	for _, src := range sources {
 		sourceKinds[src.ID] = src.Kind
-		key, err := software.ValidateSource(software.SourceInput{Kind: src.Kind, Slug: src.Slug, Name: src.Name, URIs: src.Uris,
+		validateAs := src.Kind
+		if src.Kind == software.SourceKindPaddock {
+			// The Paddock repository is an APT repository; without its credential apt cannot read it, so the source is
+			// left out (a required package from it is then not installed, which is safe).
+			repo, err := repositoryCredential(ctx, q, org, src, creds)
+			if err != nil {
+				slog.ErrorContext(ctx, "paddock software source left out of bundles: its credential is not available",
+					"source_id", src.ID, "error", err)
+				continue
+			}
+			s.repository, validateAs = repo, software.SourceKindAPT
+		}
+		key, err := software.ValidateSource(software.SourceInput{Kind: validateAs, Slug: src.Slug, Name: src.Name, URIs: src.Uris,
 			Suites: src.Suites, Components: src.Components, Architectures: src.Architectures,
 			SigningKey: src.SigningKey, Fingerprint: src.Fingerprint})
 		if err != nil {
@@ -162,9 +186,16 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 		b := bundle.SoftwareSource{Slug: src.Slug, Kind: kind, URIs: src.Uris, Suites: src.Suites,
 			Components: src.Components, Architectures: src.Architectures,
 			Keyring: base64.StdEncoding.EncodeToString(key.Keyring), Fingerprint: key.Fingerprint}
-		if err := bundle.ValidateSoftware(bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{b}}); err != nil {
+		check := bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{b}}
+		if src.Kind == software.SourceKindPaddock {
+			check.Repository = &s.repository.auth
+		}
+		if err := bundle.ValidateSoftware(check); err != nil {
 			slog.ErrorContext(ctx, "software source left out of bundles: it fails the bundle contract",
 				"source_id", src.ID, "slug", src.Slug, "error", err)
+			if src.Kind == software.SourceKindPaddock {
+				s.repository = nil
+			}
 			continue
 		}
 		s.sources[src.ID], s.bySlug[src.Slug] = b, b
@@ -194,6 +225,29 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 		}
 	}
 	return s, nil
+}
+
+// repositoryCredential returns the read credential of the organization's Paddock repository for its source: the
+// machine of apt's auth.conf is the source's first URI without the scheme. The secret is decrypted with the compiler's
+// Transit policy and never logged.
+func repositoryCredential(ctx context.Context, q *pgstore.Queries, org uuid.UUID, src pgstore.SoftwareSource,
+	creds CredentialDecrypter) (*repositoryAuth, error) {
+	if creds == nil {
+		return nil, errors.New("no Transit decrypter configured")
+	}
+	if len(src.Uris) != 1 || !strings.HasPrefix(src.Uris[0], "https://") {
+		return nil, errors.New("the paddock source must have exactly one https URI")
+	}
+	repo, err := q.GetSoftwareRepository(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("software repository: %w", err)
+	}
+	secret, err := creds.DecryptContext(ctx, app.SoftwareRepoCredentialKey, org, bao.FieldRepositoryCredential, repo.CredentialCiphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt the repository credential: %w", err)
+	}
+	return &repositoryAuth{slug: src.Slug, auth: bundle.SoftwareRepositoryAuth{
+		Host: strings.TrimPrefix(src.Uris[0], "https://"), Username: app.RepositoryUsername, Password: string(secret)}}, nil
 }
 
 // section returns the software section of the device with the given ID, in groups, with the given os-release ID,
@@ -355,6 +409,10 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 	}
 	addFlatpakRuntime(spec)
 	spec.Windows = s.deviceWindows(ctx, device, groups)
+	if r := s.repository; r != nil && slices.ContainsFunc(spec.Sources, func(x bundle.SoftwareSource) bool { return x.Slug == r.slug }) {
+		auth := r.auth
+		spec.Repository = &auth
+	}
 	slices.SortFunc(spec.Sources, func(a, b bundle.SoftwareSource) int { return strings.Compare(a.Slug, b.Slug) })
 	return spec, holds, conflicts, warnings, nil
 }

@@ -35,7 +35,8 @@
 		respond 403
 	}
 	# Request body limits at the edge (plan M8s decision 31, plan M12h decision 16): the platform uploads (agent
-	# releases, the package upload of ADR 0050) up to 256 MiB, everything else well above the api's own 256 KiB and
+	# releases, the package upload of ADR 0050) up to 256.5 MiB (268959744 bytes), so that a package of the api's
+	# 256 MiB limit fits with its multipart framing (PDK-812), everything else well above the api's own 256 KiB and
 	# 1 MiB limits.
 	@uploads {
 		method PUT POST
@@ -44,13 +45,13 @@
 	@uploads_too_large {
 		method PUT POST
 		path /api/platform/v1/agent-releases/* /api/v1/software-packages
-		expression `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 268435456`
+		expression `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 268959744`
 	}
 	handle @uploads_too_large {
 		respond 413
 	}
 	request_body @uploads {
-		max_size 256MiB
+		max_size 268959744
 	}
 	@other {
 		not path /api/platform/v1/agent-releases/* /api/v1/software-packages

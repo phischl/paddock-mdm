@@ -359,11 +359,11 @@ legitimate request; a request beyond them is refused, not queued.
 
 | Limit | Value | Where | Beyond it |
 | --- | --- | --- | --- |
-| Request body, `admin.` | 2 MiB; 256 MiB for the platform uploads | Caddy | 413 from the edge |
+| Request body, `admin.` | 2 MiB; 256.5 MiB for the platform uploads (a stored package of at most 256 MiB with its multipart framing) | Caddy | 413 from the edge |
 | Request body, `auth.`, `device.`, `bundles.` | 1 MiB (`bundles.`: 33 MiB for an escrowed LUKS header) | Caddy | 413 from the edge |
 | Request body, `fleet.` | 64 MiB | Caddy | 413 from the edge |
 | Reading a request (api, gateway, escrow-reader) | headers 10 s, whole request 60 s | Go server | connection closed; a body sent at 1 byte/s ends after 60 s |
-| Writing a response (api, gateway, escrow-reader) | 120 s; 30 min for agent release uploads; the audit export download 60 s per write, in total max(10 min, size at 64 KiB/s), at most 24 h | Go server | connection closed |
+| Writing a response (api, gateway, escrow-reader) | 120 s; 30 min for agent release and package uploads; the audit export download 60 s per write, in total max(10 min, size at 64 KiB/s), at most 24 h | Go server | connection closed |
 | Idle keep-alive connection | 120 s | Go server | connection closed |
 | Requests per minute | `PADDOCK_RATELIMIT_*`, `PADDOCK_DEVICE_PER_IP_LIMIT` (`install.md` section 4) | api, gateway | 429 `rate_limited` |
 

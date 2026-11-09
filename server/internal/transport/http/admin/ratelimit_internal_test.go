@@ -62,6 +62,9 @@ func TestPrincipalClass(t *testing.T) {
 		{http.MethodPut, "/api/platform/v1/agent-releases/1.2.3/artifacts", ratelimit.AdminWrite},
 		{http.MethodPut, "/api/platform/v1/agent-releases/1.2.3/notes/amd64", ratelimit.AdminWrite},
 		{http.MethodGet, "/api/platform/v1/agent-releases/1.2.3/artifacts/amd64", ratelimit.AdminRead},
+		{http.MethodPost, "/api/v1/software-packages", ratelimit.PlatformUpload},
+		{http.MethodGet, "/api/v1/software-packages", ratelimit.AdminRead},
+		{http.MethodDelete, "/api/v1/software-packages/x", ratelimit.AdminWrite},
 	} {
 		r := httptest.NewRequest(c.method, "https://admin.test"+c.path, nil)
 		if got := principalClass(r); got != c.want {

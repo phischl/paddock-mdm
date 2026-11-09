@@ -662,3 +662,39 @@ func TestSoftwareStagedUserAssignmentRow(t *testing.T) {
 		t.Fatalf("staged assignment rows %+v", got)
 	}
 }
+
+// TestDeclarativeSoftwarePaddockSource (plan M13c decision 11): the system source of the Paddock repository is no part
+// of the document — the export leaves it out, a document without it never deletes it — while catalog entries name it
+// by its slug in both directions.
+func TestDeclarativeSoftwarePaddockSource(t *testing.T) {
+	h := newConfigHarness(t)
+	ctx := principal.With(context.Background(), h.account(t, principal.RoleOrgAdmin, true))
+	source := uuid.Must(uuid.NewV7())
+	if _, err := h.super.Exec(context.Background(), `INSERT INTO software_source (id, organization_id, kind, slug, name, uris, suites,
+		components, signing_key, fingerprint) VALUES ($1, $2, 'paddock', 'paddock', 'Paddock', '{https://bundles.example.com/apt/x/}',
+		'{paddock}', '{main}', $3, $4)`, source, h.org, sourceKey(t, "ed25519.asc"), sourceEd25519FP); err != nil {
+		t.Fatal(err)
+	}
+	doc := declarative.Document{
+		APIVersion: declarative.APIVersion, Kind: declarative.Kind,
+		SoftwareSources: &[]declarative.SoftwareSource{},
+		SoftwareCatalog: &[]declarative.SoftwareCatalogEntry{{
+			Name: "Acme", Source: strPtr("paddock"),
+			Packages: []software.PackageRef{{Distribution: "ubuntu", Release: "*", Architecture: "*", Package: "acme-tool"}},
+		}},
+	}
+	if _, _, err := h.config.Apply(ctx, raw(t, doc), ""); err != nil {
+		t.Fatal(err)
+	}
+	got := h.export(t, h.account(t, principal.RoleOrgAuditor, false))
+	if len(*got.SoftwareSources) != 0 || len(*got.SoftwareCatalog) != 1 || *(*got.SoftwareCatalog)[0].Source != "paddock" {
+		t.Fatalf("export %+v %+v", *got.SoftwareSources, *got.SoftwareCatalog)
+	}
+	if p, err := h.config.Plan(ctx, raw(t, got)); err != nil || len(p.Changes) != 0 {
+		t.Fatalf("export again: %+v, %v", p, err)
+	}
+	var n int
+	if err := h.super.QueryRow(context.Background(), "SELECT count(*) FROM software_source WHERE id = $1", source).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("paddock source after the apply: %d, %v", n, err)
+	}
+}

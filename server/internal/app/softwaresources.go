@@ -158,6 +158,9 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 			return notFound(err)
 		}
 		rec.SetTarget(sourceTarget(old))
+		if old.Kind == software.SourceKindPaddock {
+			return errSystemSource
+		}
 		merged, fields := mergeSource(old, in)
 		rec.SetParam("name", software.DisplayParam(merged.Name, software.MaxNameLength))
 		rec.SetParam("slug", old.Slug)
@@ -225,6 +228,9 @@ func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 		rec.SetParam("kind", old.Kind)
 		rec.SetParam("fingerprint", old.Fingerprint)
 		rec.SetParam("weak_key", old.WeakKey)
+		if old.Kind == software.SourceKindPaddock {
+			return errSystemSource
+		}
 		// The source is locked, so no entry can start using it between the count and the delete.
 		used, err := q.CountSoftwareCatalogEntriesBySource(ctx, uuid.NullUUID{UUID: id, Valid: true})
 		if err != nil {
@@ -244,6 +250,10 @@ func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 		return nil
 	}))
 }
+
+// errSystemSource refuses a change of the system source of the Paddock repository, which the worker maintains (plan
+// M13c decision 11).
+var errSystemSource = problem.InvalidState.WithDetail("the source of the Paddock repository is maintained by Paddock and cannot be changed or deleted")
 
 // mergeSource applies a change to a stored source and returns the result with the names of the fields whose value
 // changed, except the signing key, which counts as changed only when its canonical form differs after validation.
