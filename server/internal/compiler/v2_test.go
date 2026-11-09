@@ -313,7 +313,7 @@ func TestReconcileRecompilesOutdatedSchemas(t *testing.T) {
 // TestReconcileDeliversRotatedKeys (plan M4a decision 5): after command-signing is rotated, the reconcile loop
 // recompiles the organization and v2 bundles list both versions; without a change a reconcile keeps the version.
 func TestReconcileDeliversRotatedKeys(t *testing.T) {
-	w := newWorld(t)
+	w := newWorldWith(t, nil, true)
 	dev := w.v2Device("{1,2}")
 	w.mustCompile(statechange.ScopeDevice, dev)
 	ctx := context.Background()

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
+	pvalkey "github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/baotest"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/s3test"
@@ -80,8 +82,53 @@ func newWorld(t *testing.T) *world {
 	return newWorldConfig(t, nil)
 }
 
+// sharedServices are the OpenBao, RustFS and Valkey of the package: starting three containers per test made the
+// package exceed the ten-minute go test limit on a loaded host (PDK-931). Isolation between tests comes from the
+// per-test organization and device ids, which scope every bundle object key and cache key; a test that changes the
+// shared services' state (key rotation) asks for its own OpenBao.
+type sharedServices struct {
+	bao    *baotest.Bao
+	s3     *s3test.RustFS
+	valkey valkey.Client
+}
+
+var (
+	servicesOnce sync.Once
+	services     sharedServices
+)
+
+// keepAlive suppresses the per-test cleanup so the containers outlive the test that started them; Ryuk removes
+// them at exit.
+type keepAlive struct{ *testing.T }
+
+func (keepAlive) Cleanup(func()) {}
+
+func sharedInfra(t *testing.T) sharedServices {
+	t.Helper()
+	servicesOnce.Do(func() {
+		k := keepAlive{t}
+		services.bao = baotest.Start(k)
+		services.s3 = s3test.StartPlain(k, "paddock-bundles")
+		client, err := pvalkey.New(valkeytest.Start(k).Config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		services.valkey = client
+	})
+	if services.bao == nil || services.valkey == nil {
+		t.Fatal("shared services not available")
+	}
+	return services
+}
+
 // newWorldConfig is newWorld with a change of the compiler configuration.
 func newWorldConfig(t *testing.T, change func(*compiler.Config)) *world {
+	t.Helper()
+	return newWorldWith(t, change, false)
+}
+
+// newWorldWith is newWorldConfig; ownBao starts a private OpenBao for a test that changes its keys.
+func newWorldWith(t *testing.T, change func(*compiler.Config), ownBao bool) *world {
 	t.Helper()
 	ctx := context.Background()
 	env := pgtest.SharedPaddock(t)
@@ -95,7 +142,11 @@ func newWorldConfig(t *testing.T, change func(*compiler.Config)) *world {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = super.Close(ctx) })
-	b := baotest.Start(t)
+	infra := sharedInfra(t)
+	b := infra.bao
+	if ownBao {
+		b = baotest.Start(t)
+	}
 	role := b.AppRole(t, "paddock-compiler")
 	signer, err := bao.New(b.Addr, role.RoleID, role.SecretID)
 	if err != nil {
@@ -105,8 +156,8 @@ func newWorldConfig(t *testing.T, change func(*compiler.Config)) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rfs := s3test.StartPlain(t, "paddock-bundles")
-	vk := valkeytest.Start(t).Client(t)
+	rfs := infra.s3
+	vk := infra.valkey
 	w := &world{
 		t: t, cache: devicecache.New(vk), valkey: vk, s3: rfs, super: super, bao: b,
 		store: &flakyStore{store: objectstore.New(rfs.Endpoint, s3test.RootUser, s3test.RootPassword, rfs.Bucket)},
