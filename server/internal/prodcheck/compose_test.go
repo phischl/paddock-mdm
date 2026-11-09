@@ -248,8 +248,10 @@ func TestCaddyfilesEdge(t *testing.T) {
 			}
 		}
 	}
-	if proxies != 4 {
-		t.Errorf("found %d proxies to Paddock roles, want 4 (admin_site, device. in the three Caddyfiles)", proxies)
+	// The bundles host proxies GET and HEAD of /apt/* to the api, which checks the repository credential and redirects
+	// to a presigned GET (plan M13c decision 14, ADR 0050, PDK-812): one more role proxy in each Caddyfile.
+	if proxies != 7 {
+		t.Errorf("found %d proxies to Paddock roles, want 7 (admin_site, device. and bundles. /apt/* in the three Caddyfiles)", proxies)
 	}
 	// Plan M8s decision 31: every proxy to a role or an upstream is preceded by a request body limit in its block.
 	limited := 0
@@ -272,8 +274,9 @@ func TestCaddyfilesEdge(t *testing.T) {
 		!strings.Contains(g, "int({http.request.header.Content-Length}) > {args[1]}") {
 		t.Error("guards.caddy has no body_limit snippet with a Content-Length check and request_body")
 	}
-	if limited != 17 {
-		t.Errorf("found %d proxies to roles and upstreams, want 17 (2 in the guards, 5 in each Caddyfile)", limited)
+	// The bundles host's /apt/* proxy to the api (PDK-812) is the sixth in each Caddyfile.
+	if limited != 20 {
+		t.Errorf("found %d proxies to roles and upstreams, want 20 (2 in the guards, 6 in each Caddyfile)", limited)
 	}
 	// Plan M12h decision 16: every site imports the hardening headers, and the snippet sets all four.
 	g := read("guards.caddy")
