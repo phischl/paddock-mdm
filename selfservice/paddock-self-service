@@ -1,0 +1,13 @@
+#!/usr/bin/python3 -IB
+"""Launcher of Paddock Self-Service, installed as /usr/lib/paddock-self-service/paddock-self-service."""
+
+import os
+import sys
+
+# -I keeps the user's environment and site directory out of the import path, -B keeps Python from writing bytecode
+# next to the package; the package is found next to this file only.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+from paddock_self_service.main import main  # noqa: E402
+
+sys.exit(main())

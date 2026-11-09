@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Paddock Self-Service
+Name[de]=Paddock Self-Service
+GenericName=Software from your organization
+GenericName[de]=Software Ihrer Organisation
+Comment=Install applications your organization offers
+Comment[de]=Von Ihrer Organisation angebotene Anwendungen installieren
+Exec=paddock-self-service
+Icon=com.paddock.SelfService
+Terminal=false
+Categories=System;PackageManager;GTK;
+Keywords=software;apps;install;paddock;
+Keywords[de]=Software;Anwendungen;installieren;Paddock;
+StartupNotify=true
