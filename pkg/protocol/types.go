@@ -239,6 +239,8 @@ const (
 	EventSoftwareReinstalled = "software.reinstalled"  // data: SoftwareChange{reason: locally_removed}
 	EventSoftwareRemoved     = "software.removed"      // data: SoftwareChange
 	EventSoftwareApplyFailed = "software.apply_failed" // data: SoftwareApplyFailed
+	// Self-service (plan M13b decision 18, ADR 0049 decision 7): one per operation a user asked for on the device.
+	EventSoftwareSelfService = "software.self_service" // data: SoftwareSelfService
 )
 
 // Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial; helper_failed when
@@ -338,6 +340,39 @@ const (
 	SoftwareFlatpakFailed  = "flatpak_failed"
 )
 
+// Actions, outcomes and reasons of SoftwareSelfService (plan M13b §3.1, ADR 0049 decision 6). A failed operation
+// carries a reason of SoftwareApplyFailed or one of the self-service failure reasons, a refused one a refusal reason.
+const (
+	SelfServiceInstall = "install"
+	SelfServiceRemove  = "remove"
+	SelfServiceUpdate  = "update"
+
+	SelfServiceSucceeded = "succeeded"
+	SelfServiceFailed    = "failed"
+	SelfServiceRefused   = "refused"
+
+	SelfServiceInterrupted = "interrupted"
+	SelfServiceTimeout     = "timeout"
+
+	SelfServiceRequiredByPolicy = "required_by_policy"
+	SelfServiceNotInAudience    = "not_in_audience"
+)
+
+// SoftwareSelfService is the data of software.self_service: who asked for which operation on which catalog entry and
+// how it ended. User is the user name of the asking account (the UPN of a directory user); Package or FlatpakRef
+// names the application; Version is the installed version after a succeeded install or update.
+type SoftwareSelfService struct {
+	User       string `json:"user"`
+	EntryID    string `json:"entry_id"`
+	Package    string `json:"package,omitempty"`
+	FlatpakRef string `json:"flatpak_ref,omitempty"`
+	Scope      string `json:"scope"`
+	Action     string `json:"action"`
+	Outcome    string `json:"outcome"`
+	Reason     string `json:"reason,omitempty"`
+	Version    string `json:"version,omitempty"`
+}
+
 // SoftwareApplyFailed is the data of software.apply_failed: a package or a source (Source without Package) that could
 // not be applied. Error is at most 200 characters.
 type SoftwareApplyFailed struct {
@@ -373,6 +408,7 @@ var EventTypes = []string{
 	EventDiskConversionPrepared, EventDiskConversionStarted, EventDiskConversionCompleted, EventDiskConversionFailed,
 	EventDiskConversionAborted, EventDiskConversionNeutralizeFailed, EventDiskConversionUnlockRestoreFailed,
 	EventSoftwareInstalled, EventSoftwareReinstalled, EventSoftwareRemoved, EventSoftwareApplyFailed,
+	EventSoftwareSelfService,
 }
 
 // SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass

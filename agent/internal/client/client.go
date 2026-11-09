@@ -79,8 +79,6 @@ func NewWithHTTP(serverURL string, hc *http.Client, key identity.Key, now func()
 
 // do signs and sends a request and decodes a 2xx JSON answer into out (if not nil).
 func (c *Client) do(ctx context.Context, method, path, device string, seq int64, in, out any) error {
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
 	var body []byte
 	if in != nil {
 		var err error
@@ -88,24 +86,38 @@ func (c *Client) do(ctx context.Context, method, path, device string, seq int64,
 			return err
 		}
 	}
+	data, err := c.send(ctx, method, path, device, seq, body, in != nil)
+	if err != nil || out == nil {
+		return err
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return fmt.Errorf("device API %s %s: decode response: %w", method, path, err)
+	}
+	return nil
+}
+
+// send signs and sends a request and returns the body of a 2xx answer (at most maxResponse bytes).
+func (c *Client) send(ctx context.Context, method, path, device string, seq int64, body []byte, isJSON bool) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := protocol.Sign(req, body, c.key.Private, device, c.key.KeyID, seq, c.now()); err != nil {
-		return err
+		return nil, err
 	}
-	if in != nil {
+	if isJSON {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = res.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		e := &APIError{Status: res.StatusCode}
@@ -113,15 +125,15 @@ func (c *Client) do(ctx context.Context, method, path, device string, seq int64,
 		if s, err := strconv.Atoi(res.Header.Get("Retry-After")); err == nil && s > 0 {
 			e.RetryAfter = time.Duration(s) * time.Second
 		}
-		return e
+		return nil, e
 	}
-	if out == nil {
-		return nil
-	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("device API %s %s: decode response: %w", method, path, err)
-	}
-	return nil
+	return data, nil
+}
+
+// CatalogIcon fetches the PNG icon of a catalog entry for the self-service app (plan M13b decision 16); an entry
+// without an icon is an *APIError with status 404.
+func (c *Client) CatalogIcon(ctx context.Context, deviceID string, seq int64, entryID string) ([]byte, error) {
+	return c.send(ctx, http.MethodGet, "/v1/catalog/"+url.PathEscape(entryID)+"/icon", deviceID, seq, nil, false)
 }
 
 // Enroll sends the enrollment request and returns the enrollment ID.

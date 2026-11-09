@@ -32,6 +32,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/selfservice"
 	"github.com/phischl/paddock-mdm/agent/internal/spool"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
@@ -54,6 +55,9 @@ type Deps struct {
 	// Software is the software reconciler of Applier; New gives it the server's reachability, and its status goes
 	// into the health report after every pass (plan M13a decisions 25 and 27). Nil: no software report.
 	Software *reconcile.Software
+	// SelfService serves the self-service socket and runs the operations users ask for (plan M13b decisions 11–14);
+	// nil serves no self-service.
+	SelfService *selfservice.Service
 	// Commands executes the commands of check-ins; nil means the handlers of this build (commands.Handlers).
 	Commands *commands.Executor
 	// Events receives the device events of the reconcilers; New connects it to the spool.
@@ -214,6 +218,7 @@ func Load(l paths.Layout) (Deps, error) {
 		d.Encrypt = encrypt.OS{}
 		d.EncryptModule = encrypt.Module()
 		d.Notify = func(ctx context.Context, msg string) { notifySessions(ctx, sys.Loginctl, runTool, msg) }
+		d.SelfService = selfservice.New(selfservice.Config{Sys: sys, Packages: software, Version: buildinfo.Version})
 	}
 	return d, nil
 }
@@ -331,6 +336,17 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}()
 	defer wg.Wait()
+	if a.d.SelfService != nil {
+		a.refreshSelfService()
+		a.d.SelfService.Start(ctx)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := a.d.SelfService.Serve(ctx, a.d.Layout.SelfServiceSocket()); err != nil {
+				slog.ErrorContext(ctx, "self-service socket failed", "error", err)
+			}
+		}()
+	}
 	if err := a.waitActive(ctx); err != nil {
 		return err
 	}
@@ -372,12 +388,19 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 	dms := time.NewTicker(DMSTick)
 	defer dms.Stop()
 	nextAt := a.d.Now()
+	var selfService <-chan protocol.SoftwareSelfService
+	if a.d.SelfService != nil {
+		selfService = a.d.SelfService.Events()
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case ev := <-selfService:
+			a.event(protocol.EventSoftwareSelfService, ev)
 		case <-drift.C:
 			a.drift(ctx)
+			a.refreshSelfService()
 			a.tickLUKS(ctx, true)
 			a.tickConversion(ctx)
 			a.reportUpdateRuns(ctx)

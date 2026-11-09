@@ -71,6 +71,9 @@ func (l Layout) UninstallBinary() string { return l.Join("/root/paddock-uninstal
 // Socket is the health socket.
 func (l Layout) Socket() string { return l.Join("/run/paddock/agent.sock") }
 
+// SelfServiceSocket is the self-service socket (plan M13b decision 12): mode 0666, every local user may connect.
+func (l Layout) SelfServiceSocket() string { return l.Join("/run/paddock/selfservice.sock") }
+
 // LastCheckin is touched after every successful check-in.
 func (l Layout) LastCheckin() string { return l.Join("/run/paddock/last-checkin") }
 

@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -616,7 +618,7 @@ func (s *System) Loginctl(_ context.Context, args ...string) (string, int, error
 	return "", 0, nil
 }
 
-// Getent implements reconcile.System for passwd (Passwd) and group (Members).
+// Getent implements reconcile.System for passwd (Passwd, by name or by UID) and group (Members).
 func (s *System) Getent(_ context.Context, database, key string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -624,6 +626,11 @@ func (s *System) Getent(_ context.Context, database, key string) (string, int, e
 	case "passwd":
 		if uid, ok := s.Passwd[key]; ok {
 			return s.GetentNoise + fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash\n", key, uid, uid, key), 0, nil
+		}
+		names := slices.Sorted(maps.Keys(s.Passwd))
+		if i := slices.IndexFunc(names, func(n string) bool { return strconv.Itoa(s.Passwd[n]) == key }); i >= 0 {
+			name := names[i]
+			return s.GetentNoise + fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash\n", name, s.Passwd[name], s.Passwd[name], name), 0, nil
 		}
 	case "group":
 		if members, ok := s.Members[key]; ok {

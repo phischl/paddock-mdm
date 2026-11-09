@@ -181,6 +181,16 @@ func (s *System) flatpak(inst *FlatpakInstallation, scope string, stdin []byte, 
 			s.Calls = append(s.Calls, "flatpak install "+scope+" "+pos[1])
 		}
 		return "", 0, nil
+	case "update":
+		if len(pos) != 1 {
+			return "error: the fake updates one REF", 1, nil
+		}
+		if _, ok := inst.Apps[pos[0]]; !ok {
+			return "error: " + pos[0] + " not installed", 1, nil
+		}
+		inst.Apps[pos[0]] = "2.0"
+		s.Calls = append(s.Calls, "flatpak update "+scope+" "+pos[0])
+		return "", 0, nil
 	case "uninstall":
 		if len(pos) != 1 {
 			return "error: uninstall REF", 1, nil

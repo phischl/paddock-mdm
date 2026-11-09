@@ -46,6 +46,22 @@ func TestNotifyActiveGraphicalSessions(t *testing.T) {
 	}
 }
 
+// TestNotifyUser: only the active graphical sessions of the given user are told (a self-service operation, plan M13b
+// decision 13).
+func TestNotifyUser(t *testing.T) {
+	sys := fakesys.New()
+	sys.Sessions = []fakesys.Session{
+		{ID: "2", UID: 811622788, User: "dave@acme.test", Class: "user", Type: "wayland", State: "active"},
+		{ID: "3", UID: 1000, User: "paddock", Class: "user", Type: "x11", State: "active"},
+		{ID: "4", UID: 1000, User: "paddock", Class: "user", Type: "tty", State: "active"},
+	}
+	sys.Outputs = map[string]fakesys.OutputReply{notifyLine("1000"): {}}
+	n, err := NotifyUser(context.Background(), sys, 1000, "Summary", "-body")
+	if err != nil || n != (Result{Sessions: 1, Reached: 1}) || !slices.Equal(sys.OutputCalls, []string{notifyLine("1000")}) {
+		t.Fatalf("NotifyUser = %+v, %v, calls %q", n, err, sys.OutputCalls)
+	}
+}
+
 func TestNotifyWithoutSessions(t *testing.T) {
 	sys := fakesys.New()
 	n, err := Notify(context.Background(), sys, "s", "b")
