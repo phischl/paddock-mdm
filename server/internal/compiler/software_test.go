@@ -1142,6 +1142,7 @@ func approvalOf(p *bundle.SoftwarePackage) string {
 // approval carries neither; an audience of everyone keeps the approval with the approved users.
 func TestSoftwareApproval(t *testing.T) {
 	w := newWorld(t)
+	w.comp.SetApprovalAgent(approvalRelease)
 	alice, bob, carol := w.user("alice", false), w.user("bob", false), w.user("carol", false)
 	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
 	vim := w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"})
@@ -1193,23 +1194,36 @@ func TestSoftwareApproval(t *testing.T) {
 	}
 }
 
+// approvalRelease stands in for the release PDK-811 ships in: the tests of the approval flow compile with it as the
+// gate, as the compiler will once PDK-811 sets compiler.ApprovalAgent.
+const approvalRelease = "0.1.0-alpha.10"
+
 // TestWithheldForApproval (architect decision A10-17): only an available package whose entry requires approval is left
-// out, and only for a release before the gate; a development build is never older. The gate is checked against a later
-// release than compiler.ApprovalAgent too, so the rule holds when PDK-811 ships after the self-service app.
+// out, for a release before the gate, and for every agent while the gate is empty; a development build is never older
+// than a set gate. The gate is checked against a later release than approvalRelease too, so the rule holds when
+// PDK-811 ships after the self-service app.
 func TestWithheldForApproval(t *testing.T) {
 	cases := []struct {
 		intent, approval, agent, gate string
 		want                          bool
 	}{
-		{"available", "required", "0.1.0-alpha.9", compiler.ApprovalAgent, true},
-		{"available", "required", compiler.ApprovalAgent, compiler.ApprovalAgent, false},
-		{"available", "required", "0.1.0-alpha.11", compiler.ApprovalAgent, false},
+		{"available", "required", "0.1.0-alpha.9", approvalRelease, true},
+		{"available", "required", approvalRelease, approvalRelease, false},
+		{"available", "required", "0.1.0-alpha.11", approvalRelease, false},
 		{"available", "required", "0.1.0-alpha.10", "0.1.0-alpha.11", true},
 		{"available", "required", "0.1.0-alpha.10+build.7", "0.1.0-alpha.11", true},
 		{"available", "required", "0.0.0-dev", "0.1.0-alpha.11", false},
-		{"available", "none", "0.1.0-alpha.9", compiler.ApprovalAgent, false},
-		{"required", "required", "0.1.0-alpha.9", compiler.ApprovalAgent, false},
-		{"forbid", "required", "0.1.0-alpha.9", compiler.ApprovalAgent, false},
+		{"available", "required", "0.1.0-alpha.11", "", true},
+		{"available", "required", "1.0.0", "", true},
+		{"available", "required", "0.0.0-dev", "", true},
+		{"available", "required", "0.0.0-devicesim", "", true},
+		{"available", "required", "", "", true},
+		{"available", "none", "0.1.0-alpha.9", approvalRelease, false},
+		{"available", "none", "0.0.0-dev", "", false},
+		{"required", "required", "0.1.0-alpha.9", approvalRelease, false},
+		{"required", "required", "0.0.0-dev", "", false},
+		{"forbid", "required", "0.1.0-alpha.9", approvalRelease, false},
+		{"forbid", "required", "0.0.0-dev", "", false},
 	}
 	for _, c := range cases {
 		if got := compiler.WithheldForApproval(c.intent, c.approval, c.agent, c.gate); got != c.want {
@@ -1218,14 +1232,10 @@ func TestWithheldForApproval(t *testing.T) {
 	}
 }
 
-// TestSoftwareApprovalGated (architect decision A10-17 with A10-6): an alpha.9 agent never gets a package whose entry
-// requires approval, in a section the frozen alpha.9 rules accept (checked against the alpha.9 compat fixture); the
-// first agent with the approval flow gets it with approval required. A forbid of the same package wins over the
-// available assignment, so no approval is rendered for it.
-func TestSoftwareApprovalGated(t *testing.T) {
-	if err := alpha9Accepts(alpha9FixtureSoftware(t)); err != nil {
-		t.Fatalf("the alpha.9 check refuses the alpha.9 fixture: %v", err)
-	}
+// approvalWorld is a world with an available entry "gated" that requires approval, a required "nano", and an entry
+// "blocked" that requires approval but is forbidden for w.g1.
+func approvalWorld(t *testing.T) *world {
+	t.Helper()
 	w := newWorld(t)
 	gated := w.entry("Gated", nil, [4]string{"ubuntu", "*", "*", "gated"})
 	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", gated)
@@ -1235,13 +1245,34 @@ func TestSoftwareApprovalGated(t *testing.T) {
 	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", blocked)
 	w.assign(blocked, nil, "available", "latest", nil)
 	w.assign(blocked, w.g1, "forbid", "latest", nil)
+	return w
+}
+
+// devicesAt adds an Ubuntu device in w.g1 for each agent version.
+func (w *world) devicesAt(versions ...string) map[string]uuid.UUID {
+	w.t.Helper()
 	devices := map[string]uuid.UUID{}
-	for _, v := range []string{"0.1.0-alpha.9", compiler.ApprovalAgent} {
+	for _, v := range versions {
 		d := w.v2Device("{1,2}", w.g1)
 		w.ubuntu(d, "amd64")
 		w.agentAt(d, v)
 		devices[v] = d
 	}
+	return devices
+}
+
+// TestSoftwareApprovalGated (architect decision A10-17 with A10-6): an agent before the gate never gets a package whose
+// entry requires approval, and an alpha.9 agent gets a section the frozen alpha.9 rules accept (checked against the
+// alpha.9 compat fixture); the first agent with the approval flow gets it with approval required. A forbid of the same
+// package wins over the available assignment, so no approval is rendered for it.
+func TestSoftwareApprovalGated(t *testing.T) {
+	if err := alpha9Accepts(alpha9FixtureSoftware(t)); err != nil {
+		t.Fatalf("the alpha.9 check refuses the alpha.9 fixture: %v", err)
+	}
+	const later = "0.1.0-alpha.11"
+	w := approvalWorld(t)
+	w.comp.SetApprovalAgent(later)
+	devices := w.devicesAt("0.1.0-alpha.9", "0.1.0-alpha.10", later)
 	w.mustCompile(statechange.ScopeOrg, w.org)
 
 	old := w.fetch(devices["0.1.0-alpha.9"]).Software
@@ -1255,11 +1286,126 @@ func TestSoftwareApprovalGated(t *testing.T) {
 	if err := alpha9Accepts(raw); err != nil {
 		t.Errorf("the alpha.9 agent refuses the section: %v", err)
 	}
-	s := w.fetch(devices[compiler.ApprovalAgent]).Software
+	if s := w.fetch(devices["0.1.0-alpha.10"]).Software; pkgOf(s, "gated") != nil || pkgOf(s, "nano") == nil {
+		t.Errorf("alpha.10 below the gate %s: %+v", later, s.Packages)
+	}
+	s := w.fetch(devices[later]).Software
 	if got := approvalOf(pkgOf(s, "gated")); got != "required" {
-		t.Errorf("%s: gated %q", compiler.ApprovalAgent, got)
+		t.Errorf("%s: gated %q", later, got)
 	}
 	if p := pkgOf(s, "blocked"); p == nil || p.Intent != bundle.SoftwareForbid || p.Approval != "" || p.Approved != nil {
-		t.Errorf("%s: forbid did not win: %+v", compiler.ApprovalAgent, p)
+		t.Errorf("%s: forbid did not win: %+v", later, p)
 	}
+}
+
+// TestSoftwareApprovalWithheldWithoutAgentSupport (architect decision A10-17): while no agent has PDK-811, the
+// compiler's own gate withholds every package whose entry requires approval, from releases and from development builds
+// and the device simulator alike, since those are built from a tree without the approval flow. The section otherwise
+// stays complete. PDK-811 sets compiler.ApprovalAgent and replaces this test with the cases of its release.
+func TestSoftwareApprovalWithheldWithoutAgentSupport(t *testing.T) {
+	if compiler.ApprovalAgent != "" {
+		t.Fatalf("the gate is %s: replace this test with the cases of the release that has PDK-811", compiler.ApprovalAgent)
+	}
+	w := approvalWorld(t)
+	devices := w.devicesAt("0.1.0-alpha.9", "0.1.0-alpha.10", "0.1.0-alpha.11", "0.0.0-dev", "0.0.0-devicesim", "")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for v, d := range devices {
+		s := w.fetch(d).Software
+		if s == nil || pkgOf(s, "gated") != nil || pkgOf(s, "nano") == nil {
+			t.Errorf("agent %q: section %+v", v, s)
+			continue
+		}
+		if p := pkgOf(s, "blocked"); p == nil || p.Intent != bundle.SoftwareForbid || p.Approval != "" {
+			t.Errorf("agent %q: forbid did not win: %+v", v, p)
+		}
+	}
+}
+
+// TestSoftwareApprovalAcrossEntries (A10-17, plan M13c decision 9): two catalog entries name one package, a free one
+// offered to alice and one requiring approval offered to everyone. In both creation orders, so either entry supplies
+// the merged package: an agent before the gate, including a development build under the production gate, gets alice's
+// free offer only; an agent at or past the gate gets the package for everyone with approval required and alice, who
+// may install it without approval, approved.
+func TestSoftwareApprovalAcrossEntries(t *testing.T) {
+	const later = "0.1.0-alpha.11"
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	free := func(name, pkg string) {
+		w.assignTo(w.entry(name, nil, [4]string{"ubuntu", "*", "*", pkg}), "user_id", alice, "available")
+	}
+	gated := func(name, pkg string) {
+		e := w.entry(name, nil, [4]string{"ubuntu", "*", "*", pkg})
+		w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", e)
+		w.assign(e, nil, "available", "latest", nil)
+	}
+	free("Free first", "first")
+	gated("Gated first", "first")
+	gated("Gated second", "second")
+	free("Free second", "second")
+	devices := w.devicesAt("0.0.0-dev", "0.1.0-alpha.10", later)
+	for _, d := range devices {
+		w.own(d, alice)
+	}
+	check := func(stage, agent, want string) {
+		t.Helper()
+		s := w.fetch(devices[agent]).Software
+		for _, pkg := range []string{"first", "second"} {
+			p := pkgOf(s, pkg)
+			if p == nil {
+				t.Errorf("%s, agent %s: %s missing", stage, agent, pkg)
+				continue
+			}
+			if got := audienceString(p.Audience) + " " + approvalOf(p); got != want {
+				t.Errorf("%s, agent %s: %s %q, want %q", stage, agent, pkg, got, want)
+			}
+		}
+	}
+	freeOnly := audienceString(&bundle.SoftwareAudience{Users: []string{w.username(alice)}}) + " "
+
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for v := range devices {
+		check("production gate", v, freeOnly)
+	}
+
+	w.comp.SetApprovalAgent(later)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	check("set gate", "0.0.0-dev", audienceString(&bundle.SoftwareAudience{All: true})+" required:"+w.username(alice))
+	check("set gate", "0.1.0-alpha.10", freeOnly)
+	check("set gate", later, audienceString(&bundle.SoftwareAudience{All: true})+" required:"+w.username(alice))
+}
+
+// TestSoftwareReconcileFollowsApprovalGate (A10-17 with the A10-6 mechanism of PDK-799): the reconcile loop recompiles
+// a device whose agent version crossed the approval gate, so an upgrade past it gains the package with approval
+// required and a rollback below it drops the package again.
+func TestSoftwareReconcileFollowsApprovalGate(t *testing.T) {
+	const gate = "0.1.0-alpha.11"
+	w := approvalWorld(t)
+	w.comp.SetApprovalAgent(gate)
+	d := w.devicesAt("0.1.0-alpha.10")["0.1.0-alpha.10"]
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	check := func(when, want string) {
+		t.Helper()
+		s := w.fetch(d).Software
+		if pkgOf(s, "nano") == nil {
+			t.Fatalf("%s: nano missing: %+v", when, s)
+		}
+		if got := approvalOf(pkgOf(s, "gated")); got != want {
+			t.Fatalf("%s: gated %q, want %q", when, got, want)
+		}
+	}
+	reconcile := func() {
+		t.Helper()
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("compiled below the gate", "missing")
+
+	w.agentAt(d, gate)
+	reconcile()
+	check("upgraded to the gate", "required")
+
+	w.agentAt(d, "0.1.0-alpha.10")
+	reconcile()
+	check("rolled back below the gate", "missing")
 }

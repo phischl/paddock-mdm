@@ -19,6 +19,10 @@ func (c *Compiler) RecordWarningsAt(ctx context.Context, org, device uuid.UUID, 
 // ApprovalAgent is approvalAgent for the tests of the approval gate (A10-17).
 const ApprovalAgent = approvalAgent
 
+// SetApprovalAgent makes c compile with gate as approvalAgent, so a test can run the approval flow as it will be once
+// PDK-811 sets the constant.
+func (c *Compiler) SetApprovalAgent(gate string) { c.approvalAgent = gate }
+
 // WithheldForApproval is withheldForApproval for the tests of the approval gate.
 func WithheldForApproval(intent, approval, agent, gate string) bool {
 	return withheldForApproval(intent, approval, agent, gate)
