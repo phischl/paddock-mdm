@@ -238,6 +238,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getSoftwareAssignment` | read | no | GET /api/v1/software-assignments/{id} |
 | `getSoftwareCatalogEntry` | read | no | GET /api/v1/software-catalog/{id} |
 | `getSoftwareSource` | read | no | One source with its signing key (a public key); 404 not_found for another organization's. |
+| `listCompileWarnings` | read | no | What the compiler shortened or dropped from a device's bundle against what an administrator assigned (architect decisions A10-9 and A10-10), from the device's latest compile: each compile of a device replaces its warnings, and a device whose bundle was blocked keeps those of its current bundle. |
 | `listDeviceManagedSoftware` | read | no | The catalog applications the device manages (plan M13a §3.4): what the device reported for each, and for an application assigned to it that it has not reported on the derived state not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package applies, no report yet). |
 | `listSoftwareAssignments` | read | no | The assignments of catalog entries to the organization, device groups, users or user groups; the search matches the entry's name. |
 | `listSoftwareCatalog` | read | no | The applications of the organization's software catalog (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one. |

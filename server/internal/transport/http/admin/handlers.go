@@ -80,8 +80,10 @@ type handlers struct {
 	softwareCatalog *app.SoftwareCatalog
 	// softwareStatus lists what devices report about the catalog's applications (plan M13a §3.4).
 	softwareStatus *app.SoftwareStatus
-	ipAllowlist    *app.IPAllowlist
-	overview       *app.Overview
+	// compileWarnings are the compile warnings of the organization's devices (PDK-918).
+	compileWarnings *app.CompileWarnings
+	ipAllowlist     *app.IPAllowlist
+	overview        *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
 	// accessReview is the access review report (plan M12 decisions 25 and 26).

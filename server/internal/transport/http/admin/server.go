@@ -73,8 +73,10 @@ type Deps struct {
 	SoftwareCatalog *app.SoftwareCatalog
 	// SoftwareStatus lists what devices report about the catalog's applications (plan M13a §3.4).
 	SoftwareStatus *app.SoftwareStatus
-	AccountList    *app.AccountList
-	Overview       *app.Overview
+	// CompileWarnings lists what the compiler shortened or dropped from devices' bundles (PDK-918).
+	CompileWarnings *app.CompileWarnings
+	AccountList     *app.AccountList
+	Overview        *app.Overview
 	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
 	SecurityReview *app.SecurityReview
 	// AccessReview is the access review report (plan M12 decisions 25 and 26).
@@ -327,7 +329,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns, backupRestorePlans: d.BackupRestorePlans,
+		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwareCatalog: d.SoftwareCatalog, softwareStatus: d.SoftwareStatus, compileWarnings: d.CompileWarnings, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns, backupRestorePlans: d.BackupRestorePlans,
 		securityReview: d.SecurityReview,
 		accessReview:   d.AccessReview,
 		diagnostics:    d.Diagnostics,

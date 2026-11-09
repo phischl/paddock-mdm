@@ -146,11 +146,16 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 // owners, capped at bundle.MaxSoftwareAudience. Required and available packages name their source, and Sources lists
 // exactly those; a section with a Flatpak source also requires the flatpak runtime package (plan M13b decision 9), so
 // a Flatpak forbid, uninstall or hold alone never installs Flatpak (architect decision A10-7). For an agent release
-// before selfServiceAgent, available packages and Flatpak applications are left out (A10-6). The section is nil when
-// no package resolves. err names an entry that fails the current rules and has an assignment whose scope covers the
+// before selfServiceAgent, available packages and Flatpak applications are left out (A10-6). When the flatpak package
+// itself resolves to forbid or uninstall, every Flatpak application is left out with its remote and the runtime, and
+// each required or available one returns a flatpak_forbidden warning (A10-9); a truncated audience returns an
+// audience_truncated warning (A10-10). Both warnings name every assignment the package came from. The section is nil
+// when no package resolves. err names an entry that fails the current rules and has an assignment whose scope covers the
 // device, or such an assignment whose entry resolves on the device; the device's bundle must then not be published.
-func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uuid.UUID, osID, versionID, arch, agent string) (*bundle.SoftwareSpec, []bundle.Hold, []software.Conflict, error) {
+func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uuid.UUID, osID, versionID, arch, agent string) (*bundle.SoftwareSpec, []bundle.Hold, []software.Conflict, []compileWarning, error) {
 	var effective []software.Effective
+	// contributors are the assignments each package came from, by packageKey, for the warnings.
+	contributors := map[string][]pgstore.SoftwareAssignment{}
 	for _, a := range s.assignments {
 		audience, applies := s.audience(ctx, a, device, groups)
 		if !applies {
@@ -163,7 +168,7 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 		// An invalid entry fails every device of the assignment's scope, whether or not its references resolve there:
 		// which reference would apply cannot be trusted once the list fails the rules (an empty list resolves nowhere).
 		if e.invalid != nil {
-			return nil, nil, nil, fmt.Errorf("catalog entry %s (%s) fails the catalog rules: %w", a.CatalogEntryID,
+			return nil, nil, nil, nil, fmt.Errorf("catalog entry %s (%s) fails the catalog rules: %w", a.CatalogEntryID,
 				software.DisplayParam(e.name, 100), e.invalid)
 		}
 		ref, ok := software.ResolveRef(e.packages, osID, versionID, arch)
@@ -171,7 +176,7 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 			continue
 		}
 		if err := s.invalidAssignments[a.ID]; err != nil {
-			return nil, nil, nil, fmt.Errorf("software assignment %s of catalog entry %s (%s) fails the assignment rules: %w",
+			return nil, nil, nil, nil, fmt.Errorf("software assignment %s of catalog entry %s (%s) fails the assignment rules: %w",
 				a.ID, a.CatalogEntryID, software.DisplayParam(e.name, 100), err)
 		}
 		slug := ""
@@ -188,16 +193,32 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 		effective = append(effective, software.Effective{CatalogEntryID: a.CatalogEntryID, Package: ref.Package,
 			FlatpakRef: ref.FlatpakRef, Scope: ref.Scope, Source: slug, Intent: a.Intent, UpdateRule: a.UpdateRule,
 			Version: a.Version, Audience: audience})
+		key := packageKey(bundle.SoftwarePackage{Package: ref.Package, FlatpakRef: ref.FlatpakRef})
+		contributors[key] = append(contributors[key], a)
 	}
 	resolved, mergeHolds, conflicts := software.MergeIntents(effective)
 	if len(resolved) == 0 {
-		return nil, nil, conflicts, nil
+		return nil, nil, conflicts, nil, nil
 	}
 	selfService := !buildinfo.OlderRelease(agent, selfServiceAgent)
+	flatpakForbidden := slices.ContainsFunc(resolved, func(r software.Resolved) bool {
+		return r.FlatpakRef == "" && r.Package == flatpakRuntime &&
+			(r.Intent == software.IntentForbid || r.Intent == software.IntentUninstall)
+	})
+	var warnings []compileWarning
 	spec := &bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{}, Packages: make([]bundle.SoftwarePackage, 0, len(resolved)+1)}
 	var holds []bundle.Hold
 	for _, r := range resolved {
 		if !selfService && (r.FlatpakRef != "" || r.Intent == software.IntentAvailable) {
+			continue
+		}
+		if flatpakForbidden && r.FlatpakRef != "" {
+			if r.Intent == software.IntentRequired || r.Intent == software.IntentAvailable {
+				slog.WarnContext(ctx, "flatpak_forbidden: an entry forbids or uninstalls flatpak, so a Flatpak application is left out",
+					"device_id", device, "catalog_entry_id", r.CatalogEntryID)
+				warnings = append(warnings, assignmentWarnings(contributors[packageKey(bundle.SoftwarePackage{FlatpakRef: r.FlatpakRef})],
+					WarningFlatpakForbidden, map[string]any{"flatpak_ref": r.FlatpakRef})...)
+			}
 			continue
 		}
 		p := bundle.SoftwarePackage{Package: r.Package, FlatpakRef: r.FlatpakRef, Scope: r.Scope, Intent: r.Intent,
@@ -212,6 +233,8 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 			slog.WarnContext(ctx, "audience_truncated: the audience of an available package names more users than a bundle carries; "+
 				"the first ones by user name keep it", "device_id", device, "catalog_entry_id", r.CatalogEntryID,
 				"users", len(a.Users), "kept", bundle.MaxSoftwareAudience)
+			warnings = append(warnings, assignmentWarnings(contributors[packageKey(p)], WarningAudienceTruncated,
+				map[string]any{"users": len(a.Users), "kept": bundle.MaxSoftwareAudience})...)
 			a.Users = a.Users[:bundle.MaxSoftwareAudience]
 		}
 		spec.Packages = append(spec.Packages, p)
@@ -224,11 +247,11 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 		}
 	}
 	if len(spec.Packages) == 0 {
-		return nil, nil, conflicts, nil
+		return nil, nil, conflicts, warnings, nil
 	}
 	addFlatpakRuntime(spec)
 	slices.SortFunc(spec.Sources, func(a, b bundle.SoftwareSource) int { return strings.Compare(a.Slug, b.Slug) })
-	return spec, holds, conflicts, nil
+	return spec, holds, conflicts, warnings, nil
 }
 
 // selfServiceAgent is the first agent release that reads what plan M13b added to the software section: available
