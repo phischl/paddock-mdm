@@ -417,10 +417,12 @@ type SoftwareSpec struct {
 	Packages []SoftwarePackage `json:"packages"`
 }
 
-// SoftwareSource is an APT source the device writes as a deb822 file with its keyring.
+// SoftwareSource is an APT source the device writes as a deb822 file with its keyring, or a Flatpak remote (Kind
+// SoftwareSourceFlatpak, plan M13b decision 7) with exactly one URI and no suites, components or architectures.
 type SoftwareSource struct {
 	Slug          string   `json:"slug"`
-	URIs          []string `json:"uris"` // https only
+	Kind          string   `json:"kind,omitempty"` // "" = APT, SoftwareSourceFlatpak
+	URIs          []string `json:"uris"`           // https only
 	Suites        []string `json:"suites"`
 	Components    []string `json:"components"`
 	Architectures []string `json:"architectures"` // empty = apt's default
@@ -434,12 +436,41 @@ const (
 	SoftwareUninstall = "uninstall"
 	SoftwareHold      = "hold"
 	SoftwareForbid    = "forbid"
+	// SoftwareAvailable offers the package to the users of its Audience to install and remove themselves (plan M13b
+	// decision 7).
+	SoftwareAvailable = "available"
 )
+
+// Kinds of SoftwareSource.Kind and scopes of SoftwarePackage.Scope (plan M13b decision 7).
+const (
+	SoftwareSourceFlatpak = "flatpak"
+	SoftwareScopeSystem   = "system"
+	SoftwareScopeUser     = "user"
+)
+
+// MaxSoftwareAudience bounds the user names of an audience (plan M13b R2, decision Q13); the compiler caps a larger
+// audience and warns.
+const MaxSoftwareAudience = 200
+
+// SoftwareRuntimeEntryID is the catalog_entry_id of a package the compiler adds itself, such as the flatpak runtime
+// (plan M13b decision 9): it is not an entry of the organization, and the agent reports it as system-managed.
+const SoftwareRuntimeEntryID = "00000000-0000-0000-0000-000000000000"
+
+// SoftwareAudience names who may see and install an available package: everyone (All) or the listed users (lower-case
+// UPNs, sorted, at most MaxSoftwareAudience).
+type SoftwareAudience struct {
+	All   bool     `json:"all,omitempty"`
+	Users []string `json:"users,omitempty"`
+}
 
 // SoftwarePackage is the desired state of one package.
 type SoftwarePackage struct {
-	Package string `json:"package"`
-	Intent  string `json:"intent"`
+	// Package is the APT package; FlatpakRef the Flatpak application ID of a package from a Flatpak source, in Scope
+	// ("" = system). A package names exactly one of them.
+	Package    string `json:"package"`
+	FlatpakRef string `json:"flatpak_ref,omitempty"`
+	Scope      string `json:"scope,omitempty"`
+	Intent     string `json:"intent"`
 	// Version is the version a required package is pinned to or a hold keeps; nil otherwise.
 	Version *string `json:"version"`
 	// Source is the slug of a Sources entry, "" for the distribution's own repositories.
@@ -449,6 +480,8 @@ type SoftwarePackage struct {
 	// device: the hold is left out of the updates section so the removal is not refused by apt-mark, and the agent
 	// reports the overlap in the software resource's status (architect decision 2026-11-02). Absent otherwise.
 	SupersededHold bool `json:"superseded_hold,omitempty"`
+	// Audience is set for an available package only.
+	Audience *SoftwareAudience `json:"audience,omitempty"`
 }
 
 // Limits of the software section (plan M13a decisions 2 and 8).
@@ -470,57 +503,140 @@ var (
 	sourceComponent   = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 	sourceFingerprint = regexp.MustCompile(`^[0-9A-F]{40}$`)
 	catalogEntryID    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	flatpakRef        = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*){2,}$`)
+)
+
+// Limits of a Flatpak application ID and of an audience's user name (plan M13b decisions 3 and 7). The user name
+// limit is the one of app_user.username (characters, not bytes), so every user the server stores fits an audience.
+const (
+	maxFlatpakRef       = 255
+	maxAudienceUsername = 256
 )
 
 // ValidateSoftware checks every field of a software section: the source rules the server applies on upload (plan
-// M13a decision 2), the package and intent rules (decisions 8 and 9), the protected packages (RefusedIntent), unique
-// slugs and packages, and that every source a package names is in Sources. It does not compare a keyring with its fingerprint; the agent does that per source.
+// M13a decision 2, plan M13b decision 5 for Flatpak remotes), the package and intent rules (M13a decisions 8 and 9),
+// the protected packages (RefusedIntent), unique slugs and packages, and that every source a package names is in
+// Sources. A package names either an APT package or a Flatpak application (of a Flatpak source when it is required or
+// available); an available package has an audience of everyone or of 1 to MaxSoftwareAudience sorted user names
+// (ValidAudienceUser), and no other package has one (plan M13b decision 7). It does not compare a keyring with its
+// fingerprint; the agent does that per source.
 func ValidateSoftware(s SoftwareSpec) error {
-	slugs := make([]string, 0, len(s.Sources))
+	kinds := make(map[string]string, len(s.Sources))
 	for _, src := range s.Sources {
 		if err := validateSoftwareSource(src); err != nil {
 			return err
 		}
-		if slices.Contains(slugs, src.Slug) {
+		if _, ok := kinds[src.Slug]; ok {
 			return fmt.Errorf("bundle: duplicate software source %q", src.Slug)
 		}
-		slugs = append(slugs, src.Slug)
+		kinds[src.Slug] = src.Kind
 	}
 	var names []string
 	for _, p := range s.Packages {
-		if !ValidPackage(p.Package) {
-			return fmt.Errorf("bundle: invalid software package %q", p.Package)
+		name, err := validateSoftwareName(p, kinds)
+		if err != nil {
+			return err
 		}
-		if slices.Contains(names, p.Package) {
-			return fmt.Errorf("bundle: duplicate software package %q", p.Package)
+		if slices.Contains(names, name) {
+			return fmt.Errorf("bundle: duplicate software package %q", name)
 		}
-		names = append(names, p.Package)
+		names = append(names, name)
 		switch p.Intent {
 		case SoftwareRequired, SoftwareHold:
 			if p.Version != nil && !ValidPackageVersion(*p.Version) {
-				return fmt.Errorf("bundle: invalid version of software package %q", p.Package)
+				return fmt.Errorf("bundle: invalid version of software package %q", name)
 			}
-		case SoftwareUninstall, SoftwareForbid:
+		case SoftwareUninstall, SoftwareForbid, SoftwareAvailable:
 			if p.Version != nil {
-				return fmt.Errorf("bundle: software package %q with intent %s must not have a version", p.Package, p.Intent)
+				return fmt.Errorf("bundle: software package %q with intent %s must not have a version", name, p.Intent)
 			}
 		default:
-			return fmt.Errorf("bundle: invalid intent %q of software package %q", p.Intent, p.Package)
+			return fmt.Errorf("bundle: invalid intent %q of software package %q", p.Intent, name)
 		}
-		if RefusedIntent(p.Package, p.Intent) {
+		if err := validateAudience(p, name); err != nil {
+			return err
+		}
+		if p.FlatpakRef == "" && RefusedIntent(p.Package, p.Intent) {
 			return fmt.Errorf("bundle: software package %q is protected against intent %s", p.Package, p.Intent)
 		}
 		if p.SupersededHold && p.Intent != SoftwareForbid && p.Intent != SoftwareUninstall {
-			return fmt.Errorf("bundle: software package %q with intent %s cannot supersede a hold", p.Package, p.Intent)
-		}
-		if p.Source != "" && !slices.Contains(slugs, p.Source) {
-			return fmt.Errorf("bundle: software package %q names the unknown source %q", p.Package, p.Source)
+			return fmt.Errorf("bundle: software package %q with intent %s cannot supersede a hold", name, p.Intent)
 		}
 		if !catalogEntryID.MatchString(p.CatalogEntryID) {
-			return fmt.Errorf("bundle: invalid catalog_entry_id of software package %q", p.Package)
+			return fmt.Errorf("bundle: invalid catalog_entry_id of software package %q", name)
 		}
 	}
 	return nil
+}
+
+// validateSoftwareName checks what a package installs and from which source, and returns its name for messages and
+// the duplicate check: the APT package, or the Flatpak application ID with its scope, which names its Flatpak source
+// when it is required or available. An APT package never names a Flatpak source.
+func validateSoftwareName(p SoftwarePackage, kinds map[string]string) (string, error) {
+	kind, known := kinds[p.Source]
+	if p.Source != "" && !known {
+		return "", fmt.Errorf("bundle: software package %q names the unknown source %q", p.Package+p.FlatpakRef, p.Source)
+	}
+	if p.FlatpakRef == "" {
+		if !ValidPackage(p.Package) {
+			return "", fmt.Errorf("bundle: invalid software package %q", p.Package)
+		}
+		if p.Scope != "" {
+			return "", fmt.Errorf("bundle: software package %q must not have a scope", p.Package)
+		}
+		if kind == SoftwareSourceFlatpak {
+			return "", fmt.Errorf("bundle: software package %q names the flatpak source %q", p.Package, p.Source)
+		}
+		return p.Package, nil
+	}
+	if p.Package != "" {
+		return "", fmt.Errorf("bundle: software package %q must not also name the flatpak_ref %q", p.Package, p.FlatpakRef)
+	}
+	if len(p.FlatpakRef) > maxFlatpakRef || !flatpakRef.MatchString(p.FlatpakRef) {
+		return "", fmt.Errorf("bundle: invalid flatpak_ref %q", p.FlatpakRef)
+	}
+	if p.Scope != "" && p.Scope != SoftwareScopeSystem && p.Scope != SoftwareScopeUser {
+		return "", fmt.Errorf("bundle: flatpak_ref %q has an invalid scope %q", p.FlatpakRef, p.Scope)
+	}
+	// Only a required or available application brings its remote; forbid, uninstall and hold act on an installed one
+	// and never add Flatpak to a device (architect decision A10-7).
+	if kind != SoftwareSourceFlatpak && (p.Source != "" || p.Intent == SoftwareRequired || p.Intent == SoftwareAvailable) {
+		return "", fmt.Errorf("bundle: flatpak_ref %q must name a flatpak source", p.FlatpakRef)
+	}
+	return "flatpak:" + p.FlatpakRef, nil
+}
+
+// validateAudience checks the audience of a package: required for an available package and absent otherwise; either
+// everyone or 1 to MaxSoftwareAudience distinct lower-case user names in ascending order.
+func validateAudience(p SoftwarePackage, name string) error {
+	a := p.Audience
+	if p.Intent != SoftwareAvailable {
+		if a != nil {
+			return fmt.Errorf("bundle: software package %q with intent %s must not have an audience", name, p.Intent)
+		}
+		return nil
+	}
+	switch {
+	case a == nil || !a.All && len(a.Users) == 0:
+		return fmt.Errorf("bundle: available software package %q needs an audience", name)
+	case a.All && len(a.Users) > 0:
+		return fmt.Errorf("bundle: the audience of software package %q is either all or users", name)
+	case len(a.Users) > MaxSoftwareAudience:
+		return fmt.Errorf("bundle: the audience of software package %q has more than %d users", name, MaxSoftwareAudience)
+	}
+	for i, u := range a.Users {
+		if !ValidAudienceUser(u) || i > 0 && a.Users[i-1] >= u {
+			return fmt.Errorf("bundle: the audience of software package %q has an invalid or unsorted user %q", name, u)
+		}
+	}
+	return nil
+}
+
+// ValidAudienceUser reports whether an audience can name user name u: valid UTF-8 of 1 to 256 characters, lower case,
+// without white space. The compiler leaves out an owner whose name fails it instead of failing the device's bundle.
+func ValidAudienceUser(u string) bool {
+	return u != "" && utf8.ValidString(u) && utf8.RuneCountInString(u) <= maxAudienceUsername && u == strings.ToLower(u) &&
+		!strings.ContainsFunc(u, unicode.IsSpace)
 }
 
 func validateSoftwareSource(src SoftwareSource) error {
@@ -535,6 +651,30 @@ func validateSoftwareSource(src SoftwareSource) error {
 			return fmt.Errorf("bundle: software source %q: %w", src.Slug, err)
 		}
 	}
+	switch src.Kind {
+	case "":
+		if err := validateAPTSource(src); err != nil {
+			return err
+		}
+	case SoftwareSourceFlatpak:
+		if len(src.URIs) != 1 || len(src.Suites) > 0 || len(src.Components) > 0 || len(src.Architectures) > 0 {
+			return fmt.Errorf("bundle: flatpak source %q must have exactly one uri and no suites, components or architectures", src.Slug)
+		}
+	default:
+		return fmt.Errorf("bundle: software source %q has an invalid kind %q", src.Slug, src.Kind)
+	}
+	keyring, err := base64.StdEncoding.Strict().DecodeString(src.Keyring)
+	if err != nil || len(keyring) == 0 || len(keyring) > maxSourceKeyring {
+		return fmt.Errorf("bundle: software source %q has an invalid keyring", src.Slug)
+	}
+	if !sourceFingerprint.MatchString(src.Fingerprint) {
+		return fmt.Errorf("bundle: software source %q has an invalid fingerprint", src.Slug)
+	}
+	return nil
+}
+
+// validateAPTSource checks the suites, components and architectures of an APT source.
+func validateAPTSource(src SoftwareSource) error {
 	if len(src.Suites) < 1 || len(src.Suites) > maxSourceSuites {
 		return fmt.Errorf("bundle: software source %q must have 1 to %d suites", src.Slug, maxSourceSuites)
 	}
@@ -567,13 +707,6 @@ func validateSoftwareSource(src SoftwareSource) error {
 		if (a != sourceArchAMD64 && a != sourceArchARM64) || slices.Contains(src.Architectures[:i], a) {
 			return fmt.Errorf("bundle: software source %q has an invalid architecture %q", src.Slug, a)
 		}
-	}
-	keyring, err := base64.StdEncoding.Strict().DecodeString(src.Keyring)
-	if err != nil || len(keyring) == 0 || len(keyring) > maxSourceKeyring {
-		return fmt.Errorf("bundle: software source %q has an invalid keyring", src.Slug)
-	}
-	if !sourceFingerprint.MatchString(src.Fingerprint) {
-		return fmt.Errorf("bundle: software source %q has an invalid fingerprint", src.Slug)
 	}
 	return nil
 }

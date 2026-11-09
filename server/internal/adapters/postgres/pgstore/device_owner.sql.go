@@ -92,3 +92,37 @@ func (q *Queries) ListDeviceOwners(ctx context.Context, deviceID uuid.UUID) ([]L
 	}
 	return items, nil
 }
+
+const listDeviceOwnersWithUsernames = `-- name: ListDeviceOwnersWithUsernames :many
+SELECT device_owner.device_id, device_owner.user_id, app_user.username
+FROM device_owner JOIN app_user ON app_user.id = device_owner.user_id
+ORDER BY device_owner.device_id, app_user.username
+`
+
+type ListDeviceOwnersWithUsernamesRow struct {
+	DeviceID uuid.UUID
+	UserID   uuid.UUID
+	Username string
+}
+
+// Every owner of the organization's devices with the user name (lower-case UPN), for the compiler (plan M13b
+// decision 8).
+func (q *Queries) ListDeviceOwnersWithUsernames(ctx context.Context) ([]ListDeviceOwnersWithUsernamesRow, error) {
+	rows, err := q.db.Query(ctx, listDeviceOwnersWithUsernames)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeviceOwnersWithUsernamesRow{}
+	for rows.Next() {
+		var i ListDeviceOwnersWithUsernamesRow
+		if err := rows.Scan(&i.DeviceID, &i.UserID, &i.Username); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

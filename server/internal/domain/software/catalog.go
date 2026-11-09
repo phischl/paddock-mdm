@@ -212,6 +212,13 @@ func NormalizeCategory(category string) string { return NormalizeName(category) 
 // exact release and architecture, exact release, exact architecture, neither. An empty device architecture matches
 // the wildcard only. ok is false when no candidate applies: the entry is not applicable to the device.
 func Resolve(packages []PackageRef, osID, versionID, arch string) (pkg string, ok bool) {
+	ref, ok := ResolveRef(packages, osID, versionID, arch)
+	return ref.Package, ok
+}
+
+// ResolveRef is Resolve returning the whole winning reference, so a Flatpak application keeps its ID and scope (plan
+// M13b decision 8).
+func ResolveRef(packages []PackageRef, osID, versionID, arch string) (ref PackageRef, ok bool) {
 	best := -1
 	for _, p := range packages {
 		if p.Distribution != osID {
@@ -231,10 +238,10 @@ func Resolve(packages []PackageRef, osID, versionID, arch string) (pkg string, o
 			continue
 		}
 		if rank > best {
-			best, pkg, ok = rank, p.Package, true
+			best, ref, ok = rank, p, true
 		}
 	}
-	return pkg, ok
+	return ref, ok
 }
 
 // DefaultUpdateRule is the update rule of an assignment that names none: pinned for a required application with a

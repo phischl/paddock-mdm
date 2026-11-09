@@ -162,12 +162,13 @@ LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.state = 'active' AND d.bundle_seq > 0
   AND ((coalesce(s.arch, '') <> '' AND d.compiled_arch <> s.arch)
     OR d.compiled_os_id <> coalesce(d.os_release ->> 'id', '')
-    OR d.compiled_os_version_id <> coalesce(d.os_release ->> 'version_id', ''))
+    OR d.compiled_os_version_id <> coalesce(d.os_release ->> 'version_id', '')
+    OR d.compiled_agent_version <> coalesce(s.agent_version, ''))
 ORDER BY d.id
 `
 
-// Active devices with a bundle whose architecture or os-release (the canonical lowercase keys) differ from what their
-// latest compile saw (PDK-695). An architecture the agent does not report ("") is no change.
+// Active devices with a bundle whose architecture, os-release (the canonical lowercase keys) or agent version differ
+// from what their latest compile saw (PDK-695, PDK-799). An architecture the agent does not report ("") is no change.
 func (q *Queries) ListDevicesWithOutdatedPlatform(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, listDevicesWithOutdatedPlatform)
 	if err != nil {
@@ -273,23 +274,27 @@ func (q *Queries) SetDeviceBundleSeq(ctx context.Context, arg SetDeviceBundleSeq
 }
 
 const setDeviceCompiledPlatform = `-- name: SetDeviceCompiledPlatform :exec
-UPDATE device SET compiled_arch = $1, compiled_os_id = $2, compiled_os_version_id = $3
-WHERE id = $4 AND (compiled_arch, compiled_os_id, compiled_os_version_id) IS DISTINCT FROM ($1::text, $2::text, $3::text)
+UPDATE device SET compiled_arch = $1, compiled_os_id = $2, compiled_os_version_id = $3,
+  compiled_agent_version = $4
+WHERE id = $5 AND (compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version)
+  IS DISTINCT FROM ($1::text, $2::text, $3::text, $4::text)
 `
 
 type SetDeviceCompiledPlatformParams struct {
-	Arch        string
-	OsID        string
-	OsVersionID string
-	ID          uuid.UUID
+	Arch         string
+	OsID         string
+	OsVersionID  string
+	AgentVersion string
+	ID           uuid.UUID
 }
 
-// The platform inputs a compile of the device saw (PDK-695).
+// The platform inputs a compile of the device saw (PDK-695, PDK-799).
 func (q *Queries) SetDeviceCompiledPlatform(ctx context.Context, arg SetDeviceCompiledPlatformParams) error {
 	_, err := q.db.Exec(ctx, setDeviceCompiledPlatform,
 		arg.Arch,
 		arg.OsID,
 		arg.OsVersionID,
+		arg.AgentVersion,
 		arg.ID,
 	)
 	return err

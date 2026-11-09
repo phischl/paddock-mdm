@@ -27,21 +27,24 @@ WHERE d.state = 'active'
   AND lb.schema_version <> CASE WHEN 2 = ANY(coalesce(s.schema_versions, '{}')) THEN 2 ELSE 1 END
 ORDER BY d.id;
 
--- Active devices with a bundle whose architecture or os-release (the canonical lowercase keys) differ from what their
--- latest compile saw (PDK-695). An architecture the agent does not report ("") is no change.
+-- Active devices with a bundle whose architecture, os-release (the canonical lowercase keys) or agent version differ
+-- from what their latest compile saw (PDK-695, PDK-799). An architecture the agent does not report ("") is no change.
 -- name: ListDevicesWithOutdatedPlatform :many
 SELECT d.id FROM device d
 LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.state = 'active' AND d.bundle_seq > 0
   AND ((coalesce(s.arch, '') <> '' AND d.compiled_arch <> s.arch)
     OR d.compiled_os_id <> coalesce(d.os_release ->> 'id', '')
-    OR d.compiled_os_version_id <> coalesce(d.os_release ->> 'version_id', ''))
+    OR d.compiled_os_version_id <> coalesce(d.os_release ->> 'version_id', '')
+    OR d.compiled_agent_version <> coalesce(s.agent_version, ''))
 ORDER BY d.id;
 
--- The platform inputs a compile of the device saw (PDK-695).
+-- The platform inputs a compile of the device saw (PDK-695, PDK-799).
 -- name: SetDeviceCompiledPlatform :exec
-UPDATE device SET compiled_arch = @arch, compiled_os_id = @os_id, compiled_os_version_id = @os_version_id
-WHERE id = @id AND (compiled_arch, compiled_os_id, compiled_os_version_id) IS DISTINCT FROM (@arch::text, @os_id::text, @os_version_id::text);
+UPDATE device SET compiled_arch = @arch, compiled_os_id = @os_id, compiled_os_version_id = @os_version_id,
+  compiled_agent_version = @agent_version
+WHERE id = @id AND (compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version)
+  IS DISTINCT FROM (@arch::text, @os_id::text, @os_version_id::text, @agent_version::text);
 
 -- Optimistic: a concurrent compile of the same device makes this update no row.
 -- name: SetDeviceBundleSeq :execrows
