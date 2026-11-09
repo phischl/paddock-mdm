@@ -285,7 +285,7 @@ func AuditIndexDSN() (string, error) {
 }
 
 // AuditWriterDSN is the paddock_audit_writer DSN with the host rewritten to the development port mapping: the
-// isolation gate finishes the evidence exports it requested itself with it (isolation_fixtures.go).
+// isolation gate finishes the evidence exports it requested itself with it (isolation_fixtures_test.go).
 func AuditWriterDSN() (string, error) {
 	raw, err := Secret("db_paddock_audit_writer_url")
 	if err != nil {
