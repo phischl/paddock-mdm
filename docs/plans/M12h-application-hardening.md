@@ -154,7 +154,8 @@ unit is sandboxed as far as the agent's work allows. Nothing a device or an admi
 12. `fsutil.WriteFileOwned` and every path-creating primitive the reconcilers use (`MkdirAll`, `Rename`,
     `Remove`) MUST resolve the target's parent step by step with `openat2`-free Go primitives: open each component
     with `O_PATH|O_NOFOLLOW|O_DIRECTORY` from `/`, refuse a component that is a symlink (`ELOOP`/`ENOTDIR`), refuse
-    a directory not owned by uid 0 or writable by group/others (mode `& 0o022 != 0`) unless the directory is one
+    a directory not owned by uid 0 or writable by group/others (mode `& 0o022 != 0`; group write by gid 0 without
+    an access ACL allowed, see Correction 2026-11-09, PDK-963) unless the directory is one
     of the allow-listed sticky system directories (`/tmp`, `/var/tmp` — never used by managed files anyway),
     and perform the write relative to the final directory file descriptor (`unix.Openat`, `Renameat`,
     `Unlinkat`). A refusal is `reconcile.ErrParentNotTrusted`; a managed file below such a parent reports
@@ -817,3 +818,13 @@ and a 1.08 GiB peak at the first start, so 1g would let the kernel kill a web wo
 `authentik-worker` keeps 1g (measured 265–330 MiB, 370 MiB peak at the first start). Both values are overridable per
 installation (`PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT`, `PADDOCK_AUTHENTIK_WORKER_MEM_LIMIT`) and listed in
 `docs/operations/capacity.md`.
+
+## Correction 2026-11-09 (PDK-963, regression finding A10-22)
+
+§3.5 decision 12 refused every group-writable parent (`mode & 0o022 != 0`). That also refused root-owned system state
+directories whose group is root: Ubuntu 26.04 ships `/var/lib/AccountsService` as 0775 root:root, so the agent could
+no longer hide the local administrator from the login screen (plan M4a.1 decision 4). Corrected rule: a parent is
+refused when it is world-writable (`mode & 0o002`, except the allow-listed sticky `/tmp` and `/var/tmp`), when it is
+group-writable and its group is not gid 0, when it is group-writable and carries an access ACL (the group bits are
+then the ACL mask, which may grant write to a named user or group), or when it is not owned by uid 0. Group write for
+gid 0 without an ACL grants nothing beyond root. The component-by-component, descriptor-relative walk is unchanged.
