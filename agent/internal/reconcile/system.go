@@ -46,33 +46,14 @@ func (o OS) ReadFile(path string) ([]byte, fs.FileInfo, error) {
 	return data, info, nil
 }
 
-// WriteFileAtomic implements System.
+// WriteFileAtomic implements System. Missing parents are created 0755, owned by root:root when running as root (plan
+// M2b decision 10); a parent that fails the parent rule refuses the write with ErrParentNotTrusted.
 func (o OS) WriteFileAtomic(path string, data []byte, mode fs.FileMode, uid, gid int) error {
-	if err := o.mkdirs(filepath.Dir(path)); err != nil {
-		return err
-	}
 	return fsutil.WriteFileOwned(o.path(path), data, mode, 0o755, uid, gid)
 }
 
-// mkdirs creates missing parent directories 0755, owned by root:root when running as root.
-func (o OS) mkdirs(dir string) error {
-	if _, err := os.Stat(o.path(dir)); err == nil || dir == "/" {
-		return nil
-	}
-	if err := o.mkdirs(filepath.Dir(dir)); err != nil {
-		return err
-	}
-	if err := os.Mkdir(o.path(dir), 0o755); err != nil && !errors.Is(err, fs.ErrExist) { //nolint:gosec // plan M2b decision 10: parents 0755 root:root
-		return err
-	}
-	if os.Geteuid() == 0 {
-		return os.Chown(o.path(dir), 0, 0)
-	}
-	return nil
-}
-
 // Remove implements System.
-func (o OS) Remove(path string) error { return os.Remove(o.path(path)) }
+func (o OS) Remove(path string) error { return fsutil.Remove(o.path(path)) }
 
 // LookupUser implements System from /etc/passwd, never through NSS: Himmelblau's NSS module answers for any user
 // name with a synthetic entry (plan M5a step 0a), and os/user would ask NSS in a cgo build.
@@ -382,10 +363,7 @@ func (o OS) Chpasswd(ctx context.Context, input []byte) (string, int, error) {
 
 // Rename implements System.
 func (o OS) Rename(oldPath, newPath string) error {
-	if err := os.Rename(o.path(oldPath), o.path(newPath)); err != nil {
-		return err
-	}
-	return fsutil.SyncDir(o.path(filepath.Dir(newPath)))
+	return fsutil.Rename(o.path(oldPath), o.path(newPath))
 }
 
 // ReadDir implements System.

@@ -176,3 +176,27 @@ only the escrow-reader counts their uses" (recorded with this date in the appsec
   accepted for alpha.10; the M12h-2 plan re-evaluates the escrow-reader fetching tokens by `jti`.
 - − Seven secrets instead of one; one development-only user, guarded by `prod-check`.
 - Follow-up: `docs/architecture.md` §8.3's key table is replaced by the real inventory (PDK-820).
+
+## Amendment 2026-11-08 — decision 5: two AG-2 directives move to the "off" list
+
+Decided by the architect lead on 2026-11-08 (alpha.10 decision A10-3, PDK-826). Decision 5 stands; the AG-2 set
+changes:
+
+1. **`ProtectKernelTunables` is off.** It makes all of `/sys` and `/proc/sys` read-only, not only sysctl. The agent's
+   job is installing packages, and their maintainer scripts reload AppArmor profiles (`/sys/kernel/security`,
+   e.g. `himmelblau-apparmor` on Ubuntu 26.04), trigger udev (`uevent` files) or write EFI variables
+   (`grub-install`, `efibootmgr` on a grub or shim upgrade). Under the directive these fail or are skipped silently
+   and no system gate would notice.
+2. **`SystemCallArchitectures=native` is off**, for the same reason: maintainer scripts of multiarch packages (for
+   example i386) run foreign-architecture binaries, which the filter kills.
+3. The "on" set of `paddock-supervisor.service` and `paddock-disk-setup.service` is `LockPersonality=yes`,
+   `RestrictRealtime=yes`, `ProtectKernelLogs=yes`, `PrivateTmp=yes`, `SystemCallFilter=~@obsolete @cpu-emulation`;
+   both moved directives are named with their reason in the unit's "off" list.
+4. **Revocation path.** `paddock-revoke` runs as the agent's child and inherits the unit's sandbox, so its runtime
+   environment changes although its code does not. Every directive in effect was checked against what
+   `paddock-revoke` and cryptsetup need (block devices, device mapper, the kernel keyring, `/run/cryptsetup`,
+   `mlock`, `loginctl`, `systemctl reboot --force --force`); none restricts them. If a later directive could hinder
+   the revocation, the revoke invocation must not inherit it (the unit or the exec path escapes the sandbox) or the
+   directive goes on the "off" list; the revocation is never weakened to fit the sandbox. The revocation VM gates
+   (`TestRevocationLockGate`, `TestRevocationRefusalGates`, the destroy flow) and `TestDiskGates` must be green on
+   both VMs before the sandboxed units merge.

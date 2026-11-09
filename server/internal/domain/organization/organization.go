@@ -9,6 +9,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/phischl/paddock-mdm/pkg/policy"
 )
 
 // Statuses.
@@ -19,7 +21,7 @@ const (
 	StatusSuspended          = "suspended"
 )
 
-var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$`)
+var slugPattern = regexp.MustCompile(`^` + policy.OrgSlugPattern + `$`)
 
 // ErrInvalidSlug and ErrInvalidName are validation errors.
 var (
@@ -107,8 +109,6 @@ const MaxDomains = 20
 // ErrInvalidDomains is returned for malformed or duplicate domains.
 var ErrInvalidDomains = fmt.Errorf("domains must be at most %d distinct lowercase DNS names such as example.org", MaxDomains)
 
-var domainPattern = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$`)
-
 // ValidateDomains checks the domains of an organization (plan M3a decision 1); the order is kept because the first
 // domain is the primary domain.
 func ValidateDomains(domains []string) error {
@@ -117,7 +117,7 @@ func ValidateDomains(domains []string) error {
 	}
 	seen := map[string]bool{}
 	for _, d := range domains {
-		if len(d) > 253 || !domainPattern.MatchString(d) || seen[d] {
+		if policy.ValidateLoginDomain(d) != nil || seen[d] {
 			return ErrInvalidDomains
 		}
 		seen[d] = true

@@ -22,6 +22,16 @@ TTYReset=yes
 TTYVHangup=yes
 TTYVTDisallocate=yes
 TimeoutStartSec=30min
+# Sandboxing: the "on" set of paddock-supervisor.service (ADR 0051 decision 5, plan M12h decision 13). The install
+# passphrase is read from /var/lib/paddock, never from /tmp, so PrivateTmp applies; the TPM and the LUKS header are
+# reached through /dev, which no directive here restricts. The autoinstall gate (TestEncryptGates) must pass with
+# this set; the reasons for the directives that stay off (including ProtectKernelTunables and
+# SystemCallArchitectures=native) are in paddock-supervisor.service. Removed after a failing system gate: none.
+LockPersonality=yes
+RestrictRealtime=yes
+ProtectKernelLogs=yes
+PrivateTmp=yes
+SystemCallFilter=~@obsolete @cpu-emulation
 
 [Install]
 WantedBy=multi-user.target

@@ -349,7 +349,7 @@ func (a *Applier) removeStale(b *bundle.Bundle, rep *Report) {
 	for _, path := range a.stale(b) {
 		id := "file:" + path
 		if err := a.file.Remove(path); err != nil { // reconcile.ErrModified: left in place and reported
-			rep.fail(id, err.Error())
+			rep.fail(id, reconcile.Message(err))
 			continue
 		}
 		rep.Changed++
@@ -386,7 +386,7 @@ func (a *Applier) Plan(ctx context.Context, b *bundle.Bundle) []Planned {
 		if rec, ok := a.reconciler(b, res.Type); !ok {
 			p.Error = "unsupported resource type " + res.Type
 		} else if changes, err := rec.Plan(ctx, res); err != nil {
-			p.Error = err.Error()
+			p.Error = reconcile.Message(err)
 		} else {
 			p.Changes = changes
 		}

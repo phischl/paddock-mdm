@@ -1369,6 +1369,23 @@ flowchart TB
 
 Everything is Go, `CGO_ENABLED=0`, statically linked, `linux/amd64` and `linux/arm64`.
 
+**Sandboxed unit (ADR 0051 decision 5, plan M12h decision 13).** `paddock-supervisor.service` and
+`paddock-disk-setup.service` run with `LockPersonality`, `RestrictRealtime`, `ProtectKernelLogs`, `PrivateTmp` and
+`SystemCallFilter=~@obsolete @cpu-emulation` (ADR 0051 amendment 2026-11-08). The agent and every tool it starts
+(apt, dpkg, cryptsetup, visudo, `paddock-revoke`) inherit them; transient units started with `systemd-run`
+(supervisor upgrade, uninstall helper, desktop notifications) do not. `ProtectClock`, `RestrictSUIDSGID`,
+`ProtectHostname`, `NoNewPrivileges`, `~@mount`, `ProtectKernelTunables`, `SystemCallArchitectures=native` and
+`ProtectSystem` stay off; the unit file names why. None of the directives touches the A/B switch, the self-test or
+the rollback (§11.2).
+
+**Parent rule for managed paths (ADR 0051 AG-1, plan M12h decision 12).** Every write, rename and delete of a
+reconciler (files, software, login, sudoers quarantine) and of the uninstall resolves the parent directory component
+by component from `/` with `O_PATH|O_NOFOLLOW|O_DIRECTORY` and acts relative to the final directory descriptor
+(`openat`, `renameat`, `unlinkat`). A component that is a symlink or not a directory, not owned by root, or writable by
+group or others (except the sticky root-owned `/tmp` and `/var/tmp`) refuses the operation: the resource fails with
+`parent_not_trusted`, nothing is written. Writes into the agent's own layout (`/var/lib/paddock`, `/etc/paddock`) keep
+the plain atomic write.
+
 ### 11.2 Update with A/B, self-test, watchdog (design contract 1–6)
 
 ```mermaid

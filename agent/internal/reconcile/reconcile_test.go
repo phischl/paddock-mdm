@@ -2,6 +2,8 @@ package reconcile_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"os/user"
@@ -226,6 +228,63 @@ func TestFileOnDisk(t *testing.T) {
 	}
 	if _, err := os.Stat(full); !os.IsNotExist(err) {
 		t.Fatal("not removed")
+	}
+}
+
+// TestFileParentNotTrusted: a managed file below a parent a service user could swap (a symlink, a group-writable
+// directory) is refused with the status message parent_not_trusted; nothing is written or deleted through it (plan
+// M12h decision 12).
+func TestFileParentNotTrusted(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := user.LookupGroupId(me.Gid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAccounts(t, root, me.Username+":x:"+me.Uid+":"+me.Gid+"::/home/x:/bin/sh\n", group.Name+":x:"+me.Gid+":\n")
+	victim := filepath.Join(root, "etc", "sudoers.d")
+	shared := filepath.Join(root, "opt", "shared")
+	for _, dir := range []string{victim, filepath.Join(root, "opt", "app"), shared} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(shared, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(root, "opt", "app", "conf")); err != nil {
+		t.Fatal(err)
+	}
+	sys := reconcile.OS{Root: root}
+	f := &reconcile.File{Sys: sys, Managed: managed(t)}
+	for _, path := range []string{"/opt/app/conf/paddock-x", "/opt/shared/app.conf"} {
+		res := f.Apply(ctx, fileRes(t, path, "0644", me.Username, group.Name, "x\n"))
+		if res.Status != reconcile.Error || res.Message != "parent_not_trusted" {
+			t.Fatalf("%s: %+v, want error parent_not_trusted", path, res)
+		}
+	}
+	if entries, _ := os.ReadDir(victim); len(entries) != 0 {
+		t.Fatalf("written through the symlink: %v", entries)
+	}
+	if entries, _ := os.ReadDir(shared); len(entries) != 0 {
+		t.Fatalf("written below the group-writable directory: %v", entries)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "keep"), []byte("x\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("x\n"))
+	if err := f.Managed.Record("/opt/app/conf/keep", hex.EncodeToString(sum[:])); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Remove("/opt/app/conf/keep"); !errors.Is(err, reconcile.ErrParentNotTrusted) || reconcile.Message(err) != "parent_not_trusted" {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(victim, "keep")); err != nil {
+		t.Fatalf("deleted through the symlink: %v", err)
 	}
 }
 
