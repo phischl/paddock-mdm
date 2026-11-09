@@ -143,7 +143,10 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 // apply, and those of a user or user group that owns the device (plan M13b decision 8); each resolves through its
 // entry to the device's package and the results merge per package (software.MergeIntents). An available package
 // carries its audience: everyone for an organization or device-group target, otherwise the user names of the targeted
-// owners, capped at bundle.MaxSoftwareAudience. Required and available packages name their source, and Sources lists
+// owners, capped at bundle.MaxSoftwareAudience. A user-scope Flatpak application with intent required, forbid or
+// uninstall carries the same user names as its Users when every assignment of the winning intent targets users or
+// user groups, and none (system scope) when one targets the organization or a device group, or when a system-scope entry
+// of the same application contributes the winning intent (architect decision A10-11, PDK-925); a truncated list returns a flatpak_users_truncated warning. Required and available packages name their source, and Sources lists
 // exactly those; a section with a Flatpak source also requires the flatpak runtime package (plan M13b decision 9), so
 // a Flatpak forbid, uninstall or hold alone never installs Flatpak (architect decision A10-7). For an agent release
 // before selfServiceAgent, available packages and Flatpak applications are left out (A10-6). When the flatpak package
@@ -157,7 +160,7 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 	// contributors are the assignments each package came from, by packageKey, for the warnings.
 	contributors := map[string][]pgstore.SoftwareAssignment{}
 	for _, a := range s.assignments {
-		audience, applies := s.audience(ctx, a, device, groups)
+		owners, applies := s.targets(a, device, groups)
 		if !applies {
 			continue
 		}
@@ -190,9 +193,13 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 			// so a failed source never lifts it.
 			slug = src.Slug
 		}
+		audience, users, ok := targetedUsers(ctx, a, ref, owners, device)
+		if !ok {
+			continue
+		}
 		effective = append(effective, software.Effective{CatalogEntryID: a.CatalogEntryID, Package: ref.Package,
 			FlatpakRef: ref.FlatpakRef, Scope: ref.Scope, Source: slug, Intent: a.Intent, UpdateRule: a.UpdateRule,
-			Version: a.Version, Audience: audience})
+			Version: a.Version, Audience: audience, Users: users})
 		key := packageKey(bundle.SoftwarePackage{Package: ref.Package, FlatpakRef: ref.FlatpakRef})
 		contributors[key] = append(contributors[key], a)
 	}
@@ -223,6 +230,10 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 		}
 		p := bundle.SoftwarePackage{Package: r.Package, FlatpakRef: r.FlatpakRef, Scope: r.Scope, Intent: r.Intent,
 			Version: r.Version, CatalogEntryID: r.CatalogEntryID.String(), Audience: r.Audience}
+		// The supplier's scope decides: a system-scope result never carries the users of another entry's user scope.
+		if r.Scope == bundle.SoftwareScopeUser && r.Users != nil {
+			p.Users = &r.Users
+		}
 		if r.Source != "" && (r.Intent == software.IntentRequired || r.Intent == software.IntentAvailable) {
 			p.Source = r.Source
 			if !slices.ContainsFunc(spec.Sources, func(x bundle.SoftwareSource) bool { return x.Slug == r.Source }) {
@@ -236,6 +247,18 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 			warnings = append(warnings, assignmentWarnings(contributors[packageKey(p)], WarningAudienceTruncated,
 				map[string]any{"users": len(a.Users), "kept": bundle.MaxSoftwareAudience})...)
 			a.Users = a.Users[:bundle.MaxSoftwareAudience]
+		}
+		if u := p.Users; u != nil && len(*u) > bundle.MaxSoftwareAudience {
+			slog.WarnContext(ctx, "flatpak_users_truncated: a user-scope Flatpak application targets more users than a bundle "+
+				"carries; the first ones by user name keep it", "device_id", device, "catalog_entry_id", r.CatalogEntryID,
+				"users", len(*u), "kept", bundle.MaxSoftwareAudience)
+			// Only the winning intent's user-targeted assignments put users into the list; the others lost the merge.
+			listed := slices.DeleteFunc(slices.Clone(contributors[packageKey(p)]), func(a pgstore.SoftwareAssignment) bool {
+				return a.Intent != r.Intent || (!a.UserID.Valid && !a.UserGroupID.Valid)
+			})
+			warnings = append(warnings, assignmentWarnings(listed, WarningFlatpakUsersTruncated,
+				map[string]any{"users": len(*u), "kept": bundle.MaxSoftwareAudience, "flatpak_ref": p.FlatpakRef})...)
+			*u = (*u)[:bundle.MaxSoftwareAudience]
 		}
 		spec.Packages = append(spec.Packages, p)
 		// ADR 0042 decision 3: a hold and a required pinned package are held by the updates reconciler, the single
@@ -287,12 +310,12 @@ func packageKey(p bundle.SoftwarePackage) string {
 	return p.Package
 }
 
-// audience reports whether assignment a applies to the device in groups and, for an available assignment, its
-// audience on the device (plan M13b decision 8): everyone for the organization or a device group of the device; the
-// targeted user when they own the device; the owners who are members of a targeted user group. A user or user-group
-// assignment applies only when it names at least one owner, so a device without owners gets none of them; an
-// available one only when one of them has a user name an audience can carry (bundle.ValidAudienceUser).
-func (s *orgSoftware) audience(ctx context.Context, a pgstore.SoftwareAssignment, device uuid.UUID, groups []uuid.UUID) (*bundle.SoftwareAudience, bool) {
+// targets reports whether assignment a applies to the device in groups and, for a user or user-group target, the
+// owners it targets on the device (plan M13b decision 8): an organization target or a device group of the device
+// applies with no owners named; a user target applies when the user owns the device, a user-group target with the
+// owners who are members. A user or user-group assignment applies only when it names at least one owner, so a device
+// without owners gets none of them.
+func (s *orgSoftware) targets(a pgstore.SoftwareAssignment, device uuid.UUID, groups []uuid.UUID) ([]deviceOwner, bool) {
 	var owners []deviceOwner
 	switch {
 	case a.DeviceGroupID.Valid && !slices.Contains(groups, a.DeviceGroupID.UUID):
@@ -310,33 +333,50 @@ func (s *orgSoftware) audience(ctx context.Context, a pgstore.SoftwareAssignment
 			}
 		}
 	default:
-		if a.Intent != software.IntentAvailable {
-			return nil, true
-		}
-		return &bundle.SoftwareAudience{All: true}, true
-	}
-	if len(owners) == 0 {
-		return nil, false
-	}
-	if a.Intent != software.IntentAvailable {
 		return nil, true
 	}
-	users := make([]string, 0, len(owners))
+	return owners, len(owners) > 0
+}
+
+// targetedUsers returns what assignment a, applying to the device with the targeted owners (none for the whole
+// device), carries for package ref: the audience of an available assignment, everyone for the whole device; the user
+// names of a user-scope Flatpak application with intent required, forbid or uninstall, none for the whole device
+// (architect decision A10-11). A user name a bundle cannot carry (bundle.ValidAudienceUser) is left out; ok is false
+// when that leaves a user-targeted audience or user list with nobody, so the assignment does not apply, and is never
+// widened to everyone or to system scope.
+func targetedUsers(ctx context.Context, a pgstore.SoftwareAssignment, ref software.PackageRef, owners []deviceOwner,
+	device uuid.UUID) (audience *bundle.SoftwareAudience, users []string, ok bool) {
+	userScope := ref.FlatpakRef != "" && ref.Scope == bundle.SoftwareScopeUser &&
+		(a.Intent == software.IntentRequired || a.Intent == software.IntentForbid || a.Intent == software.IntentUninstall)
+	switch {
+	case a.Intent != software.IntentAvailable && !userScope:
+		return nil, nil, true
+	case owners == nil && a.Intent == software.IntentAvailable:
+		return &bundle.SoftwareAudience{All: true}, nil, true
+	case owners == nil:
+		return nil, nil, true
+	}
+	users = make([]string, 0, len(owners))
 	for _, o := range owners {
-		// app_user allows names an audience cannot carry (white space, a lower case Go and PostgreSQL disagree on):
-		// one such owner must not fail the device's bundle (PDK-799 review 1).
+		// app_user allows names a bundle cannot carry (white space, a lower case Go and PostgreSQL disagree on): one
+		// such owner must not fail the device's bundle (PDK-799 review 1).
 		if !bundle.ValidAudienceUser(o.username) {
-			slog.WarnContext(ctx, "audience_user_dropped: an owner's user name cannot be carried in an audience; the owner "+
-				"is not offered the available package", "device_id", device, "user_id", o.user, "catalog_entry_id", a.CatalogEntryID)
+			slog.WarnContext(ctx, "audience_user_dropped: an owner's user name cannot be carried in a bundle; the "+
+				"package is not offered to or targeted at the owner", "device_id", device, "user_id", o.user,
+				"catalog_entry_id", a.CatalogEntryID, "intent", a.Intent)
 			continue
 		}
 		users = append(users, o.username)
 	}
 	if len(users) == 0 {
-		return nil, false
+		return nil, nil, false
 	}
 	slices.Sort(users)
-	return &bundle.SoftwareAudience{Users: slices.Compact(users)}, true
+	users = slices.Compact(users)
+	if a.Intent == software.IntentAvailable {
+		return &bundle.SoftwareAudience{Users: users}, nil, true
+	}
+	return nil, users, true
 }
 
 // alignWithHolds makes the software section and the device's merged holds (updates section) agree, as ADR 0042

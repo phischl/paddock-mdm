@@ -140,7 +140,10 @@ in a tar.gz with a `manifest.json` (entry, bytes, SHA-256, `truncated`), the arc
 The negative list above applies to the bundle as well. The journals and the managed configuration name people: user
 principal names in Himmelblau's journal, the names of locked users and of sudo rules in the agent's journal and in
 the sudoers files. A bundle is therefore personal data of the device's users ([residual-risks.md](residual-risks.md),
-RR-108).
+RR-108). The configuration bundle itself names the user principal names of those owners of the device that a software
+assignment targets: the audience of an offered application, and the users a user-scope Flatpak application is
+installed for, forbidden for or removed for (architect decision A10-11), so the device learns which of its owners an
+assignment concerns; it names no other user.
 
 The agent's list, entry by entry (`agent/internal/diagnostics` `Entries()`; a unit test fails when the first two columns of this table and the
 code differ):

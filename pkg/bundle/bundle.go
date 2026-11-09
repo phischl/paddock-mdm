@@ -482,6 +482,12 @@ type SoftwarePackage struct {
 	SupersededHold bool `json:"superseded_hold,omitempty"`
 	// Audience is set for an available package only.
 	Audience *SoftwareAudience `json:"audience,omitempty"`
+	// Users are the targeted users (lower-case UPNs, sorted, 1 to MaxSoftwareAudience, ValidAudienceUser) of a
+	// user-scope Flatpak application with intent required, forbid or uninstall: the agent acts for these users only.
+	// Such an application without Users acts in system scope, never for every user (architect decision A10-11).
+	// Absent otherwise; additive to schema 2 (ADR 0013), and an agent before the compiler's self-service gate never
+	// gets a Flatpak application (A10-6). A pointer like Audience, so SoftwarePackage stays comparable.
+	Users *[]string `json:"users,omitempty"`
 }
 
 // Limits of the software section (plan M13a decisions 2 and 8).
@@ -518,7 +524,8 @@ const (
 // the protected packages (RefusedIntent), unique slugs and packages, and that every source a package names is in
 // Sources. A package names either an APT package or a Flatpak application (of a Flatpak source when it is required or
 // available); an available package has an audience of everyone or of 1 to MaxSoftwareAudience sorted user names
-// (ValidAudienceUser), and no other package has one (plan M13b decision 7). It does not compare a keyring with its
+// (ValidAudienceUser), and no other package has one (plan M13b decision 7); a user-scope Flatpak application with
+// intent required, forbid or uninstall may name Users with the same limits, and no other package does (A10-11). It does not compare a keyring with its
 // fingerprint; the agent does that per source.
 func ValidateSoftware(s SoftwareSpec) error {
 	kinds := make(map[string]string, len(s.Sources))
@@ -554,6 +561,9 @@ func ValidateSoftware(s SoftwareSpec) error {
 			return fmt.Errorf("bundle: invalid intent %q of software package %q", p.Intent, name)
 		}
 		if err := validateAudience(p, name); err != nil {
+			return err
+		}
+		if err := validateUsers(p, name); err != nil {
 			return err
 		}
 		if p.FlatpakRef == "" && RefusedIntent(p.Package, p.Intent) {
@@ -627,6 +637,30 @@ func validateAudience(p SoftwarePackage, name string) error {
 	for i, u := range a.Users {
 		if !ValidAudienceUser(u) || i > 0 && a.Users[i-1] >= u {
 			return fmt.Errorf("bundle: the audience of software package %q has an invalid or unsorted user %q", name, u)
+		}
+	}
+	return nil
+}
+
+// validateUsers checks the Users of a package: only a user-scope Flatpak application with intent required, forbid or
+// uninstall names them, as 1 to MaxSoftwareAudience distinct user names in ascending order (architect decision A10-11).
+// An empty list is refused rather than read as system scope, so the two meanings never share a spelling.
+func validateUsers(p SoftwarePackage, name string) error {
+	if p.Users == nil {
+		return nil
+	}
+	users := *p.Users
+	targeted := p.FlatpakRef != "" && p.Scope == SoftwareScopeUser &&
+		(p.Intent == SoftwareRequired || p.Intent == SoftwareForbid || p.Intent == SoftwareUninstall)
+	switch {
+	case !targeted:
+		return fmt.Errorf("bundle: software package %q with intent %s and scope %q must not have users", name, p.Intent, p.Scope)
+	case len(users) == 0 || len(users) > MaxSoftwareAudience:
+		return fmt.Errorf("bundle: software package %q must have 1 to %d users", name, MaxSoftwareAudience)
+	}
+	for i, u := range users {
+		if !ValidAudienceUser(u) || i > 0 && users[i-1] >= u {
+			return fmt.Errorf("bundle: the users of software package %q have an invalid or unsorted user %q", name, u)
 		}
 	}
 	return nil

@@ -426,6 +426,16 @@ func flatpak(s *SoftwareSpec, ref, scope string) {
 	s.Packages[1].Package, s.Packages[1].FlatpakRef, s.Packages[1].Scope, s.Packages[1].Source = "", ref, scope, "flathub"
 }
 
+// targeted makes the second package of a validSoftware section the user-scope Flatpak application org.gimp.GIMP with
+// intent and the targeted users.
+func targeted(s *SoftwareSpec, intent string, users ...string) {
+	flatpak(s, "org.gimp.GIMP", SoftwareScopeUser)
+	s.Packages[1].Intent, s.Packages[1].Version = intent, nil
+	if users != nil {
+		s.Packages[1].Users = &users
+	}
+}
+
 // audienceOf returns n sorted, distinct user names.
 func audienceOf(n int) []string {
 	out := make([]string, n)
@@ -595,6 +605,47 @@ func TestValidateSoftware(t *testing.T) {
 			flatpak(s, "org.gimp.GIMP", "")
 			s.Packages = append(s.Packages, s.Packages[1])
 		}, false},
+		// Architect decision A10-11: the targeted users of a user-scope application, with the limits of an audience.
+		"flatpak user required for users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, "alice@example.org", "bob@example.org") }, true},
+		"flatpak user forbid for users":   {func(s *SoftwareSpec) { targeted(s, SoftwareForbid, "alice@example.org") }, true},
+		"flatpak user uninstall for users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareUninstall, "alice@example.org")
+			s.Packages[1].Source, s.Sources = "", s.Sources[:1]
+		}, true},
+		"flatpak user required without users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired) }, true},
+		"flatpak user empty users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired)
+			s.Packages[1].Users = &[]string{}
+		}, false},
+		"flatpak user 200 users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, audienceOf(MaxSoftwareAudience)...) }, true},
+		"flatpak user 201 users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, audienceOf(MaxSoftwareAudience+1)...) }, false},
+		"flatpak user unsorted users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired, "bob@example.org", "alice@example.org")
+		}, false},
+		"flatpak user duplicate users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired, "alice@example.org", "alice@example.org")
+		}, false},
+		"flatpak user upper-case user": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, "Alice@example.org") }, false},
+		"flatpak user user with space": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, "a b@example.org") }, false},
+		"flatpak user 256 character user": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired, strings.Repeat("ä", 244)+"@example.org")
+		}, true},
+		"flatpak user 257 character user": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired, strings.Repeat("a", 245)+"@example.org")
+		}, false},
+		"flatpak system with users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired, "alice@example.org")
+			s.Packages[1].Scope = SoftwareScopeSystem
+		}, false},
+		"flatpak user hold with users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareHold, "alice@example.org")
+			s.Packages[1].Source, s.Sources = "", s.Sources[:1]
+		}, false},
+		"flatpak user available with users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareAvailable, "alice@example.org")
+			s.Packages[1].Audience = &SoftwareAudience{All: true}
+		}, false},
+		"apt package with users": {func(s *SoftwareSpec) { s.Packages[1].Users = &[]string{"alice@example.org"} }, false},
 	}
 	for name, tc := range cases {
 		s := validSoftware()
@@ -650,7 +701,7 @@ func TestSoftwareAudienceContentHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"kind"`, `"flatpak_ref"`, `"scope"`, `"audience"`} {
+	for _, field := range []string{`"kind"`, `"flatpak_ref"`, `"scope"`, `"audience"`, `"users"`} {
 		if strings.Contains(string(enc), field) {
 			t.Errorf("%s encoded although unset: %s", field, enc)
 		}

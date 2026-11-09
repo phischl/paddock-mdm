@@ -2251,7 +2251,9 @@ export interface paths {
          *     current bundle. Codes are stable English identifiers the portal localizes: audience_truncated (the audience of
          *     an available package named more users than a bundle carries; params users, kept) and flatpak_forbidden (an
          *     entry forbids or uninstalls the flatpak package on the device, so its required or available Flatpak
-         *     application is left out; params flatpak_ref). A warning names the assignment and catalog entry it concerns.
+         *     application is left out; params flatpak_ref) and flatpak_users_truncated (a user-scope Flatpak application
+         *     targeted more users on the device than a bundle carries; params users, kept, flatpak_ref). A warning names the
+         *     assignment and catalog entry it concerns.
          *     The search matches the hostname and the code. A device, assignment or entry of another organization matches
          *     nothing.
          */
@@ -6861,9 +6863,9 @@ export interface components {
              * @description The catalog entry of that assignment.
              */
             catalog_entry_id: string | null;
-            /** @description audience_truncated or flatpak_forbidden; the list of codes may grow. */
+            /** @description audience_truncated, flatpak_forbidden or flatpak_users_truncated; the list of codes may grow. */
             code: string;
-            /** @description The values of the code (audience_truncated users and kept, flatpak_forbidden flatpak_ref); never user names. */
+            /** @description The values of the code (audience_truncated users and kept, flatpak_forbidden flatpak_ref, flatpak_users_truncated users, kept and flatpak_ref); never user names. */
             params: {
                 [key: string]: unknown;
             };
