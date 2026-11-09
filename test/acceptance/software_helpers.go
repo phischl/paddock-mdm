@@ -49,6 +49,18 @@ func sourceBody(prefix string) map[string]any {
 	}
 }
 
+// flatpakSourceBody is a valid Flatpak source (plan M13b decision 5): one https remote and no suites or components.
+func flatpakSourceBody(prefix string) map[string]any {
+	body := sourceBody(prefix)
+	body["kind"], body["uris"], body["suites"], body["components"] = "flatpak", []string{"https://flatpak.gates.example/repo/"}, []string{}, []string{}
+	return body
+}
+
+// flatpakRef is one Flatpak application of a catalog entry, in scope system or user.
+func flatpakRef(ref, scope string) map[string]any {
+	return map[string]any{"distribution": "ubuntu", "release": "*", "architecture": "*", "flatpak_ref": ref, "scope": scope}
+}
+
 // deleteSourceOnCleanup deletes a software source when the test ends; renew steps p up again when its step-up window
 // has run out meanwhile.
 func deleteSourceOnCleanup(t *testing.T, p *env.Portal, renew func(t *testing.T), path string) {
