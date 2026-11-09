@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -228,7 +229,7 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		}
 	}
 	if _, ok := c.Services["rabbitmq"]; ok {
-		results = append(results, checkRabbitMQManagement(c))
+		results = append(results, checkRabbitMQManagement(c), checkRabbitMQMemoryLimit(c))
 	}
 	_, valkey := c.Services[valkeyService]
 	if valkey {
@@ -1407,6 +1408,19 @@ func checkRabbitMQManagement(c Config) Result {
 		f = append(f, fmt.Sprintf("rabbitmq: management.tcp.ip is %q, want 127.0.0.1 (rabbitmq/management-loopback.conf)", ip))
 	}
 	return result("rabbitmq: management bound to loopback", f)
+}
+
+// rabbitmqMemLimit is the format RabbitMQ accepts for total_memory_available_override_value: a whole number with an
+// optional unit. It ignores anything else (1.5g) with a log line only and sizes its memory alarm from the host RAM.
+var rabbitmqMemLimit = regexp.MustCompile(`^[0-9]+([kKmMgG](i?[bB])?)?$`)
+
+func checkRabbitMQMemoryLimit(c Config) Result {
+	var f []string
+	if v := env(c.Services["rabbitmq"], "PADDOCK_RABBITMQ_MEM_LIMIT"); v != "" && !rabbitmqMemLimit.MatchString(v) {
+		f = append(f, fmt.Sprintf("rabbitmq: PADDOCK_RABBITMQ_MEM_LIMIT is %q, want a whole number with an optional unit "+
+			"(for example 1536m, not 1.5g); the memory alarm would ignore the limit", v))
+	}
+	return result("rabbitmq: memory limit readable by the memory alarm", f)
 }
 
 // checkAllowlistBypass fails while the api bypasses the application IP allow list (plan M7a decision 22).

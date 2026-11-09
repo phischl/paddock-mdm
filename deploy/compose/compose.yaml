@@ -195,8 +195,21 @@ services:
     logging: *paddock-logging
     image: ${RABBITMQ_IMAGE}
     restart: unless-stopped
+    # Runs as the image's rabbitmq user from the start, so the entrypoint skips its root chown and gosu and the broker
+    # needs no capability; the data volume is owned by that user already (fresh volumes copy the image's directory,
+    # older releases' entrypoints chowned it). The CLI calls (healthcheck, docker exec rabbitmqctl) read the Erlang
+    # cookie in its home. No read_only: the broker writes its cookie and node files and renders its configuration at
+    # start (plan M12h §3.4, ADR 0051 decision 4; hardening-exceptions.yaml).
+    user: "999:999"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: &rabbitmq-mem-limit ${PADDOCK_RABBITMQ_MEM_LIMIT:-1g}
     hostname: rabbitmq
+    environment:
+      # rabbitmq.conf sizes the memory alarm from it.
+      PADDOCK_RABBITMQ_MEM_LIMIT: *rabbitmq-mem-limit
     volumes:
       - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
@@ -393,7 +406,14 @@ services:
     logging: *paddock-logging
     image: ${FLEET_MYSQL_IMAGE}
     restart: unless-stopped
+    # The image's entrypoint starts as root, chowns the data directory (a volume an older release or a restore left
+    # behind) and drops to mysql via gosu (plan M12h §3.4, ADR 0051 decision 4).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_FLEET_MYSQL_MEM_LIMIT:-2g}
     environment:
       MYSQL_ROOT_PASSWORD_FILE: /run/secrets/fleet_mysql_root_password
       MYSQL_DATABASE: fleet
@@ -446,7 +466,14 @@ services:
     logging: *paddock-logging
     image: ${FLEET_IMAGE}
     restart: unless-stopped
+    # Runs as the image's fleet user (plan M12h §3.4, ADR 0051 decision 4). Writable: the vulnerability volume and /tmp.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits"); the vulnerability run is the peak.
+    mem_limit: ${PADDOCK_FLEET_MEM_LIMIT:-3g}
     entrypoint: ["/bin/sh", "/paddock/entrypoint.sh"]
     environment:
       FLEET_MYSQL_ADDRESS: fleet-mysql:3306
@@ -916,7 +943,13 @@ services:
     image: ${PROMETHEUS_IMAGE}
     profiles: [observability]
     restart: unless-stopped
+    # Runs as the image's nobody user (plan M12h §3.4, ADR 0051 decision 4). Writable: the data volume only.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
     pids_limit: 256
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_PROMETHEUS_MEM_LIMIT:-1g}
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus

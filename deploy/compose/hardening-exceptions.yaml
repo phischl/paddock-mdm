@@ -69,34 +69,16 @@ services:
     mem_limit:
       reason: pending PDK-823
 
+  # Fleet's MySQL: the image's entrypoint starts as root, chowns the data directory (find … ! -user mysql) and drops to
+  # mysql via gosu. Verified on fresh and existing volumes (PDK-824).
   fleet-mysql:
-    cap_drop:
-      reason: pending PDK-824
-    no_new_privileges:
-      reason: pending PDK-824
-    mem_limit:
-      reason: pending PDK-824
-  rabbitmq:
-    cap_drop:
-      reason: pending PDK-824
-    no_new_privileges:
-      reason: pending PDK-824
-    mem_limit:
-      reason: pending PDK-824
-  fleet:
-    cap_drop:
-      reason: pending PDK-824
-    no_new_privileges:
-      reason: pending PDK-824
-    mem_limit:
-      reason: pending PDK-824
-  prometheus:
-    cap_drop:
-      reason: pending PDK-824
-    no_new_privileges:
-      reason: pending PDK-824
-    mem_limit:
-      reason: pending PDK-824
+    cap_add:
+      value: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+      reason: entrypoint chown of the data directory as root, then gosu to mysql
+
+  # Not a composelint setting, recorded here so that the matrix is complete: rabbitmq has no read_only root filesystem
+  # (plan M12h §3.4), because the broker writes its Erlang cookie and node files and renders its configuration at start.
+  # It runs as the image's rabbitmq user with no capability. fleet and prometheus have read_only.
 
   authentik-server:
     cap_drop:

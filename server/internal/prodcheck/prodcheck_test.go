@@ -165,8 +165,8 @@ func TestProductionConfigurationPasses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected all PASS:\n%s", out)
 	}
-	if strings.Count(out, "PASS") != 27 {
-		t.Fatalf("expected 27 items:\n%s", out)
+	if strings.Count(out, "PASS") != 28 {
+		t.Fatalf("expected 28 items:\n%s", out)
 	}
 }
 
@@ -686,6 +686,7 @@ var labItems = []string{
 	"trusted proxies: caddy's address only",
 	"edge: internal ranges are not private_ranges",
 	"rabbitmq: management bound to loopback",
+	"rabbitmq: memory limit readable by the memory alarm",
 	"role trusted proxies",
 	"ip allow list bypass is off",
 	"rate limits are on",
@@ -1075,6 +1076,32 @@ func TestAuthentikWebWorkersItem(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestRabbitMQMemoryLimitItem: RabbitMQ ignores a limit that is not a whole number with an optional unit and sizes its
+// memory alarm from the host RAM, so the item rejects such a value although Docker accepts it (PDK-824).
+func TestRabbitMQMemoryLimitItem(t *testing.T) {
+	for _, c := range []struct {
+		value string
+		ok    bool
+	}{{"1g", true}, {"1536m", true}, {"2048", true}, {"1GiB", true}, {"512MB", true}, {"1.5g", false}, {"1,5g", false}, {"1 g", false}, {"g", false}, {"1t", false}} {
+		t.Run(c.value, func(t *testing.T) {
+			f := newFixture(t)
+			f.cfg.Services["rabbitmq"] = prodcheck.Service{Environment: map[string]*string{"PADDOCK_RABBITMQ_MEM_LIMIT": ptr(c.value)}}
+			var got *prodcheck.Result
+			for _, r := range prodcheck.Run(context.Background(), f.cfg, prodcheck.Options{Host: prodcheck.HostControlPlane}) {
+				if r.Item == "rabbitmq: memory limit readable by the memory alarm" {
+					got = &r
+				}
+			}
+			if got == nil {
+				t.Fatal("no memory limit item")
+			}
+			if got.OK != c.ok {
+				t.Fatalf("PADDOCK_RABBITMQ_MEM_LIMIT=%q: OK = %v, want %v (%s)", c.value, got.OK, c.ok, got.Detail)
+			}
+		})
+	}
 }
 
 // withNotifier adds paddock-notifier without a relay, its empty smtp_password and the api's presence flag false, as
