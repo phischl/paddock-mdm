@@ -62,6 +62,16 @@ var softwareAuditCases = map[string][]auditCase{
 			deleteSourceOnCleanup(t, s.Portal, s.stepUp, softwareSources+"/"+responseID(t, res).String())
 			expectOneEvent(t, w.alice, res.RequestID, "software_source.created", "success")
 		}},
+		{"flatpak", func(t *testing.T, w *auditWorld) {
+			s := adminStepper(adminUser(t, "a3-source"))
+			s.stepUp(t)
+			res := call(t, s.Portal, http.MethodPost, softwareSources, flatpakSourceBody("a3"))
+			expectStatus(t, res, http.StatusCreated, "")
+			deleteSourceOnCleanup(t, s.Portal, s.stepUp, softwareSources+"/"+responseID(t, res).String())
+			if ev := expectOneEvent(t, w.alice, res.RequestID, "software_source.created", "success"); ev.Params["kind"] != "flatpak" {
+				t.Fatalf("params %v, want kind flatpak", ev.Params)
+			}
+		}},
 		{"fingerprint mismatch", func(t *testing.T, w *auditWorld) {
 			s := adminStepper(adminUser(t, "a3-source"))
 			s.stepUp(t)
@@ -212,6 +222,30 @@ var softwareCatalogAuditCases = map[string][]auditCase{
 			expectStatus(t, call(t, w.alice, http.MethodPost, softwareAssignments, body), http.StatusCreated, "")
 			res := call(t, w.alice, http.MethodPost, softwareAssignments, body)
 			expectStatus(t, res, http.StatusConflict, "already_exists")
+			expectOneEvent(t, w.alice, res.RequestID, "software_assignment.created", "failure")
+		}},
+		{"user target", func(t *testing.T, w *auditWorld) {
+			entry := strings.TrimPrefix(auditEntry(t, w.alice), softwareCatalog+"/")
+			user, _ := localUserIn(t, w.alice, "a3-target", "acme.test")
+			res := call(t, w.alice, http.MethodPost, softwareAssignments, map[string]any{"catalog_entry_id": entry, "user_id": user, "intent": "available"})
+			expectStatus(t, res, http.StatusCreated, "")
+			createdID(t, w.alice, softwareAssignments, res)
+			if ev := expectOneEvent(t, w.alice, res.RequestID, "software_assignment.created", "success"); ev.Params["target"] != "user" ||
+				ev.Params["user_id"] != user || ev.Params["intent"] != "available" {
+				t.Fatalf("params %v, want target user, user_id %s and intent available", ev.Params, user)
+			}
+		}},
+		{"two targets", func(t *testing.T, w *auditWorld) {
+			entry := strings.TrimPrefix(auditEntry(t, w.alice), softwareCatalog+"/")
+			res := call(t, w.alice, http.MethodPost, softwareAssignments,
+				map[string]any{"catalog_entry_id": entry, "user_id": uuid.NewString(), "user_group_id": uuid.NewString(), "intent": "available"})
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "software_assignment.created", "failure")
+		}},
+		{"user group not found", func(t *testing.T, w *auditWorld) {
+			entry := strings.TrimPrefix(auditEntry(t, w.alice), softwareCatalog+"/")
+			res := call(t, w.alice, http.MethodPost, softwareAssignments, map[string]any{"catalog_entry_id": entry, "user_group_id": uuid.NewString(), "intent": "available"})
+			expectStatus(t, res, http.StatusNotFound, "not_found")
 			expectOneEvent(t, w.alice, res.RequestID, "software_assignment.created", "failure")
 		}},
 		{"entry not found", func(t *testing.T, w *auditWorld) {

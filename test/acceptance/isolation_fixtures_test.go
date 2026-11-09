@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
@@ -55,6 +57,8 @@ type isolationWorld struct {
 	// globexEntry is a catalog entry of globex and globexSoftwareAssignment its organization-wide assignment
 	// (seedGlobexSoftwareCatalog).
 	globexEntry, globexSoftwareAssignment string
+	// globexSoftwareUser is a globex user that globexEntry is offered to (seedGlobexUserSoftware).
+	globexSoftwareUser string
 	// globexChangeSet is a change set of globex (seedGlobexChangeSet).
 	globexChangeSet string
 	// globexRollout is a completed configuration rollout of globex (seedGlobexRollout).
@@ -585,6 +589,10 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/devices/{id}/managed-software": itemFixture(func(w *isolationWorld) string {
 		return "/api/v1/devices/" + w.globexDevice + "/managed-software"
 	}, nil),
+	"GET /api/v1/users/{id}/software": itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/software" }, nil),
+	"GET /api/v1/compile-warnings": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/compile-warnings?page_size=100", nil
+	}},
 	"GET /api/v1/software-assignments": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return softwareAssignments + "?page_size=100", nil
 	}},
@@ -943,6 +951,7 @@ var listParents = map[string]func(w *isolationWorld) string{
 	"/api/v1/devices/{id}/software":         func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/managed-software": func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/software-catalog/{id}/devices": func(w *isolationWorld) string { return w.globexEntry },
+	"/api/v1/users/{id}/software":           func(w *isolationWorld) string { return w.globexSoftwareUser },
 	"/api/v1/devices/{id}/vulnerabilities":  func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/config-status":    func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/bundles":          func(w *isolationWorld) string { return w.globexDevice },
@@ -1039,6 +1048,10 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/devices/{id}/software":         {{"q": {"globex-iso"}}},
 	"/api/v1/devices/{id}/managed-software": {{"q": {"globex-iso"}}, {"intent": {"hold"}, "sort": {"-reported_at"}, "page_size": {"100"}}},
 	"/api/v1/software-catalog/{id}/devices": {{"sort": {"-state"}, "page_size": {"100"}}, {"sort": {"reported_at"}}},
+	// globexEntry offered to globexSoftwareUser (seedGlobexUserSoftware).
+	"/api/v1/users/{id}/software": {{"q": {"globex-iso"}}, {"intent": {"available"}, "sort": {"-intent"}}},
+	// the flatpak_forbidden warnings of a globex device (seedGlobexCompileWarning).
+	"/api/v1/compile-warnings":              {{"q": {"globex-iso"}, "page_size": {"100"}}, {"code": {"flatpak_forbidden"}, "page_size": {"100"}}},
 	"/api/v1/devices/{id}/vulnerabilities":  {{"q": {"globex-iso"}}, {"severity": {"high"}}},
 	"/api/v1/devices/{id}/config-status":    {{"q": {"globex-iso"}}, {"status": {"failed", "pending"}}},
 	"/api/v1/devices/{id}/bundles":          {{"outcome": {"applied", "none"}}},
@@ -1143,6 +1156,58 @@ var listSeeds = map[string]func(t *testing.T, w *isolationWorld){
 	"/api/v1/audit/exports":            seedGlobexExport,
 	"/api/v1/diagnostics":              seedGlobexDiagnostics,
 	"/api/v1/devices/{id}/diagnostics": seedGlobexDiagnostics,
+	"/api/v1/users/{id}/software":      seedGlobexUserSoftware,
+	"/api/v1/compile-warnings":         seedGlobexCompileWarning,
+}
+
+// seedGlobexUserSoftware offers globexEntry to a new globex user who owns no device, so no globex bundle changes (plan
+// M13b decision 6, PDK-806).
+func seedGlobexUserSoftware(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	w.globexSoftwareUser, _ = localUserIn(t, w.carol, "globex-iso", "globex.test")
+	w.globexIDs = append(w.globexIDs, w.globexSoftwareUser)
+	res := call(t, w.carol, http.MethodPost, softwareAssignments, map[string]any{
+		"catalog_entry_id": w.globexEntry, "user_id": w.globexSoftwareUser, "intent": "available",
+	})
+	expectStatus(t, res, http.StatusCreated, "")
+	assignment := responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, assignment)
+	deleteOnCleanup(t, w.carol, softwareAssignments+"/"+assignment)
+}
+
+// seedGlobexCompileWarning makes the compiler record flatpak_forbidden for a new globex device of its own group (architect
+// decisions A10-9 and A10-10, PDK-806): an available Flatpak application and a forbid of the flatpak package in that group.
+// The other globex fixtures keep their bundles.
+func seedGlobexCompileWarning(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	renew := func(t *testing.T) { stepUp(t, w.carol, env.Carol, true) }
+	renew(t)
+	res := call(t, w.carol, http.MethodPost, softwareSources, flatpakSourceBody("globex-iso"))
+	expectStatus(t, res, http.StatusCreated, "")
+	source := responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, source)
+	deleteSourceOnCleanup(t, w.carol, renew, softwareSources+"/"+source)
+	group := namedGroup(t, w.carol, "globex-iso compile warnings")
+	d := activeDevice(t, w.carol, group, "globex-iso-cw-"+uniqueSuffix())
+	d.SchemaVersions = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
+	w.globexIDs = append(w.globexIDs, group, d.DeviceID)
+	ref := "org.paddock.GlobexIso" + uniqueSuffix()
+	app := gateEntry(t, w.carol, source, flatpakRef(ref, "system"))
+	runtime := gateEntry(t, w.carol, "", packageRef("ubuntu", "*", "flatpak"))
+	w.globexIDs = append(w.globexIDs, app, runtime)
+	for _, a := range []map[string]any{
+		{"catalog_entry_id": app, "device_group_id": group, "intent": "available"},
+		{"catalog_entry_id": runtime, "device_group_id": group, "intent": "forbid"},
+	} {
+		res := call(t, w.carol, http.MethodPost, softwareAssignments, a)
+		expectStatus(t, res, http.StatusCreated, "")
+		w.globexIDs = append(w.globexIDs, createdID(t, w.carol, softwareAssignments, res))
+	}
+	latestBundle(t, d, 2*time.Minute, func(b *bundle.Bundle) bool {
+		return b.Software != nil && slices.ContainsFunc(b.Software.Packages, func(p bundle.SoftwarePackage) bool {
+			return p.Package == "flatpak" && p.Intent == bundle.SoftwareForbid
+		})
+	})
 }
 
 // bundleVersionJump is how far seedGlobexBundleVersion raises the bundle sequence of globexDevice.

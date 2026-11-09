@@ -71,7 +71,7 @@ func packageRef(distribution, release, pkg string) map[string]any {
 // records its fingerprint; a session without step-up and an API token are refused with a denied event; http URIs
 // and a mismatching fingerprint are refused; a key change records both fingerprints; a source a catalog entry uses
 // cannot be deleted. The audit-once cases of the three source codes are in audit_once_software_test.go, the list
-// contract in list_contract_test.go and the isolation gate in isolation_fixtures.go.
+// contract in list_contract_test.go and the isolation gate in isolation_fixtures_test.go.
 func TestSoftwareSources(t *testing.T) {
 	alice := login(t, env.Alice)
 	admin := adminUser(t, "sw-source")
