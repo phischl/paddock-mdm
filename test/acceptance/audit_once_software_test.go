@@ -131,6 +131,26 @@ var softwareAuditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "software_repository.credential_rotated", "denied")
 		}},
 	},
+	"POST /api/v1/software-repository/rotate-key": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			s := adminStepper(adminUser(t, "a3-repo-key"))
+			awaitSigningKey(t, s.Portal)
+			s.stepUp(t)
+			res := call(t, s.Portal, http.MethodPost, softwareRepository+"/rotate-key", nil)
+			expectStatus(t, res, http.StatusAccepted, "")
+			expectOneEvent(t, w.alice, res.RequestID, "software_repository.key_rotated", "success")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodPost, softwareRepository+"/rotate-key", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "software_repository.key_rotated", "denied")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.Alice), http.MethodPost, softwareRepository+"/rotate-key", nil)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "software_repository.key_rotated", "denied")
+		}},
+	},
 	"POST /api/v1/software-sources": {
 		{"success", func(t *testing.T, w *auditWorld) {
 			s := adminStepper(adminUser(t, "a3-source"))

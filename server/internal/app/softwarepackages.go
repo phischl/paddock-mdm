@@ -37,6 +37,8 @@ var (
 	SpecSoftwarePackageUpload    = ActionSpec{Code: audit.CodeSoftwarePackageUploaded, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 	SpecSoftwarePackageDelete    = ActionSpec{Code: audit.CodeSoftwarePackageDeleted, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 	SpecSoftwareRepositoryRotate = ActionSpec{Code: audit.CodeSoftwareRepositoryCredentialRotated, AllowedRoles: RolesAdmin, RequiresStepUp: true}
+	// SpecSoftwareRepositoryKeyRotate replaces the key every device trusts for the repository (ADR 0050 decision 3).
+	SpecSoftwareRepositoryKeyRotate = ActionSpec{Code: audit.CodeSoftwareRepositoryKeyRotated, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 )
 
 // SoftwareRepoCredentialKey is the Transit key of the repositories' read credentials: the api encrypts, the compiler
@@ -404,6 +406,33 @@ func (s *SoftwarePackages) RotateCredential(ctx context.Context) (RotatedCredent
 		return nil
 	})
 	return out, err
+}
+
+// RotateKey queues the replacement of the repository's signing key (audited: software_repository.key_rotated) and
+// returns the repository. The worker generates the new key, because software-repo-wrap is its key alone (M13c
+// amendment 2026-11-09 (PDK-812)); it signs the repository with it before the devices receive it (§3.8 L5).
+func (s *SoftwarePackages) RotateKey(ctx context.Context) (SoftwareRepositoryView, error) {
+	s.ensureForAdmin(ctx)
+	err := s.runner.RunTx(ctx, ScopeOrg, SpecSoftwareRepositoryKeyRotate, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		org, err := orgOf(ctx)
+		if err != nil {
+			return err
+		}
+		rec.SetTarget(audit.Target{Type: "software_repository", ID: org.String()})
+		repo, err := q.GetSoftwareRepositoryForUpdate(ctx)
+		if db.IsNoRows(err) || (err == nil && repo.SigningFingerprint == nil) {
+			return problem.RepositoryNotReady.WithDetail("the repository's first signing key is being generated; retry shortly")
+		}
+		if err != nil {
+			return err
+		}
+		rec.SetParam("previous_fingerprint", *repo.SigningFingerprint)
+		return q.RequestSoftwareRepositoryKeyRotation(ctx, org)
+	})
+	if err != nil {
+		return SoftwareRepositoryView{}, err
+	}
+	return s.Repository(ctx)
 }
 
 // Locate answers a request of apt on the bundles host (plan M13c decision 14): the organization by its slug, the

@@ -124,7 +124,7 @@ controlplane_secrets() {
 
   secret rustfs_root_user
   secret rustfs_root_password
-  for role in compiler gateway api; do
+  for role in compiler gateway api worker; do
     secret "rustfs_bundles_${role}_access_key"
     secret "rustfs_bundles_${role}_secret_key"
   done

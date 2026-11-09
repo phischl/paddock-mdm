@@ -88,6 +88,20 @@ for policy in "$work"/state/policy-*; do
   check "$name cannot decrypt with software-repo-credential" '! grep -q "transit/decrypt/software-repo-credential" "$policy"'
 done
 
+# The repositories' signing keys (ADR 0050 decision 3, PDK-813): software-repo-wrap is derived, and the worker alone
+# encrypts and decrypts with it.
+writes="$(grep -c '^write transit/keys/software-repo-wrap ' "$work/state/key-writes" || true)"
+check "software-repo-wrap created once over two runs (got $writes)" '[[ "$writes" == 1 ]]'
+check "software-repo-wrap is aes256-gcm96, derived, not exportable, no plaintext backup" \
+  'grep -qx "write transit/keys/software-repo-wrap type=aes256-gcm96 derived=true exportable=false allow_plaintext_backup=false" "$work/state/key-writes"'
+check "paddock-worker may encrypt with software-repo-wrap" \
+  'grep -q "^path \"transit/encrypt/software-repo-wrap\"" "$work/state/policy-paddock-worker"'
+check "paddock-worker may decrypt with software-repo-wrap" \
+  'grep -q "^path \"transit/decrypt/software-repo-wrap\"" "$work/state/policy-paddock-worker"'
+check "paddock-worker keeps command-signing" \
+  'grep -q "^path \"transit/sign/command-signing\"" "$work/state/policy-paddock-worker"'
+check "paddock-worker has nothing on software-repo-credential" '! grep -q "software-repo-credential" "$work/state/policy-paddock-worker"'
+
 if [[ "$failures" -gt 0 ]]; then
   echo "$failures check(s) failed"
   exit 1

@@ -345,6 +345,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `rotateNotificationDestinationSecret` | notifications | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
 | `rotatePlatformNotificationDestinationSecret` | platform | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
 | `rotateSoftwareRepositoryCredential` | software | Replaces the repository's read credential (HTTP basic authentication, user paddock) with a new random secret and returns it once; it is never shown again and never recorded. |
+| `rotateSoftwareRepositoryKey` | software | Replaces the repository's OpenPGP signing key (ADR 0050 decision 3). |
 | `testBackupTarget` | platform | Requests a connection test. |
 | `testNotificationDestination` | notifications | Requests a test delivery. |
 | `testPlatformNotificationDestination` | platform | Requests a test delivery. |

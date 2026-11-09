@@ -876,6 +876,13 @@ services:
       PADDOCK_ESCROW_S3_BUCKET: paddock-escrow
       PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_worker_access_key
       PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_worker_secret_key
+      # Builds and signs the organizations' Paddock repositories below apt/*/dists/ of the bundles bucket (plan M13c
+      # decision 13); their system source names the repository on the bundles host.
+      PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
+      PADDOCK_BUNDLES_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
+      PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_worker_access_key
+      PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_worker_secret_key
       # Fleet settings, inventory sync and policies (plan M5a decisions 2, 6 and 8).
       PADDOCK_FLEET_URL: http://fleet:8080
       PADDOCK_FLEET_PUBLIC_URL: https://fleet.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
@@ -895,6 +902,8 @@ services:
       - fleet_api_token
       - rustfs_escrow_worker_access_key
       - rustfs_escrow_worker_secret_key
+      - rustfs_bundles_worker_access_key
+      - rustfs_bundles_worker_secret_key
       - db_paddock_worker_url
       - db_paddock_platform_url
       - rabbitmq_worker_password
@@ -1059,6 +1068,8 @@ secrets:
   rustfs_bundles_gateway_secret_key: { file: ./.secrets/rustfs_bundles_gateway_secret_key }
   rustfs_bundles_api_access_key: { file: ./.secrets/rustfs_bundles_api_access_key }
   rustfs_bundles_api_secret_key: { file: ./.secrets/rustfs_bundles_api_secret_key }
+  rustfs_bundles_worker_access_key: { file: ./.secrets/rustfs_bundles_worker_access_key }
+  rustfs_bundles_worker_secret_key: { file: ./.secrets/rustfs_bundles_worker_secret_key }
   rustfs_artifacts_api_access_key: { file: ./.secrets/rustfs_artifacts_api_access_key }
   rustfs_artifacts_api_secret_key: { file: ./.secrets/rustfs_artifacts_api_secret_key }
   rustfs_escrow_worker_access_key: { file: ./.secrets/rustfs_escrow_worker_access_key }

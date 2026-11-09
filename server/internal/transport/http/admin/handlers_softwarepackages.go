@@ -134,10 +134,23 @@ func (h *handlers) GetSoftwareRepository(ctx context.Context, _ adminapi.GetSoft
 	if err != nil {
 		return nil, err
 	}
+	return adminapi.GetSoftwareRepository200JSONResponse(toSoftwareRepository(v)), nil
+}
+
+func (h *handlers) RotateSoftwareRepositoryKey(ctx context.Context, _ adminapi.RotateSoftwareRepositoryKeyRequestObject) (adminapi.RotateSoftwareRepositoryKeyResponseObject, error) {
+	v, err := h.softwarePackages.RotateKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.RotateSoftwareRepositoryKey202JSONResponse(toSoftwareRepository(v)), nil
+}
+
+func toSoftwareRepository(v app.SoftwareRepositoryView) adminapi.SoftwareRepository {
 	r := v.Repository
 	out := adminapi.SoftwareRepository{
 		State: adminapi.SoftwareRepositoryState(v.State), Url: v.URL, Fingerprint: r.SigningFingerprint,
-		PreviousFingerprint: r.PreviousFingerprint, Generation: r.Generation, LastBuiltAt: utcPtr(r.LastBuiltAt),
+		PreviousFingerprint: r.PreviousFingerprint, KeyRotationRequestedAt: utcPtr(r.KeyRotationRequestedAt),
+		Generation: r.Generation, LastBuiltAt: utcPtr(r.LastBuiltAt),
 		LastError: r.LastError, PackageCount: int(v.PackageCount), CredentialRotatedAt: r.CredentialRotatedAt.UTC(),
 		PreviousCredentialValidUntil: utcPtr(r.PreviousCredentialExpiresAt),
 	}
@@ -145,7 +158,7 @@ func (h *handlers) GetSoftwareRepository(ctx context.Context, _ adminapi.GetSoft
 		src := toSoftwareSourceSummary(*v.Source)
 		out.Source = &src
 	}
-	return adminapi.GetSoftwareRepository200JSONResponse(out), nil
+	return out
 }
 
 func (h *handlers) RotateSoftwareRepositoryCredential(ctx context.Context, _ adminapi.RotateSoftwareRepositoryCredentialRequestObject) (adminapi.RotateSoftwareRepositoryCredentialResponseObject, error) {

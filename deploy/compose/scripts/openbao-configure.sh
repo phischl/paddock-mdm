@@ -2,8 +2,8 @@
 # Configures an initialized and unsealed OpenBao (plan M7b decision 17; content of plan M0 §6.8, M2a decision 15, M4a
 # decisions 2 and 9, M4c decisions 2 and 14, M6a decision 5, M9 decision 12): the engines transit, secret (kv-v2) and
 # approle, the transit keys audit-chain, bundle-signing, command-signing, revocation-signing, time-ticket (ed25519),
-# escrow-wrap (rsa-4096), notification-wrap, notification-pseudonym and software-repo-credential (aes256-gcm96,
-# derived), backup-wrap (aes256-gcm96, plan M15 decision 5), the KV secret secret/paddock/session, the policies and the AppRoles, whose
+# escrow-wrap (rsa-4096), notification-wrap, notification-pseudonym, software-repo-credential and software-repo-wrap
+# (aes256-gcm96, derived), backup-wrap (aes256-gcm96, plan M15 decision 5), the KV secret secret/paddock/session, the policies and the AppRoles, whose
 # role_id and secret_id are written to .secrets/approle/<role>/ (paddock-audit-writer's directory is copied to the
 # audit host). Idempotent: a stored non-empty secret_id is kept. Needs the root token in BAO_TOKEN. Development:
 # openbao-bootstrap.sh calls it; production: `./paddock bootstrap openbao` after the manual init and unseal
@@ -66,8 +66,8 @@ fi
 # The read credentials of the organizations' Paddock repositories (plan M13c amendment 2026-11-09 (PDK-812)): the api
 # encrypts, the compiler alone decrypts to render them into the bundles; derived like the notification keys, so a
 # ciphertext decrypts for its own organization only. No role holds it together with software-repo-wrap, the key of
-# the repositories' signing keys.
-for key in notification-wrap notification-pseudonym software-repo-credential; do
+# the repositories' private signing keys, which the worker alone encrypts and decrypts (ADR 0050 decision 3, PDK-813).
+for key in notification-wrap notification-pseudonym software-repo-credential software-repo-wrap; do
   if ! bao read "transit/keys/$key" >/dev/null 2>&1; then
     bao write "transit/keys/$key" type=aes256-gcm96 derived=true exportable=false allow_plaintext_backup=false \
       >/dev/null
@@ -167,8 +167,16 @@ path "transit/decrypt/escrow-wrap" {
 }
 EOF
 
+# The worker signs device commands (plan M4a decision 2) and generates, stores and uses the repositories' signing keys
+# (ADR 0050 decision 3); nothing else touches software-repo-wrap.
 bao policy write paddock-worker - >/dev/null <<'EOF'
 path "transit/sign/command-signing" {
+  capabilities = ["update"]
+}
+path "transit/encrypt/software-repo-wrap" {
+  capabilities = ["update"]
+}
+path "transit/decrypt/software-repo-wrap" {
   capabilities = ["update"]
 }
 EOF

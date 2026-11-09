@@ -608,7 +608,10 @@
       "deleted": "{actor} hat das Paket {package} {version} ({architecture}) aus dem Paddock-Repository gelöscht"
     },
     "software_repository": {
-      "credential_rotated": "{actor} hat die Lesezugangsdaten des Paddock-Repositorys ersetzt"
+      "credential_rotated": "{actor} hat die Lesezugangsdaten des Paddock-Repositorys ersetzt",
+      "key_rotated": "{actor} hat den Signaturschlüssel des Paddock-Repositorys ersetzt",
+      "built": "{actor} hat Stand {generation} des Paddock-Repositorys veröffentlicht, signiert mit dem Schlüssel {fingerprint}",
+      "build_failed": "{actor} konnte das Paddock-Repository nicht erstellen: {error}"
     },
     "software_source": {
       "created": "{actor} hat die Paketquelle {name} mit dem Schlüssel {fingerprint} hinzugefügt",

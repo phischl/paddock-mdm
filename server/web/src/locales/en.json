@@ -608,7 +608,10 @@
       "deleted": "{actor} deleted the package {package} {version} ({architecture}) from the Paddock repository"
     },
     "software_repository": {
-      "credential_rotated": "{actor} replaced the read credential of the Paddock repository"
+      "credential_rotated": "{actor} replaced the read credential of the Paddock repository",
+      "key_rotated": "{actor} rotated the signing key of the Paddock repository",
+      "built": "{actor} published build {generation} of the Paddock repository, signed with the key {fingerprint}",
+      "build_failed": "{actor} could not build the Paddock repository: {error}"
     },
     "software_source": {
       "created": "{actor} added the package source {name} with the key {fingerprint}",

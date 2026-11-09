@@ -298,6 +298,10 @@ const (
 	CodeSoftwarePackageUploaded             Code = "software_package.uploaded"
 	CodeSoftwarePackageDeleted              Code = "software_package.deleted"
 	CodeSoftwareRepositoryCredentialRotated Code = "software_repository.credential_rotated"
+	// The worker's build and the signing key of the repository (plan M13c decision 13, ADR 0050 decision 3).
+	CodeSoftwareRepositoryKeyRotated  Code = "software_repository.key_rotated"
+	CodeSoftwareRepositoryBuilt       Code = "software_repository.built"
+	CodeSoftwareRepositoryBuildFailed Code = "software_repository.build_failed"
 
 	// Software catalog entries and assignments (plan M13a §6.3).
 	CodeSoftwareCatalogEntryCreated Code = "software_catalog_entry.created"
@@ -1849,6 +1853,25 @@ var registry = map[Code]Definition{
 		Params:      []string{"previous_valid_until"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role.",
+	},
+	CodeSoftwareRepositoryKeyRotated: {
+		Code: CodeSoftwareRepositoryKeyRotated, Emitted: true,
+		Description: "An organization administrator rotated the signing key of the organization's Paddock repository: the worker generates a new key at its next round (within a minute), signs the repository with it and only then gives it to the devices with their next bundle, so a device that received the new key always finds the repository signed with it. For 30 days the repository is signed with the previous key (previous_fingerprint) as well, so a device that has not received the new key yet keeps updating; the software_repository.built event names the new fingerprint.",
+		Params:      []string{"previous_fingerprint"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role, repository_not_ready while the first signing key is being generated.",
+	},
+	CodeSoftwareRepositoryBuilt: {
+		Code: CodeSoftwareRepositoryBuilt, Emitted: true,
+		Description: "The worker published a new build of the organization's Paddock repository (actor: system): the package lists, the Release file and its signatures (InRelease, Release.gpg) made with the signing key named by fingerprint and, for 30 days after a rotation, also with the previous key. key_generated is true when the build generated that key, the first one or one an administrator's rotation requested.",
+		Params:      []string{"generation", "fingerprint", "package_count", "key_generated"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeSoftwareRepositoryBuildFailed: {
+		Code: CodeSoftwareRepositoryBuildFailed, Emitted: true,
+		Description: "A build of the organization's Paddock repository failed (actor: system), e.g. because OpenBao is sealed or the object store is unreachable; the previous build stays published and devices keep using it. The worker retries every minute; the event is recorded when the error first occurs or changes, not for every retry. The error is also shown as last_error of the repository; an error of OpenBao or the object store is recorded as its step and class (error code, HTTP status or network error), the full message is in the worker's log.",
+		Params:      []string{"error"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 	},
 	CodeSoftwareCatalogEntryCreated: {
 		Code: CodeSoftwareCatalogEntryCreated, Emitted: true,

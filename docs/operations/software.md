@@ -340,13 +340,45 @@ catalog entries.
    and the previous secret stays valid for 24 hours (`previous_credential_valid_until`). A device that stays offline
    longer fails `apt-get update` for the repository with 401 (`source_unreachable`) until its next check-in. The
    credential is one per organization, not per device (RR-115).
-6. **Serving.** On the bundles host, `GET /apt/<slug>/<path>` answers 401 with a `Basic` challenge without the
+6. **Build and signing key.** The worker builds the repository every minute when it is due (PDK-813): after an upload
+   or a delete, a key rotation, and after a failed build. It writes `dists/paddock/main/binary-{amd64,arm64}/Packages`
+   and `Packages.gz` (a package of architecture `all` is listed for both), the same lists again below
+   `by-hash/SHA256/<sha256>` of their directory, `Release` with their SHA-256 and `Acquire-By-Hash: yes`, the detached
+   `Release.gpg` and the clearsigned `InRelease`, which it writes last. apt fetches the lists by their hash, so a build
+   that fails halfway leaves the previous build readable. Older `by-hash` files stay in the bucket. The first build generates the organization's signing key, an Ed25519 OpenPGP key `Paddock <slug>`; its
+   private key exists in clear only in the worker while it signs, is stored encrypted with the Transit key
+   `software-repo-wrap`, which no other role can use, and never appears in the log. The first build also creates the
+   system source with the public key, so `GET /api/v1/software-repository` shows `fingerprint` and `source` and uploads
+   are accepted from then on. Every published build is recorded as `software_repository.built` (generation,
+   fingerprint, package count). A failed build (OpenBao sealed, the object store unreachable) keeps the previous build
+   published; it is shown as `state: failed` with `last_error`, recorded once per distinct error as
+   `software_repository.build_failed`, and retried every minute. An error of OpenBao or the object store is recorded as
+   its step and class (for example `upload InRelease: AccessDenied, HTTP 403` or `network error`); the full message,
+   with the request ID, is in the worker's log (`software repository round failed`).
+7. **Rotating the signing key.** `POST /api/v1/software-repository/rotate-key` (`org_admin`, step-up;
+   `software_repository.key_rotated` with the replaced fingerprint) answers 202 with `key_rotation_requested_at` set.
+   Within a minute the worker generates the new key, signs the repository with it and only then gives the system
+   source the new key; every device receives it with its next bundle, writes the keyring before it updates, and finds
+   `InRelease` signed with the key it has. For 30 days the worker signs `InRelease` and `Release.gpg` with the previous
+   key (`previous_fingerprint`) as well, so a device that has not received the new key yet, also one that is offline
+   meanwhile, keeps updating from the repository; 30 days after the new key was first published the worker drops the
+   previous key and rebuilds with the new key alone. A build that fails does not start the 30 days. A device that has
+   not checked in for 30 days after a rotation fails `apt-get update` for this repository until its next check-in
+   brings the new key. Rotating again while the previous rotation has not been published yet (its build failed and
+   `state` is `failed`) is safe: the unpublished key is replaced and the key the devices have keeps signing. A second
+   rotation after the first was published ends the overlap of the first: only the key it replaces keeps signing, so a
+   device that had not fetched the first new key before the second rotation fails `apt-get update` for this repository
+   until its next check-in brings the current key. Leave a device poll interval between two rotations unless the key
+   is compromised.
+8. **Serving.** On the bundles host, `GET /apt/<slug>/<path>` answers 401 with a `Basic` challenge without the
    credential, 302 to a presigned download URL (valid for 10 minutes) with it, and 404 for a path the repository does
    not have. At most `PADDOCK_RATELIMIT_BUNDLES_APT` requests a minute (default 60) per client address are answered;
    more get 429. Many devices behind one address can exceed it during a package roll-out: raise the limit then.
 
 To read the repository by hand: `curl -u paddock:<secret> -I https://bundles.<domain>/apt/<slug>/pool/main/…` answers
-302.
+302. To check the signature as apt does: download `dists/paddock/InRelease` with `curl -L -u paddock:<secret>`, save
+the system source's `signing_key` (`GET /api/v1/software-sources/{id}`) as `paddock.asc`, and run
+`gpg --dearmor <paddock.asc >paddock.gpg && gpgv --keyring ./paddock.gpg InRelease`.
 
 ## Uninstalling Paddock
 
