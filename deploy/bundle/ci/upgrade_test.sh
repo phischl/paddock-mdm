@@ -212,6 +212,32 @@ if out="$(lib eval 'cp_paddock() { printf "%s\n" postgres paddock-api; }; orphan
   pass "without orphans the step passes"
 else failed "no orphans: $out"; fi
 
+# --- rollback --------------------------------------------------------------------------------------------------------
+# A key-shaped test value built at run time, so no literal key sits in the repository for the secret scanner.
+key="$(printf 0123456789abcdef0123456789abcdef | base64)"
+# lib_rollback <legacy: true|false> <cp|audit>: step 9 against stubbed hosts; prints the call and what it read on stdin.
+lib_rollback() {
+  KEY="$key" LEGACY="$1" lib eval '
+    legacy=$LEGACY
+    mkdir -p "$W/seed"
+    printf "%s\n" "$KEY" >"$W/seed/backup.key"
+    cp_paddock() { printf "cp %s stdin=[%s]\n" "$*" "$(cat)"; }
+    audit_paddock() { printf "audit %s stdin=[%s]\n" "$*" "$(cat)"; }
+    rollback_host '"$2"
+}
+out="$(lib_rollback false cp)"
+if [[ "$out" == "cp rollback $work/w/prev/cp --yes stdin=[$key]" ]]; then
+  pass "the control plane's rollback to a release with restore.sh gets the backup key on stdin, not on its command line"
+else failed "rollback cp: $out"; fi
+out="$(lib_rollback true cp)"
+if [[ "$out" == "cp rollback $work/w/prev/cp --yes stdin=[]" ]]; then
+  pass "the control plane's legacy rollback to 0.1.0-alpha.8 gets no key"
+else failed "legacy rollback cp: $out"; fi
+out="$(lib_rollback false audit)"
+if [[ "$out" == "audit rollback $work/w/prev/audit --yes stdin=[]" ]]; then
+  pass "the audit host's rollback, which restores nothing, gets no key"
+else failed "rollback audit: $out"; fi
+
 # --- failure report ----------------------------------------------------------------------------------------------------
 : >"$STUB_LOG"
 set +e
