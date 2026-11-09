@@ -231,7 +231,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 
 | Tool | Class | Destructive | Summary |
 | --- | --- | --- | --- |
-| `createSoftwareAssignment` | write | no | Assigns a catalog entry to every device of the organization (no device_group_id) or to a device group with an intent. |
+| `createSoftwareAssignment` | write | no | Assigns a catalog entry with an intent to one target: every device of the organization (no target ID), a device group (device_group_id), a user (user_id) or a user group (user_group_id); more than one target ID is 400 invalid_request. |
 | `createSoftwareCatalogEntry` | write | no | Adds an application with its package names per distribution, release and architecture (1 to 20 references; release and architecture may be "*"; the tuple is unique within the entry). |
 | `deleteSoftwareAssignment` | write | yes | The devices stop enforcing the assignment with their next bundle; installed software stays. |
 | `deleteSoftwareCatalogEntry` | write | yes | Removes the entry together with its assignments (never 409); the devices stop managing the application, installed software stays. |
@@ -239,7 +239,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getSoftwareCatalogEntry` | read | no | GET /api/v1/software-catalog/{id} |
 | `getSoftwareSource` | read | no | One source with its signing key (a public key); 404 not_found for another organization's. |
 | `listDeviceManagedSoftware` | read | no | The catalog applications the device manages (plan M13a §3.4): what the device reported for each, and for an application assigned to it that it has not reported on the derived state not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package applies, no report yet). |
-| `listSoftwareAssignments` | read | no | The assignments of catalog entries to the organization or device groups; the search matches the entry's name. |
+| `listSoftwareAssignments` | read | no | The assignments of catalog entries to the organization, device groups, users or user groups; the search matches the entry's name. |
 | `listSoftwareCatalog` | read | no | The applications of the organization's software catalog (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one. |
 | `listSoftwareCatalogDevices` | read | no | The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, with what they reported or the derived state not_applicable or unknown (see the device's managed software). |
 | `listSoftwareSources` | read | no | The organization's APT package sources (plan M13a decision 1); the list never contains the signing key. |
@@ -274,6 +274,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `listUserDevices` | read | no | The devices the user owns (plan M8d decision 4). |
 | `listUserGroupMembers` | read | no | The members of a user group. |
 | `listUserGroups` | read | no | Local groups and imported upstream groups. |
+| `listUserSoftware` | read | no | The software assignments that target the user (plan M13b decision 6): directly (user_group_id null) or through a user group the user is a member of, with the intent. |
 | `listUsers` | read | no | Local and synced users of the organization. |
 | `lockUser` | write | yes | Locks the user: the affected devices get the lock in their next bundle (priority lane), and in Authentik the user joins paddock.<slug>.locked and loses its refresh tokens, access tokens and sessions. |
 | `removeUserGroupMember` | write | yes | Removes a user from a local group (imported groups: 409 attribute_owned_upstream). |
@@ -302,7 +303,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `createIpAllowlistEntry` | platform | Adds a range. |
 | `createNotificationDestination` | notifications | Creates a destination. |
 | `createPlatformNotificationDestination` | platform | Creates a destination. |
-| `createSoftwareSource` | software | Adds an APT package source with its signing key. |
+| `createSoftwareSource` | software | Adds a package source with its signing key: an APT repository (kind apt, the default) or a Flatpak remote (kind flatpak: exactly one URI, the remote's URL, and no suites, components or architectures, else 400 invalid_request; the signing key is the remote's GPG key). |
 | `deleteBackupTarget` | platform | Deletes the target; the backup sets already on it stay. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
 | `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |

@@ -281,6 +281,13 @@ func TestSoftwareCatalogAPI(t *testing.T) {
 	if r.status != http.StatusOK || apage.Total != 1 || apage.Items[0].Id != a.Id {
 		t.Fatalf("assignment list: %d %s", r.status, r.body)
 	}
+	if r = e.do(call{method: "GET", path: assignments + "?target=bogus", cookie: dave, skipReqCheck: true}); r.status != http.StatusBadRequest ||
+		r.problemCode(t) != "invalid_request" {
+		t.Fatalf("assignment list with an unknown target: %d %s", r.status, r.body)
+	}
+	if r = e.do(call{method: "GET", path: assignments + "?target=device_group", cookie: dave}); r.status != http.StatusOK {
+		t.Fatalf("assignment list with target device_group: %d %s", r.status, r.body)
+	}
 	if r = e.do(call{method: "GET", path: item, cookie: dave}); !strings.Contains(string(r.body), `"assignment_count":2`) {
 		t.Fatalf("assignment_count: %s", r.body)
 	}

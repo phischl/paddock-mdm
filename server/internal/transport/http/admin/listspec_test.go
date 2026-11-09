@@ -80,6 +80,7 @@ var lists = map[string]struct {
 	"listUsers":              {userList, "postgres/queries/user.sql", "ListAppUsers", "id"},
 	"listDeviceLogins":       {deviceLoginList, "postgres/queries/login_history.sql", "ListDeviceLoginEvents", "id"},
 	"listUserDevices":        {ownedDeviceList, "postgres/queries/device.sql", "ListDevices", `device\.id`},
+	"listUserSoftware":       {userSoftwareList, "postgres/queries/software.sql", "ListUserSoftware", `a\.id`},
 	"listUserGroupMembers":   {userList, "postgres/queries/user.sql", "ListAppUsers", "id"},
 	"listUserGroups":         {userGroupList, "postgres/queries/user.sql", "ListUserGroups", "id"},
 	"listPermissionProfiles": {permissionProfileList, "postgres/queries/privilege.sql", "ListPermissionProfiles", "id"},
@@ -97,6 +98,7 @@ var sortColumns = map[string]map[string]string{
 		"name": "e.name", "category": "e.category", "created_at": "e.created_at", "updated_at": "e.updated_at",
 	},
 	"listSoftwareAssignments": {"created_at": "a.created_at", "updated_at": "a.updated_at", "intent": "a.intent"},
+	"listUserSoftware":        {"name": "e.name", "intent": "a.intent"},
 	"listDeviceDiagnostics":   {"requested_at": "dd.requested_at", "state": "dd.state"},
 	"listDiagnostics":         {"requested_at": "dd.requested_at", "hostname": "d.hostname", "state": "dd.state"},
 	"listFindings": {

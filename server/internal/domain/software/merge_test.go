@@ -37,6 +37,31 @@ func TestMergeIntents(t *testing.T) {
 			conflicts: []Conflict{{Package: "nano", Versions: []*string{ver("1.0"), ver("2.0")}, Chosen: ver("1.0")}},
 		},
 		{
+			name: "available alone",
+			in:   []Effective{eff(1, "gimp", IntentAvailable, UpdateLatest, nil), eff(2, "gimp", IntentAvailable, UpdateLatest, nil)},
+			want: []Resolved{{id(1), "gimp", "src1", IntentAvailable, nil}},
+		},
+		{
+			name: "hold beats available",
+			in:   []Effective{eff(1, "gimp", IntentAvailable, UpdateLatest, nil), eff(2, "gimp", IntentHold, UpdateLatest, ver("2.10"))},
+			want: []Resolved{{id(2), "gimp", "src2", IntentHold, ver("2.10")}}, holds: []bundle.Hold{{Package: "gimp", Version: ver("2.10")}},
+		},
+		{
+			name: "required beats available",
+			in:   []Effective{eff(1, "gimp", IntentAvailable, UpdateLatest, nil), eff(2, "gimp", IntentRequired, UpdateLatest, nil)},
+			want: []Resolved{{id(2), "gimp", "src2", IntentRequired, nil}},
+		},
+		{
+			name: "uninstall beats available",
+			in:   []Effective{eff(1, "gimp", IntentUninstall, UpdateLatest, nil), eff(2, "gimp", IntentAvailable, UpdateLatest, nil)},
+			want: []Resolved{{id(1), "gimp", "src1", IntentUninstall, nil}},
+		},
+		{
+			name: "forbid beats available",
+			in:   []Effective{eff(1, "gimp", IntentAvailable, UpdateLatest, nil), eff(2, "gimp", IntentForbid, UpdateLatest, nil)},
+			want: []Resolved{{id(2), "gimp", "src2", IntentForbid, nil}},
+		},
+		{
 			name: "forbid beats required",
 			in:   []Effective{eff(1, "nano", IntentRequired, UpdatePinned, ver("1.0")), eff(2, "nano", IntentForbid, UpdateLatest, nil)},
 			want: []Resolved{{id(2), "nano", "src2", IntentForbid, nil}},

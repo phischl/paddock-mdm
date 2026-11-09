@@ -203,10 +203,11 @@ func TestSoftwareCatalog(t *testing.T) {
 		t.Fatalf("assignment event %+v", ev)
 	}
 	for name, in := range map[string]app.AssignmentInput{
-		"latest with version":   {CatalogEntryID: &entry.ID, Intent: software.IntentRequired, UpdateRule: software.UpdateLatest, Version: &pinned},
-		"forbid with version":   {CatalogEntryID: &entry.ID, Intent: software.IntentForbid, Version: &pinned},
-		"unknown intent":        {CatalogEntryID: &entry.ID, Intent: "available"},
-		"hold with bad version": {CatalogEntryID: &entry.ID, Intent: software.IntentHold, Version: new("1 0")},
+		"latest with version":    {CatalogEntryID: &entry.ID, Intent: software.IntentRequired, UpdateRule: software.UpdateLatest, Version: &pinned},
+		"forbid with version":    {CatalogEntryID: &entry.ID, Intent: software.IntentForbid, Version: &pinned},
+		"unknown intent":         {CatalogEntryID: &entry.ID, Intent: "install"},
+		"available with version": {CatalogEntryID: &entry.ID, Intent: software.IntentAvailable, Version: &pinned},
+		"hold with bad version":  {CatalogEntryID: &entry.ID, Intent: software.IntentHold, Version: new("1 0")},
 	} {
 		if _, err := catalog.CreateAssignment(ctx(operator), in); !errors.Is(err, problem.InvalidRequest) {
 			t.Errorf("%s = %v", name, err)
@@ -327,7 +328,8 @@ func TestSoftwareCatalogConstraints(t *testing.T) {
 		"forbid with version":             {"forbid", "latest", "1.0"},
 		"uninstall pinned":                {"uninstall", "pinned", nil},
 		"hold pinned":                     {"hold", "pinned", "1.0"},
-		"unknown intent":                  {"available", "latest", nil},
+		"unknown intent":                  {"install", "latest", nil},
+		"available with version":          {"available", "latest", "1.0"},
 	} {
 		if err := insertAssignment(h.org, nil, c.intent, c.rule, c.version); err == nil {
 			t.Errorf("%s was stored", name)

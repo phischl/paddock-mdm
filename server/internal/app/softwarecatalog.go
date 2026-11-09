@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"maps"
 	"slices"
 	"strings"
 
@@ -124,6 +125,7 @@ type EntryInput struct {
 func (c *SoftwareCatalog) Create(ctx context.Context, in EntryInput) (CatalogEntry, error) {
 	var out CatalogEntry
 	in.Name, in.Category = software.NormalizeName(in.Name), software.NormalizeCategory(in.Category)
+	in.Packages = software.NormalizePackages(in.Packages)
 	spec := SpecSoftwareCatalogEntryCreate
 	spec.Params = map[string]any{
 		"name": software.DisplayParam(in.Name, software.MaxNameLength), "category": software.DisplayParam(in.Category, software.MaxCategoryLength),
@@ -133,11 +135,14 @@ func (c *SoftwareCatalog) Create(ctx context.Context, in EntryInput) (CatalogEnt
 		if err := software.ValidateEntry(in.Name, in.Description, in.Category, in.Packages); err != nil {
 			return softwareEntryProblem(err)
 		}
-		slug, err := entrySourceSlug(ctx, q, in.SourceID)
+		slug, kind, err := entrySource(ctx, q, in.SourceID)
 		if err != nil {
 			return err
 		}
 		rec.SetParam("source_slug", slug)
+		if err := software.ValidatePackages(kind, in.Packages); err != nil {
+			return softwareEntryProblem(err)
+		}
 		packages, err := json.Marshal(in.Packages)
 		if err != nil {
 			return fmt.Errorf("encode package references: %w", err)
@@ -175,6 +180,7 @@ func (c *SoftwareCatalog) Create(ctx context.Context, in EntryInput) (CatalogEnt
 func (c *SoftwareCatalog) Update(ctx context.Context, id uuid.UUID, in EntryInput) (CatalogEntry, error) {
 	var out CatalogEntry
 	in.Name, in.Category = software.NormalizeName(in.Name), software.NormalizeCategory(in.Category)
+	in.Packages = software.NormalizePackages(in.Packages)
 	spec := SpecSoftwareCatalogEntryUpdate
 	spec.Target = &audit.Target{Type: "software_catalog_entry", ID: id.String()}
 	err := c.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
@@ -201,8 +207,12 @@ func (c *SoftwareCatalog) Update(ctx context.Context, id uuid.UUID, in EntryInpu
 				return softwareAssignmentProblem(err)
 			}
 		}
-		if _, err := entrySourceSlug(ctx, q, in.SourceID); err != nil {
+		_, kind, err := entrySource(ctx, q, in.SourceID)
+		if err != nil {
 			return err
+		}
+		if err := software.ValidatePackages(kind, in.Packages); err != nil {
+			return softwareEntryProblem(err)
 		}
 		packages, err := json.Marshal(in.Packages)
 		if err != nil {
@@ -289,11 +299,15 @@ func (c *SoftwareCatalog) Delete(ctx context.Context, id uuid.UUID) error {
 	})
 }
 
-// SoftwareAssignmentQuery selects a page of assignments; q matches the entry's name.
+// SoftwareAssignmentQuery selects a page of assignments; q matches the entry's name. Target is one of the
+// software.Target* kinds.
 type SoftwareAssignmentQuery struct {
 	Page           ListPage
 	CatalogEntryID *uuid.UUID
 	DeviceGroupID  *uuid.UUID
+	UserID         *uuid.UUID
+	UserGroupID    *uuid.UUID
+	Target         *string
 	Intent         *string
 }
 
@@ -306,6 +320,7 @@ func (c *SoftwareCatalog) ListAssignments(ctx context.Context, query SoftwareAss
 	err := c.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		n, err := q.CountSoftwareAssignments(ctx, pgstore.CountSoftwareAssignmentsParams{
 			QPattern: query.Page.QPattern, CatalogEntryID: nullID(query.CatalogEntryID), DeviceGroupID: nullID(query.DeviceGroupID),
+			UserID: nullID(query.UserID), UserGroupID: nullID(query.UserGroupID), Target: query.Target,
 			Intent: query.Intent, CountLimit: countLimit,
 		})
 		if err != nil {
@@ -314,7 +329,7 @@ func (c *SoftwareCatalog) ListAssignments(ctx context.Context, query SoftwareAss
 		out.Count = int(n)
 		rows, err := q.ListSoftwareAssignments(ctx, pgstore.ListSoftwareAssignmentsParams{
 			QPattern: query.Page.QPattern, CatalogEntryID: nullID(query.CatalogEntryID), DeviceGroupID: nullID(query.DeviceGroupID),
-			Intent: query.Intent, Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
+			UserID: nullID(query.UserID), UserGroupID: nullID(query.UserGroupID), Target: query.Target, Intent: query.Intent, Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
 		})
 		for _, r := range rows {
 			out.Items = append(out.Items, Assignment(r))
@@ -338,12 +353,55 @@ func (c *SoftwareCatalog) GetAssignment(ctx context.Context, id uuid.UUID) (Assi
 	return out, err
 }
 
-// AssignmentInput are the fields of an assignment. UpdateRule is derived (software.DefaultUpdateRule) when empty. On
-// update they replace the stored intent, update rule, version and reason; the entry and the scope are fixed, and
-// giving either is refused.
+// UserSoftwareQuery selects a page of the assignments that target a user; q matches the entry's name.
+type UserSoftwareQuery struct {
+	Page   ListPage
+	Intent *string
+}
+
+// UserSoftware is an assignment that targets a user, directly or through a user group (UserGroupID).
+type UserSoftware = pgstore.ListUserSoftwareRow
+
+// UserSoftware returns one page of the assignments that target the user directly or through one of their user groups
+// (plan M13b decision 6); a missing user or another organization's is not found.
+func (c *SoftwareCatalog) UserSoftware(ctx context.Context, user uuid.UUID, query UserSoftwareQuery) (Listed[UserSoftware], error) {
+	var out Listed[UserSoftware]
+	if _, err := RequireOrg(ctx, RolesRead); err != nil {
+		return out, err
+	}
+	err := c.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if _, err := q.GetAppUser(ctx, user); err != nil {
+			return notFound(err)
+		}
+		id := uuid.NullUUID{UUID: user, Valid: true}
+		n, err := q.CountUserSoftware(ctx, pgstore.CountUserSoftwareParams{
+			UserID: id, QPattern: query.Page.QPattern, Intent: query.Intent, CountLimit: countLimit,
+		})
+		if err != nil {
+			return fmt.Errorf("count the software of user %s: %w", user, err)
+		}
+		out.Count = int(n)
+		out.Items, err = q.ListUserSoftware(ctx, pgstore.ListUserSoftwareParams{
+			UserID: id, QPattern: query.Page.QPattern, Intent: query.Intent, Sort: query.Page.Sort,
+			SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
+		})
+		if err != nil {
+			return fmt.Errorf("list the software of user %s: %w", user, err)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// AssignmentInput are the fields of an assignment. At most one of DeviceGroupID, UserID and UserGroupID names its
+// target; none is the whole organization. UpdateRule is derived (software.DefaultUpdateRule) when empty. On update
+// they replace the stored intent, update rule, version and reason; the entry and the target are fixed, and giving
+// either is refused.
 type AssignmentInput struct {
 	CatalogEntryID *uuid.UUID
 	DeviceGroupID  *uuid.UUID
+	UserID         *uuid.UUID
+	UserGroupID    *uuid.UUID
 	Intent         string
 	UpdateRule     string
 	Version        *string
@@ -353,8 +411,9 @@ type AssignmentInput struct {
 // Bounds of request text in the audit params of an assignment: an intent or update rule is at most 9 characters.
 const maxIntentParam = 16
 
-// CreateAssignment assigns an entry to the organization or a device group (audited: software_assignment.created).
-// An entry or group that is not the organization's is not found; the compiler recomputes the devices.
+// CreateAssignment assigns an entry to the organization, a device group, a user or a user group (audited:
+// software_assignment.created). An entry, group or user that is not the organization's is not found; the compiler
+// recomputes the devices.
 func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInput) (Assignment, error) {
 	var out Assignment
 	if in.UpdateRule == "" {
@@ -365,6 +424,9 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 	spec.Params["app"] = nil
 	err := c.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if err := software.ValidateAssignment(in.Intent, in.UpdateRule, in.Version, in.Reason); err != nil {
+			return softwareAssignmentProblem(err)
+		}
+		if _, err := software.Target(in.DeviceGroupID, in.UserID, in.UserGroupID); err != nil {
 			return softwareAssignmentProblem(err)
 		}
 		if in.CatalogEntryID == nil {
@@ -379,7 +441,7 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 		if err := entryAssignable(in.Intent, entry.Packages); err != nil {
 			return err
 		}
-		group, err := assignmentGroup(ctx, q, in.DeviceGroupID)
+		group, err := assignmentTargetName(ctx, q, in.DeviceGroupID, in.UserID, in.UserGroupID)
 		if err != nil {
 			return err
 		}
@@ -390,14 +452,15 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 		p, _ := principal.From(ctx)
 		id := uuid.Must(uuid.NewV7())
 		err = q.InsertSoftwareAssignment(ctx, pgstore.InsertSoftwareAssignmentParams{
-			ID: id, OrganizationID: org, CatalogEntryID: entry.ID, DeviceGroupID: nullID(in.DeviceGroupID), Intent: in.Intent,
+			ID: id, OrganizationID: org, CatalogEntryID: entry.ID, DeviceGroupID: nullID(in.DeviceGroupID),
+			UserID: nullID(in.UserID), UserGroupID: nullID(in.UserGroupID), Intent: in.Intent,
 			UpdateRule: in.UpdateRule, Version: in.Version, Reason: in.Reason,
 			CreatedBy: uuid.NullUUID{UUID: p.ID, Valid: p.ID != uuid.Nil},
 		})
 		if db.IsUniqueViolation(err, "") {
-			return problem.AlreadyExists.WithDetail("this application is already assigned in this scope")
+			return problem.AlreadyExists.WithDetail("this application is already assigned to this target")
 		}
-		// The entry or the group was deleted after the lookup.
+		// The entry or the target was deleted after the lookup.
 		if db.IsForeignKeyViolation(err) {
 			return problem.NotFound
 		}
@@ -439,19 +502,20 @@ func (c *SoftwareCatalog) UpdateAssignment(ctx context.Context, id uuid.UUID, in
 		if err != nil {
 			return notFound(err)
 		}
-		group, err := assignmentGroup(ctx, q, groupPtr(old.DeviceGroupID))
+		group, err := assignmentTargetName(ctx, q, groupPtr(old.DeviceGroupID), groupPtr(old.UserID), groupPtr(old.UserGroupID))
 		if err != nil {
 			return err
 		}
 		rec.SetTarget(assignmentTarget(id, old.AppName, group))
 		for k, v := range assignmentParams(&old, AssignmentInput{
-			CatalogEntryID: &old.CatalogEntryID, DeviceGroupID: groupPtr(old.DeviceGroupID), Intent: in.Intent,
-			UpdateRule: in.UpdateRule, Version: in.Version, Reason: in.Reason,
+			CatalogEntryID: &old.CatalogEntryID, DeviceGroupID: groupPtr(old.DeviceGroupID), UserID: groupPtr(old.UserID),
+			UserGroupID: groupPtr(old.UserGroupID), Intent: in.Intent, UpdateRule: in.UpdateRule, Version: in.Version,
+			Reason: in.Reason,
 		}) {
 			rec.SetParam(k, v)
 		}
-		if in.CatalogEntryID != nil || in.DeviceGroupID != nil {
-			return problem.InvalidRequest.WithDetail("catalog_entry_id and device_group_id cannot be changed")
+		if in.CatalogEntryID != nil || in.DeviceGroupID != nil || in.UserID != nil || in.UserGroupID != nil {
+			return problem.InvalidRequest.WithDetail("catalog_entry_id, device_group_id, user_id and user_group_id cannot be changed")
 		}
 		if err := software.ValidateAssignment(in.Intent, in.UpdateRule, in.Version, in.Reason); err != nil {
 			return softwareAssignmentProblem(err)
@@ -488,14 +552,16 @@ func (c *SoftwareCatalog) DeleteAssignment(ctx context.Context, id uuid.UUID) er
 		if err != nil {
 			return notFound(err)
 		}
-		group, err := assignmentGroup(ctx, q, groupPtr(old.DeviceGroupID))
+		group, err := assignmentTargetName(ctx, q, groupPtr(old.DeviceGroupID), groupPtr(old.UserID), groupPtr(old.UserGroupID))
 		if err != nil {
 			return err
 		}
 		rec.SetTarget(assignmentTarget(id, old.AppName, group))
 		rec.SetParam("app", old.AppName)
 		rec.SetParam("catalog_entry_id", old.CatalogEntryID.String())
-		rec.SetParam("device_group_id", idParam(groupPtr(old.DeviceGroupID)))
+		for k, v := range targetParams(groupPtr(old.DeviceGroupID), groupPtr(old.UserID), groupPtr(old.UserGroupID)) {
+			rec.SetParam(k, v)
+		}
 		rec.SetParam("intent", old.Intent)
 		n, err := q.DeleteSoftwareAssignment(ctx, id)
 		if err != nil {
@@ -509,17 +575,17 @@ func (c *SoftwareCatalog) DeleteAssignment(ctx context.Context, id uuid.UUID) er
 	})
 }
 
-// entrySourceSlug returns the slug of the source an entry uses ("" for the distribution's own repositories); a
-// source of another organization or an unknown one is not found.
-func entrySourceSlug(ctx context.Context, q *pgstore.Queries, source *uuid.UUID) (string, error) {
+// entrySource returns the slug ("" for the distribution's own repositories) and the kind of the source an entry uses;
+// a source of another organization or an unknown one is not found.
+func entrySource(ctx context.Context, q *pgstore.Queries, source *uuid.UUID) (slug, kind string, err error) {
 	if source == nil {
-		return "", nil
+		return "", software.SourceKindAPT, nil
 	}
 	s, err := q.GetSoftwareSource(ctx, *source)
 	if err != nil {
-		return "", notFound(err)
+		return "", "", notFound(err)
 	}
-	return s.SoftwareSource.Slug, nil
+	return s.SoftwareSource.Slug, s.SoftwareSource.Kind, nil
 }
 
 // entryAssignable refuses an intent for an entry whose packages it must not touch (software.ValidateAssignmentTarget).
@@ -531,17 +597,39 @@ func entryAssignable(intent string, raw []byte) error {
 	return softwareAssignmentProblem(software.ValidateAssignmentTarget(intent, packages))
 }
 
-// assignmentGroup returns the name of an assignment's device group ("" for the whole organization); a group of
-// another organization or an unknown one is not found.
-func assignmentGroup(ctx context.Context, q *pgstore.Queries, group *uuid.UUID) (string, error) {
-	if group == nil {
-		return "", nil
+// assignmentTargetName returns the name of an assignment's target: the device group's or the user group's name or
+// the user's name ("" for the whole organization); a target of another organization or an unknown one is not found.
+func assignmentTargetName(ctx context.Context, q *pgstore.Queries, deviceGroup, user, userGroup *uuid.UUID) (string, error) {
+	switch {
+	case deviceGroup != nil:
+		g, err := q.GetDeviceGroup(ctx, *deviceGroup)
+		if err != nil {
+			return "", notFound(err)
+		}
+		return g.Name, nil
+	case user != nil:
+		u, err := q.GetAppUser(ctx, *user)
+		if err != nil {
+			return "", notFound(err)
+		}
+		return u.Username, nil
+	case userGroup != nil:
+		g, err := q.GetUserGroup(ctx, *userGroup)
+		if err != nil {
+			return "", notFound(err)
+		}
+		return g.Name, nil
 	}
-	g, err := q.GetDeviceGroup(ctx, *group)
-	if err != nil {
-		return "", notFound(err)
+	return "", nil
+}
+
+// targetParams are the audit params that name an assignment's target (plan M13b §6.4); target is "" when more than
+// one target ID is given, which the assignment rules refuse.
+func targetParams(deviceGroup, user, userGroup *uuid.UUID) map[string]any {
+	target, _ := software.Target(deviceGroup, user, userGroup)
+	return map[string]any{
+		"target": target, "device_group_id": idParam(deviceGroup), "user_id": idParam(user), "user_group_id": idParam(userGroup),
 	}
-	return g.Name, nil
 }
 
 func assignmentTarget(id uuid.UUID, app, group string) audit.Target {
@@ -556,10 +644,11 @@ func assignmentTarget(id uuid.UUID, app, group string) audit.Target {
 // arbitrary text into an immutable audit event.
 func assignmentParams(old *Assignment, in AssignmentInput) map[string]any {
 	params := map[string]any{
-		"catalog_entry_id": idParam(in.CatalogEntryID), "device_group_id": idParam(in.DeviceGroupID),
-		"intent": software.DisplayParam(in.Intent, maxIntentParam), "update_rule": software.DisplayParam(in.UpdateRule, maxIntentParam),
+		"catalog_entry_id": idParam(in.CatalogEntryID),
+		"intent":           software.DisplayParam(in.Intent, maxIntentParam), "update_rule": software.DisplayParam(in.UpdateRule, maxIntentParam),
 		"version": nil, "reason": software.DisplayParam(in.Reason, software.MaxReasonLength),
 	}
+	maps.Copy(params, targetParams(in.DeviceGroupID, in.UserID, in.UserGroupID))
 	if in.Version != nil {
 		params["version"] = software.DisplayParam(*in.Version, software.MaxVersionLength)
 	}

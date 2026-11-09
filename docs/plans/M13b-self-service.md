@@ -423,3 +423,23 @@ refused (recommended).
 
 Python package layout and GTK widget choices; the icon cache layout; the exact `AppView` field order; whether the
 executor is a goroutine with a channel or a worker pool of one; the sqlc query names; German texts.
+
+## Amendment 2026-11-09 (architect-lead decisions Q12–Q14, PDK-798)
+
+Open points (4) to (6) of §12 are decided as recommended:
+
+- **(4), Q12:** when an organization has a source of kind `flatpak`, the compiler adds the `flatpak` runtime package
+  to the affected devices automatically, as decision 9 describes (PDK-799).
+- **(5), Q13:** the audience of an `available` package is capped at 200 UPNs; the compiler emits an
+  `audience_truncated` warning, and the entry's portal detail shows it (R2; PDK-799, PDK-804).
+- **(6), Q14:** a user-scope Flatpak install runs in the user's session (`systemd-run --machine=<uid>@.host --user`)
+  instead of being refused. Without an active session of the user the install stays `pending`; it is never escalated
+  to system scope (RR-117; PDK-800, PDK-801).
+
+PDK-798 lands the migration as `00113_software_targets_flatpak.sql` (00108 was taken). Its unique index on
+`(organization_id, catalog_entry_id, device_group_id, user_id, user_group_id) NULLS NOT DISTINCT` replaces the
+unnamed unique constraint of migration 00096, and the table check of `software_assignment` admits `available` with
+update rule `latest` and no version. A source of kind `flatpak` is checked in the table too (one URI, no suites,
+components or architectures), and the status upsert keys on the new primary key. Until PDK-799 renders them, the
+compiler leaves user and user-group targets, the `available` intent and Flatpak sources and entries out of every
+bundle, so none of them applies organization-wide or fails a bundle in between.

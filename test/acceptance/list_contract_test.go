@@ -104,6 +104,7 @@ func TestListContract(t *testing.T) {
 		"/api/v1/devices/{id}/vulnerabilities": member.DeviceID,
 		"/api/v1/devices/{id}/config-status":   member.DeviceID, "/api/v1/devices/{id}/bundles": member.DeviceID, "/api/v1/vulnerabilities/{cve}/devices": cve}
 	parents["/api/v1/devices/{id}/managed-software"] = member.DeviceID
+	parents["/api/v1/users/{id}/software"] = owner
 	parents["/api/v1/devices/{id}/diagnostics"] = member.DeviceID
 	parents["/api/v1/software-catalog/{id}/devices"] = listSoftwareEntry(t, sessions[false], parentGroup)
 	// A rollout stages a section for its whole organization: it runs in a gate organization of its own, listed by its

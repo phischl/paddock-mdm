@@ -542,6 +542,8 @@ type DeviceSoftwareStatus struct {
 	Reason         string
 	Error          string
 	ReportedAt     time.Time
+	Scope          string
+	Username       string
 }
 
 type DeviceStatus struct {
@@ -1098,6 +1100,8 @@ type SoftwareAssignment struct {
 	CreatedBy      uuid.NullUUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	UserID         uuid.NullUUID
+	UserGroupID    uuid.NullUUID
 }
 
 type SoftwareCatalogEntry struct {
@@ -1129,6 +1133,7 @@ type SoftwareSource struct {
 	CreatedBy      uuid.NullUUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Kind           string
 }
 
 type UserGroup struct {

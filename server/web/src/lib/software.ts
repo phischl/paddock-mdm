@@ -245,7 +245,7 @@ export function validateEntry(e: EntryInput): EntryErrors {
   e.packages.forEach((p, i) => {
     if (!distributionPattern.test(p.distribution)) out.rows[i].distribution = 'software.catalog.distributionInvalid'
     if (p.release !== '*' && !releasePattern.test(p.release)) out.rows[i].release = 'software.catalog.releaseInvalid'
-    if (!validPackage(p.package)) out.rows[i].package = 'software.catalog.packageInvalid'
+    if (!validPackage(p.package ?? '')) out.rows[i].package = 'software.catalog.packageInvalid'
   })
   const tuples = e.packages.map((p) => [p.distribution, p.release, p.architecture].join('\u0000'))
   if (!out.packages && new Set(tuples).size !== tuples.length) out.packages = 'software.catalog.packagesDuplicate'

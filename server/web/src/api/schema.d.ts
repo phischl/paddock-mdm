@@ -1579,6 +1579,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{id}/software": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The software assignments that target the user (plan M13b decision
+         *     6): directly (user_group_id null) or through a user group the user is a member of, with the intent. Assignments
+         *     of the organization or of device groups are not listed. 404 not_found for a missing user or another
+         *     organization's.
+         */
+        get: operations["listUserSoftware"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/{id}/lock": {
         parameters: {
             query?: never;
@@ -2005,7 +2029,9 @@ export interface paths {
         get: operations["listSoftwareSources"];
         put?: never;
         /**
-         * @description Roles: org_admin. Adds an APT package source with its signing key. A source is root-equivalent: every package
+         * @description Roles: org_admin. Adds a package source with its signing key: an APT repository (kind apt, the default) or a
+         *     Flatpak remote (kind flatpak: exactly one URI, the remote's URL, and no suites, components or architectures,
+         *     else 400 invalid_request; the signing key is the remote's GPG key). A source is root-equivalent: every package
          *     it signs is installed as root. URIs must use https (400 invalid_request "uris must use https"); they may name
          *     internal hosts, because only the devices fetch from them, never the server. Suites are either all flat
          *     (ending in "/", then no components) or none (then at least one component). The signing key is one
@@ -2163,17 +2189,20 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Roles: org_admin, org_operator, org_auditor. The assignments of catalog entries to the organization or device groups; the search matches the entry's name. */
+        /** @description Roles: org_admin, org_operator, org_auditor. The assignments of catalog entries to the organization, device groups, users or user groups; the search matches the entry's name. */
         get: operations["listSoftwareAssignments"];
         put?: never;
         /**
-         * @description Roles: org_admin, org_operator. Assigns a catalog entry to every device of the organization (no
-         *     device_group_id) or to a device group with an intent. required keeps the application installed (update_rule
-         *     latest without a version, or pinned with one; omitted, the rule is pinned for a required assignment with a
-         *     version and latest otherwise); uninstall removes it; hold keeps the installed version (with a version it is
-         *     pinned); forbid removes it and blocks it for apt. uninstall and forbid take no version. Violations are 400
-         *     invalid_request. An entry or device group of another organization or an unknown one is 404 not_found; a
-         *     second assignment of the entry in the same scope is 409 already_exists.
+         * @description Roles: org_admin, org_operator. Assigns a catalog entry with an intent to one target: every device of the
+         *     organization (no target ID), a device group (device_group_id), a user (user_id) or a user group
+         *     (user_group_id); more than one target ID is 400 invalid_request. required keeps the application installed
+         *     (update_rule latest without a version, or pinned with one; omitted, the rule is pinned for a required
+         *     assignment with a version and latest otherwise); uninstall removes it; hold keeps the installed version (with
+         *     a version it is pinned); forbid removes it and blocks it for apt; available offers it to the target's users
+         *     to install themselves and loses against every other intent on the same device. uninstall, forbid and
+         *     available take no version. Violations are 400 invalid_request. An entry, device group, user or user group of
+         *     another organization or an unknown one is 404 not_found; a second assignment of the entry to the same target
+         *     is 409 already_exists.
          */
         post: operations["createSoftwareAssignment"];
         delete?: never;
@@ -2202,8 +2231,8 @@ export interface paths {
         /**
          * @description Roles: org_admin, org_operator. Replaces intent, update_rule, version and reason with the submitted values
          *     (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the
-         *     same rules as on creation apply. The entry and the scope are fixed: giving a catalog_entry_id or a
-         *     device_group_id is 400 invalid_request.
+         *     same rules as on creation apply. The entry and the target are fixed: giving a catalog_entry_id,
+         *     device_group_id, user_id or user_group_id is 400 invalid_request.
          */
         patch: operations["updateSoftwareAssignment"];
         trace?: never;
@@ -6529,9 +6558,15 @@ export interface components {
         };
         /** @enum {string} */
         SoftwareArchitecture: "amd64" | "arm64";
+        /**
+         * @description apt: an APT repository; flatpak: a Flatpak remote with exactly one URI and no suites, components or architectures. Immutable.
+         * @enum {string}
+         */
+        SoftwareSourceKind: "apt" | "flatpak";
         SoftwareSourceSummary: {
             /** Format: uuid */
             id: string;
+            kind: components["schemas"]["SoftwareSourceKind"];
             /** @description Immutable; names the source file and keyring on the devices. */
             slug: string;
             name: string;
@@ -6556,14 +6591,15 @@ export interface components {
             signing_key: string;
         };
         SoftwareSourceCreate: {
-            /** @description ^[a-z0-9][a-z0-9-]{1,40}$ */
+            kind?: components["schemas"]["SoftwareSourceKind"];
+            /** @description ^[a-z0-9][a-z0-9-]{1,40}$; for a Flatpak remote the device names the remote paddock-<slug>. */
             slug: string;
             /** @description 1 to 100 characters after trimming. */
             name: string;
             /** @description https only, no query, fragment or user information. */
             uris: string[];
-            /** @description ^[A-Za-z0-9./_-]{1,64}$; a flat repository's suite ends in /. */
-            suites: string[];
+            /** @description ^[A-Za-z0-9./_-]{1,64}$; a flat repository's suite ends in /. An APT repository needs 1 to 8, a Flatpak remote none. */
+            suites?: string[];
             /** @description ^[a-z0-9-]{1,32}$; none for a flat repository, at least one otherwise. */
             components?: string[];
             architectures?: components["schemas"]["SoftwareArchitecture"][];
@@ -6573,6 +6609,7 @@ export interface components {
             fingerprint: string;
         };
         SoftwareSourceUpdate: {
+            kind?: components["schemas"]["SoftwareSourceKind"];
             /** @description Immutable; any value is refused with 400 invalid_request. */
             slug?: string;
             name?: string;
@@ -6597,9 +6634,14 @@ export interface components {
             sort: string;
         };
         /** @enum {string} */
-        SoftwareIntent: "required" | "uninstall" | "hold" | "forbid";
+        SoftwareIntent: "required" | "uninstall" | "hold" | "forbid" | "available";
+        /** @enum {string} */
+        SoftwareTarget: "organization" | "device_group" | "user" | "user_group";
+        /** @enum {string} */
+        SoftwareScope: "system" | "user";
         /** @enum {string} */
         SoftwareUpdateRule: "latest" | "pinned";
+        /** @description Names either an APT package (package) or a Flatpak application (flatpak_ref, with scope); an entry of a Flatpak source names Flatpak applications only, every other entry APT packages only. */
         PackageRef: {
             /** @description The ID of /etc/os-release, ^[a-z][a-z0-9-]{0,31}$, e.g. ubuntu or debian. */
             distribution: string;
@@ -6608,7 +6650,10 @@ export interface components {
             /** @enum {string} */
             architecture: "*" | "amd64" | "arm64";
             /** @description ^[a-z0-9][a-z0-9+.-]+$ */
-            package: string;
+            package?: string;
+            /** @description A Flatpak application ID, ^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*){2,}$, e.g. org.gimp.GIMP. */
+            flatpak_ref?: string;
+            scope?: components["schemas"]["SoftwareScope"];
         };
         SoftwareCatalogEntryCreate: {
             /** @description 1 to 100 characters after trimming; unique within the organization. */
@@ -6669,12 +6714,22 @@ export interface components {
             catalog_entry_id: string;
             /**
              * Format: uuid
-             * @description Omit or null for every device of the organization.
+             * @description Omit or null, together with user_id and user_group_id, for every device of the organization.
              */
             device_group_id?: string | null;
+            /**
+             * Format: uuid
+             * @description The user the assignment targets.
+             */
+            user_id?: string | null;
+            /**
+             * Format: uuid
+             * @description The user group the assignment targets.
+             */
+            user_group_id?: string | null;
             intent: components["schemas"]["SoftwareIntent"];
             update_rule?: components["schemas"]["SoftwareUpdateRule"];
-            /** @description ^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall and forbid. */
+            /** @description ^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall, forbid and available. */
             version?: string | null;
             reason?: string;
         };
@@ -6689,6 +6744,16 @@ export interface components {
              * @description Fixed; any value is refused with 400 invalid_request.
              */
             device_group_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Fixed; any value is refused with 400 invalid_request.
+             */
+            user_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Fixed; any value is refused with 400 invalid_request.
+             */
+            user_group_id?: string | null;
             intent: components["schemas"]["SoftwareIntent"];
             update_rule?: components["schemas"]["SoftwareUpdateRule"];
             version?: string | null;
@@ -6703,9 +6768,19 @@ export interface components {
             catalog_entry_id: string;
             /**
              * Format: uuid
-             * @description null = every device of the organization.
+             * @description The device group the assignment targets.
              */
             device_group_id: string | null;
+            /**
+             * Format: uuid
+             * @description The user the assignment targets.
+             */
+            user_id: string | null;
+            /**
+             * Format: uuid
+             * @description The user group the assignment targets; all three null = every device of the organization.
+             */
+            user_group_id: string | null;
             intent: components["schemas"]["SoftwareIntent"];
             update_rule: components["schemas"]["SoftwareUpdateRule"];
             version: string | null;
@@ -6714,6 +6789,34 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        UserSoftware: {
+            /** Format: uuid */
+            assignment_id: string;
+            /** Format: uuid */
+            catalog_entry_id: string;
+            /** @description The catalog entry's name. */
+            name: string;
+            intent: components["schemas"]["SoftwareIntent"];
+            /**
+             * Format: uuid
+             * @description The user group the assignment targets; null when it targets the user directly.
+             */
+            user_group_id: string | null;
+            /** @description Empty when the assignment targets the user directly. */
+            user_group_name: string;
+            reason: string;
+        };
+        UserSoftwarePage: {
+            items: components["schemas"]["UserSoftware"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
         };
         SoftwareAssignmentPage: {
             items: components["schemas"]["SoftwareAssignment"][];
@@ -8877,6 +8980,14 @@ export interface components {
         SoftwareSourceFilter: string;
         /** @description Only assignments of this catalog entry. */
         SoftwareEntryFilter: string;
+        /** @description Only assignments that target this user directly. */
+        SoftwareUserFilter: string;
+        /** @description Only assignments that target this user group. */
+        SoftwareUserGroupFilter: string;
+        /** @description Only assignments with this kind of target. */
+        SoftwareTargetFilter: components["schemas"]["SoftwareTarget"];
+        /** @description Sort field; "-" prefix sorts descending. The assignment id is the tie-breaker. */
+        UserSoftwareSort: "name" | "-name" | "intent" | "-intent";
         /** @description Only assignments with this intent. */
         SoftwareIntentFilter: components["schemas"]["SoftwareIntent"];
         /** @description Sort field; "-" prefix sorts descending. The name, then the entry id, are the tie-breakers. */
@@ -11593,6 +11704,42 @@ export interface operations {
             404: components["responses"]["Problem"];
         };
     };
+    listUserSoftware: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The assignment id is the tie-breaker. */
+                sort?: components["parameters"]["UserSoftwareSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only assignments with this intent. */
+                intent?: components["parameters"]["SoftwareIntentFilter"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the software assignments that target the user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSoftwarePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
     lockUser: {
         parameters: {
             query?: never;
@@ -12973,6 +13120,12 @@ export interface operations {
                 catalog_entry_id?: components["parameters"]["SoftwareEntryFilter"];
                 /** @description Only definitions scoped to this device group. */
                 device_group_id?: components["parameters"]["DeviceGroupFilter"];
+                /** @description Only assignments that target this user directly. */
+                user_id?: components["parameters"]["SoftwareUserFilter"];
+                /** @description Only assignments that target this user group. */
+                user_group_id?: components["parameters"]["SoftwareUserGroupFilter"];
+                /** @description Only assignments with this kind of target. */
+                target?: components["parameters"]["SoftwareTargetFilter"];
                 /** @description Only assignments with this intent. */
                 intent?: components["parameters"]["SoftwareIntentFilter"];
             };

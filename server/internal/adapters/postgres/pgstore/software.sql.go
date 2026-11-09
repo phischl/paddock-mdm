@@ -19,8 +19,13 @@ SELECT count(*) FROM (
   WHERE ($1::text IS NULL OR e.name ILIKE $1::text ESCAPE '\')
     AND ($2::uuid IS NULL OR a.catalog_entry_id = $2::uuid)
     AND ($3::uuid IS NULL OR a.device_group_id = $3::uuid)
-    AND ($4::text IS NULL OR a.intent = $4::text)
-  LIMIT $5
+    AND ($4::uuid IS NULL OR a.user_id = $4::uuid)
+    AND ($5::uuid IS NULL OR a.user_group_id = $5::uuid)
+    AND ($6::text IS NULL OR $6::text = CASE
+      WHEN a.device_group_id IS NOT NULL THEN 'device_group' WHEN a.user_id IS NOT NULL THEN 'user'
+      WHEN a.user_group_id IS NOT NULL THEN 'user_group' ELSE 'organization' END)
+    AND ($7::text IS NULL OR a.intent = $7::text)
+  LIMIT $8
 ) matching
 `
 
@@ -28,6 +33,9 @@ type CountSoftwareAssignmentsParams struct {
 	QPattern       *string
 	CatalogEntryID uuid.NullUUID
 	DeviceGroupID  uuid.NullUUID
+	UserID         uuid.NullUUID
+	UserGroupID    uuid.NullUUID
+	Target         *string
 	Intent         *string
 	CountLimit     int32
 }
@@ -37,6 +45,9 @@ func (q *Queries) CountSoftwareAssignments(ctx context.Context, arg CountSoftwar
 		arg.QPattern,
 		arg.CatalogEntryID,
 		arg.DeviceGroupID,
+		arg.UserID,
+		arg.UserGroupID,
+		arg.Target,
 		arg.Intent,
 		arg.CountLimit,
 	)
@@ -102,6 +113,36 @@ type CountSoftwareSourcesParams struct {
 
 func (q *Queries) CountSoftwareSources(ctx context.Context, arg CountSoftwareSourcesParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countSoftwareSources, arg.QPattern, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUserSoftware = `-- name: CountUserSoftware :one
+SELECT count(*) FROM (
+  SELECT 1 FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+  WHERE (a.user_id = $1
+      OR EXISTS (SELECT 1 FROM user_group_member m WHERE m.group_id = a.user_group_id AND m.user_id = $1))
+    AND ($2::text IS NULL OR e.name ILIKE $2::text ESCAPE '\')
+    AND ($3::text IS NULL OR a.intent = $3::text)
+  LIMIT $4
+) matching
+`
+
+type CountUserSoftwareParams struct {
+	UserID     uuid.NullUUID
+	QPattern   *string
+	Intent     *string
+	CountLimit int32
+}
+
+func (q *Queries) CountUserSoftware(ctx context.Context, arg CountUserSoftwareParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUserSoftware,
+		arg.UserID,
+		arg.QPattern,
+		arg.Intent,
+		arg.CountLimit,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -189,7 +230,7 @@ func (q *Queries) GetDeviceSoftwareTarget(ctx context.Context, id uuid.UUID) (Ge
 }
 
 const getSoftwareAssignment = `-- name: GetSoftwareAssignment :one
-SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, a.user_id, a.user_group_id, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
 WHERE a.id = $1
 `
 
@@ -205,6 +246,8 @@ type GetSoftwareAssignmentRow struct {
 	CreatedBy      uuid.NullUUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	UserID         uuid.NullUUID
+	UserGroupID    uuid.NullUUID
 	AppName        string
 }
 
@@ -223,13 +266,15 @@ func (q *Queries) GetSoftwareAssignment(ctx context.Context, id uuid.UUID) (GetS
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
+		&i.UserGroupID,
 		&i.AppName,
 	)
 	return i, err
 }
 
 const getSoftwareAssignmentForUpdate = `-- name: GetSoftwareAssignmentForUpdate :one
-SELECT id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_by, created_at, updated_at FROM software_assignment WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_by, created_at, updated_at, user_id, user_group_id FROM software_assignment WHERE id = $1 FOR UPDATE
 `
 
 // The assignment locked for the rest of the transaction: an update writes the intent columns back.
@@ -248,6 +293,8 @@ func (q *Queries) GetSoftwareAssignmentForUpdate(ctx context.Context, id uuid.UU
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
+		&i.UserGroupID,
 	)
 	return i, err
 }
@@ -348,7 +395,7 @@ func (q *Queries) GetSoftwareCatalogEntryIcon(ctx context.Context, id uuid.UUID)
 }
 
 const getSoftwareSource = `-- name: GetSoftwareSource :one
-SELECT s.id, s.organization_id, s.slug, s.name, s.uris, s.suites, s.components, s.architectures, s.signing_key, s.fingerprint, s.weak_key, s.created_by, s.created_at, s.updated_at, (SELECT count(*) FROM software_catalog_entry e WHERE e.source_id = s.id)::bigint AS entry_count
+SELECT s.id, s.organization_id, s.slug, s.name, s.uris, s.suites, s.components, s.architectures, s.signing_key, s.fingerprint, s.weak_key, s.created_by, s.created_at, s.updated_at, s.kind, (SELECT count(*) FROM software_catalog_entry e WHERE e.source_id = s.id)::bigint AS entry_count
 FROM software_source s WHERE s.id = $1
 `
 
@@ -376,13 +423,14 @@ func (q *Queries) GetSoftwareSource(ctx context.Context, id uuid.UUID) (GetSoftw
 		&i.SoftwareSource.CreatedBy,
 		&i.SoftwareSource.CreatedAt,
 		&i.SoftwareSource.UpdatedAt,
+		&i.SoftwareSource.Kind,
 		&i.EntryCount,
 	)
 	return i, err
 }
 
 const getSoftwareSourceForUpdate = `-- name: GetSoftwareSourceForUpdate :one
-SELECT id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at FROM software_source WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at, kind FROM software_source WHERE id = $1 FOR UPDATE
 `
 
 // The source locked for the rest of the transaction: an update writes every column back, so a concurrent update must
@@ -405,15 +453,16 @@ func (q *Queries) GetSoftwareSourceForUpdate(ctx context.Context, id uuid.UUID) 
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
 	)
 	return i, err
 }
 
 const insertSoftwareAssignment = `-- name: InsertSoftwareAssignment :exec
-INSERT INTO software_assignment (id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version,
-  reason, created_by)
-VALUES ($1, $2, $3, $4, $5, $6,
-  $7, $8, $9)
+INSERT INTO software_assignment (id, organization_id, catalog_entry_id, device_group_id, user_id, user_group_id, intent,
+  update_rule, version, reason, created_by)
+VALUES ($1, $2, $3, $4, $5,
+  $6, $7, $8, $9, $10, $11)
 `
 
 type InsertSoftwareAssignmentParams struct {
@@ -421,6 +470,8 @@ type InsertSoftwareAssignmentParams struct {
 	OrganizationID uuid.UUID
 	CatalogEntryID uuid.UUID
 	DeviceGroupID  uuid.NullUUID
+	UserID         uuid.NullUUID
+	UserGroupID    uuid.NullUUID
 	Intent         string
 	UpdateRule     string
 	Version        *string
@@ -434,6 +485,8 @@ func (q *Queries) InsertSoftwareAssignment(ctx context.Context, arg InsertSoftwa
 		arg.OrganizationID,
 		arg.CatalogEntryID,
 		arg.DeviceGroupID,
+		arg.UserID,
+		arg.UserGroupID,
 		arg.Intent,
 		arg.UpdateRule,
 		arg.Version,
@@ -474,16 +527,17 @@ func (q *Queries) InsertSoftwareCatalogEntry(ctx context.Context, arg InsertSoft
 }
 
 const insertSoftwareSource = `-- name: InsertSoftwareSource :one
-INSERT INTO software_source (id, organization_id, slug, name, uris, suites, components, architectures, signing_key,
-  fingerprint, weak_key, created_by)
+INSERT INTO software_source (id, organization_id, kind, slug, name, uris, suites, components, architectures,
+  signing_key, fingerprint, weak_key, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-  $11, $12)
-RETURNING id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at
+  $11, $12, $13)
+RETURNING id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at, kind
 `
 
 type InsertSoftwareSourceParams struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
+	Kind           string
 	Slug           string
 	Name           string
 	Uris           []string
@@ -500,6 +554,7 @@ func (q *Queries) InsertSoftwareSource(ctx context.Context, arg InsertSoftwareSo
 	row := q.db.QueryRow(ctx, insertSoftwareSource,
 		arg.ID,
 		arg.OrganizationID,
+		arg.Kind,
 		arg.Slug,
 		arg.Name,
 		arg.Uris,
@@ -527,12 +582,13 @@ func (q *Queries) InsertSoftwareSource(ctx context.Context, arg InsertSoftwareSo
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
 	)
 	return i, err
 }
 
 const listAllSoftwareAssignments = `-- name: ListAllSoftwareAssignments :many
-SELECT id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_by, created_at, updated_at FROM software_assignment ORDER BY catalog_entry_id, device_group_id NULLS FIRST, id
+SELECT id, organization_id, catalog_entry_id, device_group_id, intent, update_rule, version, reason, created_by, created_at, updated_at, user_id, user_group_id FROM software_assignment ORDER BY catalog_entry_id, device_group_id NULLS FIRST, id
 `
 
 // Every assignment of the organization (compiler), in a stable order.
@@ -557,6 +613,8 @@ func (q *Queries) ListAllSoftwareAssignments(ctx context.Context) ([]SoftwareAss
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.UserID,
+			&i.UserGroupID,
 		); err != nil {
 			return nil, err
 		}
@@ -619,7 +677,7 @@ func (q *Queries) ListAllSoftwareCatalogEntries(ctx context.Context) ([]ListAllS
 }
 
 const listAllSoftwareSources = `-- name: ListAllSoftwareSources :many
-SELECT id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at FROM software_source ORDER BY slug, id
+SELECT id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at, kind FROM software_source ORDER BY slug, id
 `
 
 // Every source of the organization (compiler), in a stable order.
@@ -647,6 +705,7 @@ func (q *Queries) ListAllSoftwareSources(ctx context.Context) ([]SoftwareSource,
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}
@@ -668,7 +727,7 @@ CROSS JOIN LATERAL (
   SELECT array_agg(DISTINCT a.intent ORDER BY a.intent)::text[] AS intents
   FROM software_assignment a
   WHERE a.catalog_entry_id = e.id
-    AND (a.device_group_id IS NULL
+    AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
       OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = $1 AND m.device_group_id = a.device_group_id))
 ) t
 WHERE (s.device_id IS NOT NULL OR t.intents IS NOT NULL)
@@ -756,26 +815,34 @@ func (q *Queries) ListSoftwareAssignmentIntentsOfEntry(ctx context.Context, cata
 }
 
 const listSoftwareAssignments = `-- name: ListSoftwareAssignments :many
-SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+SELECT a.id, a.organization_id, a.catalog_entry_id, a.device_group_id, a.intent, a.update_rule, a.version, a.reason, a.created_by, a.created_at, a.updated_at, a.user_id, a.user_group_id, e.name AS app_name FROM software_assignment a JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
 WHERE ($1::text IS NULL OR e.name ILIKE $1::text ESCAPE '\')
   AND ($2::uuid IS NULL OR a.catalog_entry_id = $2::uuid)
   AND ($3::uuid IS NULL OR a.device_group_id = $3::uuid)
-  AND ($4::text IS NULL OR a.intent = $4::text)
+  AND ($4::uuid IS NULL OR a.user_id = $4::uuid)
+  AND ($5::uuid IS NULL OR a.user_group_id = $5::uuid)
+  AND ($6::text IS NULL OR $6::text = CASE
+    WHEN a.device_group_id IS NOT NULL THEN 'device_group' WHEN a.user_id IS NOT NULL THEN 'user'
+    WHEN a.user_group_id IS NOT NULL THEN 'user_group' ELSE 'organization' END)
+  AND ($7::text IS NULL OR a.intent = $7::text)
 ORDER BY
-  CASE WHEN $5::text = 'created_at' THEN a.created_at END ASC,
-  CASE WHEN $5::text = '-created_at' THEN a.created_at END DESC,
-  CASE WHEN $5::text = 'updated_at' THEN a.updated_at END ASC,
-  CASE WHEN $5::text = '-updated_at' THEN a.updated_at END DESC,
-  CASE WHEN $5::text = 'intent' THEN a.intent END ASC,
-  CASE WHEN $5::text = '-intent' THEN a.intent END DESC,
+  CASE WHEN $8::text = 'created_at' THEN a.created_at END ASC,
+  CASE WHEN $8::text = '-created_at' THEN a.created_at END DESC,
+  CASE WHEN $8::text = 'updated_at' THEN a.updated_at END ASC,
+  CASE WHEN $8::text = '-updated_at' THEN a.updated_at END DESC,
+  CASE WHEN $8::text = 'intent' THEN a.intent END ASC,
+  CASE WHEN $8::text = '-intent' THEN a.intent END DESC,
   a.id
-LIMIT $7 OFFSET $6
+LIMIT $10 OFFSET $9
 `
 
 type ListSoftwareAssignmentsParams struct {
 	QPattern       *string
 	CatalogEntryID uuid.NullUUID
 	DeviceGroupID  uuid.NullUUID
+	UserID         uuid.NullUUID
+	UserGroupID    uuid.NullUUID
+	Target         *string
 	Intent         *string
 	Sort           string
 	SkipRows       int32
@@ -794,6 +861,8 @@ type ListSoftwareAssignmentsRow struct {
 	CreatedBy      uuid.NullUUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	UserID         uuid.NullUUID
+	UserGroupID    uuid.NullUUID
 	AppName        string
 }
 
@@ -802,6 +871,9 @@ func (q *Queries) ListSoftwareAssignments(ctx context.Context, arg ListSoftwareA
 		arg.QPattern,
 		arg.CatalogEntryID,
 		arg.DeviceGroupID,
+		arg.UserID,
+		arg.UserGroupID,
+		arg.Target,
 		arg.Intent,
 		arg.Sort,
 		arg.SkipRows,
@@ -826,6 +898,8 @@ func (q *Queries) ListSoftwareAssignments(ctx context.Context, arg ListSoftwareA
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.UserID,
+			&i.UserGroupID,
 			&i.AppName,
 		); err != nil {
 			return nil, err
@@ -854,7 +928,7 @@ CROSS JOIN LATERAL (
   SELECT array_agg(DISTINCT a.intent ORDER BY a.intent)::text[] AS intents
   FROM software_assignment a
   WHERE a.catalog_entry_id = $1
-    AND (a.device_group_id IS NULL
+    AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
       OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = a.device_group_id))
 ) t
 WHERE d.state = 'active' AND t.intents IS NOT NULL
@@ -1016,7 +1090,7 @@ func (q *Queries) ListSoftwareCatalogEntries(ctx context.Context, arg ListSoftwa
 }
 
 const listSoftwareSources = `-- name: ListSoftwareSources :many
-SELECT s.id, s.organization_id, s.slug, s.name, s.uris, s.suites, s.components, s.architectures, s.signing_key, s.fingerprint, s.weak_key, s.created_by, s.created_at, s.updated_at, coalesce(c.entry_count, 0)::bigint AS entry_count
+SELECT s.id, s.organization_id, s.slug, s.name, s.uris, s.suites, s.components, s.architectures, s.signing_key, s.fingerprint, s.weak_key, s.created_by, s.created_at, s.updated_at, s.kind, coalesce(c.entry_count, 0)::bigint AS entry_count
 FROM software_source s
 LEFT JOIN (
   SELECT source_id, count(*) AS entry_count FROM software_catalog_entry WHERE source_id IS NOT NULL GROUP BY source_id
@@ -1076,7 +1150,83 @@ func (q *Queries) ListSoftwareSources(ctx context.Context, arg ListSoftwareSourc
 			&i.SoftwareSource.CreatedBy,
 			&i.SoftwareSource.CreatedAt,
 			&i.SoftwareSource.UpdatedAt,
+			&i.SoftwareSource.Kind,
 			&i.EntryCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserSoftware = `-- name: ListUserSoftware :many
+SELECT a.id, a.catalog_entry_id, e.name, a.intent, a.user_group_id, coalesce(g.name, '')::text AS user_group_name,
+       a.reason
+FROM software_assignment a
+JOIN software_catalog_entry e ON e.id = a.catalog_entry_id
+LEFT JOIN user_group g ON g.id = a.user_group_id
+WHERE (a.user_id = $1
+    OR EXISTS (SELECT 1 FROM user_group_member m WHERE m.group_id = a.user_group_id AND m.user_id = $1))
+  AND ($2::text IS NULL OR e.name ILIKE $2::text ESCAPE '\')
+  AND ($3::text IS NULL OR a.intent = $3::text)
+ORDER BY
+  CASE WHEN $4::text = 'name' THEN e.name END ASC,
+  CASE WHEN $4::text = '-name' THEN e.name END DESC,
+  CASE WHEN $4::text = 'intent' THEN a.intent END ASC,
+  CASE WHEN $4::text = '-intent' THEN a.intent END DESC,
+  a.id
+LIMIT $6 OFFSET $5
+`
+
+type ListUserSoftwareParams struct {
+	UserID   uuid.NullUUID
+	QPattern *string
+	Intent   *string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+}
+
+type ListUserSoftwareRow struct {
+	ID             uuid.UUID
+	CatalogEntryID uuid.UUID
+	Name           string
+	Intent         string
+	UserGroupID    uuid.NullUUID
+	UserGroupName  string
+	Reason         string
+}
+
+// The assignments that target a user (plan M13b decision 6): directly or through a user group the user is a member
+// of, with the entry's name and the group's name (empty for a direct target).
+func (q *Queries) ListUserSoftware(ctx context.Context, arg ListUserSoftwareParams) ([]ListUserSoftwareRow, error) {
+	rows, err := q.db.Query(ctx, listUserSoftware,
+		arg.UserID,
+		arg.QPattern,
+		arg.Intent,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserSoftwareRow{}
+	for rows.Next() {
+		var i ListUserSoftwareRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CatalogEntryID,
+			&i.Name,
+			&i.Intent,
+			&i.UserGroupID,
+			&i.UserGroupName,
+			&i.Reason,
 		); err != nil {
 			return nil, err
 		}
@@ -1198,7 +1348,7 @@ UPDATE software_source SET name = $1, uris = $2, suites = $3, components = $4,
   architectures = $5, signing_key = $6, fingerprint = $7, weak_key = $8,
   updated_at = now()
 WHERE id = $9
-RETURNING id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at
+RETURNING id, organization_id, slug, name, uris, suites, components, architectures, signing_key, fingerprint, weak_key, created_by, created_at, updated_at, kind
 `
 
 type UpdateSoftwareSourceParams struct {
@@ -1241,6 +1391,7 @@ func (q *Queries) UpdateSoftwareSource(ctx context.Context, arg UpdateSoftwareSo
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
 	)
 	return i, err
 }
@@ -1250,7 +1401,7 @@ INSERT INTO device_software_status (device_id, organization_id, catalog_entry_id
 SELECT $1, $2, r.id, r.package, r.intent, r.state, r.version, r.reason, r.error, $3
 FROM jsonb_to_recordset($4::jsonb) AS r(id uuid, package text, intent text, state text, version text, reason text, error text)
 JOIN software_catalog_entry e ON e.id = r.id AND e.organization_id = $2
-ON CONFLICT (device_id, catalog_entry_id) DO UPDATE SET
+ON CONFLICT (device_id, catalog_entry_id, scope, username) DO UPDATE SET
   package = EXCLUDED.package, intent = EXCLUDED.intent, state = EXCLUDED.state, version = EXCLUDED.version,
   reason = EXCLUDED.reason, error = EXCLUDED.error, reported_at = EXCLUDED.reported_at
 WHERE device_software_status.reported_at <= EXCLUDED.reported_at
