@@ -296,6 +296,29 @@ func (v *VM) MustIn(stdin []byte, command string) string {
 	}
 }
 
+// MustRoot runs a command as root and returns its standard output alone, trimmed. Use it for every lookup whose output
+// is parsed. sudo itself resolves users through NSS while it starts, and a module that logs there (himmelblaud while
+// it is down) writes to sudo's standard output, which would be mixed into the result (PDK-926). The guest has no root
+// login, so the command writes into a file of the paddock user and sudo's own standard output is discarded; the file
+// holds the bytes of the target command and nothing else. The command is a plain shell command, without sudo.
+func (v *VM) MustRoot(command string) string {
+	v.t.Helper()
+	return v.MustRootIn(nil, command)
+}
+
+// MustRootIn is MustRoot with stdin for the command.
+func (v *VM) MustRootIn(stdin []byte, command string) string {
+	v.t.Helper()
+	return v.MustIn(stdin, rootCapture(command))
+}
+
+// rootCapture wraps command so that only its own standard output reaches the caller. The file lives in the home
+// directory, not in /tmp: root may not open another user's file in a sticky directory (fs.protected_regular).
+func rootCapture(command string) string {
+	return `f=$(mktemp -p "$HOME") || exit 1; sudo -n sh -c ` + shellQuote(`exec >"$0"; `+command) +
+		` "$f" >/dev/null; rc=$?; cat "$f"; rm -f "$f"; exit $rc`
+}
+
 // Copy copies a local file into the guest.
 func (v *VM) Copy(local, remote string) {
 	v.t.Helper()

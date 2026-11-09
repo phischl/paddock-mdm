@@ -147,13 +147,14 @@ func (d *Device) AnswerDiskSetup(t *testing.T, pin string) {
 }
 
 // LUKSDevice is the LUKS partition of the guest: the first LUKS device blkid lists.
-func (v *VM) LUKSDevice() string { return v.MustDevice("sudo blkid -t TYPE=crypto_LUKS -o device") }
+func (v *VM) LUKSDevice() string { return v.MustDevice("blkid -t TYPE=crypto_LUKS -o device") }
 
-// MustDevice runs a command that prints device paths, one per line, and returns the first. Any other line, such as
-// an NSS module's log line (PDK-892), fails the test instead of becoming the device argument of the next command.
+// MustDevice runs a command as root (without sudo, see MustRoot) that prints device paths, one per line, and returns
+// the first. Any other line, such as an NSS module's log line (PDK-892), fails the test instead of becoming the
+// device argument of the next command.
 func (v *VM) MustDevice(command string) string {
 	v.t.Helper()
-	out := v.Must(command)
+	out := v.MustRoot(command)
 	devices, err := devicePaths(out)
 	if err != nil {
 		v.t.Fatalf("%s: %s: %v", v.Name, command, err)
@@ -194,7 +195,7 @@ func (v *VM) Keyslots(t *testing.T) []string {
 			PIN      bool     `json:"tpm2-pin"`
 		} `json:"tokens"`
 	}
-	if err := json.Unmarshal([]byte(v.Must("sudo cryptsetup luksDump --dump-json-metadata "+v.LUKSDevice())), &md); err != nil {
+	if err := json.Unmarshal([]byte(v.MustRoot("cryptsetup luksDump --dump-json-metadata "+v.LUKSDevice())), &md); err != nil {
 		t.Fatal(err)
 	}
 	var kinds []string
@@ -230,7 +231,7 @@ func (v *VM) Opens(t *testing.T, secret string) bool {
 // other failure than a rejected secret fails the test.
 func (v *VM) OpensDevice(t *testing.T, device, secret string) bool {
 	t.Helper()
-	slots, tokens, err := luksPassphraseSlots([]byte(v.Must("sudo cryptsetup luksDump --dump-json-metadata " + device)))
+	slots, tokens, err := luksPassphraseSlots([]byte(v.MustRoot("cryptsetup luksDump --dump-json-metadata " + device)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -32,7 +32,7 @@ type revokeTarget struct {
 // override of paddock-revoke test builds (plan M4c decision 13).
 func loopTarget(t *testing.T, d *Device) *revokeTarget {
 	t.Helper()
-	dev := d.MustDevice(`sudo sh -c 'truncate -s 64M /root/revoke-target.img && losetup -f --show /root/revoke-target.img'`)
+	dev := d.MustDevice(`truncate -s 64M /root/revoke-target.img && losetup -f --show /root/revoke-target.img`)
 	if !strings.HasPrefix(dev, "/dev/loop") {
 		t.Fatalf("loop device %q", dev)
 	}
@@ -64,7 +64,7 @@ func keyslotCount(t *testing.T, vm *VM, device string) int {
 	var md struct {
 		Keyslots map[string]json.RawMessage `json:"keyslots"`
 	}
-	if err := json.Unmarshal([]byte(vm.Must("sudo cryptsetup luksDump --dump-json-metadata "+device)), &md); err != nil {
+	if err := json.Unmarshal([]byte(vm.MustRoot("cryptsetup luksDump --dump-json-metadata "+device)), &md); err != nil {
 		t.Fatal(err)
 	}
 	return len(md.Keyslots)
@@ -475,7 +475,7 @@ func dmsState(t *testing.T, d *Device) (ticketAt time.Time, triggered bool) {
 		TicketAt  time.Time `json:"ticket_at"`
 		Triggered bool      `json:"triggered"`
 	}
-	if out := d.Must("sudo cat /var/lib/paddock/state/dms.json 2>/dev/null || echo '{}'"); json.Unmarshal([]byte(out), &st) != nil {
+	if out := d.MustRoot("cat /var/lib/paddock/state/dms.json 2>/dev/null || echo '{}'"); json.Unmarshal([]byte(out), &st) != nil {
 		t.Fatalf("dms.json %q", out)
 	}
 	return st.TicketAt, st.Triggered

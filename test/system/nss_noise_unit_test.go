@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,7 @@ func fakeSSH(t *testing.T) *VM {
 // device argument of cryptsetup luksDump).
 func TestMustReturnsStdoutAlone(t *testing.T) {
 	v := fakeSSH(t)
+	fakeSudo(t)
 	if out := v.Must("echo '" + nssNoise + "' >&2; echo /dev/sda3"); out != "/dev/sda3" {
 		t.Fatalf("Must = %q", out)
 	}
@@ -57,5 +59,37 @@ func TestDevicePaths(t *testing.T) {
 		if got, err := devicePaths(out); err == nil {
 			t.Errorf("%s: devicePaths = %v, want an error", name, got)
 		}
+	}
+}
+
+// fakeSudo puts a sudo on PATH that behaves like the guest's with himmelblaud down: it prints the NSS log line on its
+// own standard output, then runs the command.
+func fakeSudo(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\necho '" + nssNoise + "'\nif [ \"$1\" = -n ]; then shift; fi\nexec \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", t.TempDir())
+}
+
+// TestMustRootIgnoresSudoNoise: sudo's own standard output never reaches a parsed lookup (PDK-926), while the plain
+// sudo form still shows the noise, so the test fails without the wrapper.
+func TestMustRootIgnoresSudoNoise(t *testing.T) {
+	v := fakeSSH(t)
+	fakeSudo(t)
+	if out := v.Must("sudo echo /dev/sda3"); !strings.Contains(out, "ERROR") {
+		t.Fatalf("the fake sudo does not reproduce the noise: %q", out)
+	}
+	if out := v.MustRoot("echo /dev/sda3"); out != "/dev/sda3" {
+		t.Fatalf("MustRoot = %q", out)
+	}
+	if out := v.MustDevice("printf '/dev/sda3\\n/dev/loop0\\n'"); out != "/dev/sda3" {
+		t.Fatalf("MustDevice = %q", out)
+	}
+	if out := v.MustRootIn([]byte("from stdin"), "cat"); out != "from stdin" {
+		t.Fatalf("MustRootIn = %q", out)
 	}
 }

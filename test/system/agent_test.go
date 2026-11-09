@@ -121,7 +121,7 @@ func gateS2(t *testing.T, d *Device) {
 	var plan struct {
 		Changes int `json:"changes"`
 	}
-	if err := json.Unmarshal([]byte(d.Must("sudo paddockd plan")), &plan); err != nil || plan.Changes != 0 {
+	if err := json.Unmarshal([]byte(d.MustRoot("paddockd plan")), &plan); err != nil || plan.Changes != 0 {
 		t.Fatalf("second run plans %d changes (%v)", plan.Changes, err)
 	}
 	a, b := d.managedPath("a"), d.managedPath("b")
