@@ -121,12 +121,19 @@ func TestContainerMatrixFindings(t *testing.T) {
 		{"memory limit excepted (pending PDK-910)", "paddock-api", func(c *prodcheck.InspectedContainer) {
 			c.HostConfig.Memory = 0
 		}, ""},
-		{"excepted capability set (pending PDK-823)", "openbao", func(c *prodcheck.InspectedContainer) {
-			c.HostConfig.CapDrop = nil
-			c.HostConfig.SecurityOpt = nil
-			c.HostConfig.Memory = 0
+		{"openbao with its one capability", "openbao", func(c *prodcheck.InspectedContainer) {
 			c.HostConfig.CapAdd = []string{"CAP_IPC_LOCK"}
 		}, ""},
+		{"openbao back on Docker's default capabilities", "openbao", func(c *prodcheck.InspectedContainer) {
+			c.HostConfig.CapDrop = nil
+			c.HostConfig.CapAdd = []string{"CAP_IPC_LOCK"}
+		}, "paddock-openbao-1 (service openbao): CapDrop [] lacks ALL"},
+		{"audit-rustfs without a memory limit", "audit-rustfs", func(c *prodcheck.InspectedContainer) {
+			c.HostConfig.Memory = 0
+		}, "paddock-audit-rustfs-1 (service audit-rustfs): no memory limit"},
+		{"rustfs may gain privileges", "rustfs", func(c *prodcheck.InspectedContainer) {
+			c.HostConfig.SecurityOpt = nil
+		}, "(service rustfs)"},
 		{"privileged even where listed", "openbao", func(c *prodcheck.InspectedContainer) {
 			c.HostConfig.CapAdd = []string{"CAP_IPC_LOCK"}
 			c.HostConfig.Privileged = true
