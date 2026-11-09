@@ -125,6 +125,20 @@ func TestPlanText(t *testing.T) {
 	}
 }
 
+func TestPlanTextRequiresStepUp(t *testing.T) {
+	p := render.Plan{Changes: []render.Change{{Section: "software_sources", Key: `["vendor"]`, Action: "create"}},
+		Created: 1, RequiresStepUp: []string{"software_sources"}}
+	var b strings.Builder
+	if err := render.PlanText(&b, p); err != nil {
+		t.Fatal(err)
+	}
+	want := "+ software_sources [\"vendor\"]\nPlan: 1 to create, 0 to update, 0 to delete\n" +
+		"Requires a step-up: software_sources (an API token cannot apply this plan; apply these sections from the portal)\n"
+	if b.String() != want {
+		t.Fatalf("plan text:\n%s\nwant:\n%s", b.String(), want)
+	}
+}
+
 func TestDevicesTable(t *testing.T) {
 	v, contact := int64(4), "2026-10-08T10:00:00Z"
 	var b strings.Builder

@@ -105,7 +105,7 @@ async function removeEntry(): Promise<void> {
   if (!entry.value) return
   const confirmed = await confirm({
     title: t('software.catalog.deleteTitle'),
-    message: t('software.catalog.deleteConfirm', { count: entry.value.assignment_count }),
+    message: t('software.catalog.deleteConfirm'),
     confirmLabel: t('common.delete'),
     destructive: true,
     requireTypedText: entry.value.name,

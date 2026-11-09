@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -41,7 +42,8 @@ type CatalogEntry = pgstore.GetSoftwareCatalogEntryRow
 type Assignment = pgstore.GetSoftwareAssignmentRow
 
 // SoftwareCatalog are the use cases of the organization's software catalog and the assignments of its entries
-// (plan M13a decisions 7 to 11).
+// (plan M13a decisions 7 to 11). Every write records a change set (plan M13c decision 3); an assignment change is staged
+// when the organization's rollouts are enabled, an entry change never.
 type SoftwareCatalog struct {
 	runner *ActionRunner
 	org    *db.OrgPool
@@ -131,7 +133,7 @@ func (c *SoftwareCatalog) Create(ctx context.Context, in EntryInput) (CatalogEnt
 		"name": software.DisplayParam(in.Name, software.MaxNameLength), "category": software.DisplayParam(in.Category, software.MaxCategoryLength),
 		"source_id": idParam(in.SourceID), "source_slug": nil, "package_count": len(in.Packages),
 	}
-	err := c.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := c.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if err := software.ValidateEntry(in.Name, in.Description, in.Category, in.Packages); err != nil {
 			return softwareEntryProblem(err)
 		}
@@ -171,7 +173,7 @@ func (c *SoftwareCatalog) Create(ctx context.Context, in EntryInput) (CatalogEnt
 		rec.StateChanged(statechange.ScopeOrg, org)
 		out, err = q.GetSoftwareCatalogEntry(ctx, id)
 		return err
-	})
+	}))
 	return out, err
 }
 
@@ -183,7 +185,7 @@ func (c *SoftwareCatalog) Update(ctx context.Context, id uuid.UUID, in EntryInpu
 	in.Packages = software.NormalizePackages(in.Packages)
 	spec := SpecSoftwareCatalogEntryUpdate
 	spec.Target = &audit.Target{Type: "software_catalog_entry", ID: id.String()}
-	err := c.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := c.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetSoftwareCatalogEntryForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -237,7 +239,7 @@ func (c *SoftwareCatalog) Update(ctx context.Context, id uuid.UUID, in EntryInpu
 		rec.StateChanged(statechange.ScopeOrg, old.OrganizationID)
 		out, err = q.GetSoftwareCatalogEntry(ctx, id)
 		return err
-	})
+	}))
 	return out, err
 }
 
@@ -269,24 +271,27 @@ func (c *SoftwareCatalog) SetIcon(ctx context.Context, id uuid.UUID, icon []byte
 	})
 }
 
-// Delete removes an entry together with its assignments (audited: software_catalog_entry.deleted with the number of
-// assignments removed); the devices stop managing the application.
+// Delete removes an entry without assignments (audited: software_catalog_entry.deleted); it changes nothing on any
+// device. An entry that still has assignments is refused with 409 in_use naming them (plan M13c amendment 2026-11-09,
+// A10-12): their removal is an assignment change that rolls out in waves, the entry's deletion must not be a side door.
 func (c *SoftwareCatalog) Delete(ctx context.Context, id uuid.UUID) error {
 	spec := SpecSoftwareCatalogEntryDelete
 	spec.Target = &audit.Target{Type: "software_catalog_entry", ID: id.String()}
-	return c.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return c.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetSoftwareCatalogEntryForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
 		}
 		rec.SetTarget(audit.Target{Type: "software_catalog_entry", ID: id.String(), Display: old.Name})
 		rec.SetParam("name", old.Name)
-		// The entry is locked, so no assignment can be added between the count and the cascade.
 		row, err := q.GetSoftwareCatalogEntry(ctx, id)
 		if err != nil {
 			return notFound(err)
 		}
 		rec.SetParam("assignment_count", row.AssignmentCount)
+		if err := requireEntryUnassigned(ctx, q, id, old.Name, row.AssignmentCount); err != nil {
+			return err
+		}
 		n, err := q.DeleteSoftwareCatalogEntry(ctx, id)
 		if err != nil {
 			return err
@@ -296,7 +301,53 @@ func (c *SoftwareCatalog) Delete(ctx context.Context, id uuid.UUID) error {
 		}
 		rec.StateChanged(statechange.ScopeOrg, old.OrganizationID)
 		return nil
+	}))
+}
+
+// maxNamedAssignments is how many assignments the refusal of an entry's deletion names; the rest it counts.
+const maxNamedAssignments = 10
+
+// requireEntryUnassigned refuses the deletion of a catalog entry that still has assignments with 409 in_use, naming
+// them by target; count is the entry's number of assignments. The caller holds the entry's row lock, so no assignment
+// can be added between this check and the deletion, and ON DELETE CASCADE never removes one.
+func requireEntryUnassigned(ctx context.Context, q *pgstore.Queries, id uuid.UUID, name string, count int64) error {
+	if count == 0 {
+		return nil
+	}
+	rows, err := q.ListSoftwareAssignmentTargetsOfEntry(ctx, pgstore.ListSoftwareAssignmentTargetsOfEntryParams{
+		CatalogEntryID: id, MaxRows: maxNamedAssignments + 1,
 	})
+	if err != nil {
+		return fmt.Errorf("assignments of catalog entry %s: %w", id, err)
+	}
+	named := make([]string, 0, maxNamedAssignments)
+	for _, r := range rows[:min(len(rows), maxNamedAssignments)] {
+		named = append(named, assignmentTargetText(r.Target, r.TargetName))
+	}
+	return entryInUse(name, int(count), named)
+}
+
+// entryInUse is the 409 in_use of an entry's deletion: name has count assignments, named are the first of them.
+func entryInUse(name string, count int, named []string) error {
+	list := strings.Join(named, ", ")
+	if more := count - len(named); more > 0 {
+		list += fmt.Sprintf(" and %d more", more)
+	}
+	return problem.InUse.WithDetail(fmt.Sprintf("catalog entry %q still has %d assignments (%s); remove them first, "+
+		"which rolls out like every assignment change, then delete the entry", name, count, list))
+}
+
+// assignmentTargetText names an assignment by its target for a problem detail.
+func assignmentTargetText(target, name string) string {
+	switch target {
+	case software.TargetDeviceGroup:
+		return "device group " + strconv.Quote(name)
+	case software.TargetUser:
+		return "user " + strconv.Quote(name)
+	case software.TargetUserGroup:
+		return "user group " + strconv.Quote(name)
+	}
+	return "organization"
 }
 
 // SoftwareAssignmentQuery selects a page of assignments; q matches the entry's name. Target is one of the
@@ -422,7 +473,7 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 	spec := SpecSoftwareAssignmentCreate
 	spec.Params = assignmentParams(nil, in)
 	spec.Params["app"] = nil
-	err := c.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := c.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if err := software.ValidateAssignment(in.Intent, in.UpdateRule, in.Version, in.Reason); err != nil {
 			return softwareAssignmentProblem(err)
 		}
@@ -471,7 +522,7 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 		rec.StateChanged(statechange.ScopeOrg, org)
 		out, err = q.GetSoftwareAssignment(ctx, id)
 		return err
-	})
+	}))
 	return out, err
 }
 
@@ -484,7 +535,7 @@ func (c *SoftwareCatalog) UpdateAssignment(ctx context.Context, id uuid.UUID, in
 	}
 	spec := SpecSoftwareAssignmentUpdate
 	spec.Target = &audit.Target{Type: "software_assignment", ID: id.String()}
-	err := c.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := c.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		pre, err := q.GetSoftwareAssignment(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -535,7 +586,7 @@ func (c *SoftwareCatalog) UpdateAssignment(ctx context.Context, id uuid.UUID, in
 		rec.StateChanged(statechange.ScopeOrg, old.OrganizationID)
 		out, err = q.GetSoftwareAssignment(ctx, id)
 		return err
-	})
+	}))
 	return out, err
 }
 
@@ -544,7 +595,7 @@ func (c *SoftwareCatalog) UpdateAssignment(ctx context.Context, id uuid.UUID, in
 func (c *SoftwareCatalog) DeleteAssignment(ctx context.Context, id uuid.UUID) error {
 	spec := SpecSoftwareAssignmentDelete
 	spec.Target = &audit.Target{Type: "software_assignment", ID: id.String()}
-	return c.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return c.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if _, err := q.GetSoftwareAssignmentForUpdate(ctx, id); err != nil {
 			return notFound(err)
 		}
@@ -572,7 +623,7 @@ func (c *SoftwareCatalog) DeleteAssignment(ctx context.Context, id uuid.UUID) er
 		}
 		rec.StateChanged(statechange.ScopeOrg, old.OrganizationID)
 		return nil
-	})
+	}))
 }
 
 // entrySource returns the slug ("" for the distribution's own repositories) and the kind of the source an entry uses;

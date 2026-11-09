@@ -199,13 +199,32 @@ func countRollout(r pgstore.ConfigRollout, staged []string, devices []pgstore.Li
 	return c
 }
 
-// stagedResourceIDs returns the resource IDs the plan of a change set stages.
-func stagedResourceIDs(plan json.RawMessage) ([]string, error) {
+// SoftwareResourcePrefix prefixes the catalog entry ID of a staged software assignment's resource ID (plan M13c
+// decision 3); ListConfigRolloutReports lists a failed software status of the entry under the same ID.
+const SoftwareResourcePrefix = "software:"
+
+// stagedResourceIDs returns the resource IDs the plan of a change set stages: those of configrollout.StagedResourceIDs
+// and software:<entry id> for every entry whose assignments it stages. An entry name that no longer resolves (the
+// rollout ended and the entry was renamed or deleted since) reaches no device and is left out.
+func stagedResourceIDs(ctx context.Context, q *pgstore.Queries, plan json.RawMessage) ([]string, error) {
 	var p declarative.Plan
 	if err := json.Unmarshal(plan, &p); err != nil {
 		return nil, fmt.Errorf("decode the plan of the rollout's change set: %w", err)
 	}
-	return configrollout.StagedResourceIDs(p), nil
+	out := configrollout.StagedResourceIDs(p)
+	names := configrollout.StagedEntries(p)
+	if len(names) == 0 {
+		return out, nil
+	}
+	entries, err := q.ListSoftwareCatalogEntryIDsByName(ctx, names)
+	if err != nil {
+		return nil, fmt.Errorf("resolve the catalog entries of the rollout's change set: %w", err)
+	}
+	for _, e := range entries {
+		out = append(out, SoftwareResourcePrefix+e.ID.String())
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // rolloutWorld is what the counts of rollouts read: the active devices, the members of their canary groups and the
@@ -296,7 +315,7 @@ func (c *ConfigRollouts) List(ctx context.Context, page ListPage, statuses []str
 		}
 		out.Items = make([]ConfigRolloutRecord, len(rows))
 		for i, r := range rows {
-			staged, err := stagedResourceIDs(r.Plan)
+			staged, err := stagedResourceIDs(ctx, q, r.Plan)
 			if err != nil {
 				return err
 			}
@@ -323,7 +342,7 @@ func (c *ConfigRollouts) Get(ctx context.Context, id uuid.UUID) (ConfigRolloutDe
 		if err != nil {
 			return fmt.Errorf("read the change set of rollout %s: %w", id, err)
 		}
-		staged, err := stagedResourceIDs(cs.Plan)
+		staged, err := stagedResourceIDs(ctx, q, cs.Plan)
 		if err != nil {
 			return err
 		}
@@ -357,7 +376,7 @@ func (c *ConfigRollouts) ListDevices(ctx context.Context, id uuid.UUID, query Co
 		if err != nil {
 			return fmt.Errorf("read the plan of rollout %s: %w", id, err)
 		}
-		staged, err := stagedResourceIDs(plan)
+		staged, err := stagedResourceIDs(ctx, q, plan)
 		if err != nil {
 			return err
 		}
@@ -582,7 +601,7 @@ func (c *ConfigRollouts) Evaluate(ctx context.Context, now time.Time) error {
 			return err
 		}
 		for _, r := range rows {
-			staged, err := stagedResourceIDs(r.Plan)
+			staged, err := stagedResourceIDs(ctx, q, r.Plan)
 			if err != nil {
 				return err
 			}

@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
 	"github.com/phischl/paddock-mdm/server/internal/domain/loginsettings"
 	"github.com/phischl/paddock-mdm/server/internal/domain/privilege"
+	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 	"github.com/phischl/paddock-mdm/server/internal/domain/updates"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -33,6 +34,11 @@ type configExec struct {
 	index   map[string]map[string]int
 	// steppedUp: a change needed a step-up and it was fresh; the change set's actor records it like the event's.
 	steppedUp bool
+	// planOnly: a dry run, rolled back; a change of software sources is named in the plan instead of refused.
+	planOnly bool
+	// endsRollout: the revert of the open rollout's change set, which deletes a catalog entry together with its
+	// assignments (plan M13c amendment 2026-11-09, A10-13).
+	endsRollout bool
 }
 
 // requireStepUp refuses the change unless the step-up is fresh (full profiles, plan M4a decision 7).
@@ -49,6 +55,9 @@ func (ex *configExec) run(ctx context.Context, plan declarative.Plan) error {
 	if err := ex.guardGroupDeletions(plan); err != nil {
 		return err
 	}
+	if err := ex.guardEntryDeletions(plan); err != nil {
+		return err
+	}
 	// A document can complete a root grant across profiles and assignments (plan M8s decision 7g); the whole
 	// document is compared before and after.
 	grants := slices.ContainsFunc(plan.Changes, func(c declarative.Change) bool {
@@ -59,6 +68,12 @@ func (ex *configExec) run(ctx context.Context, plan declarative.Plan) error {
 		var err error
 		if guard, err = beginGrantGuard(ctx, ex.q); err != nil {
 			return err
+		}
+	}
+	// A source change needs the step-up for the whole apply (plan M13c decision 2), checked before anything is written.
+	if len(plan.RequiresStepUp) > 0 {
+		if err := ex.requireSourceStepUp(); err != nil {
+			return atPath("/"+declarative.SectionSoftwareSources, err)
 		}
 	}
 	for _, c := range plan.Changes {
@@ -151,6 +166,12 @@ func (ex *configExec) change(ctx context.Context, c declarative.Change) error {
 		return ex.assignment(ctx, c)
 	case declarative.SectionSettingsUpdates:
 		return ex.updateSettings(ctx)
+	case declarative.SectionSoftwareSources:
+		return ex.softwareSource(ctx, c)
+	case declarative.SectionSoftwareCatalog:
+		return ex.softwareEntry(ctx, c)
+	case declarative.SectionSoftwareAssignments:
+		return ex.softwareAssignment(ctx, c)
 	case declarative.SectionSettingsLogin:
 		return ex.loginSettings(ctx)
 	case declarative.SectionSettingsManaged:
@@ -559,7 +580,7 @@ func (ex *configExec) lockedGroupIsEmpty(ctx context.Context, c declarative.Chan
 		return err
 	}
 	if scoped > 0 {
-		return problem.InUse.WithDetail(fmt.Sprintf("device group %s has %d managed files, units, package holds or profile assignments that "+
+		return problem.InUse.WithDetail(fmt.Sprintf("device group %s has %d managed files, units, package holds, profile or software assignments that "+
 			"the plan does not delete (added after the configuration was read); review the plan again", name, scoped))
 	}
 	return nil
@@ -604,6 +625,16 @@ func scopedItems(d declarative.Document, section string) (bool, []scopedItem) {
 		for i, a := range *d.ProfileAssignments {
 			out = append(out, scopedItem{a.DeviceGroup, "assignment of profile " + strconv.Quote(a.Profile), i})
 		}
+	case declarative.SectionSoftwareAssignments:
+		if d.SoftwareAssignments == nil {
+			return false, nil
+		}
+		for i, a := range *d.SoftwareAssignments {
+			if a.Target.Type == software.TargetDeviceGroup {
+				name := a.Target.Name
+				out = append(out, scopedItem{&name, "software assignment of " + strconv.Quote(a.Entry), i})
+			}
+		}
 	}
 	return true, out
 }
@@ -625,7 +656,7 @@ func (ex *configExec) guardGroupDeletions(plan declarative.Plan) error {
 		return nil
 	}
 	for _, s := range []string{declarative.SectionManagedFiles, declarative.SectionManagedUnits, declarative.SectionPackageHolds,
-		declarative.SectionProfileAssignments} {
+		declarative.SectionProfileAssignments, declarative.SectionSoftwareAssignments} {
 		present, listed := scopedItems(ex.desired, s)
 		if present {
 			for _, it := range listed {

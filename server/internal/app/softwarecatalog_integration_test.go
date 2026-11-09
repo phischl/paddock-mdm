@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -257,24 +258,34 @@ func TestSoftwareCatalog(t *testing.T) {
 		t.Fatalf("list entries = %+v, %v", entries, err)
 	}
 
-	// Delete: the assignments go with the entry and the event counts them.
+	// Delete: an entry with assignments is refused naming them (plan M13c amendment 2026-11-09, A10-12); once they are
+	// removed it goes and the event names it.
 	if err := catalog.Delete(ctx(auditor), entry.ID); !errors.Is(err, problem.Forbidden) {
 		t.Fatalf("auditor delete = %v", err)
+	}
+	err = catalog.Delete(ctx(operator), entry.ID)
+	if !errors.Is(err, problem.InUse) || !strings.Contains(problem.From(err).Detail, `"Editor" still has 2 assignments (device group "Laptops", organization)`) {
+		t.Fatalf("delete with assignments = %v", err)
+	}
+	if ev = h.lastEvent(t); ev.Outcome != audit.OutcomeFailure || ev.Params["assignment_count"] != float64(2) || ev.Params["name"] != "Editor" {
+		t.Fatalf("refused delete event %+v", ev)
+	}
+	if _, err := catalog.GetAssignment(ctx(auditor), created.ID); err != nil {
+		t.Fatalf("assignment after the refused delete = %v", err)
+	}
+	for _, id := range []uuid.UUID{created.ID, orgWide.ID} {
+		if err := catalog.DeleteAssignment(ctx(operator), id); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := catalog.Delete(ctx(operator), entry.ID); err != nil {
 		t.Fatal(err)
 	}
-	if ev = h.lastEvent(t); ev.Params["assignment_count"] != float64(2) || ev.Params["name"] != "Editor" {
+	if ev = h.lastEvent(t); ev.Outcome != audit.OutcomeSuccess || ev.Params["assignment_count"] != float64(0) || ev.Params["name"] != "Editor" {
 		t.Fatalf("deleted event %+v", ev)
-	}
-	if _, err := catalog.GetAssignment(ctx(auditor), created.ID); !errors.Is(err, problem.NotFound) {
-		t.Fatalf("assignment after delete = %v", err)
 	}
 	if err := catalog.Delete(ctx(operator), entry.ID); !errors.Is(err, problem.NotFound) {
 		t.Fatalf("second delete = %v", err)
-	}
-	if err := catalog.DeleteAssignment(ctx(operator), orgWide.ID); !errors.Is(err, problem.NotFound) {
-		t.Fatalf("delete assignment after the entry = %v", err)
 	}
 }
 

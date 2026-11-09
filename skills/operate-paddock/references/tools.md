@@ -234,7 +234,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `createSoftwareAssignment` | write | no | Assigns a catalog entry with an intent to one target: every device of the organization (no target ID), a device group (device_group_id), a user (user_id) or a user group (user_group_id); more than one target ID is 400 invalid_request. |
 | `createSoftwareCatalogEntry` | write | no | Adds an application with its package names per distribution, release and architecture (1 to 20 references; release and architecture may be "*"; the tuple is unique within the entry). |
 | `deleteSoftwareAssignment` | write | yes | The devices stop enforcing the assignment with their next bundle; installed software stays. |
-| `deleteSoftwareCatalogEntry` | write | yes | Removes the entry together with its assignments (never 409); the devices stop managing the application, installed software stays. |
+| `deleteSoftwareCatalogEntry` | write | yes | Removes an entry that has no assignments; it changes nothing on any device. |
 | `getSoftwareAssignment` | read | no | GET /api/v1/software-assignments/{id} |
 | `getSoftwareCatalogEntry` | read | no | GET /api/v1/software-catalog/{id} |
 | `getSoftwareSource` | read | no | One source with its signing key (a public key); 404 not_found for another organization's. |

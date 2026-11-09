@@ -171,6 +171,19 @@ func NormalizeFingerprint(s string) string {
 	}, s))
 }
 
+// CanonicalSigningKey returns signingKey in the form ValidateSource stores it (re-armored without armor headers) and
+// true, or signingKey unchanged and false when it is not one parseable OpenPGP key; the validation then refuses it.
+func CanonicalSigningKey(signingKey string) (string, bool) {
+	if len(signingKey) > MaxSigningKeyLength {
+		return signingKey, false
+	}
+	key, err := openpgpkey.ParseArmored([]byte(signingKey))
+	if err != nil {
+		return signingKey, false
+	}
+	return string(openpgpkey.Armor(key.Keyring)), true
+}
+
 func validateURIs(uris []string) error {
 	if len(uris) < 1 || len(uris) > MaxURIs {
 		return fmt.Errorf("%w: uris must have 1 to %d entries", ErrSource, MaxURIs)
