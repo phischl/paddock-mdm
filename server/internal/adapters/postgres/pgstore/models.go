@@ -304,25 +304,32 @@ type ComponentTarget struct {
 }
 
 type ConfigRollout struct {
-	ID                      uuid.UUID
-	OrganizationID          uuid.UUID
-	ChangeSetID             uuid.UUID
-	Waves                   []int32
-	CurrentWaveIndex        int32
-	WaveStartedAt           time.Time
-	MinWaveMinutes          int32
-	FailureThresholdPercent int32
-	FailureThresholdMin     int32
-	CanaryDeviceGroupID     uuid.NullUUID
-	Status                  string
-	HaltedReason            *string
-	EvaluationSince         time.Time
-	StartedBy               string
-	StartedAt               time.Time
-	EndedAt                 *time.Time
-	EndedReason             *string
-	UpdatedAt               time.Time
-	StagedAssignments       json.RawMessage
+	ID                          uuid.UUID
+	OrganizationID              uuid.UUID
+	ChangeSetID                 uuid.UUID
+	Waves                       []int32
+	CurrentWaveIndex            int32
+	WaveStartedAt               time.Time
+	MinWaveMinutes              int32
+	FailureThresholdPercent     int32
+	FailureThresholdMin         int32
+	CanaryDeviceGroupID         uuid.NullUUID
+	Status                      string
+	HaltedReason                *string
+	EvaluationSince             time.Time
+	StartedBy                   string
+	StartedAt                   time.Time
+	EndedAt                     *time.Time
+	EndedReason                 *string
+	UpdatedAt                   time.Time
+	StagedAssignments           json.RawMessage
+	WaveSuccessThresholdPercent int32
+	StallWarningHours           int32
+	WaveFirstAppliedAt          *time.Time
+	WaveApplied                 int32
+	WaveProgressAt              time.Time
+	WaveOutstanding             int32
+	StallWarnedAt               *time.Time
 }
 
 type Device struct {
@@ -476,6 +483,17 @@ type DeviceGroup struct {
 	StalenessCriticalH *int32
 	AgentUpdatePolicy  *string
 	DiskUnlockMode     *string
+}
+
+type DeviceGroupMaintenanceWindow struct {
+	OrganizationID  uuid.UUID
+	DeviceGroupID   uuid.UUID
+	Days            []int32
+	StartMinute     int32
+	DurationMinutes int32
+	Timezone        string
+	UpdatedBy       uuid.NullUUID
+	UpdatedAt       time.Time
 }
 
 type DeviceGroupMember struct {
@@ -911,15 +929,17 @@ type OrganizationRoleSnapshot struct {
 }
 
 type OrganizationRolloutSetting struct {
-	OrganizationID          uuid.UUID
-	Enabled                 bool
-	Waves                   []int32
-	MinWaveMinutes          int32
-	FailureThresholdPercent int32
-	FailureThresholdMin     int32
-	CanaryDeviceGroupID     uuid.NullUUID
-	UpdatedAt               time.Time
-	UpdatedBy               uuid.NullUUID
+	OrganizationID              uuid.UUID
+	Enabled                     bool
+	Waves                       []int32
+	MinWaveMinutes              int32
+	FailureThresholdPercent     int32
+	FailureThresholdMin         int32
+	CanaryDeviceGroupID         uuid.NullUUID
+	UpdatedAt                   time.Time
+	UpdatedBy                   uuid.NullUUID
+	WaveSuccessThresholdPercent int32
+	StallWarningHours           int32
 }
 
 type OrganizationUpdateSetting struct {
@@ -1116,6 +1136,7 @@ type SoftwareAssignment struct {
 	UpdatedAt      time.Time
 	UserID         uuid.NullUUID
 	UserGroupID    uuid.NullUUID
+	Urgent         bool
 }
 
 type SoftwareCatalogEntry struct {

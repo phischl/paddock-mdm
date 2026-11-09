@@ -43,6 +43,8 @@ func publicBundleFields() map[string]bool {
 		"software.packages.flatpak_ref", "software.packages.scope", "software.packages.audience.all",
 		"software.packages.audience.users", "software.packages.users", "software.packages.approval",
 		"software.packages.approved",
+		"software.packages.urgent", "software.windows.days", "software.windows.start_minute",
+		"software.windows.duration_minutes", "software.windows.timezone",
 		"resources.spec:time.ntp",
 		"resources.spec:file.path", "resources.spec:file.mode", "resources.spec:file.owner", "resources.spec:file.group",
 		"resources.spec:file.content_sha256",

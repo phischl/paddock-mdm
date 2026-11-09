@@ -415,6 +415,10 @@ func UpdatesResource(s UpdatesSpec) (Resource, error) {
 type SoftwareSpec struct {
 	Sources  []SoftwareSource  `json:"sources"`
 	Packages []SoftwarePackage `json:"packages"`
+	// Windows are the maintenance windows of the device: the union of its device groups' windows (plan M13c decisions
+	// 5 and Q17). Absent means no window: the policy applies at any time. Additive to schema 2 (ADR 0013): an agent
+	// before PDK-809 ignores it and applies at once.
+	Windows []SoftwareWindow `json:"windows,omitempty"`
 }
 
 // SoftwareSource is an APT source the device writes as a deb822 file with its keyring, or a Flatpak remote (Kind
@@ -502,6 +506,9 @@ type SoftwarePackage struct {
 	// the same package to without approval; only with Approval. A pointer like Audience, so SoftwarePackage stays
 	// comparable.
 	Approved *[]string `json:"approved,omitempty"`
+	// Urgent marks a package of an assignment an administrator marked urgent with a step-up (plan M13c decision 7):
+	// the agent applies it outside the maintenance windows too. Absent otherwise.
+	Urgent bool `json:"urgent,omitempty"`
 }
 
 // SoftwareApprovalRequired is the only value of SoftwarePackage.Approval (plan M13c decision 9).
@@ -545,8 +552,16 @@ const (
 // (ValidAudienceUser), and no other package has one (plan M13b decision 7); a user-scope Flatpak application with
 // intent required, forbid or uninstall may name Users with the same limits, and no other package does (A10-11); only an
 // available package requires approval and lists its approved users with the same limits (plan M13c decision 9). It does not compare a keyring with its
-// fingerprint; the agent does that per source.
+// fingerprint; the agent does that per source. Windows are at most MaxSoftwareWindows, each ValidateSoftwareWindow.
 func ValidateSoftware(s SoftwareSpec) error {
+	if len(s.Windows) > MaxSoftwareWindows {
+		return fmt.Errorf("bundle: more than %d software windows", MaxSoftwareWindows)
+	}
+	for i, w := range s.Windows {
+		if err := ValidateSoftwareWindow(w); err != nil {
+			return fmt.Errorf("bundle: software window %d: %w", i, err)
+		}
+	}
 	kinds := make(map[string]string, len(s.Sources))
 	for _, src := range s.Sources {
 		if err := validateSoftwareSource(src); err != nil {

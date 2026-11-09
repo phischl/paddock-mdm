@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,6 +33,8 @@ var (
 	SpecConfigRolloutResume   = ActionSpec{Code: audit.CodeConfigRolloutResumed, AllowedRoles: RolesWrite}
 	SpecConfigRolloutAdvance  = ActionSpec{Code: audit.CodeConfigRolloutAdvanced, AllowedRoles: RolesWrite}
 	SpecConfigRolloutComplete = ActionSpec{Code: audit.CodeConfigRolloutCompleted, AllowedRoles: RolesWrite}
+	// SpecConfigRolloutStalled is the worker's stall warning (architect decision A10-16).
+	SpecConfigRolloutStalled = ActionSpec{Code: audit.CodeConfigRolloutStalled, AllowedRoles: RolesWrite}
 )
 
 // Report outcomes of a device in a rollout's device list: report_only is the report of a report-only device, whose
@@ -58,12 +61,15 @@ func NewConfigRollouts(runner *ActionRunner, org *db.OrgPool) *ConfigRollouts {
 	return &ConfigRollouts{runner: runner, org: org}
 }
 
-// RolloutCounts are the devices of a rollout: eligible are the enforced active devices inside the wave it reached, failed those
-// whose newest report on a bundle of the rollout since its start or last resume is a rejection or names a failed
-// staged resource (what the worker counts), applied those whose newest such report applied every staged resource, and
-// pending the rest.
+// RolloutCounts are the devices of a rollout (the A10-19 accounting table, column 5): eligible are the enforced active
+// devices inside the wave it reached, failed those whose newest report on a bundle of the rollout since its start or
+// last resume is a rejection or names a failed staged resource (what the worker counts), applied those whose newest such
+// report applied every staged resource, and pending the rest. Waiting (a subset of pending) are those that wait for
+// their maintenance window; AwaitingRetry are those whose failure the last resume discarded (pending) and, after a
+// resume, those that failed (failed): each holds the rollout until it applies successfully.
 type RolloutCounts struct {
 	Eligible, Applied, Failed, Pending int
+	Waiting, AwaitingRetry             int
 }
 
 // ConfigRolloutRecord is a rollout with its counts.
@@ -80,7 +86,10 @@ type ConfigRolloutDetail struct {
 }
 
 // ConfigRolloutDevice is an active device as a rollout sees it: whether it is inside the wave, its newest bundle,
-// whether that bundle carries the rollout, its report and the staged resources that failed in it.
+// whether that bundle carries the rollout, its report, the staged resources that failed in it, whether it applied
+// the bundle but still waits for its maintenance window to run a staged software change (A10-16), so it counts as
+// pending although its report_outcome is applied, and whether it holds the rollout until it applies successfully after
+// a resume (A10-19).
 type ConfigRolloutDevice struct {
 	DeviceID          uuid.UUID
 	Hostname          string
@@ -89,6 +98,8 @@ type ConfigRolloutDevice struct {
 	CarriesRollout    bool
 	ReportOutcome     string
 	FailedResourceIDs []string
+	WaitingForWindow  bool
+	AwaitingRetry     bool
 }
 
 // ConfigRolloutDeviceQuery selects a page of a rollout's devices; nil and empty filters select every device.
@@ -96,6 +107,7 @@ type ConfigRolloutDeviceQuery struct {
 	Page           ListPage
 	InWave         *bool
 	ReportOutcomes []string
+	AwaitingRetry  *bool
 }
 
 // rolloutTarget is the audit target of a rollout.
@@ -125,7 +137,7 @@ func inWave(r pgstore.ConfigRollout, d pgstore.ListConfigRolloutDevicesRow, cana
 	return d.ConfigMode != device.ConfigModeReportOnly && configrollout.Eligible(configrollout.Bucket(d.ID, r.ID), reachedPercent(r), canary[d.ID])
 }
 
-// stagedFailure reports whether failed names a staged resource.
+// stagedFailure reports whether failed names a staged resource; classify also asks it of the waiting resources.
 func stagedFailure(failed, staged []string) bool {
 	return slices.ContainsFunc(failed, func(id string) bool { return slices.Contains(staged, id) })
 }
@@ -137,6 +149,11 @@ const (
 	statePending deviceState = iota
 	stateApplied
 	stateFailed
+	// stateWaiting is pending because a staged software entry waits for the device's maintenance window.
+	stateWaiting
+	// stateDiscarded is pending because the device's failure was reported before the last resume and not retried since
+	// (A10-18).
+	stateDiscarded
 )
 
 // countsAgainst reports whether rep counts toward the failure rate of r: received by the server since the rollout's
@@ -148,10 +165,13 @@ func countsAgainst(r pgstore.ConfigRollout, rep pgstore.ListConfigRolloutReports
 }
 
 // classify is the one rule of the worker's evaluation and of the API's counts (plan M11 decision 27, amendments R6.6
-// and R6.14) for a device's newest report on a bundle of r (nil: none): failed is a rejection, or an enforced apply
-// with a failed staged resource, reported since evaluation_since; the failed resources of a report-only device are
-// plan errors and never count, its rejection does. Applied is an enforced apply without a failed staged resource;
-// everything else is pending.
+// and R6.14, the A10-19 accounting table §2) for a device's newest report on a bundle of r (nil: none): failed (FL) is a
+// rejection, or an enforced apply with a failed staged resource, reported since evaluation_since; the failed resources
+// of a report-only device are plan errors and never count, its rejection does. Applied (OK) is an enforced apply
+// without a failed staged resource and without a staged software entry that waits for the device's maintenance window
+// (PDK-809): such a device has not run the change yet and is waiting (WW). A failure from before the last resume is
+// discarded (DC): pending in the counts, and awaiting a retry until the device reports again (A10-18). Everything else
+// is pending (RP).
 func classify(r pgstore.ConfigRollout, rep *pgstore.ListConfigRolloutReportsRow, staged []string) deviceState {
 	switch {
 	case rep == nil:
@@ -160,24 +180,42 @@ func classify(r pgstore.ConfigRollout, rep *pgstore.ListConfigRolloutReportsRow,
 		if countsAgainst(r, *rep) {
 			return stateFailed
 		}
-		return statePending
+		return stateDiscarded
 	case rep.Mode == protocol.BundleModeReportOnly:
 		return statePending
 	case stagedFailure(rep.FailedResourceIds, staged):
 		if countsAgainst(r, *rep) {
 			return stateFailed
 		}
-		return statePending
+		return stateDiscarded
+	case stagedFailure(rep.DiscardedResourceIds, staged):
+		return stateDiscarded
+	case stagedFailure(rep.WaitingResourceIds, staged):
+		return stateWaiting
 	case rep.Outcome == RolloutReportApplied:
 		return stateApplied
 	}
 	return statePending
 }
 
-// countRollout counts the active devices of r (RolloutCounts).
+// resumed reports whether r was resumed since its start: evaluation_since and started_at default to the same now() at
+// insert, and only a resume moves evaluation_since.
+func resumed(r pgstore.ConfigRollout) bool { return r.EvaluationSince.After(r.StartedAt) }
+
+// awaitsRetry reports whether a device in state holds r until it applies successfully (A10-19 I2, S12–S15): its failure
+// was discarded by the last resume, or it failed after a resume.
+func awaitsRetry(r pgstore.ConfigRollout, state deviceState) bool {
+	return state == stateDiscarded || (state == stateFailed && resumed(r))
+}
+
+// countRollout counts the eligible devices of r (set E of the A10-19 accounting table: RolloutCounts, which the halt,
+// the waiting escape and the retries read) and, for the observation of the wave, those that joined in its current
+// wave (set J: configrollout.WaveCounts).
 func countRollout(r pgstore.ConfigRollout, staged []string, devices []pgstore.ListConfigRolloutDevicesRow, canary map[uuid.UUID]bool,
-	reports map[uuid.UUID]pgstore.ListConfigRolloutReportsRow) RolloutCounts {
+	reports map[uuid.UUID]pgstore.ListConfigRolloutReportsRow) (RolloutCounts, configrollout.WaveCounts) {
 	var c RolloutCounts
+	var w configrollout.WaveCounts
+	waves := rolloutWaves(r)
 	for _, d := range devices {
 		if !inWave(r, d, canary) {
 			continue
@@ -187,7 +225,8 @@ func countRollout(r pgstore.ConfigRollout, staged []string, devices []pgstore.Li
 		if row, ok := reports[d.ID]; ok {
 			rep = &row
 		}
-		switch classify(r, rep, staged) {
+		state := classify(r, rep, staged)
+		switch state {
 		case stateApplied:
 			c.Applied++
 		case stateFailed:
@@ -195,8 +234,37 @@ func countRollout(r pgstore.ConfigRollout, staged []string, devices []pgstore.Li
 		default:
 			c.Pending++
 		}
+		if state == stateWaiting {
+			c.Waiting++
+		}
+		if awaitsRetry(r, state) {
+			c.AwaitingRetry++
+		}
+		if !configrollout.JoinedIn(configrollout.Bucket(d.ID, r.ID), waves, int(r.CurrentWaveIndex), canary[d.ID]) {
+			continue
+		}
+		w.Eligible++
+		if state != stateApplied && state != stateFailed {
+			continue
+		}
+		w.Applied++
+		if state == stateApplied {
+			w.Succeeded++
+		}
+		if countsAgainst(r, *rep) {
+			w.Recent++
+		}
 	}
-	return c
+	return c, w
+}
+
+// rolloutWaves returns the wave percentages of r.
+func rolloutWaves(r pgstore.ConfigRollout) []int {
+	waves := make([]int, len(r.Waves))
+	for i, w := range r.Waves {
+		waves[i] = int(w)
+	}
+	return waves
 }
 
 // SoftwareResourcePrefix prefixes the catalog entry ID of a staged software assignment's resource ID (plan M13c
@@ -281,7 +349,8 @@ func (w rolloutWorld) canaryOf(r pgstore.ConfigRollout) map[uuid.UUID]bool {
 
 // counts returns the RolloutCounts of r.
 func (w rolloutWorld) counts(r pgstore.ConfigRollout, staged []string) RolloutCounts {
-	return countRollout(r, staged, w.devices, w.canaryOf(r), w.reports[r.ID])
+	c, _ := countRollout(r, staged, w.devices, w.canaryOf(r), w.reports[r.ID])
+	return c
 }
 
 // List returns one page of the organization's rollouts with their counts.
@@ -392,7 +461,8 @@ func (c *ConfigRollouts) ListDevices(ctx context.Context, id uuid.UUID, query Co
 			}
 			dev := rolloutDevice(r, d, rep, staged, canary)
 			if (query.InWave == nil || *query.InWave == dev.InWave) &&
-				(len(query.ReportOutcomes) == 0 || slices.Contains(query.ReportOutcomes, dev.ReportOutcome)) {
+				(len(query.ReportOutcomes) == 0 || slices.Contains(query.ReportOutcomes, dev.ReportOutcome)) &&
+				(query.AwaitingRetry == nil || *query.AwaitingRetry == dev.AwaitingRetry) {
 				all = append(all, dev)
 			}
 		}
@@ -408,9 +478,10 @@ func (c *ConfigRollouts) ListDevices(ctx context.Context, id uuid.UUID, query Co
 	return out, nil
 }
 
-// rolloutDevice is device d as rollout r sees it. The report is the device's newest report on a bundle of r, the one
-// its counts read (classify); a failure that no longer counts is shown as none. The failed resources it lists are those
-// that count, and the plan errors of a report-only device, which are shown but never count.
+// rolloutDevice is device d as rollout r sees it (the A10-19 accounting table, column 5). The report is the device's
+// newest report on a bundle of r, the one its counts read (classify); a failure the last resume discarded is shown as
+// none. The failed resources it lists are those that count, and the plan errors of a report-only device, which are
+// shown but never count. waiting_for_window and awaiting_retry are set only for a device inside the wave.
 func rolloutDevice(r pgstore.ConfigRollout, d pgstore.ListConfigRolloutDevicesRow, rep *pgstore.ListConfigRolloutReportsRow,
 	staged []string, canary map[uuid.UUID]bool) ConfigRolloutDevice {
 	out := ConfigRolloutDevice{
@@ -423,10 +494,12 @@ func rolloutDevice(r pgstore.ConfigRollout, d pgstore.ListConfigRolloutDevicesRo
 	if rep == nil {
 		return out
 	}
+	state := classify(r, rep, staged)
+	out.WaitingForWindow = out.InWave && state == stateWaiting
+	out.AwaitingRetry = out.InWave && awaitsRetry(r, state)
 	reportOnly := rep.Mode == protocol.BundleModeReportOnly && rep.Outcome == RolloutReportApplied
-	failure := !reportOnly && (rep.Outcome == RolloutReportRejected || stagedFailure(rep.FailedResourceIds, staged))
 	switch {
-	case failure && !countsAgainst(r, *rep):
+	case state == stateDiscarded:
 		// A failure the counts discarded at the last resume is not listed (amendment R6.14 c): the device is pending.
 		return out
 	case reportOnly:
@@ -572,16 +645,19 @@ func (c *ConfigRollouts) transition(ctx context.Context, spec ActionSpec, id uui
 	return out, err
 }
 
-// runningRollout is a running rollout as the worker read it, with its counts.
+// runningRollout is a running rollout as the worker read it, with its counts and those of its current wave.
 type runningRollout struct {
 	pgstore.ConfigRollout
 	counts RolloutCounts
+	wave   configrollout.WaveCounts
 }
 
-// Evaluate is the worker's round for the organization of ctx (plan M11 decision 33): every running rollout halts when
-// its failed devices reach the threshold, otherwise advances once the wave's minimum duration passed, or completes
-// after the last wave. It counts with the API's rule (classify, amendment R6.14) in a fixed number of queries per
-// organization. Each change is one audited action of the system; a halted rollout is not evaluated.
+// Evaluate is the worker's round for the organization of ctx (plan M11 decision 33, architect decision A10-16): every
+// running rollout halts when its failed devices reach the threshold, otherwise advances once its wave is done
+// (configrollout.WaveDone), or completes after the last wave; a wave that cannot move on and made no progress for the
+// rollout's stall_warning_hours is warned about once (configrollout.Stalled). It counts with the API's rule (classify, amendment R6.14) in a fixed
+// number of queries per organization and records the wave's progress first, so the first apply is dated by the round
+// that saw it. Each change is one audited action of the system; a halted rollout is not evaluated.
 func (c *ConfigRollouts) Evaluate(ctx context.Context, now time.Time) error {
 	var running []runningRollout
 	if err := c.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -605,7 +681,12 @@ func (c *ConfigRollouts) Evaluate(ctx context.Context, now time.Time) error {
 			if err != nil {
 				return err
 			}
-			running = append(running, runningRollout{ConfigRollout: r.ConfigRollout, counts: w.counts(r.ConfigRollout, staged)})
+			rr := runningRollout{ConfigRollout: r.ConfigRollout}
+			rr.counts, rr.wave = countRollout(r.ConfigRollout, staged, w.devices, w.canaryOf(r.ConfigRollout), w.reports[r.ConfigRollout.ID])
+			if rr.ConfigRollout, err = recordWaveProgress(ctx, q, rr.ConfigRollout, rr.counts, rr.wave, now); err != nil {
+				return err
+			}
+			running = append(running, rr)
 		}
 		return nil
 	}); err != nil {
@@ -619,17 +700,48 @@ func (c *ConfigRollouts) Evaluate(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-// evaluate decides on one running rollout and records the change, if any.
-func (c *ConfigRollouts) evaluate(ctx context.Context, r runningRollout, now time.Time) error {
-	waves := make([]int, len(r.Waves))
-	for i, w := range r.Waves {
-		waves[i] = int(w)
+// recordWaveProgress stores what the worker saw of r's current wave (A10-16, A10-19 §3) and returns r as stored: the
+// first apply of a device that joined in the wave, dated now, and now as the last progress when more of them applied
+// than before or fewer devices are outstanding (waiting for their window or awaiting a retry). A rollout an
+// administrator changed since it was read is left alone; the next round sees the change.
+func recordWaveProgress(ctx context.Context, q *pgstore.Queries, r pgstore.ConfigRollout, counts RolloutCounts,
+	wave configrollout.WaveCounts, now time.Time) (pgstore.ConfigRollout, error) {
+	applied := int32(min(wave.Applied, math.MaxInt32))                                          //nolint:gosec // bounded above
+	outstanding := int32(min(int64(counts.Waiting)+int64(counts.AwaitingRetry), math.MaxInt32)) //nolint:gosec // bounded above
+	if applied == r.WaveApplied && outstanding == r.WaveOutstanding {
+		return r, nil
 	}
+	n, err := q.RecordConfigRolloutWaveProgress(ctx, pgstore.RecordConfigRolloutWaveProgressParams{
+		WaveApplied: applied, WaveOutstanding: outstanding, Now: now, ID: r.ID, CurrentWaveIndex: r.CurrentWaveIndex,
+		WaveStartedAt: r.WaveStartedAt,
+	})
+	if err != nil {
+		return r, fmt.Errorf("record the wave progress of rollout %s: %w", r.ID, err)
+	}
+	if n == 0 {
+		return r, nil
+	}
+	if r.WaveFirstAppliedAt == nil && applied > 0 {
+		r.WaveFirstAppliedAt = &now
+	}
+	if applied > r.WaveApplied || outstanding < r.WaveOutstanding {
+		r.WaveProgressAt, r.StallWarnedAt = now, nil
+	}
+	r.WaveApplied, r.WaveOutstanding = applied, outstanding
+	return r, nil
+}
+
+// evaluate decides on one running rollout and records the change, if any; a rollout it keeps can still get its stall
+// warning.
+func (c *ConfigRollouts) evaluate(ctx context.Context, r runningRollout, now time.Time) error {
 	eligible, failed := int64(r.counts.Eligible), int64(r.counts.Failed)
 	in := configrollout.Rollout{
-		Status: configrollout.StatusRunning, Waves: waves, CurrentWave: int(r.CurrentWaveIndex), WaveStartedAt: r.WaveStartedAt,
-		MinWaveMinutes: int(r.MinWaveMinutes), FailurePercent: int(r.FailureThresholdPercent), FailureMin: int(r.FailureThresholdMin),
-		Eligible: eligible, Failed: failed,
+		Status: configrollout.StatusRunning, Waves: rolloutWaves(r.ConfigRollout), CurrentWave: int(r.CurrentWaveIndex),
+		WaveStartedAt: r.WaveStartedAt, MinWaveMinutes: int(r.MinWaveMinutes), FailurePercent: int(r.FailureThresholdPercent),
+		FailureMin: int(r.FailureThresholdMin), Eligible: eligible, Failed: failed,
+		Waiting: int64(r.counts.Waiting), AwaitingRetry: int64(r.counts.AwaitingRetry),
+		SuccessPercent: int(r.WaveSuccessThresholdPercent), FirstAppliedAt: r.WaveFirstAppliedAt, Wave: r.wave,
+		WaveProgressAt: r.WaveProgressAt, StallWarningHours: int(r.StallWarningHours), StallWarned: r.StallWarnedAt != nil,
 	}
 	var spec ActionSpec
 	var params map[string]any
@@ -648,7 +760,7 @@ func (c *ConfigRollouts) evaluate(ctx context.Context, r runningRollout, now tim
 	case configrollout.Complete:
 		spec, params, change = SpecConfigRolloutComplete, map[string]any{"manual": false}, complete("every wave passed")
 	default:
-		return nil
+		return c.warnStalled(ctx, r, in, now)
 	}
 	slog.InfoContext(ctx, "config rollout changed", "rollout", r.ID, "code", spec.Code, "eligible", eligible, "failed", failed)
 	read := r.ConfigRollout
@@ -661,6 +773,31 @@ func (c *ConfigRollouts) evaluate(ctx context.Context, r runningRollout, now tim
 				return cur, problem.InvalidState.WithDetail("the rollout changed since it was evaluated")
 			}
 			return change(ctx, q, rec, cur)
+		}))
+}
+
+// warnStalled records the stall warning of r's current wave (config_rollout.stalled, A10-16, A10-19 §3) once the wave
+// cannot move on and made no progress for the rollout's stall_warning_hours (configrollout.Stalled on in). A wave that
+// only waits for its minimum duration is never stalled. It only informs: the wave keeps its rules.
+func (c *ConfigRollouts) warnStalled(ctx context.Context, r runningRollout, in configrollout.Rollout, now time.Time) error {
+	if !configrollout.Stalled(in, now) {
+		return nil
+	}
+	params := map[string]any{
+		"stalled_since": r.WaveProgressAt.UTC().Format(time.RFC3339), "stall_warning_hours": int(r.StallWarningHours),
+		"wave_eligible": r.wave.Eligible, "wave_applied": r.wave.Applied, "waiting": r.counts.Waiting,
+		"awaiting_retry": r.counts.AwaitingRetry,
+	}
+	slog.InfoContext(ctx, "config rollout stalled", "rollout", r.ID, "wave", r.CurrentWaveIndex, "waiting", r.counts.Waiting,
+		"awaiting_retry", r.counts.AwaitingRetry)
+	read := r.ConfigRollout
+	return ignoreStale(c.transition(ctx, SpecConfigRolloutStalled, r.ID, params, nil,
+		func(ctx context.Context, q *pgstore.Queries, _ Recorder, cur pgstore.ConfigRollout) (pgstore.ConfigRollout, error) {
+			if cur.Status != configrollout.StatusRunning || cur.CurrentWaveIndex != read.CurrentWaveIndex ||
+				!cur.WaveStartedAt.Equal(read.WaveStartedAt) || !cur.WaveProgressAt.Equal(read.WaveProgressAt) || cur.StallWarnedAt != nil {
+				return cur, problem.InvalidState.WithDetail("the rollout changed since it was evaluated")
+			}
+			return q.MarkConfigRolloutStalled(ctx, pgstore.MarkConfigRolloutStalledParams{Now: now, ID: cur.ID})
 		}))
 }
 

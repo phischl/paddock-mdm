@@ -14,6 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	// The zone database in the binary: the api checks maintenance window timezones with time.LoadLocation (plan M13c
+	// decision 5), and the runtime image need not carry tzdata.
+	_ "time/tzdata"
+
 	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/platform/migrate"

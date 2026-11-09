@@ -260,7 +260,8 @@ func (w rolloutWrite) finish(ctx context.Context, q *pgstore.Queries, rec Record
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: p.OrganizationID, ChangeSetID: id, Waves: waves,
 			MinWaveMinutes: int32(w.settings.MinWaveMinutes), FailureThresholdPercent: int32(w.settings.FailureThresholdPercent), //nolint:gosec // validated settings
 			FailureThresholdMin: int32(w.settings.FailureThresholdMin), CanaryDeviceGroupID: canary, StartedBy: actorName(ctx), //nolint:gosec // validated settings
-			StagedAssignments: assignments,
+			StagedAssignments:           assignments,
+			WaveSuccessThresholdPercent: int32(w.settings.WaveSuccessThresholdPercent), StallWarningHours: int32(w.settings.StallWarningHours), //nolint:gosec // validated settings
 		})
 		if db.IsUniqueViolation(err, "config_rollout_one_open_idx") {
 			return problem.RolloutRunning.WithDetail("another rollout started concurrently; complete or revert it first")

@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+
+	"github.com/phischl/paddock-mdm/server/internal/domain/devicegroup"
 )
 
 // Sections of a document as they appear in a plan.
@@ -530,7 +532,11 @@ func ContentSummary(content string) string {
 func (g DeviceGroup) Key() Key { return Key{Name: g.Name} }
 
 func (g DeviceGroup) fields() []field {
-	return []field{{"name", g.Name}, {"description", g.Description}}
+	var window any
+	if g.MaintenanceWindow != nil {
+		window = devicegroup.WindowSummary(*g.MaintenanceWindow)
+	}
+	return []field{{"name", g.Name}, {"description", g.Description}, {"maintenance_window", window}}
 }
 
 // Key is the natural key of a permission profile: its name.

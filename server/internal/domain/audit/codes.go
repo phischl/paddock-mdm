@@ -16,6 +16,9 @@ const (
 	CodeDeviceGroupDeleted     Code = "device_group.deleted"
 	CodeActionFinalizedUnknown Code = "action.finalized_unknown"
 
+	CodeDeviceGroupMaintenanceWindowChanged Code = "device_group.maintenance_window_changed"
+	CodeDeviceGroupMaintenanceWindowRemoved Code = "device_group.maintenance_window_removed"
+
 	CodeEnrollmentTokenCreated   Code = "enrollment_token.created"
 	CodeEnrollmentTokenRevoked   Code = "enrollment_token.revoked"
 	CodeDeviceEnrolled           Code = "device.enrolled"
@@ -258,6 +261,8 @@ const (
 	CodeConfigRolloutHalted    Code = "config_rollout.halted"
 	CodeConfigRolloutResumed   Code = "config_rollout.resumed"
 	CodeConfigRolloutCompleted Code = "config_rollout.completed"
+	// CodeConfigRolloutStalled is the worker's warning that a wave made no progress (architect decision A10-16).
+	CodeConfigRolloutStalled Code = "config_rollout.stalled"
 
 	// Read-access recording, coalesced per actor and window (ADR 0032 §4, plan M10 §6.4).
 	CodeAuditSearched         Code = "audit.searched"
@@ -434,6 +439,20 @@ var registry = map[Code]Definition{
 		Description: "A device group was deleted.",
 		Params:      withChangeSetParams([]string{"name"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
+	},
+	CodeDeviceGroupMaintenanceWindowChanged: {
+		Code: CodeDeviceGroupMaintenanceWindowChanged, Emitted: true,
+		Description: "The maintenance window of a device group was set or changed: its devices install and remove the software of their policy only inside the union of their groups' windows, except for urgent assignments.",
+		Params:      withChangeSetParams([]string{"name", "days", "start_minute", "duration_minutes", "timezone", "old_days", "old_start_minute", "old_duration_minutes", "old_timezone"}),
+		Outcomes:    adminOutcomes,
+		Note:        "Days are ISO weekdays (1 = Monday); start_minute counts from local midnight in the timezone. The old_ params are null when the group had no window. Failure with invalid_request for a value out of range or an unknown timezone.",
+	},
+	CodeDeviceGroupMaintenanceWindowRemoved: {
+		Code: CodeDeviceGroupMaintenanceWindowRemoved, Emitted: true,
+		Description: "The maintenance window of a device group was removed: its devices apply their software policy at the next pass unless another group of the device has a window.",
+		Params:      withChangeSetParams([]string{"name", "days", "start_minute", "duration_minutes", "timezone"}),
+		Outcomes:    adminOutcomes,
+		Note:        "The params are the removed window. Failure with not_found when the group has no window.",
 	},
 	CodeEnrollmentTokenCreated: {
 		Code: CodeEnrollmentTokenCreated, Emitted: true,
@@ -1634,11 +1653,11 @@ var registry = map[Code]Definition{
 	},
 	CodeSettingsRolloutChanged: {
 		Code: CodeSettingsRolloutChanged, Emitted: true,
-		Description: "An organization administrator changed the settings of staged configuration rollouts: whether they are on, the waves, the minimum wave duration, the failure threshold and the canary device group. A running rollout keeps the values it started with.",
+		Description: "An organization administrator changed the settings of staged configuration rollouts: whether they are on, the waves, the minimum wave duration, the failure threshold, the canary device group, the wave success threshold and the stall warning hours (A10-16). A running rollout keeps the values it started with.",
 		Params: []string{"enabled", "waves", "min_wave_minutes", "failure_threshold_percent", "failure_threshold_min",
-			"canary_device_group_id"},
+			"canary_device_group_id", "wave_success_threshold_percent", "stall_warning_hours"},
 		Outcomes: adminOutcomes,
-		Note:     "failure with invalid_request for invalid waves, a minimum wave duration below the minimum or a threshold out of range, and with not_found for an unknown or foreign canary device group.",
+		Note:     "failure with invalid_request for invalid waves, a minimum wave duration below the minimum, a threshold out of range, a wave success threshold outside 1 to 100 or stall warning hours outside 1 to 720, and with not_found for an unknown or foreign canary device group.",
 	},
 	CodeConfigRolloutAdvanced: {
 		Code: CodeConfigRolloutAdvanced, Emitted: true,
@@ -1667,6 +1686,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"rollout_id", "change_set_id", "wave", "manual"},
 		Outcomes:    adminOutcomes,
 		Note:        "failure with invalid_state when the rollout already completed or was reverted, not_found for an unknown rollout or one of another organization.",
+	},
+	CodeConfigRolloutStalled: {
+		Code: CodeConfigRolloutStalled, Emitted: true,
+		Description: "The current wave of a running staged configuration rollout cannot move on and made no progress for the rollout's stall_warning_hours (default 24): since stalled_since none of the devices that joined in the wave applied the change and no device it waits for (waiting for its maintenance window, or awaiting a successful retry after a resume) stopped waiting, typically because devices wait for their window, are offline or keep failing after a resume (actor: system). A wave without a successful apply never moves on by itself. It only informs: the wave keeps its rules, nothing is forced and nothing is applied outside a window. Recorded once per stall; a new apply, a device that stops waiting, the next wave or a resume starts a new one.",
+		Params:      []string{"rollout_id", "change_set_id", "wave", "stalled_since", "stall_warning_hours", "wave_eligible", "wave_applied", "waiting", "awaiting_retry"},
+		Outcomes:    adminOutcomes,
+		Note:        "failure with invalid_state when an administrator changed the rollout between the worker's read and its warning; the next round decides again.",
 	},
 	CodeAuditSearched: {
 		Code: CodeAuditSearched, Emitted: true,
@@ -1822,16 +1848,16 @@ var registry = map[Code]Definition{
 	CodeSoftwareAssignmentCreated: {
 		Code: CodeSoftwareAssignmentCreated, Emitted: true,
 		Description: "An application was assigned to a target (target: the organization, a device group, a user or a user group) with an intent: required (installed and kept installed), uninstall (removed), hold (version kept), forbid (removed and blocked for apt) or available (offered for the users to install themselves).",
-		Params:      []string{"app", "catalog_entry_id", "target", "device_group_id", "user_id", "user_group_id", "intent", "update_rule", "version", "reason"},
+		Params:      []string{"app", "catalog_entry_id", "target", "device_group_id", "user_id", "user_group_id", "intent", "update_rule", "version", "reason", "urgent"},
 		Outcomes:    adminOutcomes,
-		Note:        "Failure with invalid_request when the intent and version rules are violated or more than one target is given, already_exists for a second assignment of the entry to the same target, not_found for an unknown entry, device group, user or user group. Request text is clipped before it is recorded.",
+		Note:        "Failure with invalid_request when the intent and version rules are violated or more than one target is given, or when urgent is set without a reason of 2 to 500 characters; already_exists for a second assignment of the entry to the same target, not_found for an unknown entry, device group, user or user group. urgent (the devices apply it outside their maintenance windows) needs a fresh step-up: denied with step_up_required otherwise, always for API tokens. Request text is clipped before it is recorded.",
 	},
 	CodeSoftwareAssignmentUpdated: {
 		Code: CodeSoftwareAssignmentUpdated, Emitted: true,
 		Description: "The intent, update rule, version or reason of a software assignment changed.",
-		Params:      []string{"app", "catalog_entry_id", "target", "device_group_id", "user_id", "user_group_id", "intent", "update_rule", "version", "old_intent", "old_version", "reason"},
+		Params:      []string{"app", "catalog_entry_id", "target", "device_group_id", "user_id", "user_group_id", "intent", "update_rule", "version", "old_intent", "old_version", "reason", "urgent", "old_urgent"},
 		Outcomes:    adminOutcomes,
-		Note:        "Failure with invalid_request when the intent and version rules are violated. Request text is clipped before it is recorded.",
+		Note:        "Failure with invalid_request when the intent and version rules are violated, or when urgent is set without a reason of 2 to 500 characters. urgent (the devices apply it outside their maintenance windows) needs a fresh step-up: denied with step_up_required otherwise, always for API tokens. Request text is clipped before it is recorded.",
 	},
 	CodeSoftwareAssignmentDeleted: {
 		Code: CodeSoftwareAssignmentDeleted, Emitted: true,

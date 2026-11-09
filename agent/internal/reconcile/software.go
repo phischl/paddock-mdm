@@ -65,6 +65,10 @@ type Software struct {
 	// ServerReachable reports whether the last successful check-in is recent; removals wait while it is false. Nil
 	// counts as unreachable.
 	ServerReachable func() bool
+	// Now is the clock of the maintenance windows (nil: time.Now).
+	Now func() time.Time
+	// zoneLogged is the spec whose unknown window timezones were logged, so that they are logged once per bundle.
+	zoneLogged []byte
 	// applied is the spec of the last pass that wrote the files: a file that differs from the same spec was changed
 	// outside Paddock.
 	applied []byte
@@ -419,6 +423,12 @@ func (s *Software) Apply(ctx context.Context, r bundle.Resource) Result {
 		}
 	}
 	reachable := s.ServerReachable != nil && s.ServerReachable()
+	win := s.windows(sp, r.Spec)
+	// Outside the maintenance window the policy's installations and removals wait (plan M13c decision 6); the files
+	// above are written regardless, and an urgent assignment's package does not wait.
+	if win.outside {
+		installs, removals = s.deferOutsideWindow(installs, pass), s.deferOutsideWindow(removals, pass)
+	}
 	var deferred []softwareOp
 	if err == nil {
 		deferred, err = s.install(ctx, installs, removals, reachable, pass)
@@ -436,7 +446,7 @@ func (s *Software) Apply(ctx context.Context, r bundle.Resource) Result {
 			}
 		}
 	}
-	if fpErr := s.applyFlatpak(ctx, sp, reachable, pass); fpErr != nil && err == nil {
+	if fpErr := s.applyFlatpak(ctx, sp, reachable, win.outside, pass); fpErr != nil && err == nil {
 		err = fpErr
 	}
 	if recErr := s.writeRecord(sp); recErr != nil && err == nil {
@@ -444,6 +454,9 @@ func (s *Software) Apply(ctx context.Context, r bundle.Resource) Result {
 	}
 	s.status = s.health(sp, pass)
 	note := superseded(sp)
+	if len(win.unknownZones) > 0 {
+		note = joinNotes(note, "window_timezone_unknown: "+strings.Join(win.unknownZones, ", ")+" (evaluated in UTC)")
+	}
 	switch {
 	case err != nil:
 		return Result{ID: r.ID, Status: Error, Message: joinNote(err.Error(), note)}
@@ -489,6 +502,44 @@ func superseded(sp bundle.SoftwareSpec) string {
 		return ""
 	}
 	return "package hold superseded by forbid or uninstall: " + strings.Join(pkgs, ", ")
+}
+
+// joinNotes joins two status notes, either of which may be empty.
+func joinNotes(a, b string) string {
+	if a == "" {
+		return b
+	}
+	return joinNote(a, b)
+}
+
+// windows evaluates the section's maintenance windows at the reconciler's clock. Timezones the device does not know
+// are logged once per bundle (plan M13c §3.8 L3); the status note names them on every pass.
+func (s *Software) windows(sp bundle.SoftwareSpec, spec []byte) windowState {
+	now := time.Now
+	if s.Now != nil {
+		now = s.Now
+	}
+	win := evaluateWindows(sp.Windows, now())
+	if len(win.unknownZones) > 0 && !bytes.Equal(s.zoneLogged, spec) {
+		slog.Warn("window_timezone_unknown: the device does not know a maintenance window's timezone; the window is evaluated in UTC",
+			"timezones", win.unknownZones)
+		s.zoneLogged = bytes.Clone(spec)
+	}
+	return win
+}
+
+// deferOutsideWindow reports the operations that wait for the maintenance window as pending/outside_window and
+// returns those of urgent packages, which run now.
+func (s *Software) deferOutsideWindow(ops []softwareOp, pass *softwarePass) []softwareOp {
+	var now []softwareOp
+	for _, op := range ops {
+		if op.pkg.Urgent {
+			now = append(now, op)
+			continue
+		}
+		pass.set(op.pkg.Package, protocol.SoftwareStatePending, protocol.SoftwareOutsideWindow, "")
+	}
+	return now
 }
 
 func joinNote(msg, note string) string {

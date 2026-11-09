@@ -544,7 +544,12 @@ func inheritOmitted(desired *declarative.Document, current declarative.Document)
 func normalize(doc *declarative.Document) {
 	if doc.DeviceGroups != nil {
 		for i, g := range *doc.DeviceGroups {
-			(*doc.DeviceGroups)[i] = declarative.DeviceGroup{Name: devicegroup.NormalizeName(g.Name), Description: strings.TrimSpace(g.Description)}
+			item := declarative.DeviceGroup{Name: devicegroup.NormalizeName(g.Name), Description: strings.TrimSpace(g.Description)}
+			if g.MaintenanceWindow != nil {
+				w := devicegroup.NormalizeWindow(*g.MaintenanceWindow)
+				item.MaintenanceWindow = &w
+			}
+			(*doc.DeviceGroups)[i] = item
 		}
 	}
 	if doc.PermissionProfiles != nil {
@@ -629,11 +634,22 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	if err != nil {
 		return st, fmt.Errorf("device groups: %w", err)
 	}
+	windowRows, err := q.ListAllMaintenanceWindows(ctx)
+	if err != nil {
+		return st, fmt.Errorf("maintenance windows: %w", err)
+	}
+	windows := make(map[uuid.UUID]devicegroup.Window, len(windowRows))
+	for _, w := range windowRows {
+		windows[w.DeviceGroupID] = WindowOf(w)
+	}
 	names := map[uuid.UUID]string{}
 	dgs := make([]declarative.DeviceGroup, 0, len(groups))
 	for _, g := range groups {
 		names[g.ID], st.groups[g.Name] = g.Name, g.ID
 		item := declarative.DeviceGroup{Name: g.Name, Description: g.Description}
+		if w, ok := windows[g.ID]; ok {
+			item.MaintenanceWindow = &w
+		}
 		st.ids[declarative.SectionDeviceGroups][item.Key().String()] = g.ID
 		st.names[item.Key().String()] = g.Name
 		dgs = append(dgs, item)

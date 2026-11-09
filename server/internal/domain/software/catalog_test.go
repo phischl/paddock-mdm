@@ -279,3 +279,24 @@ func TestTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateUrgent(t *testing.T) {
+	for _, tc := range []struct {
+		urgent bool
+		reason string
+		ok     bool
+	}{
+		{false, "", true},
+		{true, "CVE-2026-1234", true},
+		{true, "ok", true},
+		{true, "", false},
+		{true, "x", false},
+		{true, "   ", false},
+		{true, " x ", false},
+	} {
+		err := ValidateUrgent(tc.urgent, tc.reason)
+		if (err == nil) != tc.ok || err != nil && !errors.Is(err, ErrAssignment) {
+			t.Errorf("ValidateUrgent(%v, %q) = %v", tc.urgent, tc.reason, err)
+		}
+	}
+}

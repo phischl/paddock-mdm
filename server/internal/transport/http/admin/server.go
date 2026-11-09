@@ -156,6 +156,8 @@ var privileged = map[string]struct {
 	"POST /api/v1/device-groups":                                           {app.ScopeOrg, app.SpecDeviceGroupCreate},
 	"PATCH /api/v1/device-groups/{id}":                                     {app.ScopeOrg, app.SpecDeviceGroupUpdate},
 	"DELETE /api/v1/device-groups/{id}":                                    {app.ScopeOrg, app.SpecDeviceGroupDelete},
+	"PUT /api/v1/device-groups/{id}/maintenance-window":                    {app.ScopeOrg, app.SpecMaintenanceWindowSet},
+	"DELETE /api/v1/device-groups/{id}/maintenance-window":                 {app.ScopeOrg, app.SpecMaintenanceWindowDelete},
 	"POST /api/platform/v1/organizations":                                  {app.ScopePlatform, app.SpecOrganizationCreate},
 	"POST /api/platform/v1/sessions/end-all":                               {app.ScopePlatform, app.SpecSessionsEndAll},
 	"POST /api/platform/v1/openbao/auto-unseal/enable":                     {app.ScopePlatform, app.SpecAutoUnsealEnable},

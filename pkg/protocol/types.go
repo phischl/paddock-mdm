@@ -337,7 +337,9 @@ const (
 	SoftwareDpkgLocked            = "dpkg_locked"
 	SoftwareAptFailed             = "apt_failed"
 	SoftwareDeferredOffline       = "deferred_offline"
-	SoftwareNotYetApplied         = "not_yet_applied"
+	// SoftwareOutsideWindow is a policy operation that waits for the device's maintenance window (plan M13c decision 6).
+	SoftwareOutsideWindow = "outside_window"
+	SoftwareNotYetApplied = "not_yet_applied"
 	// SoftwareFlatpakMissing fails a required Flatpak application while the flatpak runtime is not installed;
 	// SoftwareFlatpakFailed is a flatpak command that failed (plan M13b §3.7 F8, F13).
 	SoftwareFlatpakMissing = "flatpak_missing"
@@ -719,7 +721,7 @@ const (
 	SoftwareStateInstalled = "installed"
 	SoftwareStateHeld      = "held"
 	SoftwareStateAbsent    = "absent"
-	SoftwareStatePending   = "pending" // reason: dpkg_locked | deferred_offline | not_yet_applied
+	SoftwareStatePending   = "pending" // reason: dpkg_locked | deferred_offline | outside_window | not_yet_applied
 	SoftwareStateFailed    = "failed"  // reason: the reason of software.apply_failed
 )
 

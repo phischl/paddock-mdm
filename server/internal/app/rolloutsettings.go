@@ -54,6 +54,7 @@ func LoadRolloutSettings(ctx context.Context, q *pgstore.Queries) (RolloutConfig
 		Settings: configrollout.Settings{
 			Enabled: r.Enabled, Waves: waves, MinWaveMinutes: int(r.MinWaveMinutes),
 			FailureThresholdPercent: int(r.FailureThresholdPercent), FailureThresholdMin: int(r.FailureThresholdMin),
+			WaveSuccessThresholdPercent: int(r.WaveSuccessThresholdPercent), StallWarningHours: int(r.StallWarningHours),
 		},
 		UpdatedAt: &r.UpdatedAt,
 	}
@@ -79,7 +80,9 @@ func (r *RolloutSettings) Get(ctx context.Context) (RolloutConfig, error) {
 }
 
 // Update replaces the organization's rollout settings (audited: settings.rollout_changed). A rollout that is
-// already running keeps the parameters it started with.
+// already running keeps the parameters it started with. A zero WaveSuccessThresholdPercent or StallWarningHours keeps
+// the stored value (the default without a row): the fields came with A10-16, and a client that does not know them must
+// not reset them.
 func (r *RolloutSettings) Update(ctx context.Context, in RolloutConfig) (RolloutConfig, error) {
 	spec := SpecRolloutSettings
 	if org, err := orgOf(ctx); err == nil {
@@ -96,6 +99,18 @@ func (r *RolloutSettings) Update(ctx context.Context, in RolloutConfig) (Rollout
 	}
 	var out RolloutConfig
 	err := r.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		stored, err := LoadRolloutSettings(ctx, q)
+		if err != nil {
+			return err
+		}
+		if in.WaveSuccessThresholdPercent == 0 {
+			in.WaveSuccessThresholdPercent = stored.WaveSuccessThresholdPercent
+		}
+		if in.StallWarningHours == 0 {
+			in.StallWarningHours = stored.StallWarningHours
+		}
+		rec.SetParam("wave_success_threshold_percent", in.WaveSuccessThresholdPercent)
+		rec.SetParam("stall_warning_hours", in.StallWarningHours)
 		if err := in.Validate(r.development); err != nil {
 			return problem.InvalidRequest.WithDetail(err.Error())
 		}
@@ -109,13 +124,15 @@ func (r *RolloutSettings) Update(ctx context.Context, in RolloutConfig) (Rollout
 		for i, w := range in.Waves {
 			waves[i] = int32(w) //nolint:gosec // validated 1..100
 		}
-		_, err := q.UpsertRolloutSettings(ctx, pgstore.UpsertRolloutSettingsParams{
+		_, err = q.UpsertRolloutSettings(ctx, pgstore.UpsertRolloutSettingsParams{
 			OrganizationID: p.OrganizationID, Enabled: in.Enabled, Waves: waves,
-			MinWaveMinutes:          int32(in.MinWaveMinutes),          //nolint:gosec // validated
-			FailureThresholdPercent: int32(in.FailureThresholdPercent), //nolint:gosec // validated
-			FailureThresholdMin:     int32(in.FailureThresholdMin),     //nolint:gosec // validated
-			CanaryDeviceGroupID:     nullID(in.CanaryDeviceGroupID),
-			UpdatedBy:               uuid.NullUUID{UUID: p.ID, Valid: p.ID != uuid.Nil},
+			MinWaveMinutes:              int32(in.MinWaveMinutes),          //nolint:gosec // validated
+			FailureThresholdPercent:     int32(in.FailureThresholdPercent), //nolint:gosec // validated
+			FailureThresholdMin:         int32(in.FailureThresholdMin),     //nolint:gosec // validated
+			CanaryDeviceGroupID:         nullID(in.CanaryDeviceGroupID),
+			WaveSuccessThresholdPercent: int32(in.WaveSuccessThresholdPercent), //nolint:gosec // validated
+			StallWarningHours:           int32(in.StallWarningHours),           //nolint:gosec // validated
+			UpdatedBy:                   uuid.NullUUID{UUID: p.ID, Valid: p.ID != uuid.Nil},
 		})
 		if err != nil {
 			return err

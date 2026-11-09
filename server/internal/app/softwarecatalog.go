@@ -471,8 +471,9 @@ func (c *SoftwareCatalog) UserSoftware(ctx context.Context, user uuid.UUID, quer
 
 // AssignmentInput are the fields of an assignment. At most one of DeviceGroupID, UserID and UserGroupID names its
 // target; none is the whole organization. UpdateRule is derived (software.DefaultUpdateRule) when empty. On update
-// they replace the stored intent, update rule, version and reason; the entry and the target are fixed, and giving
-// either is refused.
+// they replace the stored intent, update rule, version, reason and urgent flag; the entry and the target are fixed, and
+// giving either is refused. Urgent (plan M13c decision 7) makes the devices apply the assignment outside their
+// maintenance windows; it needs a reason of 2 to 500 characters and a fresh step-up, so an API token cannot set it.
 type AssignmentInput struct {
 	CatalogEntryID *uuid.UUID
 	DeviceGroupID  *uuid.UUID
@@ -482,6 +483,7 @@ type AssignmentInput struct {
 	UpdateRule     string
 	Version        *string
 	Reason         string
+	Urgent         bool
 }
 
 // Bounds of request text in the audit params of an assignment: an intent or update rule is at most 9 characters.
@@ -499,8 +501,8 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 	spec.Params = assignmentParams(nil, in)
 	spec.Params["app"] = nil
 	err := c.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		if err := software.ValidateAssignment(in.Intent, in.UpdateRule, in.Version, in.Reason); err != nil {
-			return softwareAssignmentProblem(err)
+		if err := validateAssignmentInput(rec, in); err != nil {
+			return err
 		}
 		if _, err := software.Target(in.DeviceGroupID, in.UserID, in.UserGroupID); err != nil {
 			return softwareAssignmentProblem(err)
@@ -530,7 +532,7 @@ func (c *SoftwareCatalog) CreateAssignment(ctx context.Context, in AssignmentInp
 		err = q.InsertSoftwareAssignment(ctx, pgstore.InsertSoftwareAssignmentParams{
 			ID: id, OrganizationID: org, CatalogEntryID: entry.ID, DeviceGroupID: nullID(in.DeviceGroupID),
 			UserID: nullID(in.UserID), UserGroupID: nullID(in.UserGroupID), Intent: in.Intent,
-			UpdateRule: in.UpdateRule, Version: in.Version, Reason: in.Reason,
+			UpdateRule: in.UpdateRule, Version: in.Version, Reason: in.Reason, Urgent: in.Urgent,
 			CreatedBy: uuid.NullUUID{UUID: p.ID, Valid: p.ID != uuid.Nil},
 		})
 		if db.IsUniqueViolation(err, "") {
@@ -586,21 +588,21 @@ func (c *SoftwareCatalog) UpdateAssignment(ctx context.Context, id uuid.UUID, in
 		for k, v := range assignmentParams(&old, AssignmentInput{
 			CatalogEntryID: &old.CatalogEntryID, DeviceGroupID: groupPtr(old.DeviceGroupID), UserID: groupPtr(old.UserID),
 			UserGroupID: groupPtr(old.UserGroupID), Intent: in.Intent, UpdateRule: in.UpdateRule, Version: in.Version,
-			Reason: in.Reason,
+			Reason: in.Reason, Urgent: in.Urgent,
 		}) {
 			rec.SetParam(k, v)
 		}
 		if in.CatalogEntryID != nil || in.DeviceGroupID != nil || in.UserID != nil || in.UserGroupID != nil {
 			return problem.InvalidRequest.WithDetail("catalog_entry_id, device_group_id, user_id and user_group_id cannot be changed")
 		}
-		if err := software.ValidateAssignment(in.Intent, in.UpdateRule, in.Version, in.Reason); err != nil {
-			return softwareAssignmentProblem(err)
+		if err := validateAssignmentInput(rec, in); err != nil {
+			return err
 		}
 		if err := entryAssignable(in.Intent, entry.Packages); err != nil {
 			return err
 		}
 		n, err := q.UpdateSoftwareAssignment(ctx, pgstore.UpdateSoftwareAssignmentParams{
-			ID: id, Intent: in.Intent, UpdateRule: in.UpdateRule, Version: in.Version, Reason: in.Reason,
+			ID: id, Intent: in.Intent, UpdateRule: in.UpdateRule, Version: in.Version, Reason: in.Reason, Urgent: &in.Urgent,
 		})
 		if err != nil {
 			return err
@@ -649,6 +651,22 @@ func (c *SoftwareCatalog) DeleteAssignment(ctx context.Context, id uuid.UUID) er
 		rec.StateChanged(statechange.ScopeOrg, old.OrganizationID)
 		return nil
 	}))
+}
+
+// validateAssignmentInput checks the intent, update rule, version and reason of an assignment and, when it is urgent,
+// the reason and a fresh step-up of the administrator (plan M13c decision 7); the step-up is checked last, so a request
+// that fails the rules is a failure, not a denial.
+func validateAssignmentInput(rec Recorder, in AssignmentInput) error {
+	if err := software.ValidateAssignment(in.Intent, in.UpdateRule, in.Version, in.Reason); err != nil {
+		return softwareAssignmentProblem(err)
+	}
+	if err := software.ValidateUrgent(in.Urgent, in.Reason); err != nil {
+		return softwareAssignmentProblem(err)
+	}
+	if in.Urgent {
+		return rec.RequireStepUp()
+	}
+	return nil
 }
 
 // entrySource returns the slug ("" for the distribution's own repositories) and the kind of the source an entry uses;
@@ -722,7 +740,7 @@ func assignmentParams(old *Assignment, in AssignmentInput) map[string]any {
 	params := map[string]any{
 		"catalog_entry_id": idParam(in.CatalogEntryID),
 		"intent":           software.DisplayParam(in.Intent, maxIntentParam), "update_rule": software.DisplayParam(in.UpdateRule, maxIntentParam),
-		"version": nil, "reason": software.DisplayParam(in.Reason, software.MaxReasonLength),
+		"version": nil, "reason": software.DisplayParam(in.Reason, software.MaxReasonLength), "urgent": in.Urgent,
 	}
 	maps.Copy(params, targetParams(in.DeviceGroupID, in.UserID, in.UserGroupID))
 	if in.Version != nil {
@@ -732,6 +750,7 @@ func assignmentParams(old *Assignment, in AssignmentInput) map[string]any {
 		params["app"] = old.AppName
 		params["old_intent"] = old.Intent
 		params["old_version"] = versionParam(old.Version)
+		params["old_urgent"] = old.Urgent
 	}
 	return params
 }

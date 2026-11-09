@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/server/internal/domain/devicegroup"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 )
 
@@ -39,6 +40,8 @@ type orgSoftware struct {
 	approved map[uuid.UUID]map[uuid.UUID][]string
 	// approvalGate is the compiler's approvalAgent, the gate withheldForApproval applies.
 	approvalGate string
+	// windows are the maintenance windows by device group (plan M13c decision 4) that pass the bundle rules.
+	windows map[uuid.UUID]bundle.SoftwareWindow
 }
 
 // catalogIcon is a validated catalog icon with the hex SHA-256 that names it in bundles and object storage.
@@ -99,11 +102,16 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	if err != nil {
 		return nil, err
 	}
+	windows, err := q.ListAllMaintenanceWindows(ctx)
+	if err != nil {
+		return nil, err
+	}
 	s := &orgSoftware{sources: map[uuid.UUID]bundle.SoftwareSource{}, bySlug: map[string]bundle.SoftwareSource{},
 		entries: make(map[uuid.UUID]softwareEntry, len(entries)), assignments: assignments,
 		invalidAssignments: map[uuid.UUID]error{}, owners: map[uuid.UUID][]deviceOwner{}, members: map[uuid.UUID][]uuid.UUID{},
 		icons:    make(map[uuid.UUID]catalogIcon, len(icons)),
-		approved: map[uuid.UUID]map[uuid.UUID][]string{}}
+		approved: map[uuid.UUID]map[uuid.UUID][]string{},
+		windows:  make(map[uuid.UUID]bundle.SoftwareWindow, len(windows))}
 	for _, ic := range icons {
 		// The api checked the icon on upload; a row changed outside it must not reach object storage, so the entry then
 		// shows the category glyph.
@@ -119,6 +127,16 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 			s.approved[a.DeviceID] = map[uuid.UUID][]string{}
 		}
 		s.approved[a.DeviceID][a.CatalogEntryID] = append(s.approved[a.DeviceID][a.CatalogEntryID], a.Username)
+	}
+	for _, row := range windows {
+		w := maintenanceWindow(row)
+		// Left out, the group's devices apply at any time: a window never keeps a device from its policy for good.
+		if err := bundle.ValidateSoftwareWindow(w); err != nil {
+			slog.ErrorContext(ctx, "maintenance window left out of bundles: it fails the bundle rules",
+				"device_group_id", row.DeviceGroupID, "error", err)
+			continue
+		}
+		s.windows[row.DeviceGroupID] = w
 	}
 	for _, o := range owners {
 		s.owners[o.DeviceID] = append(s.owners[o.DeviceID], deviceOwner{user: o.UserID, username: o.Username})
@@ -286,7 +304,8 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 			continue
 		}
 		p := bundle.SoftwarePackage{Package: r.Package, FlatpakRef: r.FlatpakRef, Scope: r.Scope, Intent: r.Intent,
-			Version: r.Version, CatalogEntryID: r.CatalogEntryID.String(), Audience: r.Audience}
+			Version: r.Version, CatalogEntryID: r.CatalogEntryID.String(), Audience: r.Audience,
+			Urgent: urgent(contributors[packageKey(bundle.SoftwarePackage{Package: r.Package, FlatpakRef: r.FlatpakRef})], r.Intent)}
 		// Only the self-service app shows icons, and an agent before the gate refuses a field it does not know.
 		if ic, ok := s.icons[r.CatalogEntryID]; ok && selfService {
 			p.IconSHA256 = ic.sha256
@@ -335,6 +354,7 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 		return nil, nil, conflicts, warnings, nil
 	}
 	addFlatpakRuntime(spec)
+	spec.Windows = s.deviceWindows(ctx, device, groups)
 	slices.SortFunc(spec.Sources, func(a, b bundle.SoftwareSource) int { return strings.Compare(a.Slug, b.Slug) })
 	return spec, holds, conflicts, warnings, nil
 }
@@ -423,9 +443,48 @@ const selfServiceAgent = "0.1.0-alpha.10"
 // flatpakRuntime is the distribution package that provides the flatpak command.
 const flatpakRuntime = "flatpak"
 
+// urgent reports whether an assignment that contributed the winning intent of a package is urgent (plan M13c decision
+// 7): the package then ignores the maintenance windows.
+func urgent(contributors []pgstore.SoftwareAssignment, intent string) bool {
+	return slices.ContainsFunc(contributors, func(a pgstore.SoftwareAssignment) bool { return a.Urgent && a.Intent == intent })
+}
+
+// maintenanceWindow is the bundle form of a stored window, its days sorted.
+func maintenanceWindow(row pgstore.DeviceGroupMaintenanceWindow) bundle.SoftwareWindow {
+	days := make([]int, len(row.Days))
+	for i, d := range row.Days {
+		days[i] = int(d)
+	}
+	return devicegroup.NormalizeWindow(bundle.SoftwareWindow{Days: days, StartMinute: int(row.StartMinute),
+		DurationMinutes: int(row.DurationMinutes), Timezone: row.Timezone})
+}
+
+// deviceWindows are the maintenance windows of a device: the union of its groups' windows (architect-lead decision
+// Q17), nil when none of its groups has one. A union beyond bundle.MaxSoftwareWindows keeps the first ones in their
+// stable order: fewer windows defer longer but never for good.
+func (s *orgSoftware) deviceWindows(ctx context.Context, device uuid.UUID, groups []uuid.UUID) []bundle.SoftwareWindow {
+	var all []bundle.SoftwareWindow
+	for _, g := range groups {
+		if w, ok := s.windows[g]; ok {
+			all = append(all, w)
+		}
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	out := devicegroup.UnionWindows(all)
+	if len(out) > bundle.MaxSoftwareWindows {
+		slog.WarnContext(ctx, "the device's groups have more maintenance windows than a bundle carries; the first ones keep it",
+			"device_id", device, "windows", len(out), "kept", bundle.MaxSoftwareWindows)
+		out = out[:bundle.MaxSoftwareWindows]
+	}
+	return out
+}
+
 // addFlatpakRuntime requires the flatpak package from the distribution's repositories when the section has a Flatpak
 // source and no entry names the package itself (plan M13b decision 9, architect-lead decision Q12). It carries the nil
-// entry ID: it is not an entry of the organization, and the agent reports it as system-managed.
+// entry ID: it is not an entry of the organization, and the agent reports it as system-managed. It is urgent when an
+// urgent Flatpak application needs it, which could not install outside a window otherwise.
 func addFlatpakRuntime(spec *bundle.SoftwareSpec) {
 	if !slices.ContainsFunc(spec.Sources, func(x bundle.SoftwareSource) bool { return x.Kind == bundle.SoftwareSourceFlatpak }) ||
 		slices.ContainsFunc(spec.Packages, func(p bundle.SoftwarePackage) bool { return p.Package == flatpakRuntime }) {
@@ -434,8 +493,11 @@ func addFlatpakRuntime(spec *bundle.SoftwareSpec) {
 	i, _ := slices.BinarySearchFunc(spec.Packages, flatpakRuntime, func(p bundle.SoftwarePackage, name string) int {
 		return strings.Compare(packageKey(p), name)
 	})
+	needed := slices.ContainsFunc(spec.Packages, func(p bundle.SoftwarePackage) bool {
+		return p.FlatpakRef != "" && p.Urgent && (p.Intent == bundle.SoftwareRequired || p.Intent == bundle.SoftwareAvailable)
+	})
 	spec.Packages = slices.Insert(spec.Packages, i, bundle.SoftwarePackage{Package: flatpakRuntime,
-		Intent: bundle.SoftwareRequired, CatalogEntryID: bundle.SoftwareRuntimeEntryID})
+		Intent: bundle.SoftwareRequired, CatalogEntryID: bundle.SoftwareRuntimeEntryID, Urgent: needed})
 }
 
 // packageKey is the order of the section's packages, the one software.MergeIntents returns them in.

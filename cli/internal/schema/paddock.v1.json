@@ -148,7 +148,20 @@
       "required": ["name"],
       "properties": {
         "name": { "type": "string", "minLength": 1, "maxLength": 100 },
-        "description": { "type": "string", "maxLength": 1000, "default": "" }
+        "description": { "type": "string", "maxLength": 1000, "default": "" },
+        "maintenance_window": { "$ref": "#/$defs/maintenanceWindow" }
+      }
+    },
+    "maintenanceWindow": {
+      "description": "The device group's maintenance window (plan M13c decision 4): its devices install and remove the software of their policy only inside the union of their groups' windows, except for urgent assignments. Omitted: the group has no window.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["days", "start_minute", "duration_minutes", "timezone"],
+      "properties": {
+        "days": { "description": "ISO weekdays, 1 = Monday.", "type": "array", "minItems": 1, "maxItems": 7, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 7 } },
+        "start_minute": { "description": "Minutes after local midnight.", "type": "integer", "minimum": 0, "maximum": 1439 },
+        "duration_minutes": { "type": "integer", "minimum": 30, "maximum": 1440 },
+        "timezone": { "description": "An IANA timezone name such as Europe/Berlin.", "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_+/-]{0,63}$" }
       }
     },
     "permissionProfile": {

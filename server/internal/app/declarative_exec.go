@@ -13,6 +13,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
+	"github.com/phischl/paddock-mdm/server/internal/domain/devicegroup"
 	"github.com/phischl/paddock-mdm/server/internal/domain/loginsettings"
 	"github.com/phischl/paddock-mdm/server/internal/domain/privilege"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
@@ -210,19 +211,40 @@ func (ex *configExec) deviceGroup(ctx context.Context, c declarative.Change) err
 	if err := validateGroup(g.Name, g.Description); err != nil {
 		return err
 	}
+	if w := g.MaintenanceWindow; w != nil {
+		if err := devicegroup.ValidateWindow(*w); err != nil {
+			return problem.InvalidRequest.WithDetail("/device_groups: device group " + strconv.Quote(g.Name) + ": maintenance_window: " + err.Error())
+		}
+	}
 	var err error
+	var id uuid.UUID
 	if c.Action == declarative.ActionCreate {
 		var row pgstore.DeviceGroup
 		row, err = ex.q.InsertDeviceGroup(ctx, pgstore.InsertDeviceGroupParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: ex.p.OrganizationID, Name: g.Name, Description: g.Description,
 		})
-		ex.st.groups[g.Name] = row.ID
+		ex.st.groups[g.Name], id = row.ID, row.ID
 	} else {
-		_, err = ex.q.UpdateDeviceGroup(ctx, pgstore.UpdateDeviceGroupParams{ID: ex.id(c), Name: g.Name, Description: g.Description})
+		id = ex.id(c)
+		_, err = ex.q.UpdateDeviceGroup(ctx, pgstore.UpdateDeviceGroupParams{ID: id, Name: g.Name, Description: g.Description})
 	}
 	if db.IsUniqueViolation(err, "device_group_organization_id_name_key") {
 		return problem.NameTaken.WithDetail("a device group with this name exists")
 	}
+	if err != nil {
+		return err
+	}
+	return ex.maintenanceWindow(ctx, id, g.MaintenanceWindow)
+}
+
+// maintenanceWindow stores the window of a device group the document creates or updates, or removes it when the item
+// has none (plan M13c decision 4). The apply recompiles the organization, so the members get it.
+func (ex *configExec) maintenanceWindow(ctx context.Context, group uuid.UUID, w *devicegroup.Window) error {
+	if w == nil {
+		_, err := ex.q.DeleteMaintenanceWindow(ctx, group)
+		return err
+	}
+	_, err := storeWindow(ctx, ex.q, ex.p.OrganizationID, group, *w, uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.ID != uuid.Nil})
 	return err
 }
 

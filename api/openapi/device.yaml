@@ -499,7 +499,7 @@ components:
                       scope: { type: string, enum: [system, user], description: "Empty or absent is system (agents before alpha.10); one row per entry and scope." }
                       state: { type: string, description: "installed, held, absent, pending or failed" }
                       version: { type: string }
-                      reason: { type: string, description: "pending: dpkg_locked, deferred_offline or not_yet_applied; failed: the reason of software.apply_failed." }
+                      reason: { type: string, description: "pending: dpkg_locked, deferred_offline, outside_window or not_yet_applied; failed: the reason of software.apply_failed." }
                       error: { type: string, description: At most 200 characters. }
         event_seq_high: { type: integer, format: int64, minimum: 0 }
         arch: { type: string, enum: [amd64, arm64], description: "Agent architecture; selects the artifact of an agent_update." }

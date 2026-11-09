@@ -13,7 +13,7 @@ import (
 
 const getRolloutSettings = `-- name: GetRolloutSettings :one
 
-SELECT organization_id, enabled, waves, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, updated_at, updated_by FROM organization_rollout_settings
+SELECT organization_id, enabled, waves, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, updated_at, updated_by, wave_success_threshold_percent, stall_warning_hours FROM organization_rollout_settings
 `
 
 // Staged configuration rollouts (plan M11 decisions 23 and 24). Without a settings row the defaults apply.
@@ -30,31 +30,37 @@ func (q *Queries) GetRolloutSettings(ctx context.Context) (OrganizationRolloutSe
 		&i.CanaryDeviceGroupID,
 		&i.UpdatedAt,
 		&i.UpdatedBy,
+		&i.WaveSuccessThresholdPercent,
+		&i.StallWarningHours,
 	)
 	return i, err
 }
 
 const upsertRolloutSettings = `-- name: UpsertRolloutSettings :one
 INSERT INTO organization_rollout_settings (organization_id, enabled, waves, min_wave_minutes, failure_threshold_percent,
-  failure_threshold_min, canary_device_group_id, updated_at, updated_by)
+  failure_threshold_min, canary_device_group_id, wave_success_threshold_percent, stall_warning_hours, updated_at, updated_by)
 VALUES ($1, $2, $3, $4, $5, $6,
-  $7, now(), $8)
+  $7, $8, $9, now(), $10)
 ON CONFLICT (organization_id) DO UPDATE
 SET enabled = excluded.enabled, waves = excluded.waves, min_wave_minutes = excluded.min_wave_minutes,
     failure_threshold_percent = excluded.failure_threshold_percent, failure_threshold_min = excluded.failure_threshold_min,
-    canary_device_group_id = excluded.canary_device_group_id, updated_at = excluded.updated_at, updated_by = excluded.updated_by
-RETURNING organization_id, enabled, waves, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, updated_at, updated_by
+    canary_device_group_id = excluded.canary_device_group_id,
+    wave_success_threshold_percent = excluded.wave_success_threshold_percent, stall_warning_hours = excluded.stall_warning_hours,
+    updated_at = excluded.updated_at, updated_by = excluded.updated_by
+RETURNING organization_id, enabled, waves, min_wave_minutes, failure_threshold_percent, failure_threshold_min, canary_device_group_id, updated_at, updated_by, wave_success_threshold_percent, stall_warning_hours
 `
 
 type UpsertRolloutSettingsParams struct {
-	OrganizationID          uuid.UUID
-	Enabled                 bool
-	Waves                   []int32
-	MinWaveMinutes          int32
-	FailureThresholdPercent int32
-	FailureThresholdMin     int32
-	CanaryDeviceGroupID     uuid.NullUUID
-	UpdatedBy               uuid.NullUUID
+	OrganizationID              uuid.UUID
+	Enabled                     bool
+	Waves                       []int32
+	MinWaveMinutes              int32
+	FailureThresholdPercent     int32
+	FailureThresholdMin         int32
+	CanaryDeviceGroupID         uuid.NullUUID
+	WaveSuccessThresholdPercent int32
+	StallWarningHours           int32
+	UpdatedBy                   uuid.NullUUID
 }
 
 func (q *Queries) UpsertRolloutSettings(ctx context.Context, arg UpsertRolloutSettingsParams) (OrganizationRolloutSetting, error) {
@@ -66,6 +72,8 @@ func (q *Queries) UpsertRolloutSettings(ctx context.Context, arg UpsertRolloutSe
 		arg.FailureThresholdPercent,
 		arg.FailureThresholdMin,
 		arg.CanaryDeviceGroupID,
+		arg.WaveSuccessThresholdPercent,
+		arg.StallWarningHours,
 		arg.UpdatedBy,
 	)
 	var i OrganizationRolloutSetting
@@ -79,6 +87,8 @@ func (q *Queries) UpsertRolloutSettings(ctx context.Context, arg UpsertRolloutSe
 		&i.CanaryDeviceGroupID,
 		&i.UpdatedAt,
 		&i.UpdatedBy,
+		&i.WaveSuccessThresholdPercent,
+		&i.StallWarningHours,
 	)
 	return i, err
 }

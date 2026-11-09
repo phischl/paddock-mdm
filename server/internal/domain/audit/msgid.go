@@ -17,6 +17,8 @@ var msgIDAliases = map[Code]string{
 	CodePermissionProfileRootGrantConfirmed:      "permission_profile.root_grant_ok",
 	CodeOrganizationSecurityReviewRequired:       "organization.sec_review_required",
 	CodeNotificationDestinationSecretRotated:     "notification.dest_secret_rotated",
+	CodeDeviceGroupMaintenanceWindowChanged:      "device_group.window_changed",
+	CodeDeviceGroupMaintenanceWindowRemoved:      "device_group.window_removed",
 }
 
 // MsgID returns the RFC 5424 MSGID of c: the code itself when it fits MaxMsgIDLen, its alias otherwise.

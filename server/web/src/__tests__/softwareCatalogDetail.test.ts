@@ -28,7 +28,7 @@ const rows = [
 ].map((d) => ({ ...d, row_key: d.device_id + ':' + d.scope }))
 const assignment = (over: Partial<SoftwareAssignment>): SoftwareAssignment => ({
   id: 'a1', app_name: 'Editor', catalog_entry_id: 'e1', device_group_id: null, user_id: null, user_group_id: null, intent: 'available',
-  update_rule: 'latest', version: null, reason: '', created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', ...over,
+  update_rule: 'latest', version: null, reason: '', urgent: false, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', ...over,
 })
 const assignments = [
   assignment({ id: 'a1', user_id: 'u1' }), assignment({ id: 'a2', user_group_id: 'ug1' }), assignment({ id: 'a3', device_group_id: 'g1', intent: 'required' }),
