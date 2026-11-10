@@ -935,7 +935,8 @@ step 2  GUARD (no write before it passed):
                max(T.Newest(P), retired_at) older than retention_full × full_interval → DELETE-PATH(P) later
              P retired, otherwise                     → HOLD(P)
              P unknown to the database                → HOLD(P), result class unknown_path (target run fails
-                                                         after the put phase; nothing deleted on T this round)
+                                                         after step 6; amended 2026-11-10, B2: the deletions
+                                                         of step 6 run, nothing below P is touched)
         G4 kind files, escrow, WAL: never shrink; they are decided in step 6
 step 3  PUT, in this order, only files of L (skip a label directory until L holds its backup.manifest):
         (1) WAL segments  (2) full directories: data files, backup.manifest.copy, backup.manifest last
@@ -982,7 +983,7 @@ and loses nothing; (I7) the mirror never reads an object's content from T except
 | L8 | **Key rotation** (`A` = new path, old path `P'` retired) | `switch_repo_path`: stanza in `A`, full at once; `P'` untouched | `A`'s WAL, info and the first full are put as they appear (G3 does not fire: L holds `P'`); the target manifest's empty `LastFull` is irrelevant (listing-based). `P'` on T follows A2's retired rule: HOLD until `A` is complete and `max(T.Newest(P'), retired_at)` is older than `retention_full × full_interval`, then DELETE-PATH |  none |
 | L9 | **Rotation, then L1/L3** (L lacks `P'` entirely, `A` fresh) | as L3 for `A` | G3: `P'` retired but `A` not complete → **HOLD(P')**; `A` on T: G1 → SHRUNK while T holds `A` fulls L lacks (L3), else puts continue. In every case `P'` stays byte for byte until A2's rule holds on T's own copy | as L1/L3 |
 | L10 | **Retired path expired locally, T missed the last files** (outage before the rotation) | n/a | G3 with `max(T.Newest, retired_at)`: T never loses `P'` earlier than L would have (review 5 minor 4) | none |
-| L11 | **A path on T unknown to the database** (a discarded key never has a path; a foreign-key path can only come from a damaged target) | n/a | HOLD(P), class `unknown_path`: puts run, no delete anywhere on T this round, the target run fails so an operator sees it | empty the path on the share or bucket by hand, or restore |
+| L11 | **A path on T unknown to the database** (a discarded key never has a path; a foreign-key path can only come from a damaged target) | n/a | HOLD(P), class `unknown_path`: puts run, nothing below P is deleted, every deletion the D-rules allow elsewhere on T runs (retired paths past the keep window included), the path is logged and noted in `./paddock backup status`, and the target run fails so an operator sees it (amended 2026-11-10, B2; before: no delete anywhere on T) | empty the path on the share or bucket by hand, or restore |
 | L12 | **T lost files** (share restored from an older snapshot, object store pruned) | n/a | the put phase re-copies every file L holds and T lacks; nothing is deleted (D-rules only remove what L lacks) | none |
 
 ### A5 Repository restore from a target (new component `backup-repo`; PDK-734 scope, documented in restore.md)
@@ -1010,7 +1011,7 @@ modification times, a fake clock, the key list from a fake store)
 | L8 | `TestMirrorRotationPutsNewPathHoldsOld` | retired P1 (retired_at = now − 1 d), A = P2 with info + WAL, no full yet; T: P1 complete | ops: puts of P2 files only; no delete under P1; `held` counts P1's files; subtest "A complete, T.Newest(P1) older than keep": P1 deleted whole |
 | L9 | `TestMirrorRotationThenLossKeepsOldPath` | as L8 but L lacks P1 entirely; subtest a: A has no full → ops empty except puts, P1 held; subtest b: T also holds P2 fulls L lacks → `errSetShrunk`, ops empty | P1 byte for byte identical before and after |
 | L10 | `TestMirrorRetiredPathAgeFromRetiredAt` | T.Newest(P1) = now − 20 d, retired_at = now − 2 d, keep 14 d | P1 held (age base is retired_at); subtest retired_at = now − 15 d: deleted |
-| L11 | `TestMirrorUnknownPathHeld` | T holds `pgbackrest/bk-20000101-deadbeef/…` unknown to the store | puts run; no delete; error class `unknown_path` |
+| L11 | `TestMirrorUnknownPathHeld` | T holds `pgbackrest/bk-20000101-deadbeef/…` unknown to the store, a retired path past the keep window and an expired snapshot | puts run; the unknown path is kept and named in the error; the retired path and the expired snapshot are deleted; error class `unknown_path` (amended 2026-11-10, B2; before: no delete) |
 | L12 | `TestMirrorRefillsTarget` | T lacks half of L's files | every missing file put, nothing deleted |
 | order | `TestMirrorOrderGuardPutVerifyManifestDelete` | fake target records ops | first op after `Read manifest`/`List` is a put; `Put manifest.json` after every other put; every `Delete` after the second `List`; with a failing put: no manifest, no delete |
 | partial | `TestMirrorPartialErrorStopsBeforeDelete` | a put fails midway | ops end at the failing put; T manifest unchanged; next round (fake fixed) completes the puts, then deletes |
@@ -1294,8 +1295,9 @@ the bucket kept every deleted object as a version. The rules of the amendment 20
 amendment corrects four points. Where it contradicts A1–A6 or the note 2026-11-07, it wins. Bounding step 6 by the
 round budget (PDK-869, RR-126) is **not** part of it.
 
-Binding language: **MUST** / **MUST NOT** / **SHOULD** / **MAY**. Tickets: B1–B3 and B6 rows 1–9 are PDK-972; B4 and
-B6 rows 10–13 are PDK-977. Each ticket writes the document texts of B5 that belong to its sections.
+Binding language: **MUST** / **MUST NOT** / **SHOULD** / **MAY**. Ticket: PDK-972, which also carries the
+development bootstrap of PDK-977 (B4). The amendment was written while PDK-972 was in review and records its rules
+as implemented; the one point it still has to meet is the retired-path listing of B3.
 
 ### B1 The keep window follows the effective full interval (amends A1 "retention inputs", A2, A3 G3, note 2026-11-05 b)
 
@@ -1311,7 +1313,8 @@ B6 rows 10–13 are PDK-977. Each ticket writes the document texts of B5 that be
 - Defaults: production 14 × 24 h = 14 days (unchanged). Development (`compose.backup.dev.yaml`,
   `PADDOCK_BACKUP_FULL_INTERVAL_S: "1200"`): 14 × 20 min = 4 h 40 min, before this amendment 14 days.
 - `Engine.retention` and `Engine.writeRuntime` MUST take the effective full interval from one unexported method
-  `func (e *Engine) fullInterval(sched backupset.Schedule) time.Duration`, so the two cannot diverge again.
+  `Engine.fullInterval(sched backupset.Schedule) time.Duration`, so the two cannot diverge again.
+- The escrow rule shortens with it in development: about 4.7 h instead of 14 days (B8 point 1).
 - The rule for a retired path `P'` is otherwise unchanged: `P'` is removed from L (role `expire`) and from a target
   (G3 → D6) only when `A` holds a completed full of every stanza **and** `max(newest file of P', retired_at)` is
   older than the keep window.
@@ -1326,32 +1329,42 @@ B6 rows 10–13 are PDK-977. Each ticket writes the document texts of B5 that be
 
 An **unknown path** is a repository path `pgbackrest/<key_id>` on a target that no key row names. It is no sign of a
 damaged target alone: a database restored to a point before a key was created, or a development database that was
-reset, leaves the paths of the lost key rows behind. Under A3 such a path stopped **every** deletion on the target,
-so the target could never reclaim space.
+reset, leaves the paths of the lost key rows behind. Under A3 such a path stopped **every** deletion on the target
+(`judge` counted every deletable object as held and `mirrorSet` returned before step 6), so the target could never
+reclaim space.
 
 ```
-G3      P unknown to the database → HOLD(P); remember P in plan.unknown (sorted list of repository paths)
+G3      P unknown to the database → HOLD(P); remember P in plan.unknown (the list of unknown repository paths)
 step 3–5 unchanged
-step 6  runs in full: D1–D6 apply to everything outside HOLD paths, DELETE-PATH of retired paths included.
+step 6  runs in full: every deletion D1–D6 allows is carried out, on every path outside the HOLD paths:
+        expired fulls and WAL of the active path (D1, D2), OpenBao snapshots and Fleet dumps (D4), escrowed
+        headers (D5) and retired paths past the keep window (D6). D3 and D7 never delete, as before.
         Nothing below an unknown path is written, read or deleted.
 end     when plan.unknown is not empty and steps 3–6 ended without another error, the target run ends with
-        errUnknownPath (class unknown_path), as before. Any other error of steps 3–6 wins over unknown_path.
+        errUnknownPath, wrapped with the unknown paths (class unknown_path). Any other error of steps 3–6 wins.
 ```
 
+- **The rule is the broad one, on purpose.** `decisions-alpha10.md` §42 asks that an unknown path never blocks the
+  deletion of known retired paths; the implementation lets every D-rule go on, and that is the binding rule. Reason:
+  each D-rule is decided against L on its own (I4) and none reads the unknown path. A key path is a self-contained
+  pgBackRest repository (fulls, WAL and info files below it, all held), and its key is in the operator's custody,
+  not in a target object. Holding all deletions protected nothing a restore needs.
+- **What still stops everything:** G1 and G2 (`set_shrunk`) and `foreign_set` are unchanged: nothing written, nothing
+  deleted. Without a local manifest (step 5) there is no delete phase, with or without an unknown path.
+- **One consequence to know:** when the unknown path is the newer timeline (the database was restored to a point
+  before that key existed), the OpenBao snapshots and Fleet dumps that belong to it now leave the target after their
+  keep days (D4), as every other snapshot does. Before, they stayed for ever by accident. An operator who wants to
+  keep a lost timeline restorable beyond the keep days copies the target before that (restore.md).
 - The class `unknown_path`, the target run's outcome (not ok), `backup_target_status.last_error`, the gauge
   `paddock_backup_target_reachable` (0) and the alert `PaddockBackupTargetUnreachable` are unchanged: the operator
-  still sees the target as failing until the path is gone. No schema change, no API change.
-- **Logged:** the role MUST log every unknown path once per target and round with `slog.WarnContext`, message
-  `backup target holds a repository path no backup key names`, attributes `target` (name) and `path` (the
-  repository path). The path is a key ID, not a secret.
+  still sees the target as failing until the path is gone (A4 L11: "empty the path on the share or bucket by hand,
+  or restore"). No schema change, no API change.
+- **Logged:** the engine's WARN `mirror to backup target failed` (attributes `target`, `error_class`, `error`) names
+  the unknown paths through the wrapped error. The path is a key ID, not a secret.
 - **Surfaced:** `./paddock backup status` shows the class `unknown_path` in the `ERROR` column of the target's rows
-  (already so; `printBackupStatus`). It MUST additionally print, after the target table, one line per target whose
-  rows carry `unknown_path`:
-  `<target name>: holds a backup repository no key names; nothing below it is deleted. See docs/operations/backup.md, "Status of a target".`
-- In `mirrorSet` the return of `errUnknownPath` that stands before `phaseDelete` MUST move behind the delete loop.
-  The return in the `!ret.manifestOK` branch stays where it is: without a local manifest there is no delete phase
-  (A3 step 5).
-- A4 L11, operator action: unchanged ("empty the path on the share or bucket by hand, or restore").
+  and prints, below the target table, one note per such target. The note names the target and says that the path is
+  kept, that the retention's deletions go on elsewhere, that the `paddock-backup` log names the path, and that the
+  operator removes the path by hand. The database stores the class only, so the status cannot name the path.
 
 ### B3 Slow S3 listings: probe the endpoint while a page is outstanding (amends the note 2026-11-07, second bullet)
 
@@ -1363,14 +1376,20 @@ hundred thousand to more than the stall window. The endpoint is alive the whole 
 The sentence "a listing whose next page does not arrive within the stall window fails the mirror" of the note
 2026-11-07 is replaced for **S3 targets** by:
 
-| Situation while a listing (step 1 or step 4) waits for a page | Result |
+| Situation while a listing waits for a page | Result |
 | --- | --- |
 | No page for 20 s (`listProbeEvery`) | the target sends `HeadBucket` (timeout 10 s, `listProbeTimeout`) and repeats it every 20 s until the page arrives |
 | A probe succeeds | counts as progress for the stall watchdog, like a page |
 | No page and no successful probe for 2 min (`mirrorStall`, the stall window) | the mirror fails: `no progress for 2m0s while listing the target`, class `io` (unchanged) |
 | The endpoint keeps answering, but one page does not arrive within 20 min (`listPageLimit`) | the listing ends: `errStalled`, `no page of the listing for 20m0s`, class `io` |
 
-- A probe that fails (any error, a 403 included) is no progress.
+- **Every listing of an S3 target inside a mirror is under this rule**, not only the listings of step 1 and step 4:
+  the listing of a retired path for its newest file (`Target.Newest`, A3 step 1 and G3) MUST report progress per
+  page and be probed and bounded the same way, or G3 MUST take the modification times from the step-1 listing so
+  that it needs no second listing. Which of the two is the implementer's choice. Retired paths are the large,
+  delete-marker-heavy prefixes; a listing outside the rule would stall the mirror exactly when a retired path is due.
+- A probe that fails (any error, a 403 included) is no progress. A probe in flight is abandoned as soon as the
+  listing returns, and a probe answer never counts after the listing returned.
 - **Mounted targets** (`dirTarget`: local, SMB, NFS) are unchanged: the walk reports progress every 1 024 entries,
   and a walk without progress for the stall window fails the mirror.
 - The three durations are fields of `s3Target`, set by `NewS3Target` from the constants; no environment variable.
@@ -1379,100 +1398,67 @@ The sentence "a listing whose next page does not arrive within the stall window 
   instead of 2 min. It is the trade-off of the note 2026-11-07 (PDK-865): listings are not charged against the
   round budget. A round that mirrors still ends only after its targets (RR-127).
 
-### B4 Versioned buckets need an expiry for noncurrent versions (PDK-977)
+### B4 Versioned buckets need an expiry for noncurrent versions (PDK-977, delivered with PDK-972)
 
 On a versioned bucket a deletion of the mirror frees no space: the object stays as a noncurrent version plus a
 delete marker, and both slow every later listing (B3). Paddock does not manage an operator's bucket; it states the
-requirement, follows it in development and warns where it can see a violation.
+requirement and follows it in development.
 
 1. **Requirement (operator):** a versioned backup bucket MUST have a lifecycle rule that expires noncurrent versions
    (30 days, the value the privacy pack and RR-94 name) and removes expired object delete markers.
+   `docs/operations/backup.md`, "S3 targets", says so with the reason (space, listing time).
 2. **Development bootstrap** (`deploy/compose/scripts/rustfs-backup-bootstrap.sh`): after `put-bucket-versioning` it
-   MUST set, idempotently, exactly this lifecycle configuration on `$BUCKET`:
+   sets, idempotently, this lifecycle configuration on the development bucket:
 
    ```json
    {"Rules":[{"ID":"paddock-expire-noncurrent","Status":"Enabled","Filter":{"Prefix":""},
      "NoncurrentVersionExpiration":{"NoncurrentDays":1},"Expiration":{"ExpiredObjectDeleteMarker":true}}]}
    ```
 
-   One day is the shortest expiry S3 allows. The stale comment that refers to `docs/operations/restore.md`,
-   "Backup bucket" MUST refer to `docs/operations/backup.md`, "S3 targets".
-3. **Detection** (`server/cmd/paddock-server/backuptargets.go`): a new subcommand
-   `paddock-server admin backup-targets versioning`, run like `revisions` in the `paddock-backup` container. For every
-   enabled S3 target, with the target's own credential and a timeout of 10 s per request, it calls
-   `GetBucketVersioning` and, when the status is `Enabled` or `Suspended`, `GetBucketLifecycleConfiguration`. It prints
-   one line: the word `none` without an enabled S3 target, else `<target id>=<state>` pairs sorted by target ID and
-   separated by one space. States:
+   One day is the shortest expiry S3 allows. RustFS 1.0.4 accepts the rule and returns it; that it removes the
+   versions after a day is observed on a long-lived development stack and recorded with the release regression.
+3. **No `./paddock check` item in alpha.10.** `decisions-alpha10.md` §42 asked for a warning "if that is detectable
+   through the S3 API". It is not, with the credential the runbook asks for: list, read, write and delete below the
+   prefix grant neither `s3:GetBucketVersioning` nor `s3:GetLifecycleConfiguration`, so the item would report "not
+   checked" on every correctly restricted target. `backup.md` therefore says that Paddock cannot check the rule.
+   A check for targets whose credential carries the two read-only permissions would change the operator contract
+   (two optional permissions in the runbook) and needs a subcommand in the backup role, which alone decrypts target
+   credentials; it is an open point (B8), not part of this amendment.
 
-   | State | When |
-   | --- | --- |
-   | `unversioned` | versioning was never enabled (empty status) |
-   | `expiry` | versioned, and at least one covering rule exists |
-   | `no_expiry` | versioned, and the lifecycle configuration was read (or the store answered `NoSuchLifecycleConfiguration`) without a covering rule |
-   | `unknown` | any other outcome: access denied, not implemented, timeout, any error |
+### B5 Document texts (PDK-972 writes them; this amendment's pull request adds RR-132 only)
 
-   A **covering rule** has `Status: Enabled`, a `NoncurrentVersionExpiration` with `NoncurrentDays` ≥ 1, and a filter
-   that is absent, empty, or only a prefix (`Filter.Prefix` or the legacy `Prefix`) that is a string prefix of the
-   target's object prefix `<prefix>/paddock-backup/`. A rule filtered by tag, by size or by `And` is not covering.
-   The command never prints a credential, a bucket name or an endpoint, and it exits 0 whenever it could read the
-   targets from the database.
-4. **Check** (`./paddock check --online` on a host with backups; `server/internal/prodcheck`): the script passes the
-   line as `--backup-versioning <line>` next to the revision flags, under the same conditions
-   (`PADDOCK_CHECK_SKIP_REVISIONS` skips both; a failed command or a line that does not match
-   `^(none|[0-9a-f=_ a-z-]+)$` is passed as the empty string). New `prodcheck.Options.BackupVersioning *string`
-   (nil: not checked) and `checkBackupTargetVersioning(line string) Result` with the item
-   `backup: versioned S3 targets expire noncurrent versions`:
+- `docs/operations/backup.md`, "S3 targets": the lifecycle rule of B4.1 with its reason, and that Paddock cannot
+  check it.
+- `docs/operations/backup.md`, "Status of a target", class `unknown_path`, and the retention table's row "Anything
+  else": the copy and the retention's deletions go on, the path itself is kept until the operator removes it, the
+  status notes the target and the log names the path.
+- `docs/operations/backup.md`, "Schedule and retention": no change; the sentence on a retired key's repository keeps
+  "`retention_full` full intervals", which is the effective full interval in production.
+- `docs/compliance/residual-risks.md`: RR-132 (B3's trade-off) is added with this amendment's pull request. RR-127's
+  "the target's listings (each page within the stall deadline)" SHOULD become "(each page within 2 minutes of the
+  endpoint's last answer, at most 20 minutes, RR-132)" in PDK-972.
+- Changelog: `changelog.d/PDK-972.fixed.md` names the listing rule and the unknown-path rule. The keep window and
+  the bootstrap rule change nothing an operator of a production installation sees.
 
-   | Input | Result |
-   | --- | --- |
-   | empty string | `OK: true, Warn: true`, detail `could not read the versioning of the S3 backup targets` |
-   | at least one `no_expiry` | `OK: true, Warn: true`, one detail line per target: `target <id>: the bucket is versioned without an expiry for noncurrent versions; deletions free no space and slow the listing (docs/operations/backup.md, "S3 targets")` |
-   | otherwise (`none`, or only `unversioned`, `expiry`, `unknown`) | `OK: true`; with at least one `unknown` the detail is `not checked for <n> target(s): the credential may not read the bucket's versioning or lifecycle` |
+### B6 Tests (`server/internal/backuprole` unless stated; the names are those of PDK-972, not binding)
 
-   The item never fails the check: the mirror works without the rule, it only costs space and listing time.
-5. The credential of a target needs no new permission. `s3:GetBucketVersioning` and `s3:GetLifecycleConfiguration`
-   are optional; without them the state is `unknown`.
-
-### B5 Document texts (binding content, wording free; written by the ticket named)
-
-- `docs/operations/backup.md`, "S3 targets" — **done with this amendment's pull request**: the expiry of noncurrent
-  versions and expired delete markers is required on a versioned bucket, with the reason. PDK-977 adds the two
-  optional permissions and the `./paddock check --online` item.
-- `docs/operations/backup.md`, "Status of a target", class `unknown_path` (PDK-972): "the target holds a repository
-  path no key names; the copy and the retention's deletions go on, nothing below that path is deleted, and the
-  target stays failed until the path is removed by hand". The retention table's row "Anything else" says the same.
-  A new paragraph names the listing rule of B3 in operator terms (2 minutes without any answer, 20 minutes for one
-  page of an answering endpoint).
-- `docs/operations/backup.md`, "Schedule and retention" (PDK-972): no change for production; the sentence on the
-  retired key's repository keeps "`retention_full` full intervals".
-- `docs/compliance/residual-risks.md` — RR-132 (B3's trade-off) is **added with this amendment's pull request**.
-  PDK-972: RR-127's "the target's listings (each page within the stall
-  deadline)" becomes "(each page within 2 minutes of the endpoint's last answer, at most 20 minutes)"; RR-126's
-  mitigation gains "a listing page of an answering endpoint is bounded at 20 minutes".
-- `docs/operations/install.md`, the list of `--online` findings (PDK-977): the new warning.
-- Changelog fragments: `changelog.d/PDK-972.fixed.md` covers B1–B3, `changelog.d/PDK-977.fixed.md` B4.
-
-### B6 Tests (`server/internal/backuprole` unless stated; one test per row, names binding)
-
-| # | Test | Asserts |
+| Rule | Test | Asserts |
 | --- | --- | --- |
-| 1 | `TestKeepWindowUsesEffectiveFullInterval` | schedule 24 h, `retention_full` 14: without `Config.FullInterval` the keep window is 336 h; with `Config.FullInterval` = 20 min it is 4 h 40 min; `schedule.env` carries the same interval in both cases |
-| 2 | `TestExpireRetiredPathEffectiveInterval` | local expire, `Config.FullInterval` = 20 min, `A` complete: a retired path whose newest file and `retired_at` are 5 h old is removed, one 4 h old stays |
-| 3 | `TestMirrorRetiredPathAgeFromRetiredAt` (existing, extended) | subtest with the 20-minute interval: `T.Newest` 5 h, `retired_at` 5 h → deleted; `retired_at` 1 h → held |
-| 4 | `TestMirrorNeverDeletesActivePath` | I8: T holds `A` and L lacks it → `errSetShrunk`, no operation; the same when the key table also lists `A`'s key as retired with a `retired_at` past the keep window |
-| 5 | `TestMirrorRotationPutsNewPathHoldsOld` (existing) | I9 unchanged: `A` without a full of one stanza → the retired path is held however old it is |
-| 6 | `TestMirrorUnknownPathHeld` (existing, replaced expectation) | T holds an unknown path, an expired full under `A` (D1) and a retired path past the keep window: both are deleted, nothing below the unknown path changes, the result is `errUnknownPath`, the unknown path is logged once with `path` |
-| 7 | `TestMirrorUnknownPathYieldsToOtherErrors` | unknown path plus a failing delete → class `io`, not `unknown_path` |
-| 8 | `TestSlowFirstPageFromAnsweringEndpointIsNoStall`, `TestSlowFirstPageFromSilentEndpointStalls`, `TestListingPageLimit` | the three S3 rows of B3; `TestDirTargetListingTicks` and `TestHangingListingTripsTheWatchdog` stay green unchanged |
-| 9 | `TestBackupStatusNamesUnknownPath` (`server/cmd/paddock-server`) | `printBackupStatus` with a target whose rows carry `unknown_path` prints the line of B2 once for that target; without the class it prints no such line |
-| 10 | `TestBackupTargetVersioningStates` (`server/cmd/paddock-server` or the package that holds the classification) | the four states against a fake S3 API, the covering-rule cases (no filter, matching prefix, foreign prefix, tag filter, disabled rule, `NoncurrentDays` absent), `NoSuchLifecycleConfiguration` → `no_expiry`, access denied → `unknown` |
-| 11 | `TestCheckBackupTargetVersioning` (`server/internal/prodcheck`) | the three rows of B4.4; the item never has `OK: false` |
-| 12 | `deploy/bundle/bundle_test.sh` | `./paddock check --online` passes `--backup-versioning`; a failed subcommand yields the empty string, never a failed check |
-| 13 | manual, recorded in PDK-977's result | after `make dev-secrets up`, `aws s3api get-bucket-lifecycle-configuration` on the development bucket returns the rule of B4.2. That RustFS 1.0.4 removes a noncurrent version older than one day is observed on the long-lived development stack during the release regression and recorded there |
+| B1 | `TestRetiredKeepFollowsEffectiveFullInterval` | the keep window is 336 h without `Config.FullInterval` and 4 h 40 min with 20 min |
+| B1, I8, I9 | `TestRetiredPathPruning` (S3 fake and directory target) | replacement without a full, path past the window: kept; replacement complete, path inside the window: kept; replacement complete, path past the window: removed; the active path's files stay in every case |
+| B1, I8, I9 | `TestLocalExpireKeepsActiveAndIncompleteReplacement` | the local expire never removes the active path, however old; a retired path only once the active path is complete |
+| B1 | `TestMirrorRotationPutsNewPathHoldsOld`, `TestMirrorRotationThenLossKeepsOldPath`, `TestMirrorRetiredPathAgeFromRetiredAt` (A6 L8–L10) | unchanged and green |
+| B2 | `TestMirrorUnknownPathHeld` (A6 L11, new expectation) | the unknown path is kept byte for byte, the error names it, a retired path past the window and an expired snapshot are deleted, the newest snapshot of its kind stays |
+| B2, I8–I10 | `TestMirrorInvariants` (randomized matrix) | every deletion the D-rules allow is expected with an unknown path present; a stanza without a full on the active path holds every retired path |
+| B2 | `TestPrintBackupStatusNamesUnknownPathTarget` (`server/cmd/paddock-server`) | the note for a target with `unknown_path`, none without |
+| B3 | `TestSlowFirstPageFromAnsweringEndpointIsNoStall`, `TestSlowFirstPageFromSilentEndpointStalls`, `TestListingPageLimit`, `TestHungListingOnAnsweringEndpointEndsAtPageLimit`, `TestListingEndAbandonsProbeInFlight` | the four rows of B3; a hung target does not keep the round from mirroring the next target |
+| B3 | a test for the retired-path listing (name free; PDK-972 review 2 finding 1) | a retired path due for removal on an S3 fake whose newest-file listing answers after more than the stall window while the endpoint answers probes: the mirror succeeds and the path is removed; with a silent endpoint the mirror stalls |
+| B3 | `TestHangingListingTripsTheWatchdog`, `TestDirTargetListingTicks` | unchanged assertions; mounted targets unchanged |
 
-No acceptance gate changes. The backup gates (`TestBackupRuns`, `TestBackupRotation`, `TestBackupTargets`) MUST be
-green on a development stack whose target bucket holds at least 50 000 objects; that run is recorded in PDK-972's
-result.
+The new expectation of `TestMirrorUnknownPathHeld` and of the matrix follows this amendment's rule change and
+asserts more than before; it is no weakened test. No acceptance gate changes. The backup gates (`TestBackupRuns`,
+`TestBackupRotation`, `TestBackupTargets`) MUST be green on a development stack whose target bucket holds at least
+50 000 objects; that run is recorded with PDK-972.
 
 ### B7 Acceptance criteria
 
@@ -1483,36 +1469,38 @@ result.
   loses a file, however old it is.
 - **AC-3 (developer):** given the development stack with a 20-minute full interval, then a retired key path leaves
   the local set and the development target 4 h 40 min after its rotation at the earliest, not after 14 days.
-- **AC-4 (operator):** given a target that holds an unknown path, when a round runs, then expired fulls, WAL and
-  retired paths are deleted as without it, the unknown path is byte for byte unchanged, the role's log names the
-  path, and `./paddock backup status` shows `unknown_path` and the line of B2 for that target.
-- **AC-5 (operator):** given an S3 target whose first listing page takes longer than 2 minutes while the endpoint
-  answers, then the mirror succeeds; given an endpoint that answers nothing, then the mirror fails after 2 minutes;
-  given a page that never arrives, then the mirror fails after 20 minutes. Each failure shows the class `io`.
-- **AC-6 (operator):** given an enabled S3 target on a versioned bucket without a covering rule and a credential
-  that may read the lifecycle, when `./paddock check --online` runs, then it prints a WARN that names the target and
-  exits as without the finding.
-- **AC-7 (developer):** given a fresh development stack, then the development backup bucket carries the rule of
+- **AC-4 (operator):** given a target that holds an unknown path, when a round runs, then expired fulls, WAL,
+  snapshots and retired paths are deleted as without it, the unknown path is byte for byte unchanged, the role's log
+  names the path, and `./paddock backup status` shows `unknown_path` and the note for that target.
+- **AC-5 (operator):** given an S3 target whose listing page (of the whole target or of a retired path) takes longer
+  than 2 minutes while the endpoint answers, then the mirror succeeds; given an endpoint that answers nothing, then
+  the mirror fails after 2 minutes; given a page that never arrives, then the mirror fails after 20 minutes. Each
+  failure shows the class `io`.
+- **AC-6 (developer):** given a fresh development stack, then the development backup bucket carries the rule of
   B4.2.
 
-### B8 Stop conditions and freedoms
+### B8 Decided and open points
 
-- Stop and report: RustFS 1.0.4 rejects the lifecycle configuration of B4.2, or the regression shows that it does
-  not expire noncurrent versions (no other image, no other rule without a decision); a second place besides `retention.keep` derives a window from
-  `full_interval_hours`; a change to `backup_target_status`, the admin API or the portal seems necessary; any need to
-  touch step 6's budget (PDK-869).
-- Free: internal helper names other than those B1–B6 fix, and the layout of the fake S3 API in the tests. No portal
-  text changes.
+Decided with this amendment:
 
-### B9 Open points (defaults chosen; the architect lead may overrule)
+1. **The escrow rule follows the effective full interval too (B1).** `decisions-alpha10.md` §42 names only retired
+   paths; PDK-972 review 2 (finding 2) asked for a record. There is one keep window. In development the escrowed
+   header of a destroyed device therefore leaves the local set and the targets about 4.7 h (4 h 40 min) after the
+   Destroy instead of 14 days; production is unchanged (14 days with the default schedule). A separate window for
+   the escrow rule was rejected: it would let the two rules disagree about the span of the retained fulls.
+2. **Every D-rule goes on beside an unknown path (B2)**, not only the removal of retired paths.
+3. **A target with an unknown path stays failed (B2).** The class, the status row and the alert exist and need no
+   schema change, and a stray repository should not go unnoticed. Cost: `LAST SUCCESS` of that target does not
+   advance although its copy is current, and the standing alert can hide a second failure.
 
-1. **The escrow rule uses the same keep window (B1).** `decisions-alpha10.md` §42 names only retired paths. Default:
-   one window for both, because both stand for the span of the retained fulls and production is unaffected. Effect
-   in development only: a destroyed device's escrowed header leaves the set after 4 h 40 min instead of 14 days.
-   Alternative: a second window for the escrow rule from the schedule alone.
-2. **A target with an unknown path stays failed (B2).** Default: yes, because the class, the status row and the alert
-   exist and need no schema change, and a stray repository should not go unnoticed. Cost: `LAST SUCCESS` of that
-   target does not advance although its copy is current, and the standing alert can hide a second failure.
-   Alternative for a later release: a warning state per target (a new column and an API field).
-3. **RR-126 stays open.** After this amendment the first successful mirror of a long-failing target deletes its
-   whole backlog in one round; PDK-869 bounds it.
+Open (no work in alpha.10 without a decision of the architect lead):
+
+4. A warning state per target instead of a failed run for an unknown path (a new column and an API field).
+5. A `./paddock check --online` warning for versioned buckets without the rule, for targets whose credential may
+   read the bucket's versioning and lifecycle (B4.3).
+6. RR-126 stays open: after this amendment the first successful mirror of a long-failing target deletes its whole
+   backlog in one round; PDK-869 bounds it.
+
+Stop conditions for PDK-972: a second place besides `retention.keep` derives a window from `full_interval_hours`; a
+change to `backup_target_status`, the admin API or the portal seems necessary; any need to touch step 6's budget
+(PDK-869); RustFS rejects the lifecycle configuration of B4.2.

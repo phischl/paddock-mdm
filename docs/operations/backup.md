@@ -141,10 +141,7 @@ password with `docker volume inspect` (residual risk RR-122).
 No host step. The credential needs list, read, write and delete below `<prefix>/` of the bucket (the mirror deletes what
 retention removes and the connection test writes and deletes `<prefix>/.paddock-test`). **Object Lock stays off**:
 pgBackRest and the mirror must be able to expire. Versioning is welcome (an overwritten or deleted object stays as a
-noncurrent version, so one compromised credential cannot destroy every copy). **A versioned bucket needs a lifecycle
-rule that expires noncurrent versions after 30 days and removes expired delete markers.** Without it nothing the
-retention deletes ever frees space, and the delete markers pile up in front of the live objects: the store walks them
-on every listing, so the mirror gets slower with every round. Paddock does not set the rule on your bucket.
+noncurrent version, so one compromised credential cannot destroy every copy); expire noncurrent versions after 30 days.
 Keep the credentials of each target separate from every other use.
 
 For a restore without a database, export the target with its credentials and keep the file offline with the key:
