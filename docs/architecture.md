@@ -761,6 +761,23 @@ flowchart LR
 > advance and complete record `StateChanged` for the organization, so the compiler renders again (halt and resume keep
 > the devices inside the wave). The rest of the flow is unchanged.
 
+> **Amendment 2026-11-09 (M13c, ADR 0033 amendment, plan M13c §3.1 and its amendments A10-12 to A10-19):** the
+> section `software_assignments` is rollout-able too. The rollout records, per staged assignment key, the assignment's
+> row, catalog entry and target IDs (`config_rollout.staged_assignments`), and the overlay renders a device outside the
+> wave from the before items matched by those IDs, so a renamed user or group does not move the overlay. Catalog
+> entries and sources are never staged (immediate); an entry that still has assignments is never deleted (409
+> `in_use`, also in a declarative document), and while a rollout is open an entry named by a staged assignment is
+> neither renamed nor deleted (409 `rollout_conflict`); the revert of the open rollout's change set removes the
+> assignments first and then the entry it created. A failed software status of a staged entry counts as a failed
+> resource `software:<entry id>`. The accounting of every configuration rollout follows one state table (plan M13c
+> amendment A10-19, identical in plan M11): a wave advances only after an observed success, after `min_wave_minutes`
+> from the first apply of a device that joined in the wave, and when the share of applied devices reaches
+> `wave_success_threshold_percent` or no device still waits for its maintenance window; a device waiting for its window
+> is pending, and after a resume every device whose failure was discarded holds the rollout until it has applied
+> successfully (`awaiting_retry`). A wave without progress for `stall_warning_hours` records `config_rollout.stalled`.
+> The approved users of an approval-required package (§12.5) are rendered after the overlay, so an approval never
+> reaches a device by another way.
+
 ### 7.2 Bundle format
 
 The envelope is **DSSE** (Dead Simple Signing Envelope, Apache-2.0 specification), payload type
@@ -1381,10 +1398,10 @@ the rollback (§11.2).
 **Parent rule for managed paths (ADR 0051 AG-1, plan M12h decision 12).** Every write, rename and delete of a
 reconciler (files, software, login, sudoers quarantine) and of the uninstall resolves the parent directory component
 by component from `/` with `O_PATH|O_NOFOLLOW|O_DIRECTORY` and acts relative to the final directory descriptor
-(`openat`, `renameat`, `unlinkat`). A component that is a symlink or not a directory, not owned by root, or writable by
-group or others (except the sticky root-owned `/tmp` and `/var/tmp`) refuses the operation: the resource fails with
-`parent_not_trusted`, nothing is written. Writes into the agent's own layout (`/var/lib/paddock`, `/etc/paddock`) keep
-the plain atomic write.
+(`openat`, `renameat`, `unlinkat`). A component that is a symlink or not a directory, not owned by root, writable by
+others (except the sticky root-owned `/tmp` and `/var/tmp`), writable by a group other than gid 0, or group-writable
+and carrying an access ACL (PDK-963) refuses the operation: the resource fails with `parent_not_trusted`, nothing is
+written. Writes into the agent's own layout (`/var/lib/paddock`, `/etc/paddock`) keep the plain atomic write.
 
 ### 11.2 Update with A/B, self-test, watchdog (design contract 1–6)
 
@@ -1482,6 +1499,15 @@ them; any change it made is reverted and reported as `config.playbook_touched_pr
 > compiler merges the catalog's `hold` and `required pinned` results into `updates.holds`. Removals need a check-in
 > within 15 minutes; a dpkg lock is retried at the next drift pass; every operation is simulated first and refused
 > when it would remove other packages.
+
+> **Amendment 2026-11-09 (M13c, plan M13c decisions 5 to 7):** the `software` section carries `windows`, the union of
+> the maintenance windows of the device's groups (only groups with a window count; none means no restriction).
+> Outside every window the software reconciler still writes sources, keyrings, pins, Flatpak remotes and masks, but
+> defers the installs, reinstalls, moves to a pinned version and removals of the policy, APT and Flatpak, and reports
+> them `pending/outside_window`; the first drift pass inside a window runs them. A package of an `urgent` assignment is
+> never deferred; a user's self-service operations are never deferred. A timezone the device does not know is
+> evaluated in UTC (`window_timezone_unknown` in the status message). The repository credential file
+> `/etc/apt/auth.conf.d/paddock-repo.conf` of plan M13c decision 15 is not written yet (PDK-812).
 
 > **Amendment 2026-11-02 (M11, ADR 0033):** a bundle with `mode: report_only` is **planned, not applied**. The applier runs
 > `Plan` for every resource of the bundle and for stale managed files, and never calls a reconciler's `Apply`, the deny
@@ -1783,6 +1809,16 @@ Software catalog (M13a, ADR 0042): catalog entries with package names per distri
 assigned per device group with the intents required, uninstall, hold and forbid; `required latest` is installed and
 moves with the update runs, `required pinned` is installed at and held to a version; a locally removed required
 package is reinstalled and reported (`device.software_reinstalled`).
+
+Software rollouts, maintenance windows and approvals (M13c, PDK-808 to PDK-810): an assignment change rolls out in
+waves and halts on software failures (§7.1); a device group's maintenance window defers the policy's installs and
+removals outside it, and an `urgent` assignment (reason and step-up) bypasses the window (§11.3, RR-118). A catalog
+entry with `approval: required` offers its available package only to users an administrator approved: the device
+reports a user's request as `software.request`, the worker opens a `software_request` (one per device, entry and user
+while open, valid 30 days), an organization administrator approves or denies it with a reason, and the worker's
+request round expires what is left open or no longer holds. Until the agent release with the request flow (PDK-811)
+the compiler gives no agent an approval-required package. Packages stored in Paddock, the patch compliance report and
+the shared catalog follow (plan M13c §3.4 to §3.6).
 
 ### 12.6 Dead man's switch (F14)
 
@@ -2259,6 +2295,17 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > **Amendment 2026-10-24 (M13a, ADR 0042):** new tables in the database `paddock`: `software_source`,
 > `software_catalog_entry`, `software_assignment`, `device_software_status`; new column `device_status.software_digest`.
 
+> **Amendment 2026-11-09 (M13c, plan M13c decisions 4, 7 and 8):** new organization-scoped tables
+> `device_group_maintenance_window` (one window per device group: ISO weekdays, start minute, duration, IANA timezone;
+> migration `00120`) and `software_request` (catalog entry, device, user name and user, state `requested`, `approved`,
+> `denied`, `expired` or `withdrawn`, requested and expiry times, the decision with its reason and the entry's
+> approval epoch; no justification text; migration `00119`), both with the tenant policy. New columns:
+> `software_catalog_entry.approval` and `approval_epoch`, `software_assignment.urgent`, `config_rollout`
+> `staged_assignments` (migration `00117`), `wave_success_threshold_percent`, `stall_warning_hours` and the wave
+> bookkeeping (`wave_first_applied_at`, `wave_applied`, `wave_outstanding`, `wave_progress_at`, `stall_warned_at`),
+> `organization_rollout_settings` `wave_success_threshold_percent` and `stall_warning_hours`. The attention view gains
+> the kind `software_requests_open`.
+
 > **Amendment 2026-11-06 (M12, ADR 0048, ADR 0031 amendment 2026-11-04, plan M12):** new organization-scoped table
 > `device_diagnostics` (RLS with the tenant policy; `paddock_api` selects, inserts and updates, `paddock_worker` selects,
 > updates and deletes; migration `00103`): one row per `collect_status` request, its ID the command ID, with the
@@ -2380,6 +2427,19 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > carries `rollout`, `rollout_id`, `urgent_reason`, `reverts_change_set_id`, `reverted_by` and `before_available`, and
 > `EffectiveConfig` carries `rollout`. Guide: `docs/operations/configuration-rollouts.md`.
 
+> **Amendment 2026-11-09 (M13c, plan M13c §6):** `PUT`/`GET /api/v1/config` carry the sections `software_sources`
+> (a change needs a step-up; an API token's apply is refused with 403 `step_up_required`, the plan names it in
+> `requires_step_up`), `software_catalog` (with `approval`) and `software_assignments`, and a device group's
+> `maintenance_window`. New endpoints: `GET`/`PUT`/`DELETE /api/v1/device-groups/{id}/maintenance-window`
+> (`org_admin`, `org_operator`; audited as `device_group.maintenance_window_changed` and `_removed`), `GET
+> /api/v1/software-requests` (list contract; filters `state`, `catalog_entry_id`, `device_id`; search `username`), `GET
+> /api/v1/software-requests/{id}`, `POST /api/v1/software-requests/{id}/approve` (optional reason) and `…/deny` (reason
+> required), `org_admin`, no step-up of their own (Q15), audited as `software_request.approved` and `_denied`, 409
+> `invalid_state` unless the request is open and still holds. A software assignment takes `urgent` with a reason and a
+> step-up. `ConfigRollout` gains `wave_success_threshold_percent`, `stall_warning_hours`, `wave_first_applied_at`,
+> `stalled_since` and the counts `waiting` and `awaiting_retry`; the rollout device list gains `waiting_for_window` and
+> `awaiting_retry` (also a filter). Guide: `docs/operations/software.md`.
+
 > **Amendment 2026-11-06 (M12, ADR 0048, ADR 0031 amendment 2026-11-04, plan M12):** new endpoints
 > `POST`/`GET /api/v1/devices/{id}/diagnostics` (request with a reason, `org_admin` and `org_operator`; the device's list),
 > `GET /api/v1/diagnostics` and `GET /api/v1/diagnostics/{id}` (the organization's bundles, the same two roles, never
@@ -2424,6 +2484,11 @@ See §6.8; contract in `api/openapi/device.yaml`; Go types shared with the agent
 > `collect_status` command held for the device, 409 `already_uploaded` for a second announcement, 413 and 429. An absent
 > `key_version` means version 1 of the `escrow-wrap` key (additive change, ADR 0013). The gateway holds no database and
 > hands the announcement to the worker.
+
+> **Amendment 2026-11-09 (M13c, plan M13c decision 9, ADR 0013):** new event type `software.request` with `{user,
+> entry_id}`: a user of the device asks for an available application whose entry requires approval. The worker records
+> `device.software_requested` with these two fields only (any other field a device sends is dropped) and opens the
+> request. The bundles host's `/apt/*` route of plan M13c decision 14 is not served yet (PDK-812).
 
 ### 17.3 Git export *(not scheduled)*
 

@@ -47,10 +47,13 @@ var (
 	architectures    = []string{"amd64", "arm64"}
 )
 
-// The kinds of a source (plan M13b decision 5): an APT repository or a Flatpak remote.
+// The kinds of a source (plan M13b decision 5): an APT repository or a Flatpak remote. SourceKindPaddock is the system
+// source of the organization's Paddock repository (plan M13c decision 11): an APT repository that Paddock maintains,
+// which ValidateSource refuses as the kind of a source an administrator submits.
 const (
 	SourceKindAPT     = "apt"
 	SourceKindFlatpak = "flatpak"
+	SourceKindPaddock = "paddock"
 )
 
 // SourceInput is a package source as an administrator submits it. Kind is SourceKindAPT when empty. SigningKey is

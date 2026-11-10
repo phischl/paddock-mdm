@@ -138,10 +138,15 @@ catalog that organizations copy from; and everything about software is part of t
     ```sql
     CREATE TABLE software_repository (
       organization_id uuid PRIMARY KEY REFERENCES organization(id),
-      signing_public_key text NOT NULL, signing_fingerprint text NOT NULL CHECK (signing_fingerprint ~ '^[0-9A-F]{40}$'),
-      signing_private_ciphertext text NOT NULL,       -- transit software-repo-wrap (worker decrypts)
+      -- amendment 2026-11-09 (PDK-812): the three signing columns are nullable until the worker generates the key
+      -- (ADR 0050 decision 3, PDK-813); all three are NULL or all three are set
+      signing_public_key text, signing_fingerprint text CHECK (signing_fingerprint IS NULL OR signing_fingerprint ~ '^[0-9A-F]{40}$'),
+      signing_private_ciphertext text,                -- transit software-repo-wrap (worker decrypts; nothing else)
+      CONSTRAINT software_repository_signing_key_complete CHECK (
+        (signing_public_key IS NULL) = (signing_fingerprint IS NULL)
+        AND (signing_public_key IS NULL) = (signing_private_ciphertext IS NULL)),
       previous_public_key text, previous_fingerprint text, previous_retired_at timestamptz,
-      credential_ciphertext text NOT NULL,            -- transit software-repo-wrap: the basic-auth secret
+      credential_ciphertext text NOT NULL,            -- transit software-repo-credential (api encrypts, compiler decrypts)
       credential_sha256 bytea NOT NULL,               -- the api checks requests against it
       generation bigint NOT NULL DEFAULT 0, rebuild_requested_at timestamptz, last_built_at timestamptz, last_error text,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
@@ -851,3 +856,94 @@ difference only in those rows.
   ticket, with a test that an unchanged device inside the wave gets a tagged bundle and one outside the wave does not.
 - **PDK-944** dates staged software applies and failures by `device_software_status.reported_at` (§2 "recent").
 - **PDK-937** (other pending software reasons) is unchanged by this table: only `outside_window` is WW.
+
+## Amendment 2026-11-09 (architect, PDK-812): nullable signing columns, separate Transit key for the repository credential
+
+Raised by the PDK-812 implementer; decided by the architect on 2026-11-09. Both change §3.4 decision 11 (migration
+`00112_software_repository.sql`, edited in place above) and are recorded in ADR 0050 (amendment 2026-11-09).
+
+1. **Signing columns nullable.** ADR 0050 decision 3 has the **worker** generate the organization's OpenPGP key on
+   first use (PDK-813), while PDK-812 creates the `software_repository` row with the credential from the api
+   (upload, `GET`, `rotate-credential`). `NOT NULL` on `signing_public_key`, `signing_fingerprint` and
+   `signing_private_ciphertext` was therefore unsatisfiable. They are nullable, the fingerprint `CHECK` applies when
+   set, and the constraint `software_repository_signing_key_complete` keeps the three together (all `NULL` or all
+   set). **While an organization has no signing key, uploads are refused and its repository is not published**
+   (architect lead, A10-21): the api creates the `software_repository` row (credential generated, signing
+   columns `NULL`) on the organization's first `GET /api/v1/software-repository` or first upload attempt and
+   queues `software_repo.rebuild`; the worker's rebuild job generates the key when the signing columns are `NULL`
+   (this is the "first use" of ADR 0050 decision 3) and only then publishes. Until the key exists:
+   `POST /api/v1/software-packages` answers 409 `repository_not_ready` (detail: the signing key is being
+   generated, retry shortly; recorded as a denied attempt by the `ActionRunner`); `GET /apt/<org_slug>/*` answers
+   404 (nothing is published); the system-managed `paddock` `software_source` row does not exist and nothing is
+   rendered into bundles; `GET /api/v1/software-repository` returns `fingerprint: null` and `source: null`.
+   PDK-812 implements the refusal and the row creation; PDK-813 the key generation and the first publish. The
+   problem code `repository_not_ready` is added to the registry and documented in `api/openapi/admin.yaml`.
+2. **Transit key `software-repo-credential`.** The compiler decrypts the basic-auth credential to render
+   `software.repository.auth` into bundles. Under one key `software-repo-wrap` it would also hold the power to
+   decrypt every organization's signing private key. Two keys, least privilege:
+   - `software-repo-wrap` (exists per ADR 0050): signing private keys; worker AppRole `decrypt` (and `encrypt`
+     for `rotate-key`); no other role.
+   - `software-repo-credential` (new; aes256-gcm96, derived, context = organization id, created by PDK-812 in
+     `deploy/compose/scripts/openbao-configure.sh`): the repository credential; api AppRole `encrypt` only (the
+     api verifies requests against `credential_sha256` and never decrypts), compiler AppRole `decrypt` only;
+     `rotate-credential` re-encrypts under this key. No AppRole holds `decrypt` on both keys.
+   - Tests: the OpenBao policy tests get a negative case per role (api `decrypt` on either key → 403; compiler
+     `decrypt` on `software-repo-wrap` → 403; worker on `software-repo-credential` → 403) where the policy test
+     pattern exists; otherwise the implementer records the gap in the result document and the reviewer checks
+     the rendered policies by hand.
+
+## Amendment 2026-11-09 (PDK-813, implementer choices within §13 and the PDK-812 amendment)
+
+- **Who generates a rotated key.** `software-repo-wrap` is the worker's alone (amendment above, point 2), so
+  `POST /api/v1/software-repository/rotate-key` does not generate the key: it records `software_repository.key_rotated`
+  (step-up, `previous_fingerprint`), sets `key_rotation_requested_at` (migration `00122`) and answers 202 with the
+  repository. The worker generates the key at its next round; `software_repository.built` names the new fingerprint
+  (`key_generated: true`). Before the first key exists the request is 409 `repository_not_ready`.
+- **Order of a rotation (§3.8 L5).** The worker stores the new key (the current one becomes `previous_*`), signs and
+  writes the index with it (`InRelease` last), and only then gives the system source the new key and records the state
+  change. A device that receives the new keyring therefore always finds `InRelease` signed with it. The previous
+  private key is not kept; `previous_public_key`/`previous_fingerprint` are dropped by the worker 30 days after
+  `previous_retired_at`.
+- **State change.** A build records `StateChanged(ScopeOrg)` only when the system source changed (created, new key or
+  URL): the bundles carry the source and its key, not the package lists.
+- **Rebuild bookkeeping.** A published build clears the `rebuild_requested_at` it served (a later request stays
+  queued); a failed one keeps it, so the next round retries. `software_repository.build_failed` is recorded when
+  `last_error` changes, not for every retry.
+- **Worker grants.** The worker inserts and updates only the `kind = 'paddock'` row of `software_source` (policy
+  `worker_paddock_source`, migration `00122`) and writes below `apt/*/dists/*` of the bundles bucket with a user of its
+  own (`rustfs_bundles_worker_*`, `PutObject` only).
+- **Key and signatures.** v4 legacy EdDSA on Ed25519 without subkeys and without expiry, SHA-512 signatures without
+  the library's salt notation (deterministic for the same Release and time). gpgv 2.4 (Ubuntu 24.04) and apt verify
+  them (tests in `server/internal/adapters/aptsign`).
+
+### Correction 2026-11-09 (PDK-813, fix round 1 after review 1)
+
+The sentence "The previous private key is not kept" in the amendment above narrowed the maintainer's decision
+(decisions-alpha10 item 5 / §32, Q16; §3.8 L5 "the old key stays valid for 30 days") and is superseded; the binding
+rule is a real 30-day signing-key overlap:
+
+- **Overlap.** A rotation moves the current private key, still Transit-wrapped under `software-repo-wrap`, to
+  `previous_private_ciphertext` (migration `00122`). While it is set, every build signs `InRelease` and `Release.gpg`
+  with both keys (one OpenPGP signature per key); apt accepts a file when one signature verifies with the source's
+  keyring, so a device that still has only the old key keeps updating. 30 days after `previous_retired_at` the worker
+  drops `previous_*` together with the ciphertext and queues a rebuild, which signs with the new key alone. Only a
+  published key (the system source carries it) is retired; `previous_retired_at` is set by the first published build
+  of its successor, so failed builds never start the 30 days. A rotation while the current key is unpublished (the
+  build of an earlier rotation failed) replaces that key and keeps the previous one (fix round 2 after review 2). A
+  second rotation after the first was published replaces the previous key with the one it retires; rotation is never
+  blocked, so an emergency rotation after a key compromise stays possible. Verified independently with gpgv
+  (status lines, as apt reads them) and with `apt-get update` (old keyring alone: accepted during the overlap, refused
+  after it).
+- **Device keyring.** The system source, and so each device's keyring, carries only the current key. The bundle
+  contract allows one key per source (`SoftwareSource.Keyring`/`Fingerprint`; the agent refuses a keyring with more
+  than one key), and the overlap needs none: the new key reaches a device only after `InRelease` carries its signature,
+  and a device with the old key verifies the old key's signature. Carrying both keys would be a bundle-contract change
+  for the architect.
+- **Mid-upload failure (§3.7).** `Release` sets `Acquire-By-Hash: yes`, and the worker writes each list below
+  `main/binary-<arch>/by-hash/SHA256/<sha256>` before the lists at their names, `Release`, `Release.gpg` and `InRelease`.
+  A build that fails halfway leaves the previous `InRelease`, whose lists apt fetches by hash. Old by-hash files are not
+  pruned yet.
+- **Recorded error.** `last_error` and `software_repository.build_failed` record an OpenBao or object-store error as its
+  step and class (API error code, HTTP status, network error or timeout), never the request ID or client address, so a
+  persistent failure is recorded once; the worker logs the full error. Both build events have the outcomes
+  `success`/`failure` of the other system events.

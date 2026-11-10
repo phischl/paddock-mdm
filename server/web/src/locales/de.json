@@ -282,6 +282,8 @@
     "invalid_state": "Diese Aktion ist im aktuellen Zustand nicht möglich.",
     "conflict": "Das steht im Konflikt mit einem vorhandenen Eintrag.",
     "already_exists": "Das wird für dieselben Geräte bereits verwaltet.",
+    "unsupported_compression": "Das Steuerarchiv des Pakets ist mit einem Verfahren komprimiert, das Paddock nicht liest. Bauen Sie es mit dpkg-deb -Zgzip oder -Zzstd.",
+    "repository_not_ready": "Der Signaturschlüssel des Repositorys wird noch erzeugt. Versuchen Sie es in einer Minute erneut.",
     "in_use": "Dieser Eintrag wird noch verwendet. Entfernen Sie zuerst, was ihn verwendet.",
     "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der gesperrten Pfade.",
     "unit_not_allowed": "Diese Unit ist nicht erlaubt. Units von Paddock, Himmelblau, Fleet, SSH, GDM und systemd selbst sind geschützt.",
@@ -600,6 +602,16 @@
       "created": "{actor} hält das Paket {package} zurück",
       "updated": "{actor} hat das Zurückhalten des Pakets {package} geändert",
       "deleted": "{actor} hat das Paket {package} freigegeben"
+    },
+    "software_package": {
+      "uploaded": "{actor} hat das Paket {package} {version} ({architecture}) in das Paddock-Repository hochgeladen",
+      "deleted": "{actor} hat das Paket {package} {version} ({architecture}) aus dem Paddock-Repository gelöscht"
+    },
+    "software_repository": {
+      "credential_rotated": "{actor} hat die Lesezugangsdaten des Paddock-Repositorys ersetzt",
+      "key_rotated": "{actor} hat den Signaturschlüssel des Paddock-Repositorys ersetzt",
+      "built": "{actor} hat Stand {generation} des Paddock-Repositorys veröffentlicht, signiert mit dem Schlüssel {fingerprint}",
+      "build_failed": "{actor} konnte das Paddock-Repository nicht erstellen: {error}"
     },
     "software_source": {
       "created": "{actor} hat die Paketquelle {name} mit dem Schlüssel {fingerprint} hinzugefügt",

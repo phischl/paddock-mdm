@@ -200,3 +200,12 @@ changes:
    directive goes on the "off" list; the revocation is never weakened to fit the sandbox. The revocation VM gates
    (`TestRevocationLockGate`, `TestRevocationRefusalGates`, the destroy flow) and `TestDiskGates` must be green on
    both VMs before the sandboxed units merge.
+
+## Correction 2026-11-09 (PDK-963) — AG-1 parent rule and the root group
+
+AG-1 refuses a parent writable by others; the implementation of plan M12h decision 12 also refused every
+group-writable parent, including root:root directories such as Ubuntu 26.04's `/var/lib/AccountsService` (0775), which
+broke hiding the local administrator from the login screen. A group-writable parent is trusted when its group is gid 0
+and it carries no access ACL (with an ACL the group bits are the ACL mask, which may grant write to a named user or
+group); a world-writable parent (outside the sticky `/tmp` and `/var/tmp`), a parent writable by another group and a
+parent not owned by root stay refused with `parent_not_trusted`. Confirmed by the lead as a regression fix (A10-22).

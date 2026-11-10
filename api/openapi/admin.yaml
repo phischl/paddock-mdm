@@ -3379,6 +3379,157 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-packages:
+    get:
+      operationId: listSoftwarePackages
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The Debian packages stored in the organization's Paddock
+        repository (plan M13c decision 12, ADR 0050).
+      x-paddock-list:
+        sort: [package, size, uploaded_at]
+        default_sort: -uploaded_at
+        search: [package, version]
+        filters: [architecture]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/SoftwarePackageSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/SoftwarePackageArchitectureFilter"
+      responses:
+        "200":
+          description: One page of stored packages.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwarePackagePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: uploadSoftwarePackage
+      x-paddock-step-up: true
+      tags: [software]
+      description: |
+        Roles: org_admin. Uploads a binary Debian package (at most 256 MiB) into the organization's Paddock
+        repository. Uploading a package is root-equivalent on every device it is assigned to: its maintainer scripts
+        run as root and Paddock scans nothing inside it (RR-114). The file must be an ar archive of exactly
+        debian-binary (2.0), control.tar[.gz|.zst] and data.tar.*, with a control file of one paragraph whose Package,
+        Version and Architecture (amd64, arm64 or all) pass the Debian rules and which sets none of the index fields
+        Filename, Size, MD5sum, SHA1, SHA256, SHA512 or Description-md5 (400 invalid_request otherwise). A control
+        archive in xz or another compression is 415 unsupported_compression: build with dpkg-deb -Zgzip or -Zzstd.
+        The optional fields package, version and architecture must equal the control file's (400 invalid_request).
+        The same name, version and architecture again is 409 already_exists. While the repository's signing key is
+        being generated (shortly after the first visit of the repository) the upload is 409 repository_not_ready.
+        Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy
+        it). The repository is rebuilt in the background.
+      x-paddock-audit: software_package.uploaded
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: "#/components/schemas/SoftwarePackageUpload" }
+      responses:
+        "201":
+          description: Stored.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwarePackage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-packages/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    delete:
+      operationId: deleteSoftwarePackage
+      x-paddock-step-up: true
+      tags: [software]
+      description: |
+        Roles: org_admin. Removes a stored package from the repository, which is rebuilt without it. While a catalog
+        entry of the Paddock source names the package (any version, any architecture), the delete is 409 in_use. 404 not_found for another organization's package. Needs a step-up within the last
+        5 minutes (403 step_up_required).
+      x-paddock-audit: software_package.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204": { description: Deleted. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-repository:
+    get:
+      operationId: getSoftwareRepository
+      tags: [software]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The organization's Paddock repository (ADR 0050): its state, the
+        system source and the signing key's fingerprint once the key exists, the build and the stored packages. The
+        first call creates the repository with its read credential and queues the generation of its signing key;
+        until the key exists the state is disabled and source and fingerprint are null. The credential itself is shown
+        only by rotate-credential.
+      responses:
+        "200":
+          description: The repository.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareRepository" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-repository/rotate-credential:
+    post:
+      operationId: rotateSoftwareRepositoryCredential
+      x-paddock-step-up: true
+      tags: [software]
+      description: |
+        Roles: org_admin. Replaces the repository's read credential (HTTP basic authentication, user paddock) with a
+        new random secret and returns it once; it is never shown again and never recorded. Every device receives the
+        new one with its next bundle; the previous one stays valid for 24 hours (previous_valid_until). Needs a
+        step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: software_repository.credential_rotated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The new credential.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareRepositoryCredential" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/software-repository/rotate-key:
+    post:
+      operationId: rotateSoftwareRepositoryKey
+      x-paddock-step-up: true
+      tags: [software]
+      description: |
+        Roles: org_admin. Replaces the repository's OpenPGP signing key (ADR 0050 decision 3). The worker generates the
+        new key at its next round (within a minute), signs the repository with it and only then gives it to the devices
+        with their next bundle, so a device that received the new key always finds the repository signed with it; a
+        device that is offline meanwhile receives the new key before its next update. For 30 days the repository is
+        signed with the previous key (previous_fingerprint) as well, so a device that has not received the new key yet
+        keeps updating; then it is signed with the new key alone. The answer is the repository with key_rotation_requested_at set; fingerprint
+        changes once the worker has published. 409 repository_not_ready while the first key is being generated. Needs a
+        step-up within the last 5 minutes (403 step_up_required).
+      x-paddock-audit: software_repository.key_rotated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "202":
+          description: The rotation is queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareRepository" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/v1/software-catalog:
     get:
       operationId: listSoftwareCatalog
@@ -7841,6 +7992,19 @@ components:
         type: string
         enum: [name, -name, created_at, -created_at, updated_at, -updated_at]
         default: name
+    SoftwarePackageSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [package, -package, size, -size, uploaded_at, -uploaded_at]
+        default: -uploaded_at
+    SoftwarePackageArchitectureFilter:
+      name: architecture
+      in: query
+      description: Only packages of this architecture.
+      schema: { $ref: "#/components/schemas/SoftwarePackageArchitecture" }
     SoftwareRequestSort:
       name: sort
       in: query
@@ -10149,8 +10313,8 @@ components:
       enum: [amd64, arm64]
     SoftwareSourceKind:
       type: string
-      enum: [apt, flatpak]
-      description: "apt: an APT repository; flatpak: a Flatpak remote with exactly one URI and no suites, components or architectures. Immutable."
+      enum: [apt, flatpak, paddock]
+      description: "apt: an APT repository; flatpak: a Flatpak remote with exactly one URI and no suites, components or architectures; paddock: the system source of the organization's Paddock repository (ADR 0050), maintained by Paddock, never created, changed or deleted through the API (409 invalid_state). Immutable."
     SoftwareSourceSummary:
       type: object
       required: [id, kind, slug, name, uris, suites, components, architectures, fingerprint, weak_key, entry_count, created_at, updated_at]
@@ -10214,6 +10378,77 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    SoftwarePackageArchitecture:
+      type: string
+      enum: [amd64, arm64, all]
+    SoftwarePackage:
+      type: object
+      required: [id, package, version, architecture, size, sha256, filename, control, uploaded_by, uploaded_at]
+      properties:
+        id: { type: string, format: uuid }
+        package: { type: string }
+        version: { type: string }
+        architecture: { $ref: "#/components/schemas/SoftwarePackageArchitecture" }
+        size: { type: integer, format: int64, description: "Bytes of the file." }
+        sha256: { type: string, description: "SHA-256 of the file, 64 lowercase hexadecimal characters." }
+        filename: { type: string, description: "The file's path in the repository: pool/main/<p>/<package>/<package>_<version without epoch>_<architecture>.deb." }
+        control:
+          type: object
+          additionalProperties: { type: string }
+          description: The fields of the package's control file as uploaded; continuation lines of a value are joined by a newline.
+        uploaded_by: { type: string, description: "The uploading administrator's display name." }
+        uploaded_at: { type: string, format: date-time }
+    SoftwarePackagePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SoftwarePackage" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: "Applied sort." }
+    SoftwarePackageUpload:
+      type: object
+      required: [file]
+      properties:
+        file: { type: string, format: binary, description: "The .deb file, at most 256 MiB." }
+        package: { type: string, description: "When given, must equal the control file's Package." }
+        version: { type: string, description: "When given, must equal the control file's Version." }
+        architecture: { type: string, description: "When given, must equal the control file's Architecture." }
+    SoftwareRepository:
+      type: object
+      required: [state, url, source, fingerprint, previous_fingerprint, key_rotation_requested_at, generation, last_built_at, last_error, package_count, credential_rotated_at, previous_credential_valid_until]
+      properties:
+        state:
+          type: string
+          enum: [disabled, pending, built, failed]
+          x-enum-varnames: [RepositoryStateDisabled, RepositoryStatePending, RepositoryStateBuilt, RepositoryStateFailed]
+          description: "disabled: the signing key is being generated, uploads are refused and nothing is published; pending: a rebuild is queued; built: the published index is current; failed: the last build failed (last_error), the previous index stays published."
+        url: { type: string, description: "The repository's URL on the bundles host: https://bundles.<domain>/apt/<organization slug>/." }
+        source:
+          allOf: [{ $ref: "#/components/schemas/SoftwareSourceSummary" }]
+          nullable: true
+          description: The system source (kind paddock) that catalog entries name; null until the signing key exists.
+        fingerprint: { type: string, nullable: true, description: "The signing key's fingerprint; null until it exists." }
+        previous_fingerprint: { type: string, nullable: true, description: "The previous signing key's fingerprint for 30 days after a key rotation." }
+        key_rotation_requested_at: { type: string, format: date-time, nullable: true, description: "Set while a key rotation waits for the worker." }
+        generation: { type: integer, format: int64, description: "The number of published builds." }
+        last_built_at: { type: string, format: date-time, nullable: true }
+        last_error: { type: string, nullable: true }
+        package_count: { type: integer, minimum: 0 }
+        credential_rotated_at: { type: string, format: date-time }
+        previous_credential_valid_until: { type: string, format: date-time, nullable: true, description: "Until when the previous read credential is still accepted." }
+    SoftwareRepositoryCredential:
+      type: object
+      required: [username, secret, url, previous_valid_until]
+      properties:
+        username: { type: string, description: "Always paddock." }
+        secret: { type: string, description: "The new secret; shown once." }
+        url: { type: string }
+        previous_valid_until: { type: string, format: date-time }
     SoftwareIntent:
       type: string
       enum: [required, uninstall, hold, forbid, available]

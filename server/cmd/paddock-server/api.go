@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -88,6 +89,12 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	// Escrowed LUKS headers, read for a recovery only (plan M4b decision 14).
 	escrowObjects := objectstore.New(l.Required("PADDOCK_ESCROW_S3_ENDPOINT"), l.SecretFile("PADDOCK_ESCROW_S3_ACCESS_KEY_FILE"),
 		l.SecretFile("PADDOCK_ESCROW_S3_SECRET_KEY_FILE"), l.String("PADDOCK_ESCROW_S3_BUCKET", "paddock-escrow"))
+	// The packages stored in Paddock (plan M13c decision 12, ADR 0050): the api writes and deletes them below apt/ of the
+	// bundles bucket and presigns the GET apt is redirected to, with a user of its own that may do nothing else.
+	bundlesAccessKey := l.SecretFile("PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE")
+	bundlesSecretKey := l.SecretFile("PADDOCK_BUNDLES_S3_SECRET_KEY_FILE")
+	bundlesBucket := l.String("PADDOCK_BUNDLES_S3_BUCKET", "paddock-bundles")
+	packageStore := objectstore.New(l.Required("PADDOCK_BUNDLES_S3_ENDPOINT"), bundlesAccessKey, bundlesSecretKey, bundlesBucket)
 	var runnerOpts []app.RunnerOption
 	if common.Development() {
 		// Development-only test hook for the reaper acceptance test (plan M0 §8, A3).
@@ -120,6 +127,12 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		if _, err := backup.ParseKey(legacyBackupKey); legacyBackupKey != "" && err != nil {
 			l.Invalid("PADDOCK_BACKUP_LEGACY_KEY_FILE", err.Error())
 		}
+	}
+	var bundlesHost string
+	if u, err := url.Parse(bundlesURL); err != nil || u.Host == "" {
+		l.Invalid("PADDOCK_BUNDLES_PUBLIC_URL", "not an absolute URL")
+	} else {
+		bundlesHost = u.Host
 	}
 	if err := l.Err(); err != nil {
 		return err
@@ -211,6 +224,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	})
 	// The api never verifies or stores a bundle, so it needs neither the worker's object reader nor its retention unit.
 	diagnostics := app.NewDiagnostics(runner, orgPool, nil, 24*time.Hour).WithDownload(escrowAccess, escrowObjects)
+	softwarePackages := app.NewSoftwarePackages(runner, orgPool, baoClient, packageStore,
+		objectstore.NewPresigner(bundlesURL, bundlesAccessKey, bundlesSecretKey, bundlesBucket), bundlesURL)
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:     app.NewDeviceGroups(runner, orgPool),
 		Tokens:           app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, devicecache.New(vk), deviceURL),
@@ -243,6 +258,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		SoftwareSources:  app.NewSoftwareSources(runner, orgPool),
 		SoftwareCatalog:  app.NewSoftwareCatalog(runner, orgPool),
 		SoftwareRequests: app.NewSoftwareRequests(runner, orgPool),
+		SoftwarePackages: softwarePackages,
+		BundlesHost:      bundlesHost,
+		Repositories:     softwarePackages,
 		SoftwareStatus:   app.NewSoftwareStatus(orgPool),
 		CompileWarnings:  app.NewCompileWarnings(orgPool),
 		AccountList:      app.NewAccountList(orgPool),

@@ -451,7 +451,31 @@ func TestValidateSoftware(t *testing.T) {
 		change func(*SoftwareSpec)
 		ok     bool
 	}{
-		"valid":                    {func(*SoftwareSpec) {}, true},
+		"valid": {func(*SoftwareSpec) {}, true},
+		// The credential of the Paddock repository (plan M13c decision 15) names a source's host and path.
+		"repository credential": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com:8443/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com:8443/apt/acme/", Username: "paddock", Password: strings.Repeat("aZ0_-", 9)}
+		}, true},
+		"repository credential for no source": {func(s *SoftwareSpec) {
+			s.Repository = &SoftwareRepositoryAuth{Host: "evil.example.com/apt/acme/", Username: "paddock", Password: strings.Repeat("a", 43)}
+		}, false},
+		"repository password with a newline": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock", Password: strings.Repeat("a", 40) + "\nmachine x"}
+		}, false},
+		"repository password with a space": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock", Password: strings.Repeat("a", 40) + " login x"}
+		}, false},
+		"repository short password": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock", Password: "short"}
+		}, false},
+		"repository user with a space": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock x", Password: strings.Repeat("a", 43)}
+		}, false},
 		"required without version": {func(s *SoftwareSpec) { s.Packages[0].Version = nil }, true},
 		"hold with version":        {func(s *SoftwareSpec) { s.Packages[1].Intent, s.Packages[1].Version = SoftwareHold, &v }, true},
 		"flat repository":          {func(s *SoftwareSpec) { s.Sources[0].Suites, s.Sources[0].Components = []string{"./"}, nil }, true},

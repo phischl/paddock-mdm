@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/phischl/paddock-mdm/server/internal/adapters/aptsign"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/fleet"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/osvfeed"
@@ -38,6 +39,12 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	// and deletes diagnostics bundles only (plan M4b decision 13, plan M12 decision 7).
 	escrowObjects := objectstore.New(l.Required("PADDOCK_ESCROW_S3_ENDPOINT"), l.SecretFile("PADDOCK_ESCROW_S3_ACCESS_KEY_FILE"),
 		l.SecretFile("PADDOCK_ESCROW_S3_SECRET_KEY_FILE"), l.String("PADDOCK_ESCROW_S3_BUCKET", "paddock-escrow"))
+	// The organizations' Paddock repositories (plan M13c decision 13): the worker writes their signed index below
+	// apt/<organization_id>/dists/ of the bundles bucket with a user that may write nothing else; the system source
+	// names the repository on the public bundles host.
+	bundlesURL := strings.TrimRight(l.Required("PADDOCK_BUNDLES_PUBLIC_URL"), "/")
+	repositoryIndex := objectstore.New(l.Required("PADDOCK_BUNDLES_S3_ENDPOINT"), l.SecretFile("PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE"),
+		l.SecretFile("PADDOCK_BUNDLES_S3_SECRET_KEY_FILE"), l.String("PADDOCK_BUNDLES_S3_BUCKET", "paddock-bundles"))
 	// Inventory (plan M5a decisions 2 and 6): Fleet's internal API with the API-only user's token.
 	fleetURL := l.Required("PADDOCK_FLEET_URL")
 	fleetToken := l.SecretFile("PADDOCK_FLEET_TOKEN_FILE")
@@ -92,7 +99,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	}
 	defer vk.Close()
 	cache := devicecache.New(vk)
-	// The worker's AppRole may only sign with command-signing (plan M4a decision 2).
+	// The worker's AppRole may sign with command-signing (plan M4a decision 2) and encrypt and decrypt with
+	// software-repo-wrap, the key of the repositories' signing keys (ADR 0050 decision 3).
 	signer, err := bao.New(baoCfg.Addr, baoCfg.RoleID, baoCfg.SecretID)
 	if err != nil {
 		return err
@@ -120,6 +128,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	configRollouts := worker.NewConfigRollouts(app.NewConfigRollouts(runner, pool), pool, platformPool)
 	softwareRequests := worker.NewSoftwareRequests(app.NewSoftwareRequests(runner, pool), pool, platformPool, worker.SoftwareRequestInterval)
+	softwareRepositories := worker.NewSoftwareRepositories(app.NewSoftwareRepositoryBuilds(runner, pool, signer,
+		aptsign.Signer{}, repositoryIndex, bundlesURL), pool, platformPool)
 	ak := authentik.New(authentikURL, authentikToken)
 	reconcileAK := authentik.New(authentikURL, authentikToken).WithMaxConcurrent(worker.ReconcileAuthentikConcurrency)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, reconcileAK, ak, ak),
@@ -166,6 +176,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		rollouts.Run,
 		configRollouts.Run,
 		softwareRequests.Run,
+		softwareRepositories.Run,
 		identity.RunSync,
 		identity.RunReconcile,
 		identity.RunAdminAccounts,

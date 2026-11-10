@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -59,6 +60,11 @@ type isolationWorld struct {
 	globexEntry, globexSoftwareAssignment string
 	// globexSoftwareUser is a globex user that globexEntry is offered to (seedGlobexUserSoftware).
 	globexSoftwareUser string
+	// globexRequestGroup is a globex device group with a maintenance window and globexRequestDevice its device, and
+	// globexSoftwareRequest an open software request of that device (seedGlobexSoftwareRequest).
+	globexRequestGroup, globexRequestDevice, globexSoftwareRequest string
+	// globexPackage is a package stored in globex's Paddock repository (seedGlobexSoftwarePackage).
+	globexPackage string
 	// globexChangeSet is a change set of globex (seedGlobexChangeSet).
 	globexChangeSet string
 	// globexRollout is a completed configuration rollout of globex (seedGlobexRollout).
@@ -240,6 +246,60 @@ func seedGlobexSoftwareCatalog(t *testing.T, w *isolationWorld) {
 	w.globexIDs = append(w.globexIDs, w.globexSoftwareAssignment)
 }
 
+// seedGlobexSoftwareRequest gives globex a device group of its own with a maintenance window and a device, offers the
+// group an approval-required entry and opens a request of a globex user for it (plan M13c decisions 4 and 8 to 10). The
+// approval-required package reaches no agent (PDK-943), so no other globex bundle changes. Everything is removed when
+// the gate ends: the request with its entry.
+func seedGlobexSoftwareRequest(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	f := newRequestFixture(t, w.carol, "globex-iso-req")
+	w.globexRequestGroup, w.globexRequestDevice = f.group, f.device.DeviceID
+	res := call(t, w.carol, http.MethodPut, maintenanceWindowPath(f.group), nightlyWindow())
+	expectStatus(t, res, http.StatusOK, "")
+	deleteOnCleanup(t, w.carol, maintenanceWindowPath(f.group))
+	entry := f.offer(t, "globex-iso-req-"+uniqueSuffix(), "required")
+	user := "globex-iso-" + uniqueSuffix() + "@globex.test"
+	f.ask(t, entry, user)
+	w.globexSoftwareRequest = waitRequest(t, w.carol, entry, user, "requested", time.Minute).ID
+	w.globexIDs = append(w.globexIDs, f.group, f.device.DeviceID, entry, w.globexSoftwareRequest)
+}
+
+// seedGlobexSoftwarePackage stores a package row in globex's repository directly: an upload needs the repository's
+// signing key, which the worker generates (PDK-813), and the gate only needs a globex ID to address. It is removed
+// when the gate ends.
+func seedGlobexSoftwarePackage(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	dsn, err := stack.PaddockOwnerDSN()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(testContext(t, time.Minute), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	id, org := uuid.NewString(), orgOf(t, w.carol)
+	pkg := "globex-iso-" + uniqueSuffix()
+	if _, err := conn.Exec(testContext(t, time.Minute), `INSERT INTO software_package (id, organization_id, package, version,
+		architecture, size, sha256, object_key, control, uploaded_by) VALUES ($1, $2, $3, '1.0', 'amd64', 1, repeat('0', 64),
+		'apt/' || $2 || '/pool/main/g/' || $3 || '/x.deb', '{}', 'gate')`, id, org, pkg); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		conn, err := pgx.Connect(context.Background(), dsn)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		if _, err := conn.Exec(context.Background(), "DELETE FROM software_package WHERE id = $1", id); err != nil {
+			t.Error(err)
+		}
+	})
+	w.globexPackage = id
+	w.globexIDs = append(w.globexIDs, id)
+}
+
 // settingsOnlyConfig is a document with acme's current update settings only: applying it changes and deletes nothing.
 func settingsOnlyConfig(t *testing.T, p *env.Portal) map[string]any {
 	t.Helper()
@@ -397,6 +457,9 @@ const (
 	isoList
 	// isoOwn: the operation acts on the caller's own data → 2xx without globex IDs.
 	isoOwn
+	// isoOwnRefused: the operation acts on the caller's own data and the gate's request is refused for its own content
+	// (4xx other than 404, e.g. a package upload without a package) → no globex IDs.
+	isoOwnRefused
 )
 
 type isolationFixture struct {
@@ -567,6 +630,24 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/software-sources/{id}":    itemFixture(func(w *isolationWorld) string { return softwareSources + "/" + w.globexSource }, nil),
 	"PATCH /api/v1/software-sources/{id}":  itemFixture(func(w *isolationWorld) string { return softwareSources + "/" + w.globexSource }, map[string]any{"name": "acme-iso"}),
 	"DELETE /api/v1/software-sources/{id}": itemFixture(func(w *isolationWorld) string { return softwareSources + "/" + w.globexSource }, nil),
+	"GET /api/v1/software-packages": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwarePackages + "?page_size=100", nil
+	}},
+	"POST /api/v1/software-packages": {kind: isoOwnRefused, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwarePackages, map[string]any{"package": "acme-iso"}
+	}},
+	"DELETE /api/v1/software-packages/{id}": itemFixture(func(w *isolationWorld) string { return softwarePackages + "/" + w.globexPackage }, nil),
+	"GET /api/v1/software-repository": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareRepository, nil
+	}},
+	"POST /api/v1/software-repository/rotate-credential": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareRepository + "/rotate-credential", nil
+	}},
+	// The rotation needs the organization's first signing key, which the worker generates (PDK-813).
+	"POST /api/v1/software-repository/rotate-key": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		awaitSigningKey(t, w.alice)
+		return softwareRepository + "/rotate-key", nil
+	}},
 	"GET /api/v1/software-catalog": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return softwareCatalog + "?page_size=100", nil
 	}},
@@ -593,6 +674,25 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/compile-warnings": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/compile-warnings?page_size=100", nil
 	}},
+	"GET /api/v1/software-requests": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return softwareRequests + "?page_size=100", nil
+	}},
+	"GET /api/v1/software-requests/{id}": itemFixture(func(w *isolationWorld) string { return softwareRequests + "/" + w.globexSoftwareRequest }, nil),
+	"POST /api/v1/software-requests/{id}/approve": itemFixture(func(w *isolationWorld) string {
+		return softwareRequests + "/" + w.globexSoftwareRequest + "/approve"
+	}, map[string]any{"reason": "acme-iso"}),
+	"POST /api/v1/software-requests/{id}/deny": itemFixture(func(w *isolationWorld) string {
+		return softwareRequests + "/" + w.globexSoftwareRequest + "/deny"
+	}, map[string]any{"reason": "acme-iso"}),
+	"GET /api/v1/device-groups/{id}/maintenance-window": itemFixture(func(w *isolationWorld) string {
+		return maintenanceWindowPath(w.globexRequestGroup)
+	}, nil),
+	"PUT /api/v1/device-groups/{id}/maintenance-window": itemFixture(func(w *isolationWorld) string {
+		return maintenanceWindowPath(w.globexRequestGroup)
+	}, nightlyWindow()),
+	"DELETE /api/v1/device-groups/{id}/maintenance-window": itemFixture(func(w *isolationWorld) string {
+		return maintenanceWindowPath(w.globexRequestGroup)
+	}, nil),
 	"GET /api/v1/software-assignments": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return softwareAssignments + "?page_size=100", nil
 	}},
@@ -1021,9 +1121,10 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"carol"}},
 		{"role": {"org_admin"}, "sort": {"username"}, "page_size": {"100"}},
 	},
-	"/api/v1/managed-units":    {{"q": {"globex-iso"}}},
-	"/api/v1/package-holds":    {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
-	"/api/v1/software-sources": {{"q": {"globex-iso"}}, {"sort": {"-updated_at"}, "page_size": {"100"}}},
+	"/api/v1/managed-units":     {{"q": {"globex-iso"}}},
+	"/api/v1/package-holds":     {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
+	"/api/v1/software-sources":  {{"q": {"globex-iso"}}, {"sort": {"-updated_at"}, "page_size": {"100"}}},
+	"/api/v1/software-packages": {{"q": {"globex-iso"}}, {"architecture": {"amd64"}, "sort": {"-uploaded_at"}, "page_size": {"100"}}},
 	"/api/v1/software-catalog": {
 		{"q": {"globex-iso"}},
 		{"sort": {"-updated_at"}, "page_size": {"100"}},
@@ -1051,7 +1152,9 @@ var listIsolationQueries = map[string][]url.Values{
 	// globexEntry offered to globexSoftwareUser (seedGlobexUserSoftware).
 	"/api/v1/users/{id}/software": {{"q": {"globex-iso"}}, {"intent": {"available"}, "sort": {"-intent"}}},
 	// the flatpak_forbidden warnings of a globex device (seedGlobexCompileWarning).
-	"/api/v1/compile-warnings":              {{"q": {"globex-iso"}, "page_size": {"100"}}, {"code": {"flatpak_forbidden"}, "page_size": {"100"}}},
+	"/api/v1/compile-warnings": {{"q": {"globex-iso"}, "page_size": {"100"}}, {"code": {"flatpak_forbidden"}, "page_size": {"100"}}},
+	// the open request of a globex user (seedGlobexSoftwareRequest).
+	"/api/v1/software-requests":             {{"q": {"globex-iso"}}, {"state": {"requested"}, "sort": {"-requested_at"}, "page_size": {"100"}}},
 	"/api/v1/devices/{id}/vulnerabilities":  {{"q": {"globex-iso"}}, {"severity": {"high"}}},
 	"/api/v1/devices/{id}/config-status":    {{"q": {"globex-iso"}}, {"status": {"failed", "pending"}}},
 	"/api/v1/devices/{id}/bundles":          {{"outcome": {"applied", "none"}}},
@@ -1389,6 +1492,9 @@ var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Value
 	},
 	"/api/v1/software-catalog": {
 		func(w *isolationWorld) url.Values { return url.Values{"source_id": {w.globexSource}} },
+	},
+	"/api/v1/software-requests": {
+		func(w *isolationWorld) url.Values { return url.Values{"device_id": {w.globexRequestDevice}} },
 	},
 	"/api/v1/devices/{id}/logins": {
 		func(w *isolationWorld) url.Values { return url.Values{"username": {strings.ToLower(w.globexLogin)}} },

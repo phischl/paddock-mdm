@@ -87,6 +87,14 @@ type Config struct {
 	// FleetURL (https://fleet.<domain>) and FleetEnrollSecret enroll fleetd (inventory.fleet_url and
 	// inventory.enroll_secret of v2 bundles, plan M5a decision 4); empty: no inventory section.
 	FleetURL, FleetEnrollSecret string
+	// Credentials decrypts the read credential of an organization's Paddock repository (Transit key
+	// software-repo-credential, plan M13c decision 15); nil leaves the Paddock source out of every bundle.
+	Credentials CredentialDecrypter
+}
+
+// CredentialDecrypter decrypts a ciphertext of a derived Transit key for an organization and field (bao.Client).
+type CredentialDecrypter interface {
+	DecryptContext(ctx context.Context, key string, org uuid.UUID, field bao.ContextField, ciphertext string) ([]byte, error)
 }
 
 // KeyReader reads public keys of Transit keys (bao.Client).
@@ -241,7 +249,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
 			return err
 		}
-		if keys.Software, err = loadSoftware(ctx, q); err != nil {
+		if keys.Software, err = loadSoftware(ctx, q, org, c.cfg.Credentials); err != nil {
 			return err
 		}
 		keys.Software.approvalGate = c.approvalAgent

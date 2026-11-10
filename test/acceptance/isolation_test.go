@@ -44,6 +44,8 @@ func TestOrganizationIsolation(t *testing.T) {
 	seedGlobexNotification(t, w)
 	seedGlobexSoftwareSource(t, w)
 	seedGlobexSoftwareCatalog(t, w)
+	seedGlobexSoftwareRequest(t, w)
+	seedGlobexSoftwarePackage(t, w)
 	seedGlobexFinding(t, w)
 	seedGlobexConfigStatus(t, w)
 	ctx := testContext(t, time.Minute)
@@ -100,6 +102,10 @@ func TestOrganizationIsolation(t *testing.T) {
 			case isoList, isoOwn:
 				if res.Status >= 300 {
 					t.Fatalf("HTTP %d: %s", res.Status, res.Body)
+				}
+			case isoOwnRefused:
+				if res.Status < 400 || res.Status >= 500 || res.Status == http.StatusNotFound {
+					t.Fatalf("HTTP %d, want a refusal of the request's own content: %s", res.Status, res.Body)
 				}
 			}
 			checked := res.Body

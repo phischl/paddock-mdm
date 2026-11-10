@@ -13,8 +13,8 @@ import (
 )
 
 // ErrParentNotTrusted means a parent directory of a path is a symlink, not a directory, not owned by root (or the
-// agent's own user) or writable by group or others (plan M12h decision 12, ADR 0051 AG-1). Its text is the status
-// message of a refused resource.
+// agent's own user), writable by others, writable by a group other than root's, or group-writable by root's group
+// while carrying an access ACL (plan M12h decision 12, ADR 0051 AG-1, corrected by PDK-963). Its text is the status message of a refused resource.
 var ErrParentNotTrusted = errors.New("parent_not_trusted")
 
 // dirFlags open a path component without following it: a symlink fails with ENOTDIR (O_DIRECTORY) or ELOOP.
@@ -24,13 +24,17 @@ const dirFlags = unix.O_PATH | unix.O_NOFOLLOW | unix.O_DIRECTORY | unix.O_CLOEX
 func stickyAllowed(dir string) bool { return dir == "/tmp" || dir == "/var/tmp" }
 
 // checkDir applies the parent rule to one directory. euid is trusted besides root: the agent runs as root, so this
-// is root in production; a test tree belongs to the test's own user, who could change it anyway.
-func checkDir(dir string, uid, mode uint32, euid int) error {
+// is root in production; a test tree belongs to the test's own user, who could change it anyway. hasACL reports
+// whether the directory carries an access ACL; it is only consulted for a group-writable directory of gid 0.
+func checkDir(dir string, uid, gid, mode uint32, euid int, hasACL bool) error {
 	if mode&unix.S_IFMT != unix.S_IFDIR {
 		return fmt.Errorf("%s: %w", dir, ErrParentNotTrusted)
 	}
 	owned := uid == 0 || int64(uid) == int64(euid)
-	if mode&0o022 != 0 {
+	// Group write for gid 0 grants nothing beyond root (Ubuntu 26.04 ships /var/lib/AccountsService 0775 root:root,
+	// PDK-963); any other writing group could swap the components below it. With an access ACL the group bits are
+	// the ACL mask, so a named user or group may hold the write bit: such a directory is refused.
+	if mode&0o002 != 0 || (mode&0o020 != 0 && (gid != 0 || hasACL)) {
 		if stickyAllowed(dir) && mode&unix.S_ISVTX != 0 && uid == 0 {
 			return nil
 		}
@@ -47,7 +51,28 @@ func trusted(fd int, dir string) error {
 	if err := unix.Fstat(fd, &st); err != nil {
 		return &fs.PathError{Op: "stat", Path: dir, Err: err}
 	}
-	return checkDir(dir, st.Uid, st.Mode, os.Geteuid())
+	hasACL := false
+	if st.Mode&0o020 != 0 && st.Gid == 0 {
+		var err error
+		if hasACL, err = accessACL(fd); err != nil {
+			return fmt.Errorf("%s: %w (read ACL: %w)", dir, ErrParentNotTrusted, err)
+		}
+	}
+	return checkDir(dir, st.Uid, st.Gid, st.Mode, os.Geteuid(), hasACL)
+}
+
+// accessACL reports whether the directory fd refers to carries an access ACL. A minimal ACL is never stored as an
+// xattr, so its presence means named entries. fgetxattr rejects O_PATH descriptors (EBADF), hence the /proc path.
+func accessACL(fd int) (bool, error) {
+	_, err := unix.Getxattr(fmt.Sprintf("/proc/self/fd/%d", fd), "system.posix_acl_access", nil)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, unix.ENODATA) || errors.Is(err, unix.ENOTSUP):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 // openDir opens dir component by component from "/" and checks every component, "/" included. Missing components are

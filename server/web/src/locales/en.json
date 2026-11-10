@@ -282,6 +282,8 @@
     "invalid_state": "This action is not possible in the current state.",
     "conflict": "This conflicts with an existing item.",
     "already_exists": "This is already managed for the same devices.",
+    "unsupported_compression": "The package's control archive uses a compression Paddock does not read. Build it with dpkg-deb -Zgzip or -Zzstd.",
+    "repository_not_ready": "The repository's signing key is still being generated. Try again in a minute.",
     "in_use": "This item is still in use. Remove what uses it first.",
     "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the denied paths.",
     "unit_not_allowed": "This unit is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected.",
@@ -600,6 +602,16 @@
       "created": "{actor} held the package {package}",
       "updated": "{actor} changed the hold of the package {package}",
       "deleted": "{actor} released the package {package}"
+    },
+    "software_package": {
+      "uploaded": "{actor} uploaded the package {package} {version} ({architecture}) into the Paddock repository",
+      "deleted": "{actor} deleted the package {package} {version} ({architecture}) from the Paddock repository"
+    },
+    "software_repository": {
+      "credential_rotated": "{actor} replaced the read credential of the Paddock repository",
+      "key_rotated": "{actor} rotated the signing key of the Paddock repository",
+      "built": "{actor} published build {generation} of the Paddock repository, signed with the key {fingerprint}",
+      "build_failed": "{actor} could not build the Paddock repository: {error}"
     },
     "software_source": {
       "created": "{actor} added the package source {name} with the key {fingerprint}",

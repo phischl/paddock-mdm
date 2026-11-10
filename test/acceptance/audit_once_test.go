@@ -606,6 +606,9 @@ func TestAuditExactlyOnce(t *testing.T) {
 			cases, ok = softwareCatalogAuditCases[op]
 		}
 		if !ok {
+			cases, ok = softwareRequestAuditCases[op]
+		}
+		if !ok {
 			cases, ok = backupAuditCases[op]
 		}
 		if !ok {
@@ -623,7 +626,7 @@ func TestAuditExactlyOnce(t *testing.T) {
 			serial = true
 		}
 		if !ok {
-			t.Errorf("privileged operation %s has no cases in audit_once_test.go, audit_once_devices_test.go, audit_once_releases_test.go, audit_once_identity_test.go, audit_once_notifications_test.go, audit_once_software_test.go, audit_once_backup_test.go, audit_once_backupkey_test.go, audit_once_accessreview_test.go or audit_once_diagnostics_test.go", op)
+			t.Errorf("privileged operation %s has no cases in audit_once_test.go, audit_once_devices_test.go, audit_once_releases_test.go, audit_once_identity_test.go, audit_once_notifications_test.go, audit_once_software_test.go, software_requests_test.go, audit_once_backup_test.go, audit_once_backupkey_test.go, audit_once_accessreview_test.go or audit_once_diagnostics_test.go", op)
 			continue
 		}
 		for _, c := range cases {

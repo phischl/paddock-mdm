@@ -80,7 +80,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run gen'; fi
 
 .PHONY: lint
-lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose lint-selfservice ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
@@ -111,6 +111,19 @@ lint-compose:
 compat-fixtures:
 	@if [ -z "$(RELEASE)" ]; then echo 'usage: make compat-fixtures RELEASE=<version without v>' >&2; exit 2; fi
 	go run ./pkg/compat/cmd/compatfixtures --release '$(RELEASE)'
+
+# The self-service desktop app (ADR 0049, plan M13b decision 15) needs nothing beyond the runner's python3: every file
+# must compile, and the tests run with the standard library's unittest against a fake socket (the GTK window test is
+# skipped without a display). Neither writes bytecode into the tree.
+SELFSERVICE_PY = $(shell find selfservice -name '*.py' -not -path '*/__pycache__/*' | LC_ALL=C sort) selfservice/paddock-self-service
+
+.PHONY: lint-selfservice
+lint-selfservice: ## Compile-check every Python file of the self-service app
+	@python3 -c 'import sys; [compile(open(f, encoding="utf-8").read(), f, "exec") for f in sys.argv[1:]]; print(f"lint-selfservice: {len(sys.argv) - 1} files compile")' $(SELFSERVICE_PY)
+
+.PHONY: test-selfservice
+test-selfservice: ## Unit tests of the self-service app (python3 -m unittest, no display needed)
+	cd selfservice && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
 
 # The dracut module of the in-place encryption (plan M8e PDK-244): the init script runs in the initrd under whatever
 # /bin/sh dracut installs, so it is checked as POSIX sh; module-setup.sh is sourced by dracut's bash. shellcheck comes
@@ -188,10 +201,12 @@ lint-prometheus:
 			promtool test rules alerts_test.yml'
 
 # Edge entrypoint (plan M7a step 1): validation messages, the rendered servers block and `caddy validate` of both
-# Caddyfiles with that block, in the pinned Caddy image.
+# Caddyfiles with that block, in the pinned Caddy image; then the slow-body regression test of the
+# device, admin and bundles sites (PDK-970).
 .PHONY: lint-caddy
 lint-caddy:
 	docker run --rm -v $(CURDIR)/$(COMPOSE_DIR)/caddy:/test:ro --entrypoint sh $(CADDY_IMAGE) /test/entrypoint_test.sh
+	docker run --rm -v $(CURDIR)/$(COMPOSE_DIR)/caddy:/test:ro --entrypoint sh $(CADDY_IMAGE) /test/slowbody_test.sh
 
 .PHONY: lint-go
 lint-go:
@@ -278,6 +293,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash scripts/changelog-assemble_test.sh
 	bash scripts/release-notes-check_test.sh
 	bash scripts/acceptance-scope_test.sh
+	$(MAKE) --no-print-directory test-selfservice
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
@@ -383,6 +399,20 @@ deb: agent ## Build the paddock-supervisor, paddock-agent and paddock-revoke Deb
 		test -f bin/deb/$${pkg}_$(DEB_VERSION)_amd64.deb || { echo "nfpm did not build bin/deb/$${pkg}_$(DEB_VERSION)_amd64.deb"; exit 1; }; \
 	done
 	@ls -1 bin/deb/*.deb
+	$(MAKE) --no-print-directory selfservice-deb VERSION=$(VERSION)
+
+# The self-service desktop app (ADR 0049 decision 1) is architecture-independent and goes to bin/selfservice/, not
+# bin/deb/: the system tests install every package of bin/deb/ on server VMs without a graphical session.
+.PHONY: selfservice-deb
+selfservice-deb: ## Build the paddock-self-service Debian package (architecture all) into bin/selfservice/ (VERSION)
+	rm -rf bin/selfservice bin/deb/stage/selfservice-locale && mkdir -p bin/selfservice bin/deb/stage
+	python3 selfservice/tools/msgfmt.py selfservice/po/de.po bin/deb/stage/selfservice-locale/de/LC_MESSAGES/paddock-self-service.mo
+	printf '%s (%s) unstable; urgency=medium\n\n  * Release %s; see CHANGELOG.md.\n\n -- Paddock <paddock@paddock-mdm.invalid>  %s\n' \
+		paddock-self-service $(DEB_VERSION) $(VERSION) "$$(date -R -u)" | gzip -9n >bin/deb/stage/paddock-self-service.changelog.gz
+	docker run --rm -u $(UID):$(GID) -v $(CURDIR):/src -w /src -e VERSION=$(VERSION) $(NFPM_IMAGE) \
+		package --config packaging/nfpm/paddock-self-service.yaml --packager deb --target bin/selfservice/
+	test -f bin/selfservice/paddock-self-service_$(DEB_VERSION)_all.deb || { echo "nfpm did not build bin/selfservice/paddock-self-service_$(DEB_VERSION)_all.deb"; exit 1; }
+	@ls -1 bin/selfservice/*.deb
 
 # fleetd (plan M5a decision 3): fleetctl packages orbit and osquery from Fleet's update server (needs outbound HTTPS)
 # without enroll secret, scripts, Fleet Desktop or auto-updates. fleetctl accepts a Fleet URL only together with an

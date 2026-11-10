@@ -1,0 +1,17 @@
+# Paddock Self-Service (ADR 0049, plan M13b §3.5). The runtime comes only from Ubuntu's packages (python3-gi,
+# gir1.2-gtk-4.0, gir1.2-adw-1); nothing is installed from PyPI. Packaged by packaging/nfpm/paddock-self-service.yaml,
+# checked by `make lint-selfservice test-selfservice`.
+[project]
+name = "paddock-self-service"
+version = "0.0.0"
+description = "Paddock Self-Service desktop app"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+paddock-self-service = "paddock_self_service.main:main"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"

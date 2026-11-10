@@ -2113,6 +2113,134 @@ export interface paths {
         patch: operations["updateSoftwareSource"];
         trace?: never;
     };
+    "/api/v1/software-packages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The Debian packages stored in the organization's Paddock
+         *     repository (plan M13c decision 12, ADR 0050).
+         */
+        get: operations["listSoftwarePackages"];
+        put?: never;
+        /**
+         * @description Roles: org_admin. Uploads a binary Debian package (at most 256 MiB) into the organization's Paddock
+         *     repository. Uploading a package is root-equivalent on every device it is assigned to: its maintainer scripts
+         *     run as root and Paddock scans nothing inside it (RR-114). The file must be an ar archive of exactly
+         *     debian-binary (2.0), control.tar[.gz|.zst] and data.tar.*, with a control file of one paragraph whose Package,
+         *     Version and Architecture (amd64, arm64 or all) pass the Debian rules and which sets none of the index fields
+         *     Filename, Size, MD5sum, SHA1, SHA256, SHA512 or Description-md5 (400 invalid_request otherwise). A control
+         *     archive in xz or another compression is 415 unsupported_compression: build with dpkg-deb -Zgzip or -Zzstd.
+         *     The optional fields package, version and architecture must equal the control file's (400 invalid_request).
+         *     The same name, version and architecture again is 409 already_exists. While the repository's signing key is
+         *     being generated (shortly after the first visit of the repository) the upload is 409 repository_not_ready.
+         *     Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy
+         *     it). The repository is rebuilt in the background.
+         */
+        post: operations["uploadSoftwarePackage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-packages/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * @description Roles: org_admin. Removes a stored package from the repository, which is rebuilt without it. While a catalog
+         *     entry of the Paddock source names the package (any version, any architecture), the delete is 409 in_use. 404 not_found for another organization's package. Needs a step-up within the last
+         *     5 minutes (403 step_up_required).
+         */
+        delete: operations["deleteSoftwarePackage"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-repository": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's Paddock repository (ADR 0050): its state, the
+         *     system source and the signing key's fingerprint once the key exists, the build and the stored packages. The
+         *     first call creates the repository with its read credential and queues the generation of its signing key;
+         *     until the key exists the state is disabled and source and fingerprint are null. The credential itself is shown
+         *     only by rotate-credential.
+         */
+        get: operations["getSoftwareRepository"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-repository/rotate-credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Replaces the repository's read credential (HTTP basic authentication, user paddock) with a
+         *     new random secret and returns it once; it is never shown again and never recorded. Every device receives the
+         *     new one with its next bundle; the previous one stays valid for 24 hours (previous_valid_until). Needs a
+         *     step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["rotateSoftwareRepositoryCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-repository/rotate-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Replaces the repository's OpenPGP signing key (ADR 0050 decision 3). The worker generates the
+         *     new key at its next round (within a minute), signs the repository with it and only then gives it to the devices
+         *     with their next bundle, so a device that received the new key always finds the repository signed with it; a
+         *     device that is offline meanwhile receives the new key before its next update. For 30 days the repository is
+         *     signed with the previous key (previous_fingerprint) as well, so a device that has not received the new key yet
+         *     keeps updating; then it is signed with the new key alone. The answer is the repository with key_rotation_requested_at set; fingerprint
+         *     changes once the worker has published. 409 repository_not_ready while the first key is being generated. Needs a
+         *     step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["rotateSoftwareRepositoryKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/software-catalog": {
         parameters: {
             query?: never;
@@ -6767,10 +6895,10 @@ export interface components {
         /** @enum {string} */
         SoftwareArchitecture: "amd64" | "arm64";
         /**
-         * @description apt: an APT repository; flatpak: a Flatpak remote with exactly one URI and no suites, components or architectures. Immutable.
+         * @description apt: an APT repository; flatpak: a Flatpak remote with exactly one URI and no suites, components or architectures; paddock: the system source of the organization's Paddock repository (ADR 0050), maintained by Paddock, never created, changed or deleted through the API (409 invalid_state). Immutable.
          * @enum {string}
          */
-        SoftwareSourceKind: "apt" | "flatpak";
+        SoftwareSourceKind: "apt" | "flatpak" | "paddock";
         SoftwareSourceSummary: {
             /** Format: uuid */
             id: string;
@@ -6840,6 +6968,101 @@ export interface components {
             total_capped: boolean;
             /** @description Applied sort. */
             sort: string;
+        };
+        /** @enum {string} */
+        SoftwarePackageArchitecture: "amd64" | "arm64" | "all";
+        SoftwarePackage: {
+            /** Format: uuid */
+            id: string;
+            package: string;
+            version: string;
+            architecture: components["schemas"]["SoftwarePackageArchitecture"];
+            /**
+             * Format: int64
+             * @description Bytes of the file.
+             */
+            size: number;
+            /** @description SHA-256 of the file, 64 lowercase hexadecimal characters. */
+            sha256: string;
+            /** @description The file's path in the repository: pool/main/<p>/<package>/<package>_<version without epoch>_<architecture>.deb. */
+            filename: string;
+            /** @description The fields of the package's control file as uploaded; continuation lines of a value are joined by a newline. */
+            control: {
+                [key: string]: string;
+            };
+            /** @description The uploading administrator's display name. */
+            uploaded_by: string;
+            /** Format: date-time */
+            uploaded_at: string;
+        };
+        SoftwarePackagePage: {
+            items: components["schemas"]["SoftwarePackage"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        SoftwarePackageUpload: {
+            /**
+             * Format: binary
+             * @description The .deb file, at most 256 MiB.
+             */
+            file: string;
+            /** @description When given, must equal the control file's Package. */
+            package?: string;
+            /** @description When given, must equal the control file's Version. */
+            version?: string;
+            /** @description When given, must equal the control file's Architecture. */
+            architecture?: string;
+        };
+        SoftwareRepository: {
+            /**
+             * @description disabled: the signing key is being generated, uploads are refused and nothing is published; pending: a rebuild is queued; built: the published index is current; failed: the last build failed (last_error), the previous index stays published.
+             * @enum {string}
+             */
+            state: "disabled" | "pending" | "built" | "failed";
+            /** @description The repository's URL on the bundles host: https://bundles.<domain>/apt/<organization slug>/. */
+            url: string;
+            /** @description The system source (kind paddock) that catalog entries name; null until the signing key exists. */
+            source: components["schemas"]["SoftwareSourceSummary"] | null;
+            /** @description The signing key's fingerprint; null until it exists. */
+            fingerprint: string | null;
+            /** @description The previous signing key's fingerprint for 30 days after a key rotation. */
+            previous_fingerprint: string | null;
+            /**
+             * Format: date-time
+             * @description Set while a key rotation waits for the worker.
+             */
+            key_rotation_requested_at: string | null;
+            /**
+             * Format: int64
+             * @description The number of published builds.
+             */
+            generation: number;
+            /** Format: date-time */
+            last_built_at: string | null;
+            last_error: string | null;
+            package_count: number;
+            /** Format: date-time */
+            credential_rotated_at: string;
+            /**
+             * Format: date-time
+             * @description Until when the previous read credential is still accepted.
+             */
+            previous_credential_valid_until: string | null;
+        };
+        SoftwareRepositoryCredential: {
+            /** @description Always paddock. */
+            username: string;
+            /** @description The new secret; shown once. */
+            secret: string;
+            url: string;
+            /** Format: date-time */
+            previous_valid_until: string;
         };
         /** @enum {string} */
         SoftwareIntent: "required" | "uninstall" | "hold" | "forbid" | "available";
@@ -9308,6 +9531,10 @@ export interface components {
         PackageHoldSort: "package" | "-package" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         SoftwareSourceSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwarePackageSort: "package" | "-package" | "size" | "-size" | "uploaded_at" | "-uploaded_at";
+        /** @description Only packages of this architecture. */
+        SoftwarePackageArchitectureFilter: components["schemas"]["SoftwarePackageArchitecture"];
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         SoftwareRequestSort: "requested_at" | "-requested_at" | "username" | "-username" | "state" | "-state" | "expires_at" | "-expires_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -13289,6 +13516,169 @@ export interface operations {
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+        };
+    };
+    listSoftwarePackages: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwarePackageSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only packages of this architecture. */
+                architecture?: components["parameters"]["SoftwarePackageArchitectureFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of stored packages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwarePackagePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    uploadSoftwarePackage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["SoftwarePackageUpload"];
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwarePackage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            415: components["responses"]["Problem"];
+        };
+    };
+    deleteSoftwarePackage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareRepository: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The repository. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRepository"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    rotateSoftwareRepositoryCredential: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new credential. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRepositoryCredential"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    rotateSoftwareRepositoryKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rotation is queued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRepository"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     listSoftwareCatalog: {

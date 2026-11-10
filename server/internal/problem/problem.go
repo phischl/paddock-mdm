@@ -144,6 +144,12 @@ var (
 	// FingerprintMismatch: the fingerprint an administrator typed for a software source's signing key differs from the
 	// key's (plan M13a decision 2); the detail names both.
 	FingerprintMismatch = &Error{Code: "fingerprint_mismatch", Status: http.StatusUnprocessableEntity}
+	// UnsupportedCompression: an uploaded package's control archive is compressed with a method the api does not read
+	// (plan M13c decision 12: gzip and zstd only). RepositoryNotReady: the organization's Paddock repository has no
+	// signing key yet, so an upload is refused until the worker generated it (architect decision A10-21); recorded as
+	// denied.
+	UnsupportedCompression = &Error{Code: "unsupported_compression", Status: http.StatusUnsupportedMediaType}
+	RepositoryNotReady     = &Error{Code: "repository_not_ready", Status: http.StatusConflict}
 	// BackupKeyMismatch: the characters typed to confirm a backup key differ from the key's at the challenge's
 	// positions (plan M15 decision 8); the detail names the attempts left. Recorded as failure.
 	BackupKeyMismatch = &Error{Code: "backup_key_mismatch", Status: http.StatusConflict}

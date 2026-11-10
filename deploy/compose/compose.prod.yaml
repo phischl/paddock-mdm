@@ -93,6 +93,8 @@ services:
       - rustfs_artifacts_api_secret_key
       - rustfs_escrow_api_access_key
       - rustfs_escrow_api_secret_key
+      - rustfs_bundles_api_access_key
+      - rustfs_bundles_api_secret_key
       - db_paddock_api_url
       - db_paddock_platform_url
       # postgres://…@<audit host>:5432/paddock_audit?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca_bundle
@@ -161,6 +163,7 @@ services:
       PADDOCK_TLS_PROBE_HOSTS: admin.${PADDOCK_DOMAIN},auth.${PADDOCK_DOMAIN},device.${PADDOCK_DOMAIN},bundles.${PADDOCK_DOMAIN},fleet.${PADDOCK_DOMAIN}
       PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN}
       PADDOCK_FLEET_PUBLIC_URL: https://fleet.${PADDOCK_DOMAIN}
+      PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN}
       PADDOCK_OPENBAO_ADDR: https://openbao:8200
       BAO_CACERT: /run/secrets/internal_ca_bundle
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
@@ -168,6 +171,8 @@ services:
       - fleet_api_token
       - rustfs_escrow_worker_access_key
       - rustfs_escrow_worker_secret_key
+      - rustfs_bundles_worker_access_key
+      - rustfs_bundles_worker_secret_key
       - db_paddock_worker_url
       - db_paddock_platform_url
       - rabbitmq_worker_password
