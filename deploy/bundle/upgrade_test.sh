@@ -532,39 +532,68 @@ else
   has "the failure names the directory" "^paddock: migrate-from: cannot write $work/t/new\$"
 fi
 
-# An invalid high-water file in either directory fails closed (PDK-980 review 1, decisions-alpha10 §43): nothing is
-# copied, neither file changes, and the content never reaches bash arithmetic, where a[$(…)] would run a command as the
-# operator. B's file is uid 999's.
-# shellcheck disable=SC2016 # the payload must reach the file unexpanded
-for bad in 'a[$(touch '"$work"'/injected)]' '' 'garbage' '99999999999999999999'; do
+# migrate-from reads both high-water files as one validated number and fails closed on anything else
+# (PDK-980 reviews 1 and 2, decisions-alpha10 §43): nothing is copied, neither entry changes, and no content reaches
+# bash arithmetic, where PATH[$(…)] runs a command as the operator. B's file is uid 999's.
+# seq_entry <path> <spec>: file:<content>, dir or link (a symlink to a file holding 9).
+seq_entry() {
+  case "$2" in
+    file:*) printf '%s\n' "${2#file:}" >"$1" ;;
+    dir) mkdir "$1" ;;
+    link) echo 9 >"$work/elsewhere" && ln -s "$work/elsewhere" "$1" ;;
+  esac
+}
+# seq_refused <name> <A spec> <B spec> <path the message names>
+seq_refused() {
+  local got=0 before
+  setup controlplane "Schema: migrations 00105–00106"
+  mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
+  seq_entry "$work/t/old/bundle-seq/high-water" "$2"
+  seq_entry "$work/t/new/bundle-seq/high-water" "$3"
+  before="$(ls -l "$work/t/new/bundle-seq"; cat "$work/t/new/bundle-seq/high-water" 2>/dev/null || true)"
+  out="$(cd "$work/t/new" && ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
+  if [[ "$got" != 0 && ! -e "$work/injected" && ! -e "$work/t/new/.env" &&
+    "$(ls -l "$work/t/new/bundle-seq"; cat "$work/t/new/bundle-seq/high-water" 2>/dev/null || true)" == "$before" &&
+    "$out" == *"migrate-from: $work/t/$4/bundle-seq/high-water "*"; nothing changed"* ]]; then
+    pass "$1 fails migrate-from, runs nothing and changes nothing (exit $got)"
+  else fail "$1: exit $got, injected=$([[ -e "$work/injected" ]] && echo yes || echo no), $out"; fi
+  rm -rf "$work/injected" "$work/elsewhere"
+}
+# shellcheck disable=SC2016 # the payloads must reach the files unexpanded
+inject='PATH[$(touch '"$work"'/injected)]'
+for bad in "$inject" '' 'garbage' '99999999999999999999' $'8\n'"$inject"; do
+  seq_refused "B's high-water '${bad//$'\n'/\\n}'" file:3000005 "file:$bad" new
+  seq_refused "A's high-water '${bad//$'\n'/\\n}'" "file:$bad" file:2000003 old
+done
+for kind in dir link; do
+  seq_refused "B's high-water as a $kind" file:3000005 "$kind" new
+  seq_refused "A's high-water as a $kind" "$kind" file:2000003 old
+done
+if ((EUID != 0)); then
   setup controlplane "Schema: migrations 00105–00106"
   mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
   echo 3000005 >"$work/t/old/bundle-seq/high-water"
-  printf '%s\n' "$bad" >"$work/t/new/bundle-seq/high-water"
+  chmod 0000 "$work/t/old/bundle-seq/high-water"
   got=0
   out="$(cd "$work/t/new" && ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
-  if [[ "$got" != 0 && ! -e "$work/injected" && ! -e "$work/t/new/.env" &&
-    "$(cat "$work/t/new/bundle-seq/high-water")" == "$bad" &&
-    "$out" == *"$work/t/new/bundle-seq/high-water holds no bundle sequence; as root, correct it"*"nothing changed"* ]]; then
-    pass "B's high-water '$bad' fails migrate-from, runs nothing and changes nothing (exit $got)"
-  else fail "B's high-water '$bad': exit $got, injected=$([[ -e "$work/injected" ]] && echo yes || echo no), $out"; fi
-  rm -f "$work/injected"
-done
+  chmod 0644 "$work/t/old/bundle-seq/high-water"
+  if [[ "$got" != 0 && ! -e "$work/t/new/.env" && ! -e "$work/t/new/bundle-seq/high-water" &&
+    "$out" == "paddock: migrate-from: cannot read $work/t/old/bundle-seq/high-water; correct it"*"; nothing changed" ]]; then
+    pass "an unreadable high-water file fails with an actionable message (exit $got)"
+  else fail "unreadable high-water file: exit $got, $out"; fi
+fi
 
-# shellcheck disable=SC2016 # the payload must reach the file unexpanded
-for bad in 'a[$(touch '"$work"'/injected)]' '' 'garbage'; do
-  setup controlplane "Schema: migrations 00105–00106"
-  mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
-  printf '%s\n' "$bad" >"$work/t/old/bundle-seq/high-water"
-  echo 2000003 >"$work/t/new/bundle-seq/high-water"
-  got=0
-  out="$(cd "$work/t/new" && ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
-  if [[ "$got" != 0 && ! -e "$work/injected" && ! -e "$work/t/new/.env" &&
-    "$(cat "$work/t/new/bundle-seq/high-water")" == 2000003 && "$out" == *"holds no bundle sequence; correct or remove it"* ]]; then
-    pass "A's high-water '$bad' fails migrate-from and changes nothing (exit $got)"
-  else fail "A's high-water '$bad': exit $got, $out"; fi
-  rm -f "$work/injected"
-done
+# Leading zeros are decimal, not octal; the written file holds the plain number.
+setup controlplane "Schema: migrations 00105–00106"
+mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
+echo 0003000009 >"$work/t/old/bundle-seq/high-water"
+echo 02000009 >"$work/t/new/bundle-seq/high-water"
+got=0
+out="$(cd "$work/t/new" && ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
+if [[ "$got" == 0 && "$(cat "$work/t/new/bundle-seq/high-water")" == 3000009 &&
+  "$(stat -c %a "$work/t/new/bundle-seq/high-water")" == 644 ]]; then
+  pass "leading zeros compare as decimal and the plain number is written"
+else fail "leading zeros: exit $got, $(cat "$work/t/new/bundle-seq/high-water" 2>&1), $out"; fi
 
 # A→B→C (R2-M1): the upgrade supersedes the old directory's own rollback point, so a rollback from there is refused
 # even where the running version cannot tell (FIXTURE_RUNNING claims the old release).

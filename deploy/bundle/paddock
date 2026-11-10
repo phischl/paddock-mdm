@@ -94,31 +94,44 @@ case "$cmd" in
       cp -a "$old/$targets" "$tmp" || die "migrate-from: could not copy $old/$targets; nothing changed"
     fi
     # The bundle sequence's high-water file (decisions-alpha9 item 68) moves too: until the new directory's first
-    # successful backup round it is the only source of a disaster restore. It is uid 999's; as for .secrets/, cp -p
-    # keeps the owner only for root, and the backup role may still replace it in its directory. Never lowered.
+    # successful backup round it is the only source of a disaster restore. The new file is the operator's, mode 0644;
+    # the backup role may still replace it in its directory. Never lowered.
     hw="$old/bundle-seq/high-water"
     seq_dir="$BUNDLE_DIR/bundle-seq"
-    if [[ -f "$hw" ]]; then
-      old_seq="$(head -n 1 "$hw")"
-      [[ "$old_seq" =~ ^[0-9]{1,18}$ ]] || die "migrate-from: $hw holds no bundle sequence; correct or remove it; nothing changed"
-      # B's file is written by uid 999, and bash arithmetic runs a[$(…)] found in it, so it is validated before any
-      # comparison. An invalid value is refused rather than read as 0: it may hide a higher sequence (decisions-alpha10
-      # §43).
-      new_seq_v=0
-      if [[ -f "$seq_dir/high-water" ]]; then
-        new_seq_v="$(head -n 1 "$seq_dir/high-water")"
-        [[ "$new_seq_v" =~ ^[0-9]{1,18}$ ]] ||
-          die "migrate-from: $seq_dir/high-water holds no bundle sequence; as root, correct it (the highest bundle sequence this release reached) or remove it; nothing changed"
+    # Both files are read as one validated number and never copied: B's is written by uid 999, and bash arithmetic
+    # runs a command found in a subscript such as PATH[$(…)]. An entry that is not a regular file, or a value that is
+    # not one number, is refused rather than read as none or 0: it may hide a higher sequence (decisions-alpha10 §43).
+    seq_value() {
+      local f="$1" fix="$2" v
+      seq_v=
+      if [[ -L "$f" ]] || [[ -e "$f" && ! -f "$f" ]]; then
+        die "migrate-from: $f is not a regular file; $fix; nothing changed"
       fi
-      mkdir -p "$seq_dir"
-      if ((10#$new_seq_v < 10#$old_seq)); then
+      [[ -e "$f" ]] || return 0
+      [[ -r "$f" ]] || die "migrate-from: cannot read $f; $fix; nothing changed"
+      v="$(<"$f")" || die "migrate-from: cannot read $f; $fix; nothing changed"
+      [[ "$v" =~ ^[0-9]{1,18}$ ]] || die "migrate-from: $f holds no single bundle sequence; $fix; nothing changed"
+      seq_v="$((10#$v))"
+    }
+    if [[ -L "$seq_dir" ]] || [[ -e "$seq_dir" && ! -d "$seq_dir" ]]; then
+      die "migrate-from: $seq_dir is not a directory; remove it; nothing changed"
+    fi
+    seq_value "$hw" "correct it (one number, the highest bundle sequence) or remove it"
+    old_seq="$seq_v"
+    if [[ -n "$old_seq" ]]; then
+      seq_value "$seq_dir/high-water" \
+        "as root, correct it (one number, the highest bundle sequence this release reached) or remove it"
+      if [[ -z "$seq_v" ]] || ((seq_v < old_seq)); then
+        mkdir -p "$seq_dir" || die "migrate-from: cannot create $seq_dir; nothing changed"
         if [[ -w "$seq_dir" ]]; then
-          cp -p "$hw" "$seq_dir/high-water.tmp" &&
-            mv -f "$seq_dir/high-water.tmp" "$seq_dir/high-water" ||
-            die "migrate-from: could not copy $hw to $seq_dir/"
+          if ! { (umask 022 && printf '%s\n' "$old_seq" >"$seq_dir/high-water.tmp") &&
+            mv -f "$seq_dir/high-water.tmp" "$seq_dir/high-water"; }; then
+            rm -f "$seq_dir/high-water.tmp"
+            die "migrate-from: could not write $old_seq to $seq_dir/high-water; nothing changed"
+          fi
         else
           # An upgrade again after a rollback (PDK-980): this release ran here, and its postgres container handed
-          # bundle-seq/ to uid 999. The operator owns this directory, so a new bundle-seq/ with the higher file
+          # bundle-seq/ to uid 999. The operator owns this directory, so a new bundle-seq/ with the higher value
           # replaces it by rename, which needs no write access to the old one; the next ./paddock up hands the new one
           # to uid 999 again. The old one cannot be deleted without root and is kept aside.
           new_seq="$(mktemp -d "$BUNDLE_DIR/.bundle-seq.new.XXXXXX")" || die "migrate-from: cannot write $BUNDLE_DIR"
@@ -126,14 +139,15 @@ case "$cmd" in
             rm -rf "$new_seq"
             die "migrate-from: cannot write $BUNDLE_DIR"
           }
-          if ! { chmod 0755 "$new_seq" && cp -p "$hw" "$new_seq/high-water" && mv -T "$seq_dir" "$aside"; }; then
+          if ! { chmod 0755 "$new_seq" && (umask 022 && printf '%s\n' "$old_seq" >"$new_seq/high-water") &&
+            mv -T "$seq_dir" "$aside"; }; then
             rm -rf "$new_seq" "$aside"
-            die "migrate-from: could not replace $seq_dir (owned by uid $(stat -c %u "$seq_dir")) with a copy of $hw; nothing changed"
+            die "migrate-from: could not replace $seq_dir (owned by uid $(stat -c %u "$seq_dir")) with one holding $old_seq; nothing changed"
           fi
           mv -T "$new_seq" "$seq_dir" || {
             mv -T "$aside" "$seq_dir"
             rm -rf "$new_seq"
-            die "migrate-from: could not move the copy of $hw into $seq_dir; nothing changed"
+            die "migrate-from: could not move the new high-water file into $seq_dir; nothing changed"
           }
           echo "bundle-seq/ of an earlier run here is kept as $aside (uid 999's; remove it with: sudo rm -rf $aside)"
         fi
