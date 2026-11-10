@@ -171,6 +171,11 @@ of the tenant domain, then a pin bump. (f) a hold around the agent's **own** tra
    started while it runs, the fact is logged, and the outcome is `max_hold`. The transaction is not interrupted.
 6. The marker is removed after the hold's event was emitted. The safety timer is cancelled only when the start
    succeeded; otherwise it stays armed.
+   **Corrected 2026-11-10 (`decisions-alpha10.md` §48 point 2):** after a failed restore the marker is **kept**. The
+   event with the outcome `restore_failed` is emitted once, and the marker records that it was. The agent retries
+   the start at its next start and in every login reconciler pass, without a second event, and removes the marker
+   and cancels the timer once the start succeeded. Reason: with the marker gone, a daemon that stayed down would
+   look like a foreign stop and never be started again by the agent (N3.3, N5).
 
 ### N3 Recovery without the agent
 
@@ -237,6 +242,13 @@ users wait** until the hold ends: seconds, minutes for large packages, at most 1
 sessions continue; local accounts, the managed local administrator included, are not affected. Offline logins wait
 as well, because the daemon that serves them is stopped.
 
+**Corrected 2026-11-10 (`decisions-alpha10.md` §48 point 1):** "running sessions continue" means that no session is
+ended. During a hold directory users and groups may not resolve through NSS, by name or by ID. Observed effects in
+a running session of a directory user: `ls -l` and `id` show numeric IDs in place of names, and `sudo` by a
+directory user can fail until the hold ends. Local accounts and the managed local administrator resolve from the
+local files and are not affected. The operator documents and RR-133 MUST say this in these terms. The effect is
+confirmed by the logging step of the system gates on both VMs and recorded with PDK-983.
+
 ### N8 Tests and gates (names as implemented in PDK-983)
 
 - Unit, `agent/internal/reconcile/shield_test.go`: the call order of N2.3; restore on error, panic and cancel;
@@ -250,6 +262,9 @@ as well, because the daemon that serves them is stopped.
 - System gates: plan M13b, amendment 2026-11-10 (SV5, SV6, SV10, SV11). `TestIdentityGates` MUST stay green on both
   VMs, because the login reconciler changed. For N6: a regular updates run that installs a package creating a
   system account succeeds on an enrolled device and yields one `device.login_nss_shield`.
+  **Corrected 2026-11-10 (`decisions-alpha10.md` §48 point 3):** that system gate for N6 is a ticket of its own in
+  alpha.10 (PDK-988) and MUST be green before the release tag. Until it lands, the unit tests of N6 above carry the
+  rule. PDK-983 is not blocked by it.
 
 ### N9 Open in PDK-985 (not decided here)
 
