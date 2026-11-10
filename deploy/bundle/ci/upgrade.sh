@@ -24,8 +24,9 @@
 # The rollback comes before the drill, as an operator rolls back right after an upgrade and not after a disaster
 # restore: the drill's restore replaces the local backup repository and with it the pre-upgrade set a rollback
 # restores (PDK-973).
-# The previous release is 0.1.0-alpha.9 or later: the supported upgrade path starts there (ADR 0047), and the job
-# refuses an older one (PDK-981). A background unsealer gives OpenBao the shares of step 1 whenever it is sealed with
+# The job tests the consecutive path from the previous release (0.1.0-alpha.9 or newer); 0.1.0-alpha.8-specific legacy
+# steps are no longer exercised, because 0.1.0-alpha.8 operators upgrade through 0.1.0-alpha.9 (ADR 0047 decision 1;
+# PDK-981), and an older previous release is refused. A background unsealer gives OpenBao the shares of step 1 whenever it is sealed with
 # the threshold 3 of that initialisation; it never touches an OpenBao with another seal configuration.
 # Exit 0: every step passed; 1: a step failed (named on stderr, and as a GitHub annotation); 2: usage. Needs what
 # smoke.sh needs, plus git with the previous tag and sudo (the local backup target below /srv/paddock-backup).
@@ -298,11 +299,12 @@ rollback_host() {
   fi
 }
 
-# prev_supported <version>: fails for a previous release before 0.1.0-alpha.9, where the supported upgrade path starts
-# (ADR 0047); the job no longer carries 0.1.0-alpha.8's S3 backups and legacy rollback (PDK-981).
+# prev_supported <version>: fails for a previous release before 0.1.0-alpha.9: the job carries no 0.1.0-alpha.8-specific
+# legacy steps (S3 backups, legacy rollback), because 0.1.0-alpha.8 operators upgrade through 0.1.0-alpha.9 (ADR 0047
+# decision 1; PDK-981).
 prev_supported() {
   case "$1" in
-    0.1.0-alpha.[1-8]) fail "the previous release $1 is below 0.1.0-alpha.9, where the supported upgrade path starts" ;;
+    0.1.0-alpha.[1-8]) fail "the previous release $1 is older than 0.1.0-alpha.9; the job tests the consecutive path from 0.1.0-alpha.9 or newer, and 0.1.0-alpha.8 upgrades through 0.1.0-alpha.9" ;;
   esac
 }
 

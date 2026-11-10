@@ -234,9 +234,9 @@ if [[ "$out" == "audit rollback $work/w/prev/audit --yes stdin=[]" ]]; then
 else failed "rollback audit: $out"; fi
 
 # --- prev_supported ------------------------------------------------------------------------------------------------
-# PDK-981: the supported upgrade path starts at 0.1.0-alpha.9 (ADR 0047); the job refuses an older previous release.
+# PDK-981: the job tests the consecutive path from 0.1.0-alpha.9 or newer and refuses an older previous release.
 if out="$(lib prev_supported 0.1.0-alpha.8 2>&1)"; then failed "0.1.0-alpha.8 as the previous release passes: $out"; elif
-  [[ "$out" == *"the previous release 0.1.0-alpha.8 is below 0.1.0-alpha.9"* ]]; then pass "0.1.0-alpha.8 as the previous release is refused"
+  [[ "$out" == *"the previous release 0.1.0-alpha.8 is older than 0.1.0-alpha.9"* ]]; then pass "0.1.0-alpha.8 as the previous release is refused"
 else failed "prev_supported 0.1.0-alpha.8: $out"; fi
 for v in 0.1.0-alpha.9 0.1.0-alpha.10 0.1.0-alpha.18 0.1.0 0.2.0-alpha.1; do
   if out="$(lib prev_supported "$v" 2>&1)"; then pass "$v as the previous release is accepted"; else failed "prev_supported $v: $out"; fi
