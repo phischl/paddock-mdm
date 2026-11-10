@@ -201,10 +201,12 @@ lint-prometheus:
 			promtool test rules alerts_test.yml'
 
 # Edge entrypoint (plan M7a step 1): validation messages, the rendered servers block and `caddy validate` of both
-# Caddyfiles with that block, in the pinned Caddy image.
+# Caddyfiles with that block, in the pinned Caddy image; then the slow-body regression test of the
+# device, admin and bundles sites (PDK-970).
 .PHONY: lint-caddy
 lint-caddy:
 	docker run --rm -v $(CURDIR)/$(COMPOSE_DIR)/caddy:/test:ro --entrypoint sh $(CADDY_IMAGE) /test/entrypoint_test.sh
+	docker run --rm -v $(CURDIR)/$(COMPOSE_DIR)/caddy:/test:ro --entrypoint sh $(CADDY_IMAGE) /test/slowbody_test.sh
 
 .PHONY: lint-go
 lint-go:
