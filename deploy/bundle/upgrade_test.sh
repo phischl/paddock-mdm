@@ -490,6 +490,47 @@ has "the check runs again" '^== upgrade-check$'
 has "migrate-from runs again" '^== migrate-from$'
 if cmp -s "$work/t/old/.env" "$work/t/new/.env"; then pass "migrate-from copies .env again"; else fail "the stale .env stays"; fi
 
+# After a rollback from the same directory (PDK-980): B ran here, so its bundle-seq/ is uid 999's, and the rollback
+# raised A's high-water file above B's. A read-only bundle-seq/ stands in for the foreign owner; root writes anyway.
+if ((EUID == 0)); then
+  echo "skip the upgrade again into a foreign bundle-seq/: root may write it"
+else
+  setup controlplane "Schema: migrations 00105–00106"
+  mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
+  echo 3000005 >"$work/t/old/bundle-seq/high-water"
+  echo 2000003 >"$work/t/new/bundle-seq/high-water"
+  chmod 0644 "$work/t/old/bundle-seq/high-water"
+  chmod 0555 "$work/t/new/bundle-seq"
+  printf 'old=%s\nrolled-back=0123456789abcdef\n' "$work/t/old" >"$work/t/new/.upgrade-state"
+  run 0 "the upgrade again into a bundle-seq/ the operator cannot write" "$work/t/old" --yes
+  aside=("$work/t/new"/.bundle-seq.replaced.*)
+  if [[ "$(cat "$work/t/new/bundle-seq/high-water" 2>&1)" == 3000005 &&
+    "$(stat -c %a "$work/t/new/bundle-seq" "$work/t/new/bundle-seq/high-water" | tr '\n' ' ')" == "755 644 " ]]; then
+    pass "migrate-from replaces the foreign bundle-seq/ with A's higher high-water file"
+  else fail "bundle-seq/ after the upgrade again: $(ls -la "$work/t/new/bundle-seq" 2>&1)"; fi
+  if ((${#aside[@]} == 1)) && [[ "$(cat "${aside[0]}/high-water" 2>&1)" == 2000003 ]] &&
+    ! compgen -G "$work/t/new/.bundle-seq.new.*" >/dev/null; then
+    pass "the replaced bundle-seq/ is kept aside, no temporary directory is left"
+  else fail "after the replacement: $(ls -a "$work/t/new")"; fi
+  has "the operator learns about the kept directory" '^bundle-seq/ of an earlier run here is kept as \.bundle-seq\.replaced\.'
+  chmod -R u+w "$work/t/new"
+
+  # When the bundle directory itself is not writable either, nothing changes and the message names the owner.
+  setup controlplane "Schema: migrations 00105–00106"
+  mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
+  echo 3000005 >"$work/t/old/bundle-seq/high-water"
+  echo 2000003 >"$work/t/new/bundle-seq/high-water"
+  chmod 0555 "$work/t/new/bundle-seq" "$work/t/new"
+  got=0
+  out="$(cd "$work/t/new" && ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
+  chmod u+w "$work/t/new" "$work/t/new/bundle-seq"
+  if [[ "$got" != 0 && "$(cat "$work/t/new/bundle-seq/high-water")" == 2000003 && ! -e "$work/t/new/.env" ]] &&
+    ! compgen -G "$work/t/new/.bundle-seq.*" >/dev/null; then
+    pass "an unwritable bundle directory fails migrate-from and changes nothing (exit $got)"
+  else fail "migrate-from in an unwritable directory: exit $got, $(ls -a "$work/t/new")"; fi
+  has "the failure names the directory" "^paddock: migrate-from: cannot write $work/t/new\$"
+fi
+
 # A→B→C (R2-M1): the upgrade supersedes the old directory's own rollback point, so a rollback from there is refused
 # even where the running version cannot tell (FIXTURE_RUNNING claims the old release).
 setup controlplane "Schema: unchanged"

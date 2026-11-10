@@ -14,8 +14,9 @@
 #    6  ./paddock rollback --yes on the control plane (the backup key on stdin), then on the audit host (the
 #       candidate's audit writer reads what the previous control plane sends, never the other way round);
 #    7  probes on the previous release: the pre-upgrade set;
-#    8  ./paddock upgrade --yes again, from a freshly extracted candidate: it starts at the check, copies .env and
-#       .secrets/ again and takes its own pre-upgrade backup;
+#    8  ./paddock upgrade --yes again from the same directories: after a rollback it starts again at the check, copies
+#       .env and .secrets/ again, carries the raised high-water file into the bundle-seq/ its release handed to uid 999
+#       (PDK-980) and takes its own pre-upgrade backup (rollback.sh);
 #    9  the probes of step 5 on the release upgraded again;
 #   10  restore drill, backup: a confirmed backup key, the local target, ./paddock backup now --label ci --wait;
 #   11  restore drill, loss and restore: ./paddock down --volumes, ./paddock secrets, ./paddock restore --from --at;
@@ -80,10 +81,8 @@ probe_env() {
 }
 
 # use_prev / use_cand: the bundle directories that cp_paddock and audit_paddock run in; both name the same projects.
-# cand_root is the candidate's extraction: <W>/cand, and <W>/cand-again for the upgrade again (step 8).
-cand_root="$W/cand"
 use_prev() { CP_DIR="$W/prev/cp" AUDIT_DIR="$W/prev/audit"; }
-use_cand() { CP_DIR="$cand_root/cp" AUDIT_DIR="$cand_root/audit"; }
+use_cand() { CP_DIR="$W/cand/cp" AUDIT_DIR="$W/cand/audit"; }
 # with_legacy_overlay: the overlay set while one process runs both releases' ./paddock (upgrade, rollback).
 legacy_overlay() { if $legacy; then CP_OVERLAY="$ci_overlay $here/compose.ci-alpha8.yaml"; else CP_OVERLAY="$ci_overlay"; fi; }
 
@@ -187,6 +186,26 @@ orphans() {
     --format '{{.Label "com.docker.compose.service"}}')
   ((${#found[@]} == 0)) || fail "orphaned containers after the upgrade: ${found[*]} (services the release does not define; PDK-845)"
   echo "no orphaned containers"
+}
+
+# prev_high_water: the previous release's high-water file, read before the upgrade again; empty without one
+# (0.1.0-alpha.8). Its pre-upgrade backup may raise it after migrate-from copied it.
+prev_high_water() { head -n 1 "$W/prev/cp/bundle-seq/high-water" 2>/dev/null || true; }
+
+# seq_high_water_carried <before>: after the upgrade again, the candidate's high-water file holds at least <before>, the
+# previous release's, which the rollback raised above the candidate's own; otherwise a disaster restore would raise
+# the restored sequences too little (decisions-alpha9 item 68, PDK-980).
+seq_high_water_carried() {
+  local p="$1" c
+  if [[ -z "$p" ]]; then
+    echo "no high-water file in the previous release's directory"
+    return 0
+  fi
+  c="$(head -n 1 "$W/cand/cp/bundle-seq/high-water" 2>/dev/null || true)"
+  if ! [[ "$p" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ ]] || ((10#$c < 10#$p)); then
+    fail "the candidate's high-water file holds '${c:-nothing}', below the previous release's $p (PDK-980)"
+  fi
+  echo "high-water: candidate $c, previous $p"
 }
 
 # hosts_healthy: the probes of smoke.sh step 8 on the running release.
@@ -303,9 +322,10 @@ attach_s3() {
 
 # upgrade_hosts <n> <name>: step 4, and step 8 after the rollback: ./paddock upgrade --yes from the previous
 # release's directories on the control plane, then on the audit host, then the release's bootstrap and the orphans.
-# The second run upgrades into a freshly extracted candidate, as ./paddock upgrade asks for: the first candidate
-# directory's bundle-seq/ belongs to the backup role after its release ran, and migrate-from cannot write the raised
-# high-water file there (PDK-977).
+# The second run uses the same candidate directories, as rollback.sh and docs/operations/upgrade.md tell an operator:
+# their .upgrade-state records the rollback, so the upgrade starts again at the check, and migrate-from replaces the
+# bundle-seq/ that the candidate's release handed to uid 999 with the previous release's raised high-water file
+# (PDK-980).
 upgrade_hosts() {
   step "$1.1 $2: control plane"
   phase=$2
@@ -455,11 +475,10 @@ seeded rolled-back "${reveal[@]}"
 device_checks_in "$W/bin/upgradesim-prev" /etc/paddock-ci/upgrade.conf
 
 # --- 8 upgrade again -------------------------------------------------------------------------------------------------
-step "8.0 upgrade-again: the candidate extracted afresh"
-cand_root="$W/cand-again"
-use_cand
-smoke_extract "$cand_tarball"
+prev_hw="$(prev_high_water)"
 upgrade_hosts 8 "upgrade-again"
+step "8.4 upgrade-again: the bundle sequence's high-water file"
+seq_high_water_carried "$prev_hw"
 
 # --- 9 probes after the upgrade again --------------------------------------------------------------------------------
 upgraded_probes 9 "probes after the upgrade again" upgraded-again "phase=upgraded-again"

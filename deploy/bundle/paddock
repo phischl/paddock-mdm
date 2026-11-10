@@ -97,14 +97,37 @@ case "$cmd" in
     # successful backup round it is the only source of a disaster restore. It is uid 999's; as for .secrets/, cp -p
     # keeps the owner only for root, and the backup role may still replace it in its directory. Never lowered.
     hw="$old/bundle-seq/high-water"
+    seq_dir="$BUNDLE_DIR/bundle-seq"
     if [[ -f "$hw" ]]; then
       [[ "$(head -n 1 "$hw")" =~ ^[0-9]{1,18}$ ]] || die "migrate-from: $hw holds no bundle sequence; correct or remove it"
-      mkdir -p "$BUNDLE_DIR/bundle-seq"
-      if [[ ! -f "$BUNDLE_DIR/bundle-seq/high-water" ]] ||
-        (($(head -n 1 "$BUNDLE_DIR/bundle-seq/high-water" 2>/dev/null || echo 0) < $(head -n 1 "$hw"))); then
-        cp -p "$hw" "$BUNDLE_DIR/bundle-seq/high-water.tmp" &&
-          mv -f "$BUNDLE_DIR/bundle-seq/high-water.tmp" "$BUNDLE_DIR/bundle-seq/high-water" ||
-          die "migrate-from: could not copy $hw to $BUNDLE_DIR/bundle-seq/"
+      mkdir -p "$seq_dir"
+      if [[ ! -f "$seq_dir/high-water" ]] ||
+        (($(head -n 1 "$seq_dir/high-water" 2>/dev/null || echo 0) < $(head -n 1 "$hw"))); then
+        if [[ -w "$seq_dir" ]]; then
+          cp -p "$hw" "$seq_dir/high-water.tmp" &&
+            mv -f "$seq_dir/high-water.tmp" "$seq_dir/high-water" ||
+            die "migrate-from: could not copy $hw to $seq_dir/"
+        else
+          # An upgrade again after a rollback (PDK-980): this release ran here, and its postgres container handed
+          # bundle-seq/ to uid 999. The operator owns this directory, so a new bundle-seq/ with the higher file
+          # replaces it by rename, which needs no write access to the old one; the next ./paddock up hands the new one
+          # to uid 999 again. The old one cannot be deleted without root and is kept aside.
+          new_seq="$(mktemp -d "$BUNDLE_DIR/.bundle-seq.new.XXXXXX")" || die "migrate-from: cannot write $BUNDLE_DIR"
+          aside="$(mktemp -d "$BUNDLE_DIR/.bundle-seq.replaced.XXXXXX")" || {
+            rm -rf "$new_seq"
+            die "migrate-from: cannot write $BUNDLE_DIR"
+          }
+          if ! { chmod 0755 "$new_seq" && cp -p "$hw" "$new_seq/high-water" && mv -T "$seq_dir" "$aside"; }; then
+            rm -rf "$new_seq" "$aside"
+            die "migrate-from: could not replace $seq_dir (owned by uid $(stat -c %u "$seq_dir")) with a copy of $hw; nothing changed"
+          fi
+          mv -T "$new_seq" "$seq_dir" || {
+            mv -T "$aside" "$seq_dir"
+            rm -rf "$new_seq"
+            die "migrate-from: could not move the copy of $hw into $seq_dir; nothing changed"
+          }
+          echo "bundle-seq/ of an earlier run here is kept as ${aside##*/} (uid 999's; remove it as root when done)"
+        fi
       fi
     fi
     cp -a "$old/.env" "$BUNDLE_DIR/.env"

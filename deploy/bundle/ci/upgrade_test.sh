@@ -257,26 +257,46 @@ if out="$(lib attach_s3 2>&1)"; then failed "attach_s3 without an endpoint passe
 else failed "attach_s3, no endpoint: $out"; fi
 
 # --- upgrade_hosts ---------------------------------------------------------------------------------------------------
-# The upgrade again after the rollback (step 8): the fresh candidate directories, the previous release's as <old dir>,
+# The upgrade again after the rollback (step 8): the same candidate directories, the previous release's as <old dir>,
 # the root token for bootstrap openbao, and the step names and log phase of that run.
 out="$(lib eval '
   printf "{\"root_token\": \"s.root\"}" >"$W/init.json"
   start_unsealer() { :; }
   use_prev
-  cand_root="$W/cand-again"
   cp_paddock() { printf "cp %s %s token=%s\n" "$CP_DIR" "$*" "${BAO_TOKEN:-}"; }
   audit_paddock() { printf "audit %s %s\n" "$AUDIT_DIR" "$*"; }
   orphans() { echo orphans; }
   upgrade_hosts 8 upgrade-again
   echo "phase=$phase"' 2>&1)"
-order="*8.1 upgrade-again: control plane*cp $work/w/cand-again/cp upgrade $work/w/prev/cp --yes token=s.root*"
-order+="8.2 upgrade-again: audit host*audit $work/w/cand-again/audit upgrade $work/w/prev/audit --yes*"
-order+="8.3 upgrade-again: the release's bootstrap and orphans*cp $work/w/cand-again/cp bootstrap buckets*"
-order+="cp $work/w/cand-again/cp up*orphans*phase=upgrade-again*"
+order="*8.1 upgrade-again: control plane*cp $work/w/cand/cp upgrade $work/w/prev/cp --yes token=s.root*"
+order+="8.2 upgrade-again: audit host*audit $work/w/cand/audit upgrade $work/w/prev/audit --yes*"
+order+="8.3 upgrade-again: the release's bootstrap and orphans*cp $work/w/cand/cp bootstrap buckets*"
+order+="cp $work/w/cand/cp up*orphans*phase=upgrade-again*"
 # shellcheck disable=SC2053
 if [[ "$out" == $order ]]; then
   pass "the upgrade again runs from the previous release's directories into the candidate's"
 else failed "upgrade_hosts: $out"; fi
+
+# --- seq_high_water_carried ------------------------------------------------------------------------------------------
+# Step 8.4 (PDK-980): the candidate's high-water file holds at least the previous release's value read before step 8.
+mkdir -p "$work/w/prev/cp/bundle-seq" "$work/w/cand/cp/bundle-seq"
+echo 3000005 >"$work/w/prev/cp/bundle-seq/high-water"
+echo 3000007 >"$work/w/cand/cp/bundle-seq/high-water"
+if out="$(lib eval 'seq_high_water_carried "$(prev_high_water)"' 2>&1)" && [[ "$out" == *"candidate 3000007, previous 3000005"* ]]; then
+  pass "a candidate high-water file at or above the previous release's passes"
+else failed "seq_high_water_carried, carried: $out"; fi
+echo 2000003 >"$work/w/cand/cp/bundle-seq/high-water"
+if out="$(lib eval 'seq_high_water_carried 3000005' 2>&1)"; then failed "a lower candidate high-water file passes: $out"; elif
+  [[ "$out" == *"holds '2000003', below the previous release's 3000005"* ]]; then pass "a lower candidate high-water file fails"
+else failed "seq_high_water_carried, lower: $out"; fi
+rm "$work/w/cand/cp/bundle-seq/high-water"
+if out="$(lib eval 'seq_high_water_carried 3000005' 2>&1)"; then failed "a missing candidate high-water file passes: $out"; else
+  pass "a missing candidate high-water file fails"
+fi
+rm "$work/w/prev/cp/bundle-seq/high-water"
+if out="$(lib eval 'seq_high_water_carried "$(prev_high_water)"' 2>&1)" && [[ "$out" == *"no high-water file in the previous"* ]]; then
+  pass "without a previous high-water file (0.1.0-alpha.8) there is nothing to carry"
+else failed "seq_high_water_carried, no previous file: $out"; fi
 
 # --- failure report ----------------------------------------------------------------------------------------------------
 : >"$STUB_LOG"
