@@ -67,6 +67,12 @@ type Config struct {
 	Notify func(ctx context.Context, uid int, summary, body string)
 	// ProbeTimeout overrides the package ProbeTimeout when not zero.
 	ProbeTimeout time.Duration
+	// Holding reports whether Paddock holds himmelblaud stopped around a package transaction (reconcile.NSSShield
+	// Holds, PDK-983): directory users may not resolve then, so a caller who does not resolve is asked to retry
+	// instead of being refused. Nil: never.
+	Holding func() bool
+	// HoldWait overrides holdWait when not zero.
+	HoldWait time.Duration
 }
 
 // Service is the self-service: the authorization view of the applied bundle, the operation queue and its executor.
@@ -170,7 +176,17 @@ const (
 	CodeRateLimited     = "rate_limited"
 	CodeUnauthenticated = "unauthenticated"
 	CodeBodyTooLarge    = "body_too_large"
+	// CodeLoginPaused: the caller could not be identified while Paddock held himmelblaud stopped around a package
+	// installation (PDK-983); retryable (503 with Retry-After).
+	CodeLoginPaused = "login_paused"
 )
+
+// holdWait bounds how long a request waits for a hold to end before it answers login_paused; it stays well within the
+// server's write timeout and the desktop app's request timeout (10 s each).
+const holdWait = 5 * time.Second
+
+// loginPausedRetry is the Retry-After of login_paused, in seconds.
+const loginPausedRetry = "10"
 
 var errNoBundle = &Problem{Status: http.StatusServiceUnavailable, Code: CodeNoBundle, Detail: "no policy has been applied on this device yet"}
 

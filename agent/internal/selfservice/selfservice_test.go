@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -794,5 +795,62 @@ func TestCatchAllLimited(t *testing.T) {
 	}
 	if code, body := f.call(t, alice, http.MethodGet, "/nothing"); code != http.StatusTooManyRequests || body["code"] != CodeRateLimited {
 		t.Errorf("61st: %d %v", code, body)
+	}
+}
+
+// unresolvedDuringHold is a device whose directory users do not resolve while held is set, as with himmelblaud stopped.
+type unresolvedDuringHold struct {
+	*fakesys.System
+	held *atomic.Bool
+}
+
+func (u unresolvedDuringHold) Getent(ctx context.Context, database, key string) (string, int, error) {
+	if u.held.Load() {
+		return "", 2, nil
+	}
+	return u.System.Getent(ctx, database, key)
+}
+
+// TestAuthorizeDuringHold (PDK-983 §51): a directory user who does not resolve while Paddock holds himmelblaud
+// stopped is looked up again once the hold ended, within the wait; a hold that outlasts the wait is the retryable 503
+// login_paused with Retry-After, never 403 unauthenticated. Without a hold an unknown UID stays 403.
+func TestAuthorizeDuringHold(t *testing.T) {
+	f := newFixture(t)
+	f.svc.SetBundle(softwareBundle(spec()), nil)
+	var holding atomic.Bool
+	f.svc.cfg.Sys = unresolvedDuringHold{System: f.sys, held: &holding}
+	f.svc.cfg.Holding = holding.Load
+	f.svc.cfg.HoldWait = 400 * time.Millisecond
+
+	// The hold ends within the wait and alice resolves again.
+	holding.Store(true)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		holding.Store(false)
+	}()
+	if status, body := f.call(t, alice, http.MethodGet, "/v1/apps"); status != http.StatusOK {
+		t.Errorf("hold ended within the wait: HTTP %d %v", status, body)
+	}
+
+	// The hold outlasts the wait.
+	holding.Store(true)
+	req := httptest.NewRequest(http.MethodGet, "http://selfservice/v1/apps", nil)
+	req = req.WithContext(withPeer(req.Context(), peer{uid: alice}))
+	rec := httptest.NewRecorder()
+	f.svc.Handler().ServeHTTP(rec, req)
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusServiceUnavailable || body["code"] != CodeLoginPaused || rec.Header().Get("Retry-After") != "10" {
+		t.Errorf("hold past the wait: HTTP %d %v Retry-After %q", rec.Code, body, rec.Header().Get("Retry-After"))
+	}
+
+	// Without a hold an unknown caller is refused as before, at once.
+	holding.Store(false)
+	start := time.Now()
+	if status, body := f.call(t, 4242, http.MethodGet, "/v1/apps"); status != http.StatusForbidden || body["code"] != CodeUnauthenticated {
+		t.Errorf("unknown UID without a hold: HTTP %d %v", status, body)
+	}
+	if time.Since(start) > 200*time.Millisecond {
+		t.Error("an unknown caller waited although no hold runs")
 	}
 }

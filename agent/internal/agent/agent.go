@@ -225,7 +225,8 @@ func Load(l paths.Layout) (Deps, error) {
 		d.Encrypt = encrypt.OS{}
 		d.EncryptModule = encrypt.Module()
 		d.Notify = func(ctx context.Context, msg string) { notifySessions(ctx, sys.Loginctl, runTool, msg) }
-		d.SelfService = selfservice.New(selfservice.Config{Sys: pkgSys, Packages: software, Version: buildinfo.Version})
+		d.SelfService = selfservice.New(selfservice.Config{Sys: pkgSys, Packages: software, Version: buildinfo.Version,
+			Holding: shield.Active})
 	}
 	return d, nil
 }

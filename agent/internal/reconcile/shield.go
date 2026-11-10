@@ -156,6 +156,10 @@ func (s *NSSShield) Holds(unit string) bool {
 	return holding || s.markerExists() || (s.LockFile != "" && lockTaken(s.LockFile))
 }
 
+// Active reports whether one of Paddock's own holds keeps himmelblaud stopped (Holds of the daemon): directory users
+// may not resolve through NSS meanwhile.
+func (s *NSSShield) Active() bool { return s.Holds(nssShieldUnit) }
+
 func (s *NSSShield) markerExists() bool {
 	data, _, err := s.Sys.ReadFile(NSSShieldMarker)
 	return err == nil && data != nil

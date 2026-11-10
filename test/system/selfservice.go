@@ -261,11 +261,21 @@ func (d *Device) ssCall(t *testing.T, u *ssUser, method, path string) ssReply {
 	if u != nil {
 		cmd = fmt.Sprintf("setpriv --reuid=%d --regid=$(id -g %d) --clear-groups %s", u.uid, u.uid, cmd)
 	}
-	r, err := parseSSReply(d.MustRootIn([]byte(ssClientScript), cmd))
-	if err != nil {
-		t.Fatal(err)
+	// login_paused is retryable: the agent holds himmelblaud stopped around a package installation, during which
+	// directory users may not resolve (PDK-983); the desktop app retries it as well. A hold lasts 4 minutes at most in
+	// a development build.
+	deadline := time.Now().Add(5 * time.Minute)
+	for {
+		r, err := parseSSReply(d.MustRootIn([]byte(ssClientScript), cmd))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Status != http.StatusServiceUnavailable || r.code() != "login_paused" || time.Now().After(deadline) {
+			return r
+		}
+		t.Logf("%s: %s %s as %s: login_paused, retrying", d.Name, method, path, ssName(u))
+		time.Sleep(5 * time.Second)
 	}
-	return r
 }
 
 // ssTry is ssCall for a socket that may not be there (the agent restarts): an error instead of a failed test.
