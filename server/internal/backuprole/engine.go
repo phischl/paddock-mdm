@@ -344,13 +344,23 @@ func (e *Engine) round(ctx context.Context) error {
 
 func hours(h int) time.Duration { return time.Duration(h) * time.Hour }
 
+// fullInterval is the interval at which pgBackRest takes full backups: the schedule's, or the development override.
+// A retired key's repository is kept retention_full of these intervals (decisions-alpha10 A10-25), the window the
+// active repository's own fulls then cover.
+func (e *Engine) fullInterval(sched backupset.Schedule) time.Duration {
+	if e.cfg.FullInterval > 0 {
+		return e.cfg.FullInterval
+	}
+	return hours(sched.FullIntervalHours)
+}
+
 // retention collects the inputs of the round's expire and mirror (plan M15, amendment 2026-11-05, A1). escrow is the
 // rule of this round's escrow pass, the zero rule without one.
 func (e *Engine) retention(activeKeyID string, keys []KeyRecord, sched backupset.Schedule,
 	escrow escrowRule) retention {
 	ret := retention{active: backupset.RepoPath(activeKeyID), retired: map[string]time.Time{},
 		known: map[string]bool{backupset.RepoPath(activeKeyID): true}, full: sched.RetentionFull,
-		keep: time.Duration(sched.RetentionFull) * hours(sched.FullIntervalHours),
+		keep: time.Duration(sched.RetentionFull) * e.fullInterval(sched),
 		kindKeep: map[string]time.Duration{"openbao/": time.Duration(sched.OpenBaoKeepDays) * 24 * time.Hour,
 			"fleet/": time.Duration(sched.FleetKeepDays) * 24 * time.Hour},
 		escrow: escrow, now: e.now()}
@@ -397,10 +407,7 @@ func (e *Engine) due(h KindHistory, interval time.Duration) bool {
 
 // writeRuntime writes the key file and schedule.env for pgBackRest (decision 16 a); both are replaced atomically.
 func (e *Engine) writeRuntime(keyID string, key []byte, sched backupset.Schedule) error {
-	full := time.Duration(sched.FullIntervalHours) * time.Hour
-	if e.cfg.FullInterval > 0 {
-		full = e.cfg.FullInterval
-	}
+	full := e.fullInterval(sched)
 	env := fmt.Sprintf("PADDOCK_BACKUP_REPO_PATH=%s\nPADDOCK_BACKUP_RETENTION_FULL=%d\nPADDOCK_BACKUP_FULL_INTERVAL_S=%d\n",
 		backupset.RepoPath(keyID), sched.RetentionFull, int64(full/time.Second))
 	rt, err := os.OpenRoot(e.cfg.RuntimeDir)

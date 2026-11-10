@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -319,6 +320,7 @@ func printBackupStatus(out io.Writer, keys []pgstore.ListBackupKeyStatesRow, run
 		byTarget[s.TargetID] = append(byTarget[s.TargetID], s)
 	}
 	_, _ = fmt.Fprint(w, "\nTARGET\tTYPE\tENABLED\tHOST STATE\tKIND\tLAST SUCCESS\tERROR\n")
+	var unknown []string
 	for _, t := range targets {
 		rows := byTarget[t.ID]
 		if len(rows) == 0 {
@@ -328,8 +330,21 @@ func printBackupStatus(out io.Writer, keys []pgstore.ListBackupKeyStatesRow, run
 			_, _ = fmt.Fprintf(w, "%s\t%s\t%t\t%s\t%s\t%s\t%s\n", t.Name, t.Type, t.Enabled, t.HostState, s.Kind,
 				timeOrDash(s.LastSuccessAt), deref(s.LastError))
 		}
+		if slices.ContainsFunc(rows, func(s pgstore.BackupTargetStatus) bool {
+			return deref(s.LastError) == backuprole.ClassUnknownPath
+		}) {
+			unknown = append(unknown, t.Name)
+		}
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	for _, name := range unknown {
+		_, _ = fmt.Fprintf(out, "\n%s holds a pgBackRest repository path no backup key names. The mirror keeps it and "+
+			"goes on deleting what retention removes elsewhere; the paddock-backup log names the path (\"mirror to "+
+			"backup target failed\"). Remove the path by hand once you know it is not needed.\n", name)
+	}
+	return nil
 }
 
 func deref(s *string) string {

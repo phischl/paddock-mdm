@@ -141,7 +141,11 @@ password with `docker volume inspect` (residual risk RR-122).
 No host step. The credential needs list, read, write and delete below `<prefix>/` of the bucket (the mirror deletes what
 retention removes and the connection test writes and deletes `<prefix>/.paddock-test`). **Object Lock stays off**:
 pgBackRest and the mirror must be able to expire. Versioning is welcome (an overwritten or deleted object stays as a
-noncurrent version, so one compromised credential cannot destroy every copy); expire noncurrent versions after 30 days.
+noncurrent version, so one compromised credential cannot destroy every copy); expire noncurrent versions after 30 days
+and remove expired delete markers. Without that rule, the bucket never frees the space of what the mirror deletes,
+and the listing slows down with every deleted object, because some S3 servers walk them all before they return a
+page. Paddock cannot check the rule for you, because the target's credential does not need the bucket-level
+permissions to read it.
 Keep the credentials of each target separate from every other use.
 
 For a restore without a database, export the target with its credentials and keep the file offline with the key:
@@ -165,7 +169,7 @@ class only, never the remote answer:
 | `io` | a write failed, the disk is full, or the target used its round's time budget (below) |
 | `foreign_set` | the target holds the set of another installation: nothing is written or deleted; empty the target's `paddock-backup/` first to reuse it |
 | `set_shrunk` | writing would make the target's copy unrestorable (after a lost local repository); nothing is written or deleted (`docs/operations/restore.md`, "Lost local backup repository") |
-| `unknown_path` | the target holds a repository path no key names; the copy goes on, nothing is deleted there |
+| `unknown_path` | the target holds a repository path no key names (`./paddock backup status` notes it, the role's log names the path): the copy and the deletions by the rules below go on, the path itself is kept until you remove it by hand |
 | `size_mismatch` | a file copied in this round has another size on the target |
 
 **The first copy of a large set is slow.** The role mirrors the targets one after another and gives each target at most
@@ -269,7 +273,7 @@ with `backup.manifest` last, then snapshots, dumps and escrow objects, then pgBa
 | An OpenBao snapshot or a Fleet dump | older than its keep days, not the newest of its kind on the target, and the local set holds at least one file of that kind | kept |
 | An escrowed LUKS header | the escrow bucket no longer holds it (checked in the same round), the audit trail records a successful Destroy of its device (`device.escrow_destroyed`) that is not older than the copy (the escrow object's time recorded in the local set's manifest), and `retention_full` full intervals have passed since that Destroy | kept ("held"); absence from the bucket alone never deletes |
 | The repository of a retired backup key | the active key's repository holds a full backup of every stanza and the target's copy is older than `retention_full` full intervals (counted from the rotation at the earliest) | kept |
-| Anything else (unknown paths, a repository the database does not know) | never | kept; an unknown repository path marks the target run as `unknown_path` |
+| Anything else (unknown paths, a repository the database does not know) | never | kept; an unknown repository path marks the target run as `unknown_path`, but every other deletion still runs |
 
 The same escrow rule applies to the local set. A bucket listing that lacks all, or more than 10 %, of the local set's
 headers without a Destroy behind them (a lost RustFS volume whose bucket was re-created empty, a wrong

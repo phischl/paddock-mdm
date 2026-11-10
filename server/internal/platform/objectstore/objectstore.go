@@ -119,17 +119,24 @@ func (s *Store) DefaultRetention(ctx context.Context) (enabled bool, mode types.
 // Newest returns the last-modified time of the newest object below prefix; found is false when there is none. It
 // needs s3:ListBucket only.
 func (s *Store) Newest(ctx context.Context, prefix string) (newest time.Time, found bool, err error) {
+	return s.NewestPaged(ctx, prefix, func() {})
+}
+
+// NewestPaged is Newest and calls page after every page of the listing.
+func (s *Store) NewestPaged(ctx context.Context, prefix string, page func()) (newest time.Time, found bool,
+	err error) {
 	p := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &prefix})
 	for p.HasMorePages() {
-		page, err := p.NextPage(ctx)
+		res, err := p.NextPage(ctx)
 		if err != nil {
 			return time.Time{}, false, err
 		}
-		for _, o := range page.Contents {
+		for _, o := range res.Contents {
 			if t := aws.ToTime(o.LastModified); !found || t.After(newest) {
 				newest, found = t, true
 			}
 		}
+		page()
 	}
 	return newest, found, nil
 }
