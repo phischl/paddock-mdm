@@ -919,7 +919,8 @@ verified. (Supersedes decision 17's `verify --set=<label>`: the whole-stanza ver
 ### A3 Mirror state table (one target, one round; the order is binding)
 
 **Amended 2026-11-10:** the keep window uses the effective full interval (B1), and an unknown path no longer stops the
-deletions of step 6 (B2); see "Amendment 2026-11-10" at the end of this plan.
+deletions of step 6 (B2); see "Amendment 2026-11-10" at the end of this plan. **Amended 2026-11-11:** "one round"
+no longer holds: the steps run in the target's lane (amendment 2026-11-11).
 
 ```
 step 0  read T/manifest.json (if any): parse error or another installation_id → foreign_set: stop, write nothing
@@ -1025,6 +1026,9 @@ L8/L9, `TestMirrorGuardIgnoresEmptyLastFull` → L8, `TestMirrorGuardPartialInfo
 `manifest.json`, `TestMirrorKeepsEscrowWhenLocalEscrowLost` → L7.
 
 ### A7 Consequences for other decisions and tickets
+
+**Amended 2026-11-11:** each target's mirror runs in a lane of its own and the round never waits for it; see
+"Amendment 2026-11-11" at the end of this plan.
 
 - Decision 16 c: the escrow expire rule (A2) is added; the OpenBao/Fleet and retired-path rules are unchanged.
 - Decision 16 e: replaced by A3.
@@ -1239,7 +1243,8 @@ doubled. The header records `# revisions:` (for the online check item of decisio
   marker, timeout), before the round's mirror: the `backup_run` row (or the answered request, which ends
   `backup now --wait`) with outcome, times, bytes, error class and `targets = []`. Restore plans and the history see
   the backup at once; before, a mirror of hours (item 67) kept it out of the database for as long.
-- **Phase 2.** After `mirrorAll`, every finished run without `mirrored_at` gets the round's per-target results and its
+- **Phase 2** (amended 2026-11-11, C4 of the amendment 2026-11-11: recorded when the targets' lanes finish, not
+  after the round's mirror). After `mirrorAll`, every finished run without `mirrored_at` gets the round's per-target results and its
   audit event `platform.backup_completed` / `platform.backup_failed` as before (§6.4; params gain `completed_at`, the
   local completion). That covers this round's runs and any an earlier round could not finish because the role
   stopped between the phases: exactly one event per run; a target the set did not reach counts as `targets_failed`.
@@ -1504,3 +1509,186 @@ Open (no work in alpha.10 without a decision of the architect lead):
 Stop conditions for PDK-972: a second place besides `retention.keep` derives a window from `full_interval_hours`; a
 change to `backup_target_status`, the admin API or the portal seems necessary; any need to touch step 6's budget
 (PDK-869); RustFS rejects the lifecycle configuration of B4.2.
+
+## Amendment 2026-11-11 — one mirror lane per target; the round never waits for a mirror (A10-26; PDK-989)
+
+Decision (architect lead, `decisions-alpha10.md` §50). Binding language: **MUST** / **MUST NOT** / **SHOULD** /
+**MAY**. Ticket: PDK-989 (alpha.10 blocker). Where this amendment contradicts decision 16, A3's "one target, one
+round", A7, the notes 2026-11-07 (all three) or B3, it wins. The mirror's steps 0–6, the guard, the D-rules and the
+invariants I1–I10 are **unchanged**; only who runs them and when changes.
+
+### C0 Why
+
+A round ran its targets' mirrors itself and ended only after the last one. On the development stack a round that
+started at 21:05 UTC mirrored to a versioned bucket with a large backlog of delete markers (left by the first prune
+after the amendment 2026-11-10). The listing was slow but alive, so by B3 it was no stall, and the number of pages
+is unbounded. For more than 40 minutes the role served nothing else: requested backups (`backup now`) stayed
+`requested`, no OpenBao snapshot and no Fleet dump was taken, the effects of a key confirmation and requested target
+tests waited, and four acceptance gates timed out. Only what does not depend on the round went on (WAL archiving and
+pgBackRest's own fulls).
+
+Options: (a) **a time slice**: the mirror yields after a budget, the listing included, and resumes next round. A
+slice cannot interrupt a list page in flight (up to 20 minutes, RR-132); cancelling the page wastes it and the next
+round asks for the same page again, so a first page slower than the slice never arrives (livelock). A continuation
+token only helps between pages. (b) **a lane per target**: the mirror runs beside the rounds and the round only
+starts it and looks at its state. **Decision: (b).**
+
+### C1 Vocabulary
+
+- **Lane** = the one mirror in flight of one target: steps 0–6 of A3 for that target, from start to its result. At
+  most one lane per target exists; the number of lanes is bounded by the number of enabled targets.
+- **Snapshot** = what a round hands to a lane at its start and the lane uses to its end: the index of the local set
+  (`repoIndex`), the retention inputs (A1, B1) with `wal_ok` and `manifestOK`, the kind state, the bytes of the
+  local `manifest.json`, and the target record. A lane MUST NOT read the database or the schedule for its decisions.
+- **Abandoned lane** = a lane whose watchdog gave up (stall, page limit, trickle) while its call has not returned.
+  Its result is recorded; no new lane of that target starts until the call returned.
+- **Awaited target** = a target whose lane result a finished run still needs for its phase 2 (C4).
+
+### C2 The round (replaces decision 16 e's place in the round and "after `mirrorAll`" of the note 2026-11-07 b)
+
+In every round, in this order, and **without waiting for any lane**:
+
+1. host states and requested target tests (C6);
+2. the key: active key, `schedule.env`, key file (decision 16 a), so the effects of a key confirmation take place
+   in the first round after it;
+3. the due and the requested runs of every kind, recorded in phase 1 as before (OpenBao snapshot, escrow pass,
+   Fleet dump, pgBackRest marker, timeouts);
+4. the local expire, `manifest.json`, the index, the metrics of the local set;
+5. for every enabled target (C3): start a lane with this round's snapshot, or leave the lane in flight alone;
+6. phase 2 for every run whose awaited targets all have a result (C4);
+7. the high-water file.
+
+A round's duration therefore no longer depends on any target. A requested run starts at the latest one round
+interval (`PADDOCK_BACKUP_ROUND_INTERVAL`, default 1 minute) after the round in flight ended.
+
+### C3 Lanes
+
+1. **Start.** A lane is started only by a round that holds the leader lock, for a target that is enabled, whose
+   host state allows a mirror (`mounted` or `n/a`), and that has no lane in flight and no abandoned lane. A target
+   in `pending_host` or `unreachable` gets no lane and its result at once (`not_mounted`, `io`), as before.
+2. **In flight.** While a lane is in flight the rounds write nothing for that target: no `backup_target_status`, no
+   metric change, no error. The error "the previous mirror has not returned" is no longer produced for a running
+   lane; it stays for an abandoned one.
+3. **Watchdog and limits** run inside the lane, unchanged: the stall window (2 minutes), the probe and the page
+   limit of S3 listings (B3), the copy budget (10 minutes, counted from the lane's first copied file) and the
+   trickle cap. A lane that used its copy budget ends with the class `continues`; the next round starts a new lane
+   with a fresh snapshot. Listings and step 6 are still not bounded by the budget (RR-126, PDK-869).
+4. **Deletions stay in the lane.** Step 6 runs in the lane that listed, guarded, copied and verified, after its own
+   step 5, on its own snapshot. No other goroutine deletes on a target. I1–I10 hold per lane.
+5. **Finish.** When a lane ends (success, error, `continues`, watchdog), it alone writes the target's
+   `backup_target_status` per kind, the gauges `paddock_backup_target_reachable` and
+   `paddock_backup_target_held_files` of its target, and its result for the runs that await it (C4). The values are
+   those the round wrote before (note 2026-11-07 b, "Copy budget" included). A round MUST NOT reset the gauges of
+   targets it did not touch.
+6. **Per-target state** (`pushed`, the held count, the newest mirrored time per kind) is owned by the target's lane
+   or guarded by one mutex; the race detector MUST be clean.
+7. **Cancel.** The engine cancels a target's lane when a round finds the target disabled or deleted, when a round
+   did not obtain the leader lock, and at shutdown (C7). A cancelled lane writes no status and no run result.
+   Other changes of a target take effect with its next lane.
+8. **Visibility.** New gauge `paddock_backup_target_mirror_started_timestamp_seconds{target}`: the start of the
+   lane in flight, absent without one. The role logs the start of a lane at `Info` when the previous lane of that
+   target ran longer than one round interval, and the end of every such lane with its duration and class.
+
+### C4 "Mirrored" is recorded when the lanes finish (replaces phase 2 of the note 2026-11-07 b)
+
+1. Phase 1 is unchanged: a run is recorded right after its local step with `targets = []` and `mirrored_at` NULL.
+2. A round **registers** every finished run without `mirrored_at` that it has not registered yet: its awaited
+   targets are the targets enabled in that round. A target without a lane (C3.1) gives its result at once.
+3. A target's result for a registered run is the result of the **first lane of that target that started in or after
+   the registering round**. A lane already in flight at the registration does not count: its snapshot may lack the
+   run's files.
+4. When every awaited target has a result, the run gets its per-target results, `mirrored_at` and its one audit
+   event (`platform.backup_completed` / `platform.backup_failed`), exactly as phase 2 did. A target that was
+   disabled or deleted meanwhile is dropped from the awaited targets and from the results.
+5. **Await limit: 60 minutes.** A run still awaiting a target 60 minutes after its registration is recorded then;
+   every target without a result gets `RunTarget{ok: false, error_class: "continues"}` (the existing class and
+   portal text). Reason: one long lane must not hold a run's audit event for hours.
+6. The registrations live in memory. After a restart every finished run without `mirrored_at` is registered again
+   by the first round, so it gets its results from the first lanes after the restart; the guard
+   `mirrored_at IS NULL` of the write keeps "exactly one event per run".
+7. The skip list of the note 2026-11-07 c is no longer needed: a run recorded after a round's index is registered
+   by the next round. The Fleet watcher of that note MAY be removed, because the next round seals the dump one
+   round interval later; if it stays, it MUST NOT wait for a lane.
+
+### C5 A lane reads only completed sets
+
+1. A lane reads from the local repository only paths of its snapshot, plus pgBackRest's label directories under
+   the existing rule (skipped until `backup.manifest` exists, A3 step 3). It puts the snapshot's `manifest.json`
+   bytes in step 5, never the file a later round wrote.
+2. Every file the role itself writes into the set (`openbao/`, `fleet/`, `escrow/`, `manifest.json`) MUST appear
+   under its final name only when complete (write to a temporary name in the same directory, then rename).
+   pgBackRest writes its own files that way. With that, the snapshot is the lock: no further lock is taken between
+   the round and the lanes.
+3. A path of the snapshot that a later round's expire removed is skipped (the existing `fs.ErrNotExist` rule). A
+   path rewritten meanwhile is verified against the bytes actually put (step 4, unchanged).
+4. The D-rules are decided against the snapshot. That is safe while the lane runs: the local set only gains newer
+   fulls, and what a rule allowed to delete at the snapshot stays expired; after a lost local repository the lane's
+   own puts and verify precede its deletions, so the target keeps a restorable copy (A4 L1–L3 unchanged for the
+   next lane, whose guard sees the shrunk set).
+
+### C6 Target tests
+
+A requested connection test runs in the round with its own timeout, opens its own connection and never waits for a
+lane, also when the target's lane is in flight. Its result is written by the round as before (decision 11).
+
+### C7 Shutdown and restart
+
+- Shutdown cancels every lane and waits for them at most 10 seconds; a call blocked in a file system returns
+  later on its own. Nothing is recorded for a cancelled lane.
+- A restart needs no lane state: every step of the mirror is idempotent (A3 step 3), the next lane lists the
+  target again, in-place rewritten files are put again once, and the runs are registered again (C4.6).
+- With more than one backup role process, only the leader's rounds start lanes (C3.1, C3.7). The supported
+  topology stays one process.
+
+### C8 Consequences for earlier texts
+
+- A7: "round budget" reads "the lane's copy budget". The note 2026-11-07: listings and step 6 hold the target's
+  lane, not the role. B3's trade-off and RR-132: a hung page holds the lane, not the round.
+- RR-127: a key confirmation takes effect in the next round, at most one round interval later; it no longer waits
+  for a copy. A lane in flight ends on its snapshot with the previous key's path; the new path follows with the
+  target's next lane.
+- No schema change, no API change, no portal change, no new dependency.
+
+### C9 Tests (`server/internal/backuprole`; names free, one test per row; all with `-race`)
+
+| # | Asserts |
+| --- | --- |
+| 1 | With a fake S3 target whose listing hangs while the endpoint answers probes: a round returns within its own work; in the following rounds a requested run of every kind is answered, a due OpenBao snapshot is taken, a key change reaches `schedule.env` and the key file, and a requested target test of that same target gets its result |
+| 2 | The same with a listing that is slow but completes: the lane ends, the target status is written once, by the lane |
+| 3 | At most one lane per target: ten rounds during one lane start no second one; a second target's lane runs and finishes meanwhile |
+| 4 | C4.3: a run recorded while a lane is in flight is not marked mirrored by that lane, but by the next one; its audit event is emitted exactly once |
+| 5 | C4.5: a run awaiting a target for 60 minutes (fake clock) is recorded with `continues` for that target |
+| 6 | C4.6: an engine created anew with an unmirrored run in the store registers it and records it after the first lanes |
+| 7 | C3.7 and C7: disabling a target, a round without the leader lock and shutdown each cancel the lane; a cancelled lane writes no status and no run result; shutdown returns within the wait although a lane's call blocks |
+| 8 | C5: a lane puts the snapshot's `manifest.json` although a later round rewrote the local one; a snapshot path removed by a later expire is skipped |
+| 9 | The invariants under lanes: the existing mirror tests (A6 L1–L12, `TestMirrorInvariants`, the tests of B6) run unchanged against the lane entry point and stay green; in particular no deletion happens on a listing that did not complete, and none outside the lane |
+| 10 | An abandoned lane: its result is recorded, and no new lane starts until its call returned |
+
+Gates after the fix: `TestBackupRuns`, `TestBackupRotation`, `TestBackupTargets`, the key confirmation and restore
+plan gates MUST be green on a development stack whose S3 target answers its listing slower than one round interval.
+No gate is weakened.
+
+### C10 Acceptance criteria
+
+- **AC-1 (platform administrator):** given a target whose mirror takes longer than an hour, when the administrator
+  requests a backup in the portal or with `./paddock backup now`, then every kind's run leaves `requested` within
+  two round intervals plus the kind's own duration, and `backup now --wait` returns.
+- **AC-2 (platform administrator):** given the same target, when a new backup key is confirmed, then the next full
+  backup uses the new key's path within one round interval, and a requested test of any target shows its result
+  within the portal's 60 seconds.
+- **AC-3 (operator):** given the same target, then OpenBao snapshots and Fleet dumps appear at their intervals in
+  `./paddock backup status`, and the gauge of C3.8 shows since when that target's mirror runs.
+- **AC-4 (auditor):** every finished run has exactly one `platform.backup_completed` or `platform.backup_failed`,
+  at the latest 60 minutes after the round that registered it, also across a restart of the role.
+- **AC-5 (operator):** given a restart of the role during a mirror, then the target's copy is completed by the next
+  lane, and nothing was deleted on the target that the D-rules do not allow.
+
+### C11 Freedoms, stop conditions, open points
+
+- Free: the type and function names of lanes and of the registration, the shape of the store call that records a
+  run's results, whether the Fleet watcher stays (C4.7), the log wording.
+- Stop and report: a writer of the set that cannot write by rename (C5.2); a need for a schema, API or portal
+  change; any deletion on a target outside its lane; a need to bound step 6 (PDK-869).
+- Open, default chosen: (1) the await limit of 60 minutes (C4.5); a longer limit delays audit events, a shorter one
+  records more runs with `continues`. (2) A lane in flight is visible to an operator only through the gauge and the
+  log; showing it in `./paddock backup status` and the portal needs a column and an API field (later release).
