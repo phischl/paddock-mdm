@@ -20,6 +20,7 @@ const driftInterval = 30 * time.Second
 // softwareGate is the per-VM state the software gates share: the repository, the source and the catalog entry of
 // gateApp with its assignment to the device's group.
 type softwareGate struct {
+	keep                     *testing.T // the VM's test: the assignments live until it ends
 	repo                     gateRepo
 	source, slug             string
 	entry, assignment        string
@@ -38,7 +39,7 @@ func TestSoftwareGates(t *testing.T) {
 		vm.Gate(t, "software")
 		vm.Fresh()
 		d := Install(t, s, vm, debDir(s))
-		g := &softwareGate{repo: d.setupGateRepo()}
+		g := &softwareGate{keep: t, repo: d.setupGateRepo()}
 		g.source, g.slug = d.softwareSource(g.repo)
 		// Both entries belong to the VM's test, not to a subtest: a subtest's cleanup would delete them when it ends.
 		g.entry = d.catalogEntry(g.source, gateApp)
@@ -103,7 +104,7 @@ func intentIs(intent string) func(map[string]any) bool {
 // status on the device's managed software.
 func gateSW1(t *testing.T, d *Device, g *softwareGate) {
 	g.installed = d.eventIDs("device.software_installed")
-	g.assignment = d.assign(g.entry, "required", "1.0")
+	g.assignment = d.assign(g.keep, g.entry, "required", "1.0")
 	waitVersion(t, d, gateApp, "1.0", 6*time.Minute, true)
 
 	source := gateSourcePath(g.slug)
@@ -159,7 +160,7 @@ func gateSW2(t *testing.T, d *Device, g *softwareGate) {
 // gateSW3: forbid removes the package with device.software_removed{intent: forbid} and pins it to -1, so apt-get
 // install fails; a dpkg -i of it is undone within the drift interval with a second event.
 func gateSW3(t *testing.T, d *Device, g *softwareGate) {
-	d.assign(g.anchorEntry, "required", "")
+	d.assign(g.keep, g.anchorEntry, "required", "")
 	waitVersion(t, d, gateAnchor, "1.0", 6*time.Minute, true)
 	g.removed = d.eventIDs("device.software_removed")
 	d.reassign(g.assignment, "forbid", "")
