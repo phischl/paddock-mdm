@@ -547,9 +547,6 @@ func (l *Login) ubuntuVersion() (string, error) {
 	return vars["VERSION_ID"], nil
 }
 
-// restart restarts the Himmelblau daemons, which read pam_allow_groups only at start, and waits until himmelblaud
-// is active. reset-failed first: the package starts the daemon before a configuration exists, which hits the
-// start limit (PoC M1).
 // restartAfterHolds restarts the Himmelblau daemons when no hold of the shield runs, so that a restart neither starts
 // the daemon in the middle of a hold nor fails because a hold stopped it. A hold that lasts past the shield's
 // LockWait defers the restart to a later pass (restartPending); the configuration file is already in place.
@@ -566,6 +563,9 @@ func (l *Login) restartAfterHolds(ctx context.Context) error {
 	return nil
 }
 
+// restart restarts the Himmelblau daemons, which read pam_allow_groups only at start, and waits until himmelblaud
+// is active. reset-failed first: the package starts the daemon before a configuration exists, which hits the
+// start limit (PoC M1).
 func (l *Login) restart(ctx context.Context) error {
 	for _, verb := range []string{"reset-failed", "restart"} {
 		for _, u := range himmelblauUnits {

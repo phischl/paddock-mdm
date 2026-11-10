@@ -247,6 +247,9 @@ func (s *NSSShield) Run(ctx context.Context, action string, run func() (string, 
 		return nssShieldBusyOutput, 100, ErrNSSShieldBusy
 	}
 	defer release()
+	// A marker under the lock is a hold whose holder died: it is finished and reported before a new hold writes its
+	// own marker over it (plan M5a N4); `paddockd updates run` never calls Recover.
+	s.finishStale(ctx)
 
 	if out, _, err := s.Sys.Systemctl(ctx, "is-active", nssShieldUnit); err != nil || firstLine(out) != "active" {
 		return run()
@@ -303,7 +306,8 @@ func (s *NSSShield) Run(ctx context.Context, action string, run func() (string, 
 // hold arms the safety net and stops himmelblaud: marker first, then the timer, then the stop, so that every state
 // a crash can leave behind is restored by the timer or by the agent. A step that fails undoes the earlier ones.
 func (s *NSSShield) hold(ctx context.Context, action string, start time.Time) error {
-	if err := s.writeMarker(shieldMarker{Action: action, StartedAt: start.UTC(), PID: os.Getpid()}); err != nil {
+	m := shieldMarker{Action: action, StartedAt: start.UTC(), PID: os.Getpid()}
+	if err := s.writeMarker(m); err != nil {
 		return err
 	}
 	s.cancelTimer(ctx)
@@ -317,8 +321,10 @@ func (s *NSSShield) hold(ctx context.Context, action string, start time.Time) er
 	if out, exit, err := s.Sys.Systemctl(ctx, "stop", nssShieldUnit); err != nil || exit != 0 {
 		stopErr := commandError("stop "+nssShieldUnit, out, exit, err)
 		if restoreErr := s.restore(ctx); restoreErr != nil {
-			// The marker stays, so that the agent retries the start.
-			return errors.Join(stopErr, restoreErr)
+			// The marker stays, so that the agent retries the start; Run reports this hold as hold_failed, so the
+			// retry does not report it again.
+			m.Reported = true
+			return errors.Join(stopErr, restoreErr, s.writeMarker(m))
 		}
 		return errors.Join(stopErr, s.Sys.Remove(NSSShieldMarker))
 	}
@@ -488,6 +494,10 @@ func (s *NSSShield) sendRecords(ctx context.Context) {
 	records, err := s.readRecords()
 	if err != nil {
 		slog.WarnContext(ctx, "dropping unreadable shield records", "error", err)
+	}
+	if n := len(records) - nssShieldMaxRecords; n > 0 {
+		slog.WarnContext(ctx, "dropping the oldest shield records", "dropped", n)
+		records = records[n:]
 	}
 	for _, r := range records {
 		s.Events.emit(protocol.EventLoginNSSShield, r)

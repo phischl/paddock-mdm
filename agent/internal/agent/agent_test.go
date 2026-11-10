@@ -177,3 +177,17 @@ func TestRunRecoversNSSShield(t *testing.T) {
 			sys.Units["himmelblaud-tasks.service"].Active, sys.Files[reconcile.NSSShieldMarker] != nil)
 	}
 }
+
+// TestApplyDevShieldDurations (plan M5a N3.4, review R2-3): a development build gives every shield, the updates
+// run's included, the 4 + 1 minute hold and timer; a release build keeps the defaults.
+func TestApplyDevShieldDurations(t *testing.T) {
+	s := &reconcile.NSSShield{}
+	ApplyDevShieldDurations(s)
+	want := [2]time.Duration{}
+	if buildinfo.Dev {
+		want = [2]time.Duration{4 * time.Minute, time.Minute}
+	}
+	if got := [2]time.Duration{s.MaxHold, s.TimerGrace}; got != want {
+		t.Errorf("durations %v, want %v (dev %v)", got, want, buildinfo.Dev)
+	}
+}

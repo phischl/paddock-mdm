@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -73,22 +72,6 @@ func (s *shieldSys) Remove(path string) error {
 	s.calls = append(s.calls, "remove "+path)
 	delete(s.files, path)
 	return nil
-}
-
-func (s *shieldSys) ReadDir(dir string) ([]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var names []string
-	for p := range s.files {
-		if d, name := path.Split(p); d == dir+"/" {
-			names = append(names, name)
-		}
-	}
-	if len(names) == 0 {
-		return nil, fs.ErrNotExist
-	}
-	slices.Sort(names)
-	return names, nil
 }
 
 func (s *shieldSys) Systemctl(ctx context.Context, args ...string) (string, int, error) {
@@ -806,5 +789,74 @@ func TestLoginRestartWaitsForHold(t *testing.T) {
 	}
 	if changes, _ := l.Plan(ctx, r); len(changes) != 0 {
 		t.Errorf("Plan after the deferred restart = %v", changes)
+	}
+}
+
+// TestNSSShieldRecordsReaderCap (review R2-6): the agent emits at most the newest 16 records even when the file holds
+// more than the writer keeps.
+func TestNSSShieldRecordsReaderCap(t *testing.T) {
+	sys, agent, _, events := shieldFixture(true)
+	var records []protocol.LoginNSSShield
+	for i := range 20 {
+		records = append(records, protocol.LoginNSSShield{Action: "apt-get dist-upgrade", DurationS: int64(i), Outcome: "restored"})
+	}
+	data, _ := json.Marshal(records)
+	sys.files[reconcile.NSSShieldReport] = data
+	agent.Recover(context.Background())
+	var first protocol.LoginNSSShield
+	if len(*events) != 16 || json.Unmarshal([]byte((*events)[0].data), &first) != nil || first.DurationS != 4 {
+		t.Errorf("%d events, first %+v; want the newest 16", len(*events), first)
+	}
+}
+
+// TestNSSShieldFinishesStaleBeforeHold (review R2-1, plan M5a N4): a hold that finds the unreported marker of a dead
+// holder under the lock reports that hold as recovered before it writes its own marker, so `paddockd updates run`,
+// which never calls Recover, loses no event.
+func TestNSSShieldFinishesStaleBeforeHold(t *testing.T) {
+	sys, _, clock, _ := shieldFixture(false)
+	sys.files[reconcile.NSSShieldMarker] = []byte(`{"action":"apt-get install","started_at":"` + clock.Now().Add(-2*time.Minute).Format(time.RFC3339) + `"}`)
+	updates := &reconcile.NSSShield{Sys: sys, Now: clock.Now, Events: reconcile.NSSShieldRecorder(sys)}
+	held := false
+	_, _, _ = updates.Run(context.Background(), "apt-get dist-upgrade", func() (string, int, error) {
+		held = !sys.isActive("himmelblaud.service")
+		return "", 0, nil
+	})
+	var records []protocol.LoginNSSShield
+	data, _, _ := sys.ReadFile(reconcile.NSSShieldReport)
+	_ = json.Unmarshal(data, &records)
+	want := []protocol.LoginNSSShield{
+		{Action: "apt-get install", DurationS: 120, Outcome: protocol.NSSShieldRecovered},
+		{Action: "apt-get dist-upgrade", Outcome: protocol.NSSShieldRestored},
+	}
+	if !held || !slices.Equal(records, want) {
+		t.Errorf("held %v, records %+v, want %+v", held, records, want)
+	}
+	if _, _, files := sys.snapshot(); files != 1 {
+		t.Errorf("%d files, want only the records (the marker removed)", files)
+	}
+}
+
+// TestNSSShieldStopAndRestoreFail (review R2-2): when the stop and the following start both fail, the hold is reported
+// once as hold_failed; the marker stays for the retry, marked reported, so Recover retries the start without
+// reporting the hold again.
+func TestNSSShieldStopAndRestoreFail(t *testing.T) {
+	sys, shield, _, events := shieldFixture(true)
+	sys.fail["systemctl stop himmelblaud.service"] = true
+	sys.fail["systemctl start himmelblaud-tasks.service"] = true
+	_, _, _ = shield.Run(context.Background(), "apt-get install", func() (string, int, error) { return "", 0, nil })
+	if ev := shieldEvent(t, *events); ev.Outcome != protocol.NSSShieldHoldFailed {
+		t.Fatalf("event %+v", ev)
+	}
+	var m struct {
+		Reported bool `json:"reported"`
+	}
+	if data, _, err := sys.ReadFile(reconcile.NSSShieldMarker); err != nil || json.Unmarshal(data, &m) != nil || !m.Reported {
+		t.Fatalf("marker %s %v, want it kept as reported", data, err)
+	}
+	shield.Recover(context.Background())
+	delete(sys.fail, "systemctl start himmelblaud-tasks.service")
+	shield.Recover(context.Background())
+	if _, _, files := sys.snapshot(); len(*events) != 1 || files != 0 {
+		t.Errorf("events %v, marker files %d: the hold was reported again or the marker kept", *events, files)
 	}
 }

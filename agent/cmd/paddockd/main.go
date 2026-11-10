@@ -250,6 +250,7 @@ func runUpdates(ctx context.Context, layout paths.Layout, args []string) int {
 	// shield lock. The shield waits for the dpkg lock as long as apt does; the agent emits the records it leaves.
 	shield := &reconcile.NSSShield{Sys: sys, Events: reconcile.NSSShieldRecorder(sys), LockWait: osupdates.LockWait,
 		LockFile: layout.Join(reconcile.NSSShieldLock), DpkgBusy: reconcile.FrontendLockBusy(layout.Join(reconcile.DpkgFrontendLock))}
+	agent.ApplyDevShieldDurations(shield)
 	r := osupdates.RunRegular(ctx, sys.AptGetWithin, sys.DpkgWithin, shield.Run, time.Now,
 		func() bool { return osupdates.RebootRequired(layout) })
 	if err := osupdates.WriteResult(layout, r); err != nil {

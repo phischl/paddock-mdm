@@ -209,10 +209,7 @@ func Load(l paths.Layout) (Deps, error) {
 	events := &reconcile.Events{}
 	shield := &reconcile.NSSShield{Sys: sys, Events: events, LockFile: l.Join(reconcile.NSSShieldLock),
 		DpkgBusy: reconcile.FrontendLockBusy(l.Join(reconcile.DpkgFrontendLock))}
-	if buildinfo.Dev {
-		// The system gates kill the agent during a hold and wait for the safety timer (decisions §45).
-		shield.MaxHold, shield.TimerGrace = DevNSSShieldMaxHold, DevNSSShieldTimerGrace
-	}
+	ApplyDevShieldDurations(shield)
 	pkgSys := reconcile.Shielded{System: sys, Shield: shield}
 	inventory := &reconcile.Inventory{Sys: pkgSys, Events: events, Download: c.Download, BundlesURL: BundlesURL(cfg.ServerURL)}
 	software := &reconcile.Software{Sys: pkgSys, Events: events}
@@ -238,6 +235,15 @@ const (
 	DevNSSShieldMaxHold    = 4 * time.Minute
 	DevNSSShieldTimerGrace = time.Minute
 )
+
+// ApplyDevShieldDurations gives the shield of a development build the shorter hold and timer (plan M5a N3.4), for
+// the agent and `paddockd updates run` alike (N6.1); a release build keeps the defaults.
+func ApplyDevShieldDurations(s *reconcile.NSSShield) {
+	if buildinfo.Dev {
+		// The system gates kill the holder during a hold and wait for the safety timer (decisions §45).
+		s.MaxHold, s.TimerGrace = DevNSSShieldMaxHold, DevNSSShieldTimerGrace
+	}
+}
 
 // New creates the run loop. It writes nothing: `paddockd plan` uses it from a second process, so the start-time
 // work runs in Run.
