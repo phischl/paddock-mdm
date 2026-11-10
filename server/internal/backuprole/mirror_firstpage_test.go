@@ -117,3 +117,76 @@ func TestListingPageLimit(t *testing.T) {
 		t.Error("the answering endpoint's probes ticked no progress")
 	}
 }
+
+// TestHungListingOnAnsweringEndpointEndsAtPageLimit: a listing request that hangs on an endpoint that keeps answering
+// its probes outlives the stall deadline, ends at the page limit with an error naming the missing page, and does not
+// hold the round for the other target (PDK-972).
+func TestHungListingOnAnsweringEndpointEndsAtPageLimit(t *testing.T) {
+	f := newFixture(t)
+	f.confirmKey()
+	f.engine.stall = 400 * time.Millisecond
+	hung := &lateFirstPageS3{slowListS3: &slowListS3{objects: map[string]string{}, pages: 1}, firstPage: -1,
+		answering: true}
+	hungRec := f.addTarget(t, backupset.TypeS3, lateTarget(hung, 50*time.Millisecond, time.Second))
+	good := newMemTarget()
+	f.addTarget(t, backupset.TypeS3, good)
+
+	roundDone := make(chan error, 1)
+	go func() { roundDone <- f.engine.Round(context.Background()) }()
+	select {
+	case err := <-roundDone:
+		if err != nil {
+			t.Fatalf("round: %v", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("the round stayed blocked by the hung listing")
+	}
+	if _, ok := good.files[backupset.ManifestPath]; !ok {
+		t.Error("the reachable target got no manifest")
+	}
+	r, ok := f.store.run(KindOpenBao)
+	if !ok {
+		t.Fatal("no run recorded")
+	}
+	seen := false
+	for _, rt := range r.Targets {
+		if rt.TargetID == hungRec.ID.String() {
+			seen = true
+			if rt.OK || rt.ErrorClass != ClassIO {
+				t.Errorf("hung target %+v", rt)
+			}
+		}
+	}
+	if !seen {
+		t.Error("the run recorded no result for the hung target")
+	}
+
+	// The run keeps no error text, so what ended the mirror is read off a direct mirror of the same target.
+	repo, idx := openSet(t, map[string]string{backupset.ManifestPath: string(testManifest(t, InstallationID(42), nil)),
+		"openbao/20261105T060000Z.snap.enc": "a"})
+	rec := f.addTarget(t, backupset.TypeS3, lateTarget(hung, 50*time.Millisecond, time.Second))
+	start := time.Now()
+	_, err := f.engine.mirrorTarget(context.Background(), repo, idx, rec, testRetention(time.Now()))
+	if !errors.Is(err, errStalled) || !strings.Contains(err.Error(), "no page of the listing") {
+		t.Errorf("error %v, want the page limit", err)
+	}
+	if took := time.Since(start); took < 2*f.engine.stall {
+		t.Errorf("the mirror ended after %s, within the stall deadline: the probes did not keep it alive", took)
+	}
+}
+
+// TestListingEndAbandonsProbeInFlight: a probe still waiting on a silent endpoint when the listing's page arrives is
+// given up at once; the listing returns without waiting for the probe's timeout.
+func TestListingEndAbandonsProbeInFlight(t *testing.T) {
+	s3 := &lateFirstPageS3{slowListS3: &slowListS3{objects: map[string]string{}, pages: 1},
+		firstPage: 200 * time.Millisecond}
+	dst := lateTarget(s3, 20*time.Millisecond, time.Minute)
+	dst.probeTimeout = time.Minute
+	start := time.Now()
+	if _, err := dst.ListProgress(context.Background(), func() {}); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("the listing returned after %s, held by a probe in flight", took)
+	}
+}

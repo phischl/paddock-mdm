@@ -529,23 +529,26 @@ func (s *s3Target) List(ctx context.Context) (map[string]int64, error) {
 // ListProgress is List and calls tick after every page of the bucket listing and, while it waits for a page, every
 // time the endpoint answers a probe: a slow first page from an endpoint that still answers is no stall (PDK-972),
 // while an endpoint that answers nothing still trips the mirror's watchdog. A page that does not arrive within
-// pageLimit ends the listing with errStalled.
+// pageLimit ends the listing with errStalled. tick is called from two goroutines (the listing's and the probes'), so
+// it must be safe for concurrent use; it is never called once ListProgress returned.
 func (s *s3Target) ListProgress(ctx context.Context, tick func()) (map[string]int64, error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	var lastPage atomic.Int64
 	lastPage.Store(time.Now().UnixNano())
-	listed := make(chan struct{})
+	// The probes get their own context so that a probe still in flight when the listing ends is given up at once
+	// instead of holding the listing's result for up to probeTimeout.
+	probeCtx, stopProbes := context.WithCancel(ctx)
 	probing := make(chan struct{})
 	go func() {
 		defer close(probing)
-		s.probeWhileListing(ctx, listed, &lastPage, tick, cancel)
+		s.probeWhileListing(probeCtx, &lastPage, tick, cancel)
 	}()
 	all, err := s.store.ListSizesPaged(ctx, s.setPrefix(), func() {
 		lastPage.Store(time.Now().UnixNano())
 		tick()
 	})
-	close(listed)
+	stopProbes()
 	<-probing
 	if err != nil {
 		if cause := context.Cause(ctx); errors.Is(cause, errStalled) {
@@ -567,16 +570,13 @@ func (s *s3Target) ListProgress(ctx context.Context, tick func()) (map[string]in
 }
 
 // probeWhileListing asks the endpoint whether it answers every probeEvery without a page and ticks when it does; it
-// cancels the listing with errStalled once no page arrived for pageLimit. It returns once listed is closed or ctx
-// ended.
-func (s *s3Target) probeWhileListing(ctx context.Context, listed <-chan struct{}, lastPage *atomic.Int64,
-	tick func(), cancel context.CancelCauseFunc) {
+// cancels the listing with errStalled once no page arrived for pageLimit. It returns once ctx ended.
+func (s *s3Target) probeWhileListing(ctx context.Context, lastPage *atomic.Int64, tick func(),
+	cancel context.CancelCauseFunc) {
 	t := time.NewTicker(s.probeEvery)
 	defer t.Stop()
 	for {
 		select {
-		case <-listed:
-			return
 		case <-ctx.Done():
 			return
 		case <-t.C:
@@ -590,7 +590,7 @@ func (s *s3Target) probeWhileListing(ctx context.Context, listed <-chan struct{}
 			pctx, pcancel := context.WithTimeout(ctx, s.probeTimeout)
 			err := s.store.Ping(pctx)
 			pcancel()
-			if err == nil {
+			if err == nil && ctx.Err() == nil {
 				tick()
 			}
 		}
