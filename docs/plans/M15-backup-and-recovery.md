@@ -1696,8 +1696,8 @@ No gate is weakened.
 ### Correction 2026-11-11 — the lane amendment aligned with PDK-989 as built (commit `f8fbb732`, in review)
 
 The amendment above was written before the implementation existed. PDK-989 solved four points differently; three
-are adopted because they are simpler or safer, and two points of the amendment stay binding although the code does
-not meet them yet. Where this correction contradicts C3–C11, it wins.
+are adopted because they are simpler or safer, two points of the amendment stay binding although the code does
+not meet them yet, and the leader lock is decided anew (point 9). Where this correction contradicts C3–C11, it wins.
 
 **Adopted from the implementation (replaces the text named):**
 
@@ -1717,12 +1717,9 @@ not meet them yet. Where this correction contradicts C3–C11, it wins.
 3. **C5.1, the manifest.** The lane reads the local `manifest.json` once, at its start, and it must still be the
    file its index holds (size and modification time); if a later round already replaced it, the lane ends with
    `continues` and the next lane takes the newer set. The bytes read at the start are the ones put in step 5.
-4. **C3.7 and C7, leader lock and shutdown.** Lanes run outside the round's leader lock and are not cancelled by a
-   round that did not obtain it: the backup role is a single instance by construction (one local repository volume,
-   one runtime volume), and a lock per lane would need a database connection per lane. At shutdown the lanes are
-   cancelled and `Run` returns once they returned; the 10-second bound of C7 is dropped. A shutdown-cancelled lane
-   records nothing and its pass is dropped; the first pass after a restart covers every run still without
-   `mirrored_at`.
+4. **C7, shutdown.** At shutdown the lanes are cancelled and `Run` returns once they returned; the 10-second bound
+   of C7 is dropped. A shutdown-cancelled lane records nothing and its pass is dropped; the first pass after a
+   restart covers every run still without `mirrored_at`. The leader lock is decided in point 9.
 5. **C1 and C9 row 10, abandoned lanes.** A mirror call still blocked in the file system after the watchdog gave up
    is tracked as before: the target's next lane ends at once with "the previous mirror has not returned" (class
    `io`) until the call returned.
@@ -1739,7 +1736,37 @@ not meet them yet. Where this correction contradicts C3–C11, it wins.
    flight, absent without one). It is the only way an operator sees that a target's copy has been running for
    hours; RR-132 names it. `docs/operations/monitoring.md` lists it with the other backup metrics.
 
-**Unchanged:** C0, C2, C3.1–C3.6, C5.2, C5.4, C6, C8, the gates, AC-1 to AC-3 and AC-5. AC-4 reads: every finished
+9. **Leadership for the process lifetime (decision M1 of A10-26, `decisions-alpha10.md` §50; replaces C3.1's "a
+   round that holds the leader lock", C3.7's leader-lock clause and the third bullet of C7).** `f8fbb732` takes the
+   advisory lock per round and releases it when the round returns, so the lanes run without it and a second process
+   could take every other round. Options: (a) declare the role single-instance and leave the lock per round: no
+   code, but the documented guard (`docs/architecture.md` §3.2, role `backup`: exactly 1 active replica, leader
+   lock) would no longer cover the mirror; (b) hold the lock for the process lifetime. **Decision: (b).**
+   - The backup role takes the leader lock (`LockKey`) **once**, on **one dedicated database connection**, and holds
+     it until the process ends. Rounds and lanes run only while the process is leader. A process that does not get
+     the lock is a **standby**: it runs no round, starts no lane, writes nothing, and tries again every round
+     interval.
+   - The dedicated connection is exactly one connection held in addition to the pool the rounds use. When the pool
+     cannot spare it, the pool is sized by one more; falling back to (a) is not allowed.
+   - **Losing the connection is losing leadership.** The role MUST then cancel every round and every lane **before
+     any further write** to the database, the local set or a target, log the loss at `Warn`, and try to become
+     leader again as a standby does. A lane cancelled this way writes no status and no result and its pass is
+     dropped, as at shutdown; after the role is leader again, its first pass covers every run without `mirrored_at`.
+   - A file system call that cannot be interrupted may still complete one write after the cancel; that is the
+     abandoned-lane case of point 5 and is accepted. No new write starts.
+   - Tests (binding): losing leadership stops the lanes and no status or run result is written afterwards; a second
+     engine on the same lock starts no round and no lane while the first is leader, and takes over after the first
+     released it. `docs/architecture.md` §3.2 needs no change: it already states the rule the code now meets.
+
+**The eight points PDK-989 listed for this amendment, and where they are:** (1) one lane per enabled target, the
+round never waits, the lane copies its index and that index's `manifest.json`: C2, C3, point 3. (2) the 10-minute
+budget is a lane's copy budget and targets mirror in parallel: C3.3, C8. (3) phase 2 per mirror pass: point 1.
+(4) the Fleet watcher is replaced by the next round: point 6. (5) the local expire keeps what a lane in flight
+indexes: point 2. (6) target tests run every round with their own timeout of 30 seconds, independent of a lane on
+the same target: C6. (7) lanes and the leader lock: point 9, which overrules the single-instance assumption.
+(8) RR-126 and PDK-869 are unchanged in substance, an unbounded step 6 holds only its lane: C3.3, C8.
+
+**Unchanged:** C0, C2, C3.1–C3.6 (C3.1 with point 9), C5.2, C5.4, C6, C8, the gates, AC-1 to AC-3 and AC-5. AC-4 reads: every finished
 run has exactly one `platform.backup_completed` or `platform.backup_failed`, also across a restart of the role.
 Tests as built (`lanes_test.go`): `TestHangingLaneDoesNotDelayTheRound`, `TestSlowTargetDoesNotHoldTheFastOne`,
 `TestShutdownCancelsLanesAndRestartResumes`, `TestLocalExpireWaitsForLane`, `TestLanePrunesOnlyByThePDK972Rules`;
