@@ -1692,3 +1692,55 @@ No gate is weakened.
 - Open, default chosen: (1) the await limit of 60 minutes (C4.5); a longer limit delays audit events, a shorter one
   records more runs with `continues`. (2) A lane in flight is visible to an operator only through the gauge and the
   log; showing it in `./paddock backup status` and the portal needs a column and an API field (later release).
+
+### Correction 2026-11-11 — the lane amendment aligned with PDK-989 as built (commit `f8fbb732`, in review)
+
+The amendment above was written before the implementation existed. PDK-989 solved four points differently; three
+are adopted because they are simpler or safer, and two points of the amendment stay binding although the code does
+not meet them yet. Where this correction contradicts C3–C11, it wins.
+
+**Adopted from the implementation (replaces the text named):**
+
+1. **C4, mirror passes instead of awaited targets.** A round creates one **mirror pass**: it covers the finished
+   runs without `mirrored_at` at that moment, minus the runs an open pass still covers. Per target the pass takes:
+   the result of the lane this round started; `continues` at once when the target's lane is still mirroring an
+   earlier set (its index lacks the pass's runs); `not_mounted` or `io` at once for a volume that is not mounted or
+   unreachable. Phase 2 of a pass (the per-target results, `mirrored_at` and the one audit event of each of its
+   runs) runs exactly once, when the last of its lanes ended. A pass stays open until then, so no run is covered
+   twice. C4.2–C4.6 and the await limit of 60 minutes (C4.5, C9 row 5, AC-4's bound, open point 1) are **dropped**:
+   a run recorded while a target is busy gets `continues` for that target at once and is not held. Only the runs of
+   the pass that started a long lane wait for that lane, as they did before lanes.
+2. **C5.3, the local expire waits for lanes.** The role's own expire (A2: OpenBao and Fleet files, escrow copies, a
+   retired path as a whole) MUST NOT remove a file that the index of a lane in flight holds, nor a retired path
+   such an index holds; they go in the first round after that lane ended. pgBackRest's own expire is not held back;
+   a file it removed is skipped by the lane as before. This is stricter than "skip what vanished" and replaces it.
+3. **C5.1, the manifest.** The lane reads the local `manifest.json` once, at its start, and it must still be the
+   file its index holds (size and modification time); if a later round already replaced it, the lane ends with
+   `continues` and the next lane takes the newer set. The bytes read at the start are the ones put in step 5.
+4. **C3.7 and C7, leader lock and shutdown.** Lanes run outside the round's leader lock and are not cancelled by a
+   round that did not obtain it: the backup role is a single instance by construction (one local repository volume,
+   one runtime volume), and a lock per lane would need a database connection per lane. At shutdown the lanes are
+   cancelled and `Run` returns once they returned; the 10-second bound of C7 is dropped. A shutdown-cancelled lane
+   records nothing and its pass is dropped; the first pass after a restart covers every run still without
+   `mirrored_at`.
+5. **C1 and C9 row 10, abandoned lanes.** A mirror call still blocked in the file system after the watchdog gave up
+   is tracked as before: the target's next lane ends at once with "the previous mirror has not returned" (class
+   `io`) until the call returned.
+6. **C4.7.** The Fleet watcher and the skip list of the note 2026-11-07 c are removed; the next round seals the
+   dump. A failed phase-2 write is logged and no longer fails the round.
+
+**Still binding, not in `f8fbb732` (PDK-989 MUST add them before it merges, each with a test):**
+
+7. **C3.7, a disabled or deleted target.** When a round finds a target disabled or deleted whose lane is in flight,
+   it cancels that lane. A cancelled lane writes no status and no result; its pass takes no result for that target.
+   Reason: an administrator who disables or deletes a target expects Paddock to stop writing to it and deleting on
+   it, and a lane can run for hours.
+8. **C3.8, the gauge** `paddock_backup_target_mirror_started_timestamp_seconds{target}` (the start of the lane in
+   flight, absent without one). It is the only way an operator sees that a target's copy has been running for
+   hours; RR-132 names it. `docs/operations/monitoring.md` lists it with the other backup metrics.
+
+**Unchanged:** C0, C2, C3.1–C3.6, C5.2, C5.4, C6, C8, the gates, AC-1 to AC-3 and AC-5. AC-4 reads: every finished
+run has exactly one `platform.backup_completed` or `platform.backup_failed`, also across a restart of the role.
+Tests as built (`lanes_test.go`): `TestHangingLaneDoesNotDelayTheRound`, `TestSlowTargetDoesNotHoldTheFastOne`,
+`TestShutdownCancelsLanesAndRestartResumes`, `TestLocalExpireWaitsForLane`, `TestLanePrunesOnlyByThePDK972Rules`;
+they cover C9 rows 1–4 and 6–9 in the form of this correction.
