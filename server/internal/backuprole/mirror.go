@@ -116,7 +116,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 	}
 	hooks.tick()
 	facts := newIndexFacts(idx)
-	plan, err := guard(ctx, dst, facts, have, ret)
+	plan, err := guard(ctx, dst, facts, have, ret, hooks.tick)
 	if err != nil {
 		return 0, err
 	}
@@ -309,9 +309,9 @@ func (f repoFile) segment() string {
 // its copy (G2); else the set is shrunk. A repository path the local set lacks entirely is the active key's (shrunk),
 // a retired key's (removed once the local expire rule holds on the target's own copy, else held), or one no key
 // names (held, unknown_path) (G3). OpenBao snapshots, Fleet dumps, escrowed headers and WAL never shrink the set (G4).
-// It stops as soon as ctx ends.
+// The walk of a retired repository for its newest file reports progress to tick. It stops as soon as ctx ends.
 func guard(ctx context.Context, dst Target, facts *indexFacts, have map[string]int64,
-	ret retention) (guardPlan, error) {
+	ret retention, tick func()) (guardPlan, error) {
 	idx := facts.idx
 	plan := guardPlan{drop: map[string]bool{}, hold: map[string]bool{}}
 	lacking := map[string]bool{}
@@ -356,7 +356,7 @@ func guard(ctx context.Context, dst Target, facts *indexFacts, have map[string]i
 				plan.hold[dir] = true
 				continue
 			}
-			newest, err := dst.Newest(ctx, dir)
+			newest, err := newestProgress(ctx, dst, dir, tick)
 			if err != nil {
 				return guardPlan{}, err
 			}

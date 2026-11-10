@@ -52,7 +52,7 @@ func (s *slowListS3) ListSizesPaged(ctx context.Context, prefix string, page fun
 	return out, nil
 }
 
-func (s *slowListS3) Newest(context.Context, string) (time.Time, bool, error) {
+func (s *slowListS3) NewestPaged(context.Context, string, func()) (time.Time, bool, error) {
 	return time.Time{}, false, nil
 }
 

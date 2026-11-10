@@ -3,6 +3,9 @@ package backuprole
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -188,5 +191,118 @@ func TestListingEndAbandonsProbeInFlight(t *testing.T) {
 	}
 	if took := time.Since(start); took > 10*time.Second {
 		t.Errorf("the listing returned after %s, held by a probe in flight", took)
+	}
+}
+
+// slowNewestS3 is an S3 endpoint whose listing answers at once but whose walk of a repository for its newest file
+// returns its first page only after newest (never when newest < 0), as RustFS on a retired repository of 45 000
+// objects among many deleted ones (PDK-972). Ping answers when answering is set, else it blocks until given up.
+type slowNewestS3 struct {
+	*slowListS3
+	newest    time.Duration
+	answering bool
+}
+
+func (s *slowNewestS3) Ping(ctx context.Context) error {
+	if s.answering {
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (s *slowNewestS3) NewestPaged(ctx context.Context, _ string, page func()) (time.Time, bool, error) {
+	wait := make(<-chan time.Time)
+	if s.newest >= 0 {
+		wait = time.After(s.newest)
+	}
+	select {
+	case <-ctx.Done():
+		return time.Time{}, false, ctx.Err()
+	case <-wait:
+	}
+	page()
+	return time.Time{}, false, nil
+}
+
+// retiredOnSlowNewest mirrors a complete active repository to an S3 target holding a retired repository past its
+// retention, through an endpoint whose newest-file walk is slow per s; it returns the mirror's error and whether the
+// retired repository is gone.
+func retiredOnSlowNewest(t *testing.T, s *slowNewestS3) (error, bool) {
+	t.Helper()
+	f := newFixture(t)
+	f.engine.stall = 400 * time.Millisecond
+	set := "site/" + backupset.SetRoot + "/"
+	for p, body := range oldRepo() {
+		s.objects[set+p] = body
+	}
+	repo, idx := localSet(t, completeA(label9))
+	ret := testRetention(time.Now())
+	ret.retired[pathOld], ret.known[pathOld] = time.Now().Add(-20*day), true
+	dst := NewS3Target(s, "site").(*s3Target)
+	dst.probeEvery, dst.probeTimeout, dst.pageLimit = 50*time.Millisecond, 50*time.Millisecond, time.Minute
+	rec := f.addTarget(t, backupset.TypeS3, dst)
+	_, err := f.engine.mirrorTarget(context.Background(), repo, idx, rec, ret)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for p := range oldRepo() {
+		if _, ok := s.objects[set+p]; ok {
+			return err, false
+		}
+	}
+	return err, true
+}
+
+// TestSlowRetiredNewestFromAnsweringEndpointIsNoStall: the guard's walk of a retired repository for its newest file
+// takes longer than the stall deadline while the endpoint answers; the mirror goes on and prunes the repository.
+// Before, that walk reported no progress, so a large retired repository stalled every mirror before step 6 (PDK-972).
+func TestSlowRetiredNewestFromAnsweringEndpointIsNoStall(t *testing.T) {
+	err, pruned := retiredOnSlowNewest(t, &slowNewestS3{slowListS3: &slowListS3{objects: map[string]string{}, pages: 1},
+		newest: 1600 * time.Millisecond, answering: true})
+	if err != nil {
+		t.Fatalf("mirror: %v", err)
+	}
+	if !pruned {
+		t.Error("the retired repository past its retention was not pruned")
+	}
+}
+
+// TestSlowRetiredNewestFromSilentEndpointStalls: the same walk on an endpoint that answers no probe fails the mirror
+// after the stall deadline, and nothing of the retired repository is deleted.
+func TestSlowRetiredNewestFromSilentEndpointStalls(t *testing.T) {
+	start := time.Now()
+	err, pruned := retiredOnSlowNewest(t, &slowNewestS3{slowListS3: &slowListS3{objects: map[string]string{}, pages: 1},
+		newest: -1})
+	if !errors.Is(err, errStalled) || !strings.Contains(err.Error(), "no progress") {
+		t.Errorf("error %v, want a stall", err)
+	}
+	if pruned {
+		t.Error("the stalled mirror deleted the retired repository")
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("the watchdog took %s", took)
+	}
+}
+
+// TestDirTargetNewestTicks: a mounted target's walk of a repository for its newest file reports progress like its
+// listing, so a slow share that still answers is no stall.
+func TestDirTargetNewestTicks(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "mount", backupset.SetRoot)
+	dir := filepath.Join(root, "pgbackrest", "bk-20261001-0badc0de", "archive")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	const files = 3 * listTickEvery
+	for i := range files {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%05d", i)), []byte("x"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ticks := 0
+	if _, err := newestProgress(context.Background(), NewDirTarget(root), pathOld+"/", func() { ticks++ }); err != nil {
+		t.Fatal(err)
+	}
+	if ticks < files/listTickEvery {
+		t.Errorf("%d ticks while walking %d files, want at least %d", ticks, files, files/listTickEvery)
 	}
 }

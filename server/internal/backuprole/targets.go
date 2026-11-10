@@ -255,6 +255,12 @@ func (d *dirTarget) ListProgress(ctx context.Context, tick func()) (map[string]i
 }
 
 func (d *dirTarget) Newest(ctx context.Context, dir string) (time.Time, error) {
+	return d.NewestProgress(ctx, dir, func() {})
+}
+
+// NewestProgress is Newest and calls tick every listTickEvery entries, as ListProgress does: the guard asks it for
+// every retired repository, which on a slow share can take longer than the stall deadline (PDK-972).
+func (d *dirTarget) NewestProgress(ctx context.Context, dir string, tick func()) (time.Time, error) {
 	dir = strings.TrimSuffix(dir, "/")
 	if !validPath(dir) {
 		return time.Time{}, fmt.Errorf("backup target: invalid path %q", dir)
@@ -265,12 +271,16 @@ func (d *dirTarget) Newest(ctx context.Context, dir string) (time.Time, error) {
 	}
 	defer func() { _ = r.Close() }()
 	var newest time.Time
+	walked := 0
 	err = fs.WalkDir(r.FS(), dir, func(_ string, e fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if walked++; walked%listTickEvery == 0 {
+			tick()
 		}
 		if e.IsDir() || strings.HasPrefix(e.Name(), tmpPrefix) {
 			return nil
@@ -477,12 +487,25 @@ func listProgress(ctx context.Context, dst Target, tick func()) (map[string]int6
 	return dst.List(ctx)
 }
 
+// progressNewest is a Target whose Newest reports progress like its listing: it walks a whole retired repository.
+type progressNewest interface {
+	NewestProgress(ctx context.Context, dir string, tick func()) (time.Time, error)
+}
+
+// newestProgress is dst's Newest and reports progress to tick when dst can.
+func newestProgress(ctx context.Context, dst Target, dir string, tick func()) (time.Time, error) {
+	if p, ok := dst.(progressNewest); ok {
+		return p.NewestProgress(ctx, dir, tick)
+	}
+	return dst.Newest(ctx, dir)
+}
+
 // S3Store is the part of objectstore.Store an S3 target uses.
 type S3Store interface {
 	Ping(ctx context.Context) error
 	ListSizes(ctx context.Context, prefix string) (map[string]int64, error)
 	ListSizesPaged(ctx context.Context, prefix string, page func()) (map[string]int64, error)
-	Newest(ctx context.Context, prefix string) (newest time.Time, found bool, err error)
+	NewestPaged(ctx context.Context, prefix string, page func()) (newest time.Time, found bool, err error)
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
 	PutReader(ctx context.Context, key string, body io.ReadSeeker, size int64) error
 	Delete(ctx context.Context, key string) error
@@ -527,33 +550,14 @@ func (s *s3Target) List(ctx context.Context) (map[string]int64, error) {
 }
 
 // ListProgress is List and calls tick after every page of the bucket listing and, while it waits for a page, every
-// time the endpoint answers a probe: a slow first page from an endpoint that still answers is no stall (PDK-972),
-// while an endpoint that answers nothing still trips the mirror's watchdog. A page that does not arrive within
-// pageLimit ends the listing with errStalled. tick is called from two goroutines (the listing's and the probes'), so
-// it must be safe for concurrent use; it is never called once ListProgress returned.
+// time the endpoint answers a probe (paged).
 func (s *s3Target) ListProgress(ctx context.Context, tick func()) (map[string]int64, error) {
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	var lastPage atomic.Int64
-	lastPage.Store(time.Now().UnixNano())
-	// The probes get their own context so that a probe still in flight when the listing ends is given up at once
-	// instead of holding the listing's result for up to probeTimeout.
-	probeCtx, stopProbes := context.WithCancel(ctx)
-	probing := make(chan struct{})
-	go func() {
-		defer close(probing)
-		s.probeWhileListing(probeCtx, &lastPage, tick, cancel)
-	}()
-	all, err := s.store.ListSizesPaged(ctx, s.setPrefix(), func() {
-		lastPage.Store(time.Now().UnixNano())
-		tick()
-	})
-	stopProbes()
-	<-probing
-	if err != nil {
-		if cause := context.Cause(ctx); errors.Is(cause, errStalled) {
-			return nil, cause
-		}
+	var all map[string]int64
+	if err := s.paged(ctx, tick, func(ctx context.Context, page func()) error {
+		var err error
+		all, err = s.store.ListSizesPaged(ctx, s.setPrefix(), page)
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	out := make(map[string]int64, len(all))
@@ -567,6 +571,39 @@ func (s *s3Target) ListProgress(ctx context.Context, tick func()) (map[string]in
 		out[p] = size
 	}
 	return out, nil
+}
+
+// paged runs list, a bucket listing that calls page after every page, and calls tick after every page and, while it
+// waits for one, every time the endpoint answers a probe: a slow page from an endpoint that still answers is no
+// stall (PDK-972), while an endpoint that answers nothing still trips the mirror's watchdog. A page that does not
+// arrive within pageLimit ends the listing with errStalled. tick is called from two goroutines (the listing's and the
+// probes'), so it must be safe for concurrent use; it is never called once paged returned.
+func (s *s3Target) paged(ctx context.Context, tick func(), list func(ctx context.Context, page func()) error) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var lastPage atomic.Int64
+	lastPage.Store(time.Now().UnixNano())
+	// The probes get their own context so that a probe still in flight when the listing ends is given up at once
+	// instead of holding the listing's result for up to probeTimeout.
+	probeCtx, stopProbes := context.WithCancel(ctx)
+	probing := make(chan struct{})
+	go func() {
+		defer close(probing)
+		s.probeWhileListing(probeCtx, &lastPage, tick, cancel)
+	}()
+	err := list(ctx, func() {
+		lastPage.Store(time.Now().UnixNano())
+		tick()
+	})
+	stopProbes()
+	<-probing
+	if err != nil {
+		if cause := context.Cause(ctx); errors.Is(cause, errStalled) {
+			return cause
+		}
+		return err
+	}
+	return nil
 }
 
 // probeWhileListing asks the endpoint whether it answers every probeEvery without a page and ticks when it does; it
@@ -598,10 +635,21 @@ func (s *s3Target) probeWhileListing(ctx context.Context, lastPage *atomic.Int64
 }
 
 func (s *s3Target) Newest(ctx context.Context, dir string) (time.Time, error) {
+	return s.NewestProgress(ctx, dir, func() {})
+}
+
+// NewestProgress is Newest with the progress of ListProgress (paged): it lists the whole retired repository, which on
+// a versioned bucket can take longer than the stall deadline before its first page (PDK-972).
+func (s *s3Target) NewestProgress(ctx context.Context, dir string, tick func()) (time.Time, error) {
 	if !validPath(strings.TrimSuffix(dir, "/")) {
 		return time.Time{}, fmt.Errorf("backup target: invalid path %q", dir)
 	}
-	newest, _, err := s.store.Newest(ctx, s.setPrefix()+dir)
+	var newest time.Time
+	err := s.paged(ctx, tick, func(ctx context.Context, page func()) error {
+		var err error
+		newest, _, err = s.store.NewestPaged(ctx, s.setPrefix()+dir, page)
+		return err
+	})
 	return newest, err
 }
 

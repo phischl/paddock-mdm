@@ -288,7 +288,7 @@ func (f *fakeS3) ListSizesPaged(ctx context.Context, prefix string, page func())
 	}
 	return out, err
 }
-func (f *fakeS3) Newest(context.Context, string) (time.Time, bool, error) {
+func (f *fakeS3) NewestPaged(context.Context, string, func()) (time.Time, bool, error) {
 	return time.Time{}, false, nil
 }
 func (f *fakeS3) Open(_ context.Context, key string) (io.ReadCloser, error) {
