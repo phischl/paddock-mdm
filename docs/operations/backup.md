@@ -178,8 +178,8 @@ class only, never the remote answer:
 target, and a mirror copies for at most 10 minutes (a trickling target is cut off after a little longer). A target that
 has not finished stops after the file it is copying, keeps its previous `manifest.json` and **goes on in the next
 round**, so the initial sync of a large set over a WAN link spans several rounds. Listing a large target can take
-longer than a round; meanwhile the later rounds' backups show that target as *continues next round* in the run
-history, and its next mirror carries them. The target is not current until it has finished: `./paddock backup status`
+longer than a round; meanwhile the later rounds' backups wait for that target's next mirror, which carries them,
+and get their mirror results and audit event when it ended. The target is not current until it has finished: `./paddock backup status`
 and the *Overview* grid show per target and kind when its last mirror succeeded. A file the local retention would
 remove stays in the local repository while a mirror still copies the set that holds it, and goes in the first round
 after that mirror ended.

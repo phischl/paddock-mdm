@@ -435,3 +435,61 @@ func (p *partialListS3) ListSizesPaged(_ context.Context, _ string, page func())
 	page()
 	return nil, errors.New("connection reset by peer")
 }
+
+// TestLaneEndingWithTheLeadershipFreesItsSlot: a lane whose mirror returned just before the leadership ended records
+// nothing, but gives back its slot and its pin; and the end of a leadership clears every slot, so the next leadership
+// starts a lane for the target and the local expire deletes again (PDK-989 review 2, MJ1). Before, the slot stayed:
+// the target never got a lane again and the files of the dead lane's index were never expired.
+func TestLaneEndingWithTheLeadershipFreesItsSlot(t *testing.T) {
+	f := newFixture(t)
+	f.confirmKey()
+	for _, kind := range []string{KindOpenBao, KindFleet, KindEscrow} {
+		f.store.history[kind] = KindHistory{LastAttempt: f.now, LastSuccess: f.now}
+	}
+	dst := newMemTarget()
+	rec := f.addTarget(t, backupset.TypeS3, dst)
+	expired, newer := backupset.OpenBaoKey(f.now.Add(-60*24*time.Hour)), backupset.OpenBaoKey(f.now.Add(-time.Hour))
+	for _, p := range []string{expired, newer} {
+		full := filepath.Join(f.cfg.RepoDir, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("sealed"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pin := repoIndex{expired: {size: 6}}
+	exists := func() bool {
+		_, err := os.Stat(filepath.Join(f.cfg.RepoDir, filepath.FromSlash(expired)))
+		return err == nil
+	}
+
+	// settle after the leadership ended: nothing written, slot and pin released.
+	l := &lane{idx: pin}
+	f.engine.lanes[rec.ID] = l
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.engine.settle(ended, l, l.passes, rec, map[string]kindInfo{}, "", 0)
+	if len(f.engine.lanes) != 0 || len(f.engine.pinned()) != 0 {
+		t.Fatalf("after settle on an ended leadership: lanes %v, pins %d", f.engine.lanes, len(f.engine.pinned()))
+	}
+	if _, ok := f.store.statusOf(rec.ID, KindOpenBao); ok {
+		t.Error("settle wrote a status after the leadership ended")
+	}
+
+	// A slot a dead lane left behind blocks the target and pins its files, until the leadership's end clears it.
+	f.engine.lanes[rec.ID] = &lane{idx: pin}
+	f.round(t)
+	if !exists() || len(dst.ops) != 0 {
+		t.Fatalf("with a stale slot: expired snapshot kept %v, target ops %v", exists(), dst.ops)
+	}
+	f.engine.forgetPasses()
+	f.now = f.now.Add(time.Minute)
+	f.round(t)
+	if exists() {
+		t.Error("the expire still keeps the dead lane's file after the leadership ended")
+	}
+	if _, ok := dst.files[backupset.ManifestPath]; !ok {
+		t.Errorf("the next leadership started no lane for the target: %v", dst.ops)
+	}
+}

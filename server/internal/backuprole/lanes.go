@@ -155,6 +155,13 @@ func (e *Engine) mirrorLane(ctx context.Context, idx repoIndex, t TargetRecord, 
 func (e *Engine) settle(ctx context.Context, own *lane, passes []*mirrorPass, t TargetRecord, kinds map[string]kindInfo,
 	class string, held int) {
 	if ctx.Err() != nil {
+		// The lane slot and its pin go all the same: a slot left behind would keep the target from ever getting a lane
+		// again and its index from ever being expired.
+		e.laneMu.Lock()
+		if own != nil && e.lanes[t.ID] == own {
+			delete(e.lanes, t.ID)
+		}
+		e.laneMu.Unlock()
 		return
 	}
 	for _, kind := range backupset.Kinds {
@@ -258,10 +265,11 @@ func (e *Engine) waitLanes() {
 	e.laneWG.Wait()
 }
 
-// forgetPasses drops every open pass once no lane runs: their runs are still without mirror results in the database,
-// and the next leadership's first pass covers them.
+// forgetPasses drops every open pass and every lane slot once no lane runs: their runs are still without mirror
+// results in the database, and the next leadership's first pass covers them; a slot left by a lane that ended with the
+// leadership belongs to no running lane and would keep its target and its pinned files forever.
 func (e *Engine) forgetPasses() {
 	e.laneMu.Lock()
 	defer e.laneMu.Unlock()
-	e.passes, e.waiting = nil, map[uuid.UUID][]*mirrorPass{}
+	e.passes, e.waiting, e.lanes = nil, map[uuid.UUID][]*mirrorPass{}, map[uuid.UUID]*lane{}
 }

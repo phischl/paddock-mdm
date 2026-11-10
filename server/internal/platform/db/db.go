@@ -331,14 +331,19 @@ func (p *PlatformPool) Lead(ctx context.Context, key int64, check time.Duration,
 	lost := errors.Is(context.Cause(leadCtx), ErrLeadershipLost)
 	cancel(nil)
 	<-watching
+	// A dead network path would hold an unlock or a close without a deadline for the TCP timeout.
+	endCtx, end := context.WithTimeout(context.WithoutCancel(ctx), check)
+	defer end()
 	if lost {
 		// The session may still be alive behind a broken network path; closing it is the only way to be sure the
 		// lock is not held on by a connection nobody watches.
-		_ = conn.Conn().Close(context.WithoutCancel(ctx))
+		_ = conn.Conn().Close(endCtx)
 		return true, errors.Join(ErrLeadershipLost, err)
 	}
-	if _, uerr := conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", key); uerr != nil {
-		_ = conn.Conn().Close(context.WithoutCancel(ctx)) // closing the session releases the lock
+	if _, uerr := conn.Exec(endCtx, "SELECT pg_advisory_unlock($1)", key); uerr != nil {
+		closeCtx, done := context.WithTimeout(context.WithoutCancel(ctx), check)
+		_ = conn.Conn().Close(closeCtx) // closing the session releases the lock
+		done()
 	}
 	return true, err
 }
