@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,6 +73,22 @@ func (s *shieldSys) Remove(path string) error {
 	s.calls = append(s.calls, "remove "+path)
 	delete(s.files, path)
 	return nil
+}
+
+func (s *shieldSys) ReadDir(dir string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var names []string
+	for p := range s.files {
+		if d, name := path.Split(p); d == dir+"/" {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, fs.ErrNotExist
+	}
+	slices.Sort(names)
+	return names, nil
 }
 
 func (s *shieldSys) Systemctl(ctx context.Context, args ...string) (string, int, error) {
@@ -317,6 +336,27 @@ func TestNSSShieldRestoreFailed(t *testing.T) {
 	if _, timer, _ := sys.snapshot(); !timer {
 		t.Error("safety timer cancelled although himmelblaud did not start")
 	}
+	var m struct {
+		Action   string `json:"action"`
+		Reported bool   `json:"reported"`
+	}
+	if data, _, err := sys.ReadFile(reconcile.NSSShieldMarker); err != nil || json.Unmarshal(data, &m) != nil || !m.Reported || m.Action != "apt-get install" {
+		t.Fatalf("marker after a failed restore: %s %v, want it kept as reported", data, err)
+	}
+	if !shield.Holds("himmelblaud.service") {
+		t.Error("a failed restore of the agent's own hold is not its own hold any more")
+	}
+
+	// The next attempts retry the start; the hold is not reported again, and the marker goes once the start works.
+	shield.Recover(context.Background())
+	if len(*events) != 1 {
+		t.Errorf("a retry that failed again reported again: %v", *events)
+	}
+	delete(sys.fail, "systemctl start himmelblaud.service")
+	shield.Recover(context.Background())
+	if _, _, files := sys.snapshot(); files != 0 || len(*events) != 1 || !sys.isActive("himmelblaud.service") {
+		t.Errorf("after a successful retry: marker files %d, events %v, himmelblaud %v", files, *events, sys.isActive("himmelblaud.service"))
+	}
 }
 
 // TestNSSShieldHoldFailed: without a safety timer the daemon is never stopped; the transaction runs with himmelblaud
@@ -481,5 +521,290 @@ func TestLoginReportsForeignDaemonStop(t *testing.T) {
 	l.Apply(ctx, r)
 	if got := takeEvents(events); len(got) != 1 || got[0].typ != protocol.EventTamperServiceStopped {
 		t.Errorf("events of a second foreign stop %v, want it reported again", got)
+	}
+}
+
+// TestNSSShieldStopFails: when the stop itself fails, the daemon is started again, the marker removed, and the
+// transaction runs with himmelblaud running; the hold is reported once as hold_failed.
+func TestNSSShieldStopFails(t *testing.T) {
+	sys, shield, _, events := shieldFixture(true)
+	sys.fail["systemctl stop himmelblaud.service"] = true
+	ran := false
+	_, _, _ = shield.Run(context.Background(), "apt-get install", func() (string, int, error) { ran = true; return "", 0, nil })
+	_, timer, files := sys.snapshot()
+	if !ran || timer || files != 0 || !sys.isActive("himmelblaud.service") {
+		t.Errorf("ran %v, timer %v, marker files %d, himmelblaud %v", ran, timer, files, sys.isActive("himmelblaud.service"))
+	}
+	if ev := shieldEvent(t, *events); ev.Outcome != protocol.NSSShieldHoldFailed || !strings.Contains(ev.Error, "stop himmelblaud.service") {
+		t.Errorf("event %+v", ev)
+	}
+}
+
+// TestNSSShieldSerializes: two transactions at the same time are held one after the other, never overlapping.
+func TestNSSShieldSerializes(t *testing.T) {
+	sys, shield, _, events := shieldFixture(true)
+	shield.LockFile = filepath.Join(t.TempDir(), "nss-shield.lock")
+	var mu sync.Mutex
+	running, overlap := 0, false
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			_, _, _ = shield.Run(context.Background(), "apt-get install", func() (string, int, error) {
+				mu.Lock()
+				running++
+				overlap = overlap || running > 1
+				mu.Unlock()
+				time.Sleep(20 * time.Millisecond)
+				mu.Lock()
+				running--
+				mu.Unlock()
+				return "", 0, nil
+			})
+		})
+	}
+	wg.Wait()
+	if overlap || len(*events) != 2 || !sys.isActive("himmelblaud.service") {
+		t.Errorf("overlap %v, events %v, himmelblaud %v", overlap, *events, sys.isActive("himmelblaud.service"))
+	}
+}
+
+// TestNSSShieldWaitsForDpkg (review M4): while another process holds the dpkg frontend lock, himmelblaud is not
+// stopped; a lock that frees within LockWait lets the hold start, one that stays held defers the transaction with
+// apt's lock message, so that the software reconciler retries it (pending/dpkg_locked).
+func TestNSSShieldWaitsForDpkg(t *testing.T) {
+	_, shield, _, events := shieldFixture(true)
+	shield.LockWait = 600 * time.Millisecond
+	var probes atomic.Int32
+	shield.DpkgBusy = func() bool { return probes.Add(1) <= 2 }
+	ran := false
+	if _, _, err := shield.Run(context.Background(), "apt-get install", func() (string, int, error) { ran = true; return "", 0, nil }); err != nil || !ran {
+		t.Fatalf("lock freed within the wait: ran %v, %v", ran, err)
+	}
+	if shieldEvent(t, *events).Outcome != protocol.NSSShieldRestored {
+		t.Errorf("events %v", *events)
+	}
+
+	sys, shield, _, events := shieldFixture(true)
+	shield.LockWait = 300 * time.Millisecond
+	shield.DpkgBusy = func() bool { return true }
+	ran = false
+	out, exit, err := shield.Run(context.Background(), "apt-get install", func() (string, int, error) { ran = true; return "", 0, nil })
+	if ran || !errors.Is(err, reconcile.ErrNSSShieldBusy) || exit != 100 || !strings.HasPrefix(out, "E: Could not get lock") {
+		t.Errorf("lock held past the wait: ran %v, %q %d %v", ran, out, exit, err)
+	}
+	if calls, _, _ := sys.snapshot(); len(calls) != 0 || len(*events) != 0 || !sys.isActive("himmelblaud.service") {
+		t.Errorf("himmelblaud touched behind a held dpkg lock: %v %v", calls, *events)
+	}
+}
+
+// TestNSSShieldAcrossProcesses (plan M5a N6): a hold of `paddockd updates run` (another shield on the same lock file)
+// is Paddock's own: Holds is true while its lock is taken, the agent's transaction waits for the lock (and is deferred
+// past HoldWait), Recover with the lock taken recovers nothing, and the run's record reaches the agent's events once.
+func TestNSSShieldAcrossProcesses(t *testing.T) {
+	sys, agent, clock, events := shieldFixture(true)
+	lock := filepath.Join(t.TempDir(), "nss-shield.lock")
+	agent.LockFile, agent.HoldWait = lock, 300*time.Millisecond
+	updates := &reconcile.NSSShield{Sys: sys, LockFile: lock, Now: clock.Now, Events: reconcile.NSSShieldRecorder(sys)}
+
+	held, finish, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _ = updates.Run(context.Background(), "apt-get dist-upgrade", func() (string, int, error) {
+			close(held)
+			<-finish
+			return "", 0, nil
+		})
+	}()
+	<-held
+	// A fresh shield of the agent sees the other process's hold by its lock alone.
+	if fresh := (&reconcile.NSSShield{Sys: newShieldSys(true), LockFile: lock}); !fresh.Holds("himmelblaud.service") {
+		t.Error("the shield lock of another process's hold is not seen as Paddock's own hold")
+	}
+	if _, _, err := agent.Run(context.Background(), "apt-get install", func() (string, int, error) {
+		t.Error("the agent's transaction ran inside another process's hold")
+		return "", 0, nil
+	}); !errors.Is(err, reconcile.ErrNSSShieldBusy) {
+		t.Errorf("agent Run during the updates run's hold: %v", err)
+	}
+	agent.Recover(context.Background())
+	if sys.isActive("himmelblaud.service") || len(*events) != 0 {
+		t.Errorf("the agent ended another process's hold: himmelblaud %v, events %v", sys.isActive("himmelblaud.service"), *events)
+	}
+	close(finish)
+	<-done
+	if !agent.Pending(context.Background()) {
+		t.Error("the updates run's record is not pending for the agent")
+	}
+	agent.Recover(context.Background())
+	if ev := shieldEvent(t, *events); ev.Action != "apt-get dist-upgrade" || ev.Outcome != protocol.NSSShieldRestored {
+		t.Errorf("emitted record %+v", ev)
+	}
+	if agent.Pending(context.Background()) || agent.Holds("himmelblaud.service") {
+		t.Error("record or marker left after the agent emitted the record")
+	}
+}
+
+// TestNSSShieldWaitsForOtherHold (plan M5a N6.2): a transaction that finds another process's hold waits for its lock
+// and holds afterwards.
+func TestNSSShieldWaitsForOtherHold(t *testing.T) {
+	sys, agent, clock, events := shieldFixture(true)
+	lock := filepath.Join(t.TempDir(), "nss-shield.lock")
+	agent.LockFile = lock
+	updates := &reconcile.NSSShield{Sys: sys, LockFile: lock, Now: clock.Now, Events: reconcile.NSSShieldRecorder(sys)}
+	held, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _ = updates.Run(context.Background(), "apt-get dist-upgrade", func() (string, int, error) {
+			close(held)
+			time.Sleep(300 * time.Millisecond)
+			return "", 0, nil
+		})
+	}()
+	<-held
+	heldAfter := false
+	if _, _, err := agent.Run(context.Background(), "apt-get install", func() (string, int, error) {
+		heldAfter = !sys.isActive("himmelblaud.service")
+		return "", 0, nil
+	}); err != nil || !heldAfter {
+		t.Errorf("the waiting transaction: %v, held %v", err, heldAfter)
+	}
+	<-done
+	agent.Recover(context.Background())
+	var actions []string
+	for _, e := range *events {
+		var ev protocol.LoginNSSShield
+		_ = json.Unmarshal([]byte(e.data), &ev)
+		actions = append(actions, ev.Action)
+	}
+	if !slices.Equal(actions, []string{"apt-get install", "apt-get dist-upgrade"}) {
+		t.Errorf("events %v, want the agent's hold and the run's record", actions)
+	}
+}
+
+// TestNSSShieldRecords (plan M5a N6.4): the records of the updates run form one array of at most 16 entries; the
+// agent emits each as login.nss_shield and removes the file.
+func TestNSSShieldRecords(t *testing.T) {
+	sys, agent, _, events := shieldFixture(true)
+	rec := reconcile.NSSShieldRecorder(sys)
+	for i := range 18 {
+		rec.Emit(protocol.EventLoginNSSShield, protocol.LoginNSSShield{Action: "apt-get dist-upgrade", DurationS: int64(i), Outcome: "restored"})
+	}
+	agent.Recover(context.Background())
+	if len(*events) != 16 {
+		t.Fatalf("%d events, want the newest 16", len(*events))
+	}
+	var first protocol.LoginNSSShield
+	_ = json.Unmarshal([]byte((*events)[0].data), &first)
+	if first.DurationS != 2 {
+		t.Errorf("oldest kept record %+v, want the third", first)
+	}
+	if _, _, err := sys.ReadFile(reconcile.NSSShieldReport); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("record file left: %v", err)
+	}
+}
+
+// TestNSSShieldRecoverDeadHolder: a marker whose holder died (no process holds the lock) is finished by Recover, even
+// when the hold was another process's.
+func TestNSSShieldRecoverDeadHolder(t *testing.T) {
+	sys, shield, _, events := shieldFixture(false)
+	shield.LockFile = filepath.Join(t.TempDir(), "nss-shield.lock")
+	sys.files[reconcile.NSSShieldMarker] = []byte(`{"action":"apt-get dist-upgrade","pid":` + "999999" + `}`)
+	if !shield.Pending(context.Background()) {
+		t.Fatal("a hold without holder is not pending")
+	}
+	shield.Recover(context.Background())
+	if !sys.isActive("himmelblaud.service") || shieldEvent(t, *events).Outcome != protocol.NSSShieldRecovered {
+		t.Errorf("himmelblaud %v, events %v", sys.isActive("himmelblaud.service"), *events)
+	}
+}
+
+// holdDuringShow is a device on which a hold starts while the login reconciler reads himmelblaud's state: the hold's
+// marker is written and the daemon stopped just before systemctl show answers.
+type holdDuringShow struct {
+	*fakesys.System
+	armed bool
+}
+
+func (h *holdDuringShow) Systemctl(ctx context.Context, args ...string) (string, int, error) {
+	if h.armed && args[0] == "show" {
+		h.armed = false
+		h.Files[reconcile.NSSShieldMarker] = &fakesys.File{Data: []byte(`{"action":"apt-get install"}`), Mode: 0o600}
+		h.Units["himmelblaud.service"].Active = false
+	}
+	return h.System.Systemctl(ctx, args...)
+}
+
+// TestLoginHoldBetweenReads (review M1): a hold that starts between the login reconciler's check of the shield and its
+// read of the daemon's state is the agent's own, not tampering.
+func TestLoginHoldBetweenReads(t *testing.T) {
+	fs, l, events := loginFixture(t)
+	ctx := context.Background()
+	r := loginResource(t, loginSpec())
+	l.Apply(ctx, r)
+	takeEvents(events)
+	sys := &holdDuringShow{System: fs}
+	l.Sys = sys
+	l.Shield = &reconcile.NSSShield{Sys: sys, Events: l.Events}
+	sys.armed = true
+	if changes, _ := l.Plan(ctx, r); slices.ContainsFunc(changes, func(c string) bool { return strings.HasPrefix(c, "report") }) {
+		t.Errorf("Plan reports the own hold: %v", changes)
+	}
+	fs.Units["himmelblaud.service"].Active = true
+	delete(fs.Files, reconcile.NSSShieldMarker)
+	sys.armed = true
+	l.Apply(ctx, r)
+	for _, e := range takeEvents(events) {
+		if e.typ == protocol.EventTamperServiceStopped {
+			t.Errorf("Apply reported the own hold as tampering: %v", e)
+		}
+	}
+}
+
+// TestLoginRestartWaitsForHold (review M3): a configuration change while another hold runs (here of a second shield on
+// the same lock, as `paddockd updates run` takes it) does not restart himmelblaud into that hold and does not fail;
+// the restart follows once the hold ended.
+func TestLoginRestartWaitsForHold(t *testing.T) {
+	sys, l, events := loginFixture(t)
+	ctx := context.Background()
+	l.Apply(ctx, loginResource(t, loginSpec()))
+	takeEvents(events)
+	sys.FlatpakScript = map[string]fakesys.OutputReply{shieldTimerLine: {}}
+	lock := filepath.Join(t.TempDir(), "nss-shield.lock")
+	l.Shield = &reconcile.NSSShield{Sys: sys, Events: l.Events, LockFile: lock, LockWait: 200 * time.Millisecond}
+	other := &reconcile.NSSShield{Sys: sys, LockFile: lock}
+	held, finish, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _ = other.Run(ctx, "apt-get dist-upgrade", func() (string, int, error) { close(held); <-finish; return "", 0, nil })
+	}()
+	<-held
+	sys.TakeCalls()
+
+	spec := loginSpec()
+	spec.Himmelblau.EnableHello = false
+	r := loginResource(t, spec)
+	if res := l.Apply(ctx, r); res.Status == reconcile.Error {
+		t.Fatalf("Apply during another hold = %+v", res)
+	}
+	for _, e := range takeEvents(events) {
+		if e.typ == protocol.EventLoginApplyFailed || e.typ == protocol.EventTamperServiceStopped {
+			t.Errorf("event during another hold: %v", e)
+		}
+	}
+	if slices.ContainsFunc(sys.TakeCalls(), func(c string) bool { return strings.HasPrefix(c, "systemctl restart") }) {
+		t.Error("himmelblaud restarted inside another process's hold")
+	}
+	if changes, _ := l.Plan(ctx, r); !slices.Contains(changes, "restart himmelblaud") {
+		t.Errorf("Plan while the restart is deferred = %v", changes)
+	}
+
+	close(finish)
+	<-done
+	l.Apply(ctx, r)
+	if calls := sys.TakeCalls(); !slices.Contains(calls, "systemctl restart himmelblaud.service") {
+		t.Errorf("no restart after the hold ended: %v", calls)
+	}
+	if changes, _ := l.Plan(ctx, r); len(changes) != 0 {
+		t.Errorf("Plan after the deferred restart = %v", changes)
 	}
 }

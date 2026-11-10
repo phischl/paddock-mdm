@@ -1233,10 +1233,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperServiceStopped: {
 		Code: CodeDeviceTamperServiceStopped, Emitted: true,
-		Description: "A device found a service stopped outside Paddock: a service Paddock keeps running, which it started again, or a watched third-party service, which it only reports (actor: the device).",
+		Description: "A device found a service stopped outside Paddock: a service Paddock keeps running, which it started again, the login daemon himmelblaud, or a watched third-party service, both of which it only reports (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
+		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent), himmelblaud.service (the login daemon, stopped by someone other than Paddock's own package holds; reported only, never started again, state inactive or failed; PDK-983) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
 	},
 	CodeVulnerabilityCriticalSummary: {
 		Code: CodeVulnerabilityCriticalSummary, Emitted: true,

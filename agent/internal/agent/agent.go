@@ -207,7 +207,8 @@ func Load(l paths.Layout) (Deps, error) {
 	}
 	sys := reconcile.OS{Root: l.Root}
 	events := &reconcile.Events{}
-	shield := &reconcile.NSSShield{Sys: sys, Events: events}
+	shield := &reconcile.NSSShield{Sys: sys, Events: events, LockFile: l.Join(reconcile.NSSShieldLock),
+		DpkgBusy: reconcile.FrontendLockBusy(l.Join(reconcile.DpkgFrontendLock))}
 	if buildinfo.Dev {
 		// The system gates kill the agent during a hold and wait for the safety timer (decisions §45).
 		shield.MaxHold, shield.TimerGrace = DevNSSShieldMaxHold, DevNSSShieldTimerGrace

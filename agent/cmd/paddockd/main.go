@@ -245,7 +245,13 @@ func runUpdates(ctx context.Context, layout paths.Layout, args []string) int {
 		return 1
 	}
 	sys := reconcile.OS{Root: layout.Root}
-	r := osupdates.RunRegular(ctx, sys.AptGetWithin, sys.DpkgWithin, time.Now, func() bool { return osupdates.RebootRequired(layout) })
+	// The regular updates are one of Paddock's own package transactions (plan M5a N6): the dist-upgrade runs as one
+	// hold of himmelblaud, with the agent's marker, timer and maximum hold, serialized with the agent's holds by the
+	// shield lock. The shield waits for the dpkg lock as long as apt does; the agent emits the records it leaves.
+	shield := &reconcile.NSSShield{Sys: sys, Events: reconcile.NSSShieldRecorder(sys), LockWait: osupdates.LockWait,
+		LockFile: layout.Join(reconcile.NSSShieldLock), DpkgBusy: reconcile.FrontendLockBusy(layout.Join(reconcile.DpkgFrontendLock))}
+	r := osupdates.RunRegular(ctx, sys.AptGetWithin, sys.DpkgWithin, shield.Run, time.Now,
+		func() bool { return osupdates.RebootRequired(layout) })
 	if err := osupdates.WriteResult(layout, r); err != nil {
 		slog.ErrorContext(ctx, "storing the update result failed", "error", err)
 		return 1

@@ -33,14 +33,23 @@ const maxError = 240
 // wrapping context.DeadlineExceeded.
 type PackageTool func(ctx context.Context, timeout time.Duration, args ...string) (output string, exit int, err error)
 
-// lockWait lets apt wait for a dpkg lock held by another package operation (plan M3b risk R1).
-var lockWait = []string{"-o", "DPkg::Lock::Timeout=600"}
+// LockWait is how long apt waits for a dpkg lock held by another package operation (plan M3b risk R1); the
+// himmelblaud shield of the run waits as long before it stops the daemon.
+const LockWait = 10 * time.Minute
+
+// lockWait is LockWait as apt's option.
+var lockWait = []string{"-o", "DPkg::Lock::Timeout=" + strconv.Itoa(int(LockWait/time.Second))}
+
+// Hold runs the transactions of run with himmelblaud held stopped (reconcile.NSSShield.Run, plan M5a N6); action
+// names them.
+type Hold func(ctx context.Context, action string, run func() (string, int, error)) (string, int, error)
 
 // RunRegular updates the package lists and upgrades every package that is not held (apt-get dist-upgrade with
 // --force-confold), both within RunLimit, and returns the result of kind regular. A signal does not stop apt halfway,
 // which would leave dpkg broken: the run ends at RunLimit. An installation interrupted earlier is finished with
-// `dpkg --configure -a` first.
-func RunRegular(ctx context.Context, apt, dpkg PackageTool, now func() time.Time, rebootRequired func() bool) protocol.UpdatesRun {
+// `dpkg --configure -a` first. The dist-upgrade step, with that repair and its retry, runs as one hold (nil: none);
+// the package list update runs before it.
+func RunRegular(ctx context.Context, apt, dpkg PackageTool, hold Hold, now func() time.Time, rebootRequired func() bool) protocol.UpdatesRun {
 	r := protocol.UpdatesRun{Kind: protocol.UpdatesKindRegular, StartedAt: now().UTC(), HeldBack: []string{}}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RunLimit)
 	defer cancel()
@@ -64,7 +73,19 @@ func RunRegular(ctx context.Context, apt, dpkg PackageTool, now func() time.Time
 	_, err := step("-q", "update")
 	if err == nil {
 		var out string
-		out, err = step("-y", "-q", "-o", "Dpkg::Options::=--force-confold", "dist-upgrade")
+		upgrade := func() (string, int, error) {
+			out, err := step("-y", "-q", "-o", "Dpkg::Options::=--force-confold", "dist-upgrade")
+			return out, 0, err
+		}
+		if hold == nil {
+			out, _, err = upgrade()
+		} else {
+			var exit int
+			out, exit, err = hold(ctx, "apt-get dist-upgrade", upgrade)
+			if err == nil && exit != 0 {
+				err = fmt.Errorf("apt-get dist-upgrade: exit %d: %s", exit, lastLine(out))
+			}
+		}
 		r.Upgraded, r.HeldBack = ParseDistUpgrade(out)
 	}
 	r.FinishedAt = now().UTC()

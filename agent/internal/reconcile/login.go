@@ -89,11 +89,13 @@ type Login struct {
 	aptTimeouts   int
 	aptRetryAt    time.Time
 	aptTimeoutErr error
-	// Shield is the agent's own hold of himmelblaud around package transactions (PDK-983): a daemon it holds is not
-	// stopped. daemonStopped marks a stop reported as tamper.service_stopped and not seen running since; Plan reads
-	// it from the agent socket while the drift loop applies.
-	Shield        *NSSShield
-	daemonStopped atomic.Bool
+	// Shield is Paddock's own hold of himmelblaud around package transactions (PDK-983): a daemon it holds is not
+	// stopped, and a restart waits for a hold to end. daemonStopped marks a stop reported as tamper.service_stopped
+	// and not seen running since; restartPending a configuration change whose restart a hold deferred. Plan reads
+	// both from the agent socket while the drift loop applies.
+	Shield         *NSSShield
+	daemonStopped  atomic.Bool
+	restartPending atomic.Bool
 }
 
 // Type implements Reconciler.
@@ -181,6 +183,12 @@ func (l *Login) Plan(ctx context.Context, r bundle.Resource) ([]string, error) {
 	for _, path := range l.noticeChanges(l.renderNotice(s.Notice)) {
 		changes = append(changes, "notice "+path)
 	}
+	if l.Shield.Pending(ctx) {
+		changes = append(changes, "finish himmelblaud hold")
+	}
+	if l.restartPending.Load() {
+		changes = append(changes, "restart himmelblaud")
+	}
 	switch state := l.daemonState(ctx); {
 	case (state == WatchInactive || state == WatchFailed) && !l.daemonStopped.Load():
 		changes = append(changes, "report "+himmelblauUnits[0]+" "+state)
@@ -201,7 +209,11 @@ func (l *Login) daemonState(ctx context.Context) string {
 		return ""
 	}
 	state, err := watchState(ctx, l.Sys, himmelblauUnits[0])
+	// A hold writes its marker before it stops the daemon: a stop seen here with a hold that began after the first
+	// check is that hold's.
 	switch {
+	case l.Shield.Holds(himmelblauUnits[0]):
+		return ""
 	case err != nil:
 		return ""
 	case state == watchRunning:
@@ -234,6 +246,7 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	if err != nil {
 		return errorResult(r.ID, err)
 	}
+	l.Shield.Recover(ctx)
 	st, err := l.state(s)
 	if err != nil {
 		return errorResult(r.ID, err)
@@ -264,7 +277,10 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 			return l.fail(r.ID, protocol.LoginStageConfig, err)
 		}
 		changed = append(changed, "config")
-		if err := l.restart(ctx); err != nil {
+		l.restartPending.Store(true)
+	}
+	if aptErr == nil && l.restartPending.Load() {
+		if err := l.restartAfterHolds(ctx); err != nil {
 			return l.fail(r.ID, protocol.LoginStageRestart, err)
 		}
 	}
@@ -534,6 +550,22 @@ func (l *Login) ubuntuVersion() (string, error) {
 // restart restarts the Himmelblau daemons, which read pam_allow_groups only at start, and waits until himmelblaud
 // is active. reset-failed first: the package starts the daemon before a configuration exists, which hits the
 // start limit (PoC M1).
+// restartAfterHolds restarts the Himmelblau daemons when no hold of the shield runs, so that a restart neither starts
+// the daemon in the middle of a hold nor fails because a hold stopped it. A hold that lasts past the shield's
+// LockWait defers the restart to a later pass (restartPending); the configuration file is already in place.
+func (l *Login) restartAfterHolds(ctx context.Context) error {
+	ran, err := l.Shield.Exclusive(ctx, func() error { return l.restart(ctx) })
+	switch {
+	case err != nil:
+		return err
+	case !ran:
+		slog.InfoContext(ctx, "himmelblaud restart deferred: a package transaction holds it")
+		return nil
+	}
+	l.restartPending.Store(false)
+	return nil
+}
+
 func (l *Login) restart(ctx context.Context) error {
 	for _, verb := range []string{"reset-failed", "restart"} {
 		for _, u := range himmelblauUnits {

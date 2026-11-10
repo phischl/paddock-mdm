@@ -62,6 +62,8 @@ func TestSelfServiceGates(t *testing.T) {
 		vm.Gate(t, "selfservice")
 		vm.Fresh()
 		d := Install(t, s, vm, debDir(s))
+		// SV11 waits for the login reconciler's drift pass.
+		d.SetDriftInterval()
 		g := &selfServiceGate{keep: t, repo: d.setupGateRepo()}
 		d.MustRootIn([]byte(ssRepoScript), "bash -s")
 		g.source, _ = d.softwareSource(g.repo)

@@ -448,7 +448,7 @@
       "tamper_local_admin_changed": "Das Gerät {target} hat eine Änderung an seinem lokalen Administratorkonto festgestellt ({field})",
       "tamper_keyslot_changed": "Das Gerät {target} hat eine Änderung an den Keyslots seiner Festplatte festgestellt",
       "header_escrow_refused": "Ein LUKS-Header von {target} wurde nicht hinterlegt: Das Gerät hinterlegt bereits 32 Volumes",
-      "tamper_service_stopped": "Das Gerät {target} hat den gestoppten Dienst {unit} festgestellt und neu gestartet",
+      "tamper_service_stopped": "Das Gerät {target} hat den Dienst {unit} gestoppt vorgefunden",
       "tamper_agent_not_running": "fleetd meldet, dass der Paddock-Agent auf {target} nicht läuft",
       "revocation_trust_pinned_tofu": "Das Gerät {target} hat die Widerrufsschlüssel seines ersten Bundles, das sie enthielt, festgeschrieben (Trust on First Use)",
       "escrow_destroyed": "Die in der Treuhand-Ablage hinterlegten Festplattenschlüssel von {hostname} wurden vernichtet und die Vernichtung des Geräts wurde ausgestellt",
