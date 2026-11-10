@@ -1374,8 +1374,10 @@ The sentence "a listing whose next page does not arrive within the stall window 
 - **Mounted targets** (`dirTarget`: local, SMB, NFS) are unchanged: the walk reports progress every 1 024 entries,
   and a walk without progress for the stall window fails the mirror.
 - The three durations are fields of `s3Target`, set by `NewS3Target` from the constants; no environment variable.
-- Trade-off (accepted): an S3 endpoint that answers `HeadBucket` while one list request hangs holds the role for up
-  to 20 min per page instead of 2 min. A round that mirrors still ends only after its targets (RR-127).
+- Trade-off (accepted, residual risk **RR-132** in `docs/compliance/residual-risks.md`, added with this amendment):
+  an S3 endpoint that answers `HeadBucket` while one list request hangs holds the role for up to 20 min per page
+  instead of 2 min. It is the trade-off of the note 2026-11-07 (PDK-865): listings are not charged against the
+  round budget. A round that mirrors still ends only after its targets (RR-127).
 
 ### B4 Versioned buckets need an expiry for noncurrent versions (PDK-977)
 
@@ -1443,7 +1445,8 @@ requirement, follows it in development and warns where it can see a violation.
   page of an answering endpoint).
 - `docs/operations/backup.md`, "Schedule and retention" (PDK-972): no change for production; the sentence on the
   retired key's repository keeps "`retention_full` full intervals".
-- `docs/compliance/residual-risks.md` (PDK-972): RR-127's "the target's listings (each page within the stall
+- `docs/compliance/residual-risks.md` — RR-132 (B3's trade-off) is **added with this amendment's pull request**.
+  PDK-972: RR-127's "the target's listings (each page within the stall
   deadline)" becomes "(each page within 2 minutes of the endpoint's last answer, at most 20 minutes)"; RR-126's
   mitigation gains "a listing page of an answering endpoint is bounded at 20 minutes".
 - `docs/operations/install.md`, the list of `--online` findings (PDK-977): the new warning.
