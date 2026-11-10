@@ -357,6 +357,8 @@ func TestStalledTargetDoesNotBlockTheRound(t *testing.T) {
 	case <-time.After(time.Minute):
 		t.Fatal("the round stayed blocked by the stalled target")
 	}
+	// The round returned at once; the lanes end at the stall deadline or the page limit.
+	f.engine.waitLanes()
 	if _, ok := good.files[backupset.ManifestPath]; !ok {
 		t.Error("the reachable target got no manifest")
 	}

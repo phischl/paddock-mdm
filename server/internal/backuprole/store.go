@@ -91,11 +91,13 @@ type Store interface {
 	SetTargetStatus(ctx context.Context, id uuid.UUID, kind string, s KindStatus) error
 	RequestedRuns(ctx context.Context) ([]RequestedRun, error)
 	History(ctx context.Context) (map[string]KindHistory, error)
-	// RecordRun writes a finished run right after its local step (phase 1); MirrorRuns adds the round's mirror results
-	// and the audit event to every run still without them (phase 2, decisions-alpha9 item 79).
-	// RecordRun returns the IDs of the rows it wrote; MirrorRuns leaves the runs of skip for a later round.
+	// RecordRun writes a finished run right after its local step (phase 1); MirrorRuns adds a mirror pass's results
+	// and the audit event to the runs the pass covers that are still without them (phase 2, decisions-alpha9 item 79;
+	// decisions-alpha10 A10-26). RecordRun returns the IDs of the rows it wrote.
 	RecordRun(ctx context.Context, r RunRecord) ([]uuid.UUID, error)
-	MirrorRuns(ctx context.Context, results []backupset.RunTarget, skip []uuid.UUID) error
+	// UnmirroredRuns returns the IDs of the finished runs whose phase 2 is still due.
+	UnmirroredRuns(ctx context.Context) ([]uuid.UUID, error)
+	MirrorRuns(ctx context.Context, results []backupset.RunTarget, runs []uuid.UUID) error
 	// EscrowEvidence returns, by "<org>/<device>", the time of every device's newest successful Destroy
 	// (device.escrow_destroyed): the only audited evidence that lets an escrowed header copy leave the set.
 	EscrowEvidence(ctx context.Context) (map[string]time.Time, error)
@@ -357,11 +359,25 @@ func (s *pgStore) recordRun(ctx context.Context, r RunRecord) ([]uuid.UUID, erro
 	return ids, nil
 }
 
-// MirrorRuns is phase 2 (decisions-alpha9 item 79): every finished run whose mirror is still due, this round's and one
-// an earlier round could not finish (the role stopped in between), gets the round's mirror results and its audit
-// event (plan M15 §6.4); a target the set did not reach counts as targets_failed. completed_at is the run's local
-// completion, which the event's own time may follow by the length of the mirror.
-func (s *pgStore) MirrorRuns(ctx context.Context, results []backupset.RunTarget, skip []uuid.UUID) error {
+// UnmirroredRuns returns the IDs of the finished runs without mirror results, the runs a new mirror pass covers.
+func (s *pgStore) UnmirroredRuns(ctx context.Context) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	err := s.pool.InBackup(SystemContext(ctx), func(ctx context.Context, q *pgstore.Queries) error {
+		rows, err := q.BackupRoleUnmirroredRuns(ctx)
+		for _, r := range rows {
+			ids = append(ids, r.ID)
+		}
+		return err
+	})
+	return ids, err
+}
+
+// MirrorRuns is phase 2 (decisions-alpha9 item 79): every run of runs whose mirror is still due, a round's and one an
+// earlier process could not finish (the role stopped in between), gets the pass's mirror results and its audit event
+// (plan M15 §6.4); a target the set did not reach counts as targets_failed. completed_at is the run's local
+// completion, which the event's own time may follow by the length of the mirror. A run outside runs is left alone: its
+// files were not in the pass's index (decisions-alpha10 A10-26).
+func (s *pgStore) MirrorRuns(ctx context.Context, results []backupset.RunTarget, runs []uuid.UUID) error {
 	targets, err := json.Marshal(nonNilTargets(results))
 	if err != nil {
 		return err
@@ -385,7 +401,7 @@ func (s *pgStore) MirrorRuns(ctx context.Context, results []backupset.RunTarget,
 		return err
 	}
 	for _, r := range due {
-		if slices.Contains(skip, r.ID) {
+		if !slices.Contains(runs, r.ID) {
 			continue
 		}
 		spec := SpecFailed

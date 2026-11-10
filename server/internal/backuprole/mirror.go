@@ -83,12 +83,13 @@ type guardPlan struct {
 // checks the sizes of what it copied (step 4), writes manifest.json when the target's differs (step 5) and only
 // then deletes what the local expire would have removed from the target's own copy (step 6). It returns the number
 // of objects the target keeps although the local set lacks them (held). Once hooks.stop reports true after a
-// copied file it ends with errBudget before the manifest; it stops as soon as ctx ends.
+// copied file it ends with errBudget before the manifest; it stops as soon as ctx ends. The set it mirrors is idx and
+// the manifest.json idx indexed; a newer manifest ends it with errSetMoved (decisions-alpha10 A10-26).
 func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pushed map[string]fileInfo,
 	ret retention, hooks mirrorHooks) (int, error) {
-	local, err := repo.ReadFile(backupset.ManifestPath)
+	local, err := indexedManifest(repo, idx)
 	if err != nil {
-		return 0, fmt.Errorf("backup set: %w", err)
+		return 0, err
 	}
 	own, err := backupset.Parse(local)
 	if err != nil {
@@ -203,6 +204,28 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		hooks.tick()
 	}
 	return held, plan.unknownErr()
+}
+
+// indexedManifest reads the local manifest.json, which must still be the file idx indexed: a lane runs beside later
+// rounds, and their manifest may name files its index lacks.
+func indexedManifest(repo *os.Root, idx repoIndex) ([]byte, error) {
+	f, err := repo.Open(backupset.ManifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("backup set: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("backup set: %w", err)
+	}
+	if !sameFile(fileInfo{size: info.Size(), mod: info.ModTime()}, idx[backupset.ManifestPath]) {
+		return nil, errSetMoved
+	}
+	local, err := io.ReadAll(io.LimitReader(f, info.Size()+1))
+	if err != nil {
+		return nil, fmt.Errorf("backup set: %w", err)
+	}
+	return local, nil
 }
 
 // unknownErr is errUnknownPath naming the repositories no key names, or nil without one.

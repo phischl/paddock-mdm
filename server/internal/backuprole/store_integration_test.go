@@ -172,11 +172,26 @@ func TestPGStore(t *testing.T) {
 		'platform.backup_failed')`).Scan(&events); err != nil || events != 0 {
 		t.Fatalf("events after phase 1: %d %v", events, err)
 	}
+	mirrorDue := func() error {
+		due, err := s.UnmirroredRuns(ctx)
+		if err != nil {
+			return err
+		}
+		return s.MirrorRuns(ctx, targetsOK, due)
+	}
+	// A pass covers only its own runs (decisions-alpha10 A10-26): one that covers none records nothing.
 	if err := s.MirrorRuns(ctx, targetsOK, nil); err != nil {
 		t.Fatal(err)
 	}
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM action WHERE code IN ('platform.backup_completed',
+		'platform.backup_failed')`).Scan(&events); err != nil || events != 0 {
+		t.Fatalf("events after a pass without runs: %d %v", events, err)
+	}
+	if err := mirrorDue(); err != nil {
+		t.Fatal(err)
+	}
 	// A second phase 2 finds nothing due: exactly one event per run.
-	if err := s.MirrorRuns(ctx, targetsOK, nil); err != nil {
+	if err := mirrorDue(); err != nil {
 		t.Fatal(err)
 	}
 	var outcome, rawTargets string
@@ -275,10 +290,10 @@ func TestPGStore(t *testing.T) {
 	old := uuid.Must(uuid.NewV7())
 	exec(`INSERT INTO backup_run (id, kind, label, state, outcome, started_at, finished_at, targets)
 		VALUES ($1, 'openbao', 'older role', 'finished', 'succeeded', now(), now(), '[]')`, old)
-	if err := s.MirrorRuns(ctx, targetsOK, nil); err == nil {
+	if err := mirrorDue(); err == nil {
 		t.Fatal("phase 2 hid the failed write")
 	}
-	if err := s.MirrorRuns(ctx, targetsOK, nil); err != nil {
+	if err := mirrorDue(); err != nil {
 		t.Fatal(err)
 	}
 	var failingEvents int

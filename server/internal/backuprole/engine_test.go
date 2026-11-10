@@ -40,13 +40,15 @@ type fakeStore struct {
 	targets   []TargetRecord
 	requests  []RequestedRun
 	history   map[string]KindHistory
-	// runsMu guards runs: a round records the Fleet run from its watcher while the mirror runs.
+	// runsMu guards runs, mirrorErr, duplicates and status: the mirror lanes record their results while a round runs.
 	runsMu    sync.Mutex
 	runs      []fakeRun
 	mirrorErr error
-	status    map[string]KindStatus
-	hostState map[uuid.UUID]string
-	tests     map[uuid.UUID]string
+	// duplicates counts the phase 2 writes for a run that had its results already (a second audit event).
+	duplicates int
+	status     map[string]KindStatus
+	hostState  map[uuid.UUID]string
+	tests      map[uuid.UUID]string
 	// evidence is the Destroy evidence by "<org>/<device>"; evidenceErr fails the query.
 	evidence    map[string]time.Time
 	evidenceErr error
@@ -96,6 +98,8 @@ func (s *fakeStore) SetTestResult(_ context.Context, id uuid.UUID, class string)
 	return nil
 }
 func (s *fakeStore) SetTargetStatus(_ context.Context, id uuid.UUID, kind string, st KindStatus) error {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
 	s.status[id.String()+"/"+kind] = st
 	return nil
 }
@@ -119,14 +123,30 @@ func (s *fakeStore) RecordRun(_ context.Context, r RunRecord) ([]uuid.UUID, erro
 	return []uuid.UUID{id}, nil
 }
 
-func (s *fakeStore) MirrorRuns(_ context.Context, results []backupset.RunTarget, skip []uuid.UUID) error {
+func (s *fakeStore) UnmirroredRuns(context.Context) ([]uuid.UUID, error) {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
+	var out []uuid.UUID
+	for _, r := range s.runs {
+		if !r.mirrored {
+			out = append(out, r.id)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeStore) MirrorRuns(_ context.Context, results []backupset.RunTarget, runs []uuid.UUID) error {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
 	if s.mirrorErr != nil {
 		return s.mirrorErr
 	}
-	s.runsMu.Lock()
-	defer s.runsMu.Unlock()
 	for i := range s.runs {
-		if !s.runs[i].mirrored && !slices.Contains(skip, s.runs[i].id) {
+		if slices.Contains(runs, s.runs[i].id) {
+			if s.runs[i].mirrored {
+				s.duplicates++
+				continue
+			}
 			s.runs[i].Targets, s.runs[i].mirrored = slices.Clone(results), true
 		}
 	}
@@ -351,11 +371,13 @@ func (f *fixture) addTarget(t *testing.T, typ backupset.TargetType, dst Target) 
 	return rec
 }
 
+// round runs one round and waits for the lanes it started, so the test sees their results.
 func (f *fixture) round(t *testing.T) {
 	t.Helper()
 	if err := f.engine.Round(context.Background()); err != nil {
 		t.Fatalf("round: %v", err)
 	}
+	f.engine.waitLanes()
 }
 
 func (f *fixture) repoFiles(t *testing.T) map[string][]byte {

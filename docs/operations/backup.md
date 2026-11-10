@@ -32,7 +32,9 @@ rolled-back counter reissues numbers until it catches up, which weakens clone de
 - **The backup role** `paddock-backup` (`paddock-server serve backup`, database role `paddock_backup`, AppRole
   `paddock-backup`) is the only process that decrypts the backup key. It takes the OpenBao snapshots, seals the Fleet
   dumps, copies the escrow objects into the set, writes `manifest.json` and **mirrors the whole set to every enabled
-  target**. It runs a round every minute. Nothing is backed up until a platform administrator has confirmed a key.
+  target**. It runs a round every minute. Each target is mirrored in its own lane, which the round starts but never
+  waits for: a slow or unreachable target never delays the local backups, `backup now`, a key confirmation, a
+  connection test or the other targets. Nothing is backed up until a platform administrator has confirmed a key.
 - **Targets** are the places that hold a copy of the set: a local directory, an SMB share, an NFS export or an
   S3-compatible bucket. A target outage never touches the WAL archive or the control plane: pgBackRest only ever
   writes to the local repository.
@@ -172,11 +174,15 @@ class only, never the remote answer:
 | `unknown_path` | the target holds a repository path no key names (`./paddock backup status` notes it, the role's log names the path): the copy and the deletions by the rules below go on, the path itself is kept until you remove it by hand |
 | `size_mismatch` | a file copied in this round has another size on the target |
 
-**The first copy of a large set is slow.** The role mirrors the targets one after another and gives each target at most
-10 minutes per round (a trickling target is cut off after a little longer). A target that has not finished stops after
-the file it is copying, keeps its previous `manifest.json`, shows the class `io` and **goes on in the next round**, so
-the initial sync of a large set over a WAN link spans several rounds. The target is not current until it has finished:
-`./paddock backup status` and the *Overview* grid show per target and kind when it last succeeded.
+**The first copy of a large set is slow.** The role mirrors all targets at the same time, at most one mirror per
+target, and a mirror copies for at most 10 minutes (a trickling target is cut off after a little longer). A target that
+has not finished stops after the file it is copying, keeps its previous `manifest.json` and **goes on in the next
+round**, so the initial sync of a large set over a WAN link spans several rounds. Listing a large target can take
+longer than a round; meanwhile the later rounds' backups show that target as *continues next round* in the run
+history, and its next mirror carries them. The target is not current until it has finished: `./paddock backup status`
+and the *Overview* grid show per target and kind when its last mirror succeeded. A file the local retention would
+remove stays in the local repository while a mirror still copies the set that holds it, and goes in the first round
+after that mirror ended.
 
 ## Schedule and retention
 
