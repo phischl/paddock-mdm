@@ -436,6 +436,7 @@
       "bundle_entry_omitted": "Das Bundle für {target} lässt die sudo-Rechte von {username} aus: Ein Berechtigungsprofil enthält einen Befehl, der nicht mehr erlaubt ist",
       "login_applied": "Das Gerät {target} hat seine Anmeldekonfiguration angewendet",
       "login_apply_failed": "Das Gerät {target} konnte seine Anmeldekonfiguration nicht anwenden (Schritt {stage})",
+      "login_nss_shield": "Das Gerät {target} hat Verzeichnisanmeldungen für {duration_s, number} s pausiert, während der Agent Pakete installierte{outcome, select, restored {} max_hold { (maximale Pausendauer erreicht)} recovered { (nach einem Agent-Neustart beendet)} restore_failed { – der Anmeldedienst startete nicht wieder} hold_failed { – nicht pausiert, mit aktiven Anmeldungen installiert} other { ({outcome})}}",
       "user_lock_applied": "Das Gerät {target} hat den gesperrten Benutzer {username} blockiert",
       "logins_suspension_applied": "Das Gerät {target} hat Verzeichnisanmeldungen ausgesetzt und {sessions_terminated, number} Sitzungen beendet",
       "sudo_apply_failed": "Das Gerät {target} konnte die sudo-Rechte nicht anwenden",

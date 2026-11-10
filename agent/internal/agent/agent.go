@@ -55,6 +55,9 @@ type Deps struct {
 	// Software is the software reconciler of Applier; New gives it the server's reachability, and its status goes
 	// into the health report after every pass (plan M13a decisions 25 and 27). Nil: no software report.
 	Software *reconcile.Software
+	// Shield holds himmelblaud stopped around the package transactions of the reconcilers and of self-service
+	// (PDK-983); Run finishes a hold an earlier agent process left behind. Nil: no shield.
+	Shield *reconcile.NSSShield
 	// SelfService serves the self-service socket and runs the operations users ask for (plan M13b decisions 11–14);
 	// nil serves no self-service.
 	SelfService *selfservice.Service
@@ -204,13 +207,19 @@ func Load(l paths.Layout) (Deps, error) {
 	}
 	sys := reconcile.OS{Root: l.Root}
 	events := &reconcile.Events{}
-	inventory := &reconcile.Inventory{Sys: sys, Events: events, Download: c.Download, BundlesURL: BundlesURL(cfg.ServerURL)}
-	software := &reconcile.Software{Sys: sys, Events: events}
+	shield := &reconcile.NSSShield{Sys: sys, Events: events}
+	if buildinfo.Dev {
+		// The system gates kill the agent during a hold and wait for the safety timer (decisions §45).
+		shield.MaxHold, shield.TimerGrace = DevNSSShieldMaxHold, DevNSSShieldTimerGrace
+	}
+	pkgSys := reconcile.Shielded{System: sys, Shield: shield}
+	inventory := &reconcile.Inventory{Sys: pkgSys, Events: events, Download: c.Download, BundlesURL: BundlesURL(cfg.ServerURL)}
+	software := &reconcile.Software{Sys: pkgSys, Events: events}
 	d := Deps{
 		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Events: events, Sys: sys, Accounts: sys, Inventory: inventory,
-		Software: software,
-		Applier: apply.New(sys, managed, events).WithInventory(inventory).WithWatch(&reconcile.Watch{Sys: sys, Events: events}).
-			WithSoftware(software),
+		Software: software, Shield: shield,
+		Applier: apply.New(pkgSys, managed, events).WithInventory(inventory).
+			WithWatch(&reconcile.Watch{Sys: sys, Events: events}).WithSoftware(software).WithNSSShield(shield),
 	}
 	if l.Root == "" || l.Root == "/" {
 		d.FollowLogins = localadmin.FollowJournal
@@ -218,10 +227,16 @@ func Load(l paths.Layout) (Deps, error) {
 		d.Encrypt = encrypt.OS{}
 		d.EncryptModule = encrypt.Module()
 		d.Notify = func(ctx context.Context, msg string) { notifySessions(ctx, sys.Loginctl, runTool, msg) }
-		d.SelfService = selfservice.New(selfservice.Config{Sys: sys, Packages: software, Version: buildinfo.Version})
+		d.SelfService = selfservice.New(selfservice.Config{Sys: pkgSys, Packages: software, Version: buildinfo.Version})
 	}
 	return d, nil
 }
+
+// The shield's hold times in a development build: the safety timer fires after 5 minutes instead of 12.
+const (
+	DevNSSShieldMaxHold    = 4 * time.Minute
+	DevNSSShieldTimerGrace = time.Minute
+)
 
 // New creates the run loop. It writes nothing: `paddockd plan` uses it from a second process, so the start-time
 // work runs in Run.
@@ -322,6 +337,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	// and race its state writes (PDK-081).
 	a.sweepStaging()
 	a.sweepDiagnostics()
+	// Before any pass: a hold that an earlier process left (it died during a package transaction) is finished and
+	// reported first, so that himmelblaud runs again even if the safety timer has not fired yet (decisions §45).
+	a.d.Shield.Recover(ctx)
 	a.reportInterruptedInstalls()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

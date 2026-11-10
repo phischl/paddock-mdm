@@ -436,6 +436,7 @@
       "bundle_entry_omitted": "The bundle of {target} leaves out the sudo rights of {username}: a permission profile holds a command that is no longer allowed",
       "login_applied": "The device {target} applied its login configuration",
       "login_apply_failed": "The device {target} could not apply its login configuration (stage {stage})",
+      "login_nss_shield": "The device {target} paused directory logins for {duration_s, number} s while the agent installed packages{outcome, select, restored {} max_hold { (maximum hold reached)} recovered { (finished after an agent restart)} restore_failed { – the login service did not start again} hold_failed { – not paused, installed with logins active} other { ({outcome})}}",
       "user_lock_applied": "The device {target} blocked the locked user {username}",
       "logins_suspension_applied": "The device {target} suspended directory logins and ended {sessions_terminated, number} sessions",
       "sudo_apply_failed": "The device {target} could not apply sudo rights",

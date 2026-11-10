@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/sessions"
@@ -87,6 +89,11 @@ type Login struct {
 	aptTimeouts   int
 	aptRetryAt    time.Time
 	aptTimeoutErr error
+	// Shield is the agent's own hold of himmelblaud around package transactions (PDK-983): a daemon it holds is not
+	// stopped. daemonStopped marks a stop reported as tamper.service_stopped and not seen running since; Plan reads
+	// it from the agent socket while the drift loop applies.
+	Shield        *NSSShield
+	daemonStopped atomic.Bool
 }
 
 // Type implements Reconciler.
@@ -149,7 +156,7 @@ func (l *Login) state(s bundle.LoginSpec) (loginState, error) {
 }
 
 // Plan implements Reconciler.
-func (l *Login) Plan(_ context.Context, r bundle.Resource) ([]string, error) {
+func (l *Login) Plan(ctx context.Context, r bundle.Resource) ([]string, error) {
 	s, err := l.spec(r)
 	if err != nil {
 		return nil, err
@@ -174,7 +181,50 @@ func (l *Login) Plan(_ context.Context, r bundle.Resource) ([]string, error) {
 	for _, path := range l.noticeChanges(l.renderNotice(s.Notice)) {
 		changes = append(changes, "notice "+path)
 	}
+	switch state := l.daemonState(ctx); {
+	case (state == WatchInactive || state == WatchFailed) && !l.daemonStopped.Load():
+		changes = append(changes, "report "+himmelblauUnits[0]+" "+state)
+	case state == daemonRunning && l.daemonStopped.Load():
+		changes = append(changes, "clear "+himmelblauUnits[0])
+	}
 	return changes, nil
+}
+
+// daemonRunning is the daemonState of a running himmelblaud.
+const daemonRunning = "running"
+
+// daemonState is the state of himmelblaud as far as a foreign stop goes: daemonRunning, WatchInactive or WatchFailed;
+// "" while the package is not installed, the unit is starting, stopping or restarting, systemd cannot be asked, or
+// the agent's own shield holds it.
+func (l *Login) daemonState(ctx context.Context) string {
+	if !l.Sys.PackageInstalled("himmelblau") || l.Shield.Holds(himmelblauUnits[0]) {
+		return ""
+	}
+	state, err := watchState(ctx, l.Sys, himmelblauUnits[0])
+	switch {
+	case err != nil:
+		return ""
+	case state == watchRunning:
+		return daemonRunning
+	case state == WatchInactive || state == WatchFailed:
+		return state
+	}
+	return ""
+}
+
+// reportDaemon reports a foreign stop of himmelblaud once per stop as tamper.service_stopped (protected area 4). It
+// never starts the daemon: a local administrator may stop it on purpose around an apt run of their own (PDK-983), and
+// the agent does not act on its own initiative (agent design contract 8).
+func (l *Login) reportDaemon(ctx context.Context) {
+	switch state := l.daemonState(ctx); state {
+	case WatchInactive, WatchFailed:
+		if !l.daemonStopped.Swap(true) {
+			slog.WarnContext(ctx, "himmelblaud stopped outside Paddock", "state", state)
+			l.Events.emit(protocol.EventTamperServiceStopped, protocol.TamperServiceStopped{Unit: himmelblauUnits[0], State: state})
+		}
+	case daemonRunning:
+		l.daemonStopped.Store(false)
+	}
 }
 
 // Apply implements Reconciler: package, deny list, configuration with daemon restart, sessions, PAM check. The deny
@@ -238,6 +288,7 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 		return l.fail(r.ID, protocol.LoginStageNotice, noticeErr)
 	}
 	l.lastFailure = ""
+	l.reportDaemon(ctx)
 	if len(changed) == 0 {
 		return Result{ID: r.ID, Status: OK}
 	}

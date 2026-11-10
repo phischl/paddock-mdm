@@ -17,6 +17,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 func newAgent(t *testing.T, g *testgw.Gateway) *Agent {
@@ -150,3 +151,29 @@ const hangGuard = time.Minute
 // servedAtOnce is the bound a check-in the agent owes at once must meet. Here the bound is the assertion: a check-in
 // delayed by the trigger's jitter (up to TriggerMaxDelay) or gap (TriggerMinGap) would miss it.
 const servedAtOnce = TriggerMaxDelay / 3
+
+// TestRunRecoversNSSShield (PDK-983, decisions §45): an agent that starts after its predecessor died during a package
+// transaction finds the shield's marker, starts himmelblaud again and reports the hold once as recovered.
+func TestRunRecoversNSSShield(t *testing.T) {
+	g := testgw.New(t)
+	g.Checkin.NextCheckinS = 3600
+	a := newAgent(t, g)
+	sys := fakesys.New()
+	for _, u := range []string{"himmelblaud.service", "himmelblaud-tasks.service"} {
+		sys.Units[u] = &fakesys.Unit{State: "enabled"}
+	}
+	sys.Files[reconcile.NSSShieldMarker] = &fakesys.File{Data: []byte(`{"action":"apt-get install","started_at":"2026-11-10T17:00:00Z"}`), Mode: 0o600}
+	a.d.Shield = &reconcile.NSSShield{Sys: sys, Events: &reconcile.Events{Emit: a.event}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	waitWithin(t, servedAtOnce, func() bool { return slices.Contains(g.EventTypes(), protocol.EventLoginNSSShield) })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !sys.Units["himmelblaud.service"].Active || !sys.Units["himmelblaud-tasks.service"].Active || sys.Files[reconcile.NSSShieldMarker] != nil {
+		t.Errorf("himmelblaud %v, tasks %v, marker %v", sys.Units["himmelblaud.service"].Active,
+			sys.Units["himmelblaud-tasks.service"].Active, sys.Files[reconcile.NSSShieldMarker] != nil)
+	}
+}

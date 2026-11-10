@@ -28,6 +28,10 @@ const (
 	// ssSlowStarted is written by ssSlow's postinst when it starts; ssSlowRelease lets it finish.
 	ssSlowStarted = "/run/paddock-gate-slow.started"
 	ssSlowRelease = "/run/paddock-gate-slow.release"
+	// ssSysUser is a plain package whose postinst creates the system account ssSysAccount with adduser --system, as
+	// many daemon packages do (gate SV10, PDK-983).
+	ssSysUser    = "paddock-gate-sysuser"
+	ssSysAccount = "_paddock-gate"
 	// ssFlatpakURI is the gate's Flatpak repository, served by paddock-gate-repo next to the APT repository.
 	ssFlatpakURI = gateRepoURI + "flatpak/"
 	// ssFlatpakApp is the system-scope application of gate SV5, ssFlatpakUserApp the user-scope one of SV7.
@@ -47,7 +51,8 @@ const (
 // ssRepoScript adds the self-service packages to the gate's APT repository (gateRepoScript ran before) and builds the
 // gate's Flatpak repository below it, both signed with the gate's key: a runtime and two applications that need it,
 // exported with flatpak build-export (no flatpak-builder, no SDK, nothing from Flathub). flatpak is installed from the
-// distribution to build the repository and purged afterwards, so that SV5 sees the agent install it (Q12).
+// distribution to build the repository and purged afterwards with its system account, so that SV5 sees the agent
+// install it and create _flatpak under Himmelblau (Q12, PDK-983).
 //
 // apt-get runs with stdin from /dev/null because the script itself arrives on stdin (bash -s): a maintainer script
 // or a conffile prompt would read the rest of it. With stdout not a terminal, apt 3 sends dpkg's error messages to
@@ -83,6 +88,7 @@ build() {
 }
 build ` + ssOffered + ` ':'
 build ` + ssPrivate + ` ':'
+build ` + ssSysUser + ` 'adduser --system --group --no-create-home --quiet ` + ssSysAccount + `'
 build ` + ssSlow + ` 'touch ` + ssSlowStarted + `; i=0; while [ ! -e ` + ssSlowRelease + ` ] && [ $i -lt 900 ]; do sleep 1; i=$((i + 1)); done'
 cd "$dir/repo"
 apt-ftparchive packages . >Packages
@@ -90,6 +96,12 @@ apt-ftparchive release . >"$dir/Release"
 mv "$dir/Release" Release
 gpg --batch --yes --clearsign -o InRelease Release
 
+# The workaround for an apt run of a local administrator (PDK-983): with himmelblaud running, flatpak's postinst
+# cannot create its system account _flatpak.
+if systemctl is-active -q himmelblaud.service; then
+	trap 'systemctl start himmelblaud.service himmelblaud-tasks.service' EXIT
+	systemctl stop himmelblaud.service
+fi
 command -v flatpak >/dev/null || apt_get install flatpak
 key=$(gpg --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')
 arch=$(flatpak --default-arch)
@@ -112,6 +124,9 @@ done
 flatpak build-update-repo --gpg-sign="$key" --gpg-homedir="$GNUPGHOME" "$repo" >/dev/null
 python3 -c "import urllib.request; urllib.request.urlopen(\"` + ssFlatpakURI + `summary\", timeout=10)"
 apt_get purge flatpak
+# SV5 sees a device where flatpak never was: the agent's installation creates _flatpak itself.
+if grep -q '^_flatpak:' /etc/passwd; then deluser --system --quiet _flatpak; fi
+if grep -q '^_flatpak:' /etc/group; then delgroup --system --quiet _flatpak; fi
 `
 
 // ssUserScript creates the account $1 with UID $2 as Himmelblau would map a directory user (a UPN as its name, a UID

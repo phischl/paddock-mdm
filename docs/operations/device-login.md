@@ -271,6 +271,42 @@ synthetic entry (empty GECOS) whose UID it derives from the name — the same UI
 | Members of the privileged groups `sudo`, `admin`, `wheel` | NSS `getent group`; Himmelblau's OIDC provider never synthesizes groups, and `gpasswd` removes members from `/etc/group` |
 | Package scripts | no user or group lookups |
 
+### Package installations pause directory logins
+
+Because Himmelblau answers for every unknown name, a package whose maintainer script creates a system account
+(`adduser --system`, `useradd`; for example `flatpak`, database and other daemon packages) fails while `himmelblaud`
+runs: adduser finds a "user" with a directory UID and stops with *already exists, but is not a system user*. The
+agent therefore stops `himmelblaud` around each of its own package transactions and starts it again afterwards
+(PDK-983). This covers every `apt-get install`, `remove`, `purge`, `upgrade` and `dist-upgrade` and every `dpkg`
+run with maintainer scripts that the agent starts: required and forbidden software, self-service installs and removals,
+*Install now*, fleetd and the Himmelblau packages themselves. Package list updates and simulations run without it.
+
+- **Effect.** While the agent installs software, **new logins and screen unlocks of directory users wait** (seconds,
+  for large packages minutes). Running sessions continue, and local accounts are not affected.
+- **Bounds.** A hold ends with the transaction, at the latest after 10 minutes, even if the transaction still runs.
+  Before the stop the agent arms a transient systemd timer (`paddock-nss-shield-restore.timer`) that starts
+  `himmelblaud` after 12 minutes on its own, so a crashed or killed agent cannot leave logins stopped. At its next start
+  the agent finishes such a hold. A device on which `himmelblaud` is not running is not touched.
+- **Audit.** Every hold is one `device.login_nss_shield` with the transaction, the duration and the outcome:
+  `restored`, `max_hold` (started while the transaction still ran), `recovered` (the agent ended during the hold),
+  `restore_failed` (the timer retries) or `hold_failed` (the transaction ran with `himmelblaud` running and may have
+  failed).
+- **Tampering.** A stop of `himmelblaud` by anyone else is reported once per stop as
+  `device.tamper_service_stopped` (unit `himmelblaud.service`). The agent does not start it again.
+
+**Package installations of a local administrator are not covered.** `sudo apt install <package>` of a package that
+creates a system account fails the same way. Stop the daemon around the installation:
+
+```sh
+sudo systemctl stop himmelblaud.service
+sudo apt install <package>
+sudo systemctl start himmelblaud.service himmelblaud-tasks.service
+```
+
+New directory logins and screen unlocks wait meanwhile, and the agent reports the stop as
+`device.tamper_service_stopped`. If the installation already failed, run the same commands with
+`sudo dpkg --configure -a` in place of the installation.
+
 ## Login history
 
 Off by default (ADR 0037 decision 6, plan M8d decisions 14–20). An organization administrator switches it on under
