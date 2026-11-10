@@ -99,10 +99,19 @@ case "$cmd" in
     hw="$old/bundle-seq/high-water"
     seq_dir="$BUNDLE_DIR/bundle-seq"
     if [[ -f "$hw" ]]; then
-      [[ "$(head -n 1 "$hw")" =~ ^[0-9]{1,18}$ ]] || die "migrate-from: $hw holds no bundle sequence; correct or remove it"
+      old_seq="$(head -n 1 "$hw")"
+      [[ "$old_seq" =~ ^[0-9]{1,18}$ ]] || die "migrate-from: $hw holds no bundle sequence; correct or remove it; nothing changed"
+      # B's file is written by uid 999, and bash arithmetic runs a[$(…)] found in it, so it is validated before any
+      # comparison. An invalid value is refused rather than read as 0: it may hide a higher sequence (decisions-alpha10
+      # §43).
+      new_seq_v=0
+      if [[ -f "$seq_dir/high-water" ]]; then
+        new_seq_v="$(head -n 1 "$seq_dir/high-water")"
+        [[ "$new_seq_v" =~ ^[0-9]{1,18}$ ]] ||
+          die "migrate-from: $seq_dir/high-water holds no bundle sequence; as root, correct it (the highest bundle sequence this release reached) or remove it; nothing changed"
+      fi
       mkdir -p "$seq_dir"
-      if [[ ! -f "$seq_dir/high-water" ]] ||
-        (($(head -n 1 "$seq_dir/high-water" 2>/dev/null || echo 0) < $(head -n 1 "$hw"))); then
+      if ((10#$new_seq_v < 10#$old_seq)); then
         if [[ -w "$seq_dir" ]]; then
           cp -p "$hw" "$seq_dir/high-water.tmp" &&
             mv -f "$seq_dir/high-water.tmp" "$seq_dir/high-water" ||
@@ -126,7 +135,7 @@ case "$cmd" in
             rm -rf "$new_seq"
             die "migrate-from: could not move the copy of $hw into $seq_dir; nothing changed"
           }
-          echo "bundle-seq/ of an earlier run here is kept as ${aside##*/} (uid 999's; remove it as root when done)"
+          echo "bundle-seq/ of an earlier run here is kept as $aside (uid 999's; remove it with: sudo rm -rf $aside)"
         fi
       fi
     fi

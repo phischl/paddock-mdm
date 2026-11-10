@@ -512,7 +512,8 @@ else
     ! compgen -G "$work/t/new/.bundle-seq.new.*" >/dev/null; then
     pass "the replaced bundle-seq/ is kept aside, no temporary directory is left"
   else fail "after the replacement: $(ls -a "$work/t/new")"; fi
-  has "the operator learns about the kept directory" '^bundle-seq/ of an earlier run here is kept as \.bundle-seq\.replaced\.'
+  has "the operator learns about the kept directory and how to remove it" \
+    "^bundle-seq/ of an earlier run here is kept as $work/t/new/\\.bundle-seq\\.replaced\\.[^ ]+ \\(uid 999's; remove it with: sudo rm -rf $work/t/new/\\.bundle-seq\\.replaced\\."
   chmod -R u+w "$work/t/new"
 
   # When the bundle directory itself is not writable either, nothing changes and the message names the owner.
@@ -530,6 +531,40 @@ else
   else fail "migrate-from in an unwritable directory: exit $got, $(ls -a "$work/t/new")"; fi
   has "the failure names the directory" "^paddock: migrate-from: cannot write $work/t/new\$"
 fi
+
+# An invalid high-water file in either directory fails closed (PDK-980 review 1, decisions-alpha10 §43): nothing is
+# copied, neither file changes, and the content never reaches bash arithmetic, where a[$(…)] would run a command as the
+# operator. B's file is uid 999's.
+# shellcheck disable=SC2016 # the payload must reach the file unexpanded
+for bad in 'a[$(touch '"$work"'/injected)]' '' 'garbage' '99999999999999999999'; do
+  setup controlplane "Schema: migrations 00105–00106"
+  mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
+  echo 3000005 >"$work/t/old/bundle-seq/high-water"
+  printf '%s\n' "$bad" >"$work/t/new/bundle-seq/high-water"
+  got=0
+  out="$(cd "$work/t/new" && ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
+  if [[ "$got" != 0 && ! -e "$work/injected" && ! -e "$work/t/new/.env" &&
+    "$(cat "$work/t/new/bundle-seq/high-water")" == "$bad" &&
+    "$out" == *"$work/t/new/bundle-seq/high-water holds no bundle sequence; as root, correct it"*"nothing changed"* ]]; then
+    pass "B's high-water '$bad' fails migrate-from, runs nothing and changes nothing (exit $got)"
+  else fail "B's high-water '$bad': exit $got, injected=$([[ -e "$work/injected" ]] && echo yes || echo no), $out"; fi
+  rm -f "$work/injected"
+done
+
+# shellcheck disable=SC2016 # the payload must reach the file unexpanded
+for bad in 'a[$(touch '"$work"'/injected)]' '' 'garbage'; do
+  setup controlplane "Schema: migrations 00105–00106"
+  mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
+  printf '%s\n' "$bad" >"$work/t/old/bundle-seq/high-water"
+  echo 2000003 >"$work/t/new/bundle-seq/high-water"
+  got=0
+  out="$(cd "$work/t/new" && ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
+  if [[ "$got" != 0 && ! -e "$work/injected" && ! -e "$work/t/new/.env" &&
+    "$(cat "$work/t/new/bundle-seq/high-water")" == 2000003 && "$out" == *"holds no bundle sequence; correct or remove it"* ]]; then
+    pass "A's high-water '$bad' fails migrate-from and changes nothing (exit $got)"
+  else fail "A's high-water '$bad': exit $got, $out"; fi
+  rm -f "$work/injected"
+done
 
 # A→B→C (R2-M1): the upgrade supersedes the old directory's own rollback point, so a rollback from there is refused
 # even where the running version cannot tell (FIXTURE_RUNNING claims the old release).
