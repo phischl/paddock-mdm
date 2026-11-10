@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests of the upgrade job's helpers (deploy/bundle/ci/upgrade.sh, `make bundle-test`) without a stack: the judgement of
 # ./paddock upgrade-check, the staging of the previous release's agent files, the unsealer's guard, the restore drill's
-# point in time, the orphan report and the failure report (step named on stderr and as a GitHub annotation, logs
-# collected; also after a TERM). docker, sudo and git are stubs; upgrade.sh is sourced with UPGRADE_LIB_ONLY=1, which
+# point in time, the orphan report, the S3 endpoint's attachment, the upgrade run again after the rollback and the
+# failure report (step named on stderr and as a GitHub annotation, logs collected; also after a TERM). docker, sudo and git are stubs; upgrade.sh is sourced with UPGRADE_LIB_ONLY=1, which
 # stops it before the first step.
 # The snippets in single quotes run in the shell that sourced upgrade.sh, which also assigns its own `work` there;
 # pass and failed always succeed.
@@ -28,6 +28,8 @@ cat >"$work/bin/docker" <<'STUB'
 printf 'docker %s\n' "$*" >>"$STUB_LOG"
 case "$*" in
   "ps -a --filter label=com.docker.compose.project=paddock-cp"*) printf '%s\n' postgres ${STUB_ORPHAN:-} paddock-api ;;
+  "compose -p paddock-ci-s3 "*" ps -q backup-s3") printf '%s\n' "${STUB_S3_ID:-}" ;;
+  "network inspect paddock-cp_cp "*) printf '%s \n' "${STUB_CP_MEMBERS:-}" ;;
 esac
 exit 0
 STUB
@@ -215,7 +217,7 @@ else failed "no orphans: $out"; fi
 # --- rollback --------------------------------------------------------------------------------------------------------
 # A key-shaped test value built at run time, so no literal key sits in the repository for the secret scanner.
 key="$(printf 0123456789abcdef0123456789abcdef | base64)"
-# lib_rollback <legacy: true|false> <cp|audit>: step 9 against stubbed hosts; prints the call and what it read on stdin.
+# lib_rollback <legacy: true|false> <cp|audit>: step 6 against stubbed hosts; prints the call and what it read on stdin.
 lib_rollback() {
   KEY="$key" LEGACY="$1" lib eval '
     legacy=$LEGACY
@@ -237,6 +239,43 @@ out="$(lib_rollback false audit)"
 if [[ "$out" == "audit rollback $work/w/prev/audit --yes stdin=[]" ]]; then
   pass "the audit host's rollback, which restores nothing, gets no key"
 else failed "rollback audit: $out"; fi
+
+# --- attach_s3 -------------------------------------------------------------------------------------------------------
+s3id=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+: >"$STUB_LOG"
+if STUB_S3_ID=$s3id lib attach_s3 >/dev/null 2>&1 &&
+  grep -qx "docker network connect --alias backup-s3-tls paddock-cp_cp $s3id" "$STUB_LOG"; then
+  pass "the S3 endpoint is attached to a network cp without it"
+else failed "attach_s3, detached: $(cat "$STUB_LOG")"; fi
+: >"$STUB_LOG"
+if STUB_S3_ID=$s3id STUB_CP_MEMBERS="aaaa $s3id" lib attach_s3 >/dev/null 2>&1 &&
+  ! grep -q 'network connect' "$STUB_LOG"; then
+  pass "an attached S3 endpoint is not attached twice"
+else failed "attach_s3, attached: $(cat "$STUB_LOG")"; fi
+if out="$(lib attach_s3 2>&1)"; then failed "attach_s3 without an endpoint passes: $out"; elif
+  [[ "$out" == *"the CI S3 endpoint backup-s3 does not run"* ]]; then pass "a missing S3 endpoint fails"
+else failed "attach_s3, no endpoint: $out"; fi
+
+# --- upgrade_hosts ---------------------------------------------------------------------------------------------------
+# The upgrade again after the rollback (step 8): the same candidate directories, the previous release's as <old dir>,
+# the root token for bootstrap openbao, and the step names and log phase of that run.
+out="$(lib eval '
+  printf "{\"root_token\": \"s.root\"}" >"$W/init.json"
+  start_unsealer() { :; }
+  use_prev
+  cp_paddock() { printf "cp %s %s token=%s\n" "$CP_DIR" "$*" "${BAO_TOKEN:-}"; }
+  audit_paddock() { printf "audit %s %s\n" "$AUDIT_DIR" "$*"; }
+  orphans() { echo orphans; }
+  upgrade_hosts 8 upgrade-again
+  echo "phase=$phase"' 2>&1)"
+order="*8.1 upgrade-again: control plane*cp $work/w/cand/cp upgrade $work/w/prev/cp --yes token=s.root*"
+order+="8.2 upgrade-again: audit host*audit $work/w/cand/audit upgrade $work/w/prev/audit --yes*"
+order+="8.3 upgrade-again: the release's bootstrap and orphans*cp $work/w/cand/cp bootstrap buckets*"
+order+="cp $work/w/cand/cp up*orphans*phase=upgrade-again*"
+# shellcheck disable=SC2053
+if [[ "$out" == $order ]]; then
+  pass "the upgrade again runs from the previous release's directories into the candidate's"
+else failed "upgrade_hosts: $out"; fi
 
 # --- failure report ----------------------------------------------------------------------------------------------------
 : >"$STUB_LOG"

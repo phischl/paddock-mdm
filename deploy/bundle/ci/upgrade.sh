@@ -11,14 +11,20 @@
 #    4  ./paddock upgrade --yes on the control plane, then on the audit host;
 #    5  probes: the hosts, the hardening, every seeded object with its ID, the audit count, the chain verification, the
 #       API token, the escrowed password revealed with a step-up, the old device's check-in and events, a new device;
-#    6  restore drill, backup: a confirmed backup key, the local target, ./paddock backup now --label ci --wait;
-#    7  restore drill, loss and restore: ./paddock down --volumes, ./paddock secrets, ./paddock restore --from --at;
-#    8  probes again;
-#    9  ./paddock rollback --yes on the control plane (the backup key on stdin), then on the audit host (the
+#    6  ./paddock rollback --yes on the control plane (the backup key on stdin), then on the audit host (the
 #       candidate's audit writer reads what the previous control plane sends, never the other way round);
-#   10  probes on the previous release: the pre-upgrade set.
+#    7  probes on the previous release: the pre-upgrade set;
+#    8  ./paddock upgrade --yes again from the same directories: after a rollback it starts again at the check, copies
+#       .env and .secrets/ again and takes its own pre-upgrade backup (rollback.sh);
+#    9  the probes of step 5 on the release upgraded again;
+#   10  restore drill, backup: a confirmed backup key, the local target, ./paddock backup now --label ci --wait;
+#   11  restore drill, loss and restore: ./paddock down --volumes, ./paddock secrets, ./paddock restore --from --at;
+#   12  probes again.
+# The rollback comes before the drill, as an operator rolls back right after an upgrade and not after a disaster
+# restore: the drill's restore replaces the local backup repository and with it the pre-upgrade set a rollback
+# restores (PDK-973).
 # From 0.1.0-alpha.8, which backs up to S3, the previous release's bucket is the audit project's RustFS behind the CI
-# project paddock-ci-s3 (compose.ci-s3.yaml, compose.ci-alpha8.yaml), and step 9 is that release's legacy restore
+# project paddock-ci-s3 (compose.ci-s3.yaml, compose.ci-alpha8.yaml), and step 6 is that release's legacy restore
 # (plan M16 amendment 2026-11-06), which recreates volumes and initialises a fresh OpenBao: allowed only in this
 # ephemeral job (decisions-alpha9 item 49). A background unsealer gives OpenBao the shares of step 1 whenever it is
 # sealed with the threshold 3 of that initialisation; it never touches an OpenBao with another seal configuration.
@@ -201,7 +207,7 @@ if [[ "${UPGRADE_SKIP_REVEAL:-}" == 1 ]]; then reveal=(); fi
 # device_checks_in <sim> <want>: the seeded device checks in, receives a newer bundle with <want> and reports it.
 device_checks_in() { probe_env "$1" checkin --state "$W/seed/device.json" --want "$2"; }
 
-# local_target: the directory the local backup target mirrors to (step 6).
+# local_target: the directory the local backup target mirrors to (step 10).
 local_target=/srv/paddock-backup/ci
 # db_sql <service> <user> <database> <sql>: one statement through psql in the service's container, unaligned.
 db_sql() { cp_paddock compose exec -T "$1" psql -U "$2" -d "$3" -Atc "$4" </dev/null; }
@@ -269,9 +275,9 @@ drill_point() {
   fail "the local target holds no backup set with the WAL past $drill_at (${want[*]}) within 10 minutes"
 }
 
-# rollback_host <cp|audit>: step 9, ./paddock rollback --yes with on stdin what an operator types, never on a command
+# rollback_host <cp|audit>: step 6, ./paddock rollback --yes with on stdin what an operator types, never on a command
 # line. --yes answers the confirmations. The control plane's rollback to a release with scripts/restore.sh restores the
-# pre-upgrade set and asks for the backup key that made it: the key of step 2, which step 6 kept. 0.1.0-alpha.8's
+# pre-upgrade set and asks for the backup key that made it: the key of step 2. 0.1.0-alpha.8's
 # procedure (legacy) reads its key file from the old directory, and the audit host restores nothing.
 rollback_host() {
   local input=/dev/null
@@ -279,6 +285,61 @@ rollback_host() {
   if [[ "$1" == cp ]]; then cp_paddock rollback "$W/prev/cp" --yes <"$input"; else
     audit_paddock rollback "$W/prev/audit" --yes <"$input"
   fi
+}
+
+# attach_s3: the CI S3 endpoint on the network cp as backup-s3-tls, unless it is attached: 0.1.0-alpha.8's pgBackRest
+# needs it from its start, and the rollback's down may have recreated the network before the upgrade again.
+attach_s3() {
+  local id
+  id="$("${s3_project[@]}" ps -q backup-s3)"
+  [[ -n "$id" ]] || fail "the CI S3 endpoint backup-s3 does not run"
+  if ! docker network inspect paddock-cp_cp --format '{{range $k, $v := .Containers}}{{$k}} {{end}}' 2>/dev/null |
+    grep -qF "$id"; then
+    docker network connect --alias backup-s3-tls paddock-cp_cp "$id"
+  fi
+}
+
+# upgrade_hosts <n> <name>: step 4, and step 8 after the rollback: ./paddock upgrade --yes from the previous
+# release's directories on the control plane, then on the audit host, then the release's bootstrap and the orphans.
+# The second run uses the same candidate directories: their .upgrade-state records the rollback, so the upgrade starts
+# again at the check and records its own pre-upgrade backup and rollback point.
+upgrade_hosts() {
+  step "$1.1 $2: control plane"
+  phase=$2
+  use_cand
+  legacy_overlay
+  if $legacy; then attach_s3; fi
+  stop_unsealer
+  start_unsealer
+  # BAO_TOKEN lets the upgrade run ./paddock bootstrap openbao for the new release's policies and AppRoles.
+  BAO_TOKEN="$(sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p' "$W/init.json")" cp_paddock upgrade "$W/prev/cp" --yes </dev/null
+  step "$1.2 $2: audit host"
+  audit_paddock upgrade "$W/prev/audit" --yes </dev/null
+  step "$1.3 $2: the release's bootstrap and orphans"
+  CP_OVERLAY="$ci_overlay"
+  cp_paddock bootstrap buckets
+  cp_paddock up
+  orphans
+}
+
+# upgraded_probes <n> <name> <label> <touch>: step 5, and step 9 after the upgrade again: the hosts, the seeded set
+# probed under <label> with the managed file rewritten to <touch>, the old device receiving <touch>, a new device of the
+# candidate and, with --agent-artifacts, the candidate's agent release.
+upgraded_probes() {
+  step "$1.1 $2: hosts"
+  hosts_healthy
+  step "$1.2 $2: the seeded set"
+  if ((${#reveal[@]} == 0)); then
+    echo "upgrade: the escrow reveal is skipped (UPGRADE_SKIP_REVEAL=1); it must run before a release tag" >&2
+    annotate warning "escrow reveal skipped (UPGRADE_SKIP_REVEAL=1)"
+  fi
+  seeded "$3" --touch "$4" "${reveal[@]}"
+  step "$1.3 $2: the device of v$prev_version"
+  device_checks_in "$W/bin/upgradesim-prev" "$4"
+  step "$1.4 $2: a device of the candidate"
+  probe_env "$W/bin/upgradesim" enroll --state "$W/seed/device-candidate.json" --hostname ci-upgrade-candidate \
+    <"$W/seed/enroll.json"
+  if [[ -n "$agent_artifacts" ]]; then smoke_agent_release "$agent_artifacts"; fi
 }
 
 # install_traps: finish on every exit. A TERM (the workflow's timeout) or an INT exits non-zero through finish, which
@@ -332,7 +393,7 @@ step "1.5 previous: control plane"
 if $legacy; then
   # The network cp exists once a container of the project does; alpha.8's pgBackRest needs the endpoint from its start.
   cp_paddock compose create postgres
-  docker network connect --alias backup-s3-tls paddock-cp_cp "$("${s3_project[@]}" ps -q backup-s3)"
+  attach_s3
 fi
 smoke_cp_infra
 step "1.6 previous: production checks"
@@ -369,38 +430,35 @@ for host in cp audit; do
 done
 
 # --- 4 upgrade -------------------------------------------------------------------------------------------------------
-step "4.1 upgrade: control plane"
-phase=upgrade
-stop_unsealer
-start_unsealer
-# BAO_TOKEN lets the upgrade run ./paddock bootstrap openbao for the new release's policies and AppRoles.
-BAO_TOKEN="$(sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p' "$W/init.json")" cp_paddock upgrade "$W/prev/cp" --yes </dev/null
-step "4.2 upgrade: audit host"
-audit_paddock upgrade "$W/prev/audit" --yes </dev/null
-step "4.3 upgrade: the release's bootstrap and orphans"
-CP_OVERLAY="$ci_overlay"
-cp_paddock bootstrap buckets
-cp_paddock up
-orphans
+upgrade_hosts 4 upgrade
 
 # --- 5 probes --------------------------------------------------------------------------------------------------------
-step "5.1 probes: hosts"
-hosts_healthy
-step "5.2 probes: the seeded set"
-if ((${#reveal[@]} == 0)); then
-  echo "upgrade: the escrow reveal is skipped (UPGRADE_SKIP_REVEAL=1); it must run before a release tag" >&2
-  annotate warning "escrow reveal skipped (UPGRADE_SKIP_REVEAL=1)"
-fi
-seeded upgraded --touch "phase=upgraded" "${reveal[@]}"
-step "5.3 probes: the device of v$prev_version"
-device_checks_in "$W/bin/upgradesim-prev" "phase=upgraded"
-step "5.4 probes: a device of the candidate"
-probe_env "$W/bin/upgradesim" enroll --state "$W/seed/device-candidate.json" --hostname ci-upgrade-candidate \
-  <"$W/seed/enroll.json"
-if [[ -n "$agent_artifacts" ]]; then smoke_agent_release "$agent_artifacts"; fi
+upgraded_probes 5 probes upgraded "phase=upgraded"
 
-# --- 6 restore drill: backup -----------------------------------------------------------------------------------------
-step "6 restore drill: backup"
+# --- 6 rollback ------------------------------------------------------------------------------------------------------
+step "6.1 rollback: control plane"
+phase=rollback
+legacy_overlay
+rollback_host cp
+step "6.2 rollback: audit host"
+rollback_host audit
+
+# --- 7 probes on the previous release --------------------------------------------------------------------------------
+step "7.1 previous again: hosts"
+use_prev
+hosts_healthy
+step "7.2 previous again: the pre-upgrade set and the device"
+seeded rolled-back "${reveal[@]}"
+device_checks_in "$W/bin/upgradesim-prev" /etc/paddock-ci/upgrade.conf
+
+# --- 8 upgrade again -------------------------------------------------------------------------------------------------
+upgrade_hosts 8 "upgrade-again"
+
+# --- 9 probes after the upgrade again --------------------------------------------------------------------------------
+upgraded_probes 9 "probes after the upgrade again" upgraded-again "phase=upgraded-again"
+
+# --- 10 restore drill: backup ----------------------------------------------------------------------------------------
+step "10 restore drill: backup"
 # From 0.1.0-alpha.8 the api imported the old key file as key legacy; the drill confirms it, as the upgrade guide says.
 legacy_key=()
 if $legacy; then legacy_key=(--legacy-key-file "$CP_DIR/.secrets/backup_encryption_key"); fi
@@ -412,8 +470,8 @@ cp_paddock up
 cp_paddock backup now --label ci --wait </dev/null
 drill_point
 
-# --- 7 restore drill: loss and restore -------------------------------------------------------------------------------
-step "7 restore drill: down --volumes, secrets, restore --from --at $drill_at"
+# --- 11 restore drill: loss and restore ------------------------------------------------------------------------------
+step "11 restore drill: down --volumes, secrets, restore --from --at $drill_at"
 # The set is root's and the backup role's; the operator restores from a copy it can read.
 rm -rf "$W/drill-set"
 sudo cp -a "$set_dir" "$W/drill-set"
@@ -430,28 +488,12 @@ while IFS= read -r v; do restore_env+=("$v"); done < <(env | grep -E '^PADDOCK_[
   echo restore
 } | (cd "$CP_DIR" && sudo -n env "${restore_env[@]}" ./paddock restore --from "$W/drill-set" --at "$drill_at")
 
-# --- 8 probes after the restore --------------------------------------------------------------------------------------
-step "8.1 probes after the restore: hosts"
+# --- 12 probes after the restore -------------------------------------------------------------------------------------
+step "12.1 probes after the restore: hosts"
 phase=restore
 hosts_healthy
-step "8.2 probes after the restore: the seeded set and the device"
+step "12.2 probes after the restore: the seeded set and the device"
 seeded restored
-device_checks_in "$W/bin/upgradesim-prev" /etc/paddock-ci/upgrade.conf
-
-# --- 9 rollback ------------------------------------------------------------------------------------------------------
-step "9.1 rollback: control plane"
-phase=rollback
-legacy_overlay
-rollback_host cp
-step "9.2 rollback: audit host"
-rollback_host audit
-
-# --- 10 probes on the previous release -------------------------------------------------------------------------------
-step "10.1 previous again: hosts"
-use_prev
-hosts_healthy
-step "10.2 previous again: the pre-upgrade set and the device"
-seeded rolled-back "${reveal[@]}"
 device_checks_in "$W/bin/upgradesim-prev" /etc/paddock-ci/upgrade.conf
 
 step "done"
