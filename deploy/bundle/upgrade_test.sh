@@ -513,7 +513,7 @@ else
     pass "the replaced bundle-seq/ is kept aside, no temporary directory is left"
   else fail "after the replacement: $(ls -a "$work/t/new")"; fi
   has "the operator learns about the kept directory and how to remove it" \
-    "^bundle-seq/ of an earlier run here is kept as $work/t/new/\\.bundle-seq\\.replaced\\.[^ ]+ \\(uid 999's; remove it with: sudo rm -rf $work/t/new/\\.bundle-seq\\.replaced\\."
+    "^bundle-seq/ of an earlier run here is kept as $work/t/new/\\.bundle-seq\\.replaced\\.[^ ]+ \\(uid [0-9]+'s; remove it with: sudo rm -rf $work/t/new/\\.bundle-seq\\.replaced\\."
   chmod -R u+w "$work/t/new"
 
   # When the bundle directory itself is not writable either, nothing changes and the message names the owner.
@@ -535,12 +535,13 @@ fi
 # migrate-from reads both high-water files as one validated number and fails closed on anything else
 # (PDK-980 reviews 1 and 2, decisions-alpha10 §43): nothing is copied, neither entry changes, and no content reaches
 # bash arithmetic, where PATH[$(…)] runs a command as the operator. B's file is uid 999's.
-# seq_entry <path> <spec>: file:<content>, dir or link (a symlink to a file holding 9).
+# seq_entry <path> <spec>: file:<content>, dir, link (a symlink to a file holding 9) or fifo.
 seq_entry() {
   case "$2" in
     file:*) printf '%s\n' "${2#file:}" >"$1" ;;
     dir) mkdir "$1" ;;
     link) echo 9 >"$work/elsewhere" && ln -s "$work/elsewhere" "$1" ;;
+    fifo) mkfifo "$1" ;;
   esac
 }
 # seq_refused <name> <A spec> <B spec> <path the message names>
@@ -582,6 +583,79 @@ if ((EUID != 0)); then
     pass "an unreadable high-water file fails with an actionable message (exit $got)"
   else fail "unreadable high-water file: exit $got, $out"; fi
 fi
+
+# A FIFO is refused by type, without a read that could block.
+seq_refused "A's high-water as a FIFO" fifo file:2000003 old
+
+# PDK-984: no write follows a name planted in bundle-seq/. In a directory this user owns, the temp file is created
+# exclusively under a random name; a planted high-water.tmp symlink stays untouched.
+setup controlplane "Schema: migrations 00105–00106"
+mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
+echo 3000005 >"$work/t/old/bundle-seq/high-water"
+echo 2000003 >"$work/t/new/bundle-seq/high-water"
+echo victim >"$work/victim"
+ln -s "$work/victim" "$work/t/new/bundle-seq/high-water.tmp"
+got=0
+out="$(cd "$work/t/new" && ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
+if [[ "$got" == 0 && "$(cat "$work/victim")" == victim && -L "$work/t/new/bundle-seq/high-water.tmp" &&
+  ! -L "$work/t/new/bundle-seq/high-water" && "$(cat "$work/t/new/bundle-seq/high-water")" == 3000005 ]] &&
+  ! compgen -G "$work/t/new/bundle-seq/.high-water.*" >/dev/null; then
+  pass "a planted high-water.tmp symlink is not written through"
+else fail "planted symlink: exit $got, victim=$(cat "$work/victim"), $(ls -la "$work/t/new/bundle-seq"), $out"; fi
+rm -f "$work/victim"
+
+# As root, in B's bundle-seq/ of uid 999 with a planted symlink, migrate-from writes nothing inside it and swaps it.
+as_root=()
+if ((EUID != 0)); then as_root=(sudo -n); fi
+if ((EUID == 0)) || sudo -n true 2>/dev/null; then
+  setup controlplane "Schema: migrations 00105–00106"
+  mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
+  echo 3000005 >"$work/t/old/bundle-seq/high-water"
+  echo 2000003 >"$work/t/new/bundle-seq/high-water"
+  echo victim >"$work/victim"
+  for n in high-water.tmp .high-water.tmp; do ln -s "$work/victim" "$work/t/new/bundle-seq/$n"; done
+  "${as_root[@]}" chown -hR 999:999 "$work/t/new/bundle-seq"
+  got=0
+  out="$(cd "$work/t/new" && "${as_root[@]}" ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
+  aside=("$work/t/new"/.bundle-seq.replaced.*)
+  if [[ "$got" == 0 && "$(cat "$work/victim")" == victim && "$(cat "$work/t/new/bundle-seq/high-water")" == 3000005 &&
+    ! -L "$work/t/new/bundle-seq/high-water" && ${#aside[@]} == 1 && "$(stat -c %u "${aside[0]}")" == 999 &&
+    "$out" == *"(uid 999's; remove it with: sudo rm -rf ${aside[0]})"* ]]; then
+    pass "as root, uid 999's bundle-seq/ is replaced, and nothing is written through a planted symlink"
+  else fail "root with uid 999's bundle-seq/: exit $got, victim=$(cat "$work/victim"), $(ls -la "$work/t/new" "$work/t/new/bundle-seq"), $out"; fi
+  "${as_root[@]}" rm -rf "$work/t"
+  rm -f "$work/victim"
+else
+  echo "skip migrate-from as root: neither root nor sudo -n"
+fi
+
+# B's higher value is kept, with its leading zeros, and nothing is written.
+setup controlplane "Schema: migrations 00105–00106"
+mkdir -p "$work/t/old/bundle-seq" "$work/t/new/bundle-seq"
+echo 8 >"$work/t/old/bundle-seq/high-water"
+echo 0000009 >"$work/t/new/bundle-seq/high-water"
+got=0
+out="$(cd "$work/t/new" && ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
+if [[ "$got" == 0 && "$(cat "$work/t/new/bundle-seq/high-water")" == 0000009 ]]; then
+  pass "B's higher high-water (0000009 against 8) is kept"
+else fail "B higher: exit $got, $(cat "$work/t/new/bundle-seq/high-water"), $out"; fi
+
+# B's bundle-seq that is no directory is refused, nothing changed.
+for kind in link file; do
+  setup controlplane "Schema: migrations 00105–00106"
+  mkdir -p "$work/t/old/bundle-seq" "$work/elsewhere-dir"
+  echo 3000005 >"$work/t/old/bundle-seq/high-water"
+  rm -rf "$work/t/new/bundle-seq"
+  if [[ "$kind" == link ]]; then ln -s "$work/elsewhere-dir" "$work/t/new/bundle-seq"; else echo 1 >"$work/t/new/bundle-seq"; fi
+  got=0
+  out="$(cd "$work/t/new" && ./paddock migrate-from "$work/t/old" 2>&1)" || got=$?
+  if [[ "$got" != 0 && ! -e "$work/t/new/.env" && -z "$(ls -A "$work/elsewhere-dir")" &&
+    "$out" == *"migrate-from: $work/t/new/bundle-seq is not a directory; remove it; nothing changed"* ]] &&
+    { [[ "$kind" == link && -L "$work/t/new/bundle-seq" ]] || [[ "$kind" == file && "$(cat "$work/t/new/bundle-seq")" == 1 ]]; }; then
+    pass "B's bundle-seq as a $kind is refused and nothing changes (exit $got)"
+  else fail "B's bundle-seq as a $kind: exit $got, $out"; fi
+  rm -rf "$work/elsewhere-dir"
+done
 
 # Leading zeros are decimal, not octal; the written file holds the plain number.
 setup controlplane "Schema: migrations 00105–00106"
