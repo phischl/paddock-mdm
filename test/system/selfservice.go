@@ -116,9 +116,20 @@ apt_get purge flatpak
 
 // ssUserScript creates the account $1 with UID $2 as Himmelblau would map a directory user (a UPN as its name, a UID
 // in the idmap range), with a home and GNOME's first-start setup marked done so that an automatic login opens the
-// desktop. useradd refuses an "@" without --badname (--badnames before shadow 4.14).
+// desktop. useradd refuses an "@" without --badname (--badnames before shadow 4.14); only an unknown option falls
+// back, any other refusal of the first useradd is printed, since it names the real cause.
 const ssUserScript = `set -eu
-useradd --badname -m -u "$2" -s /bin/bash "$1" 2>/dev/null || useradd --badnames -m -u "$2" -s /bin/bash "$1"
+rc=0
+err=$(useradd --badname -m -u "$2" -s /bin/bash "$1" 2>&1) || rc=$?
+if [ "$rc" -ne 0 ]; then
+	case $err in
+	*"unrecognized option"*) useradd --badnames -m -u "$2" -s /bin/bash "$1" ;;
+	*)
+		echo "useradd --badname $1 (UID $2) failed with exit status $rc: $err" >&2
+		exit "$rc"
+		;;
+	esac
+fi
 home=$(getent passwd "$2" | cut -d: -f6)
 gid=$(id -g "$2")
 install -d -o "$2" -g "$gid" "$home/.config"
