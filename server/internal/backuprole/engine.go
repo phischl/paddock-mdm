@@ -32,6 +32,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/backup"
 	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
@@ -107,10 +108,16 @@ type Config struct {
 	HighWaterFile string
 }
 
-// LeaderLocker runs fn while holding a cluster-wide advisory lock; false when another replica holds it.
+// LeaderLocker runs fn while holding a cluster-wide advisory lock on one dedicated connection, checked every check;
+// false when another process holds it. fn's context ends with the cause db.ErrLeadershipLost when the connection
+// stops answering (db.PlatformPool.Lead).
 type LeaderLocker interface {
-	WithLeaderLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (bool, error)
+	Lead(ctx context.Context, key int64, check time.Duration, fn func(ctx context.Context) error) (bool, error)
 }
+
+// leaderCheckEvery is how often the leader asks its lock connection whether it still answers: the longest a process
+// that lost the lock can go on writing beside the next leader (decisions-alpha10 §50).
+const leaderCheckEvery = 5 * time.Second
 
 // Snapshotter takes OpenBao's Raft snapshot (bao.Client with the AppRole paddock-backup).
 type Snapshotter interface {
@@ -167,6 +174,8 @@ type Engine struct {
 	lanes map[uuid.UUID]*lane
 	// passes holds the mirror passes whose runs have no mirror results yet.
 	passes []*mirrorPass
+	// waiting holds, per target whose lane mirrored an earlier set when they began, the passes its next lane settles.
+	waiting map[uuid.UUID][]*mirrorPass
 	// laneWG counts the running lanes; Run waits for them on shutdown.
 	laneWG sync.WaitGroup
 	// reachable is the result of each target's last finished mirror for paddock_backup_target_reachable.
@@ -184,12 +193,45 @@ func NewEngine(cfg Config, lock LeaderLocker, store Store, keys Decrypter, snap 
 		metrics: metrics, now: now, hashes: map[string]hashEntry{}, mirrored: map[string]map[string]time.Time{},
 		pushed: map[uuid.UUID]map[string]fileInfo{}, fleetFailed: map[string]time.Time{}, stall: mirrorStall,
 		budget: mirrorBudget, minRate: mirrorMinRate, busy: map[uuid.UUID]bool{}, checking: map[uuid.UUID]bool{}, testing: map[uuid.UUID]bool{},
-		held: map[uuid.UUID]int{}, lanes: map[uuid.UUID]*lane{}, reachable: map[uuid.UUID]bool{}}
+		held: map[uuid.UUID]int{}, lanes: map[uuid.UUID]*lane{}, reachable: map[uuid.UUID]bool{},
+		waiting: map[uuid.UUID][]*mirrorPass{}}
 }
 
-// Run runs a round at start and then every RoundInterval until ctx ends. The end of ctx cancels the lanes, and Run
-// returns once they returned; a lane cancelled so records nothing, and the next process mirrors its runs.
+// Run leads the backup role for the life of the process (decisions-alpha10 §50): it holds the leader lock on one
+// dedicated connection and runs a round at start and then every RoundInterval, while the mirror lanes run beside the
+// rounds, so lanes and rounds only ever run under the lock. A process that does not get the lock stands by and tries
+// again every RoundInterval. When the lock's connection stops answering, the rounds and lanes stop before any further
+// write, the loss is logged and counted (paddock_backup_leader_lost_total; the audit registry has no code for it), and
+// Run tries to lead again. The end of ctx cancels the lanes, and Run returns once they returned; a lane cancelled so
+// records nothing, and the next leader mirrors its runs.
 func (e *Engine) Run(ctx context.Context) error {
+	for {
+		led, err := e.lock.Lead(SystemContext(ctx), LockKey, leaderCheckEvery, e.lead)
+		switch {
+		case ctx.Err() != nil:
+			return nil
+		case errors.Is(err, db.ErrLeadershipLost):
+			e.metrics.leaderLost.Inc()
+			slog.ErrorContext(ctx, "backup role lost its leader lock; rounds and mirror lanes stopped, leading again when the lock is free",
+				"error", err)
+		case err != nil:
+			slog.WarnContext(ctx, "backup role could not take its leader lock; retrying", "error", err, "led", led)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(e.cfg.RoundInterval):
+		}
+	}
+}
+
+// lead runs the rounds while this process holds the leader lock; it returns once ctx ended and every lane returned,
+// and forgets the open passes, whose runs the next leadership covers.
+func (e *Engine) lead(ctx context.Context) error {
+	e.metrics.leader.Set(1)
+	defer e.metrics.leader.Set(0)
+	defer e.forgetPasses()
+	defer e.waitLanes()
 	tick := time.NewTicker(e.cfg.RoundInterval)
 	defer tick.Stop()
 	for {
@@ -198,7 +240,6 @@ func (e *Engine) Run(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			e.waitLanes()
 			return nil
 		case <-tick.C:
 		}
@@ -209,10 +250,9 @@ func principalWith(ctx context.Context) context.Context {
 	return principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: Actor})
 }
 
-// Round runs one round on the replica that holds the lock. The lanes it starts run on with ctx after it returned.
+// Round runs one round; the caller leads (Run), and the lanes it starts run on with ctx after it returned.
 func (e *Engine) Round(ctx context.Context) error {
-	_, err := e.lock.WithLeaderLock(SystemContext(ctx), LockKey, e.round)
-	return err
+	return e.round(SystemContext(ctx))
 }
 
 // run is one run of one kind before its mirror results are known.

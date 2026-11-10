@@ -22,6 +22,10 @@ type Metrics struct {
 	// amendment 2026-11-05, A2 note b).
 	escrowUnevidenced prometheus.Gauge
 	escrowSuspicious  prometheus.Gauge
+	// leader is 1 while this process holds the backup leader lock; leaderLost counts the leaderships lost with their
+	// connection (decisions-alpha10 §50).
+	leader     prometheus.Gauge
+	leaderLost prometheus.Counter
 }
 
 // NewMetrics registers the metrics with reg.
@@ -71,8 +75,16 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "paddock_backup_escrow_listing_suspicious",
 			Help: "1 when the last escrow bucket listing lacked, without Destroy evidence, all or more than a tenth of the local set's headers (empty or wrong bucket): nothing is copied or deleted.",
 		}),
+		leader: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "paddock_backup_leader",
+			Help: "1 while this backup role process holds the leader lock and runs rounds and mirror lanes; 0 while it stands by.",
+		}),
+		leaderLost: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "paddock_backup_leader_lost_total",
+			Help: "Leaderships this backup role process lost because the connection holding the leader lock stopped answering.",
+		}),
 	}
 	reg.MustRegister(m.lastSuccess, m.reachable, m.held, m.keyConfirmed, m.runs, m.repoBytes, m.walArchived, m.series,
-		m.walStanzas, m.escrowUnevidenced, m.escrowSuspicious)
+		m.walStanzas, m.escrowUnevidenced, m.escrowSuspicious, m.leader, m.leaderLost)
 	return m
 }

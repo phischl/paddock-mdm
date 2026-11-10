@@ -16,16 +16,19 @@ import (
 
 // lane is the mirror in flight of one target (decisions-alpha10 A10-26). A round starts it and never waits for it: a
 // slow target holds only its own lane, while the round goes on with the local backups, the key, the requests and the
-// tests. idx is the set the lane copies; the local expire keeps every file of it until the lane ended.
+// tests. idx is the set the lane copies; the local expire keeps every file of it until the lane ended. passes are the
+// passes its result settles: the pass of the round that started it and every pass that waited for the target while
+// its previous lane ran (their runs are in idx).
 type lane struct {
-	idx  repoIndex
-	pass *mirrorPass
+	idx    repoIndex
+	passes []*mirrorPass
 }
 
 // mirrorPass is the mirror of one round's set: the runs it covers, the finished runs without mirror results when the
-// round indexed the set, minus those an earlier pass still covers, and one result per enabled target. Its phase 2
-// (Store.MirrorRuns) runs once, when the last of its lanes ended; a pass a shutdown cancelled records nothing, so the
-// next process covers its runs again.
+// round indexed the set, minus those an earlier pass still covers, and one result per enabled target, each from a lane
+// that copied a set holding these runs. Its phase 2 (Store.MirrorRuns) runs once, when the last of those lanes ended;
+// the round never runs it for a target no lane carried. A pass a shutdown or a lost leadership cancelled records
+// nothing, so the next leader covers its runs again.
 type mirrorPass struct {
 	runs    []uuid.UUID
 	results []backupset.RunTarget
@@ -35,8 +38,10 @@ type mirrorPass struct {
 }
 
 // startMirrors opens a mirror pass for the set idx and starts a lane for every enabled target without one in flight.
-// A target whose lane still mirrors an earlier set gets ClassContinues in this pass: that lane's index lacks this
-// round's runs. A volume target the host has not mounted gets its result at once. The lanes run with ctx.
+// A target whose lane still mirrors an earlier set makes the pass wait for the target's next lane, which a later round
+// starts with a newer index: that index holds this round's runs, the in-flight lane's does not. A volume target the
+// host has not mounted gets its result at once, in this pass and in every pass waiting for it. A pass waiting for a
+// target that is no longer enabled stops waiting for it. The lanes run with ctx.
 func (e *Engine) startMirrors(ctx context.Context, idx repoIndex, targets []TargetRecord, kinds map[string]kindInfo,
 	ret retention) error {
 	due, err := e.store.UnmirroredRuns(ctx)
@@ -45,8 +50,9 @@ func (e *Engine) startMirrors(ctx context.Context, idx repoIndex, targets []Targ
 		err = fmt.Errorf("list the runs without mirror results: %w", err)
 	}
 	type immediate struct {
-		t     TargetRecord
-		class string
+		t      TargetRecord
+		class  string
+		passes []*mirrorPass
 	}
 	var settled []immediate
 	e.laneMu.Lock()
@@ -59,48 +65,65 @@ func (e *Engine) startMirrors(ctx context.Context, idx repoIndex, targets []Targ
 	pass := &mirrorPass{runs: slices.DeleteFunc(due, func(id uuid.UUID) bool { return covered[id] }), pending: 1}
 	e.passes = append(e.passes, pass)
 	e.enabled, e.repoKinds = nil, kinds
+	enabled := map[uuid.UUID]bool{}
 	for _, t := range targets {
 		if !t.Enabled {
 			continue
 		}
+		enabled[t.ID] = true
 		e.enabled = append(e.enabled, t)
+		pass.pending++
+		if e.lanes[t.ID] != nil {
+			e.waiting[t.ID] = append(e.waiting[t.ID], pass)
+			continue
+		}
+		passes := append([]*mirrorPass{pass}, e.waiting[t.ID]...)
+		delete(e.waiting, t.ID)
 		switch {
 		case backupset.Mounted(t.Type) && t.HostState == HostPending:
-			settled = append(settled, immediate{t, ClassNotMounted})
-			pass.pending++
+			settled = append(settled, immediate{t, ClassNotMounted, passes})
 		case backupset.Mounted(t.Type) && t.HostState == HostUnreachable:
-			settled = append(settled, immediate{t, ClassIO})
-			pass.pending++
-		case e.lanes[t.ID] != nil:
-			pass.results = append(pass.results, backupset.RunTarget{TargetID: t.ID.String(), ErrorClass: ClassContinues})
+			settled = append(settled, immediate{t, ClassIO, passes})
 		default:
-			e.lanes[t.ID] = &lane{idx: idx, pass: pass}
-			pass.pending++
+			l := &lane{idx: idx, passes: passes}
+			e.lanes[t.ID] = l
 			e.laneWG.Add(1)
-			go e.runLane(ctx, pass, idx, t, kinds, ret)
+			go e.runLane(ctx, l, t, kinds, ret)
+		}
+	}
+	var abandoned []*mirrorPass
+	for id, passes := range e.waiting {
+		if !enabled[id] {
+			abandoned = append(abandoned, passes...)
+			delete(e.waiting, id)
 		}
 	}
 	e.metrics.series.Set(float64(len(backupset.Kinds) * (1 + len(e.enabled))))
 	e.publishTargets()
 	e.laneMu.Unlock()
 	for _, s := range settled {
-		e.settle(ctx, pass, s.t, kinds, s.class, 0)
+		e.settle(ctx, nil, s.passes, s.t, kinds, s.class, 0)
+	}
+	for _, p := range abandoned {
+		e.release(ctx, p)
 	}
 	e.release(ctx, pass)
 	return err
 }
 
-// runLane mirrors the set to t and settles the result in pass. A lane that ends because ctx ended (shutdown) records
-// nothing: its pass is dropped, and the restarted role mirrors from the recorded state.
-func (e *Engine) runLane(ctx context.Context, pass *mirrorPass, idx repoIndex, t TargetRecord,
-	kinds map[string]kindInfo, ret retention) {
+// runLane mirrors the set to t and settles the result in the lane's passes. A lane that ends because ctx ended
+// (shutdown, lost leadership) records nothing: its passes are dropped, and the next leader mirrors from the recorded
+// state.
+func (e *Engine) runLane(ctx context.Context, l *lane, t TargetRecord, kinds map[string]kindInfo, ret retention) {
 	defer e.laneWG.Done()
-	held, err := e.mirrorLane(ctx, idx, t, ret)
+	held, err := e.mirrorLane(ctx, l.idx, t, ret)
 	if ctx.Err() != nil {
 		e.laneMu.Lock()
 		delete(e.lanes, t.ID)
-		pass.dropped = true
-		e.passes = slices.DeleteFunc(e.passes, func(p *mirrorPass) bool { return p == pass })
+		for _, pass := range l.passes {
+			pass.dropped = true
+		}
+		e.passes = slices.DeleteFunc(e.passes, func(p *mirrorPass) bool { return slices.Contains(l.passes, p) })
 		e.laneMu.Unlock()
 		return
 	}
@@ -113,7 +136,7 @@ func (e *Engine) runLane(ctx context.Context, pass *mirrorPass, idx repoIndex, t
 		class = ErrorClass(err)
 		slog.WarnContext(ctx, "mirror to backup target failed", "target", t.Name, "error_class", class, "error", err)
 	}
-	e.settle(ctx, pass, t, kinds, class, held)
+	e.settle(ctx, l, l.passes, t, kinds, class, held)
 }
 
 // mirrorLane mirrors through its own handle on the repository: the round's closes when the round returns.
@@ -126,10 +149,14 @@ func (e *Engine) mirrorLane(ctx context.Context, idx repoIndex, t TargetRecord, 
 	return e.mirrorTarget(ctx, repo, idx, t, ret)
 }
 
-// settle records the result of t in pass: the target's status per kind, its state for the metrics, and the run
-// result; the last result due runs the pass's phase 2.
-func (e *Engine) settle(ctx context.Context, pass *mirrorPass, t TargetRecord, kinds map[string]kindInfo, class string,
-	held int) {
+// settle records the result of t, from its lane own or decided at once (own nil), in passes: the target's status per
+// kind, its state for the metrics, and the run result; the last result due in a pass runs its phase 2. Nothing is
+// written once ctx ended: a process that lost the lead must not write beside the next leader.
+func (e *Engine) settle(ctx context.Context, own *lane, passes []*mirrorPass, t TargetRecord, kinds map[string]kindInfo,
+	class string, held int) {
+	if ctx.Err() != nil {
+		return
+	}
 	for _, kind := range backupset.Kinds {
 		st := KindStatus{LastSuccess: kinds[kind].at, Bytes: kinds[kind].bytes, Error: class}
 		if class == ClassContinues {
@@ -141,7 +168,7 @@ func (e *Engine) settle(ctx context.Context, pass *mirrorPass, t TargetRecord, k
 		}
 	}
 	e.laneMu.Lock()
-	if l := e.lanes[t.ID]; l != nil && l.pass == pass {
+	if own != nil && e.lanes[t.ID] == own {
 		delete(e.lanes, t.ID)
 	}
 	if class == "" || class == ClassUnknownPath {
@@ -160,11 +187,15 @@ func (e *Engine) settle(ctx context.Context, pass *mirrorPass, t TargetRecord, k
 	default:
 		e.reachable[t.ID] = false
 	}
-	pass.results = append(pass.results, backupset.RunTarget{TargetID: t.ID.String(), OK: class == "",
-		ErrorClass: class, Held: held})
+	for _, pass := range passes {
+		pass.results = append(pass.results, backupset.RunTarget{TargetID: t.ID.String(), OK: class == "",
+			ErrorClass: class, Held: held})
+	}
 	e.publishTargets()
 	e.laneMu.Unlock()
-	e.release(ctx, pass)
+	for _, pass := range passes {
+		e.release(ctx, pass)
+	}
 }
 
 // release gives up one result due in pass and runs its phase 2 once none is due. The pass stays open until phase 2
@@ -174,7 +205,7 @@ func (e *Engine) release(ctx context.Context, pass *mirrorPass) {
 	pass.pending--
 	last := pass.pending == 0 && !pass.dropped
 	e.laneMu.Unlock()
-	if !last {
+	if !last || ctx.Err() != nil {
 		return
 	}
 	if len(pass.runs) > 0 {
@@ -225,4 +256,12 @@ func (e *Engine) pinned() []repoIndex {
 // waitLanes returns once every lane returned.
 func (e *Engine) waitLanes() {
 	e.laneWG.Wait()
+}
+
+// forgetPasses drops every open pass once no lane runs: their runs are still without mirror results in the database,
+// and the next leadership's first pass covers them.
+func (e *Engine) forgetPasses() {
+	e.laneMu.Lock()
+	defer e.laneMu.Unlock()
+	e.passes, e.waiting = nil, map[uuid.UUID][]*mirrorPass{}
 }

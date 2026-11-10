@@ -311,7 +311,7 @@ func (f fakeFactory) Open(_ context.Context, t TargetRecord) (Target, error) { r
 
 type noLock struct{}
 
-func (noLock) WithLeaderLock(ctx context.Context, _ int64, fn func(context.Context) error) (bool, error) {
+func (noLock) Lead(ctx context.Context, _ int64, _ time.Duration, fn func(context.Context) error) (bool, error) {
 	return true, fn(ctx)
 }
 

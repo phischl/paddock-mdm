@@ -297,8 +297,9 @@ func (s *pgStore) History(ctx context.Context) (map[string]KindHistory, error) {
 // platform.backup_failed with error_class record, since without a row phase 2 never sees it.
 func (s *pgStore) RecordRun(ctx context.Context, r RunRecord) ([]uuid.UUID, error) {
 	ids, err := s.recordRun(ctx, r)
-	if err == nil {
-		return ids, nil
+	if err == nil || ctx.Err() != nil {
+		// A role that stopped or lost the lead writes nothing more; the next leader takes the backup again.
+		return ids, err
 	}
 	spec := SpecFailed
 	id := uuid.Must(uuid.NewV7())
@@ -390,7 +391,10 @@ func (s *pgStore) MirrorRuns(ctx context.Context, results []backupset.RunTarget,
 			failed++
 		}
 	}
-	// A shutdown must not split a run between a failure event and a retried one: the loop finishes on its own clock.
+	// A shutdown must not split a run between a failure event and a retried one: each run finishes on its own clock.
+	// The loop stops before the next run once the caller's context ended, so a role that lost the lead does not go on
+	// recording beside the next leader (decisions-alpha10 §50).
+	stop := ctx
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(SystemContext(ctx)), mirrorRunsTimeout)
 	defer cancel()
 	var due []pgstore.BackupRoleUnmirroredRunsRow
@@ -403,6 +407,9 @@ func (s *pgStore) MirrorRuns(ctx context.Context, results []backupset.RunTarget,
 	for _, r := range due {
 		if !slices.Contains(runs, r.ID) {
 			continue
+		}
+		if err := stop.Err(); err != nil {
+			return err
 		}
 		spec := SpecFailed
 		succeeded := r.Outcome != nil && *r.Outcome == "succeeded"

@@ -86,8 +86,8 @@ func TestUnmirroredRunGetsTheNextMirror(t *testing.T) {
 
 // TestFleetRunRecordedWhileALaneHangs: the Fleet dump a round asked for is sealed and recorded by the next round
 // while the target's lane still mirrors the earlier set (decisions-alpha10 A10-26; before, decisions-alpha9 item 82
-// watched for it during the round's mirror). That lane's index lacks the dump, so the run's pass records the target as
-// continues at once instead of waiting for the lane.
+// watched for it during the round's mirror). That lane's index lacks the dump, so the run waits for the target's next
+// lane, which copies the dump and records it ok (PDK-989 review 1, B1).
 func TestFleetRunRecordedWhileALaneHangs(t *testing.T) {
 	f := newFixture(t)
 	f.confirmKey()
@@ -101,7 +101,8 @@ func TestFleetRunRecordedWhileALaneHangs(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.cfg.FleetDumpsDir, fleetRequestFile)); err != nil {
 		t.Fatalf("no fleet dump requested: %v", err)
 	}
-	name := f.now.UTC().Format("20060102T150405Z") + ".sql.gz"
+	dumpAt := f.now
+	name := dumpAt.UTC().Format("20060102T150405Z") + ".sql.gz"
 	if err := os.WriteFile(filepath.Join(f.cfg.FleetDumpsDir, name), []byte("dump"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -110,10 +111,21 @@ func TestFleetRunRecordedWhileALaneHangs(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, ok := f.store.run(KindFleet)
-	if !ok || !r.Succeeded || !r.mirrored || len(r.Targets) != 1 || r.Targets[0].TargetID != rec.ID.String() ||
-		r.Targets[0].ErrorClass != ClassContinues {
-		t.Fatalf("fleet run beside the hanging lane: %+v (recorded %v), want mirrored with the target continuing", r, ok)
+	if !ok || !r.Succeeded || r.mirrored {
+		t.Fatalf("fleet run beside the hanging lane: %+v (recorded %v), want recorded and waiting", r, ok)
 	}
 	close(dst.release)
 	f.engine.waitLanes()
+	if r, _ := f.store.run(KindFleet); r.mirrored {
+		t.Fatalf("fleet run took the results of a lane without its file: %+v", r)
+	}
+	f.now = f.now.Add(time.Minute)
+	f.round(t)
+	r, _ = f.store.run(KindFleet)
+	if !r.mirrored || len(r.Targets) != 1 || r.Targets[0].TargetID != rec.ID.String() || !r.Targets[0].OK {
+		t.Fatalf("fleet run after the target's next lane: %+v", r)
+	}
+	if _, ok := dst.files[backupset.FleetKey(dumpAt)]; !ok {
+		t.Errorf("the next lane did not copy the dump: %v", dst.ops)
+	}
 }

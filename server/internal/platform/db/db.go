@@ -286,6 +286,63 @@ func (p *PlatformPool) WithLeaderLocks(ctx context.Context, keys []int64, fn fun
 	return true, fn(ctx)
 }
 
+// ErrLeadershipLost is the cause with which Lead ends fn's context: the connection holding the lock stopped answering,
+// and with its session PostgreSQL released the lock, so another process may lead from then on.
+var ErrLeadershipLost = errors.New("db: leader lock lost with its connection")
+
+// Lead holds the advisory lock key on one dedicated connection for as long as fn runs, for a role that leads for its
+// whole process life rather than per round (the backup role, decisions-alpha10 §50). Every check it asks that
+// connection whether it still answers; when it does not, fn's context ends with the cause ErrLeadershipLost, Lead
+// waits for fn, discards the connection and returns ErrLeadershipLost. It reports false without calling fn when
+// another session holds the key.
+func (p *PlatformPool) Lead(ctx context.Context, key int64, check time.Duration, fn func(ctx context.Context) error) (bool, error) {
+	conn, err := p.p.Acquire(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Release()
+	var locked bool
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&locked); err != nil || !locked {
+		return false, err
+	}
+	leadCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	watching := make(chan struct{})
+	go func() {
+		defer close(watching)
+		tick := time.NewTicker(check)
+		defer tick.Stop()
+		for {
+			select {
+			case <-leadCtx.Done():
+				return
+			case <-tick.C:
+			}
+			pingCtx, done := context.WithTimeout(leadCtx, check)
+			err := conn.Ping(pingCtx)
+			done()
+			if err != nil && leadCtx.Err() == nil {
+				cancel(ErrLeadershipLost)
+				return
+			}
+		}
+	}()
+	err = fn(leadCtx)
+	lost := errors.Is(context.Cause(leadCtx), ErrLeadershipLost)
+	cancel(nil)
+	<-watching
+	if lost {
+		// The session may still be alive behind a broken network path; closing it is the only way to be sure the
+		// lock is not held on by a connection nobody watches.
+		_ = conn.Conn().Close(context.WithoutCancel(ctx))
+		return true, errors.Join(ErrLeadershipLost, err)
+	}
+	if _, uerr := conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", key); uerr != nil {
+		_ = conn.Conn().Close(context.WithoutCancel(ctx)) // closing the session releases the lock
+	}
+	return true, err
+}
+
 // NotifierPool is the pool of role paddock_notifier (plan M9 decisions 21–23): InOrg for the organizations and
 // InPlatformScope for the platform destinations, which the notifier serves under its own role because
 // paddock_platform has no right on their delivery state (plan M9 amendment section E).

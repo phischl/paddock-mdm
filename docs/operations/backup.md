@@ -168,7 +168,7 @@ class only, never the remote answer:
 | `dns`, `dial`, `tls` | the name does not resolve, the connection fails, the certificate is not trusted |
 | `auth`, `forbidden` | the credentials are refused, or valid but not allowed to write there |
 | `not_mounted`, `read_only` | the volume is not mounted (run `./paddock backup-target apply` and `./paddock up`), or it is mounted read-only |
-| `io` | a write failed, the disk is full, or the target used its round's time budget (below) |
+| `io` | a write failed, the disk is full, or the target copied slower than the minimum rate past its time budget (below); a mirror that only used its budget is no error and shows *continues next round* |
 | `foreign_set` | the target holds the set of another installation: nothing is written or deleted; empty the target's `paddock-backup/` first to reuse it |
 | `set_shrunk` | writing would make the target's copy unrestorable (after a lost local repository); nothing is written or deleted (`docs/operations/restore.md`, "Lost local backup repository") |
 | `unknown_path` | the target holds a repository path no key names (`./paddock backup status` notes it, the role's log names the path): the copy and the deletions by the rules below go on, the path itself is kept until you remove it by hand |
@@ -309,8 +309,12 @@ that `/backup-repo` is the named volume `backup-repo` everywhere and the local t
 The backup role exports `paddock_backup_last_success_timestamp_seconds{kind,target}` (target `repo` is the local
 repository), `paddock_backup_target_reachable{target}`, `paddock_backup_target_held_files{target}`,
 `paddock_backup_key_confirmed`, `paddock_backup_runs_total{kind,outcome}`, `paddock_backup_repo_bytes{what}`,
-`paddock_backup_wal_last_archived_timestamp_seconds{stanza}`, `paddock_backup_escrow_unevidenced_missing` and
-`paddock_backup_escrow_listing_suspicious`. The alerts `PaddockBackupStale`, `PaddockBackupAgeMissing`,
+`paddock_backup_wal_last_archived_timestamp_seconds{stanza}`, `paddock_backup_escrow_unevidenced_missing`,
+`paddock_backup_escrow_listing_suspicious`, `paddock_backup_leader` (1 while the process holds the role's leader lock)
+and `paddock_backup_leader_lost_total`. Only the process that holds the leader lock runs rounds and mirrors; it holds
+the lock on one database connection for its whole life. When that connection stops answering, it stops its rounds and
+mirrors before writing anything more, logs `backup role lost its leader lock` and takes the lock again once it is
+free; the runs it had not finished are mirrored by the next leader. The alerts `PaddockBackupStale`, `PaddockBackupAgeMissing`,
 `PaddockWALArchiveLag`, `PaddockWALArchiveLagMissing`, `PaddockBackupKeyUnconfirmed`,
 `PaddockBackupTargetUnreachable`, `PaddockBackupTargetHolding`, `PaddockBackupEscrowListingSuspicious` and
 `PaddockBackupRepoFull` are in `docs/operations/monitoring.md`.

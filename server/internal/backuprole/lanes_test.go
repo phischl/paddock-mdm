@@ -101,14 +101,19 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 // TestHangingLaneDoesNotDelayTheRound: while one target's mirror hangs in its listing, the next round still takes a
 // requested OpenBao snapshot, hands a newly confirmed key to pgBackRest, answers the connection test of the hanging
 // target with the test's own result, and starts no second mirror to that target (decisions-alpha10 A10-26; before,
-// PDK-989: one slow listing held every request and key confirmation for as long as it ran).
+// PDK-989: one slow listing held every request and key confirmation for as long as it ran). With every target busy,
+// the round settles nothing: the requested run waits for the target's next lane, which copies it and records ok
+// (PDK-989 review 1, B1).
 func TestHangingLaneDoesNotDelayTheRound(t *testing.T) {
 	f := newFixture(t)
 	f.confirmKey()
 	f.engine.stall = time.Hour
 	slow := newHangingTarget()
+	released := false
 	t.Cleanup(func() {
-		close(slow.release)
+		if !released {
+			close(slow.release)
+		}
 		f.engine.waitLanes()
 	})
 	rec := f.addTarget(t, backupset.TypeS3, slow)
@@ -138,10 +143,10 @@ func TestHangingLaneDoesNotDelayTheRound(t *testing.T) {
 	if n := slow.lists.Load(); n != 1 {
 		t.Errorf("listings of the hanging target %d, want 1: one lane per target", n)
 	}
-	// The requested run's pass began while the lane mirrored the earlier set: the target continues, at once.
+	// The requested run's pass began while the lane mirrored the earlier set: it waits for the target's next lane.
 	r, ok := f.store.runOf(KindOpenBao, 1)
-	if !ok || !r.mirrored || len(r.Targets) != 1 || r.Targets[0].ErrorClass != ClassContinues {
-		t.Errorf("requested run beside the hanging lane: %+v (recorded %v)", r, ok)
+	if !ok || r.mirrored {
+		t.Errorf("requested run beside the hanging lane: %+v (recorded %v), want recorded and waiting", r, ok)
 	}
 	// The first round's run waits for its lane: its results are recorded only when the lane ends.
 	if r, _ := f.store.runOf(KindOpenBao, 0); r.mirrored {
@@ -150,11 +155,32 @@ func TestHangingLaneDoesNotDelayTheRound(t *testing.T) {
 	if _, ok := f.store.statusOf(rec.ID, KindOpenBao); ok {
 		t.Error("the hanging target got a status before its lane ended")
 	}
+
+	released = true
+	close(slow.release)
+	f.engine.waitLanes()
+	if r, _ := f.store.runOf(KindOpenBao, 1); r.mirrored {
+		t.Errorf("the requested run got the results of a lane whose set lacks it: %+v", r)
+	}
+	f.now = f.now.Add(time.Minute)
+	f.store.requests = nil
+	f.store.targets[0].TestRequested = false
+	f.round(t)
+	for i := range 2 {
+		r, _ := f.store.runOf(KindOpenBao, i)
+		if !r.mirrored || len(r.Targets) != 1 || !r.Targets[0].OK {
+			t.Errorf("run %d after the lanes: %+v, want mirrored ok (no targets_failed)", i, r)
+		}
+	}
+	if n := f.store.duplicateWrites(); n != 0 {
+		t.Errorf("%d runs got their mirror results twice", n)
+	}
 }
 
 // TestSlowTargetDoesNotHoldTheFastOne: with one target hanging and one fast, the fast target is mirrored in every
-// round, its status and metrics are current, and the runs of a later round get their results as soon as the fast lane
-// ended; the slow lane's run gets its results when that lane ends, once (decisions-alpha10 A10-26).
+// round and its status and metrics are current; the slow lane's run gets its results when that lane ends, and a later
+// run, recorded while the slow lane ran, waits for the slow target's next lane and then is ok on both, once
+// (decisions-alpha10 A10-26; PDK-989 review 1, B1).
 func TestSlowTargetDoesNotHoldTheFastOne(t *testing.T) {
 	f := newFixture(t)
 	f.confirmKey()
@@ -181,25 +207,13 @@ func TestSlowTargetDoesNotHoldTheFastOne(t *testing.T) {
 	f.store.requests = []RequestedRun{req}
 	roundWithin(t, f)
 	f.store.requests = nil
-	waitFor(t, "the second run's mirror results", func() bool {
-		r, _ := f.store.runOf(KindOpenBao, 1)
-		return r.mirrored
+	waitFor(t, "the fast target's second mirror", func() bool {
+		f.engine.laneMu.Lock()
+		defer f.engine.laneMu.Unlock()
+		return f.engine.lanes[fastRec.ID] == nil
 	})
-	r, _ := f.store.runOf(KindOpenBao, 1)
-	for _, rt := range r.Targets {
-		switch rt.TargetID {
-		case fastRec.ID.String():
-			if !rt.OK {
-				t.Errorf("fast target in the second run: %+v", rt)
-			}
-		case slowRec.ID.String():
-			if rt.ErrorClass != ClassContinues {
-				t.Errorf("slow target in the second run: %+v", rt)
-			}
-		}
-	}
-	if len(r.Targets) != 2 {
-		t.Errorf("second run's targets %+v, want both", r.Targets)
+	if r, _ := f.store.runOf(KindOpenBao, 1); r.mirrored {
+		t.Errorf("second run mirrored before the slow target's next lane: %+v", r)
 	}
 	if first, _ := f.store.runOf(KindOpenBao, 0); first.mirrored {
 		t.Errorf("first run mirrored before the slow lane ended: %+v", first)
@@ -218,6 +232,17 @@ func TestSlowTargetDoesNotHoldTheFastOne(t *testing.T) {
 	}
 	if st, _ := f.store.statusOf(slowRec.ID, KindOpenBao); st.Error != "" || st.LastSuccess.IsZero() {
 		t.Errorf("slow target status after its lane %+v", st)
+	}
+	f.now = f.now.Add(time.Minute)
+	f.round(t)
+	second, _ := f.store.runOf(KindOpenBao, 1)
+	if !second.mirrored || len(second.Targets) != 2 {
+		t.Fatalf("second run after the slow target's next lane: %+v", second)
+	}
+	for _, rt := range second.Targets {
+		if !rt.OK {
+			t.Errorf("second run target %+v, want ok", rt)
+		}
 	}
 	if n := f.store.duplicateWrites(); n != 0 {
 		t.Errorf("%d runs got their mirror results twice", n)
