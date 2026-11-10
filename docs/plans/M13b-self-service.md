@@ -321,6 +321,9 @@ Errors are problem objects `{code, detail}`; nothing names other users' entries 
 
 ### 6.6 Residual risks (RR-116, RR-117; RR-79 written)
 
+**Amended 2026-11-10:** RR-133 (packages that create a system user; logins pause during agent installs), see
+"Amendment 2026-11-10" at the end of this plan.
+
 | ID | Risk | Mitigation | ISMS |
 | --- | --- | --- | --- |
 | RR-79 | Flathub (or any remote) is an external trust anchor; a remote's key or content change is outside Paddock | per-remote key pinned by fingerprint in the signed bundle; a mismatch installs nothing; step-up for every source change | which remotes are allowed |
@@ -514,3 +517,39 @@ bundle, so none of them applies organization-wide or fails a bundle in between.
   GET (the signed headers never reach the object store) and accepts only 200 `image/png` of at most 64 KiB with the
   PNG signature; anything else is an error, and the self-service app shows the category glyph (decision 16 unchanged).
   Re-fetching an icon whose `icon_sha256` changed and checking the digest is a follow-up of the agent's icon cache.
+
+## Amendment 2026-11-10 (maintainer decision, `decisions-alpha10.md` §45 and §47, PDK-983)
+
+On an enrolled device a package whose maintainer script creates a system account fails while `himmelblaud` runs:
+Himmelblau 4.0.8 answers every unknown name with a synthetic user, so `adduser --system` stops with "already exists,
+but is not a system user". `flatpak` creates `_flatpak`; the Flatpak runtime of decision 10 and gate SV5 therefore
+failed whenever the daemon was online. The rule, its bounds and its options are in plan M5a, "Amendment 2026-11-10"
+(N1–N9); this amendment records what changes for self-service.
+
+- **Installs and removals pause directory logins.** Every apt and dpkg transaction of the agent runs with
+  `himmelblaud` held stopped, the self-service executor's and the Flatpak runtime's included (M5a N2). While a user
+  installs or removes an application in the self-service app, new logins and screen unlocks of directory users on
+  that device wait: at most 10 minutes per transaction, with a systemd timer that starts the daemon after 12 minutes
+  if the agent died. Running sessions, the self-service app's included, continue. `flatpak` commands themselves are
+  no transactions and run without a hold.
+- **One `device.login_nss_shield` per hold** (M5a N4), in addition to the `software.self_service` event of decision
+  18. No change to the self-service socket, the bundle or the portal.
+- **F4 (agent restart mid-install)** is unchanged for the operation (`failed/interrupted`). Added: the daemon comes
+  back without the agent, by the timer, and the agent reports the hold as `recovered` at its next start.
+- **System gates (`TestSelfServiceGates`), replacing the SV5 and SV6 texts of §9 and adding two steps:**
+  - Setup: the gate builds its Flatpak repository with the documented workaround for a local administrator
+    (`himmelblaud` stopped, restarted by a trap), then purges `flatpak` and deletes `_flatpak`, so that Flatpak is
+    not preinstalled.
+  - SV5: precondition `himmelblaud` active and `getent passwd _flatpak` answered by Himmelblau; after the agent's
+    install `_flatpak` is in `/etc/passwd` with a system UID, and a `device.login_nss_shield` with the outcome
+    `restored` exists. The remote and rogue-remote assertions are unchanged.
+  - SV6: while the slow postinst runs, `himmelblaud` is stopped and the timer `paddock-nss-shield-restore` is
+    active; the supervisor is killed (`SIGKILL`) and stopped; `himmelblaud` is active again within 7 minutes with the
+    agent still down (development build: timer after 5 minutes); after the start the hold is reported as
+    `recovered`. The rest of SV6 is unchanged.
+  - SV10 (new): the fixture package `paddock-gate-sysuser` (postinst `adduser --system --group _paddock-gate`) is
+    assigned as required; it installs, the account is a system account, and the hold's event exists.
+  - SV11 (new): no `device.tamper_service_stopped` for `himmelblaud.service` since SV5 (the agent's own holds); a
+    foreign `systemctl stop himmelblaud` is reported with the state `inactive`, and the daemon is not started again.
+- **Not covered:** a package a user installs with apt outside the agent (residual risk RR-133, with the workaround).
+- §6.6 gains the reference to RR-133; RR-116 and RR-117 are unchanged.
