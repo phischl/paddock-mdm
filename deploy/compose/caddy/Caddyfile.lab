@@ -27,6 +27,7 @@ http://device.{$PADDOCK_DOMAIN} {
 	import body_limit 1MiB 1048576
 	reverse_proxy paddock-gateway:8081 {
 		header_up X-Paddock-Client-IP {client_ip}
+		import close_unread_body
 	}
 }
 
@@ -62,6 +63,7 @@ http://bundles.{$PADDOCK_DOMAIN} {
 		import body_limit 1MiB 1048576
 		reverse_proxy paddock-api:8080 {
 			header_up X-Paddock-Client-IP {client_ip}
+			import close_unread_body
 		}
 	}
 	# Devices upload escrowed LUKS headers with presigned PUTs (plan M4b decision 10); the signature fixes the key.

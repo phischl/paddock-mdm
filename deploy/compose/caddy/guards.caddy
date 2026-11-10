@@ -29,6 +29,42 @@
 	header ?Referrer-Policy strict-origin-when-cross-origin
 }
 
+# close_unread_body goes inside the reverse_proxy block of a Paddock role (PDK-970). A role can answer without having
+# read the whole request body: an error (its 60 s ReadTimeout ended a slow body, a rate limit, a body limit), or a 2xx
+# or 3xx to a GET or HEAD whose body it ignores. Caddy's net/http would then drain the rest of the client's body before
+# writing that answer, for up to Caddy's 60 s read idle timeout, so a body sent at 1 byte per second ended after 120 s
+# instead of 60 s. Connection: close on such an answer makes Caddy write it at once and close the HTTP/1.x connection
+# (HTTP/1.0 with keep-alive drains as well). It is set on HTTP/1.x only: Go's HTTP/2 server takes Connection: close as
+# a request to shut the whole multiplexed connection down (GOAWAY), and HTTP/2 does not drain. A 2xx or 3xx is closed
+# only for a GET or HEAD with a body: no Paddock client sends one, and closing every answer would cost the agents and
+# apt their keep-alive. Go removes Transfer-Encoding from the request headers, so an expression cannot see a chunked
+# body; the header matcher reads the request's transfer encoding instead.
+(close_unread_body) {
+	@role_error status 4xx 5xx
+	handle_response @role_error {
+		@http1 not protocol http/2+
+		header @http1 Connection close
+		copy_response
+	}
+	@role_answer status 2xx 3xx
+	handle_response @role_answer {
+		@length_body {
+			not protocol http/2+
+			method GET HEAD
+			header Content-Length *
+			not header Content-Length 0
+		}
+		@chunked_body {
+			not protocol http/2+
+			method GET HEAD
+			header Transfer-Encoding chunked
+		}
+		header @length_body Connection close
+		header @chunked_body Connection close
+		copy_response
+	}
+}
+
 (admin_site) {
 	@admin_denied not client_ip {$PADDOCK_ADMIN_ALLOWED_CIDRS}
 	handle @admin_denied {
@@ -68,6 +104,7 @@
 	}
 	reverse_proxy paddock-api:8080 {
 		header_up X-Paddock-Client-IP {client_ip}
+		import close_unread_body
 	}
 }
 
