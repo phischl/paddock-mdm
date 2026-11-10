@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -486,11 +487,26 @@ type S3Store interface {
 	Delete(ctx context.Context, key string) error
 }
 
+const (
+	// listProbeEvery is how long a bucket listing may wait for its next page before the endpoint is asked whether it
+	// still answers; it stays well below mirrorStall so an answering endpoint ticks before the watchdog gives up.
+	listProbeEvery = 20 * time.Second
+	// listProbeTimeout bounds one such question.
+	listProbeTimeout = 10 * time.Second
+	// listPageLimit bounds the wait for one page of a bucket listing whose endpoint keeps answering: RustFS walks every
+	// deleted object (delete marker and noncurrent versions) of a versioned bucket ahead of the page's first live key,
+	// about 0.5 ms each, so the first page of a long-lived set took more than two minutes (PDK-972), but a listing
+	// request that never returns must still end.
+	listPageLimit = 20 * time.Minute
+)
+
 // s3Target is a bucket target: the set lives below <prefix>/paddock-backup/.
 type s3Target struct {
 	store S3Store
 	// base is the administrator's prefix with a trailing slash, or "".
 	base string
+	// probeEvery, probeTimeout and pageLimit are listProbeEvery, listProbeTimeout and listPageLimit.
+	probeEvery, probeTimeout, pageLimit time.Duration
 }
 
 // NewS3Target returns the target whose set lives below <prefix>/paddock-backup/ of store's bucket.
@@ -499,7 +515,8 @@ func NewS3Target(store S3Store, prefix string) Target {
 	if base != "" {
 		base += "/"
 	}
-	return &s3Target{store: store, base: base}
+	return &s3Target{store: store, base: base, probeEvery: listProbeEvery, probeTimeout: listProbeTimeout,
+		pageLimit: listPageLimit}
 }
 
 func (s *s3Target) setPrefix() string { return s.base + backupset.SetRoot + "/" }
@@ -508,10 +525,31 @@ func (s *s3Target) List(ctx context.Context) (map[string]int64, error) {
 	return s.ListProgress(ctx, func() {})
 }
 
-// ListProgress is List and calls tick after every page of the bucket listing.
+// ListProgress is List and calls tick after every page of the bucket listing and, while it waits for a page, every
+// time the endpoint answers a probe: a slow first page from an endpoint that still answers is no stall (PDK-972),
+// while an endpoint that answers nothing still trips the mirror's watchdog. A page that does not arrive within
+// pageLimit ends the listing with errStalled.
 func (s *s3Target) ListProgress(ctx context.Context, tick func()) (map[string]int64, error) {
-	all, err := s.store.ListSizesPaged(ctx, s.setPrefix(), tick)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var lastPage atomic.Int64
+	lastPage.Store(time.Now().UnixNano())
+	listed := make(chan struct{})
+	probing := make(chan struct{})
+	go func() {
+		defer close(probing)
+		s.probeWhileListing(ctx, listed, &lastPage, tick, cancel)
+	}()
+	all, err := s.store.ListSizesPaged(ctx, s.setPrefix(), func() {
+		lastPage.Store(time.Now().UnixNano())
+		tick()
+	})
+	close(listed)
+	<-probing
 	if err != nil {
+		if cause := context.Cause(ctx); errors.Is(cause, errStalled) {
+			return nil, cause
+		}
 		return nil, err
 	}
 	out := make(map[string]int64, len(all))
@@ -525,6 +563,37 @@ func (s *s3Target) ListProgress(ctx context.Context, tick func()) (map[string]in
 		out[p] = size
 	}
 	return out, nil
+}
+
+// probeWhileListing asks the endpoint whether it answers every probeEvery without a page and ticks when it does; it
+// cancels the listing with errStalled once no page arrived for pageLimit. It returns once listed is closed or ctx
+// ended.
+func (s *s3Target) probeWhileListing(ctx context.Context, listed <-chan struct{}, lastPage *atomic.Int64,
+	tick func(), cancel context.CancelCauseFunc) {
+	t := time.NewTicker(s.probeEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-listed:
+			return
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		waited := time.Since(time.Unix(0, lastPage.Load()))
+		switch {
+		case waited >= s.pageLimit:
+			cancel(fmt.Errorf("%w: no page of the listing for %s", errStalled, s.pageLimit))
+			return
+		case waited >= s.probeEvery:
+			pctx, pcancel := context.WithTimeout(ctx, s.probeTimeout)
+			err := s.store.Ping(pctx)
+			pcancel()
+			if err == nil {
+				tick()
+			}
+		}
+	}
 }
 
 func (s *s3Target) Newest(ctx context.Context, dir string) (time.Time, error) {
