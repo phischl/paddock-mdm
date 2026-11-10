@@ -48,9 +48,31 @@ const (
 // gate's Flatpak repository below it, both signed with the gate's key: a runtime and two applications that need it,
 // exported with flatpak build-export (no flatpak-builder, no SDK, nothing from Flathub). flatpak is installed from the
 // distribution to build the repository and purged afterwards, so that SV5 sees the agent install it (Q12).
+//
+// apt-get runs with stdin from /dev/null because the script itself arrives on stdin (bash -s): a maintainer script
+// or a conffile prompt would read the rest of it. With stdout not a terminal, apt 3 sends dpkg's error messages to
+// stdout alone, so the output goes to a log that a failure prints with dpkg --audit and the end of term.log.
 const ssRepoScript = `set -eu
 dir=` + gateRepoDir + `
 export GNUPGHOME="$dir/gnupg"
+apt_get() {
+	log=$(mktemp)
+	rc=0
+	DEBIAN_FRONTEND=noninteractive apt-get -y -q -o DPkg::Lock::Timeout=300 \
+		-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@" </dev/null >"$log" 2>&1 || rc=$?
+	if [ "$rc" -ne 0 ]; then
+		{
+			echo "apt-get $* failed with exit status $rc:"
+			cat "$log"
+			echo "dpkg --audit:"
+			dpkg --audit || true
+			echo "end of /var/log/apt/term.log:"
+			tail -n 80 /var/log/apt/term.log || true
+		} >&2
+		exit "$rc"
+	fi
+	rm -f "$log"
+}
 build() {
 	root="$dir/build/$1-1.0"
 	mkdir -p "$root/DEBIAN"
@@ -68,14 +90,16 @@ apt-ftparchive release . >"$dir/Release"
 mv "$dir/Release" Release
 gpg --batch --yes --clearsign -o InRelease Release
 
-command -v flatpak >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=300 flatpak >/dev/null
+command -v flatpak >/dev/null || apt_get install flatpak
 key=$(gpg --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')
 arch=$(flatpak --default-arch)
 fb="$dir/flatpak-build"
 repo="$dir/repo/flatpak"
 rm -rf "$fb" "$repo"
-mkdir -p "$fb/runtime/files/share/paddock-gate"
-echo runtime >"$fb/runtime/files/share/paddock-gate/runtime"
+# A runtime is exported from usr/ (an application from files/), and build-export wants files/ to exist all the same
+# as the mark of an initialised build directory.
+mkdir -p "$fb/runtime/files" "$fb/runtime/usr/share/paddock-gate"
+echo runtime >"$fb/runtime/usr/share/paddock-gate/runtime"
 printf '[Runtime]\nname=%s\nruntime=%s/%s/1\nsdk=%s/%s/1\n' ` + ssFlatpakRuntime + ` ` + ssFlatpakRuntime + ` "$arch" ` + ssFlatpakRuntime + ` "$arch" >"$fb/runtime/metadata"
 flatpak build-export --runtime --gpg-sign="$key" --gpg-homedir="$GNUPGHOME" "$repo" "$fb/runtime" 1 >/dev/null
 for app in ` + ssFlatpakApp + ` ` + ssFlatpakUserApp + `; do
@@ -87,7 +111,7 @@ for app in ` + ssFlatpakApp + ` ` + ssFlatpakUserApp + `; do
 done
 flatpak build-update-repo --gpg-sign="$key" --gpg-homedir="$GNUPGHOME" "$repo" >/dev/null
 python3 -c "import urllib.request; urllib.request.urlopen(\"` + ssFlatpakURI + `summary\", timeout=10)"
-DEBIAN_FRONTEND=noninteractive apt-get purge -y -q -o DPkg::Lock::Timeout=300 flatpak >/dev/null
+apt_get purge flatpak
 `
 
 // ssUserScript creates the account $1 with UID $2 as Himmelblau would map a directory user (a UPN as its name, a UID
