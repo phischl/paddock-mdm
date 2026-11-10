@@ -155,6 +155,25 @@ The source files, keyrings and the forbid pin file are a **protected area**: an 
 `device.tamper_protected_file_changed` naming the file (RR-80). The Himmelblau source and keyring belong to the login
 configuration and are never touched by the catalog.
 
+**Installations pause directory logins.** On a device with directory logins the agent stops the login service
+(`himmelblaud`) around every package installation, removal and update run it carries out, so that packages can create
+their system accounts, and starts it again afterwards. Meanwhile new logins and screen unlocks of directory users
+wait: seconds, for large packages minutes, at most 10 minutes per installation. Running sessions and local accounts
+are not affected. Each pause is recorded as `device.login_nss_shield`. A maintenance window therefore also decides
+when logins may wait. Details and the bounds: [device-login.md](device-login.md), "Package installations pause
+directory logins" (residual risk RR-133).
+
+**Packages a user installs with apt are not covered.** `sudo apt install` of a package that creates a system account
+fails on such a device with *already exists, but is not a system user*. Stop the login service around it:
+
+```sh
+sudo systemctl stop himmelblaud.service
+sudo apt install <package>          # after a failed attempt: sudo dpkg --configure -a
+sudo systemctl start himmelblaud.service himmelblaud-tasks.service
+```
+
+The agent reports that stop as `device.tamper_service_stopped` and does not undo it.
+
 ## Waves
 
 With configuration rollouts switched on (*Settings* → *Rollouts*, [configuration rollouts](configuration-rollouts.md)),
@@ -413,6 +432,10 @@ install it on its own: an organization offers it like any other application, as 
   icons only as PNG of at most 64 KiB. The only file it writes is `~/.config/paddock-self-service/state.json` (which
   notice text the user has acknowledged).
 
+An installation or removal a user starts in the app pauses new directory logins and screen unlocks on that device
+until it has finished ("Installations pause directory logins" under [What the device does](#what-the-device-does));
+the user's own session continues.
+
 ## Uninstalling Paddock
 
 The removal of Paddock from a device (both modes, `leave` and `reset`, `docs/operations/uninstall.md`) removes every
@@ -453,4 +476,6 @@ On the device:
 RR-77 (a source key is root-equivalent), RR-78 (maintainer scripts run as root), RR-79 (reserved for Flathub, M13b),
 RR-80 (local root bypasses pins and holds), RR-81 (refused operations stay refused), RR-82 (status can lag), RR-83
 (pinned versions vanish) and RR-118 (maintenance windows defer security-relevant removals), in
-[residual-risks.md](../compliance/residual-risks.md#software-catalog-m13a).
+[residual-risks.md](../compliance/residual-risks.md#software-catalog-m13a). RR-133 (packages that create a system
+user: manual installations fail, agent installations pause directory logins), in
+[residual-risks.md](../compliance/residual-risks.md#login-and-identity).

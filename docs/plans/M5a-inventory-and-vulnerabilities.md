@@ -87,7 +87,8 @@ uninstall; Fleet UI access for anyone but platform operators via local port-forw
       names, local admin, session detection, postinst scripts) and make each one either use the local files
       (`/etc/passwd`, `/etc/group`) or require an entry that Himmelblau marks as a real directory user. Document the
       result in `docs/operations/device-login.md`; add unit tests for the corrected spots. CHANGELOG `Fixed` if behaviour
-      changes.
+      changes. **Amended 2026-11-10:** the synthesis also breaks the maintainer scripts of other packages; see
+      "Amendment 2026-11-10" at the end of this plan.
    b) Dead man's switch: when the self-lock token is deleted (switch disabled), the agent removes its pending warnings
       (desktop notification state and `/etc/issue.d/80-paddock-dms.issue`) immediately, not only after the next bundle.
       Unit test.
@@ -114,3 +115,161 @@ One commit per step.
 ## 7. Stop conditions
 S1 fleetd cannot be packaged without auto-update/scripts; S2 Fleet's free API lacks per-host software or
 vulnerabilities; S3 Fleet cannot be configured to skip host-user collection; plus M0 §11 S2/S6/S7/S8.
+
+## Amendment 2026-11-10 — the agent holds himmelblaud around its own package transactions (PDK-983; `decisions-alpha10.md` §45 and §47)
+
+Binding language: **MUST** / **MUST NOT** / **SHOULD** / **MAY**. Tickets: PDK-983 (N1–N8), PDK-985 (N9). N1–N5,
+N7 and N8 record the implementation of PDK-983 as reviewed at `a75204af`; N6 (the regular updates run) is decided by
+§47 and not implemented at that commit.
+
+### Why
+
+Step 0a established that Himmelblau's NSS module answers `getent passwd` for any name, and made the agent and
+Paddock's own package scripts decide from the local files. It missed the packages of others: Debian's `adduser`
+and shadow's `useradd` ask NSS before they create an account. On an enrolled device, while `himmelblaud` runs and
+has reached the identity provider, Himmelblau 4.0.8 returns a synthetic directory user for the new name (also for a
+name in a foreign domain; groups are not synthesized), and the maintainer script fails: `adduser --system` with exit
+13 "already exists, but is not a system user", `useradd` with exit 9. Measured on Ubuntu 24.04 and 26.04: the same
+command succeeds before enrollment and with `himmelblaud` stopped. Every package that creates a system account is
+affected (`flatpak` with `_flatpak`, database and other daemon packages). The row "Package scripts: no user or group
+lookups" of `docs/operations/device-login.md` covers Paddock's own packages only.
+
+Options: (a) `cn_name_mapping = false`: the bare name is still synthesized, and every directory user's name and home
+change. (b) nsswitch order or `[NOTFOUND=return]`: `files` is first already; glibc cannot select a source by name.
+(c) a `name_mapping_script`: changes the names and homes of existing users and cannot tell a system account from a
+directory user. (d) a global dpkg hook that stops `himmelblaud`: also pauses logins for every apt run of anybody and
+puts a new writer into the protected identity configuration. (e) an upstream option that synthesizes only full UPNs
+of the tenant domain, then a pin bump. (f) a hold around the agent's **own** transactions.
+**Decision: (f) for alpha.10, (e) as the fix** (maintainer decision §45). ADR 0019 and the pinned version are
+**not** changed now; the pin bump, the rendered option and the removal of the hold follow with the upstream fix.
+
+### N1 Vocabulary
+
+- **Transaction** = one `apt-get` call with the verb `install`, `reinstall`, `remove`, `purge`, `upgrade`,
+  `dist-upgrade`, `full-upgrade`, `autoremove` or `autopurge`, or one `dpkg` call with `-i`, `--install`,
+  `--unpack`, `--configure`, `-r`, `--remove`, `-P`, `--purge` or `--triggers-only`. A call with `-s`, `--simulate`,
+  `--just-print`, `--dry-run`, `--recon`, `--no-act`, `-d` or `--download-only`, `apt-get update` and every query
+  are no transactions.
+- **Hold** = the time `himmelblaud.service` is stopped by Paddock around one transaction.
+- **Foreign stop** = `himmelblaud.service` inactive or failed without a hold.
+
+### N2 The hold (`reconcile.NSSShield`, `agent/internal/reconcile/shield.go`)
+
+1. Every transaction the agent process runs MUST run under the hold: the applier (login and Himmelblau packages,
+   required and forbidden software, updates), fleetd, self-service installs and removals, and *Install now*
+   (`reconcile.Shielded` wraps the `System` these receive). One hold at a time; transactions are serialized.
+2. When `himmelblaud.service` is not active, the transaction runs without a hold and no event is emitted. A device
+   without directory logins is not touched, and a stopped daemon is never started by the shield.
+3. Order before the transaction, binding: write the marker `/var/lib/paddock/state/nss-shield.json` (mode 0600;
+   action and start time); remove a stale safety timer; arm the safety timer (N3); `systemctl stop
+   himmelblaud.service`. When the marker or the timer fails, the daemon is not stopped, the transaction runs with
+   the daemon running and the outcome is `hold_failed`. `himmelblaud-tasks.service` is never stopped explicitly.
+4. The restore (`systemctl start himmelblaud.service himmelblaud-tasks.service`) MUST run on every path: success,
+   error, panic (which still propagates) and a cancelled context (it runs on its own context with a timeout of
+   2 minutes).
+5. **Maximum hold: 10 minutes** (`NSSShieldMaxHold`). When a transaction is still running then, the daemons are
+   started while it runs, the fact is logged, and the outcome is `max_hold`. The transaction is not interrupted.
+6. The marker is removed after the hold's event was emitted. The safety timer is cancelled only when the start
+   succeeded; otherwise it stays armed.
+
+### N3 Recovery without the agent
+
+1. **Safety timer:** the transient systemd timer `paddock-nss-shield-restore` (`systemd-run --unit=… --on-active=…
+   --timer-property=AccuracySec=1s`) runs `systemctl start himmelblaud.service himmelblaud-tasks.service`
+   **12 minutes** after the hold began (maximum hold plus `NSSShieldTimerGrace` of 2 minutes). It depends on nothing
+   of Paddock, so a killed agent or supervisor cannot leave directory logins stopped.
+2. **Marker recovery:** at its start, before the first pass, the agent calls `NSSShield.Recover`: a marker means a
+   hold whose process died. The agent starts both daemons (the timer may have done so already), cancels the timer
+   and reports the hold once with the outcome `recovered` (`restore_failed` when the start fails).
+3. Without a marker a stopped `himmelblaud` is left alone (agent design contract 8, and N5).
+4. A build with the tag `paddock_dev` uses 4 minutes and 1 minute (timer after 5 minutes) so that the system gate
+   can wait for the timer. These values MUST NOT reach a release build.
+
+### N4 One event per hold
+
+- Device event `login.nss_shield` (`pkg/protocol`), audit code **`device.login_nss_shield`** (closed registry,
+  outcome `success`), params `action` (the transaction, for example `apt-get install`), `duration_s`, `outcome`,
+  `error`. Exactly one event per hold; a transaction without a hold (N2.2) emits none.
+- `outcome`: `restored`, `max_hold`, `recovered`, `restore_failed` (the safety timer retries), `hold_failed`.
+- No package names, no user names and no secrets in the params. `api/openapi/device.yaml` lists the event type; an
+  older server refuses the batch like every earlier new event type (server-first upgrade order).
+
+### N5 A foreign stop is reported, never repaired
+
+- The login reconciler reports a foreign stop once per stop as the existing event `tamper.service_stopped`
+  (audit code `device.tamper_service_stopped`, params `unit` = `himmelblaud.service`, `state` = `inactive` or
+  `failed`), and again only after the daemon ran in between. No new audit code.
+- It MUST NOT report the daemon while a hold of Paddock is in progress, and it MUST NOT start the daemon: a local
+  administrator's stop around an installation (the documented workaround) is not undone, and the agent does not
+  heal on its own initiative.
+- The registry note of `device.tamper_service_stopped` in `server/internal/domain/audit/codes.go` MUST name
+  `himmelblaud.service` as a covered unit that is reported only (§47; `docs/compliance/audit-codes.md` is
+  regenerated).
+- `/etc/himmelblau/`, PAM and NSS configuration are not written by the hold. Protected area 4 is unchanged.
+
+### N6 The regular updates run (`paddockd updates run`; §47 point 1)
+
+`paddockd updates run` is a process of its own (`osupdates.RunRegular`: `apt-get update`, then `apt-get
+dist-upgrade`, and `dpkg --configure -a` after an interrupted installation). It is one of the agent's own
+transactions and MUST run under the same hold. A second process changes three things, decided here:
+
+1. **One hold per run**, around the `dist-upgrade` step with its `dpkg --configure -a` and retry, with the action
+   `apt-get dist-upgrade`. `apt-get update` runs before the hold. N2.2–N2.6 and N3.1 apply unchanged, with the same
+   marker, timer name and durations.
+2. **Mutual exclusion between processes:** a hold is held under an exclusive `flock` on
+   `/var/lib/paddock/state/nss-shield.lock`, taken before the check of N2.2 and released after the marker is gone. A
+   process that finds the lock taken waits for it. The lock, not the marker, says that a hold is in progress.
+3. **Recovery and tamper detection use the lock:** `NSSShield.Recover` (N3.2) takes the lock without waiting; when
+   it is taken, another process holds and nothing is recovered. The agent MUST run the same check in every login
+   reconciler pass, so that a hold whose process died is reported as `recovered` while the agent runs. The login
+   reconciler (N5) treats a stopped daemon as held while the lock is taken or the marker exists.
+4. **Event:** the updates process cannot emit device events. Under the lock, after its restore, it appends one
+   record `{action, duration_s, outcome, error}` to the JSON array in
+   `/var/lib/paddock/state/nss-shield-report.json` (mode 0600, atomic replace, at most 16 records, the oldest
+   dropped) and removes the marker. The agent emits every record as `login.nss_shield` in its next pass, under the
+   lock, and removes the file. N4's "exactly one event per hold" holds across both processes.
+5. Effect: directory logins and screen unlocks wait during every regular updates run, at most 10 minutes per run.
+
+### N7 Effect on users (binding content for the operator documents)
+
+While the agent runs a transaction on a device with directory logins, **new logins and screen unlocks of directory
+users wait** until the hold ends: seconds, minutes for large packages, at most 10 minutes per transaction. Running
+sessions continue; local accounts, the managed local administrator included, are not affected. Offline logins wait
+as well, because the daemon that serves them is stopped.
+
+### N8 Tests and gates (names as implemented in PDK-983)
+
+- Unit, `agent/internal/reconcile/shield_test.go`: the call order of N2.3; restore on error, panic and cancel;
+  maximum hold; the skip of N2.2; a failed restore keeps the timer; `hold_failed` stops nothing; `Recover` with and
+  without a marker; the classification of N1; own hold against foreign stop in the login reconciler (reported once,
+  never started, reported again after a restart). `agent_test.go` `TestRunRecoversNSSShield`;
+  `devicereports_test.go` `TestLoginNSSShieldEvent`.
+- N6 adds: two processes contend for the lock (the second waits and holds afterwards); `Recover` with the lock taken
+  recovers nothing; a record file with two records yields two events and is removed; a dead holder is reported as
+  `recovered` by a running agent.
+- System gates: plan M13b, amendment 2026-11-10 (SV5, SV6, SV10, SV11). `TestIdentityGates` MUST stay green on both
+  VMs, because the login reconciler changed. For N6: a regular updates run that installs a package creating a
+  system account succeeds on an enrolled device and yields one `device.login_nss_shield`.
+
+### N9 Open in PDK-985 (not decided here)
+
+`paddockd supervisor-upgrade` (`dpkg -i paddock-supervisor`) and the uninstall helper run outside the agent process
+and are **not** under the hold. PDK-985 decides whether they need it: the supervisor path only if its packages can
+create a system account; the uninstall helper purges the Himmelblau packages itself. Until then RR-133 names them.
+
+### Stop conditions
+
+- The unit that runs `paddockd updates run` may not call `systemctl stop`/`start`, `systemd-run`, or write
+  `/var/lib/paddock/state/` (sandboxing): stop and report, do not loosen the unit without a decision.
+- Any need to write `/etc/nsswitch.conf`, `/etc/pam.d/` or `/etc/himmelblau/` for the hold.
+- Any path on which the daemons are started without a marker, a lock or a report of Paddock's own.
+
+### Residual risks and documents
+
+- `docs/compliance/residual-risks.md`: **RR-133** (new, written with this amendment) and RR-07 (updated).
+- `docs/operations/device-login.md`, section "Package installations pause directory logins" (PDK-983): N7, the
+  bounds of N2.5 and N3.1, the event of N4, N5 and the workaround for a local administrator's own apt run
+  (`systemctl stop himmelblaud.service` before, `systemctl start himmelblaud.service himmelblaud-tasks.service`
+  after). PDK-983 adds the regular updates run to its list when N6 is implemented.
+- `docs/operations/software.md`: "What the device does", "Self-service app", "Residual risks" (written with this
+  amendment) and the troubleshooting row (PDK-983).
