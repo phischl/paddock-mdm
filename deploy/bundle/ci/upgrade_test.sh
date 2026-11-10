@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests of the upgrade job's helpers (deploy/bundle/ci/upgrade.sh, `make bundle-test`) without a stack: the judgement of
 # ./paddock upgrade-check, the staging of the previous release's agent files, the unsealer's guard, the restore drill's
-# point in time, the orphan report and the failure report (step named on stderr and as a GitHub annotation, logs
-# collected; also after a TERM). docker, sudo and git are stubs; upgrade.sh is sourced with UPGRADE_LIB_ONLY=1, which
+# point in time, the orphan report, the refusal of a previous release before 0.1.0-alpha.9, the upgrade run again after the rollback and the
+# failure report (step named on stderr and as a GitHub annotation, logs collected; also after a TERM). docker, sudo and git are stubs; upgrade.sh is sourced with UPGRADE_LIB_ONLY=1, which
 # stops it before the first step.
 # The snippets in single quotes run in the shell that sourced upgrade.sh, which also assigns its own `work` there;
 # pass and failed always succeed.
@@ -212,6 +212,78 @@ if out="$(lib eval 'cp_paddock() { printf "%s\n" postgres paddock-api; }; orphan
   pass "without orphans the step passes"
 else failed "no orphans: $out"; fi
 
+# --- rollback --------------------------------------------------------------------------------------------------------
+# A key-shaped test value built at run time, so no literal key sits in the repository for the secret scanner.
+key="$(printf 0123456789abcdef0123456789abcdef | base64)"
+# lib_rollback <cp|audit>: step 6 against stubbed hosts; prints the call and what it read on stdin.
+lib_rollback() {
+  KEY="$key" lib eval '
+    mkdir -p "$W/seed"
+    printf "%s\n" "$KEY" >"$W/seed/backup.key"
+    cp_paddock() { printf "cp %s stdin=[%s]\n" "$*" "$(cat)"; }
+    audit_paddock() { printf "audit %s stdin=[%s]\n" "$*" "$(cat)"; }
+    rollback_host '"$1"
+}
+out="$(lib_rollback cp)"
+if [[ "$out" == "cp rollback $work/w/prev/cp --yes stdin=[$key]" ]]; then
+  pass "the control plane's rollback to a release with restore.sh gets the backup key on stdin, not on its command line"
+else failed "rollback cp: $out"; fi
+out="$(lib_rollback audit)"
+if [[ "$out" == "audit rollback $work/w/prev/audit --yes stdin=[]" ]]; then
+  pass "the audit host's rollback, which restores nothing, gets no key"
+else failed "rollback audit: $out"; fi
+
+# --- prev_supported ------------------------------------------------------------------------------------------------
+# PDK-981: the job tests the consecutive path from 0.1.0-alpha.9 or newer and refuses an older previous release.
+if out="$(lib prev_supported 0.1.0-alpha.8 2>&1)"; then failed "0.1.0-alpha.8 as the previous release passes: $out"; elif
+  [[ "$out" == *"the previous release 0.1.0-alpha.8 is older than 0.1.0-alpha.9"* ]]; then pass "0.1.0-alpha.8 as the previous release is refused"
+else failed "prev_supported 0.1.0-alpha.8: $out"; fi
+for v in 0.1.0-alpha.9 0.1.0-alpha.10 0.1.0-alpha.18 0.1.0 0.2.0-alpha.1; do
+  if out="$(lib prev_supported "$v" 2>&1)"; then pass "$v as the previous release is accepted"; else failed "prev_supported $v: $out"; fi
+done
+
+# --- upgrade_hosts ---------------------------------------------------------------------------------------------------
+# The upgrade again after the rollback (step 8): the same candidate directories, the previous release's as <old dir>,
+# the root token for bootstrap openbao, and the step names and log phase of that run.
+out="$(lib eval '
+  printf "{\"root_token\": \"s.root\"}" >"$W/init.json"
+  start_unsealer() { :; }
+  use_prev
+  cp_paddock() { printf "cp %s %s token=%s\n" "$CP_DIR" "$*" "${BAO_TOKEN:-}"; }
+  audit_paddock() { printf "audit %s %s\n" "$AUDIT_DIR" "$*"; }
+  orphans() { echo orphans; }
+  upgrade_hosts 8 upgrade-again
+  echo "phase=$phase"' 2>&1)"
+order="*8.1 upgrade-again: control plane*cp $work/w/cand/cp upgrade $work/w/prev/cp --yes token=s.root*"
+order+="8.2 upgrade-again: audit host*audit $work/w/cand/audit upgrade $work/w/prev/audit --yes*"
+order+="8.3 upgrade-again: the release's bootstrap and orphans*cp $work/w/cand/cp bootstrap buckets*"
+order+="cp $work/w/cand/cp up*orphans*phase=upgrade-again*"
+# shellcheck disable=SC2053
+if [[ "$out" == $order ]]; then
+  pass "the upgrade again runs from the previous release's directories into the candidate's"
+else failed "upgrade_hosts: $out"; fi
+
+# --- seq_high_water_carried ------------------------------------------------------------------------------------------
+# Step 8.4 (PDK-980): the candidate's high-water file holds at least the previous release's value read before step 8.
+mkdir -p "$work/w/prev/cp/bundle-seq" "$work/w/cand/cp/bundle-seq"
+echo 3000005 >"$work/w/prev/cp/bundle-seq/high-water"
+echo 3000007 >"$work/w/cand/cp/bundle-seq/high-water"
+if out="$(lib eval 'seq_high_water_carried "$(prev_high_water)"' 2>&1)" && [[ "$out" == *"candidate 3000007, previous 3000005"* ]]; then
+  pass "a candidate high-water file at or above the previous release's passes"
+else failed "seq_high_water_carried, carried: $out"; fi
+echo 2000003 >"$work/w/cand/cp/bundle-seq/high-water"
+if out="$(lib eval 'seq_high_water_carried 3000005' 2>&1)"; then failed "a lower candidate high-water file passes: $out"; elif
+  [[ "$out" == *"holds '2000003', below the previous release's 3000005"* ]]; then pass "a lower candidate high-water file fails"
+else failed "seq_high_water_carried, lower: $out"; fi
+rm "$work/w/cand/cp/bundle-seq/high-water"
+if out="$(lib eval 'seq_high_water_carried 3000005' 2>&1)"; then failed "a missing candidate high-water file passes: $out"; else
+  pass "a missing candidate high-water file fails"
+fi
+rm "$work/w/prev/cp/bundle-seq/high-water"
+if out="$(lib eval 'seq_high_water_carried "$(prev_high_water)"' 2>&1)" && [[ "$out" == *"no high-water file in the previous"* ]]; then
+  pass "without a previous high-water file there is nothing to carry"
+else failed "seq_high_water_carried, no previous file: $out"; fi
+
 # --- failure report ----------------------------------------------------------------------------------------------------
 : >"$STUB_LOG"
 set +e
@@ -226,7 +298,7 @@ set -e
 if ((rc == 1)) && [[ "$out" == *"upgrade: GET /api/v1/managed-files/x: HTTP 404"* &&
   "$out" == *"upgrade: step '5.2 probes: the seeded set' failed"* &&
   "$out" == *"::error title=upgrade::step '5.2 probes: the seeded set' failed"* && "$out" == *"logs -prev"* &&
-  "$out" == *down* && "$out" == *"upgrade: failed after"* ]] && grep -q 'paddock-ci-s3 .* down --volumes' "$STUB_LOG"; then
+  "$out" == *down* && "$out" == *"upgrade: failed after"* ]]; then
   pass "a failing probe names its step, annotates it, collects the logs and takes everything down"
 else failed "failure report (exit $rc): $out $(cat "$STUB_LOG")"; fi
 

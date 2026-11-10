@@ -183,7 +183,9 @@ every restored device's sequence to that value plus 1 000 000 or above, so devic
 after a restore on B, receive a newer bundle from A without waiting for compiles. When B's stack is already down (a
 repeated rollback), the value comes from B's high-water file. `./paddock upgrade` copies A's high-water file into B's
 directory (`migrate-from`), so the file never starts empty in a new release's directory. `docs/operations/restore.md`, *Bundle sequence*, has the
-rule.
+rule. An upgrade again after a rollback runs in the same B directory, whose `bundle-seq/` B's release handed to uid
+999: when A's file is higher, `migrate-from` puts a new `bundle-seq/` with A's file in its place and keeps the old one
+as `.bundle-seq.replaced.<random>`, which only root can remove (`sudo rm -rf`) and nothing reads.
 
 **One rollback per upgrade attempt.** After a successful rollback `.upgrade-rollback` is renamed
 `.upgrade-rollback.rolled-back-<attempt>` and `.upgrade-state` gains `rolled-back=<time>`; a second rollback of the
