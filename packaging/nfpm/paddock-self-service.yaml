@@ -1,0 +1,50 @@
+# nfpm configuration of the paddock-self-service package (ADR 0049 decision 1, plan M13b decision 15); built by
+# `make deb` into bin/selfservice/. The desktop app is Python 3 with GTK 4 and libadwaita from Ubuntu's own packages
+# (24.04 and 26.04): no compiled code, nothing from PyPI, so the package is architecture-independent. It talks only to
+# paddockd's socket /run/paddock/selfservice.sock, never runs as root and holds no credential. The German catalog
+# is compiled by `make deb` (selfservice/tools/msgfmt.py) into bin/deb/stage/selfservice-locale/.
+name: paddock-self-service
+arch: all
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Paddock <paddock@paddock-mdm.invalid>
+description: |-
+  Paddock Self-Service desktop app
+  Lists the applications your organization offers on this device and asks
+  the Paddock agent to install, update or remove them. Shows why an
+  application is managed by the organization.
+vendor: Paddock
+homepage: https://github.com/phischl/paddock-mdm
+license: MIT
+depends:
+  - python3 (>= 3.12)
+  - python3-gi
+  - gir1.2-gtk-4.0
+  - gir1.2-adw-1
+contents:
+  - src: selfservice/paddock-self-service
+    dst: /usr/lib/paddock-self-service/paddock-self-service
+    file_info: { mode: 0755 }
+  - src: selfservice/paddock_self_service/*.py
+    dst: /usr/lib/paddock-self-service/paddock_self_service/
+    file_info: { mode: 0644 }
+  - src: bin/deb/stage/selfservice-locale/de/LC_MESSAGES/paddock-self-service.mo
+    dst: /usr/lib/paddock-self-service/locale/de/LC_MESSAGES/paddock-self-service.mo
+    file_info: { mode: 0644 }
+  - src: /usr/lib/paddock-self-service/paddock-self-service
+    dst: /usr/bin/paddock-self-service
+    type: symlink
+  - src: selfservice/data/com.paddock.SelfService.desktop
+    dst: /usr/share/applications/com.paddock.SelfService.desktop
+    file_info: { mode: 0644 }
+  - src: docs/assets/logo/paddock-favicon-dark-tile-light.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/com.paddock.SelfService.svg
+    file_info: { mode: 0644 }
+  - src: packaging/debian/copyright
+    dst: /usr/share/doc/paddock-self-service/copyright
+    file_info: { mode: 0644 }
+  - src: bin/deb/stage/paddock-self-service.changelog.gz
+    dst: /usr/share/doc/paddock-self-service/changelog.gz
+    file_info: { mode: 0644 }

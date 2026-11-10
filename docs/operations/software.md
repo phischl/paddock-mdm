@@ -380,6 +380,39 @@ To read the repository by hand: `curl -u paddock:<secret> -I https://bundles.<do
 the system source's `signing_key` (`GET /api/v1/software-sources/{id}`) as `paddock.asc`, and run
 `gpg --dearmor <paddock.asc >paddock.gpg && gpgv --keyring ./paddock.gpg InRelease`.
 
+## Self-service app
+
+*Paddock Self-Service* is the desktop app through which users install, update and remove the applications offered to
+them with the intent `available`, and see why a required application is on their device (ADR 0049). Paddock does not
+install it on its own: an organization offers it like any other application, as a required catalog entry.
+
+- **Package.** `make deb` builds `bin/selfservice/paddock-self-service_<version>_all.deb` next to the agent packages
+  (`make selfservice-deb VERSION=<version>` builds it alone). Releases do not publish it yet; until they do, the
+  operator builds it from the release's source tag.
+- **Requirements.** Ubuntu 24.04 or 26.04 with a graphical session. The package needs only Ubuntu's own `python3`,
+  `python3-gi`, `gir1.2-gtk-4.0` and `gir1.2-adw-1`; apt installs them from the distribution, nothing comes from PyPI.
+  The package is architecture independent and the agent update never delivers or changes it.
+- **Offering it as a required entry:**
+  1. Build the package of the release (above).
+  2. Upload it to the organization's repository (*Packages stored in Paddock*; architecture `all` is accepted).
+  3. Create a catalog entry *Paddock Self-Service* with the source `paddock` and the package `paddock-self-service`.
+  4. Assign the entry with the intent `required` to every device group (or the whole organization) whose users get
+     self-service. With each release, upload the new version; the assignment's update rule decides when devices take it.
+- **What the user sees.** *Apps* lists the applications the device offers to the user, each with its state and
+  *Install*, *Update* or *Remove*; every application the organization manages (any intent but `available`) shows
+  *Managed by your organization* and has no buttons. *Details* names the version, the source, whether it is installed
+  for all users or only the user, and the reason of a failure. *Activity* follows the operations the user started in
+  this session (queued with the position, running, done, failed or refused with the reason). On the first start the app
+  shows the transparency notice once per notice text: the organization's text when one is set, otherwise the default
+  text. While the agent does not answer the app shows *Paddock is not running* and tries again every 10 seconds; before
+  the first policy it shows *Waiting for your organization's policy*. The texts are in English or German, following the
+  session's language.
+- **What it does not do.** The app runs as the logged-in user and refuses to start as root. It talks only to the agent's
+  socket `/run/paddock/selfservice.sock`, makes no network connection and holds no credential; the agent identifies the
+  user by the socket's peer credentials. It shows everything it receives as plain text, never as markup, and accepts
+  icons only as PNG of at most 64 KiB. The only file it writes is `~/.config/paddock-self-service/state.json` (which
+  notice text the user has acknowledged).
+
 ## Uninstalling Paddock
 
 The removal of Paddock from a device (both modes, `leave` and `reset`, `docs/operations/uninstall.md`) removes every

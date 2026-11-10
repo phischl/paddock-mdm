@@ -25,3 +25,6 @@ test/vms/virtualbox/.secrets
 # Rendered by ./paddock backup-target apply on a host (plan M15 decision 20): holds share passwords.
 deploy/compose/compose.backup-targets.yaml
 deploy/compose/.compose.backup-targets.*
+
+# Python bytecode of the self-service app (selfservice/)
+__pycache__/
