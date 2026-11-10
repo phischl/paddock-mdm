@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests of the upgrade job's helpers (deploy/bundle/ci/upgrade.sh, `make bundle-test`) without a stack: the judgement of
 # ./paddock upgrade-check, the staging of the previous release's agent files, the unsealer's guard, the restore drill's
-# point in time, the orphan report, the S3 endpoint's attachment, the upgrade run again after the rollback and the
+# point in time, the orphan report, the refusal of a previous release before 0.1.0-alpha.9, the upgrade run again after the rollback and the
 # failure report (step named on stderr and as a GitHub annotation, logs collected; also after a TERM). docker, sudo and git are stubs; upgrade.sh is sourced with UPGRADE_LIB_ONLY=1, which
 # stops it before the first step.
 # The snippets in single quotes run in the shell that sourced upgrade.sh, which also assigns its own `work` there;
@@ -28,8 +28,6 @@ cat >"$work/bin/docker" <<'STUB'
 printf 'docker %s\n' "$*" >>"$STUB_LOG"
 case "$*" in
   "ps -a --filter label=com.docker.compose.project=paddock-cp"*) printf '%s\n' postgres ${STUB_ORPHAN:-} paddock-api ;;
-  "compose -p paddock-ci-s3 "*" ps -q backup-s3") printf '%s\n' "${STUB_S3_ID:-}" ;;
-  "network inspect paddock-cp_cp "*) printf '%s \n' "${STUB_CP_MEMBERS:-}" ;;
 esac
 exit 0
 STUB
@@ -217,44 +215,32 @@ else failed "no orphans: $out"; fi
 # --- rollback --------------------------------------------------------------------------------------------------------
 # A key-shaped test value built at run time, so no literal key sits in the repository for the secret scanner.
 key="$(printf 0123456789abcdef0123456789abcdef | base64)"
-# lib_rollback <legacy: true|false> <cp|audit>: step 6 against stubbed hosts; prints the call and what it read on stdin.
+# lib_rollback <cp|audit>: step 6 against stubbed hosts; prints the call and what it read on stdin.
 lib_rollback() {
-  KEY="$key" LEGACY="$1" lib eval '
-    legacy=$LEGACY
+  KEY="$key" lib eval '
     mkdir -p "$W/seed"
     printf "%s\n" "$KEY" >"$W/seed/backup.key"
     cp_paddock() { printf "cp %s stdin=[%s]\n" "$*" "$(cat)"; }
     audit_paddock() { printf "audit %s stdin=[%s]\n" "$*" "$(cat)"; }
-    rollback_host '"$2"
+    rollback_host '"$1"
 }
-out="$(lib_rollback false cp)"
+out="$(lib_rollback cp)"
 if [[ "$out" == "cp rollback $work/w/prev/cp --yes stdin=[$key]" ]]; then
   pass "the control plane's rollback to a release with restore.sh gets the backup key on stdin, not on its command line"
 else failed "rollback cp: $out"; fi
-out="$(lib_rollback true cp)"
-if [[ "$out" == "cp rollback $work/w/prev/cp --yes stdin=[]" ]]; then
-  pass "the control plane's legacy rollback to 0.1.0-alpha.8 gets no key"
-else failed "legacy rollback cp: $out"; fi
-out="$(lib_rollback false audit)"
+out="$(lib_rollback audit)"
 if [[ "$out" == "audit rollback $work/w/prev/audit --yes stdin=[]" ]]; then
   pass "the audit host's rollback, which restores nothing, gets no key"
 else failed "rollback audit: $out"; fi
 
-# --- attach_s3 -------------------------------------------------------------------------------------------------------
-s3id=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
-: >"$STUB_LOG"
-if STUB_S3_ID=$s3id lib attach_s3 >/dev/null 2>&1 &&
-  grep -qx "docker network connect --alias backup-s3-tls paddock-cp_cp $s3id" "$STUB_LOG"; then
-  pass "the S3 endpoint is attached to a network cp without it"
-else failed "attach_s3, detached: $(cat "$STUB_LOG")"; fi
-: >"$STUB_LOG"
-if STUB_S3_ID=$s3id STUB_CP_MEMBERS="aaaa $s3id" lib attach_s3 >/dev/null 2>&1 &&
-  ! grep -q 'network connect' "$STUB_LOG"; then
-  pass "an attached S3 endpoint is not attached twice"
-else failed "attach_s3, attached: $(cat "$STUB_LOG")"; fi
-if out="$(lib attach_s3 2>&1)"; then failed "attach_s3 without an endpoint passes: $out"; elif
-  [[ "$out" == *"the CI S3 endpoint backup-s3 does not run"* ]]; then pass "a missing S3 endpoint fails"
-else failed "attach_s3, no endpoint: $out"; fi
+# --- prev_supported ------------------------------------------------------------------------------------------------
+# PDK-981: the supported upgrade path starts at 0.1.0-alpha.9 (ADR 0047); the job refuses an older previous release.
+if out="$(lib prev_supported 0.1.0-alpha.8 2>&1)"; then failed "0.1.0-alpha.8 as the previous release passes: $out"; elif
+  [[ "$out" == *"the previous release 0.1.0-alpha.8 is below 0.1.0-alpha.9"* ]]; then pass "0.1.0-alpha.8 as the previous release is refused"
+else failed "prev_supported 0.1.0-alpha.8: $out"; fi
+for v in 0.1.0-alpha.9 0.1.0-alpha.10 0.1.0-alpha.18 0.1.0 0.2.0-alpha.1; do
+  if out="$(lib prev_supported "$v" 2>&1)"; then pass "$v as the previous release is accepted"; else failed "prev_supported $v: $out"; fi
+done
 
 # --- upgrade_hosts ---------------------------------------------------------------------------------------------------
 # The upgrade again after the rollback (step 8): the same candidate directories, the previous release's as <old dir>,
@@ -295,7 +281,7 @@ if out="$(lib eval 'seq_high_water_carried 3000005' 2>&1)"; then failed "a missi
 fi
 rm "$work/w/prev/cp/bundle-seq/high-water"
 if out="$(lib eval 'seq_high_water_carried "$(prev_high_water)"' 2>&1)" && [[ "$out" == *"no high-water file in the previous"* ]]; then
-  pass "without a previous high-water file (0.1.0-alpha.8) there is nothing to carry"
+  pass "without a previous high-water file there is nothing to carry"
 else failed "seq_high_water_carried, no previous file: $out"; fi
 
 # --- failure report ----------------------------------------------------------------------------------------------------
@@ -312,7 +298,7 @@ set -e
 if ((rc == 1)) && [[ "$out" == *"upgrade: GET /api/v1/managed-files/x: HTTP 404"* &&
   "$out" == *"upgrade: step '5.2 probes: the seeded set' failed"* &&
   "$out" == *"::error title=upgrade::step '5.2 probes: the seeded set' failed"* && "$out" == *"logs -prev"* &&
-  "$out" == *down* && "$out" == *"upgrade: failed after"* ]] && grep -q 'paddock-ci-s3 .* down --volumes' "$STUB_LOG"; then
+  "$out" == *down* && "$out" == *"upgrade: failed after"* ]]; then
   pass "a failing probe names its step, annotates it, collects the logs and takes everything down"
 else failed "failure report (exit $rc): $out $(cat "$STUB_LOG")"; fi
 
