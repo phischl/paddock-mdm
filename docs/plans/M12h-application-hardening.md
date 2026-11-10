@@ -178,6 +178,9 @@ unit is sandboxed as far as the agent's work allows. Nothing a device or an admi
 15. `cmd/paddock-server/api.go` and `gateway.go`: `ReadTimeout 60s`, `WriteTimeout 120s`, `IdleTimeout 120s`;
     the artifact and package upload handlers and the export download set `rc.SetWriteDeadline(now + 30 min)`
     through `http.NewResponseController`; the audit feed and lists are unaffected (seconds).
+    **Note 2026-11-10:** behind the edge the 60 s do not hold for one case, a slow body on a non-GET request
+    answered 2xx/3xx without reading it (about 120 s); see RR-131 (§6.4) and the amendment "2026-11-10 (PDK-970,
+    PDK-971)" at the end of this plan.
 16. Caddy: a snippet `(hardening_headers)` imported by every site: `X-Content-Type-Options: nosniff`,
     `Referrer-Policy: strict-origin-when-cross-origin`, `Strict-Transport-Security: max-age=31536000;
     includeSubDomains`, `X-Frame-Options: DENY`; `request_body` per site: `admin` 2 MiB default with the
@@ -266,6 +269,7 @@ wildcard `~*`).
 | RR-121 | Sandboxing of the supervisor unit is validated on Ubuntu 24.04/26.04 only; another systemd version may reject a directive | the gates per release; a rejected directive stops the unit, which the supervisor's watchdog surfaces | distribution scope |
 | RR-129 | The api reads raw step-up ID tokens (`stepup:<jti>`) to forward them to the escrow-reader and the revocation approval (added 2026-11-08, §14.9) | token TTL, `MaxUses` counted by the escrow-reader in a key the api cannot write, `revocation-jti` claims, audit | accepted for alpha.10; M12h-2 candidate |
 | RR-130 | The worker can enumerate and delete portal session records (account revocation runs in the worker; added 2026-11-08, §14.9) | sealed cookies: a session identifier alone is not a bearer; the worker is on `data` only | accepted |
+| RR-131 | A slow request body on a non-GET request that a role answers 2xx/3xx without reading it is cut after about 120 s (`WriteTimeout`) instead of 60 s (`ReadTimeout`), on HTTP/1.x; anonymous case `POST /api/auth/logout` without a cookie (added 2026-11-10, amendment "2026-11-10 (PDK-970, PDK-971)") | the rate limiter (`auth` per address, admin API per principal, device API per device and address), the edge body limits; error answers, GET/HEAD and every body-reading route end at 60 s (PDK-970) | accepted for alpha.10; fixed in alpha.11 by PDK-971 |
 
 ## 7. Architecture amendments (PDK-827)
 
@@ -828,3 +832,27 @@ refused when it is world-writable (`mode & 0o002`, except the allow-listed stick
 group-writable and its group is not gid 0, when it is group-writable and carries an access ACL (the group bits are
 then the ACL mask, which may grant write to a named user or group), or when it is not owned by uid 0. Group write for
 gid 0 without an ACL grants nothing beyond root. The component-by-component, descriptor-relative walk is unchanged.
+
+## Amendment 2026-11-10 (PDK-970, PDK-971; `decisions-alpha10.md` §39) — residual risk RR-131
+
+§3.6 decision 15 sets `ReadTimeout 60s`, and `docs/operations/capacity.md` "Request limits" promises that a body sent
+at 1 byte/s ends after 60 s. Behind the edge that held only for requests whose body the role reads to the end.
+
+- Cause: when a role answers an HTTP/1.x request whose body is unfinished, Caddy drains the rest of the body (below
+  256 KiB) for up to its 60 s read idle timeout before it writes the answer, unless the answer carries
+  `Connection: close`. The role's `ReadTimeout` never fires for a body the handler does not read; the connection ends
+  at the role's `WriteTimeout` (120 s).
+- Fixed in alpha.10 (PDK-970, snippet `(close_unread_body)` in `deploy/compose/caddy/guards.caddy`): every 4xx/5xx
+  answer of a role, and every 2xx/3xx answer to a GET or HEAD that carries a body, closes the HTTP/1.x connection at
+  once. HTTP/2 is unchanged (it does not drain, and `Connection: close` would shut the multiplexed connection down).
+- Not fixed in alpha.10 (**RR-131**): a POST, PUT, PATCH or DELETE that a role answers 2xx or 3xx **without reading
+  its body**. A body sent at 1 byte/s ends after about 120 s. One anonymous route is known:
+  `POST /api/auth/logout` with `X-Paddock-CSRF: 1` and no session cookie answers 200 without reading the body.
+  Closing every 2xx/3xx answer is not an option: the agents' check-ins and apt would lose their HTTP/1.1 keep-alive.
+- Impact: a slow-loris attempt holds a connection for about 120 s instead of 60 s. No data is exposed. The rate
+  limiter (decision 7: `auth` per client address, the admin API per principal, the device API per device and
+  address) and the edge's body limits apply unchanged.
+- Decision: accepted for alpha.10. PDK-971 (alpha.11) audits every role route that can answer 2xx/3xx to a request
+  with a body without reading it, and makes each such handler read or refuse the body, or closes the edge connection
+  for exactly those routes. RR-131 is removed from `docs/compliance/residual-risks.md` by that ticket.
+- §6.4 and `docs/compliance/residual-risks.md` (section "Application hardening (M12h)") carry the row.
