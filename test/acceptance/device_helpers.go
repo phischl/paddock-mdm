@@ -86,7 +86,7 @@ func testUnit() string { return testUnitPrefix + uniqueSuffix() + ".service" }
 func createdID(t *testing.T, p *env.Portal, collection string, res env.Response) string {
 	t.Helper()
 	id := responseID(t, res).String()
-	deleteOnCleanup(t, p, collection+"/"+id)
+	deleteCreatedOnCleanup(t, p, collection, id)
 	return id
 }
 
@@ -95,8 +95,19 @@ func createdID(t *testing.T, p *env.Portal, collection string, res env.Response)
 func createdIDFor(t, owner *testing.T, p *env.Portal, collection string, res env.Response) string {
 	t.Helper()
 	id := responseID(t, res).String()
-	deleteOnCleanup(owner, p, collection+"/"+id)
+	deleteCreatedOnCleanup(owner, p, collection, id)
 	return id
+}
+
+// deleteCreatedOnCleanup deletes the resource id of collection when t ends; a catalog entry loses its assignments
+// first (see deleteEntryOnCleanup).
+func deleteCreatedOnCleanup(t *testing.T, p *env.Portal, collection, id string) {
+	t.Helper()
+	if collection == softwareCatalog {
+		deleteEntryOnCleanup(t, p, id)
+		return
+	}
+	deleteOnCleanup(t, p, collection+"/"+id)
 }
 
 // removeCreated removes the resource that a POST to collection created when the test ends.

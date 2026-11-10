@@ -52,21 +52,7 @@ func removeEntryAssignments(t *testing.T, p *env.Portal, rollout, entry string) 
 		}
 	}
 	complete(rollout)
-	res := call(t, p, http.MethodGet, softwareAssignments+"?"+url.Values{"catalog_entry_id": {entry}, "page_size": {"100"}}.Encode(), nil)
-	var page struct {
-		Items []struct {
-			ID string `json:"id"`
-		} `json:"items"`
-	}
-	if res.Status != http.StatusOK || res.JSON(&page) != nil {
-		t.Errorf("cleanup: assignments of entry %s: HTTP %d %s", entry, res.Status, res.Body)
-		return
-	}
-	for _, a := range page.Items {
-		if res := call(t, p, http.MethodDelete, softwareAssignments+"/"+a.ID, nil); res.Status != http.StatusNoContent && res.Status != http.StatusNotFound {
-			t.Errorf("cleanup: DELETE assignment %s: HTTP %d %s", a.ID, res.Status, res.Body)
-		}
-	}
+	deleteEntryAssignments(t, p, entry)
 	for _, id := range openRollouts(t, p) {
 		complete(id)
 	}
