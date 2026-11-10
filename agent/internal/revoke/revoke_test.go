@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strconv"
@@ -817,9 +818,9 @@ func TestUserIDs(t *testing.T) {
 		"no users":        {out: ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := userIDs(tc.out)
-			if err != nil || !slices.Equal(got, tc.want) {
-				t.Fatalf("uids %v %v, want %v", got, err, tc.want)
+			got, _, foreign := userIDs(tc.out)
+			if len(foreign) != 0 || !slices.Equal(got, tc.want) {
+				t.Fatalf("uids %v foreign %v, want %v", got, foreign, tc.want)
 			}
 		})
 	}
@@ -829,60 +830,134 @@ func TestUserIDs(t *testing.T) {
 const nssNoise = "2026-11-08T05:01:13.152453Z ERROR Unix socket stream setup error while connecting to " +
 	"/var/run/himmelblaud/socket -> Os { code: 111, kind: ConnectionRefused, message: \"Connection refused\" }"
 
-// TestUserIDsRejectsForeignLines (PDK-945): any non-empty line that is not a user is an error, never a UID and never
-// skipped.
-func TestUserIDsRejectsForeignLines(t *testing.T) {
-	for name, out := range map[string]string{
-		"noise before":         nssNoise + "\n1000 paddock no active\n",
-		"noise after":          "1000 paddock no active\n" + nssNoise + "\n",
-		"noise between":        "1000 paddock no active\n" + nssNoise + "\n200001 alice no online\n",
-		"noise only":           nssNoise + "\n",
-		"legend":               "UID USER LINGER STATE\n1000 paddock no active\n",
-		"footer":               "1000 paddock no active\n\n1 users listed.\n",
-		"uid only":             "1000\n",
-		"uid with colon":       "1000: nss lookup failed\n",
-		"uid with suffix":      "1000x paddock no active\n",
-		"signed uid":           "+1000 paddock no active\n",
-		"negative uid":         "-1 paddock no active\n",
-		"uid beyond 32 bits":   "4294967296 paddock no active\n",
-		"three columns":        "1000 paddock no\n",
-		"five columns":         "1000 paddock no active extra\n",
-		"linger not a boolean": "1000 paddock maybe active\n",
-		"unknown state":        "1000 paddock no unreachable\n",
-		"number then words":    "404 lookup of user failed\n",
+// TestUserIDsSkipsForeignLines (PDK-945): a non-empty line that is not a user is never a UID; it is reported with
+// its line number, and the users around it are still found.
+func TestUserIDsSkipsForeignLines(t *testing.T) {
+	for name, tc := range map[string]struct {
+		out     string
+		want    []int
+		users   int
+		foreign []int
+	}{
+		"noise before":         {out: nssNoise + "\n1000 paddock no active\n", want: []int{1000}, users: 1, foreign: []int{1}},
+		"noise after":          {out: "1000 paddock no active\n" + nssNoise + "\n", want: []int{1000}, users: 1, foreign: []int{2}},
+		"noise between":        {out: "1000 paddock no active\n" + nssNoise + "\n200001 alice no online\n", want: []int{1000, 200001}, users: 2, foreign: []int{2}},
+		"noise only":           {out: nssNoise + "\n", foreign: []int{1}},
+		"legend":               {out: "UID USER LINGER STATE\n1000 paddock no active\n", want: []int{1000}, users: 1, foreign: []int{1}},
+		"footer":               {out: "1000 paddock no active\n\n1 users listed.\n", want: []int{1000}, users: 1, foreign: []int{3}},
+		"uid only":             {out: "1000\n", foreign: []int{1}},
+		"uid with colon":       {out: "1000: nss lookup failed\n", foreign: []int{1}},
+		"uid with suffix":      {out: "1000x paddock no active\n", foreign: []int{1}},
+		"signed uid":           {out: "+1000 paddock no active\n", foreign: []int{1}},
+		"negative uid":         {out: "-1 paddock no active\n", foreign: []int{1}},
+		"uid beyond 32 bits":   {out: "4294967296 paddock no active\n", foreign: []int{1}},
+		"three columns":        {out: "1000 paddock no\n", foreign: []int{1}},
+		"five columns":         {out: "1000 paddock no active extra\n", foreign: []int{1}},
+		"linger not a boolean": {out: "1000 paddock maybe active\n", foreign: []int{1}},
+		"unknown state":        {out: "1000 paddock no unreachable\n", foreign: []int{1}},
+		"number then words":    {out: "404 lookup of user failed\n", foreign: []int{1}},
 		// The pre-254 `UID USER` form is printed by no supported release.
-		"two columns":         "120 gdm\n1000 paddock\n 200001 alice\n65534 nobody\n",
-		"number then a word":  "1001 errors\n",
-		"two columns between": "1000 paddock no active\n1001 errors\n200001 alice no online\n",
+		"two columns":           {out: "120 gdm\n1000 paddock\n 200001 alice\n65534 nobody\n", foreign: []int{1, 2, 3, 4}},
+		"number then a word":    {out: "1001 errors\n", foreign: []int{1}},
+		"two columns between":   {out: "1000 paddock no active\n1001 errors\n200001 alice no online\n", want: []int{1000, 200001}, users: 2, foreign: []int{2}},
+		"system user and noise": {out: "120 gdm no active\n" + nssNoise + "\n", users: 1, foreign: []int{2}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got, err := userIDs(out); err == nil {
-				t.Fatalf("uids %v, want an error", got)
+			got, users, foreign := userIDs(tc.out)
+			var lines []int
+			for _, l := range foreign {
+				lines = append(lines, l.number)
+			}
+			if !slices.Equal(got, tc.want) || users != tc.users || !slices.Equal(lines, tc.foreign) {
+				t.Fatalf("uids %v users %d foreign lines %v, want %v %d %v", got, users, lines, tc.want, tc.users, tc.foreign)
 			}
 		})
 	}
 }
 
-// TestSequenceForeignLoginctlLine (PDK-945): a foreign line in the user list ends no session; the erasure, the
-// confirmation and the reboot run as without it.
-func TestSequenceForeignLoginctlLine(t *testing.T) {
+// captureLog sends slog's default logger to the returned buffer for the duration of the test.
+func captureLog(t *testing.T) *strings.Builder {
+	t.Helper()
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// erasureTail is the part of the sequence after the session step: erasure, confirmation and reboot.
+var erasureTail = []string{
+	"cryptsetup luksDump --dump-json-metadata -- /dev/vda3",
+	"cryptsetup luksErase --batch-mode -- /dev/vda3",
+	"cryptsetup luksDump --dump-json-metadata -- /dev/vda3",
+	"confirm 0190f000-0000-7000-8000-0000000000c1",
+	"reboot",
+}
+
+// runForeignUsers runs a revocation with users as the loginctl user list and returns the sequence and the log.
+func runForeignUsers(t *testing.T, users string) ([]string, string) {
+	t.Helper()
+	logs := captureLog(t)
 	sys := newSys(t)
-	sys.users = "1000 paddock no active\n" + nssNoise + "\n200001 alice no online\n"
-	c := &fakeConfirmer{sys: sys}
-	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
+	sys.users = users
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
 	if err != nil || !e.Erased {
 		t.Fatalf("execute: %+v %v", e, err)
 	}
-	want := []string{
-		"write " + StateFile,
-		"loginctl list-users --no-legend",
-		"cryptsetup luksDump --dump-json-metadata -- /dev/vda3",
-		"cryptsetup luksErase --batch-mode -- /dev/vda3",
-		"cryptsetup luksDump --dump-json-metadata -- /dev/vda3",
-		"confirm 0190f000-0000-7000-8000-0000000000c1",
-		"reboot",
+	return sys.log, logs.String()
+}
+
+func checkSequence(t *testing.T, got []string, terminated ...string) {
+	t.Helper()
+	want := []string{"write " + StateFile, "loginctl list-users --no-legend"}
+	for _, uid := range terminated {
+		want = append(want, "loginctl terminate-user "+uid)
 	}
-	if !slices.Equal(sys.log, want) {
-		t.Fatalf("sequence\n%s\nwant\n%s", strings.Join(sys.log, "\n"), strings.Join(want, "\n"))
+	want = append(want, erasureTail...)
+	if !slices.Equal(got, want) {
+		t.Fatalf("sequence\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestSequenceForeignLoginctlLine (PDK-945): valid users between NSS noise are signed out, the noise is skipped and
+// logged with its line number and a quote, and the erasure, the confirmation and the reboot run as without it.
+func TestSequenceForeignLoginctlLine(t *testing.T) {
+	seq, logs := runForeignUsers(t, nssNoise+"\n1000 paddock no active\n"+nssNoise+"\n120 gdm no active\n200001 alice no online\n")
+	checkSequence(t, seq, "1000", "200001")
+	for _, want := range []string{"level=WARN", "line=1", "line=3", `2026-11-08T05:01:13.152453Z ERROR Unix socket`} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("log lacks %q:\n%s", want, logs)
+		}
+	}
+	if strings.Contains(logs, "level=ERROR") || strings.Contains(logs, "ConnectionRefused") {
+		t.Fatalf("log has an error or an untruncated quote:\n%s", logs)
+	}
+}
+
+// TestSequenceOnlyForeignLoginctlLines (PDK-945): an output with no user at all signs nobody out and logs an error;
+// the erasure, the confirmation and the reboot still run.
+func TestSequenceOnlyForeignLoginctlLines(t *testing.T) {
+	seq, logs := runForeignUsers(t, nssNoise+"\n"+nssNoise+"\n")
+	checkSequence(t, seq)
+	if !strings.Contains(logs, "level=ERROR") || !strings.Contains(logs, "lines=2") {
+		t.Fatalf("log lacks the error:\n%s", logs)
+	}
+}
+
+// TestSequenceNumericForeignLine (PDK-945): a foreign line that starts with a number is never taken as a UID.
+func TestSequenceNumericForeignLine(t *testing.T) {
+	seq, logs := runForeignUsers(t, "1000 paddock no active\n1001 errors\n404 lookup of user failed\n")
+	checkSequence(t, seq, "1000")
+	if !strings.Contains(logs, "line=2") || !strings.Contains(logs, "line=3") || strings.Contains(logs, "level=ERROR") {
+		t.Fatalf("log:\n%s", logs)
+	}
+}
+
+// TestForeignLineQuoteEscaped (PDK-945): the logged quote escapes control characters, so a foreign line cannot
+// forge journal lines or terminal sequences.
+func TestForeignLineQuoteEscaped(t *testing.T) {
+	_, logs := runForeignUsers(t, "evil\x1b[2J\rlevel=INFO msg=forged\n1000 paddock no active\n")
+	if strings.ContainsAny(logs, "\x1b\r") || !strings.Contains(logs, `x1b[2J`) {
+		t.Fatalf("log not escaped:\n%q", logs)
 	}
 }
