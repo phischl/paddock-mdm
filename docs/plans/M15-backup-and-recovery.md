@@ -1754,6 +1754,18 @@ not meet them yet, and the leader lock is decided anew (point 9). Where this cor
      dropped, as at shutdown; after the role is leader again, its first pass covers every run without `mirrored_at`.
    - A file system call that cannot be interrupted may still complete one write after the cancel; that is the
      abandoned-lane case of point 5 and is accepted. No new write starts.
+   - **Residual window without a fence (accepted; residual risk RR-134).** The role notices a lost lock connection
+     by a periodic check of that connection; between a silent loss and its detection lie up to the check interval
+     plus its ping timeout, about 10 seconds. Statements already in flight on the role's pool can still commit in
+     that window, and its lanes still write to their targets. An overlap with a new leader needs the database to
+     release the lock while the old process has not noticed: a kill of exactly the lock session. A database restart
+     ends the pool's connections too, and on a network partition the server keeps the lock longer than the role
+     needs to stop. The writes are safe to repeat: the target status is an upsert, a run is marked mirrored only
+     while `mirrored_at IS NULL`, a request is answered only once, and the mirror's puts and deletions follow rules
+     both processes derive from the same local set. Worst case: one extra `platform.backup_failed` for a run the
+     other leader already recorded; no run is mirrored twice. A fence inside the write transactions with the same
+     advisory lock does not work (they run in other sessions than the lock's). A real fence needs a lease row with
+     an epoch that every write checks: a data-model change, **not alpha.10**, a follow-up for the architect.
    - Tests (binding): losing leadership stops the lanes and no status or run result is written afterwards; a second
      engine on the same lock starts no round and no lane while the first is leader, and takes over after the first
      released it. `docs/architecture.md` §3.2 needs no change: it already states the rule the code now meets.
