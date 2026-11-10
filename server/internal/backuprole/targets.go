@@ -61,8 +61,9 @@ const (
 	// keep, info files the local set lacks, or the active key's repository the local set lacks entirely, as after a
 	// lost repository volume; the mirror writes and deletes nothing there until the set is whole.
 	ClassSetShrunk = "set_shrunk"
-	// ClassUnknownPath: the target holds a repository path of no key the database knows; the mirror copies but deletes
-	// nothing on that target until an operator removed the path (A3 G3).
+	// ClassUnknownPath: the target holds a repository path of no key the database knows; the mirror copies and deletes
+	// as usual but never touches that path, and the target run fails until an operator removed it (A3 G3,
+	// decisions-alpha10 A10-25).
 	ClassUnknownPath = "unknown_path"
 	// ClassSizeMismatch: a file copied in this round has another size on the target (A3 step 4).
 	ClassSizeMismatch = "size_mismatch"
@@ -74,7 +75,7 @@ const (
 var (
 	errForeignSet   = errors.New("backup target holds the set of another installation")
 	errSetShrunk    = errors.New("the local backup set lacks what the target holds; nothing is written or deleted")
-	errUnknownPath  = errors.New("backup target holds a repository path no backup key names; nothing is deleted there")
+	errUnknownPath  = errors.New("backup target holds a repository path no backup key names; it is kept until removed by hand")
 	errSizeMismatch = errors.New("backup target holds another size than the copied file")
 	// errBudget ends a mirror that used its round's time; the target is not current yet (ClassContinues), and the next
 	// round goes on with the files it still lacks.
