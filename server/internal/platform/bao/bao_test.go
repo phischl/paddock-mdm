@@ -210,8 +210,13 @@ func TestBackupWrap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(ct, "vault:v1:") || strings.Contains(ct, "svc") {
-		t.Fatalf("ciphertext %q", ct)
+	// The leak check looks for the whole plaintext, verbatim and base64-decoded: a short marker such as "svc" occurs in
+	// random base64 by chance about once in 3,700 runs (PDK-976), while the JSON's quotes never occur in base64 and
+	// 34 plaintext bytes never occur in the random ciphertext.
+	raw, decErr := base64.StdEncoding.DecodeString(strings.TrimPrefix(ct, "vault:v1:"))
+	if !strings.HasPrefix(ct, "vault:v1:") || decErr != nil || strings.Contains(ct, `"username":"svc"`) ||
+		strings.Contains(string(raw), string(creds)) {
+		t.Fatalf("ciphertext %q (decoding: %v)", ct, decErr)
 	}
 	plain, err := backup.DecryptPlatform(ctx, wrap, ct)
 	if err != nil || string(plain) != string(creds) {
