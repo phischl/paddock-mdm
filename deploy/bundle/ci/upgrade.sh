@@ -14,8 +14,8 @@
 #    6  ./paddock rollback --yes on the control plane (the backup key on stdin), then on the audit host (the
 #       candidate's audit writer reads what the previous control plane sends, never the other way round);
 #    7  probes on the previous release: the pre-upgrade set;
-#    8  ./paddock upgrade --yes again from the same directories: after a rollback it starts again at the check, copies
-#       .env and .secrets/ again and takes its own pre-upgrade backup (rollback.sh);
+#    8  ./paddock upgrade --yes again, from a freshly extracted candidate: it starts at the check, copies .env and
+#       .secrets/ again and takes its own pre-upgrade backup;
 #    9  the probes of step 5 on the release upgraded again;
 #   10  restore drill, backup: a confirmed backup key, the local target, ./paddock backup now --label ci --wait;
 #   11  restore drill, loss and restore: ./paddock down --volumes, ./paddock secrets, ./paddock restore --from --at;
@@ -80,8 +80,10 @@ probe_env() {
 }
 
 # use_prev / use_cand: the bundle directories that cp_paddock and audit_paddock run in; both name the same projects.
+# cand_root is the candidate's extraction: <W>/cand, and <W>/cand-again for the upgrade again (step 8).
+cand_root="$W/cand"
 use_prev() { CP_DIR="$W/prev/cp" AUDIT_DIR="$W/prev/audit"; }
-use_cand() { CP_DIR="$W/cand/cp" AUDIT_DIR="$W/cand/audit"; }
+use_cand() { CP_DIR="$cand_root/cp" AUDIT_DIR="$cand_root/audit"; }
 # with_legacy_overlay: the overlay set while one process runs both releases' ./paddock (upgrade, rollback).
 legacy_overlay() { if $legacy; then CP_OVERLAY="$ci_overlay $here/compose.ci-alpha8.yaml"; else CP_OVERLAY="$ci_overlay"; fi; }
 
@@ -301,8 +303,9 @@ attach_s3() {
 
 # upgrade_hosts <n> <name>: step 4, and step 8 after the rollback: ./paddock upgrade --yes from the previous
 # release's directories on the control plane, then on the audit host, then the release's bootstrap and the orphans.
-# The second run uses the same candidate directories: their .upgrade-state records the rollback, so the upgrade starts
-# again at the check and records its own pre-upgrade backup and rollback point.
+# The second run upgrades into a freshly extracted candidate, as ./paddock upgrade asks for: the first candidate
+# directory's bundle-seq/ belongs to the backup role after its release ran, and migrate-from cannot write the raised
+# high-water file there (PDK-977).
 upgrade_hosts() {
   step "$1.1 $2: control plane"
   phase=$2
@@ -452,6 +455,10 @@ seeded rolled-back "${reveal[@]}"
 device_checks_in "$W/bin/upgradesim-prev" /etc/paddock-ci/upgrade.conf
 
 # --- 8 upgrade again -------------------------------------------------------------------------------------------------
+step "8.0 upgrade-again: the candidate extracted afresh"
+cand_root="$W/cand-again"
+use_cand
+smoke_extract "$cand_tarball"
 upgrade_hosts 8 "upgrade-again"
 
 # --- 9 probes after the upgrade again --------------------------------------------------------------------------------

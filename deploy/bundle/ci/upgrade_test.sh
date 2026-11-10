@@ -257,21 +257,22 @@ if out="$(lib attach_s3 2>&1)"; then failed "attach_s3 without an endpoint passe
 else failed "attach_s3, no endpoint: $out"; fi
 
 # --- upgrade_hosts ---------------------------------------------------------------------------------------------------
-# The upgrade again after the rollback (step 8): the same candidate directories, the previous release's as <old dir>,
+# The upgrade again after the rollback (step 8): the fresh candidate directories, the previous release's as <old dir>,
 # the root token for bootstrap openbao, and the step names and log phase of that run.
 out="$(lib eval '
   printf "{\"root_token\": \"s.root\"}" >"$W/init.json"
   start_unsealer() { :; }
   use_prev
+  cand_root="$W/cand-again"
   cp_paddock() { printf "cp %s %s token=%s\n" "$CP_DIR" "$*" "${BAO_TOKEN:-}"; }
   audit_paddock() { printf "audit %s %s\n" "$AUDIT_DIR" "$*"; }
   orphans() { echo orphans; }
   upgrade_hosts 8 upgrade-again
   echo "phase=$phase"' 2>&1)"
-order="*8.1 upgrade-again: control plane*cp $work/w/cand/cp upgrade $work/w/prev/cp --yes token=s.root*"
-order+="8.2 upgrade-again: audit host*audit $work/w/cand/audit upgrade $work/w/prev/audit --yes*"
-order+="8.3 upgrade-again: the release's bootstrap and orphans*cp $work/w/cand/cp bootstrap buckets*"
-order+="cp $work/w/cand/cp up*orphans*phase=upgrade-again*"
+order="*8.1 upgrade-again: control plane*cp $work/w/cand-again/cp upgrade $work/w/prev/cp --yes token=s.root*"
+order+="8.2 upgrade-again: audit host*audit $work/w/cand-again/audit upgrade $work/w/prev/audit --yes*"
+order+="8.3 upgrade-again: the release's bootstrap and orphans*cp $work/w/cand-again/cp bootstrap buckets*"
+order+="cp $work/w/cand-again/cp up*orphans*phase=upgrade-again*"
 # shellcheck disable=SC2053
 if [[ "$out" == $order ]]; then
   pass "the upgrade again runs from the previous release's directories into the candidate's"
