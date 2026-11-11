@@ -408,6 +408,7 @@ func (s *Software) planFlatpak(ctx context.Context, sp bundle.SoftwareSpec) []st
 		users, _ = s.sessionUsers(ctx)
 	}
 	userApps := map[int]map[string]string{}
+	unreadable := map[int]bool{}
 	for _, p := range flatpakPackages(sp) {
 		if p.Intent != bundle.SoftwareRequired && !removal(p) {
 			continue
@@ -417,12 +418,18 @@ func (s *Software) planFlatpak(ctx context.Context, sp bundle.SoftwareSpec) []st
 			continue
 		}
 		for _, uid := range targetUIDs(p, users) {
-			if _, ok := userApps[uid]; !ok {
-				userApps[uid], _ = s.userApps(ctx, uid) // a user that cannot be reached is planned again next pass
+			if _, ok := userApps[uid]; !ok && !unreadable[uid] {
+				a, err := s.userApps(ctx, uid)
+				userApps[uid], unreadable[uid] = a, err != nil
 			}
-			if userApps[uid] != nil {
-				out = append(out, flatpakPlanLine(p, userApps[uid], " uid "+strconv.Itoa(uid)))
+			suffix := " uid " + strconv.Itoa(uid)
+			if unreadable[uid] {
+				// A drift pass applies only what the plan lists: dropping the user here would leave the item
+				// pending/not_yet_applied for good and hide the failure, which only Apply reports (PDK-996).
+				out = append(out, flatpakUnreadLine(p, suffix))
+				continue
 			}
+			out = append(out, flatpakPlanLine(p, userApps[uid], suffix))
 		}
 	}
 	return slices.DeleteFunc(out, func(l string) bool { return l == "" })
@@ -461,6 +468,15 @@ func flatpakPlanLine(p bundle.SoftwarePackage, installed map[string]string, suff
 		return "flatpak-remove " + p.FlatpakRef + suffix
 	}
 	return ""
+}
+
+// flatpakUnreadLine is the plan line of an application for a listed user whose installation could not be read: what
+// the application's intent would do there, since whether it is needed is unknown.
+func flatpakUnreadLine(p bundle.SoftwarePackage, suffix string) string {
+	if p.Intent == bundle.SoftwareRequired {
+		return "flatpak-install " + p.FlatpakRef + suffix
+	}
+	return "flatpak-remove " + p.FlatpakRef + suffix
 }
 
 // applyFlatpak runs the Flatpak part of a pass after the APT steps, which install the flatpak runtime (plan M13b

@@ -478,6 +478,39 @@ func TestFlatpakUserScopeWithoutSession(t *testing.T) {
 	}
 }
 
+// TestFlatpakUserScopeUnreadableInstallation (PDK-996): a drift pass applies only what the plan lists, so a listed
+// user with a session whose installation cannot be read is planned with the application's intent: Apply then reports
+// the failure instead of the item staying pending/not_yet_applied with the cause hidden.
+func TestFlatpakUserScopeUnreadableInstallation(t *testing.T) {
+	sys, s, _, _ := flatpakFixture(t)
+	ctx := context.Background()
+	r := softwareResource(t, []bundle.SoftwareSource{flathubSource(t)}, flatpakRuntime(), userApp(gimp, bundle.SoftwareRequired, "alice"))
+	s.Apply(ctx, r)
+	if it := status(t, s, gimpItem); it.State != protocol.SoftwareStatePending || it.Reason != protocol.SoftwareNotYetApplied {
+		t.Fatalf("item without a session %+v", it)
+	}
+
+	sys.Sessions = []fakesys.Session{{ID: "2", UID: 70001, User: "alice", Class: "user", Type: "wayland", State: "active"}}
+	if plan, _ := s.Plan(ctx, r); !slices.Equal(plan, []string{"flatpak-install org.gimp.GIMP uid 70001"}) {
+		t.Fatalf("plan %q", plan)
+	}
+	if res := s.Apply(ctx, r); res.Status != reconcile.Error {
+		t.Fatalf("apply %+v", res)
+	}
+	it := status(t, s, gimpItem)
+	if it.State != protocol.SoftwareStateFailed || it.Reason != protocol.SoftwareFlatpakFailed || !strings.Contains(it.Error, "uid 70001") {
+		t.Fatalf("item %+v", it)
+	}
+	if len(sys.FlatpakSystem.Apps) != 0 {
+		t.Fatal("escalated to the system installation")
+	}
+
+	forbid := softwareResource(t, []bundle.SoftwareSource{flathubSource(t)}, userApp(gimp, bundle.SoftwareForbid, "alice"))
+	if plan, _ := s.Plan(ctx, forbid); !slices.Equal(plan, []string{"flatpak-remove org.gimp.GIMP uid 70001"}) {
+		t.Fatalf("removal plan %q", plan)
+	}
+}
+
 // TestFlatpakUserScopeRemovalListedOnly (A10-11): a user-scope forbid or uninstall removes the application from the
 // installations of the listed users with a session only (the session's user name matched case-insensitively, local
 // accounts never); another signed-in user's installation and the system installation stay, and nothing is masked.
