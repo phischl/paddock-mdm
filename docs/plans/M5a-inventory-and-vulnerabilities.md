@@ -366,6 +366,11 @@ this amendment contradicts N3, N5, N6.3 or N9, it wins.
   event, no new status reason: the transaction stays `pending` / `dpkg_locked` as today.
 - **Not closed:** a local administrator with root can also rewrite the marker, or stop the agent. That is the root
   bypass of RR-01; this rule removes the cheap, silent variant only.
+- **Accepted bound (added 2026-11-11, PDK-990/991 review 2):** the marker's age is measured on the wall clock,
+  across processes. When the device's clock steps forward by more than the bound (12 minutes) during a hold of the
+  updates process, the agent sees an old marker and reports one false `tamper.service_stopped` for that hold. A
+  step backward only lengthens the time a marker counts. One false report at a clock step is accepted over a
+  cross-process monotonic clock; RR-133 names it.
 - Tests (unit): lock taken, no marker, daemon stopped → reported once; fresh marker → not reported; marker older
   than the bound → reported once; the agent's own hold and a hold of the updates process inside the bound → not
   reported (the existing tests stay green).
@@ -390,6 +395,10 @@ this amendment contradicts N3, N5, N6.3 or N9, it wins.
   "exactly one event per hold" therefore holds while the state directory is writable. No further mechanism: a
   second event with the outcome `recovered` for a hold already reported is harmless and points at the failing
   directory.
+- **A second accepted duplicate (added 2026-11-11, PDK-990/991 review 2).** When the updates process alone cannot
+  take the cross-process lock, it writes its record to the report file without the lock while the agent may be
+  sending that file. A record the updates process re-read and wrote back can then be sent twice. The direction is
+  the harmless one: a duplicate event, never a lost one. Accepted for the same reason as the failed marker rewrite.
 - Tests (unit): an unopenable lock file with a live marker → no start of the daemon, no `recovered` event, the
   marker kept, the transaction runs with one `hold_failed`.
 - **Scope: 0.1.0-alpha.10** (PDK-991, implementer). Small, and since PDK-983 every package transaction passes this
