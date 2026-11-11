@@ -261,3 +261,11 @@ overlaid for devices outside the wave by the compiler exactly as managed files a
 support revert but are never staged: an entry's package list is referenced by assignments, and a source is a
 trust anchor that changes with a step-up (ADR 0034). Rollout-able sections are therefore five; everything else in
 decision 1 stands.
+
+## Amendment 2026-11-11 — unknown event types are skipped, not refused (PDK-995)
+
+The context above says that the gateway rejects a whole event batch with 400 `unknown_event_type`, "so a new event
+type blocks the spool of a new agent against an older server". From 0.1.0-alpha.10 the gateway skips an event of an
+unknown type, answers 202 and records the skip once (ADR 0024, amendment 2026-11-11). The statement still holds for
+servers before that release. This ADR's decisions are unchanged: they add no event type that an older server would
+receive, and the sender rule of ADR 0024 stays binding, because a skipped event is still a lost event.
