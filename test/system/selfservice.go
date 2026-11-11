@@ -129,9 +129,17 @@ if grep -q '^_flatpak:' /etc/passwd; then deluser --system --quiet _flatpak; fi
 if grep -q '^_flatpak:' /etc/group; then delgroup --system --quiet _flatpak; fi
 `
 
+// ssAs is the setpriv prefix that runs a command as u. It names the account and its group, never their numbers:
+// setpriv, id, chown and install read an argument as a name first, and Himmelblau's NSS module answers a number such
+// as 208071 as an unknown name with a synthetic directory user of another UID (PDK-983). The account's name is in
+// /etc/passwd, which NSS reads first.
+func ssAs(u *ssUser) string {
+	return "setpriv --reuid=" + shellQuote(u.name) + " --regid=\"$(id -gn " + shellQuote(u.name) + ")\" --clear-groups"
+}
+
 // ssUserScript creates the account $1 with UID $2 as Himmelblau would map a directory user (a UPN as its name, a UID
 // in the idmap range), with a home and GNOME's first-start setup marked done so that an automatic login opens the
-// desktop. useradd refuses an "@" without --badname (--badnames before shadow 4.14); only an unknown option falls
+// desktop; after useradd it names the account and its group, never the UID (see ssAs). useradd refuses an "@" without --badname (--badnames before shadow 4.14); only an unknown option falls
 // back, any other refusal of the first useradd is printed, since it names the real cause.
 const ssUserScript = `set -eu
 rc=0
@@ -146,10 +154,10 @@ if [ "$rc" -ne 0 ]; then
 	esac
 fi
 home=$(getent passwd "$2" | cut -d: -f6)
-gid=$(id -g "$2")
-install -d -o "$2" -g "$gid" "$home/.config"
+group=$(id -gn "$1")
+install -d -o "$1" -g "$group" "$home/.config"
 echo yes >"$home/.config/gnome-initial-setup-done"
-chown "$2:$gid" "$home/.config/gnome-initial-setup-done"
+chown "$1:$group" "$home/.config/gnome-initial-setup-done"
 `
 
 // ssClientScript sends one request to the self-service socket as the account it runs as and prints the status, the
@@ -259,7 +267,7 @@ func (d *Device) ssCall(t *testing.T, u *ssUser, method, path string) ssReply {
 	t.Helper()
 	cmd := "python3 - " + method + " " + shellQuote(path)
 	if u != nil {
-		cmd = fmt.Sprintf("setpriv --reuid=%d --regid=$(id -g %d) --clear-groups %s", u.uid, u.uid, cmd)
+		cmd = ssAs(u) + " " + cmd
 	}
 	r, err := parseSSReply(d.MustRootIn([]byte(ssClientScript), cmd))
 	if err != nil {
@@ -270,7 +278,7 @@ func (d *Device) ssCall(t *testing.T, u *ssUser, method, path string) ssReply {
 
 // ssTry is ssCall for a socket that may not be there (the agent restarts): an error instead of a failed test.
 func (d *Device) ssTry(u *ssUser, method, path string) (ssReply, error) {
-	cmd := fmt.Sprintf("setpriv --reuid=%d --regid=$(id -g %d) --clear-groups python3 - %s %s", u.uid, u.uid, method, shellQuote(path))
+	cmd := ssAs(u) + " python3 - " + method + " " + shellQuote(path)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	out, err := d.SSH(ctx, []byte(ssClientScript), rootCapture(cmd))

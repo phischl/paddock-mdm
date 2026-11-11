@@ -82,8 +82,8 @@ type shieldSys interface {
 // NSSShield holds himmelblaud stopped around Paddock's own package transactions (PDK-983, decisions §45 and §47).
 // Himmelblau 4.0.8's NSS module answers getpwnam for every unknown name with a synthetic directory user while the
 // daemon runs, so adduser and useradd in a maintainer script refuse to create a system user ("already exists"). While
-// the daemon is stopped, new logins and screen unlocks of directory users wait, and directory users may not resolve
-// through NSS; sessions are not ended.
+// the daemon is stopped, new logins and screen unlocks of directory users wait; running sessions continue, and a
+// signed-in directory user still resolves through NSS from Himmelblau's cache.
 //
 // One hold runs at a time on a device: the in-process semaphore and the flock on LockFile serialize the agent's
 // transactions and those of `paddockd updates run`. A hold waits for the dpkg frontend lock before it stops the
