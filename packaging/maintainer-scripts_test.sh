@@ -39,11 +39,21 @@ script_paths() {
   ' "$1"
 }
 
+# inline_scripts <config>: every `scripts:` written as a flow map (`scripts: { … }`), which script_paths does not read;
+# next to a block-style `scripts:` its scripts would otherwise go unchecked.
+inline_scripts() {
+  grep -nE '(^|[[:space:]{,])scripts:[[:space:]]*\{' "$1" || true
+}
+
 # offenders <file>: every line of a shell script that creates, changes or looks up a user or group, with its line
-# number. Comments are ignored so that a script may explain why it needs no account.
+# number. Whole-line comments are ignored so that a script may explain why it needs no account; a trailing comment is
+# not stripped, because a `#` inside a quoted string would hide the rest of the line. Sourcing a file and running a
+# shell on an inline string are flagged too: the account handling would move where this test does not look.
 offenders() {
   local cmd='(^|[;&|(`{]|\$\(|then|do|else|!|exec|xargs|sudo|env|command)[[:space:]]*'
-  sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$1" | grep -nE \
+  sed -e 's/^[[:space:]]*#.*$//' "$1" | grep -nE \
+    -e "${cmd}(\\.|source)[[:space:]]" \
+    -e '(^|[^A-Za-z0-9_-])(sh|bash|dash)[[:space:]]+(-[A-Za-z]+[[:space:]]+)*-[A-Za-z]*c([[:space:]]|$)' \
     -e '(^|[^A-Za-z0-9_-])(useradd|adduser|groupadd|addgroup|usermod|groupmod|userdel|groupdel|deluser|delgroup|gpasswd|newusers|chpasswd|getent|systemd-sysusers|runuser|setpriv|chown|chgrp)([^A-Za-z0-9_-]|$)' \
     -e 'sysusers\.d' \
     -e "${cmd}id[[:space:]]+[^|;&[:space:]]" \
@@ -83,6 +93,15 @@ forbidden=(
   'setpriv --reuid=paddock true'
   'systemd-run --uid=paddock true'
   'start-stop-daemon --start --chuid paddock --exec /bin/true'
+  'echo "step #1"; adduser --system x'
+  'echo "a # b"; getent passwd x'
+  '. /usr/lib/paddock/helper.sh'
+  'source /usr/lib/paddock/helper.sh'
+  'if true; then . /usr/lib/paddock/helper.sh; fi'
+  'sh -c "adduser --system x"'
+  'bash -c "true"'
+  '/bin/dash -e -c "true"'
+  'bash -ec "true"'
 )
 allowed=(
   'pam-auth-update --package --enable paddock-deny'
@@ -94,6 +113,10 @@ allowed=(
   'if [ "$1" = remove ] && [ -d /run/systemd/system ]; then'
   'systemctl disable --now paddock-supervisor.service >/dev/null || true'
   '# no adduser or getent here: the supervisor upgrade runs without the NSS hold'
+  '#!/bin/sh'
+  'set -e'
+  'if [ ! -e "$slots/current" ] && [ ! -L "$slots/current" ]; then'
+  'mv -T "$slots/.current.new" "$slots/current"'
 )
 probe="$(mktemp)"
 trap 'rm -f "$probe"' EXIT
@@ -106,9 +129,18 @@ for line in "${allowed[@]}"; do
   if [[ -z "$(offenders "$probe")" ]]; then echo "ok   detector allows: $line"; else fail "detector flags: $line"; fi
 done
 
+printf 'scripts:\n  postinstall: a.sh\ndeb:\n  scripts: { rules: b.sh }\n' >"$probe"
+if [[ -n "$(inline_scripts "$probe")" ]]; then echo "ok   detector catches an inline scripts: map"; else
+  fail "detector misses an inline scripts: map"; fi
+printf 'scripts:\n  postinstall: a.sh\n' >"$probe"
+if [[ -z "$(inline_scripts "$probe")" ]]; then echo "ok   detector allows a block-style scripts: map"; else
+  fail "detector flags a block-style scripts: map"; fi
+
 # The real scripts.
 for config in "${configs[@]}"; do
   [[ -f "$root/$config" ]] || { fail "$config is missing"; continue; }
+  inline="$(inline_scripts "$root/$config")"
+  [[ -z "$inline" ]] || fail "$config: write scripts: as a block map, this test reads no inline map: $inline"
   mapfile -t scripts < <(script_paths "$root/$config")
   # A config whose scripts are no longer found would pass silently; the guard must see at least one.
   if ((${#scripts[@]} == 0)); then
@@ -129,7 +161,8 @@ for config in "${configs[@]}"; do
       done <<<"$hits"
       echo "     The supervisor upgrade and the uninstall helper run this package's scripts without the NSS hold" \
         "(plan M5a amendment 2026-11-11 b, P1): on an enrolled device Himmelblau answers every unknown name with a" \
-        "synthetic user. Remove the account handling, or reopen that decision first."
+        "synthetic user. Remove the account handling, or reopen that decision first; moving it into a sourced or" \
+        "inline-run helper reopens it the same way."
     fi
   done
   # A sysusers.d file in the package would make systemd create an account on install, outside every script.
