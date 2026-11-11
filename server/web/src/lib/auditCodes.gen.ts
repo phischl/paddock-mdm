@@ -100,6 +100,7 @@ export const auditCodes = [
   'device.software_installed',
   'device.software_reinstalled',
   'device.software_removed',
+  'device.software_request_withdrawn',
   'device.software_requested',
   'device.software_self_service',
   'device.stale_cleared',

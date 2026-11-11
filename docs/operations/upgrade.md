@@ -185,7 +185,10 @@ repeated rollback), the value comes from B's high-water file. `./paddock upgrade
 directory (`migrate-from`), so the file never starts empty in a new release's directory. `docs/operations/restore.md`, *Bundle sequence*, has the
 rule. An upgrade again after a rollback runs in the same B directory, whose `bundle-seq/` B's release handed to uid
 999: when A's file is higher, `migrate-from` puts a new `bundle-seq/` with A's file in its place and keeps the old one
-as `.bundle-seq.replaced.<random>`, which only root can remove (`sudo rm -rf`) and nothing reads.
+as `.bundle-seq.replaced.<random>`, which only root can remove (`sudo rm -rf`) and nothing reads. Remove it: its
+high-water is lower than the live one and must never be taken for it. Until then `./paddock check` warns (item
+`upgrade: no leftover bundle-seq directories`) and names each path and the command; the warning never fails the check
+or the upgrade.
 
 **One rollback per upgrade attempt.** After a successful rollback `.upgrade-rollback` is renamed
 `.upgrade-rollback.rolled-back-<attempt>` and `.upgrade-state` gains `rolled-back=<time>`; a second rollback of the

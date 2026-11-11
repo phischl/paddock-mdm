@@ -275,6 +275,10 @@ container of the project whose capabilities (`CapAdd`, `CapDrop`), security opti
 unconfined seccomp or AppArmor profile), privileged mode, host PID or IPC namespace, pids or memory limit differ from
 the matrix of `hardening-exceptions.yaml` (item `containers: capabilities and security options match the matrix`;
 it warns "not checked" while no container of the project runs).
+On a host with backups (control plane, lab with `PADDOCK_LAB_BACKUP=yes`) it also warns, without failing, while the
+bundle directory holds `.bundle-seq.replaced.*` directories that an upgrade again after a rollback kept aside (item
+`upgrade: no leftover bundle-seq directories`; it lists each path and the `sudo rm -rf` command,
+`docs/operations/upgrade.md`, *Bundle sequence after a rollback*).
 
 Portal sessions are kept in Valkey: while Valkey is unreachable the portal answers 503 `session_store_unavailable`
 (devices and API tokens are not affected), and after Valkey is back every session continues. Signing out ends the

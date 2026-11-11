@@ -140,6 +140,60 @@ if grep -q '^_flatpak:' /etc/group; then delgroup --system --quiet _flatpak; fi
 // nssShieldLock is the agent's shield lock (reconcile.NSSShieldLock).
 const nssShieldLock = "/var/lib/paddock/state/nss-shield.lock"
 
+const (
+	// nssShieldReport is where `paddockd updates run` leaves its login.nss_shield records for the agent
+	// (reconcile.NSSShieldReport, plan M5a N6.4).
+	nssShieldReport = "/var/lib/paddock/state/nss-shield-report.json"
+	// ssUpgrade is installed at 1.0 by hand before gate SV12; its 1.1 in the gate repository depends on ssUpgradeDep,
+	// a new package whose postinst creates the system account ssUpgradeAccount with adduser --system (PDK-988).
+	ssUpgrade        = "paddock-gate-upgrade"
+	ssUpgradeDep     = "paddock-gate-upgrade-account"
+	ssUpgradeAccount = "_paddock-gate-upd"
+	// ssUpgradeBase is ssUpgrade 1.0, built outside the repository so that apt never offers it.
+	ssUpgradeBase = gateRepoDir + "/build/" + ssUpgrade + "_1.0_all.deb"
+	// ssUpgradeAptConf limits every apt run to the gate's source while SV12 runs, as the agent's scoped updates do
+	// on the command line.
+	ssUpgradeAptConf = "/etc/apt/apt.conf.d/99paddock-gate-sv12"
+)
+
+// ssUpgradeScript builds the packages of gate SV12 with the gate's key: "base" builds ssUpgrade 1.0 next to the
+// repository, "publish" adds ssUpgradeDep 1.0 and ssUpgrade 1.1 to the repository and signs it again.
+const ssUpgradeScript = `set -eu
+dir=` + gateRepoDir + `
+export GNUPGHOME="$dir/gnupg"
+build() {
+	root="$dir/build/$1-$2"
+	rm -rf "$root"
+	mkdir -p "$root/DEBIAN"
+	{
+		printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: Paddock system tests <systest@paddock.invalid>\n' "$1" "$2"
+		if [ -n "$3" ]; then printf 'Depends: %s\n' "$3"; fi
+		printf 'Description: Paddock updates run gate package\n'
+	} >"$root/DEBIAN/control"
+	printf '#!/bin/sh\nset -e\n%s\n' "$4" >"$root/DEBIAN/postinst"
+	chmod 0755 "$root/DEBIAN/postinst"
+	dpkg-deb --root-owner-group --build "$root" "$5/$1_$2_all.deb" >/dev/null
+}
+case "$1" in
+base)
+	build ` + ssUpgrade + ` 1.0 '' ':' "$dir/build"
+	;;
+publish)
+	build ` + ssUpgradeDep + ` 1.0 '' 'adduser --system --group --no-create-home --quiet ` + ssUpgradeAccount + `' "$dir/repo"
+	build ` + ssUpgrade + ` 1.1 ` + ssUpgradeDep + ` ':' "$dir/repo"
+	cd "$dir/repo"
+	apt-ftparchive packages . >Packages
+	apt-ftparchive release . >"$dir/Release"
+	mv "$dir/Release" Release
+	gpg --batch --yes --clearsign -o InRelease Release
+	;;
+*)
+	echo "usage: base|publish" >&2
+	exit 2
+	;;
+esac
+`
+
 // ssAs is the setpriv prefix that runs a command as u. It names the account and its group, never their numbers:
 // setpriv, id, chown and install read an argument as a name first, and Himmelblau's NSS module answers a number such
 // as 208071 as an unknown name with a synthetic directory user of another UID (PDK-983). The account's name is in
