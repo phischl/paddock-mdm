@@ -405,7 +405,7 @@ func TestFlatpakUserScope(t *testing.T) {
 		t.Fatalf("apply %+v", res)
 	}
 	prefix := "systemd-run --machine=70001@.host --user --wait --pipe --quiet --collect --property=RuntimeMaxSec=900 --setenv=LC_ALL=C flatpak "
-	for _, want := range []string{prefix + "remote-add --user --if-not-exists --gpg-import=- paddock-flathub " + flathubURL,
+	for _, want := range []string{prefix + "remote-add --user --if-not-exists --gpg-import=/run/paddock/flatpak-keys/70001-1.gpg paddock-flathub " + flathubURL,
 		prefix + "install -y --noninteractive --user paddock-flathub " + gimp} {
 		if !slices.Contains(sys.FlatpakCalls, want) {
 			t.Fatalf("no %q in %q", want, sys.FlatpakCalls)
@@ -418,6 +418,11 @@ func TestFlatpakUserScope(t *testing.T) {
 		u := sys.FlatpakUsers[uid]
 		if _, ok := u.Apps[gimp]; !ok || u.Remotes[flathubRemote] == nil || string(u.Remotes[flathubRemote].Key) != string(reconcile.HimmelblauKey()) {
 			t.Fatalf("uid %d: %+v", uid, u)
+		}
+	}
+	for _, path := range []string{"/run/paddock/flatpak-keys/70001-1.gpg", "/run/paddock/flatpak-keys/70002-2.gpg"} {
+		if !slices.Contains(sys.Calls, "write "+path) || !slices.Contains(sys.Calls, "remove "+path) || sys.Files[path] != nil {
+			t.Fatalf("key file %s not written for the call alone: %q", path, sys.Calls)
 		}
 	}
 	if len(sys.FlatpakUsers[120].Apps) != 0 || len(sys.FlatpakUsers[70004].Apps) != 0 || len(sys.FlatpakSystem.Apps) != 0 {
@@ -475,6 +480,77 @@ func TestFlatpakUserScopeWithoutSession(t *testing.T) {
 	s.Apply(ctx, r)
 	if _, ok := sys.FlatpakUsers[70001].Apps[gimp]; !ok {
 		t.Fatal("not installed at the session")
+	}
+}
+
+// TestFlatpakUserScopeUnreadableInstallation (PDK-996): a drift pass applies only what the plan lists, so a listed
+// user with a session whose installation cannot be read is planned with the application's intent: Apply then reports
+// the failure instead of the item staying pending/not_yet_applied with the cause hidden.
+func TestFlatpakUserScopeUnreadableInstallation(t *testing.T) {
+	sys, s, _, _ := flatpakFixture(t)
+	ctx := context.Background()
+	r := softwareResource(t, []bundle.SoftwareSource{flathubSource(t)}, flatpakRuntime(), userApp(gimp, bundle.SoftwareRequired, "alice"))
+	s.Apply(ctx, r)
+	if it := status(t, s, gimpItem); it.State != protocol.SoftwareStatePending || it.Reason != protocol.SoftwareNotYetApplied {
+		t.Fatalf("item without a session %+v", it)
+	}
+
+	sys.Sessions = []fakesys.Session{{ID: "2", UID: 70001, User: "alice", Class: "user", Type: "wayland", State: "active"}}
+	if plan, _ := s.Plan(ctx, r); !slices.Equal(plan, []string{"flatpak-install org.gimp.GIMP uid 70001"}) {
+		t.Fatalf("plan %q", plan)
+	}
+	if res := s.Apply(ctx, r); res.Status != reconcile.Error {
+		t.Fatalf("apply %+v", res)
+	}
+	it := status(t, s, gimpItem)
+	if it.State != protocol.SoftwareStateFailed || it.Reason != protocol.SoftwareFlatpakFailed || !strings.Contains(it.Error, "uid 70001") {
+		t.Fatalf("item %+v", it)
+	}
+	if len(sys.FlatpakSystem.Apps) != 0 {
+		t.Fatal("escalated to the system installation")
+	}
+
+	forbid := softwareResource(t, []bundle.SoftwareSource{flathubSource(t)}, userApp(gimp, bundle.SoftwareForbid, "alice"))
+	if plan, _ := s.Plan(ctx, forbid); !slices.Equal(plan, []string{"flatpak-remove org.gimp.GIMP uid 70001"}) {
+		t.Fatalf("removal plan %q", plan)
+	}
+}
+
+// TestFlatpakUserScopeListingBackoff (PDK-996 Review 1): an installation that cannot be listed yet at the sign-in
+// fails the pass without a backoff, so the application lands at the next pass; a failed install still waits.
+func TestFlatpakUserScopeListingBackoff(t *testing.T) {
+	sys, s, _, _ := flatpakFixture(t)
+	ctx := context.Background()
+	r := softwareResource(t, []bundle.SoftwareSource{flathubSource(t)}, flatpakRuntime(), userApp(gimp, bundle.SoftwareRequired, "alice"))
+	s.Apply(ctx, r)
+	sys.Sessions = []fakesys.Session{{ID: "2", UID: 70001, User: "alice", Class: "user", Type: "wayland", State: "active"}}
+	if res := s.Apply(ctx, r); res.Status != reconcile.Error {
+		t.Fatalf("apply while the manager starts %+v", res)
+	}
+	sys.FlatpakUsers = map[int]*fakesys.FlatpakInstallation{70001: fakesys.NewFlatpakInstallation()}
+	if plan, _ := s.Plan(ctx, r); !slices.Equal(plan, []string{"flatpak-install org.gimp.GIMP uid 70001"}) {
+		t.Fatalf("plan %q", plan)
+	}
+	s.Apply(ctx, r)
+	if _, ok := sys.FlatpakUsers[70001].Apps[gimp]; !ok {
+		t.Fatalf("not installed at the pass after the listing failed: %q", sys.FlatpakCalls)
+	}
+	if it := status(t, s, gimpItem); it.State != protocol.SoftwareStateInstalled {
+		t.Fatalf("item %+v", it)
+	}
+
+	delete(sys.FlatpakUsers[70001].Apps, gimp)
+	install := "systemd-run --machine=70001@.host --user --wait --pipe --quiet --collect --property=RuntimeMaxSec=900 --setenv=LC_ALL=C flatpak install -y --noninteractive --user paddock-flathub " + gimp
+	sys.FlatpakScript = map[string]fakesys.OutputReply{install: {Data: []byte("error: no space left\n"), Exit: 1}}
+	s.Apply(ctx, r)
+	delete(sys.FlatpakScript, install)
+	before := len(sys.FlatpakCalls)
+	s.Apply(ctx, r)
+	if got := slices.DeleteFunc(slices.Clone(sys.FlatpakCalls[before:]), func(c string) bool { return !strings.HasPrefix(c, "systemd-run") }); len(got) != 0 {
+		t.Fatalf("a failed install ran again at once: %q", got)
+	}
+	if it := status(t, s, gimpItem); it.State != protocol.SoftwareStateFailed || !strings.Contains(it.Error, "no space left") {
+		t.Fatalf("item while waiting %+v", it)
 	}
 }
 
