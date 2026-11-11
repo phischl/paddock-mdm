@@ -271,6 +271,58 @@ synthetic entry (empty GECOS) whose UID it derives from the name — the same UI
 | Members of the privileged groups `sudo`, `admin`, `wheel` | NSS `getent group`; Himmelblau's OIDC provider never synthesizes groups, and `gpasswd` removes members from `/etc/group` |
 | Package scripts | no user or group lookups |
 
+### Package installations pause directory logins
+
+Because Himmelblau answers for every unknown name, a package whose maintainer script creates a system account
+(`adduser --system`, `useradd`; for example `flatpak`, database and other daemon packages) fails while `himmelblaud`
+runs: adduser finds a "user" with a directory UID and stops with *already exists, but is not a system user*. The
+agent therefore stops `himmelblaud` around Paddock's own package transactions and starts it again afterwards
+(PDK-983). Covered are the `apt-get install`, `remove`, `purge`, `upgrade` and `dist-upgrade` runs and the `dpkg` runs
+with maintainer scripts of:
+
+- required and forbidden software, self-service installs and removals, *Install now*, fleetd and the Himmelblau
+  packages;
+- the dracut installation of in-place disk encryption;
+- the regular updates (`paddockd updates run`).
+
+Package list updates and simulations run without a hold. Not covered are the supervisor upgrade and the uninstall
+helper (PDK-985), and every package operation a user or another tool starts.
+
+- **Effect.** While Paddock installs software, **new logins and screen unlocks of directory users wait** (seconds,
+  for large packages or a regular update minutes). Running sessions continue: a signed-in directory user still
+  resolves through NSS, by name and by UID, while the daemon is stopped (Himmelblau's cache; observed in the system
+  gates on Ubuntu 24.04 and 26.04). Only a directory user the device has never seen may not resolve until the hold
+  ends. Local accounts, the managed local administrator included, are not affected.
+- **Bounds.** One hold runs at a time on a device, also between the agent and the regular updates, which run in a
+  process of their own (lock file `/var/lib/paddock/state/nss-shield.lock`). A regular updates run is one hold around
+  its `dist-upgrade`; the package list update runs before it. A hold starts only once no other package operation
+  holds the dpkg lock. If one does for longer than 2 minutes (for the regular updates 10 minutes, as long as apt
+  itself waits), the transaction is deferred to the next pass (software: `pending`, `dpkg_locked`) instead of
+  stopping logins behind it. A hold ends with the transaction, and at the latest after 10 minutes even if the
+  transaction still runs. Before the stop, a transient systemd timer (`paddock-nss-shield-restore.timer`) is armed
+  that starts `himmelblaud` after 12 minutes on its own, so a crashed or killed agent or updates run cannot leave
+  logins stopped. The agent finishes such a hold, and a restart that failed, at its next start and in its next login
+  pass. A device on which `himmelblaud` is not running is not touched.
+- **Audit.** Every hold is one `device.login_nss_shield` with the transaction, the duration and the outcome:
+  `restored`, `max_hold` (started while the transaction still ran), `recovered` (the holder ended during the hold),
+  `restore_failed` (the timer and the agent retry) or `hold_failed` (the transaction ran with `himmelblaud` running and
+  may have failed). The agent reports the holds of the regular updates in its next pass after the run.
+- **Tampering.** A stop of `himmelblaud` by anyone other than these holds is reported once per stop as
+  `device.tamper_service_stopped` (unit `himmelblaud.service`). The agent does not start it again.
+
+**Package installations of a local administrator are not covered.** `sudo apt install <package>` of a package that
+creates a system account fails the same way. Stop the daemon around the installation:
+
+```sh
+sudo systemctl stop himmelblaud.service
+sudo apt install <package>
+sudo systemctl start himmelblaud.service himmelblaud-tasks.service
+```
+
+New directory logins and screen unlocks wait meanwhile, and the agent reports the stop as
+`device.tamper_service_stopped`. If the installation already failed, run the same commands with
+`sudo dpkg --configure -a` in place of the installation.
+
 ## Login history
 
 Off by default (ADR 0037 decision 6, plan M8d decisions 14–20). An organization administrator switches it on under

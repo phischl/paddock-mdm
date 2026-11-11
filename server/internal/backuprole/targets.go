@@ -68,7 +68,8 @@ const (
 	// ClassSizeMismatch: a file copied in this round has another size on the target (A3 step 4).
 	ClassSizeMismatch = "size_mismatch"
 	// ClassContinues is no error: the mirror used the round's copy budget and goes on next round (decisions-alpha9
-	// item 79). The run's target is not ok, but the target's status records no last_error and keeps its last success.
+	// item 79), or the target's lane was still mirroring an earlier set when the run's pass began (decisions-alpha10
+	// A10-26). The run's target is not ok, but the target's status records no last_error and keeps its last success.
 	ClassContinues = "continues"
 )
 
@@ -80,6 +81,9 @@ var (
 	// errBudget ends a mirror that used its round's time; the target is not current yet (ClassContinues), and the next
 	// round goes on with the files it still lacks.
 	errBudget = errors.New("backup target mirror used its round's budget; it continues next round")
+	// errSetMoved ends a lane whose local manifest.json is no longer the one of its index: a later round wrote the set
+	// on, and the next lane mirrors that one (ClassContinues; decisions-alpha10 A10-26).
+	errSetMoved = errors.New("the local backup set changed since the mirror's index; it continues next round")
 )
 
 // maxRead bounds a file Read takes into memory (a manifest, a marker): a share or bucket can plant any size.

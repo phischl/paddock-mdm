@@ -404,6 +404,7 @@ var eventCodes = map[string]audit.Code{
 
 	protocol.EventLoginApplied:               audit.CodeDeviceLoginApplied,
 	protocol.EventLoginApplyFailed:           audit.CodeDeviceLoginApplyFailed,
+	protocol.EventLoginNSSShield:             audit.CodeDeviceLoginNSSShield,
 	protocol.EventUserLockApplied:            audit.CodeDeviceUserLockApplied,
 	protocol.EventLoginsSuspensionApplied:    audit.CodeDeviceLoginsSuspensionApplied,
 	protocol.EventSudoApplyFailed:            audit.CodeDeviceSudoApplyFailed,
