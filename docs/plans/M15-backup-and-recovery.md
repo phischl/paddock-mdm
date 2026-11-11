@@ -1692,3 +1692,94 @@ No gate is weakened.
 - Open, default chosen: (1) the await limit of 60 minutes (C4.5); a longer limit delays audit events, a shorter one
   records more runs with `continues`. (2) A lane in flight is visible to an operator only through the gauge and the
   log; showing it in `./paddock backup status` and the portal needs a column and an API field (later release).
+
+### Correction 2026-11-11 — the lane amendment aligned with PDK-989 as built (commit `f8fbb732`, in review)
+
+The amendment above was written before the implementation existed. PDK-989 solved four points differently; three
+are adopted because they are simpler or safer, two points of the amendment stay binding although the code does
+not meet them yet, and the leader lock is decided anew (point 9). Where this correction contradicts C3–C11, it wins.
+
+**Adopted from the implementation (replaces the text named):**
+
+1. **C4, mirror passes instead of awaited targets.** A round creates one **mirror pass**: it covers the finished
+   runs without `mirrored_at` at that moment, minus the runs an open pass still covers. Per target the pass takes:
+   the result of the lane this round started; `continues` at once when the target's lane is still mirroring an
+   earlier set (its index lacks the pass's runs); `not_mounted` or `io` at once for a volume that is not mounted or
+   unreachable. Phase 2 of a pass (the per-target results, `mirrored_at` and the one audit event of each of its
+   runs) runs exactly once, when the last of its lanes ended. A pass stays open until then, so no run is covered
+   twice. C4.2–C4.6 and the await limit of 60 minutes (C4.5, C9 row 5, AC-4's bound, open point 1) are **dropped**:
+   a run recorded while a target is busy gets `continues` for that target at once and is not held. Only the runs of
+   the pass that started a long lane wait for that lane, as they did before lanes.
+2. **C5.3, the local expire waits for lanes.** The role's own expire (A2: OpenBao and Fleet files, escrow copies, a
+   retired path as a whole) MUST NOT remove a file that the index of a lane in flight holds, nor a retired path
+   such an index holds; they go in the first round after that lane ended. pgBackRest's own expire is not held back;
+   a file it removed is skipped by the lane as before. This is stricter than "skip what vanished" and replaces it.
+3. **C5.1, the manifest.** The lane reads the local `manifest.json` once, at its start, and it must still be the
+   file its index holds (size and modification time); if a later round already replaced it, the lane ends with
+   `continues` and the next lane takes the newer set. The bytes read at the start are the ones put in step 5.
+4. **C7, shutdown.** At shutdown the lanes are cancelled and `Run` returns once they returned; the 10-second bound
+   of C7 is dropped. A shutdown-cancelled lane records nothing and its pass is dropped; the first pass after a
+   restart covers every run still without `mirrored_at`. The leader lock is decided in point 9.
+5. **C1 and C9 row 10, abandoned lanes.** A mirror call still blocked in the file system after the watchdog gave up
+   is tracked as before: the target's next lane ends at once with "the previous mirror has not returned" (class
+   `io`) until the call returned.
+6. **C4.7.** The Fleet watcher and the skip list of the note 2026-11-07 c are removed; the next round seals the
+   dump. A failed phase-2 write is logged and no longer fails the round.
+
+**Still binding, not in `f8fbb732` (PDK-989 MUST add them before it merges, each with a test):**
+
+7. **C3.7, a disabled or deleted target.** When a round finds a target disabled or deleted whose lane is in flight,
+   it cancels that lane. A cancelled lane writes no status and no result; its pass takes no result for that target.
+   Reason: an administrator who disables or deletes a target expects Paddock to stop writing to it and deleting on
+   it, and a lane can run for hours.
+8. **C3.8, the gauge** `paddock_backup_target_mirror_started_timestamp_seconds{target}` (the start of the lane in
+   flight, absent without one). It is the only way an operator sees that a target's copy has been running for
+   hours; RR-132 names it. `docs/operations/monitoring.md` lists it with the other backup metrics.
+
+9. **Leadership for the process lifetime (decision M1 of A10-26, `decisions-alpha10.md` §50; replaces C3.1's "a
+   round that holds the leader lock", C3.7's leader-lock clause and the third bullet of C7).** `f8fbb732` takes the
+   advisory lock per round and releases it when the round returns, so the lanes run without it and a second process
+   could take every other round. Options: (a) declare the role single-instance and leave the lock per round: no
+   code, but the documented guard (`docs/architecture.md` §3.2, role `backup`: exactly 1 active replica, leader
+   lock) would no longer cover the mirror; (b) hold the lock for the process lifetime. **Decision: (b).**
+   - The backup role takes the leader lock (`LockKey`) **once**, on **one dedicated database connection**, and holds
+     it until the process ends. Rounds and lanes run only while the process is leader. A process that does not get
+     the lock is a **standby**: it runs no round, starts no lane, writes nothing, and tries again every round
+     interval.
+   - The dedicated connection is exactly one connection held in addition to the pool the rounds use. When the pool
+     cannot spare it, the pool is sized by one more; falling back to (a) is not allowed.
+   - **Losing the connection is losing leadership.** The role MUST then cancel every round and every lane **before
+     any further write** to the database, the local set or a target, log the loss at `Warn`, and try to become
+     leader again as a standby does. A lane cancelled this way writes no status and no result and its pass is
+     dropped, as at shutdown; after the role is leader again, its first pass covers every run without `mirrored_at`.
+   - A file system call that cannot be interrupted may still complete one write after the cancel; that is the
+     abandoned-lane case of point 5 and is accepted. No new write starts.
+   - **Residual window without a fence (accepted; residual risk RR-134).** The role notices a lost lock connection
+     by a periodic check of that connection; between a silent loss and its detection lie up to the check interval
+     plus its ping timeout, about 10 seconds. Statements already in flight on the role's pool can still commit in
+     that window, and its lanes still write to their targets. An overlap with a new leader needs the database to
+     release the lock while the old process has not noticed: a kill of exactly the lock session. A database restart
+     ends the pool's connections too, and on a network partition the server keeps the lock longer than the role
+     needs to stop. The writes are safe to repeat: the target status is an upsert, a run is marked mirrored only
+     while `mirrored_at IS NULL`, a request is answered only once, and the mirror's puts and deletions follow rules
+     both processes derive from the same local set. Worst case: one extra `platform.backup_failed` for a run the
+     other leader already recorded; no run is mirrored twice. A fence inside the write transactions with the same
+     advisory lock does not work (they run in other sessions than the lock's). A real fence needs a lease row with
+     an epoch that every write checks: a data-model change, **not alpha.10**, a follow-up for the architect.
+   - Tests (binding): losing leadership stops the lanes and no status or run result is written afterwards; a second
+     engine on the same lock starts no round and no lane while the first is leader, and takes over after the first
+     released it. `docs/architecture.md` §3.2 needs no change: it already states the rule the code now meets.
+
+**The eight points PDK-989 listed for this amendment, and where they are:** (1) one lane per enabled target, the
+round never waits, the lane copies its index and that index's `manifest.json`: C2, C3, point 3. (2) the 10-minute
+budget is a lane's copy budget and targets mirror in parallel: C3.3, C8. (3) phase 2 per mirror pass: point 1.
+(4) the Fleet watcher is replaced by the next round: point 6. (5) the local expire keeps what a lane in flight
+indexes: point 2. (6) target tests run every round with their own timeout of 30 seconds, independent of a lane on
+the same target: C6. (7) lanes and the leader lock: point 9, which overrules the single-instance assumption.
+(8) RR-126 and PDK-869 are unchanged in substance, an unbounded step 6 holds only its lane: C3.3, C8.
+
+**Unchanged:** C0, C2, C3.1–C3.6 (C3.1 with point 9), C5.2, C5.4, C6, C8, the gates, AC-1 to AC-3 and AC-5. AC-4 reads: every finished
+run has exactly one `platform.backup_completed` or `platform.backup_failed`, also across a restart of the role.
+Tests as built (`lanes_test.go`): `TestHangingLaneDoesNotDelayTheRound`, `TestSlowTargetDoesNotHoldTheFastOne`,
+`TestShutdownCancelsLanesAndRestartResumes`, `TestLocalExpireWaitsForLane`, `TestLanePrunesOnlyByThePDK972Rules`;
+they cover C9 rows 1–4 and 6–9 in the form of this correction.
