@@ -185,7 +185,7 @@ func TestRequestDenied(t *testing.T) {
 	f.svc.SetBundle(softwareBundle(approvalSpec(nil)), nil)
 	f.request(t, alice, entryB, "")
 	f.requestEvent(t)
-	reason := "Use <b>LibreOffice</b>\x1b[31m‮\ninstead\x00"
+	reason := "Use <b>LibreOffice</b>\x1b[31m\u202e\ninstead\x00"
 	f.svc.SetBundle(softwareBundle(approvalSpec(nil, bundle.SoftwareDenial{User: "alice@example.org", Reason: reason})), nil)
 	_, body := f.call(t, alice, http.MethodGet, "/v1/apps/"+entryB)
 	r, _ := body["request"].(map[string]any)
