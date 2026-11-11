@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "910a5462173bd7c9a28a88355467b680cc8102874edd37e6610611fa30b4475f"
+const Version = "e90757bae777fb03a49b691e76602694a173192a92aa94dd76786dd38731642c"
 
 var tools = []Tool{
 	{
@@ -149,8 +149,8 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "software_request.approved",
 		Summary:     "",
-		Description: "Roles: org_admin. Approves an open request, optionally with a reason; no step-up of its own (the entry's source needed one). The device's next bundle lets the user install the application. 409 invalid_state unless the request is open, 404 not_found for another organization's request.\n\nChanges data; needs your MCP write access.",
-		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"reason\":{\"description\":\"Optional; trimmed.\",\"maxLength\":500,\"type\":\"string\"}},\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+		Description: "Roles: org_admin. Approves an open request, optionally with a reason; no step-up of its own (the entry's source needed one). The device's next bundle lets the user install the application. The reason is plain text of at most 500 characters without control, format or invisible characters except line breaks (no tabs). 400 invalid_request for a reason that breaks these rules, 409 invalid_state unless the request is open, 404 not_found for another organization's request.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"reason\":{\"description\":\"Optional; trimmed. Plain text without control, format or invisible characters except line breaks (no tabs).\",\"maxLength\":500,\"type\":\"string\"}},\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "assignFinding",
@@ -1049,8 +1049,8 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "software_request.denied",
 		Summary:     "",
-		Description: "Roles: org_admin. Denies an open request with a reason, which the user sees; no step-up of its own. The user may ask again after 24 hours. 400 invalid_request without a reason, 409 invalid_state unless the request is open, 404 not_found for another organization's request.\n\nChanges data; needs your MCP write access.",
-		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"reason\":{\"description\":\"Required: the user sees it. Trimmed; must not be empty.\",\"maxLength\":500,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"reason\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+		Description: "Roles: org_admin. Denies an open request with a reason, which the user sees; no step-up of its own. The user may ask again after 24 hours; until then the device's bundle names the denial with its reason. The reason is plain text of at most 500 characters without control, format or invisible characters except line breaks. 400 invalid_request without a reason or for a reason that breaks these rules, 409 invalid_state unless the request is open, 404 not_found for another organization's request.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"reason\":{\"description\":\"Required: the user sees it. Trimmed; must not be empty. Plain text without control, format or invisible characters except line breaks (no tabs).\",\"maxLength\":500,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"reason\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "destroyDevice",

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -1298,34 +1299,454 @@ func TestSoftwareApprovalGated(t *testing.T) {
 	}
 }
 
-// TestSoftwareApprovalWithheldWithoutAgentSupport (architect decision A10-17): while no agent has PDK-811, the
-// compiler's own gate withholds every package whose entry requires approval, from releases and from development builds
-// and the device simulator alike, since those are built from a tree without the approval flow. The section otherwise
-// stays complete. PDK-811 sets compiler.ApprovalAgent and replaces this test with the cases of its release.
-func TestSoftwareApprovalWithheldWithoutAgentSupport(t *testing.T) {
-	if compiler.ApprovalAgent != "" {
-		t.Fatalf("the gate is %s: replace this test with the cases of the release that has PDK-811", compiler.ApprovalAgent)
+// TestSoftwareApprovalAgentGate (architect decision A10-17, PDK-811a): the compiler's own gate is the release that ships
+// PDK-811. An agent before it never gets a package whose entry requires approval, and an alpha.9 agent's section passes
+// the frozen alpha.9 rules; the gate's release, later releases, development builds and the device simulator get it with
+// approval required. A forbid of the same package wins for every agent.
+func TestSoftwareApprovalAgentGate(t *testing.T) {
+	if compiler.ApprovalAgent != approvalRelease {
+		t.Fatalf("the gate is %q, want %s, the release with PDK-811", compiler.ApprovalAgent, approvalRelease)
 	}
 	w := approvalWorld(t)
-	devices := w.devicesAt("0.1.0-alpha.9", "0.1.0-alpha.10", "0.1.0-alpha.11", "0.0.0-dev", "0.0.0-devicesim", "")
+	devices := w.devicesAt("0.1.0-alpha.9", approvalRelease, "0.1.0-alpha.11", "0.0.0-dev", "0.0.0-devicesim")
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	for v, d := range devices {
 		s := w.fetch(d).Software
-		if s == nil || pkgOf(s, "gated") != nil || pkgOf(s, "nano") == nil {
-			t.Errorf("agent %q: section %+v", v, s)
+		if v == "0.1.0-alpha.9" {
+			raw, err := json.Marshal(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pkgOf(s, "gated") != nil || pkgOf(s, "nano") == nil {
+				t.Errorf("agent %s: section %s", v, raw)
+			}
+			if err := alpha9Accepts(raw); err != nil {
+				t.Errorf("the alpha.9 agent refuses the section: %v", err)
+			}
 			continue
 		}
-		if p := pkgOf(s, "blocked"); p == nil || p.Intent != bundle.SoftwareForbid || p.Approval != "" {
-			t.Errorf("agent %q: forbid did not win: %+v", v, p)
+		if got := approvalOf(pkgOf(s, "gated")); got != "required" || pkgOf(s, "nano") == nil {
+			t.Errorf("agent %s: gated %q, section %+v", v, got, s)
 		}
+		if p := pkgOf(s, "blocked"); p == nil || p.Intent != bundle.SoftwareForbid || p.Approval != "" {
+			t.Errorf("agent %s: forbid did not win: %+v", v, p)
+		}
+	}
+}
+
+// denyRequest records a denial of user's request for entry on dev, decided at decidedAgo before now, with reason.
+func (w *world) denyRequest(entry, dev, user uuid.UUID, decidedAgo time.Duration, reason string) {
+	w.t.Helper()
+	w.exec(`INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state,
+		requested_at, expires_at, decided_at, decision_reason, approval_epoch) VALUES ($1, $2, $3, $4, $5, $6, 'denied',
+		now() - $7::interval, now() + interval '30 days', now() - $7::interval, $8,
+		(SELECT approval_epoch FROM software_catalog_entry WHERE id = $3))`,
+		uuid.Must(uuid.NewV7()), w.org, entry, dev, user, w.username(user), fmt.Sprintf("%d seconds", int(decidedAgo.Seconds())), reason)
+}
+
+// deniedOf is how a test reads a package's denials: "user=reason" pairs in bundle order.
+func deniedOf(p *bundle.SoftwarePackage) string {
+	if p == nil {
+		return "missing"
+	}
+	if p.Denied == nil {
+		return ""
+	}
+	var out []string
+	for _, d := range *p.Denied {
+		out = append(out, d.User+"="+d.Reason)
+	}
+	return strings.Join(out, ";")
+}
+
+// TestSoftwareDenials (architect decision A10-27): a package whose entry requires approval names the users of its
+// audience whose request on the device was denied inside the 24-hour re-request lock, with the reason as the
+// administrator wrote it, an HTML payload included, sorted by user, the latest denial of a user only. Denials older than
+// the lock, of another device, of a user outside the audience or of an approved user stay out; a reason that fails the
+// reason rules (written outside the api) is left out while the denial stays; an entry without approval names none.
+func TestSoftwareDenials(t *testing.T) {
+	w := newWorld(t)
+	alice, bob, carol, dave, erin := w.user("alice", false), w.user("bob", false), w.user("carol", false),
+		w.user("dave", false), w.user("erin", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_group_id", w.userGroup("devs", alice, bob, carol, erin), "available")
+	d, other := w.v2Device("{1,2}", w.g1), w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.ubuntu(other, "amd64")
+	w.own(d, alice, bob, carol, dave, erin)
+	w.own(other, alice, bob, carol, dave, erin)
+
+	html := `<script>alert("x")</script> not <b>licensed</b>`
+	w.denyRequest(nano, d, bob, time.Hour, html)
+	w.denyRequest(nano, d, alice, 30*time.Hour, "an old denial")
+	w.denyRequest(nano, d, alice, 2*time.Hour, "line one\nline two")
+	w.denyRequest(nano, d, carol, 25*time.Hour, "outside the lock")
+	w.denyRequest(nano, d, dave, time.Hour, "not in the audience")
+	w.denyRequest(nano, d, erin, time.Hour, "tab\tin the reason")
+	w.denyRequest(nano, other, carol, time.Hour, "on the other device")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	want := w.username(alice) + "=line one\nline two;" + w.username(bob) + "=" + html + ";" + w.username(erin) + "="
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != want {
+		t.Fatalf("denials %q, want %q", got, want)
+	}
+	if got, want := deniedOf(pkgOf(w.fetch(other).Software, "nano")), w.username(carol)+"=on the other device"; got != want {
+		t.Fatalf("the other device: %q, want %q", got, want)
+	}
+
+	// A later approval of the user, here through an entry that offers the package to bob without approval, wins.
+	w.assignTo(w.entry("Nano for bob", nil, [4]string{"ubuntu", "*", "*", "nano"}), "user_id", bob, "available")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	p := pkgOf(w.fetch(d).Software, "nano")
+	if got, want := deniedOf(p), w.username(alice)+"=line one\nline two;"+w.username(erin)+"="; got != want {
+		t.Fatalf("denials beside bob's approval %q, want %q", got, want)
+	}
+	if got, want := approvalOf(p), "required:"+w.username(bob); got != want {
+		t.Fatalf("approval %q, want %q", got, want)
+	}
+
+	w.exec("UPDATE software_catalog_entry SET approval = 'none' WHERE id = $1", nano)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := pkgOf(w.fetch(d).Software, "nano"); p == nil || p.Denied != nil || p.Approval != "" {
+		t.Fatalf("an entry without approval names denials: %+v", p)
+	}
+}
+
+// TestSoftwareDenialsGated (architect decision A10-27 with A10-6, compat): an agent before the approval gate never
+// receives denials, because the package that would carry them is withheld, and its section passes the frozen alpha.9
+// rules; an agent at the gate receives the field, and only the agent filters it down to the requesting user (PDK-811).
+func TestSoftwareDenialsGated(t *testing.T) {
+	w := approvalWorld(t)
+	alice := w.user("alice", false)
+	devices := w.devicesAt("0.1.0-alpha.9", approvalRelease)
+	var gated uuid.UUID
+	if err := w.super.QueryRow(context.Background(), "SELECT id FROM software_catalog_entry WHERE organization_id = $1 AND name = 'Gated'",
+		w.org).Scan(&gated); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range devices {
+		w.own(d, alice)
+		w.denyRequest(gated, d, alice, time.Hour, "not licensed")
+	}
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	old := w.fetch(devices["0.1.0-alpha.9"]).Software
+	raw, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "denied") || pkgOf(old, "gated") != nil {
+		t.Errorf("alpha.9 section %s", raw)
+	}
+	if err := alpha9Accepts(raw); err != nil {
+		t.Errorf("the alpha.9 agent refuses the section: %v", err)
+	}
+	if got, want := deniedOf(pkgOf(w.fetch(devices[approvalRelease]).Software, "gated")), w.username(alice)+"=not licensed"; got != want {
+		t.Errorf("%s: denials %q, want %q", approvalRelease, got, want)
+	}
+}
+
+// TestSoftwareReconcileDenialLockConverges (architect decision A10-27, PDK-993 review 1): a denial whose lock ended but
+// that the bundle never named (its entry no longer requires approval) makes the reconcile recompile the device once;
+// the unchanged recompile writes no bundle, and the next rounds select the device no more.
+func TestSoftwareReconcileDenialLockConverges(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.assignTo(nano, "user_id", alice, "available")
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	w.denyRequest(nano, d, alice, 25*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	reconcile := func() {
+		t.Helper()
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcile()
+	// The last compile rendered before the lock ended.
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", d)
+	before := w.version(d)
+	checked := func() *time.Time {
+		t.Helper()
+		var at *time.Time
+		if err := w.super.QueryRow(context.Background(), "SELECT denial_lock_checked_at FROM device WHERE id = $1", d).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	reconcile()
+	first := checked()
+	if first == nil {
+		t.Fatal("the reconcile did not record the recompile for the ended lock")
+	}
+	for range 3 {
+		reconcile()
+	}
+	if at := checked(); at == nil || !at.Equal(*first) {
+		t.Fatalf("a later round recompiled the device again: checked at %v, first %v", at, first)
+	}
+	if v := w.version(d); v != before {
+		t.Fatalf("an unchanged recompile wrote a bundle: version %d, want %d", v, before)
+	}
+}
+
+// TestSoftwareReconcileDenialLockRenderTime (architect decision A10-27, PDK-993 review 2): a compile that rendered
+// before a denial's lock ended and published after it names the denial in a bundle newer than the lock end. The
+// reconcile goes by the render time, so it selects the device once the lock has ended and the recompile drops the
+// denial.
+func TestSoftwareReconcileDenialLockRenderTime(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The lock ends an hour ago; the compile renders two hours ago and publishes now.
+	w.denyRequest(nano, d, alice, 25*time.Hour, "not licensed")
+	w.comp.SetNow(func() time.Time { return time.Now().Add(-2 * time.Hour) })
+	w.mustCompile(statechange.ScopeDevice, d)
+	w.comp.SetNow(time.Now)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != w.username(alice)+"=not licensed" {
+		t.Fatalf("rendered before the lock end: %q", got)
+	}
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the reconcile: %q", got)
+	}
+}
+
+// denialLockChecked reads device.denial_lock_checked_at.
+func (w *world) denialLockChecked(t *testing.T, dev uuid.UUID) *time.Time {
+	t.Helper()
+	var at *time.Time
+	if err := w.super.QueryRow(context.Background(), "SELECT denial_lock_checked_at FROM device WHERE id = $1", dev).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+// TestSoftwareDenialLockNotRecordedOnPublishFailure (architect decision A10-27, PDK-993 review 3): a bundle that was
+// rendered but not committed does not record its render time, so the next round selects the device again and the
+// retried bundle drops the denial.
+func TestSoftwareDenialLockNotRecordedOnPublishFailure(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.denyRequest(nano, d, alice, 23*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got == "" {
+		t.Fatal("the denial is not named in the bundle")
+	}
+	// The lock has ended and the last recorded render time lies before its end.
+	w.exec("UPDATE software_request SET decided_at = decided_at - interval '2 hours' WHERE device_id = $1", d)
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", d)
+	stamp := w.denialLockChecked(t, d)
+	w.store.broken.Store(true)
+	if err := w.comp.Reconcile(context.Background()); err == nil {
+		t.Fatal("reconcile succeeded although the upload failed")
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.Equal(*stamp) {
+		t.Fatalf("the failed publish recorded a render time: %v -> %v", stamp, got)
+	}
+	w.store.broken.Store(false)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the retry: %q", got)
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.After(time.Now().Add(-time.Minute)) {
+		t.Fatalf("the retry did not record its render time: %v", got)
+	}
+}
+
+// TestSoftwareDenialLockRecordedOnRenderFailure (architect decision A10-27, PDK-993 review 3): a device whose render is
+// blocked keeps its bundle, and the compile records its render time like the platform it saw, so a denial lock that
+// ended does not select the device every round: one round recompiles it, records one failure, and later rounds leave
+// it alone.
+func TestSoftwareDenialLockRecordedOnRenderFailure(t *testing.T) {
+	w := newWorld(t)
+	dev := w.v2Device("{1,2}")
+	dave := w.user("dave", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	profile := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO permission_profile (id, organization_id, name, class) VALUES ($1, $2, 'root', 'full')", profile, w.org)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	before := w.version(dev)
+
+	w.validator.reject = "NOPASSWD"
+	w.exec("UPDATE permission_profile SET require_password = false WHERE id = $1", profile)
+	w.exec("INSERT INTO profile_assignment (id, organization_id, profile_id, subject_type, subject_id) VALUES ($1, $2, $3, 'user', $4)",
+		uuid.Must(uuid.NewV7()), w.org, profile, dave)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	if w.version(dev) != before {
+		t.Fatal("a bundle with an invalid sudo entry was published")
+	}
+	if got := w.denialLockChecked(t, dev); got == nil || got.Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("the blocked render did not record its render time: %v", got)
+	}
+
+	// A denial whose lock ended after the last recorded render time selects the device once.
+	w.denyRequest(nano, dev, dave, 25*time.Hour, "not licensed")
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", dev)
+	failures := func() int {
+		t.Helper()
+		var n int
+		if err := w.super.QueryRow(context.Background(), `SELECT count(*) FROM action WHERE organization_id = $1
+			AND code = 'device.bundle_render_failed' AND target->>'id' = $2`, w.org, dev.String()).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first, stamp := failures(), w.denialLockChecked(t, dev)
+	if stamp == nil || stamp.Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("the reconcile's blocked render did not record its render time: %v", stamp)
+	}
+	for range 3 {
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := w.denialLockChecked(t, dev); got == nil || !got.Equal(*stamp) {
+		t.Fatalf("a later round recompiled the blocked device again: %v -> %v", stamp, got)
+	}
+	if n := failures(); n != first {
+		t.Fatalf("device.bundle_render_failed %d after three more rounds, %d after the first", n, first)
+	}
+	if w.version(dev) != before {
+		t.Fatal("a blocked device's bundle was published")
+	}
+}
+
+// TestSoftwareDenialLockConcurrentCompile (architect decision A10-27, PDK-993 review 3): a slower compile that rendered
+// after a denial's lock ended, without the denial and unchanged at bundle seq n, records its render time only while the
+// device is still at n. When a concurrent compile that rendered before the lock end has meanwhile published n+1 naming
+// the denial, the slower compile's later render time is not recorded, so the reconcile still selects the device and
+// drops the denial.
+func TestSoftwareDenialLockConcurrentCompile(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.denyRequest(nano, d, alice, 25*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeDevice, d)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("rendered after the lock end: %q", got)
+	}
+	slower := w.version(d)
+
+	// The concurrent compile renders two hours ago, before the lock end, and publishes slower+1 with the denial.
+	w.comp.SetNow(func() time.Time { return time.Now().Add(-2 * time.Hour) })
+	w.mustCompile(statechange.ScopeDevice, d)
+	w.comp.SetNow(time.Now)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != w.username(alice)+"=not licensed" || w.version(d) != slower+1 {
+		t.Fatalf("the concurrent compile: %q at version %d", got, w.version(d))
+	}
+	stamp := w.denialLockChecked(t, d)
+
+	// The slower compile's write arrives last.
+	if err := w.comp.RecordDenialLockAt(context.Background(), w.org, d, slower, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.Equal(*stamp) {
+		t.Fatalf("the slower compile recorded its render time on a newer bundle: %v -> %v", stamp, got)
+	}
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the reconcile: %q", got)
+	}
+	// A write for the bundle the device still has is recorded.
+	at := time.Now().Add(time.Minute).Truncate(time.Microsecond)
+	if err := w.comp.RecordDenialLockAt(context.Background(), w.org, d, w.version(d), at); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.Equal(at) {
+		t.Fatalf("a write for the current bundle: %v, want %v", got, at)
+	}
+}
+
+// TestSoftwareReconcileEndsDenialLock (architect decision A10-27): once the re-request lock of a denial ends, the
+// reconcile loop recompiles the device, so its bundle no longer names the denial and the user may ask again; a device
+// whose bundle was compiled after the lock ended is left alone.
+func TestSoftwareReconcileEndsDenialLock(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	w.denyRequest(nano, d, alice, 23*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != w.username(alice)+"=not licensed" {
+		t.Fatalf("inside the lock: %q", got)
+	}
+	reconcile := func() {
+		t.Helper()
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcile()
+	before := w.version(d)
+
+	// The lock ends: the denial is 25 hours old, and the last compile rendered before its end.
+	w.exec("UPDATE software_request SET decided_at = now() - interval '25 hours' WHERE device_id = $1", d)
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", d)
+	reconcile()
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the lock: %q", got)
+	}
+	after := w.version(d)
+	if after <= before {
+		t.Fatalf("bundle version %d after the lock, before %d", after, before)
+	}
+	reconcile()
+	if v := w.version(d); v != after {
+		t.Fatalf("a second round recompiled the device: version %d, want %d", v, after)
 	}
 }
 
 // TestSoftwareApprovalAcrossEntries (A10-17, plan M13c decision 9): two catalog entries name one package, a free one
 // offered to alice and one requiring approval offered to everyone. In both creation orders, so either entry supplies
-// the merged package: an agent before the gate, including a development build under the production gate, gets alice's
+// the merged package: an agent before the gate gets alice's
 // free offer only; an agent at or past the gate gets the package for everyone with approval required and alice, who
-// may install it without approval, approved.
+// may install it without approval, approved. Under the production gate (0.1.0-alpha.10) every agent of the test is at
+// or past it.
 func TestSoftwareApprovalAcrossEntries(t *testing.T) {
 	const later = "0.1.0-alpha.11"
 	w := newWorld(t)
@@ -1364,7 +1785,7 @@ func TestSoftwareApprovalAcrossEntries(t *testing.T) {
 
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	for v := range devices {
-		check("production gate", v, freeOnly)
+		check("production gate", v, audienceString(&bundle.SoftwareAudience{All: true})+" required:"+w.username(alice))
 	}
 
 	w.comp.SetApprovalAgent(later)
