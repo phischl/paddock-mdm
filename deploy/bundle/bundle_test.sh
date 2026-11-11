@@ -688,6 +688,7 @@ case "$*" in
   *":/run/paddock-check/containers.json:ro "*)
     for a in "$@"; do [[ "$a" != *:/run/paddock-check/containers.json:ro ]] || cp "${a%%:*}" "$FAKE_DOCKER_LOG.containers"; done
     ;;
+  *" prod-check "*) exit "${FAKE_PRODCHECK_RC:-0}" ;;
   "ps -q --filter label=com.docker.compose.project="*) [[ -z "${FAKE_PS_FAIL:-}" ]] || exit 1; printf '%s\n' $FAKE_CONTAINERS ;;
   "inspect "*) printf '[{"Name":"/%s"}]\n' "${*:2}" ;;
   "network ls"*) [[ -z "${FAKE_NETWORKS_FAIL:-}" ]] || exit 1; printf '%s\n' n1 n2 ;;
@@ -841,6 +842,29 @@ FAKE_NETWORKS_FAIL=1 paddock_t check
   grep -q -- "prod-check " "$FAKE_DOCKER_LOG" && ! grep -q -- "--docker-networks" "$FAKE_DOCKER_LOG" &&
   pass "check reports the edge subnet as not checked when listing the host's networks fails" ||
   fail "check with a failed network listing: exit $rc, $out, docker: $(grep prod-check "$FAKE_DOCKER_LOG")"
+# PDK-982 (decisions-alpha10 §44): leftover .bundle-seq.replaced.* directories of an upgrade again after a rollback
+# are a WARN with every path and the sudo rm -rf command; they never change the exit code, and bundle-seq/ is never
+# named or touched.
+item="upgrade: no leftover bundle-seq directories"
+mkdir -p "$work/t/bundle-seq"
+echo 7 >"$work/t/bundle-seq/high-water"
+paddock_t check
+[[ $rc == 0 && "$out" == *"PASS  $item"* && "$out" != *"WARN  $item"* ]] &&
+  pass "check passes the bundle-seq leftover item without leftovers" || fail "check without leftovers: exit $rc, $out"
+mkdir -p "$work/t/.bundle-seq.replaced.aB3dE9" "$work/t/.bundle-seq.replaced.Zz01xy"
+echo 3 >"$work/t/.bundle-seq.replaced.aB3dE9/high-water"
+paddock_t check
+[[ $rc == 0 && "$out" == *"WARN  $item"* && "$out" != *"PASS  $item"* &&
+  "$out" == *"- $work/t/.bundle-seq.replaced.aB3dE9: "* && "$out" == *"- $work/t/.bundle-seq.replaced.Zz01xy: "* &&
+  "$out" == *"sudo rm -rf $work/t/.bundle-seq.replaced.aB3dE9 $work/t/.bundle-seq.replaced.Zz01xy"* &&
+  "$out" != *"$work/t/bundle-seq "* && "$out" != *"$work/t/bundle-seq:"* &&
+  -d "$work/t/.bundle-seq.replaced.aB3dE9" && "$(cat "$work/t/bundle-seq/high-water")" == 7 ]] &&
+  pass "check warns about leftover bundle-seq directories with their paths and the removal command, exit 0" ||
+  fail "check with leftovers: exit $rc, $out"
+FAKE_PRODCHECK_RC=1 paddock_t check
+[[ $rc == 1 && "$out" == *"WARN  $item"* ]] &&
+  pass "the leftover warning leaves a failing check failing" || fail "check with leftovers and a FAIL: exit $rc, $out"
+rm -rf "$work/t/.bundle-seq.replaced.aB3dE9" "$work/t/.bundle-seq.replaced.Zz01xy"
 # PDK-733 review 2 (R2-m1): bash writes a here-string above 64 KiB to a temp file (sh-thd.*), so a large render with the
 # passwords must reach the loop and base64 through pipes. Without strace the backup-target branch is read instead.
 big="$fixture# $(head -c 60000 /dev/zero | tr '\0' x)
