@@ -61,7 +61,7 @@ func TestAuditEvidenceExport(t *testing.T) {
 	ctx := testContext(t, 10*time.Minute)
 	root := login(t, env.PlatformAdmin)
 	body := newOrg()
-	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", body)
+	res := createOrg(t, root, body)
 	expectStatus(t, res, http.StatusCreated, "")
 	org := responseID(t, res)
 	adminName, adminPW := tempUser(t, "export-admin", env.RoleGroup(body["slug"], "admins"))

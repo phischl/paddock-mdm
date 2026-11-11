@@ -37,7 +37,7 @@ func gateOrganization(t *testing.T) (string, uuid.UUID) {
 	t.Helper()
 	root := login(t, env.PlatformAdmin)
 	org := newOrg()
-	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", org)
+	res := createOrg(t, root, org)
 	expectStatus(t, res, http.StatusCreated, "")
 	return org["slug"], responseID(t, res)
 }
