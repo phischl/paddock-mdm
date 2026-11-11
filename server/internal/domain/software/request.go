@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -55,12 +56,29 @@ func ValidApproval(a string) bool { return a == ApprovalNone || a == ApprovalReq
 func NormalizeDecisionReason(reason string) string { return strings.TrimSpace(reason) }
 
 // ValidateDecisionReason checks the reason of an approval or a denial: at most MaxReasonLength characters of text
-// without control, format or invisible characters (line breaks allowed), and not empty when required (a denial).
+// without control, format or invisible characters (line breaks allowed, tabs not), and not empty when required (a
+// denial). A denial's reason reaches the user's device in the bundle (architect decision A10-27), so it is held to the
+// rule of untrusted text the justification follows (maintainer answer Q7).
 func ValidateDecisionReason(reason string, required bool) error {
 	if required && reason == "" {
 		return fmt.Errorf("%w: a denial needs a reason", ErrRequest)
 	}
+	if strings.ContainsRune(reason, '\t') {
+		return fmt.Errorf("%w: reason must not contain control, format or invisible characters", ErrRequest)
+	}
 	return validateFreeText("reason", reason, MaxReasonLength, true, ErrRequest)
+}
+
+// MaxJustificationLength is the limit of a request's justification in characters (maintainer answer Q7).
+const MaxJustificationLength = 500
+
+// ValidJustification reports whether a device's request can carry justification j (maintainer answer Q7): valid
+// UTF-8 of at most MaxJustificationLength characters without control characters except line breaks. It is the rule
+// the agent applies before it sends the request, so a request a conforming agent sends is never refused for its text.
+// Unlike names and reasons, format characters stay allowed: the user types the text, and emoji sequences need them.
+func ValidJustification(j string) bool {
+	return utf8.ValidString(j) && utf8.RuneCountInString(j) <= MaxJustificationLength &&
+		!strings.ContainsFunc(j, func(r rune) bool { return r != '\n' && unicode.Is(unicode.Cc, r) })
 }
 
 // ValidRequestUsername reports whether a device's request can name user name u: 1 to MaxRequestUsername characters of

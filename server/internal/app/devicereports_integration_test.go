@@ -236,6 +236,47 @@ func TestRecordEventsBatch(t *testing.T) {
 	}
 }
 
+// TestRecordEventBatchUnknownTypes (PDK-995): an event of an unknown type, from a newer agent, claims its number
+// without an audit event and is reported once, also when the message is redelivered; the known events of the batch are
+// audited, and a batch of unknown types only claims their numbers.
+func TestRecordEventBatchUnknownTypes(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	at := time.Now().UTC().Truncate(time.Second)
+	mixed := []protocol.Event{
+		{EventSeq: 1, Type: protocol.EventLoginApplied, OccurredAt: at, Data: json.RawMessage(`{"changed":["config"]}`)},
+		{EventSeq: 2, Type: "software.withdrawn", OccurredAt: at},
+		{EventSeq: 3, Type: protocol.EventTamperSudoersDFile, OccurredAt: at, Data: json.RawMessage(`{"file":"evil"}`)},
+	}
+	for round, want := range []string{"[software.withdrawn]", "[]"} {
+		unknown, err := h.reports.RecordEventBatch(systemCtx(org), device, time.Now(), mixed)
+		if err != nil || fmt.Sprint(unknown) != want {
+			t.Fatalf("mixed batch, round %d: unknown %v (%v), want %s", round, unknown, err, want)
+		}
+	}
+	only := []protocol.Event{
+		{EventSeq: 4, Type: "future.one\x00" + strings.Repeat("x", 100), OccurredAt: at},
+		{EventSeq: 5, Type: "future.two", OccurredAt: at},
+	}
+	unknown, err := h.reports.RecordEventBatch(systemCtx(org), device, time.Now(), only)
+	if err != nil || len(unknown) != 2 || unknown[0] != "future.one"+strings.Repeat("x", 54) || unknown[1] != "future.two" {
+		t.Fatalf("unknown-only batch: unknown %q (%v)", unknown, err)
+	}
+	ctx := context.Background()
+	var codes string
+	if err := h.super.QueryRow(ctx, "SELECT string_agg(code, ' ' ORDER BY code) FROM action WHERE organization_id = $1", org).Scan(&codes); err != nil {
+		t.Fatal(err)
+	}
+	if codes != "device.login_applied device.tamper_sudoers_d_file" {
+		t.Fatalf("audit codes %q", codes)
+	}
+	var seqs string
+	if err := h.super.QueryRow(ctx, "SELECT string_agg(event_seq::text, ' ' ORDER BY event_seq) FROM device_event_seen WHERE device_id = $1",
+		device).Scan(&seqs); err != nil || seqs != "1 2 3 4 5" {
+		t.Fatalf("claimed event_seq %q (%v), want 1 2 3 4 5 (no gap)", seqs, err)
+	}
+}
+
 // TestRecordOnceBatchFallback (N2 review): when the batch transaction fails because of one event (a NUL character,
 // which jsonb rejects), every other event is still audited exactly once; the bad one fails alone, also on redelivery,
 // and leaves no claimed key behind.

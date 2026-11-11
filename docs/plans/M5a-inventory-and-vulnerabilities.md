@@ -228,12 +228,22 @@ transactions and MUST run under the same hold. A second process changes three th
    it is taken, another process holds and nothing is recovered. The agent MUST run the same check in every login
    reconciler pass, so that a hold whose process died is reported as `recovered` while the agent runs. The login
    reconciler (N5) treats a stopped daemon as held while the lock is taken or the marker exists.
+   (Amended 2026-11-11: only a marker younger than 12 minutes counts; "Amendment 2026-11-11 b", P2.)
 4. **Event:** the updates process cannot emit device events. Under the lock, after its restore, it appends one
    record `{action, duration_s, outcome, error}` to the JSON array in
    `/var/lib/paddock/state/nss-shield-report.json` (mode 0600, atomic replace, at most 16 records, the oldest
    dropped) and removes the marker. The agent emits every record as `login.nss_shield` in its next pass, under the
    lock, and removes the file. N4's "exactly one event per hold" holds across both processes.
 5. Effect: directory logins and screen unlocks wait during every regular updates run, at most 10 minutes per run.
+6. **Accepted bound (added 2026-11-11): the hold can end before the run does.** The hold covers the run only while
+   `himmelblaud` stays stopped. Two cases start it mid-run: a `dist-upgrade` that outlasts the maximum hold of 10
+   minutes (N2.5; outcome `max_hold`), and a run that upgrades the Himmelblau packages themselves, whose maintainer
+   scripts start the daemon. A package configured **after** that point that creates a system account fails as it
+   did without a hold ("already exists, but is not a system user"). The run is not interrupted; it reports the
+   failure in its result (`updates.run` with the result and error of the run), and the next regular run finishes
+   the installation (`dpkg --configure -a`, then `dist-upgrade`) under a new hold. N6 does not extend the hold
+   beyond 10 minutes and does not stop the daemon a second time within one run: a longer or repeated stop would
+   widen the login pause for a case that the next run repairs. Named in RR-133.
 
 ### N7 Effect on users (binding content for the operator documents)
 
@@ -284,8 +294,17 @@ local files or from the session, or passed in a form the tool defines as numeric
   **Corrected 2026-11-10 (`decisions-alpha10.md` §48 point 3):** that system gate for N6 is a ticket of its own in
   alpha.10 (PDK-988) and MUST be green before the release tag. Until it lands, the unit tests of N6 above carry the
   rule. PDK-983 is not blocked by it.
+  **Added 2026-11-11 — accepted test-scope limit of that gate (SV12, PDK-988).** SV12 runs in
+  `TestSelfServiceGates`, the gate with an enrolled device. For the length of its run it restricts apt to the
+  gate's own package source with a temporary `/etc/apt/apt.conf.d/99paddock-gate-sv12` (`Dir::Etc::sourcelist` =
+  the gate source, no `sourceparts`, no list cleanup), removed when the step ends. Without it the `dist-upgrade`
+  would also pull distribution and Himmelblau updates, which trigger exactly the two cases of N6.6 and make the
+  gate depend on the day's archive. SV12 therefore proves the hold for one package that creates a system account,
+  not a full distribution upgrade; N6.6's bound is covered by the unit tests of the maximum hold, not by a gate.
 
 ### N9 Open in PDK-985 (not decided here)
+
+**Decided 2026-11-11: no hold for either path; see "Amendment 2026-11-11 b", P1.**
 
 `paddockd supervisor-upgrade` (`dpkg -i paddock-supervisor`) and the uninstall helper run outside the agent process
 and are **not** under the hold. PDK-985 decides whether they need it: the supervisor path only if its packages can
@@ -307,3 +326,71 @@ create a system account; the uninstall helper purges the Himmelblau packages its
   after). PDK-983 adds the regular updates run to its list when N6 is implemented.
 - `docs/operations/software.md`: "What the device does", "Self-service app", "Residual risks" (written with this
   amendment) and the troubleshooting row (PDK-983).
+
+## Amendment 2026-11-11 b — the remaining points of the hold (PDK-985, PDK-990, PDK-991; architect decisions)
+
+Three stubs left open by the amendment 2026-11-10 are decided. Binding language: **MUST** / **MUST NOT**. Where
+this amendment contradicts N3, N5, N6.3 or N9, it wins.
+
+### P1 PDK-985: the supervisor upgrade and the uninstall helper get **no** hold (replaces N9)
+
+- **Supervisor upgrade** (`paddockd supervisor-upgrade`: `dpkg -i paddock-supervisor_<v>_<arch>.deb`). The package
+  has no dependency it could pull in (`dpkg -i` installs exactly one file), and its maintainer scripts
+  (`packaging/scripts/supervisor-postinst.sh`, `-prerm.sh`, `-postrm.sh`) create no user or group and look none up.
+  Nothing in that transaction can fail on Himmelblau's synthetic users, so a hold would only pause logins.
+- **Uninstall helper.** Its package calls are `apt-get update` and purges (the Himmelblau packages, fleetd,
+  `paddock-revoke`, `paddock-agent`, `paddock-supervisor`). A purge creates no account, and the helper removes the
+  cause itself when it purges Himmelblau. A hold here would also need a marker, a timer and a report from a
+  process that is removing the agent that reports.
+- **Guard (alpha.10, small):** a test MUST fail when a maintainer script of `paddock-supervisor` or `paddock-agent`
+  gains a user or group creation or lookup (`adduser`, `addgroup`, `useradd`, `groupadd`, `getent`,
+  `systemd-sysusers`), next to the packaging checks that `make test` runs. That keeps the reason for "no hold"
+  true; a script that needs an account later reopens this decision.
+- RR-133 no longer lists the two paths as a gap. **PDK-985 closes with this decision and the guard.**
+
+### P2 PDK-990: only a fresh marker counts as a hold (replaces the last sentence of N6.3)
+
+- **Finding.** N6.3 let the login reconciler treat a stopped `himmelblaud` as held "while the lock is taken or the
+  marker exists". A local administrator can hold the lock file for ever (`flock … sleep infinity`), stop the
+  daemon, and no `tamper.service_stopped` is ever reported; the agent's package transactions are deferred
+  meanwhile and show only `pending` / `dpkg_locked`.
+- **Rule.** A stopped `himmelblaud` counts as held **iff a marker exists whose start time is younger than the
+  maximum hold plus the timer grace** (`NSSShieldMaxHold + NSSShieldTimerGrace`: 12 minutes; 5 minutes in a
+  development build). The lock alone never counts. Reason: every legitimate hold writes its marker before it stops
+  the daemon (N2.3) and ends at the maximum hold; the safety timer has fired by the bound.
+- Outside the rule the stop is reported once as `tamper.service_stopped` (N5, unchanged event and params), whatever
+  holds the lock. That includes a hold whose restore failed and whose marker is kept (N2.6): after the bound the
+  device reports both the `restore_failed` hold and the stopped service, which is true.
+- **A lock held without a hold.** When the agent cannot get the lock for a transaction within its wait, it MUST
+  log at `Warn`, at most once an hour, that the shield lock is held by another process and for how long. No new
+  event, no new status reason: the transaction stays `pending` / `dpkg_locked` as today.
+- **Not closed:** a local administrator with root can also rewrite the marker, or stop the agent. That is the root
+  bypass of RR-01; this rule removes the cheap, silent variant only.
+- Tests (unit): lock taken, no marker, daemon stopped → reported once; fresh marker → not reported; marker older
+  than the bound → reported once; the agent's own hold and a hold of the updates process inside the bound → not
+  reported (the existing tests stay green).
+- **Scope: 0.1.0-alpha.10** (PDK-990, implementer). It is one predicate in the login reconciler plus one log line.
+  `TestIdentityGates` and `TestSelfServiceGates` (SV11, SV12) MUST stay green on both VMs.
+
+### P3 PDK-991: no cross-process lock means no hold and no recovery (amends N2.3, N3.2, N6.2)
+
+- **Finding.** When the lock file cannot be opened, `NSSShield.acquire` fell back to serializing within the process
+  and still reported success. `Run` and `Recover` then treated the marker of a hold in **another** process as
+  stale: they started `himmelblaud` in the middle of that process's transaction and reported its hold as
+  `recovered` while the holder reported `restored` (two events for one hold, against N4).
+- **Rule.** The cross-process lock is a precondition of every hold, like the marker and the timer (N2.3):
+  - a process that cannot take it (the file cannot be opened or locked) MUST NOT stop the daemon, MUST NOT finish
+    a marker as stale and MUST NOT send the report file's records;
+  - `Run` runs the transaction without a hold and emits one `login.nss_shield` with the outcome `hold_failed` and
+    the error; `Recover` and the per-pass check do nothing and log at `Warn`;
+  - `acquire` MUST tell its callers whether it holds the cross-process lock; "process-local only" exists only
+    where no lock file is configured (unit tests), never on a device.
+- **The double report after a failed marker rewrite is accepted.** When the marker cannot be rewritten as reported
+  (the state directory fails in the middle of a hold), the next recovery reports that hold a second time. N4's
+  "exactly one event per hold" therefore holds while the state directory is writable. No further mechanism: a
+  second event with the outcome `recovered` for a hold already reported is harmless and points at the failing
+  directory.
+- Tests (unit): an unopenable lock file with a live marker → no start of the daemon, no `recovered` event, the
+  marker kept, the transaction runs with one `hold_failed`.
+- **Scope: 0.1.0-alpha.10** (PDK-991, implementer). Small, and since PDK-983 every package transaction passes this
+  path, so the degraded mode must fail safe in the release that introduces the hold.

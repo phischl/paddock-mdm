@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
@@ -91,6 +92,8 @@ type Software struct {
 	// session the last pass or NewUserSession saw.
 	userScoped   bool
 	seenSessions []int
+	// keySeq names the key file of each user remote-add (addUserRemote).
+	keySeq atomic.Uint64
 }
 
 type softwareRetry struct {

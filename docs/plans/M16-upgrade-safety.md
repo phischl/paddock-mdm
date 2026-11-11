@@ -615,3 +615,21 @@ The points:
    state file and is built in a checkout of the previous tag against that release's `devicesim` package. The
    previous release's `devicesim` CLI enrolls a new device on every call, so it cannot check in again after the
    upgrade.
+
+## Note 2026-11-11 — leftover `.bundle-seq.replaced.*` directories (PDK-982; `decisions-alpha10.md` §44; architect)
+
+Since PDK-980, a `./paddock upgrade` after a rollback from the same bundle directory moves the `bundle-seq/` that
+the newer release handed to uid 999 aside as `.bundle-seq.replaced.<random>`. A non-root operator cannot delete
+it, one is added per retry, and each holds an outdated, lower high-water value next to the live `bundle-seq/`.
+Nothing reads them; the hazard is an operator who recovers the high-water file by hand or copies the bundle
+directory and picks the stale value, which weakens the bundle-sequence raise after a disaster restore.
+
+- **0.1.0-alpha.10 (PDK-982, small):** `./paddock check` (every mode, on a host with backups) gains the item
+  `upgrade: no leftover bundle-seq directories`. With at least one `.bundle-seq.replaced.*` directory in the bundle
+  directory it is a **WARN** that lists each path and the command `sudo rm -rf <paths>`; it never fails the
+  check and never names or touches `bundle-seq/` itself. `bundle_test.sh` covers both cases.
+- **0.1.0-alpha.11:** `./paddock upgrade` and `./paddock up` remove the leftovers when they run as root; without
+  root the warning stays. No Compose change and no new mount: a root-run script needs neither. Removal MUST match
+  the exact pattern `.bundle-seq.replaced.*` directly below the bundle directory and MUST NOT follow symlinks.
+- No residual-risk row: the directories are inert, the runbook (`docs/operations/upgrade.md`) and the upgrade
+  output already name them, and from alpha.10 on the check repeats it.

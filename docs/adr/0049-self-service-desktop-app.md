@@ -126,3 +126,29 @@ checked, what the device reports about self-service actions, and the state machi
   (listed, works-council relevant). Flathub as a trust anchor stays a residual risk.
 - Follow-ups: M13c's approval workflow uses the same channel (`POST /v1/apps/{id}/request`); the shared catalog
   (M13c) and the stored packages (ADR 0050) feed the same bundle section.
+
+## Amendment 2026-11-11 — requests for approval-required entries on the self-service channel (PDK-811, PDK-811b)
+
+The follow-up named under Consequences is built. Decision 2's channel gains `POST /v1/apps/{entry_id}/request`
+(body `{"justification": string}`, 202) and `DELETE /v1/apps/{entry_id}/request` (200), and the app views gain
+`approval`, `requestable` and `request{state, reason}`. Decision 3's authorization gains: a directory user may
+request an `available` entry that requires approval and may install it only while the signed bundle lists that
+user in `approved[]` (otherwise 403 `approval_required`); a local account cannot request (403 `not_in_audience`),
+because an approval names a UPN.
+
+- **Per-caller answers.** The caller is the socket's peer UID, as in decision 2. A denial (`denied[]` of the
+  bundle, with the administrator's reason) is returned only to the user it names; no answer reveals another user's
+  request, approval or denial.
+- **Untrusted text in both directions.** The justification is plain text of at most 500 characters without
+  control characters except newlines; the agent refuses anything else and never logs it. A denial's reason is
+  stripped of control and format characters and shown by the app as plain text.
+- **Limits.** One pending request per user and entry; at most 10 requests per user and hour (429 `busy`); a new
+  request is refused with 409 `denied` while the bundle names the user as denied (24 hours).
+- **State.** Pending requests (entry, UPN, time; no justification) are kept in the agent's root-only self-service
+  state file until the bundle reflects a decision or 30 days passed.
+- **Withdrawal.** The user can withdraw a pending request. The agent reports it to the server
+  (`software.request_withdrawn`) only while the bundle's software section carries `request_withdraw`, which only a
+  server that understands the event renders; otherwise the withdrawal stays on the device.
+
+The codes, the bundle fields and the server side are specified in plan M13c, amendments 2026-11-11 and
+2026-11-11 b. This ADR's status and its open maintainer points are unchanged.

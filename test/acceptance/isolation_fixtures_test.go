@@ -248,8 +248,8 @@ func seedGlobexSoftwareCatalog(t *testing.T, w *isolationWorld) {
 
 // seedGlobexSoftwareRequest gives globex a device group of its own with a maintenance window and a device, offers the
 // group an approval-required entry and opens a request of a globex user for it (plan M13c decisions 4 and 8 to 10). The
-// approval-required package reaches no agent (PDK-943), so no other globex bundle changes. Everything is removed when
-// the gate ends: the request with its entry.
+// entry is offered to that group only, so no other globex bundle changes. Everything is removed when the gate ends: the
+// request with its entry.
 func seedGlobexSoftwareRequest(t *testing.T, w *isolationWorld) {
 	t.Helper()
 	f := newRequestFixture(t, w.carol, "globex-iso-req")

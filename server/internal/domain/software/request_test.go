@@ -21,6 +21,7 @@ func TestValidateDecisionReason(t *testing.T) {
 		{strings.Repeat("ä", MaxReasonLength), true, true},
 		{strings.Repeat("a", MaxReasonLength+1), true, false},
 		{"bell\a", false, false},
+		{"tab\there", true, false},
 		{"rtl\u202e", true, false},
 		{"\xff", true, false},
 	}
@@ -32,6 +33,22 @@ func TestValidateDecisionReason(t *testing.T) {
 	}
 	if got := NormalizeDecisionReason("  ok \n"); got != "ok" {
 		t.Errorf("normalized %q", got)
+	}
+}
+
+// TestValidJustification (maintainer answer Q7): a justification is valid UTF-8 of at most 500 characters without
+// control characters except line breaks; markup is just text, and format characters such as the joiner of an emoji
+// sequence stay allowed, as the agent allows them.
+func TestValidJustification(t *testing.T) {
+	for j, ok := range map[string]bool{
+		"": true, "for the Q4 report": true, "line one\nline two": true, "<script>alert(1)</script>": true, "👩\u200d💻": true,
+		strings.Repeat("ä", MaxJustificationLength): true, strings.Repeat("a", MaxJustificationLength+1): false,
+		"tab\there": false, "cr\r": false, "nul\x00": false, "esc\x1b[0m": false, "del\x7f": false, "c1\u0085": false,
+		"\xff": false,
+	} {
+		if got := ValidJustification(j); got != ok {
+			t.Errorf("%q: %v, want %v", j, got, ok)
+		}
 	}
 }
 
