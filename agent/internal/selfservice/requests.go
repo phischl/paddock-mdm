@@ -64,6 +64,9 @@ type requestBody struct {
 // Requests delivers the software.request events; the run loop spools them.
 func (s *Service) Requests() <-chan protocol.SoftwareRequest { return s.requests }
 
+// Withdrawals delivers the software.request_withdrawn events; the run loop spools them.
+func (s *Service) Withdrawals() <-chan protocol.SoftwareRequestWithdrawn { return s.withdrawn }
+
 // approvedFor reports whether p may install pkg without asking: it requires no approval, or the bundle lists p's UPN
 // as approved.
 func approvedFor(pkg bundle.SoftwarePackage, p Principal) bool {
@@ -188,8 +191,9 @@ func (s *Service) Request(p Principal, entryID, justification string) (AppView, 
 	return s.view(pkg, p), nil
 }
 
-// Withdraw clears p's pending request of entryID. The server learns nothing of it: its request ends with a decision
-// or its expiry, and a new request on the device is only reported again (plan M13c amendment for PDK-810).
+// Withdraw clears p's pending request of entryID and reports it once as software.request_withdrawn while the bundle's
+// software section sets RequestWithdraw (PDK-811b, decisions §54). Without the flag the server learns nothing of it:
+// its request ends with a decision or its expiry, and a new request on the device is only reported again.
 func (s *Service) Withdraw(p Principal, entryID string) (AppView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -203,6 +207,16 @@ func (s *Service) Withdraw(p Principal, entryID string) (AppView, error) {
 	i := s.pendingIndex(pkg.CatalogEntryID, p, s.cfg.Now())
 	if i < 0 {
 		return AppView{}, &Problem{Status: http.StatusNotFound, Code: CodeNotFound, Detail: "no pending request"}
+	}
+	// ADR 0024: a server before the flag rejected an unknown event type with its whole batch.
+	if s.snap.spec.RequestWithdraw {
+		select {
+		case s.withdrawn <- protocol.SoftwareRequestWithdrawn{User: p.UPN, EntryID: pkg.CatalogEntryID}:
+		default:
+			// The request stays pending, so the user can retry and the server does not keep an open request the device
+			// no longer shows.
+			return AppView{}, &Problem{Status: http.StatusTooManyRequests, Code: CodeBusy, Detail: "too many requests are waiting"}
+		}
 	}
 	s.record.Requests = slices.Delete(s.record.Requests, i, i+1)
 	if err := saveRecord(s.cfg.Sys, s.record); err != nil {

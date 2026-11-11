@@ -444,6 +444,8 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventSoftwareSelfService: audit.CodeDeviceSoftwareSelfService,
 	// The worker opens the request in the event's claim (plan M13c decision 9, softwareRequestEntry).
 	protocol.EventSoftwareRequest: audit.CodeDeviceSoftwareRequested,
+	// The worker closes the open request in the event's claim (PDK-811b, softwareRequestEntry).
+	protocol.EventSoftwareRequestWithdrawn: audit.CodeDeviceSoftwareRequestWithdrawn,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).

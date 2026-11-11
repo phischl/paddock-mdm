@@ -294,16 +294,51 @@ func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID 
 	}}, nil
 }
 
+// withdrawSoftwareRequest closes the open request a software.request_withdrawn event of the device reports, received
+// at receivedAt (PDK-811b), in the transaction of its claim. Malformed data, or no open request of that device, entry
+// and user (an administrator decided it or it expired first), changes nothing. No event of its own is recorded: the
+// device's device.software_request_withdrawn is the one audit event of the withdrawal.
+func withdrawSoftwareRequest(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, data json.RawMessage, receivedAt time.Time) error {
+	var ev protocol.SoftwareRequestWithdrawn
+	if json.Unmarshal(data, &ev) != nil || !software.ValidRequestUsername(ev.User) {
+		return nil
+	}
+	entry, err := uuid.Parse(ev.EntryID)
+	if err != nil {
+		return nil //nolint:nilerr // a malformed entry ID closes nothing; the event itself is still recorded
+	}
+	_, err = q.WithdrawSoftwareRequest(ctx, pgstore.WithdrawSoftwareRequestParams{
+		DecidedAt: &receivedAt, DeviceID: deviceID, CatalogEntryID: entry, Username: ev.User,
+	})
+	return err
+}
+
 // softwareRequestEntry adds to the once-entry of a software.request event the opening of its request and, when it
-// opened one, the software_request.opened event in the same transaction. Every other entry is returned unchanged.
+// opened one, the software_request.opened event in the same transaction; to that of a software.request_withdrawn event
+// the closing of the open request. Every other entry is returned unchanged.
 func (d *DeviceReports) softwareRequestEntry(entry OnceEntry, deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) OnceEntry {
-	if ev.Type != protocol.EventSoftwareRequest {
+	code, ok := map[string]audit.Code{
+		protocol.EventSoftwareRequest:          audit.CodeDeviceSoftwareRequested,
+		protocol.EventSoftwareRequestWithdrawn: audit.CodeDeviceSoftwareRequestWithdrawn,
+	}[ev.Type]
+	if !ok {
 		return entry
 	}
 	// Only the documented fields: whatever else a device sends, such as the justification, never reaches the audit log;
 	// openSoftwareRequest stores the justification in the request alone (maintainer answer Q7).
-	def, _ := audit.Lookup(audit.CodeDeviceSoftwareRequested)
+	def, _ := audit.Lookup(code)
 	maps.DeleteFunc(entry.Spec.Params, func(k string, _ any) bool { return !slices.Contains(def.Params, k) })
+	if ev.Type == protocol.EventSoftwareRequestWithdrawn {
+		claim := entry.Claim
+		entry.Claim = func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+			fresh, err := claim(ctx, q)
+			if err != nil || !fresh {
+				return fresh, err
+			}
+			return true, withdrawSoftwareRequest(ctx, q, deviceID, ev.Data, receivedAt)
+		}
+		return entry
+	}
 	claim := entry.Claim
 	var opened *openedRequest
 	entry.Claim = func(ctx context.Context, q *pgstore.Queries) (bool, error) {

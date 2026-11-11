@@ -150,6 +150,7 @@ async function decide(verb: 'approve' | 'deny', r: SoftwareRequest): Promise<voi
           data-testid="request-decision"
         >
           <span v-if="item.decided_by">{{ t('softwareRequests.decidedBy', { name: item.decided_by }) }}</span>
+          <span v-else-if="item.state === 'withdrawn'">{{ t('softwareRequests.withdrawnByUser') }}</span>
           <TimeCell :iso="item.decided_at" />
           <span
             v-if="item.decision_reason"

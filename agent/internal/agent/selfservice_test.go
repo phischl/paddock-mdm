@@ -18,7 +18,7 @@ import (
 
 // TestSelfServiceWiring: the self-service socket exists while the agent runs (mode 0666) and is gone after it stopped,
 // and the run loop spools the self-service events (here the operation a previous process left running, F4) and the
-// software requests (plan M13c decision 9).
+// software requests (plan M13c decision 9) and their withdrawals (PDK-811b).
 func TestSelfServiceWiring(t *testing.T) {
 	g := testgw.New(t)
 	g.Checkin.NextCheckinS = 3600
@@ -32,7 +32,7 @@ func TestSelfServiceWiring(t *testing.T) {
 	a.d.SelfService = selfservice.New(selfservice.Config{Sys: sys, Packages: &reconcile.Software{Sys: sys}, Version: "test"})
 	a.current = &bundle.Bundle{BundleVersion: 1, Software: &bundle.SoftwareSpec{Packages: []bundle.SoftwarePackage{{Package: "code",
 		Intent: bundle.SoftwareAvailable, CatalogEntryID: "aaaaaaaa-0000-4000-8000-000000000001", Audience: &bundle.SoftwareAudience{All: true},
-		Approval: bundle.SoftwareApprovalRequired}}}}
+		Approval: bundle.SoftwareApprovalRequired}}, RequestWithdraw: true}}
 	path := a.d.Layout.SelfServiceSocket()
 	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("socket before the start: %v", err)
@@ -55,6 +55,14 @@ func TestSelfServiceWiring(t *testing.T) {
 		pending, _ := a.d.Spool.Pending()
 		return slices.ContainsFunc(pending, func(ev protocol.Event) bool { return ev.Type == protocol.EventSoftwareRequest }) ||
 			slices.Contains(g.EventTypes(), protocol.EventSoftwareRequest)
+	})
+	if _, err := a.d.SelfService.Withdraw(alice, "aaaaaaaa-0000-4000-8000-000000000001"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		pending, _ := a.d.Spool.Pending()
+		return slices.ContainsFunc(pending, func(ev protocol.Event) bool { return ev.Type == protocol.EventSoftwareRequestWithdrawn }) ||
+			slices.Contains(g.EventTypes(), protocol.EventSoftwareRequestWithdrawn)
 	})
 	cancel()
 	if err := <-done; err != nil {

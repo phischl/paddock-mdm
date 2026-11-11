@@ -114,6 +114,13 @@ UPDATE software_request SET state = @state, decided_by = @decided_by, decided_at
   decision_reason = sqlc.narg(decision_reason)
 WHERE id = @id AND state = 'requested';
 
+-- name: WithdrawSoftwareRequest :execrows
+-- Closes the open request of the device, entry and user a device reported withdrawn (PDK-811b); the partial unique
+-- index allows one at most. A request opened after the report was received is a newer one and stays.
+UPDATE software_request SET state = 'withdrawn', decided_at = @decided_at
+WHERE device_id = @device_id AND catalog_entry_id = @catalog_entry_id AND username = @username AND state = 'requested'
+  AND requested_at <= @decided_at;
+
 -- name: ListSoftwareRequests :many
 -- The rows are read through a subquery, so the sort columns are unambiguous (device has a state too).
 SELECT id, organization_id, catalog_entry_id, entry_name, entry_approval, device_id, hostname, user_id, username, state,
