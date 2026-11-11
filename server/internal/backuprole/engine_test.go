@@ -153,18 +153,6 @@ func (s *fakeStore) MirrorRuns(_ context.Context, results []backupset.RunTarget,
 	return nil
 }
 
-func (s *fakeStore) count(kind string) int {
-	s.runsMu.Lock()
-	defer s.runsMu.Unlock()
-	n := 0
-	for _, r := range s.runs {
-		if r.Kind == kind {
-			n++
-		}
-	}
-	return n
-}
-
 // answers counts the recorded runs that answer the request id.
 func (s *fakeStore) answers(id uuid.UUID) int {
 	s.runsMu.Lock()
