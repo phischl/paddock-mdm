@@ -3698,9 +3698,9 @@ paths:
       tags: [software]
       description: |
         Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment
-        of the organization or of one of their groups, and the active devices that reported it (an entry that reaches a
-        device through its owners), with what they reported or the derived state not_applicable or unknown (see the
-        device's managed software). A device with a system and a user-scope row for the entry is
+        of the organization, of one of their groups or of one of their owners (a user, or a user group with a member who
+        owns the device), and the active devices that reported it, with what they reported or the derived state
+        not_applicable or unknown (see the device's managed software). A device with a system and a user-scope row for the entry is
         listed once per scope (plan M13b decision 17). The search matches the hostname. 404 not_found for another
         organization's entry.
       x-paddock-list:
@@ -5466,7 +5466,9 @@ paths:
       tags: [software]
       description: |
         Roles: org_admin, org_operator, org_auditor. The catalog applications the device manages (plan M13a §3.4): what
-        the device reported for each, and for an application assigned to it that it has not reported on the derived state
+        the device reported for each, and for an application assigned to it (through the organization, one of its groups
+        or one of its owners, a user or a user group with a member who owns the device) that it has not reported on the
+        derived state
         not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package
         applies, no report yet). An application the device reports in system and in user scope is listed once per scope
         (plan M13b decision 17). The state, intent and scope filters apply to derived entries too; derived entries have

@@ -287,6 +287,93 @@ func TestSoftwareStatusScopes(t *testing.T) {
 	}
 }
 
+// TestSoftwareStatusOwnerTargets (PDK-1000, plan M13a amendment 2026-11-11): an entry assigned to a user and to a user
+// group lists the devices of the user and of the group's members as unknown before any report, in both reads, with the
+// intents of the owner assignments; a device of another owner, a device without owners and another organization's
+// reader see nothing.
+func TestSoftwareStatusOwnerTargets(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, aliceDev := h.device(t)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := h.super.Exec(context.Background(), sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	newDevice := func(hostname string) uuid.UUID {
+		id := uuid.Must(uuid.NewV7())
+		exec(`INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, $3, 'active')`, id, org, hostname)
+		return id
+	}
+	exec(`UPDATE device SET hostname = 'alice-laptop' WHERE id = $1`, aliceDev)
+	bobDev, carolDev, ownerless := newDevice("bob-laptop"), newDevice("carol-laptop"), newDevice("spare")
+	exec(`UPDATE device SET os_release = '{"id":"ubuntu","version_id":"24.04"}' WHERE organization_id = $1`, org)
+	suffix := uuid.NewString()[:8]
+	alice, bob, carol := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for name, id := range map[string]uuid.UUID{"alice": alice, "bob": bob, "carol": carol} {
+		exec(`INSERT INTO app_user (id, organization_id, username, source) VALUES ($1, $2, $3, 'local')`, id, org, name+"-"+suffix+"@acme.test")
+	}
+	group := uuid.Must(uuid.NewV7())
+	exec(`INSERT INTO user_group (id, organization_id, slug, name, source) VALUES ($1, $2, 'design', 'Design', 'local')`, group, org)
+	exec(`INSERT INTO user_group_member (organization_id, group_id, user_id) VALUES ($1, $2, $3)`, org, group, bob)
+	for dev, user := range map[uuid.UUID]uuid.UUID{aliceDev: alice, bobDev: bob, carolDev: carol} {
+		exec(`INSERT INTO device_owner (organization_id, device_id, user_id) VALUES ($1, $2, $3)`, org, dev, user)
+	}
+	entry := h.softwareEntry(t, org, "GIMP", nanoEverywhere)
+	exec(`INSERT INTO software_assignment (id, organization_id, catalog_entry_id, user_id, intent) VALUES ($1, $2, $3, $4, 'available')`,
+		uuid.Must(uuid.NewV7()), org, entry, alice)
+	exec(`INSERT INTO software_assignment (id, organization_id, catalog_entry_id, user_group_id, intent) VALUES ($1, $2, $3, $4, 'required')`,
+		uuid.Must(uuid.NewV7()), org, entry, group)
+
+	api, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(api.Close)
+	status := app.NewSoftwareStatus(api)
+	reader := adminCtx(org, principal.RoleOrgAuditor, "auditor")
+
+	got, err := status.CatalogDevices(reader, entry, app.SoftwareCatalogDeviceQuery{Page: app.ListPage{Sort: "hostname", Limit: 100}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devices []string
+	for _, it := range got.Items {
+		devices = append(devices, it.Hostname+":"+it.State+":"+it.Intent)
+	}
+	if s := strings.Join(devices, " "); s != "alice-laptop:unknown:available bob-laptop:unknown:required" || got.Count != 2 {
+		t.Fatalf("devices of the owner-targeted entry %q (count %d)", s, got.Count)
+	}
+
+	managed := func(dev uuid.UUID) string {
+		t.Helper()
+		got, err := status.DeviceManagedSoftware(reader, dev, app.DeviceManagedSoftwareQuery{Page: app.ListPage{Sort: "name", Limit: 100}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, it := range got.Items {
+			out = append(out, it.Name+":"+it.State+":"+it.Intent)
+		}
+		return strings.Join(out, " ")
+	}
+	for dev, want := range map[uuid.UUID]string{aliceDev: "GIMP:unknown:available", bobDev: "GIMP:unknown:required", carolDev: "", ownerless: ""} {
+		if s := managed(dev); s != want {
+			t.Fatalf("managed software of %s %q, want %q", dev, s, want)
+		}
+	}
+
+	otherOrg, _ := h.device(t)
+	if _, err := status.CatalogDevices(adminCtx(otherOrg, principal.RoleOrgAuditor, "auditor"), entry,
+		app.SoftwareCatalogDeviceQuery{Page: app.ListPage{Sort: "hostname", Limit: 10}}); !errors.Is(err, problem.NotFound) {
+		t.Fatalf("another organization read the entry's devices: %v", err)
+	}
+	if _, err := status.DeviceManagedSoftware(adminCtx(otherOrg, principal.RoleOrgAuditor, "auditor"), bobDev,
+		app.DeviceManagedSoftwareQuery{Page: app.ListPage{Sort: "name", Limit: 10}}); !errors.Is(err, problem.NotFound) {
+		t.Fatalf("another organization read the device: %v", err)
+	}
+}
+
 // TestSoftwareStatusBoundsItems: 250 items store 200 rows, and a repeated entry keeps its last item.
 func TestSoftwareStatusBoundsItems(t *testing.T) {
 	h := newReleaseHarness(t, true)

@@ -248,10 +248,11 @@ UPDATE device_status SET software_truncated = @truncated
 WHERE device_id = @device_id AND software_truncated IS DISTINCT FROM @truncated;
 
 -- name: ListDeviceManagedSoftware :many
--- The entries a device manages: those assigned to it, through the organization or one of its groups, and those it
--- reported a row for, with the intents of the assignments (NULL: none) and the reported rows (state '': none; one per
--- scope, plan M13b decision 17). The page derives not_applicable and unknown from the rest and filters and sorts them
--- in memory (ADR 0028).
+-- The entries a device manages: those assigned to it, through the organization, one of its groups or one of its owners
+-- (a user or a user group with a member who owns it, plan M13a amendment 2026-11-11), and those it reported a row for,
+-- with the intents of the assignments (NULL: none) and the reported rows (state '': none; one per scope, plan M13b
+-- decision 17). The page derives not_applicable and unknown from the rest and filters and sorts them in memory
+-- (ADR 0028).
 SELECT e.id AS catalog_entry_id, e.name, e.packages, t.intents, coalesce(s.package, '')::text AS package,
        coalesce(s.intent, '')::text AS intent, coalesce(s.state, '')::text AS state, coalesce(s.version, '')::text AS version,
        coalesce(s.reason, '')::text AS reason, coalesce(s.error, '')::text AS error, coalesce(s.scope, '')::text AS scope,
@@ -263,7 +264,10 @@ CROSS JOIN LATERAL (
   FROM software_assignment a
   WHERE a.catalog_entry_id = e.id
     AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
-      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = @device_id AND m.device_group_id = a.device_group_id))
+      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = @device_id AND m.device_group_id = a.device_group_id)
+      OR EXISTS (SELECT 1 FROM device_owner o WHERE o.device_id = @device_id AND o.user_id = a.user_id)
+      OR EXISTS (SELECT 1 FROM user_group_member g JOIN device_owner o ON o.user_id = g.user_id
+                 WHERE o.device_id = @device_id AND g.group_id = a.user_group_id))
 ) t
 WHERE (s.device_id IS NOT NULL OR t.intents IS NOT NULL)
   AND (sqlc.narg(q_pattern)::text IS NULL OR e.name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
@@ -278,8 +282,9 @@ FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.id = @id;
 
 -- name: ListSoftwareCatalogDevices :many
--- The active devices the entry is assigned to, through the organization or one of their groups, and those that reported a
--- row for it (an entry that reaches a device through its owners, plan M13b), with the rows they reported for it
+-- The active devices the entry is assigned to, through the organization, one of their groups or one of their owners (a
+-- user or a user group with a member who owns the device, plan M13a amendment 2026-11-11), and those that reported a
+-- row for it (PDK-999), with the rows they reported for it
 -- (state '': none; one per scope) and the intents of the assignments (NULL: none). The page filters and sorts the derived
 -- states in memory (ADR 0028), so the query returns every match in hostname order.
 SELECT d.id AS device_id, d.hostname, coalesce(d.name, '')::text AS name,
@@ -298,7 +303,10 @@ CROSS JOIN LATERAL (
   FROM software_assignment a
   WHERE a.catalog_entry_id = @catalog_entry_id
     AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
-      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = a.device_group_id))
+      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = a.device_group_id)
+      OR EXISTS (SELECT 1 FROM device_owner o WHERE o.device_id = d.id AND o.user_id = a.user_id)
+      OR EXISTS (SELECT 1 FROM user_group_member g JOIN device_owner o ON o.user_id = g.user_id
+                 WHERE o.device_id = d.id AND g.group_id = a.user_group_id))
 ) t
 WHERE d.state = 'active' AND (st.device_id IS NOT NULL OR t.intents IS NOT NULL)
   AND (sqlc.narg(device_group_id)::uuid IS NULL OR EXISTS (
