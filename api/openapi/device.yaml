@@ -679,7 +679,8 @@ components:
             at most 500 characters without control characters except newlines; untrusted, never in audit params)}: a
             user asked for an available application whose entry requires approval; the agent sends it only while its
             bundle carries such a package. The server opens one request per device, entry and user; a repeat while it
-            is open changes nothing.
+            is open changes nothing. It stores the justification with the request (PDK-993) and opens none for a
+            justification that breaks these rules.
             Since plan M8e the phases of an in-place encryption, each with data.conversion_id:
             disk.conversion_prepared {layout (lvm|plain), volume (the LUKS UUID of the header to come), data_bytes},
             disk.conversion_started {volume, init_s, init_result (ok, <stage>:<reason> or unknown), after_cancel

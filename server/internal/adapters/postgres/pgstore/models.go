@@ -360,6 +360,7 @@ type Device struct {
 	CompiledOsID                string
 	CompiledOsVersionID         string
 	CompiledAgentVersion        string
+	DenialLockCheckedAt         *time.Time
 }
 
 type DeviceAlert struct {
@@ -1206,6 +1207,7 @@ type SoftwareRequest struct {
 	DecidedBy      *string
 	DecidedAt      *time.Time
 	DecisionReason *string
+	Justification  string
 }
 
 type SoftwareSource struct {

@@ -17,7 +17,7 @@ import { useSessionStore } from '../stores/session'
 /**
  * The users' requests for applications that need approval (plan M13c decision 10). An organization administrator
  * approves an open request, optionally with a reason, or denies it with a reason the user sees; operators and auditors
- * read the list.
+ * read the list. The user's justification and the decision's reason are untrusted plain text and render as text only.
  */
 const { t } = useI18n()
 const { pending, run } = usePending()
@@ -35,6 +35,7 @@ const columns = computed<ListColumn[]>(() => [
   { key: 'state', title: 'softwareRequests.state', sortable: true, role: 'status' },
   { key: 'requested_at', title: 'softwareRequests.requestedAt', sortable: true, role: 'meta' },
   { key: 'expires_at', title: 'softwareRequests.expiresAt', sortable: true, role: 'meta', hideBelow: 'md' },
+  { key: 'justification', title: 'softwareRequests.justification', role: 'meta', hideBelow: 'md' },
   { key: 'decision', title: 'softwareRequests.decision', role: 'meta', hideBelow: 'md' },
   ...(session.canDelete ? [{ key: 'actions', title: 'common.actions', role: 'actions' as const }] : []),
 ])
@@ -130,6 +131,19 @@ async function decide(verb: 'approve' | 'deny', r: SoftwareRequest): Promise<voi
           class="pd-muted"
         >–</span>
       </template>
+      <template #[`item.justification`]="{ item }: { item: SoftwareRequest }">
+        <!-- Untrusted text from the user's device (maintainer answer Q7): text interpolation only, never v-html. -->
+        <span
+          v-if="item.justification"
+          class="request-text"
+          dir="auto"
+          data-testid="request-justification"
+        >{{ item.justification }}</span>
+        <span
+          v-else
+          class="pd-muted"
+        >–</span>
+      </template>
       <template #[`item.decision`]="{ item }: { item: SoftwareRequest }">
         <span
           v-if="item.decided_at"
@@ -179,6 +193,11 @@ async function decide(verb: 'approve' | 'deny', r: SoftwareRequest): Promise<voi
 </template>
 
 <style scoped>
+.request-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .decision-reason {
   display: block;
   white-space: pre-wrap;

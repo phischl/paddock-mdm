@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ type softwareRequest struct {
 	State          string  `json:"state"`
 	DecidedBy      *string `json:"decided_by"`
 	DecisionReason *string `json:"decision_reason"`
+	Justification  string  `json:"justification"`
 }
 
 // requestFixture is a device in a device group of its own, the catalog entries that group is offered and the next
@@ -64,12 +66,16 @@ func (f *requestFixture) offer(t *testing.T, pkg, approval string) string {
 	return entry
 }
 
-// ask sends the device's software.request of user for entry with extra fields the server must drop.
+// gateJustification is the justification every request of the gate carries: markup the server stores and returns as
+// plain text, never in an audit event (maintainer answer Q7).
+const gateJustification = "<script>alert(\"gate\")</script>\n<b>for the project</b>"
+
+// ask sends the device's software.request of user for entry with gateJustification.
 func (f *requestFixture) ask(t *testing.T, entry, user string) {
 	t.Helper()
 	f.seq++
 	sendBundleEvent(t, f.device, f.seq, protocol.EventSoftwareRequest, map[string]any{
-		"user": user, "entry_id": entry, "justification": `<script>alert("gate")</script>`,
+		"user": user, "entry_id": entry, "justification": gateJustification,
 	})
 }
 
@@ -160,16 +166,17 @@ func requestEvent(t *testing.T, viewer *env.Portal, code, id string) env.AuditEv
 	}
 }
 
-// TestSoftwareRequests is the gate of plan M13c decisions 8 to 10 (C3) on the server side, with the PDK-943 agent
-// gate and architect decision A10-17. The request flow on the device and the bundle's approved users follow with
-// PDK-811 (the self-service app's Request button, the agent gate's release); until then a devicesim reports the
-// software.request event directly.
-//   - PDK-943: no agent gets an approval-required package, not a devicesim and not an alpha.10 build, also when another
-//     entry offers the same package without approval; the group's other available package arrives.
-//   - A request opens one request (also when repeated), records device.software_requested without the justification
-//     text the device sent (Q7: not stored) and software_request.opened, and shows in the attention list.
-//   - Deny needs a reason, the user sees it, a re-request within 24 hours opens nothing; approve with or without a
-//     reason; a decided request cannot be decided again (409 invalid_state); an approved user's re-request opens nothing.
+// TestSoftwareRequests is the gate of plan M13c decisions 8 to 10 (C3) on the server side, with the agent gate of
+// architect decision A10-17 at the release that ships PDK-811 (PDK-811a) and the denials of A10-27. A devicesim reports
+// the software.request event the agent sends.
+//   - Agent gate: a devicesim (a development build) and an alpha.10 agent get the approval-required package; while
+//     another entry offers the same package to everyone without approval, it carries no approval, and once that offer
+//     is gone it carries approval required.
+//   - A request opens one request (also when repeated) with the justification the device sent as plain text (Q7),
+//     records device.software_requested and software_request.opened without it, and shows in the attention list.
+//   - Deny needs a reason, the device's bundle names the denial with that reason, a re-request within 24 hours opens
+//     nothing; approve with or without a reason; a decided request cannot be decided again (409 invalid_state); an
+//     approved user's re-request opens nothing.
 //   - Expiry by the worker's request round: validity_ended after expires_at, approval_removed for open and approved
 //     requests once the entry no longer requires approval; deciding such a request is 409 invalid_state at once.
 func TestSoftwareRequests(t *testing.T) {
@@ -179,30 +186,40 @@ func TestSoftwareRequests(t *testing.T) {
 	pkg := "paddock-gate-req-" + suffix
 	free := "paddock-gate-req-free-" + suffix
 
-	// PDK-943: the merged package of an approval-required entry and an entry without approval is withheld as well.
+	// Agent gate (PDK-811a): the merged package of an approval-required entry and an entry that offers it to everyone
+	// without approval needs no approval; without that offer it requires approval.
 	entry := f.offer(t, pkg, "required")
 	merged := gateEntry(t, alice, "", packageRef("ubuntu", "*", pkg))
 	mergedAssignment := assign(t, alice, map[string]any{"catalog_entry_id": merged, "device_group_id": f.group, "intent": "available"})
 	f.offer(t, free, "none")
 	alpha10 := activeDevice(t, alice, f.group, "swreq-a10-"+suffix)
 	alpha10.SchemaVersions, alpha10.AgentVersion = []int{bundle.SchemaVersion, bundle.SchemaVersion2}, "0.1.0-alpha.10"
-	for _, d := range []*devicesim.Device{f.device, alpha10} {
-		b := latestBundle(t, d, 2*time.Minute, hasPackage(free))
-		if p, ok := softwarePackage(b, pkg); ok {
-			t.Fatalf("agent %q received the approval-required package: %s", d.AgentVersion, asJSON(t, p))
+	devices := []*devicesim.Device{f.device, alpha10}
+	for _, d := range devices {
+		b := latestBundle(t, d, 2*time.Minute, func(b *bundle.Bundle) bool { return hasPackage(free)(b) && hasPackage(pkg)(b) })
+		if p, _ := softwarePackage(b, pkg); p.Approval != "" {
+			t.Fatalf("agent %q: the package offered to everyone without approval %s", d.AgentVersion, asJSON(t, p))
 		}
 	}
 	expectStatus(t, call(t, alice, http.MethodDelete, softwareAssignments+"/"+mergedAssignment, nil), http.StatusNoContent, "")
+	for _, d := range devices {
+		latestBundle(t, d, 2*time.Minute, func(b *bundle.Bundle) bool {
+			p, ok := softwarePackage(b, pkg)
+			return ok && p.Approval == bundle.SoftwareApprovalRequired && p.Approved == nil && p.Denied == nil
+		})
+	}
 
 	u1, u2 := "swreq-u1-"+suffix+"@acme.test", "swreq-u2-"+suffix+"@acme.test"
 	t.Run("request", func(t *testing.T) {
 		f.ask(t, entry, u1)
 		r := waitRequest(t, alice, entry, u1, "requested", time.Minute)
-		if r.DeviceID != f.device.DeviceID || r.EntryApproval != "required" || r.UserID != nil || r.DecidedBy != nil || r.Hostname == "" {
+		if r.DeviceID != f.device.DeviceID || r.EntryApproval != "required" || r.UserID != nil || r.DecidedBy != nil || r.Hostname == "" ||
+			r.Justification != gateJustification {
 			t.Fatalf("request %+v", r)
 		}
 		requested := requestEvent(t, alice, "software_request.opened", r.ID)
-		if requested.Params["user"] != u1 || requested.Params["catalog_entry_id"] != entry || requested.Params["expires_at"] == nil {
+		if requested.Params["user"] != u1 || requested.Params["catalog_entry_id"] != entry || requested.Params["expires_at"] == nil ||
+			strings.Contains(asJSON(t, requested.Params), "script") {
 			t.Fatalf("software_request.opened params %v", requested.Params)
 		}
 		f.ask(t, entry, u1)
@@ -249,6 +266,14 @@ func TestSoftwareRequests(t *testing.T) {
 		res = call(t, alice, http.MethodPost, path+"/approve", nil)
 		expectStatus(t, res, http.StatusConflict, "invalid_state")
 		expectOneEvent(t, alice, res.RequestID, "software_request.approved", "failure")
+		// The device learns of the denial with the reason (architect decision A10-27); its agent shows it to u1 only.
+		latestBundle(t, f.device, 2*time.Minute, func(b *bundle.Bundle) bool {
+			p, ok := softwarePackage(b, pkg)
+			return ok && p.Denied != nil && slices.Equal(*p.Denied, []bundle.SoftwareDenial{{User: u1, Reason: "Not licensed for this team"}})
+		})
+		// A reason with a control character other than a line break is refused before anything else (Q7).
+		res = call(t, alice, http.MethodPost, path+"/deny", map[string]any{"reason": "a\tb"})
+		expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 		// Within 24 hours of the denial the device's next request opens nothing.
 		f.ask(t, entry, u1)
 		waitDeviceEvents(t, alice, "device.software_requested", f.device.DeviceID, 3)
@@ -303,10 +328,10 @@ func TestSoftwareRequests(t *testing.T) {
 			"name": e["name"], "packages": e["packages"], "approval": "none",
 		}), http.StatusOK, "")
 		expectStatus(t, call(t, alice, http.MethodPost, softwareRequests+"/"+open.ID+"/approve", nil), http.StatusConflict, "invalid_state")
-		b := latestBundle(t, f.device, 2*time.Minute, hasPackage(pkg))
-		if p, _ := softwarePackage(b, pkg); p.Approval != "" || p.Approved != nil {
-			t.Fatalf("package of an entry without approval %s", asJSON(t, p))
-		}
+		latestBundle(t, f.device, 2*time.Minute, func(b *bundle.Bundle) bool {
+			p, ok := softwarePackage(b, pkg)
+			return ok && p.Approval == "" && p.Approved == nil && p.Denied == nil
+		})
 
 		for _, c := range []struct{ entry, user, cause string }{
 			{entry, u3, "approval_removed"}, {entry, u2, "approval_removed"}, {other, u4, "validity_ended"},

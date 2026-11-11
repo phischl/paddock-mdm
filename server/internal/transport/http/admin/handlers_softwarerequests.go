@@ -78,6 +78,7 @@ func toSoftwareRequest(r app.SoftwareRequest) adminapi.SoftwareRequest {
 		Id: r.ID, CatalogEntryId: r.CatalogEntryID, EntryName: r.EntryName, EntryApproval: adminapi.SoftwareApproval(r.EntryApproval),
 		DeviceId: r.DeviceID, Hostname: r.Hostname, UserId: user, Username: r.Username, State: adminapi.SoftwareRequestState(r.State),
 		RequestedAt: r.RequestedAt.UTC(), ExpiresAt: r.ExpiresAt.UTC(), DecidedBy: r.DecidedBy, DecisionReason: r.DecisionReason,
+		Justification: r.Justification,
 	}
 	if r.DecidedAt != nil {
 		at := r.DecidedAt.UTC()
