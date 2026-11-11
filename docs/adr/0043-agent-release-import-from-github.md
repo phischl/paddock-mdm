@@ -218,3 +218,43 @@ Decision 4's asset list gains `paddock-self-service_<v>_all.deb` with its `.mini
 earlier one. The release registry gains the package name `paddock-self-service` and the package architecture
 `all`, valid only together. The sign job signs it, so the rule "the sign job signs exactly the required assets"
 holds unchanged. Decision and reasons: plan M13b, amendment 2026-11-11 (PDK-968).
+
+## Amendment 2026-11-11 b — a package must be signed for the release it is stored under (PDK-1002; architect decision)
+
+**Finding.** The upload (`AgentReleases.UploadPackage`), the host publish (`PublishFromHost`) and the GitHub import
+(`ReleaseImports`) verify the minisign signature of every Debian package, but check the trusted comment
+`paddock-agent version=<v> arch=<arch>` for the `paddockd` binaries only. A package of an **older** release, validly
+signed then, can therefore be stored as a package of a newer release. Whoever can change a release's files
+without holding the release key (a compromised GitHub release or account, or a platform administrator) could
+hand devices an old, possibly vulnerable `paddock-agent`, `paddock-supervisor` or `paddock-self-service` package
+under a new version. That is a replay of signed artifacts, which agent design contract 5 exists to prevent.
+
+**What devices verify (the exposure).** For the `paddockd` binary the supervisor verifies the signature **and**
+the trusted comment with its own public key before it installs (contract 5); that path is not affected. For
+packages no device verifies the release signature: the autoinstall and the supervisor upgrade download a package
+by the URL and SHA-256 the server names and check the SHA-256 only, and the self-service package is installed by
+apt from the organization's package source. The server's check at upload and import is the **only** place the
+release key protects a package. A device would install a replayed package.
+
+**Decision.** In all three paths a package is accepted only when its trusted comment names the release it is
+stored under and its architecture: `paddock-agent version=<release version> arch=<package arch>`, with `arch=all`
+for `paddock-self-service`. One shared check next to `checkBinaryComment`; a mismatch or an unparsable comment is
+refused with the existing problem `release_signature_mismatch` (upload, host publish) or fails the import as it
+does for a binary, and nothing of that package is stored. Negative tests per path: another version, another
+architecture, no comment. The sign job writes this comment for every package since releases have been signed, so
+every published release passes.
+
+- **Not covered by this decision:** `paddock-revoke` (signed offline with the revocation key; its comment is
+  decided with the revocation path, two-person rule) and `fleet-osquery` (versioned by fleetd, not by the release).
+  Their checks are unchanged.
+- **Not closed, accepted:** the comment names version and architecture, not the package. Within one release and
+  architecture a package could still be stored under another package's name. That needs the same position, cannot
+  bring an older artifact, and ends in a failed installation that the staged rollout stops on. Checking the
+  package's own control fields (`Package`, `Version`, `Architecture`) against the upload is a follow-up for
+  0.1.0-alpha.11.
+- Releases already stored are not re-verified; the check applies to every upload and import from this change on.
+
+**Scope: 0.1.0-alpha.10** (PDK-1002). It is small (one check in three call sites), and devices would install a
+replayed package. `docs/operations/agent-releases.md` states the rule. This amendment also corrects plan M13b,
+amendment 2026-11-11 (PDK-968), point 3: "the import verifies signature and comment like every other asset" is
+true for packages only with this change.
