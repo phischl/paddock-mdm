@@ -141,7 +141,7 @@ func addSignedPackage(t *testing.T, files map[string][]byte, pkg, v, arch string
 	t.Helper()
 	name := pkg + "_" + v + "_" + arch + ".deb"
 	files[name] = []byte("!<arch>\ngate " + name)
-	files[name+".minisig"] = minisign.SignWithComments(releaseKey(t), files[name], pkg+" "+v+" "+arch, "")
+	files[name+".minisig"] = minisign.SignWithComments(releaseKey(t), files[name], releasesig.Comment(v, arch), "")
 }
 
 // importBase is the version core of the gate's releases: the patch after the newest published release of the stack,

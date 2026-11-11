@@ -63,9 +63,22 @@ func TestAgentReleasesAPI(t *testing.T) {
 		return e.do(call{method: "PUT", path: base + "/packages/" + name + "/amd64", rawBody: string(deb), contentType: "application/octet-stream",
 			headers: map[string]string{"X-Paddock-Minisig": sig}, cookie: root})
 	}
-	debSig := base64.StdEncoding.EncodeToString(minisign.Sign(e.release, deb))
+	debSig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(e.release, deb, releasesig.Comment(v, "amd64"), ""))
 	if r := uploadDeb("paddock-agent", sig); r.status != http.StatusBadRequest {
 		t.Fatalf("package with the binary's signature: %d %s", r.status, r.body)
+	}
+	// A valid package signature whose trusted comment names another release or arch, or no release at all (ADR 0043
+	// amendment 2026-11-11 b).
+	for _, comment := range []string{releasesig.Comment("1.0.0", "amd64"), releasesig.Comment(v, "arm64"), ""} {
+		other := minisign.Sign(e.release, deb)
+		if comment != "" {
+			other = minisign.SignWithComments(e.release, deb, comment, "")
+		}
+		r := uploadDeb("paddock-agent", base64.StdEncoding.EncodeToString(other))
+		if r.status != http.StatusUnprocessableEntity || r.problemCode(t) != "release_signature_mismatch" {
+			t.Fatalf("package signed comment %q: %d %s", comment, r.status, r.body)
+		}
+		e.expectEvent(r, "agent_release.artifact_uploaded:failure:release_signature_mismatch")
 	}
 	var pkg struct {
 		Name    string `json:"name"`

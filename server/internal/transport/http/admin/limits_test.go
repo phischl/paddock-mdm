@@ -141,7 +141,7 @@ func TestUploadDeadlines(t *testing.T) {
 		sig  []byte
 	}{
 		"artifact": {base + "/artifacts/amd64", bin, minisign.SignWithComments(e.release, bin, releasesig.Comment(v, "amd64"), "")},
-		"package":  {base + "/packages/paddock-agent/amd64", deb, minisign.Sign(e.release, deb)},
+		"package":  {base + "/packages/paddock-agent/amd64", deb, minisign.SignWithComments(e.release, deb, releasesig.Comment(v, "amd64"), "")},
 	} {
 		start := time.Now()
 		rec, ob := send(c.path, c.body, c.sig)

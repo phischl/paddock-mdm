@@ -31,12 +31,8 @@ func githubFixture(t *testing.T, key minisign.PrivateKey, v string) *httptest.Se
 			continue
 		}
 		body := []byte("content of " + a.Name)
-		comment := a.Package + " " + v + " " + a.Arch
-		if a.Package == "" {
-			comment = releasesig.Comment(v, a.Arch)
-		}
 		files[a.Name] = body
-		files[a.Name+".minisig"] = minisign.SignWithComments(key, body, comment, "")
+		files[a.Name+".minisig"] = minisign.SignWithComments(key, body, releasesig.Comment(v, a.Arch), "")
 	}
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
