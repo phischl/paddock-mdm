@@ -234,6 +234,15 @@ transactions and MUST run under the same hold. A second process changes three th
    dropped) and removes the marker. The agent emits every record as `login.nss_shield` in its next pass, under the
    lock, and removes the file. N4's "exactly one event per hold" holds across both processes.
 5. Effect: directory logins and screen unlocks wait during every regular updates run, at most 10 minutes per run.
+6. **Accepted bound (added 2026-11-11): the hold can end before the run does.** The hold covers the run only while
+   `himmelblaud` stays stopped. Two cases start it mid-run: a `dist-upgrade` that outlasts the maximum hold of 10
+   minutes (N2.5; outcome `max_hold`), and a run that upgrades the Himmelblau packages themselves, whose maintainer
+   scripts start the daemon. A package configured **after** that point that creates a system account fails as it
+   did without a hold ("already exists, but is not a system user"). The run is not interrupted; it reports the
+   failure in its result (`updates.run` with the result and error of the run), and the next regular run finishes
+   the installation (`dpkg --configure -a`, then `dist-upgrade`) under a new hold. N6 does not extend the hold
+   beyond 10 minutes and does not stop the daemon a second time within one run: a longer or repeated stop would
+   widen the login pause for a case that the next run repairs. Named in RR-133.
 
 ### N7 Effect on users (binding content for the operator documents)
 
@@ -284,6 +293,13 @@ local files or from the session, or passed in a form the tool defines as numeric
   **Corrected 2026-11-10 (`decisions-alpha10.md` §48 point 3):** that system gate for N6 is a ticket of its own in
   alpha.10 (PDK-988) and MUST be green before the release tag. Until it lands, the unit tests of N6 above carry the
   rule. PDK-983 is not blocked by it.
+  **Added 2026-11-11 — accepted test-scope limit of that gate (SV12, PDK-988).** SV12 runs in
+  `TestSelfServiceGates`, the gate with an enrolled device. For the length of its run it restricts apt to the
+  gate's own package source with a temporary `/etc/apt/apt.conf.d/99paddock-gate-sv12` (`Dir::Etc::sourcelist` =
+  the gate source, no `sourceparts`, no list cleanup), removed when the step ends. Without it the `dist-upgrade`
+  would also pull distribution and Himmelblau updates, which trigger exactly the two cases of N6.6 and make the
+  gate depend on the day's archive. SV12 therefore proves the hold for one package that creates a system account,
+  not a full distribution upgrade; N6.6's bound is covered by the unit tests of the maximum hold, not by a gate.
 
 ### N9 Open in PDK-985 (not decided here)
 
