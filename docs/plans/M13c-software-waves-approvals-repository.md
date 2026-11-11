@@ -947,3 +947,131 @@ rule is a real 30-day signing-key overlap:
   step and class (API error code, HTTP status, network error or timeout), never the request ID or client address, so a
   persistent failure is recorded once; the worker logs the full error. Both build events have the outcomes
   `success`/`failure` of the other system events.
+
+## Amendment 2026-11-11 (architect decision A10-27; PDK-811, PDK-811a, PDK-993): the justification is stored, denials reach the device
+
+Decision (architect lead, `decisions-alpha10.md` §53 and §55; maintainer answer Q7 = §12 question 4). Binding
+language: **MUST** / **MUST NOT**. It amends decisions 8 and 9, the "Bundle" line of §6, the first bullet of the
+PDK-810 amendment ("without `justification`") and the PDK-943 amendment ("the gate is empty until PDK-811"). It
+records PDK-811 (merged) and PDK-993 with PDK-811a (in review at `8672d4f4`).
+
+### Why
+
+Decision 9 let the app show a denial "with the reason", but named no channel that brings a denial to the device:
+the bundle carried approvals only. The agent could not tell a denied user from one who never asked, so the user saw
+*Request* again, and the server silently opened nothing for 24 hours (§3.7). Options: (a) an additive bundle field
+that names the denied users with the reason; (b) a new device endpoint the agent polls for its requests (a new
+contract and a new read path into organization data for the gateway); (c) no reason on the device, only a generic
+"denied" state derived from the 24 h rule on the agent (the agent cannot know the decision time). **Decision: (a).**
+
+### D1 The bundle field (additive, ADR 0013)
+
+```go
+// pkg/bundle
+type SoftwarePackage struct {
+    // … unchanged fields …
+    Denied *[]SoftwareDenial `json:"denied,omitempty"`
+}
+type SoftwareDenial struct {
+    User   string `json:"user"`   // UPN, a valid audience user
+    Reason string `json:"reason"` // untrusted plain text, at most 500 characters
+}
+const MaxSoftwareDenialReason = 500
+```
+
+- Bundle rules (`validateDenied`): `denied` only on a package with `approval: required`; 1 to 200 entries
+  (`MaxSoftwareAudience`); sorted by `user` without duplicates; every `user` a valid audience user; `denied` and
+  `approved` disjoint; `reason` valid UTF-8 of at most 500 characters. A bundle that breaks a rule is refused.
+- **Gating (A10-6).** The field exists only on a package that requires approval, and such a package reaches only
+  agents from `approvalAgent` = **`0.1.0-alpha.10`** on (PDK-811a sets the constant that the PDK-943 amendment left
+  empty). An older agent gets neither the package nor `denied`, so it never sees a field it would refuse;
+  development builds (`0.0.0-dev`, the device simulator) count as current. Compat tests:
+  `TestSoftwareApprovalAgentGate`, `TestSoftwareDenialsGated` (the alpha.9 section passes the frozen alpha.9 rules).
+- The diagnostics bundle classifies `software.packages.denied.user` as public and redacts `reason`.
+
+### D2 What the compiler renders
+
+- A package of a device names in `denied` the users whose **latest denial** for that device and catalog entry was
+  decided less than **24 hours** before the render time: the re-request lock of §3.7. The approval epoch is ignored,
+  as the lock ignores it.
+- Only for an entry that requires approval on that device, only users of the package's audience, never a user who
+  is in `approved`; sorted; capped at 200.
+- A denial queues a compile of its device, inside the audited action, as an approval does.
+- **The reason is untrusted text end to end.** The API accepts a decision reason of at most 500 characters without
+  control characters except newlines (a tab is refused now, for approvals and denials alike, 400
+  `invalid_request`). The compiler checks the stored reason again; a row that fails the rule is rendered with an
+  **empty** reason (the denial stays, the text is never shown) and logged at `Warn` without the text.
+
+### D3 What the agent and the app do
+
+- **Only the requesting user sees a denial.** The self-service socket identifies the caller by its peer credentials
+  (UID → UPN). `GET /v1/apps/{id}` returns `request: {state: "denied", reason}` only when the caller's own UPN is
+  in `denied`; another user's entry is never returned, listed or counted.
+- The agent makes the reason safe to show (`displayReason`): invalid UTF-8, control and format characters (bidi
+  overrides included) are removed except newlines, and the text is cut at 500 characters. The app renders it as
+  plain text, never as markup.
+- **The 24 h re-request lock on the device:** while the caller is in `denied`, `POST /v1/apps/{id}/request` answers
+  409 `denied` and emits no event. The lock ends when a bundle without that entry arrives (D4); the agent keeps no
+  clock of its own for it.
+- A pending request of the device is dropped from the agent's record once the bundle names the user in `approved`
+  or `denied`.
+
+### D4 The lock ends by a recompile (compiler reconcile)
+
+The bundle carries no expiry, so the device depends on the server to drop a denial. Every reconcile round (60 s)
+the compiler recompiles the active devices that have a denial whose lock ended.
+
+- New column `device.denial_lock_checked_at timestamptz` (migration `00124_software_denial_lock.sql`, written by
+  the compiler role): **the render time of the device's last compile that committed a bundle, left it unchanged, or
+  was blocked.** A compile takes one render time per round and uses it both for the 24 h window of D2 and for this
+  stamp, so the two agree: a bundle names a denial iff its lock end lies after the render time, and the reconcile
+  selects a device iff a lock end lies after the stamp.
+- **Selection:** a denial of the device with `lock end ≤ now`, `lock end > coalesce(denial_lock_checked_at,
+  -infinity)` and `lock end` within the **last 7 days** (bounds the scan). Partial index
+  `software_request_denied_idx ON software_request (organization_id, decided_at) WHERE state = 'denied'` (`00124`).
+- **Conditional stamp (§55 point 2):** the stamp is written per device only `WHERE bundle_seq =` the sequence the
+  compile left (the unchanged or blocked bundle's, or the new one's). When a concurrent compile moved the device on,
+  nothing is written and that compile writes its own render time, so a stale stamp can never hide a lock end.
+- **Blocked and failed renders are stamped too (§55 point 1)**, exactly where a device counts as seen. Without
+  that, a blocked device would be re-rendered every round for 7 days, with one `device.bundle_render_failed` each.
+  A device whose rendered bundle was not committed (publish failure) is not stamped and is selected again.
+- **Accepted bounds:**
+  - a blocked device keeps its old bundle, and with it an expired denial, until the compile that clears the block;
+    that compile renders at its own time and drops the denial. Until then the user of that device cannot ask again;
+  - a lock end older than 7 days is not selected: after a compiler outage or failing publishes of more than 7
+    days, the denial stays in the bundle until an unrelated recompile of the device.
+- Tests: `TestSoftwareDenials`, `TestSoftwareReconcileEndsDenialLock`, `TestSoftwareReconcileDenialLockConverges`,
+  `TestSoftwareReconcileDenialLockRenderTime`, `TestSoftwareDenialLockNotRecordedOnPublishFailure`,
+  `TestSoftwareDenialLockRecordedOnRenderFailure`, `TestSoftwareDenialLockConcurrentCompile`.
+
+### D5 The justification (Q7; replaces "without `justification`" of the PDK-810 amendment)
+
+- **Stored as plain text.** Migration `00123_software_request_justification.sql` adds
+  `software_request.justification text NOT NULL DEFAULT ''` with a CHECK: at most **500 characters** and no control
+  characters except newlines. (Decision 8's `00111`/`00119` sketch carried the column; it arrives in `00123`.)
+- **One rule on the agent, the server and the database:** valid UTF-8, at most 500 characters, no control
+  characters except `\n`. The agent refuses other input with 400 `invalid_request`; the event
+  `software.request{entry_id, user, justification}` carries it; a justification that breaks the rule opens **no**
+  request on the server (the device's event is still recorded as `device.software_requested`).
+- **Never in audit or logs.** The justification MUST NOT appear in audit params (`device.software_requested`,
+  `software_request.opened`, `.approved`, `.denied`, `.expired`), in notifications, in `slog` output or in problem
+  details. It lives in the column and in `SoftwareRequest.justification` of the admin API (list and detail) only.
+- **Shown as text only.** The portal's *Software requests* list renders it by text interpolation (`dir="auto"`,
+  `pre-wrap`), never as HTML. MCP list output carries it as data (RR-85).
+- **Privacy.** `docs/compliance/privacy.md`, row "Software requests", lists the justification: what it is, that
+  the agent keeps it only in its event spool until the server accepted it, that the server stores it with the
+  request, who sees it (the organization's administrators, operators and auditors), and that a denial's reason is
+  in the device's bundle for 24 hours. PDK-993 writes that row; it is part of this decision.
+- Tests: `TestValidJustification`, `TestSoftwareRequestJustification` (stored and returned verbatim, never in
+  `action.params`), the portal test for inert rendering, and the acceptance gate `TestSoftwareRequests`.
+
+### D6 Amended texts
+
+- Decision 9, last sentence: "a denial is shown in the app with the reason" holds through `denied[]` (D1–D3), to
+  the requesting user only.
+- §6 "Bundle": `SoftwarePackage + urgent, approval, approved[], denied[]{user, reason}`.
+- §3.7: the 24 h re-request rule is enforced on the server (no request is opened) **and** on the device (409
+  `denied` while the bundle names the user).
+- `docs/architecture.md`: §12.5 and the amendments of §16 and §17.1 dated 2026-11-11 (written with this amendment).
+- Open before PDK-993 closes: `TestSoftwareRequests` against a running stack and the browser check of the
+  *Justification* column.

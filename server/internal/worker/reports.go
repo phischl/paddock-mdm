@@ -6,6 +6,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -13,6 +15,13 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 )
+
+// metricUnknownEvents counts device events of a type this server does not know, once per (device, event_seq); the
+// type is in the log line only, because a device chooses it (label cardinality).
+var metricUnknownEvents = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "paddock_device_events_unknown_total",
+	Help: "Device events of an unknown type, from a newer agent, that were skipped; each counted once.",
+})
 
 // Reports consumes ingest.heartbeat and ingest.event.
 type Reports struct {
@@ -94,7 +103,12 @@ func (r *Reports) events(ctx context.Context, messageID string, body []byte) out
 		return poison
 	}
 	ctx = systemContext(ctx, batch.OrganizationID, messageID)
-	if err := r.reports.RecordEvents(ctx, batch.DeviceID, batch.ReceivedAt, batch.Events); err != nil {
+	unknown, err := r.reports.RecordEventBatch(ctx, batch.DeviceID, batch.ReceivedAt, batch.Events)
+	for _, t := range unknown {
+		metricUnknownEvents.Inc()
+		slog.WarnContext(ctx, "device event of an unknown type skipped", "device_id", batch.DeviceID, "type", t)
+	}
+	if err != nil {
 		slog.WarnContext(ctx, "recording device events failed; retrying", "device_id", batch.DeviceID,
 			"events", len(batch.Events), "error", err)
 		return retry
