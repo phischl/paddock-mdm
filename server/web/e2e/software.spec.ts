@@ -1,9 +1,13 @@
+import { spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import { expect } from '@playwright/test'
 import { login, loginWithPassword, tempUser } from './auth'
 import { expectAccessible, watchCSP } from './checks'
 import { test } from './cleanup'
 
 const csrf = { 'X-Paddock-CSRF': '1' }
+// The reference device client (test/acceptance/cmd/devicesim), built by `make e2e`.
+const devicesim = process.env.PADDOCK_E2E_DEVICESIM ?? '../../bin/devicesim'
 
 // Plan M13b decision 19 (PDK-804): an administrator assigns a catalog entry as available to a user group through the
 // target selector; the entry's member sees it on their user page, directly or through the group, and the assignment
@@ -188,5 +192,75 @@ test('administrator sets approval, the urgent reason and a maintenance window', 
   await expect(page.getByTestId('confirm-dialog')).toContainText(groupName)
   await page.getByTestId('confirm-accept').click()
   await expect(page.getByTestId('window-summary')).toContainText('No window')
+  expect(csp).toEqual([])
+})
+
+// PDK-993, ticket PDK-999: the justification a user types on the device is untrusted text (maintainer answer Q7). A
+// device (devicesim) asks for an approval-required entry with markup as its justification; the administrator's request
+// list shows it literally, creates no element from it and runs none of its script.
+test('request list shows a justification with markup as plain text', async ({ page, cleanup }) => {
+  test.setTimeout(400_000)
+  const csp = watchCSP(page)
+  const dialogs: string[] = []
+  page.on('dialog', async (d) => {
+    dialogs.push(d.message())
+    await d.dismiss()
+  })
+  await login(page, 'alice@acme.test', 'dev_alice_password')
+  const stamp = Date.now()
+  const app = `E2E Justified ${stamp}`
+  const groupName = `E2E Requests ${stamp}`
+  const tokenName = `E2E request token ${stamp}`
+  const username = `e2e-req-${stamp}@acme.test`
+  const justification = '<script>alert(1)</script><img src=x onerror=alert(1)>'
+  cleanup.remove('/api/v1/enrollment-tokens', tokenName)
+  cleanup.remove('/api/v1/device-groups', groupName)
+  cleanup.remove('/api/v1/software-catalog', app)
+  cleanup.remove('/api/v1/software-assignments', app)
+
+  const entry = await page.request.post('/api/v1/software-catalog', {
+    headers: csrf,
+    data: { name: app, approval: 'required', packages: [{ distribution: 'ubuntu', release: '*', architecture: '*', package: `e2e-req-${stamp}` }] },
+  })
+  expect(entry.status()).toBe(201)
+  const entryID = (await entry.json()).id as string
+  const group = await page.request.post('/api/v1/device-groups', { headers: csrf, data: { name: groupName } })
+  expect(group.status()).toBe(201)
+  const groupID = (await group.json()).id as string
+  expect((await page.request.post('/api/v1/software-assignments', {
+    headers: csrf, data: { catalog_entry_id: entryID, device_group_id: groupID, intent: 'available' },
+  })).status()).toBe(201)
+  const token = await page.request.post('/api/v1/enrollment-tokens', {
+    headers: csrf,
+    data: { name: tokenName, expires_at: new Date(stamp + 3600_000).toISOString(), max_uses: 1, auto_approve: true },
+  })
+  expect(token.status()).toBe(201)
+  const config = JSON.stringify((await token.json()).enrollment_config)
+
+  // devicesim prints the device ID once enrolled and sends the request once its bundle offers the entry: the server
+  // opens a request only for an entry the device is offered, and enrollment tokens assign no group.
+  const sim = spawn(devicesim, ['software-request', '--hostname', `e2e-req-${stamp}`, '--entry', entryID, '--user', username,
+    '--justification', justification], { stdio: ['pipe', 'pipe', 'inherit'] })
+  sim.stdin.end(config)
+  const lines = createInterface({ input: sim.stdout })[Symbol.asyncIterator]()
+  const exited = new Promise<number | null>((resolve) => sim.on('close', resolve))
+  const deviceID = (JSON.parse((await lines.next()).value as string) as { device_id: string }).device_id
+  expect((await page.request.put(`/api/v1/devices/${deviceID}/groups`, { headers: csrf, data: { device_group_ids: [groupID] } })).status()).toBe(200)
+  expect(await exited).toBe(0)
+  // The worker opens the request asynchronously.
+  await expect.poll(async () => {
+    const r = await page.request.get(`/api/v1/software-requests?q=${encodeURIComponent(username)}`)
+    return ((await r.json()) as { total: number }).total
+  }, { timeout: 120_000, intervals: [2_000] }).toBe(1)
+
+  await page.goto('/software-requests')
+  await expect(page.getByRole('heading', { level: 1, name: 'Software requests' })).toBeVisible()
+  const list = page.getByTestId('software-request-list')
+  await list.getByTestId('list-search').getByRole('searchbox').fill(username)
+  const cell = list.getByRole('row').filter({ hasText: username }).getByTestId('request-justification')
+  await expect(cell).toHaveText(justification)
+  await expect(cell.locator('script, img')).toHaveCount(0)
+  await expectAccessible(page)
+  expect(dialogs).toEqual([])
   expect(csp).toEqual([])
 })
