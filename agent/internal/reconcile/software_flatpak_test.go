@@ -516,6 +516,44 @@ func TestFlatpakUserScopeUnreadableInstallation(t *testing.T) {
 	}
 }
 
+// TestFlatpakUserScopeListingBackoff (PDK-996 Review 1): an installation that cannot be listed yet at the sign-in
+// fails the pass without a backoff, so the application lands at the next pass; a failed install still waits.
+func TestFlatpakUserScopeListingBackoff(t *testing.T) {
+	sys, s, _, _ := flatpakFixture(t)
+	ctx := context.Background()
+	r := softwareResource(t, []bundle.SoftwareSource{flathubSource(t)}, flatpakRuntime(), userApp(gimp, bundle.SoftwareRequired, "alice"))
+	s.Apply(ctx, r)
+	sys.Sessions = []fakesys.Session{{ID: "2", UID: 70001, User: "alice", Class: "user", Type: "wayland", State: "active"}}
+	if res := s.Apply(ctx, r); res.Status != reconcile.Error {
+		t.Fatalf("apply while the manager starts %+v", res)
+	}
+	sys.FlatpakUsers = map[int]*fakesys.FlatpakInstallation{70001: fakesys.NewFlatpakInstallation()}
+	if plan, _ := s.Plan(ctx, r); !slices.Equal(plan, []string{"flatpak-install org.gimp.GIMP uid 70001"}) {
+		t.Fatalf("plan %q", plan)
+	}
+	s.Apply(ctx, r)
+	if _, ok := sys.FlatpakUsers[70001].Apps[gimp]; !ok {
+		t.Fatalf("not installed at the pass after the listing failed: %q", sys.FlatpakCalls)
+	}
+	if it := status(t, s, gimpItem); it.State != protocol.SoftwareStateInstalled {
+		t.Fatalf("item %+v", it)
+	}
+
+	delete(sys.FlatpakUsers[70001].Apps, gimp)
+	install := "systemd-run --machine=70001@.host --user --wait --pipe --quiet --collect --property=RuntimeMaxSec=900 --setenv=LC_ALL=C flatpak install -y --noninteractive --user paddock-flathub " + gimp
+	sys.FlatpakScript = map[string]fakesys.OutputReply{install: {Data: []byte("error: no space left\n"), Exit: 1}}
+	s.Apply(ctx, r)
+	delete(sys.FlatpakScript, install)
+	before := len(sys.FlatpakCalls)
+	s.Apply(ctx, r)
+	if got := slices.DeleteFunc(slices.Clone(sys.FlatpakCalls[before:]), func(c string) bool { return !strings.HasPrefix(c, "systemd-run") }); len(got) != 0 {
+		t.Fatalf("a failed install ran again at once: %q", got)
+	}
+	if it := status(t, s, gimpItem); it.State != protocol.SoftwareStateFailed || !strings.Contains(it.Error, "no space left") {
+		t.Fatalf("item while waiting %+v", it)
+	}
+}
+
 // TestFlatpakUserScopeRemovalListedOnly (A10-11): a user-scope forbid or uninstall removes the application from the
 // installations of the listed users with a session only (the session's user name matched case-insensitively, local
 // accounts never); another signed-in user's installation and the system installation stay, and nothing is masked.

@@ -639,14 +639,15 @@ func (s *Software) addRemote(ctx context.Context, src bundle.SoftwareSource, key
 // for the call, under a name of its own, so that concurrent operations never share one.
 func (s *Software) addUserRemote(ctx context.Context, uid int, name, uri string, keyring []byte) error {
 	path := flatpakUserKeyDir + "/" + strconv.Itoa(uid) + "-" + strconv.FormatUint(s.keySeq.Add(1), 10) + ".gpg"
-	if err := s.Sys.WriteFileAtomic(path, keyring, 0o644, 0, 0); err != nil {
-		return fmt.Errorf("writing the key of remote %s: %w", name, err)
-	}
+	// Registered before the write: a write that fails after the rename, at the directory sync, leaves the file.
 	defer func() {
 		if err := s.Sys.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			slog.Warn("removing the flatpak key file failed", "path", path, "error", err)
 		}
 	}()
+	if err := s.Sys.WriteFileAtomic(path, keyring, 0o644, 0, 0); err != nil {
+		return fmt.Errorf("writing the key of remote %s: %w", name, err)
+	}
 	_, err := s.runUserFlatpak(ctx, uid, "remote-add", "--user", "--if-not-exists", "--gpg-import="+path, name, uri)
 	return err
 }
@@ -839,7 +840,7 @@ func (f *flatpakApply) installUser(ctx context.Context, p bundle.SoftwarePackage
 		return
 	}
 	var errs []string
-	windowed := false
+	windowed, backoff := false, false
 	for _, uid := range f.targets(p) {
 		installed, err := f.apps(ctx, uid)
 		if err == nil {
@@ -864,12 +865,17 @@ func (f *flatpakApply) installUser(ctx context.Context, p bundle.SoftwarePackage
 				f.installed(p, version)
 				continue
 			}
+			backoff = true
 		}
 		errs = append(errs, err.Error())
 	}
 	if len(errs) > 0 {
 		msg := strings.Join(errs, "; ")
-		f.s.retry[key] = softwareRetry{passes: softwareRetryPasses - 1, err: msg}
+		// Only a failed remote-add or install waits: an installation that cannot be listed yet, such as a user
+		// manager still starting at the sign-in, is tried again at the next pass (PDK-996 Review 1).
+		if backoff {
+			f.s.retry[key] = softwareRetry{passes: softwareRetryPasses - 1, err: msg}
+		}
 		f.s.failPackage(f.pass, p, protocol.SoftwareStageInstall, protocol.SoftwareFlatpakFailed, msg)
 		return
 	}
