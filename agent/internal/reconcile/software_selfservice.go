@@ -190,10 +190,10 @@ func (s *Software) flatpakOne(ctx context.Context, sp bundle.SoftwareSpec, p bun
 	}
 	user := userScope(p)
 	scope := "--system"
-	run := func(stdin []byte, args ...string) (string, error) { return s.runFlatpak(ctx, args...) }
+	run := func(args ...string) (string, error) { return s.runFlatpak(ctx, args...) }
 	if user {
 		scope = "--user"
-		run = func(stdin []byte, args ...string) (string, error) { return s.runUserFlatpak(ctx, uid, stdin, args...) }
+		run = func(args ...string) (string, error) { return s.runUserFlatpak(ctx, uid, args...) }
 	}
 	installed, err := s.selfServiceApps(ctx, user, uid)
 	if err != nil {
@@ -207,12 +207,12 @@ func (s *Software) flatpakOne(ctx context.Context, sp bundle.SoftwareSpec, p bun
 			return SelfServiceResult{}
 		}
 		// No --delete-data and no --unused: the user's data and the shared runtimes stay (plan M13b decision 10).
-		_, err = run(nil, "uninstall", "-y", "--noninteractive", scope, "--app", p.FlatpakRef)
+		_, err = run("uninstall", "-y", "--noninteractive", scope, "--app", p.FlatpakRef)
 	case protocol.SelfServiceUpdate:
 		if !present {
 			return selfServiceFailed(protocol.SoftwareFlatpakFailed, fmt.Errorf("%s is not installed", p.FlatpakRef))
 		}
-		_, err = run(nil, "update", "-y", "--noninteractive", scope, p.FlatpakRef)
+		_, err = run("update", "-y", "--noninteractive", scope, p.FlatpakRef)
 	default:
 		if present {
 			return SelfServiceResult{Version: installed[p.FlatpakRef], Present: true}
@@ -220,7 +220,7 @@ func (s *Software) flatpakOne(ctx context.Context, sp bundle.SoftwareSpec, p bun
 		if res, ok := s.selfServiceRemote(ctx, sp, p, user, uid); !ok {
 			return res
 		}
-		_, err = run(nil, "install", "-y", "--noninteractive", scope, remote, p.FlatpakRef)
+		_, err = run("install", "-y", "--noninteractive", scope, remote, p.FlatpakRef)
 	}
 	if err != nil {
 		return selfServiceErr(err, "", protocol.SoftwareFlatpakFailed)
@@ -262,7 +262,7 @@ func (s *Software) selfServiceRemote(ctx context.Context, sp bundle.SoftwareSpec
 	if err != nil {
 		return selfServiceFailed(protocol.SoftwareFingerprintMismatch, err), false
 	}
-	if _, err := s.runUserFlatpak(ctx, uid, keyring, "remote-add", "--user", "--if-not-exists", "--gpg-import=-", name, sp.Sources[i].URIs[0]); err != nil {
+	if err := s.addUserRemote(ctx, uid, name, sp.Sources[i].URIs[0], keyring); err != nil {
 		return selfServiceErr(err, "", protocol.SoftwareFlatpakFailed), false
 	}
 	return SelfServiceResult{}, true

@@ -29,7 +29,7 @@ func TestAuditChain(t *testing.T) {
 
 	// A fresh organization with an admin and some activity.
 	body := newOrg()
-	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", body)
+	res := createOrg(t, root, body)
 	expectStatus(t, res, http.StatusCreated, "")
 	chain := responseID(t, res)
 	user, pw := tempUser(t, "chain", env.RoleGroup(body["slug"], "admins"))

@@ -237,7 +237,7 @@ var auditCases = map[string][]auditCase{
 	},
 	"POST /api/platform/v1/organizations": {
 		{"success", func(t *testing.T, w *auditWorld) {
-			res := call(t, w.root, http.MethodPost, "/api/platform/v1/organizations", newOrg())
+			res := createOrg(t, w.root, newOrg())
 			expectStatus(t, res, http.StatusCreated, "")
 			org := responseID(t, res)
 			expectOneIndexEvent(t, w.idx, org, "correlation_id = $1", res.RequestID, "organization.created", "success", auditPollTimeout)
@@ -674,7 +674,7 @@ func TestAuditExternalFailures(t *testing.T) {
 		t.Cleanup(restart)
 
 		body := newOrg()
-		res := call(t, w.root, http.MethodPost, "/api/platform/v1/organizations", body)
+		res := createOrg(t, w.root, body)
 		expectStatus(t, res, http.StatusBadGateway, "upstream_unavailable")
 		org := organizationBySlug(t, w.root, body["slug"])
 		if org.status != "provisioning_failed" {
@@ -720,7 +720,7 @@ func TestAuditExternalFailures(t *testing.T) {
 		// Re-provisioning the failed organization with the same slug succeeds (AC8).
 		var retry env.Response
 		for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(5 * time.Second) {
-			retry = call(t, w.root, http.MethodPost, "/api/platform/v1/organizations", body)
+			retry = createOrg(t, w.root, body)
 			if retry.Status != http.StatusBadGateway || time.Now().After(deadline) {
 				break
 			}

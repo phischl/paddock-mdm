@@ -463,28 +463,78 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 
 // RecordEvents is RecordEvent for the events of one ingest message, session logins included, in one transaction
 // (ActionRunner.RecordOnceBatch); receivedAt is when the gateway received the message (zero: unknown, now is used).
-// An error means that some event could not be recorded; the others are, and a redelivery skips them by
-// (device_id, event_seq).
+// An event of a type outside the closed set, from a newer agent, only claims its number so that gap detection does not
+// report it as lost (PDK-995). An error means that some event could not be recorded; the others are, and a redelivery
+// skips them by (device_id, event_seq).
 func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, receivedAt time.Time, events []protocol.Event) error {
+	_, err := d.RecordEventBatch(ctx, deviceID, receivedAt, events)
+	return err
+}
+
+// RecordEventBatch is RecordEvents that also lists the types, cleaned for a log line, of the unknown events whose
+// numbers this call claimed, so the caller reports each one once even when the message is redelivered.
+func (d *DeviceReports) RecordEventBatch(ctx context.Context, deviceID uuid.UUID, receivedAt time.Time, events []protocol.Event) (unknown []string, err error) {
 	if receivedAt.IsZero() {
 		receivedAt = d.now()
 	}
 	entries := make([]OnceEntry, 0, len(events))
+	var claims []*unknownClaim
 	for _, ev := range events {
 		entry, ok := eventEntry(deviceID, ev, receivedAt)
 		entry = d.softwareRequestEntry(entry, deviceID, ev, receivedAt)
 		if ev.Type == protocol.EventSessionLogin {
 			entry, ok = sessionLoginEntry(deviceID, ev, receivedAt, d.now()), true
 		}
+		if !slices.Contains(protocol.EventTypes, ev.Type) {
+			c := &unknownClaim{eventType: ev.Type}
+			claims = append(claims, c)
+			entry, ok = unknownEventEntry(deviceID, ev, receivedAt, c), true
+		}
 		if ok {
 			entries = append(entries, entry)
 		}
 	}
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
-	_, err := d.runner.RecordOnceBatch(ctx, entries)
-	return err
+	_, err = d.runner.RecordOnceBatch(ctx, entries)
+	for _, c := range claims {
+		if c.fresh {
+			unknown = append(unknown, cleanEventType(c.eventType))
+		}
+	}
+	return unknown, err
+}
+
+// unknownClaim is whether the claim of an unknown event's number was new in its last (committed or fallback) attempt.
+type unknownClaim struct {
+	eventType string
+	fresh     bool
+}
+
+// unknownEventEntry is the unaudited batch entry of an event of an unknown type: the claim of its (device, event_seq)
+// only, because the closed audit registry has no code for a type this server does not know.
+func unknownEventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time, c *unknownClaim) OnceEntry {
+	return OnceEntry{Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+		c.fresh = false
+		n, err := q.InsertDeviceEventSeen(ctx, pgstore.InsertDeviceEventSeenParams{
+			DeviceID: deviceID, EventSeq: ev.EventSeq, OrganizationID: mustOrg(ctx), ReceivedAt: &receivedAt,
+		})
+		if err != nil {
+			return false, err
+		}
+		c.fresh = n == 1
+		return false, nil
+	}}
+}
+
+// cleanEventType bounds a device-chosen event type for a log line.
+func cleanEventType(t string) string {
+	t = stripControls(t)
+	if len(t) > maxEventTypeLog {
+		t = strings.ToValidUTF8(t[:maxEventTypeLog], "")
+	}
+	return t
 }
 
 // eventEntry is the audited action of a device event and the claim of its (device, event_seq), received by the gateway
@@ -772,7 +822,9 @@ func updateOutcome(eventType string, params map[string]any) (string, bool) {
 // Bounds of the device-reported values copied into audit params.
 const (
 	maxParamString = 256
-	maxParamList   = 50
+	// maxEventTypeLog bounds the unknown event type in a log line; known types are at most 40 bytes.
+	maxEventTypeLog = 64
+	maxParamList    = 50
 )
 
 // eventParams copies the documented fields of an event (audit.deviceEventParams) with bounded sizes; other data a

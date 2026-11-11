@@ -17,7 +17,7 @@ func gateOrg(t *testing.T, prefix string) (*mfaUser, string) {
 	t.Helper()
 	root := login(t, env.PlatformAdmin)
 	body := newOrg()
-	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", body)
+	res := createOrg(t, root, body)
 	expectStatus(t, res, http.StatusCreated, "")
 	admin := steppedUpTempUser(t, prefix, env.RoleGroup(body["slug"], "admins"))
 	// The gates write files below operator roots without a step-up (ADR 0034 amendment 2026-10-16).

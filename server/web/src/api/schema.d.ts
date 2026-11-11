@@ -2334,8 +2334,9 @@ export interface paths {
         };
         /**
          * @description Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment
-         *     of the organization or of one of their groups, with what they reported or the derived state not_applicable or
-         *     unknown (see the device's managed software). A device with a system and a user-scope row for the entry is
+         *     of the organization or of one of their groups, and the active devices that reported it (an entry that reaches a
+         *     device through its owners), with what they reported or the derived state not_applicable or unknown (see the
+         *     device's managed software). A device with a system and a user-scope row for the entry is
          *     listed once per scope (plan M13b decision 17). The search matches the hostname. 404 not_found for another
          *     organization's entry.
          */
@@ -2460,8 +2461,10 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin. Approves an open request, optionally with a reason; no step-up of its own (the entry's source
-         *     needed one). The device's next bundle lets the user install the application. 409 invalid_state unless the
-         *     request is open, 404 not_found for another organization's request.
+         *     needed one). The device's next bundle lets the user install the application. The reason is plain text of at
+         *     most 500 characters without control, format or invisible characters except line breaks (no tabs). 400
+         *     invalid_request for a reason that breaks these rules, 409 invalid_state unless the request is open, 404
+         *     not_found for another organization's request.
          */
         post: operations["approveSoftwareRequest"];
         delete?: never;
@@ -2483,8 +2486,10 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin. Denies an open request with a reason, which the user sees; no step-up of its own. The user
-         *     may ask again after 24 hours. 400 invalid_request without a reason, 409 invalid_state unless the request is
-         *     open, 404 not_found for another organization's request.
+         *     may ask again after 24 hours; until then the device's bundle names the denial with its reason. The reason is
+         *     plain text of at most 500 characters without control, format or invisible characters except line breaks.
+         *     400 invalid_request without a reason or for a reason that breaks these rules, 409 invalid_state unless the
+         *     request is open, 404 not_found for another organization's request.
          */
         post: operations["denySoftwareRequest"];
         delete?: never;
@@ -7171,7 +7176,10 @@ export interface components {
              * @description When it was decided or expired.
              */
             decided_at: string | null;
+            /** @description Untrusted plain text; render it as text only. A denial's reason reaches the user's device. */
             decision_reason: string | null;
+            /** @description The user's justification as the device sent it; empty when the user gave none. Untrusted plain text of at most 500 characters without control characters except line breaks: render it as text only, never as HTML or markdown. It never appears in audit events, logs or notifications. */
+            justification: string;
         };
         SoftwareRequestPage: {
             items: components["schemas"]["SoftwareRequest"][];
@@ -7185,11 +7193,11 @@ export interface components {
             sort: string;
         };
         SoftwareRequestDecision: {
-            /** @description Optional; trimmed. */
+            /** @description Optional; trimmed. Plain text without control, format or invisible characters except line breaks (no tabs). */
             reason?: string;
         };
         SoftwareRequestDenial: {
-            /** @description Required: the user sees it. Trimmed; must not be empty. */
+            /** @description Required: the user sees it. Trimmed; must not be empty. Plain text without control, format or invisible characters except line breaks (no tabs). */
             reason: string;
         };
         SoftwareCatalogEntryPage: {

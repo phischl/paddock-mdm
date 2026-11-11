@@ -101,6 +101,28 @@ func call(t *testing.T, p *env.Portal, method, path string, body any) env.Respon
 	return res
 }
 
+// orgCreateTimeout bounds one POST /api/platform/v1/organizations. The server provisions the organization in
+// Authentik synchronously within app.ProvisioningBudget (60 s) plus its two transactions, and answers within its
+// write timeout of 120 s. The session clients' 30 s gave up on slow but successful creates under CI load (PDK-889).
+const orgCreateTimeout = 90 * time.Second
+
+// createOrg is call for POST /api/platform/v1/organizations with a client that waits orgCreateTimeout. It shares
+// p's transport and session cookies.
+func createOrg(t *testing.T, p *env.Portal, body any) env.Response {
+	t.Helper()
+	const path = "/api/platform/v1/organizations"
+	client := *p.Client
+	client.Timeout = orgCreateTimeout
+	res, err := env.Call(testContext(t, orgCreateTimeout), &client, http.MethodPost, stack.AdminURL()+path, body, true)
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	if res.RequestID == "" {
+		t.Fatalf("POST %s: response without X-Request-Id", path)
+	}
+	return res
+}
+
 func expectStatus(t *testing.T, res env.Response, status int, code string) {
 	t.Helper()
 	if res.Status != status || (code != "" && res.ProblemCode() != code) {

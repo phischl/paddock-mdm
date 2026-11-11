@@ -218,6 +218,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 	var todo []rendered
 	var failures []renderFailure
 	var seen []pgstore.SetDeviceCompiledPlatformParams
+	// checked are the bundles each compiled device keeps, for the render time renderAt (architect decision A10-27).
+	var checked []pgstore.MarkDenialLockCheckedParams
+	renderAt := c.now()
 	warnings := map[uuid.UUID]deviceWarnings{}
 	keys, err := c.keys(ctx)
 	if err != nil {
@@ -249,7 +252,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
 			return err
 		}
-		if keys.Software, err = loadSoftware(ctx, q, org, c.cfg.Credentials); err != nil {
+		if keys.Software, err = loadSoftware(ctx, q, org, c.cfg.Credentials, renderAt); err != nil {
 			return err
 		}
 		keys.Software.approvalGate = c.approvalAgent
@@ -284,6 +287,8 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			// recorded once, not on every reconcile round.
 			seen = append(seen, pgstore.SetDeviceCompiledPlatformParams{ID: row.ID, Arch: row.Arch, OsID: row.OsID, OsVersionID: row.OsVersionID,
 				AgentVersion: row.AgentVersion})
+			// Like seen, a blocked device is recorded too: otherwise the reconcile would select it every round.
+			checked = append(checked, pgstore.MarkDenialLockCheckedParams{ID: row.ID, BundleSeq: row.BundleSeq, CheckedAt: renderAt})
 			if changed {
 				todo = append(todo, r)
 			}
@@ -302,6 +307,14 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		seen = slices.DeleteFunc(seen, func(p pgstore.SetDeviceCompiledPlatformParams) bool {
 			return slices.ContainsFunc(todo, func(r rendered) bool { return r.device == p.ID }) && !slices.Contains(committed, p.ID)
 		})
+		checked = slices.DeleteFunc(checked, func(p pgstore.MarkDenialLockCheckedParams) bool {
+			return slices.ContainsFunc(todo, func(r rendered) bool { return r.device == p.ID }) && !slices.Contains(committed, p.ID)
+		})
+		for i, p := range checked {
+			if slices.Contains(committed, p.ID) {
+				checked[i].BundleSeq++
+			}
+		}
 		for _, r := range todo {
 			if slices.Contains(committed, r.device) {
 				warnings[r.device] = deviceWarnings{seq: r.oldSeq + 1, warnings: r.warnings}
@@ -310,7 +323,27 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			}
 		}
 	}
-	return errors.Join(publishErr, c.recordPlatform(ctx, seen), c.recordWarnings(ctx, org, warnings))
+	return errors.Join(publishErr, c.recordPlatform(ctx, seen), c.recordDenialLocks(ctx, checked),
+		c.recordWarnings(ctx, org, warnings))
+}
+
+// recordDenialLocks records the render time for each device whose bundle_seq is still the one this compile left:
+// the committed bundle, or the unchanged or blocked one it kept. Every denial lock that ended before the render time is
+// reflected in that bundle, so the reconcile selects only locks that end later (architect decision A10-27). The render
+// time counts, not the publish time: a render before a lock's end that commits after it still names the denial. A
+// device a concurrent compile moved on is skipped; that compile records its own render time.
+func (c *Compiler) recordDenialLocks(ctx context.Context, checked []pgstore.MarkDenialLockCheckedParams) error {
+	if len(checked) == 0 {
+		return nil
+	}
+	return c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		for _, p := range checked {
+			if _, err := q.MarkDenialLockChecked(ctx, p); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // recordPlatform stores the architecture, os-release and agent version the compile of each device read, after its
