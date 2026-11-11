@@ -246,6 +246,8 @@ func TestSoftwareSelfService(t *testing.T) {
 	})
 
 	t.Run("A10-14 icon of a catalog entry", func(t *testing.T) {
+		// SS1 already applied the current bundle and the gateway offers only a newer one, so the device asks for it again.
+		owned.Applied = 0
 		b := latestBundle(t, owned, 2*time.Minute, hasPackage(ssDevicePackage))
 		p, _ := softwarePackage(b, ssDevicePackage)
 		want := sha256.Sum256(gatePNG(t))
