@@ -291,7 +291,8 @@ helper (PDK-985), and every package operation a user or another tool starts.
 - **Effect.** While Paddock installs software, **new logins and screen unlocks of directory users wait** (seconds,
   for large packages or a regular update minutes). Running sessions continue: a signed-in directory user still
   resolves through NSS, by name and by UID, while the daemon is stopped (Himmelblau's cache; observed in the system
-  gates on Ubuntu 24.04 and 26.04). Local accounts, the managed local administrator included, are not affected.
+  gates on Ubuntu 24.04 and 26.04). Only a directory user the device has never seen may not resolve until the hold
+  ends. Local accounts, the managed local administrator included, are not affected.
 - **Bounds.** One hold runs at a time on a device, also between the agent and the regular updates, which run in a
   process of their own (lock file `/var/lib/paddock/state/nss-shield.lock`). A regular updates run is one hold around
   its `dist-upgrade`; the package list update runs before it. A hold starts only once no other package operation
