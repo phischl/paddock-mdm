@@ -8,7 +8,7 @@ request, cluster, release), the flake policy and how to read the acceptance shar
 ## Prerequisites
 
 - Docker Engine with Compose v2 (`docker compose`), GNU make, Go 1.21 or newer (for `make dev-seed`,
-  `make acceptance`). The repository declares Go 1.27.3 (`toolchain` line in `go.work` and every `go.mod`); an older
+  `make acceptance`). The repository declares Go 1.27.4 (`toolchain` line in `go.work` and every `go.mod`); an older
   host Go downloads that toolchain automatically on first use (`GOTOOLCHAIN=auto`, the Go default, set by the
   Makefile; for `go` commands outside make, unset a `GOTOOLCHAIN=local` from your environment). Container builds
   use the pinned `GO_BUILD_IMAGE` from `deploy/compose/versions.env`.
