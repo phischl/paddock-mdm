@@ -72,9 +72,9 @@ type System interface {
 	// Flatpak runs flatpak like AptGet (plan M13b decision 10): in a process group of its own, killed at
 	// PackageTimeout, stdout and stderr combined.
 	Flatpak(ctx context.Context, args ...string) (output string, exit int, err error)
-	// SystemdRun runs systemd-run like Flatpak with stdin as its standard input: a command in a user's service
-	// manager (--machine=<uid>@.host --user --pipe, plan M13b decision 10 and Q14).
-	SystemdRun(ctx context.Context, stdin []byte, args ...string) (output string, exit int, err error)
+	// SystemdRun runs systemd-run like Flatpak: a command in a user's service manager (--machine=<uid>@.host --user
+	// --pipe, plan M13b decision 10 and Q14).
+	SystemdRun(ctx context.Context, args ...string) (output string, exit int, err error)
 	// Loginctl runs loginctl.
 	Loginctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	// Getent looks key up in an NSS database (passwd, group); exit 2 means not found.

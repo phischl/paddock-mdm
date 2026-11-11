@@ -34,6 +34,11 @@ const (
 	flatpakMasksRecord = "/var/lib/paddock/state/flatpak-masks"
 	// flatpakKeyFile holds a source's key for the --gpg-import of one remote-add, in a directory only root reads.
 	flatpakKeyFile = "/var/lib/paddock/state/flatpak-import.gpg"
+	// flatpakUserKeyDir holds the key file of one remote-add in a user's installation. flatpak 1.14 imports nothing
+	// from --gpg-import=- and the user's flatpak runs as the user, who cannot read flatpakKeyFile (PDK-996). Root owns
+	// the directory and the user cannot write it, so no file in it can be swapped or redirected by a symlink; the
+	// file holds a public key only, so it is world-readable.
+	flatpakUserKeyDir = "/run/paddock/flatpak-keys"
 )
 
 // FlatpakRemoteName is the system remote of a Flatpak source.
@@ -106,10 +111,10 @@ func (s *Software) runFlatpak(ctx context.Context, args ...string) (string, erro
 // installation, never escalated to the system one. The UID, not the name: systemd splits --machine at the first "@",
 // which a directory user's name contains. RuntimeMaxSec: killing systemd-run at the timeout leaves the transient unit
 // running in the user's service manager, so the unit ends itself at the same limit.
-func (s *Software) runUserFlatpak(ctx context.Context, uid int, stdin []byte, args ...string) (string, error) {
+func (s *Software) runUserFlatpak(ctx context.Context, uid int, args ...string) (string, error) {
 	full := append([]string{"--machine=" + strconv.Itoa(uid) + "@.host", "--user", "--wait", "--pipe", "--quiet", "--collect",
 		"--property=RuntimeMaxSec=" + strconv.Itoa(int(PackageTimeout.Seconds())), "--setenv=LC_ALL=C", "flatpak"}, args...)
-	out, exit, err := s.Sys.SystemdRun(ctx, stdin, full...)
+	out, exit, err := s.Sys.SystemdRun(ctx, full...)
 	return out, flatpakErr("flatpak "+args[0]+" (uid "+strconv.Itoa(uid)+")", out, exit, err)
 }
 
@@ -179,7 +184,7 @@ func (s *Software) systemApps(ctx context.Context) (map[string]string, error) {
 }
 
 func (s *Software) userApps(ctx context.Context, uid int) (map[string]string, error) {
-	out, err := s.runUserFlatpak(ctx, uid, nil, "list", "--user", "--app", "--columns=application,version")
+	out, err := s.runUserFlatpak(ctx, uid, "list", "--user", "--app", "--columns=application,version")
 	if err != nil {
 		return nil, err
 	}
@@ -630,6 +635,22 @@ func (s *Software) addRemote(ctx context.Context, src bundle.SoftwareSource, key
 	return err
 }
 
+// addUserRemote adds the remote name with its checked key to the installation of user uid. The key file lives only
+// for the call, under a name of its own, so that concurrent operations never share one.
+func (s *Software) addUserRemote(ctx context.Context, uid int, name, uri string, keyring []byte) error {
+	path := flatpakUserKeyDir + "/" + strconv.Itoa(uid) + "-" + strconv.FormatUint(s.keySeq.Add(1), 10) + ".gpg"
+	if err := s.Sys.WriteFileAtomic(path, keyring, 0o644, 0, 0); err != nil {
+		return fmt.Errorf("writing the key of remote %s: %w", name, err)
+	}
+	defer func() {
+		if err := s.Sys.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			slog.Warn("removing the flatpak key file failed", "path", path, "error", err)
+		}
+	}()
+	_, err := s.runUserFlatpak(ctx, uid, "remote-add", "--user", "--if-not-exists", "--gpg-import="+path, name, uri)
+	return err
+}
+
 // applyMasks masks the forbidden and held system applications and unmasks those Paddock masked whose intent ended.
 // Only the masks Paddock added are recorded, so a mask the device already had survives the end of the intent.
 func (s *Software) applyMasks(ctx context.Context, sp bundle.SoftwareSpec, pass *softwarePass) error {
@@ -800,7 +821,7 @@ func (f *flatpakApply) apps(ctx context.Context, uid int) (map[string]string, er
 }
 
 // installUser installs a user-scope application in the installation of every listed user with a session, adding the
-// source's remote there first (its key on stdin). Without such a user it stays pending: it is never installed system
+// source's remote there first (addUserRemote). Without such a user it stays pending: it is never installed system
 // wide instead (decision Q14).
 func (f *flatpakApply) installUser(ctx context.Context, p bundle.SoftwarePackage) {
 	key := softwareKey(p)
@@ -830,9 +851,9 @@ func (f *flatpakApply) installUser(ctx context.Context, p bundle.SoftwarePackage
 				continue
 			}
 			name := FlatpakRemoteName(p.Source)
-			_, err = f.s.runUserFlatpak(ctx, uid, keyring, "remote-add", "--user", "--if-not-exists", "--gpg-import=-", name, src.URIs[0])
+			err = f.s.addUserRemote(ctx, uid, name, src.URIs[0], keyring)
 			if err == nil {
-				_, err = f.s.runUserFlatpak(ctx, uid, nil, "install", "-y", "--noninteractive", "--user", name, p.FlatpakRef)
+				_, err = f.s.runUserFlatpak(ctx, uid, "install", "-y", "--noninteractive", "--user", name, p.FlatpakRef)
 			}
 			if err == nil {
 				delete(f.userApps, uid)
@@ -879,7 +900,7 @@ func (f *flatpakApply) removeUser(ctx context.Context, p bundle.SoftwarePackage)
 				deferred = true
 				continue
 			}
-			if _, err = f.s.runUserFlatpak(ctx, uid, nil, "uninstall", "-y", "--noninteractive", "--user", "--app", p.FlatpakRef); err == nil {
+			if _, err = f.s.runUserFlatpak(ctx, uid, "uninstall", "-y", "--noninteractive", "--user", "--app", p.FlatpakRef); err == nil {
 				delete(installed, p.FlatpakRef)
 				f.removed(p, version)
 				continue

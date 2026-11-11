@@ -405,7 +405,7 @@ func TestFlatpakUserScope(t *testing.T) {
 		t.Fatalf("apply %+v", res)
 	}
 	prefix := "systemd-run --machine=70001@.host --user --wait --pipe --quiet --collect --property=RuntimeMaxSec=900 --setenv=LC_ALL=C flatpak "
-	for _, want := range []string{prefix + "remote-add --user --if-not-exists --gpg-import=- paddock-flathub " + flathubURL,
+	for _, want := range []string{prefix + "remote-add --user --if-not-exists --gpg-import=/run/paddock/flatpak-keys/70001-1.gpg paddock-flathub " + flathubURL,
 		prefix + "install -y --noninteractive --user paddock-flathub " + gimp} {
 		if !slices.Contains(sys.FlatpakCalls, want) {
 			t.Fatalf("no %q in %q", want, sys.FlatpakCalls)
@@ -418,6 +418,11 @@ func TestFlatpakUserScope(t *testing.T) {
 		u := sys.FlatpakUsers[uid]
 		if _, ok := u.Apps[gimp]; !ok || u.Remotes[flathubRemote] == nil || string(u.Remotes[flathubRemote].Key) != string(reconcile.HimmelblauKey()) {
 			t.Fatalf("uid %d: %+v", uid, u)
+		}
+	}
+	for _, path := range []string{"/run/paddock/flatpak-keys/70001-1.gpg", "/run/paddock/flatpak-keys/70002-2.gpg"} {
+		if !slices.Contains(sys.Calls, "write "+path) || !slices.Contains(sys.Calls, "remove "+path) || sys.Files[path] != nil {
+			t.Fatalf("key file %s not written for the call alone: %q", path, sys.Calls)
 		}
 	}
 	if len(sys.FlatpakUsers[120].Apps) != 0 || len(sys.FlatpakUsers[70004].Apps) != 0 || len(sys.FlatpakSystem.Apps) != 0 {

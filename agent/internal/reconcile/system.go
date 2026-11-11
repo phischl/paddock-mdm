@@ -247,11 +247,11 @@ func (o OS) Flatpak(ctx context.Context, args ...string) (string, int, error) {
 }
 
 // SystemdRun implements System.
-func (o OS) SystemdRun(ctx context.Context, stdin []byte, args ...string) (string, int, error) {
+func (o OS) SystemdRun(ctx context.Context, args ...string) (string, int, error) {
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return packageCommand(ctx, PackageTimeout, stdin, "systemd-run", args...)
+	return packageCommand(ctx, PackageTimeout, nil, "systemd-run", args...)
 }
 
 // packageCommand runs a package tool non-interactively in a process group of its own and kills the whole group at
