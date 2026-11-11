@@ -1820,6 +1820,21 @@ request round expires what is left open or no longer holds. Until the agent rele
 the compiler gives no agent an approval-required package. Packages stored in Paddock, the patch compliance report and
 the shared catalog follow (plan M13c §3.4 to §3.6).
 
+> **Amendment 2026-11-11 (M13c, architect decision A10-27):** the request flow on the device ships with agent
+> `0.1.0-alpha.10`; from that release on an agent receives approval-required packages, an older agent receives
+> neither the package nor the fields below. The bundle's software package gains the additive field
+> `denied[]{user, reason}` (ADR 0013) next to `approval` and `approved[]`: the users of the audience whose latest
+> request for that device and entry an administrator denied less than 24 hours ago, each with the administrator's
+> reason. The reason is untrusted plain text of at most 500 characters; the agent shows a denial only to the user
+> it names (the caller's peer UID on the self-service socket) and refuses that user's new request with 409
+> `denied` while the bundle names them. The bundle carries no expiry: the compiler's reconcile loop recompiles a
+> device once a denial's 24 hours ended (lock ends of the last 7 days; `device.denial_lock_checked_at` holds the
+> render time of the device's last compile and is written only for the bundle sequence that compile left). A device
+> whose bundle is blocked keeps an expired denial until the compile that clears the block. The user's
+> justification (at most 500 characters of plain text) is stored with the request and shown to the organization's
+> administrators, operators and auditors as text only; it never enters audit params or logs. Plan M13c, amendment
+> 2026-11-11.
+
 ### 12.6 Dead man's switch (F14)
 
 - Contact anchor: every check-in response carries a **time ticket** `{organization_id, issued_at}`
@@ -2427,6 +2442,11 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > carries `rollout`, `rollout_id`, `urgent_reason`, `reverts_change_set_id`, `reverted_by` and `before_available`, and
 > `EffectiveConfig` carries `rollout`. Guide: `docs/operations/configuration-rollouts.md`.
 
+> **Amendment 2026-11-11 (M13c, architect decision A10-27):** `software_request` gains `justification` (plain text,
+> at most 500 characters, no control characters except newlines; migration `00123`), which replaces "no
+> justification text" of the amendment 2026-11-09; `device` gains `denial_lock_checked_at`, and `software_request`
+> the partial index `software_request_denied_idx` on denied requests (migration `00124`).
+
 > **Amendment 2026-11-09 (M13c, plan M13c §6):** `PUT`/`GET /api/v1/config` carry the sections `software_sources`
 > (a change needs a step-up; an API token's apply is refused with 403 `step_up_required`, the plan names it in
 > `requires_step_up`), `software_catalog` (with `approval`) and `software_assignments`, and a device group's
@@ -2439,6 +2459,11 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > step-up. `ConfigRollout` gains `wave_success_threshold_percent`, `stall_warning_hours`, `wave_first_applied_at`,
 > `stalled_since` and the counts `waiting` and `awaiting_retry`; the rollout device list gains `waiting_for_window` and
 > `awaiting_retry` (also a filter). Guide: `docs/operations/software.md`.
+
+> **Amendment 2026-11-11 (M13c, architect decision A10-27):** `SoftwareRequest` carries `justification` (untrusted
+> text, at most 500 characters; list and detail). The reason of `…/approve` and `…/deny` is refused with 400
+> `invalid_request` when it holds a control character other than a newline (a tab included); a denial's reason
+> reaches the requesting user's device in the bundle. A decision queues a compile of the request's device.
 
 > **Amendment 2026-11-06 (M12, ADR 0048, ADR 0031 amendment 2026-11-04, plan M12):** new endpoints
 > `POST`/`GET /api/v1/devices/{id}/diagnostics` (request with a reason, `org_admin` and `org_operator`; the device's list),
