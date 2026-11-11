@@ -1,7 +1,8 @@
 // Package backuprole is the backup role `paddock-server serve backup` (plan M15 decisions 15–19, ADR 0046): the only
 // process that holds the backup key at run time. Every round it hands the key and the schedule to pgBackRest through
 // the runtime tmpfs, takes the due OpenBao snapshots, seals the Fleet dumps, copies the escrow objects into the local
-// repository, expires old files, writes manifest.json and mirrors the set to every enabled target.
+// repository, expires old files, writes manifest.json and starts the mirror of the set to every enabled target in that
+// target's own lane, which the round never waits for (decisions-alpha10 A10-26).
 package backuprole
 
 import (
@@ -31,6 +32,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/backup"
 	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
@@ -106,10 +108,16 @@ type Config struct {
 	HighWaterFile string
 }
 
-// LeaderLocker runs fn while holding a cluster-wide advisory lock; false when another replica holds it.
+// LeaderLocker runs fn while holding a cluster-wide advisory lock on one dedicated connection, checked every check;
+// false when another process holds it. fn's context ends with the cause db.ErrLeadershipLost when the connection
+// stops answering (db.PlatformPool.Lead).
 type LeaderLocker interface {
-	WithLeaderLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (bool, error)
+	Lead(ctx context.Context, key int64, check time.Duration, fn func(ctx context.Context) error) (bool, error)
 }
+
+// leaderCheckEvery is how often the leader asks its lock connection whether it still answers: the longest a process
+// that lost the lock can go on writing beside the next leader (decisions-alpha10 §50).
+const leaderCheckEvery = 5 * time.Second
 
 // Snapshotter takes OpenBao's Raft snapshot (bao.Client with the AppRole paddock-backup).
 type Snapshotter interface {
@@ -134,14 +142,14 @@ type Engine struct {
 	metrics *Metrics
 	now     func() time.Time
 	hashes  map[string]hashEntry
-	// mirrored is the newest time of every kind a target held after its last successful mirror.
+	// mirrored is the newest time of every kind a target held after its last successful mirror (guarded by laneMu).
 	mirrored map[string]map[string]time.Time
-	// pushed is, per target, the local state of every in-place rewritten file when the mirror last copied it.
+	// pushed is, per target, the local state of every in-place rewritten file when the mirror last copied it (the
+	// outer map guarded by busyMu).
 	pushed map[uuid.UUID]map[string]fileInfo
 	// fleetFailed is the time of the last failed sealing of a waiting dump, by file name.
 	fleetFailed map[string]time.Time
 	stall       time.Duration
-	fleetWatch  time.Duration
 	budget      time.Duration
 	// minRate is the throughput a target must reach on the file it copies when the budget ends (bytes per second).
 	minRate int64
@@ -157,8 +165,27 @@ type Engine struct {
 	// warned about once.
 	escrowMissing []string
 	// held is the held count of each target's last mirror that reached step 6; a failed mirror keeps it, so one
-	// failure does not reset PaddockBackupTargetHolding's for: window (PDK-732 review 6, F3).
+	// failure does not reset PaddockBackupTargetHolding's for: window (PDK-732 review 6, F3). Guarded by laneMu.
 	held map[uuid.UUID]int
+	// laneMu guards the lanes, the open passes and the per-target state the lanes report (held, mirrored, reachable,
+	// enabled, repoKinds).
+	laneMu sync.Mutex
+	// lanes holds the mirror in flight of each target: at most one per target (decisions-alpha10 A10-26).
+	lanes map[uuid.UUID]*lane
+	// passes holds the mirror passes whose runs have no mirror results yet.
+	passes []*mirrorPass
+	// waiting holds, per target whose lane mirrored an earlier set when they began, the passes its next lane settles.
+	waiting map[uuid.UUID][]*mirrorPass
+	// longLane holds the targets whose last lane ran longer than a round interval: their next lane's start is logged.
+	longLane map[uuid.UUID]bool
+	// laneWG counts the running lanes; Run waits for them on shutdown.
+	laneWG sync.WaitGroup
+	// reachable is the result of each target's last finished mirror for paddock_backup_target_reachable.
+	reachable map[uuid.UUID]bool
+	// enabled and repoKinds are the enabled targets and the local set's kinds of the newest pass, which the metrics
+	// a lane publishes when it ends refer to.
+	enabled   []TargetRecord
+	repoKinds map[string]kindInfo
 }
 
 // NewEngine creates the engine.
@@ -166,13 +193,47 @@ func NewEngine(cfg Config, lock LeaderLocker, store Store, keys Decrypter, snap 
 	targets TargetFactory, metrics *Metrics, now func() time.Time) *Engine {
 	return &Engine{cfg: cfg, lock: lock, store: store, keys: keys, snap: snap, escrow: escrow, targets: targets,
 		metrics: metrics, now: now, hashes: map[string]hashEntry{}, mirrored: map[string]map[string]time.Time{},
-		pushed: map[uuid.UUID]map[string]fileInfo{}, fleetFailed: map[string]time.Time{}, stall: mirrorStall, fleetWatch: fleetWatchEvery,
+		pushed: map[uuid.UUID]map[string]fileInfo{}, fleetFailed: map[string]time.Time{}, stall: mirrorStall,
 		budget: mirrorBudget, minRate: mirrorMinRate, busy: map[uuid.UUID]bool{}, checking: map[uuid.UUID]bool{}, testing: map[uuid.UUID]bool{},
-		held: map[uuid.UUID]int{}}
+		held: map[uuid.UUID]int{}, lanes: map[uuid.UUID]*lane{}, reachable: map[uuid.UUID]bool{},
+		waiting: map[uuid.UUID][]*mirrorPass{}, longLane: map[uuid.UUID]bool{}}
 }
 
-// Run runs a round at start and then every RoundInterval until ctx ends.
+// Run leads the backup role for the life of the process (decisions-alpha10 §50): it holds the leader lock on one
+// dedicated connection and runs a round at start and then every RoundInterval, while the mirror lanes run beside the
+// rounds, so lanes and rounds only ever run under the lock. A process that does not get the lock stands by and tries
+// again every RoundInterval. When the lock's connection stops answering, the rounds and lanes stop before any further
+// write, the loss is logged and counted (paddock_backup_leader_lost_total; the audit registry has no code for it), and
+// Run tries to lead again. The end of ctx cancels the lanes, and Run returns once they returned; a lane cancelled so
+// records nothing, and the next leader mirrors its runs.
 func (e *Engine) Run(ctx context.Context) error {
+	for {
+		led, err := e.lock.Lead(SystemContext(ctx), LockKey, leaderCheckEvery, e.lead)
+		switch {
+		case ctx.Err() != nil:
+			return nil
+		case errors.Is(err, db.ErrLeadershipLost):
+			e.metrics.leaderLost.Inc()
+			slog.ErrorContext(ctx, "backup role lost its leader lock; rounds and mirror lanes stopped, leading again when the lock is free",
+				"error", err)
+		case err != nil:
+			slog.WarnContext(ctx, "backup role could not take its leader lock; retrying", "error", err, "led", led)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(e.cfg.RoundInterval):
+		}
+	}
+}
+
+// lead runs the rounds while this process holds the leader lock; it returns once ctx ended and every lane returned,
+// and forgets the open passes, whose runs the next leadership covers.
+func (e *Engine) lead(ctx context.Context) error {
+	e.metrics.leader.Set(1)
+	defer e.metrics.leader.Set(0)
+	defer e.forgetPasses()
+	defer e.waitLanes()
 	tick := time.NewTicker(e.cfg.RoundInterval)
 	defer tick.Stop()
 	for {
@@ -191,10 +252,9 @@ func principalWith(ctx context.Context) context.Context {
 	return principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: Actor})
 }
 
-// Round runs one round on the replica that holds the lock.
+// Round runs one round; the caller leads (Run), and the lanes it starts run on with ctx after it returned.
 func (e *Engine) Round(ctx context.Context) error {
-	_, err := e.lock.WithLeaderLock(SystemContext(ctx), LockKey, e.round)
-	return err
+	return e.round(SystemContext(ctx))
 }
 
 // run is one run of one kind before its mirror results are known.
@@ -255,22 +315,15 @@ func (e *Engine) round(ctx context.Context) error {
 	}
 
 	// Phase 1 (decisions-alpha9 item 79): each run is recorded as soon as its local step finished, never after the
-	// mirror, which can take hours on a large target; its mirror results and audit event follow in phase 2.
+	// mirror, which can take hours on a large target; its mirror results and audit event follow in phase 2, when the
+	// lanes of the pass that covers it ended.
 	var runs []run
-	// later holds the runs recorded after this round's index: its mirror does not hold their files, so their mirror
-	// results and audit event are the next round's (decisions-alpha9 item 82).
-	var later []uuid.UUID
-	indexed := false
 	record := func(rs ...run) {
 		for _, r := range rs {
 			runs = append(runs, r)
-			ids, err := e.store.RecordRun(ctx, r)
-			if err != nil {
+			if _, err := e.store.RecordRun(ctx, r); err != nil {
 				errs = append(errs, fmt.Errorf("record %s run: %w", r.Kind, err))
 				continue
-			}
-			if indexed {
-				later = append(later, ids...)
 			}
 			outcome := "succeeded"
 			if !r.Succeeded {
@@ -288,7 +341,7 @@ func (e *Engine) round(ctx context.Context) error {
 		r, escrow = e.mirrorEscrow(ctx, repo, byKind[KindEscrow])
 		record(r)
 	}
-	fleetRuns, fleetRequested, err := e.fleet(ctx, repo, raw, history[KindFleet], hours(sched.FleetIntervalHours),
+	fleetRuns, err := e.fleet(ctx, repo, raw, history[KindFleet], hours(sched.FleetIntervalHours),
 		byKind[KindFleet])
 	errs = append(errs, err)
 	record(fleetRuns...)
@@ -306,7 +359,7 @@ func (e *Engine) round(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(append(errs, err)...)
 	}
-	if e.expire(ctx, repo, idx, ret) {
+	if e.expire(ctx, repo, idx, ret, e.pinned()) {
 		if idx, err = indexRepo(repo); err != nil {
 			return errors.Join(append(errs, err)...)
 		}
@@ -320,20 +373,11 @@ func (e *Engine) round(ctx context.Context) error {
 	if idx, err = indexRepo(repo); err != nil {
 		return errors.Join(append(errs, err)...)
 	}
-	e.repoMetrics(idx, key.ID, kinds)
+	e.repoMetrics(idx, key.ID)
 
 	ret.walOK = e.walOK(idx, ret.active)
-	// A Fleet dump this round asked for arrives while the mirror runs, which can take hours: it is sealed and recorded
-	// as soon as it is there, not in the next round (decisions-alpha9 item 82).
-	indexed = true
-	stopFleet := func() {}
-	if fleetRequested {
-		stopFleet = e.watchFleet(ctx, repo, raw, unanswered(byKind[KindFleet], runs), record)
-	}
-	results := e.mirrorAll(ctx, repo, idx, targets, kinds, ret)
-	stopFleet()
-	if err := e.store.MirrorRuns(ctx, results, later); err != nil {
-		errs = append(errs, fmt.Errorf("record the mirror of the runs: %w", err))
+	if err := e.startMirrors(ctx, idx, targets, kinds, ret); err != nil {
+		errs = append(errs, err)
 	}
 	if err := errors.Join(errs...); err != nil {
 		return err
@@ -554,86 +598,39 @@ func (e *Engine) copyEscrow(ctx context.Context, repo *os.Root, key, local strin
 var fleetDump = regexp.MustCompile(`^(\d{8}T\d{6}Z)\.sql\.gz$`)
 
 // fleet seals the dumps fleet-backup left (sealFleet). When a dump is due or requested and none waits, it asks
-// fleet-backup for one, or finds its earlier request still open; requested is true then, and the round watches for
-// the dump while it mirrors (watchFleet). A request fleet-backup did not answer within requestTimeout fails and is
-// withdrawn.
+// fleet-backup for one, or finds its earlier request still open; the next round seals the dump (the round no longer
+// waits for a mirror, so it is at most a round interval away; decisions-alpha10 A10-26). A request fleet-backup did
+// not answer within requestTimeout fails and is withdrawn.
 func (e *Engine) fleet(ctx context.Context, repo *os.Root, key []byte, h KindHistory, interval time.Duration,
-	reqs []RequestedRun) (runs []run, requested bool, err error) {
+	reqs []RequestedRun) ([]run, error) {
 	dumps, err := e.fleetDumps()
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	runs = e.sealFleet(repo, key, dumps, reqs)
-	if len(dumps) > 0 {
-		return runs, false, nil
-	}
-	if !e.due(h, interval) && len(reqs) == 0 {
-		return runs, false, nil
+	runs := e.sealFleet(repo, key, dumps, reqs)
+	if len(dumps) > 0 || (!e.due(h, interval) && len(reqs) == 0) {
+		return runs, nil
 	}
 	now := e.now()
 	req := filepath.Join(e.cfg.FleetDumpsDir, fleetRequestFile)
 	if _, err := os.Stat(req); err == nil {
 		at := readEpochFile(req)
 		if now.Sub(at) < requestTimeout {
-			return runs, true, nil
+			return runs, nil
 		}
 		if err := os.Remove(req); err != nil {
-			return runs, false, fmt.Errorf("withdraw fleet dump request: %w", err)
+			return runs, fmt.Errorf("withdraw fleet dump request: %w", err)
 		}
 		answered := slices.DeleteFunc(slices.Clone(reqs), func(q RequestedRun) bool { return q.CreatedAt.After(at) })
 		slog.WarnContext(ctx, "fleet-backup did not answer the dump request", "requested_at", at)
 		return append(runs, run{Kind: KindFleet, Requests: answered, StartedAt: at, FinishedAt: now,
-			ErrorClass: runClassTimeout}), false, nil
+			ErrorClass: runClassTimeout}), nil
 	}
 	if err := os.WriteFile(req, []byte(strconv.FormatInt(e.now().Unix(), 10)), 0o640); err != nil { //nolint:gosec // fixed name in the dumps volume
-		return runs, false, fmt.Errorf("request fleet dump: %w", err)
+		return runs, fmt.Errorf("request fleet dump: %w", err)
 	}
 	slog.InfoContext(ctx, "fleet dump requested")
-	return runs, true, nil
-}
-
-// unanswered returns the requests of reqs no run of runs answers: a request the round already answered with a timeout
-// must not be answered again by a dump that arrives later.
-func unanswered(reqs []RequestedRun, runs []run) []RequestedRun {
-	return slices.DeleteFunc(slices.Clone(reqs), func(q RequestedRun) bool {
-		return slices.ContainsFunc(runs, func(r run) bool {
-			return slices.ContainsFunc(r.Requests, func(a RequestedRun) bool { return a.ID == q.ID })
-		})
-	})
-}
-
-// fleetWatchEvery is how often a round looks for the Fleet dump it asked for while its mirror runs.
-const fleetWatchEvery = 5 * time.Second
-
-// watchFleet seals and records the Fleet dump this round asked for as soon as fleet-backup left it, while the round's
-// mirror runs; the returned stop ends the watch and waits for it, so that the round's runs and errors are its own
-// again (decisions-alpha9 item 82).
-func (e *Engine) watchFleet(ctx context.Context, repo *os.Root, key []byte, reqs []RequestedRun,
-	record func(...run)) (stop func()) {
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		tick := time.NewTicker(e.fleetWatch)
-		defer tick.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-			}
-			dumps, err := e.fleetDumps()
-			if err != nil || len(dumps) == 0 {
-				continue
-			}
-			record(e.sealFleet(repo, key, dumps, reqs)...)
-			return
-		}
-	}()
-	return func() {
-		cancel()
-		<-done
-	}
+	return runs, nil
 }
 
 // sealFleet seals the plaintext dumps into the repository and deletes them; the first run answers reqs. A dump whose
@@ -842,10 +839,18 @@ func (e *Engine) timeouts(byKind map[string][]RequestedRun, runs []run) []run {
 // the newest of a kind, so a kind that keeps failing still has its last good file; the escrowed headers the escrow
 // rule lets go (escrowRule: a Destroy older than the keep window, never mere absence from the bucket); and the repository of a retired key once the active
 // key's repository holds a full backup of every stanza and max(its newest file, retired_at) is older than
-// retention_full full intervals. It reports whether it deleted.
-func (e *Engine) expire(ctx context.Context, repo *os.Root, idx repoIndex, ret retention) bool {
+// retention_full full intervals. It never deletes a file of a pin, the index of a lane still in flight: the lane
+// copies that set, and a file gone before its copy would leave a target whose manifest names a file it lacks
+// (decisions-alpha10 A10-26); the file goes in the first round after the lane ended. It reports whether it deleted.
+func (e *Engine) expire(ctx context.Context, repo *os.Root, idx repoIndex, ret retention, pins []repoIndex) bool {
 	deleted := false
+	pinned := func(p string) bool {
+		return slices.ContainsFunc(pins, func(pin repoIndex) bool { _, ok := pin[p]; return ok })
+	}
 	remove := func(p string) {
+		if pinned(p) {
+			return
+		}
 		if err := repo.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			slog.WarnContext(ctx, "expire failed", "path", p, "error", err)
 			return
@@ -883,7 +888,8 @@ func (e *Engine) expire(ctx context.Context, repo *os.Root, idx repoIndex, ret r
 				newest = idx[p].mod
 			}
 		}
-		if !found || ret.now.Sub(newest) <= ret.keep {
+		if !found || ret.now.Sub(newest) <= ret.keep ||
+			slices.ContainsFunc(pins, func(pin repoIndex) bool { return pin.holdsPath(repoPath) }) {
 			continue
 		}
 		if err := repo.RemoveAll(path.Clean(dir)); err != nil {
@@ -988,11 +994,9 @@ func normalized(m backupset.Manifest) backupset.Manifest {
 	return out
 }
 
-// repoMetrics exports the repository's ages, WAL ages and file system usage.
-func (e *Engine) repoMetrics(idx repoIndex, keyID string, kinds map[string]kindInfo) {
-	for kind, k := range kinds {
-		e.metrics.lastSuccess.WithLabelValues(kind, RepoTarget).Set(unix(k.at))
-	}
+// repoMetrics exports the repository's WAL ages and file system usage; the ages of the kinds follow with the
+// targets' (publishTargets).
+func (e *Engine) repoMetrics(idx repoIndex, keyID string) {
 	repoPath := backupset.RepoPath(keyID)
 	for _, stanza := range Stanzas {
 		_, at := idx.newestWAL(repoPath, stanza)
@@ -1012,83 +1016,6 @@ func unix(t time.Time) float64 {
 		return 0
 	}
 	return float64(t.Unix())
-}
-
-// mirrorAll mirrors the set to every enabled target, writes their status per kind and returns the runs' target
-// results. A failing target never stops the others.
-func (e *Engine) mirrorAll(ctx context.Context, repo *os.Root, idx repoIndex, targets []TargetRecord,
-	kinds map[string]kindInfo, ret retention) []backupset.RunTarget {
-	results := []backupset.RunTarget{}
-	e.metrics.reachable.Reset()
-	e.metrics.held.Reset()
-	enabled := 0
-	for _, t := range targets {
-		if !t.Enabled {
-			continue
-		}
-		enabled++
-		class, held := "", 0
-		switch {
-		case backupset.Mounted(t.Type) && t.HostState == HostPending:
-			class = ClassNotMounted
-		case backupset.Mounted(t.Type) && t.HostState == HostUnreachable:
-			class = ClassIO
-		default:
-			var err error
-			held, err = e.mirrorTarget(ctx, repo, idx, t, ret)
-			switch {
-			case errors.Is(err, errBudget):
-				class = ClassContinues
-				slog.InfoContext(ctx, "mirror to backup target continues next round", "target", t.Name)
-			case err != nil:
-				class = ErrorClass(err)
-				slog.WarnContext(ctx, "mirror to backup target failed", "target", t.Name, "error_class", class, "error", err)
-			}
-		}
-		results = append(results, backupset.RunTarget{TargetID: t.ID.String(), OK: class == "", ErrorClass: class,
-			Held: held})
-		if class == "" || class == ClassUnknownPath {
-			e.held[t.ID] = held
-		}
-		e.metrics.held.WithLabelValues(t.Name).Set(float64(e.held[t.ID]))
-		if class == "" || class == ClassContinues {
-			e.metrics.reachable.WithLabelValues(t.Name).Set(1)
-		}
-		if class == "" {
-			held := map[string]time.Time{}
-			for kind, k := range kinds {
-				held[kind] = k.at
-			}
-			e.mirrored[t.Name] = held
-		} else if class != ClassContinues {
-			e.metrics.reachable.WithLabelValues(t.Name).Set(0)
-		}
-		for _, kind := range backupset.Kinds {
-			st := KindStatus{LastSuccess: kinds[kind].at, Bytes: kinds[kind].bytes, Error: class}
-			if class == ClassContinues {
-				// Not an error and not current yet: no last_error, and the last success and its size stay.
-				st = KindStatus{}
-			}
-			if err := e.store.SetTargetStatus(ctx, t.ID, kind, st); err != nil {
-				slog.WarnContext(ctx, "backup target status not written", "target", t.Name, "error", err)
-			}
-		}
-	}
-	e.metrics.lastSuccess.Reset()
-	for kind, k := range kinds {
-		e.metrics.lastSuccess.WithLabelValues(kind, RepoTarget).Set(unix(k.at))
-	}
-	for _, t := range targets {
-		held, ok := e.mirrored[t.Name]
-		if !t.Enabled || !ok {
-			continue
-		}
-		for kind, at := range held {
-			e.metrics.lastSuccess.WithLabelValues(kind, t.Name).Set(unix(at))
-		}
-	}
-	e.metrics.series.Set(float64(len(backupset.Kinds) * (1 + enabled)))
-	return results
 }
 
 // errStalled marks a target operation that made no progress within its deadline.
@@ -1111,12 +1038,13 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 		return 0, fmt.Errorf("%w: the previous mirror has not returned", errStalled)
 	}
 	e.busy[t.ID] = true
-	e.busyMu.Unlock()
+	// The lanes of other targets reach this map at the same time; this target's inner map is its lane's alone.
 	pushed := e.pushed[t.ID]
 	if pushed == nil {
 		pushed = map[string]fileInfo{}
 		e.pushed[t.ID] = pushed
 	}
+	e.busyMu.Unlock()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var progress, copying, copyStart atomic.Int64
@@ -1160,6 +1088,9 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 		select {
 		case r := <-done:
 			return r.held, r.err
+		case <-ctx.Done():
+			// Shutdown: a call blocked in the file system keeps the target busy, the lane ends now.
+			return 0, ctx.Err()
 		case <-check.C:
 			if n := progress.Load(); n != last {
 				last, since = n, time.Now()

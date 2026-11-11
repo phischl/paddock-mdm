@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -266,6 +267,33 @@ func TestPrepareDracutInstallFailed(t *testing.T) {
 	}
 	if f.dev.Exists(encrypt.ModuleDir) {
 		t.Fatal("the module was written after a failed switch")
+	}
+}
+
+// TestPrepareDracutShielded (PDK-983): the dracut installation runs through the himmelblaud shield; a shield that
+// defers it behind another package run (apt's lock message) makes the step wait for the next pass, not fail.
+func TestPrepareDracutShielded(t *testing.T) {
+	f := newFixture(t)
+	p := f.preparer()
+	var actions []string
+	p.Shield = func(_ context.Context, action string, run func() (string, int, error)) (string, int, error) {
+		actions = append(actions, action)
+		return run()
+	}
+	if got := p.Prepare(context.Background()); got != encrypt.Prepared || !slices.Equal(actions, []string{"apt-get install"}) {
+		t.Fatalf("outcome %v, shielded %v", got, actions)
+	}
+
+	f = newFixture(t)
+	p = f.preparer()
+	p.Shield = func(context.Context, string, func() (string, int, error)) (string, int, error) {
+		return "E: Could not get lock /var/lib/dpkg/lock-frontend: another package operation is running\n", 100, errors.New("busy")
+	}
+	if got := p.Prepare(context.Background()); got != encrypt.Stopped || f.conversion().FailureReason != "" || f.conversion().PackagesBusySince == nil {
+		t.Fatalf("deferred install: outcome %v %+v", got, f.conversion())
+	}
+	if f.dev.Count(aptInstall) != 0 {
+		t.Fatal("dracut installed although the shield deferred it")
 	}
 }
 

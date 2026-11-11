@@ -284,9 +284,19 @@ for the application, and an organization administrator decides.
    and approved requests whose entry no longer requires approval (`approval_removed`) or that no available assignment
    offers any longer (`assignment_removed`), each with `software_request.expired`.
 
+**On the device.** The self-service app shows *Request* instead of *Install* for an entry that requires approval and
+asks for an optional justification (plain text, at most 500 characters, newlines allowed; the agent refuses control
+characters with 400 `invalid_request`). The agent reports the request once (`software.request`) and shows it as
+*Requested* until the bundle reflects a decision: an approved user sees *Install*, a denied user sees *Denied* with the
+administrator's reason, which the bundle shows to that user only. The user can withdraw a pending request in the app;
+the withdrawal stays on the device, and the server's request ends with a decision or after 30 days, as does the
+device's. A second request while one is pending answers 409 `already_requested`, one for an entry without approval 409
+`not_required`; a user makes at most 10 requests an hour. Only directory users can ask: an approval names a user
+principal name.
+
 **Agents.** An approval-required package reaches no agent before the release with the request flow on the device
 (PDK-811); until then the users of such an entry see nothing of it, so nobody installs it without an approval. The
-user's justification text is not stored yet; it follows with the request flow on the device (see
+server stores the justification and renders denials into the bundle with PDK-993 (see
 [privacy](../compliance/privacy.md)).
 
 ## States and reasons
@@ -471,6 +481,7 @@ On the device:
 | `pending`, `deferred_offline` for a long time | the device cannot reach the server; check its network and the last contact on the device page |
 | `pending`, `dpkg_locked` for a long time | a package operation hangs on the device (`ps -C apt,apt-get,dpkg,unattended-upgr`); `sudo dpkg --configure -a` after it ended |
 | `not_applicable` although the package exists | the entry has no package name for the device's distribution, release or architecture; add one |
+| `sudo apt install` of a package fails with *already exists, but is not a system user* (or useradd exit 9) | its maintainer script creates a system account and Himmelblau's NSS module answered for the name (PDK-983); the agent holds `himmelblaud` stopped around its own installations, not around yours: stop it around the installation as described in [device-login.md](device-login.md#package-installations-pause-directory-logins) |
 | A required application keeps being reinstalled | a user or a tool removes it again and again: each removal is a `device.software_reinstalled` event (RR-80) |
 
 ## Residual risks

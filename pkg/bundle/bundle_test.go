@@ -676,6 +676,59 @@ func TestValidateSoftware(t *testing.T) {
 			available(s, &SoftwareAudience{All: true})
 			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"Alice@example.org"}
 		}, false},
+		// Architect decision A10-27: the denied users of a package that requires approval, with their reasons.
+		"denied with reason": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"alice@example.org"}
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: "Use the licensed\nalternative"}, {User: "carol@example.org"}}
+		}, true},
+		"denied reason 500 characters": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: strings.Repeat("ä", MaxSoftwareDenialReason)}}
+		}, true},
+		"denied reason 501 characters": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: strings.Repeat("a", MaxSoftwareDenialReason+1)}}
+		}, false},
+		"denied reason invalid utf-8": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: "\xff"}}
+		}, false},
+		"denied without approval": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: "no"}}
+		}, false},
+		"denied empty": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Denied = SoftwareApprovalRequired, &[]SoftwareDenial{}
+		}, false},
+		"denied unsorted": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org"}, {User: "alice@example.org"}}
+		}, false},
+		"denied invalid user": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "Bob@example.org"}}
+		}, false},
+		"denied and approved": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"bob@example.org"}
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org"}}
+		}, false},
+		"denied 201 users": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			denied := make([]SoftwareDenial, MaxSoftwareAudience+1)
+			for i, u := range audienceOf(MaxSoftwareAudience + 1) {
+				denied[i].User = u
+			}
+			s.Packages[1].Denied = &denied
+		}, false},
 		// Architect decision A10-11: the targeted users of a user-scope application, with the limits of an audience.
 		"flatpak user required for users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, "alice@example.org", "bob@example.org") }, true},
 		"flatpak user forbid for users":   {func(s *SoftwareSpec) { targeted(s, SoftwareForbid, "alice@example.org") }, true},

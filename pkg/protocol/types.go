@@ -199,6 +199,8 @@ const (
 	EventTamperSudoersDFile         = "tamper.sudoers_d_file"
 	EventTamperSudoersChanged       = "tamper.sudoers_changed"
 	EventTamperProtectedFileChanged = "tamper.protected_file_changed"
+	// The agent held himmelblaud stopped around one of its own package transactions (PDK-983, decisions §45).
+	EventLoginNSSShield = "login.nss_shield"
 	// Managed local administrator (plan M4a decisions 15, 16 and 18).
 	EventLocalAdminRotated        = "local_admin.rotated"
 	EventLocalAdminRotationFailed = "local_admin.rotation_failed"
@@ -379,12 +381,14 @@ type SoftwareSelfService struct {
 	Version    string `json:"version,omitempty"`
 }
 
-// SoftwareRequest is the data of software.request: the user name of the asking account (the UPN of a directory user)
-// and the catalog entry it asks for. The user's justification text is not part of it until the maintainer decides on
-// it (plan M13c §12 Q4).
+// SoftwareRequest is the data of software.request: the user name of the asking account (the UPN of a directory user),
+// the catalog entry it asks for and the user's justification, plain text of at most 500 characters without control
+// characters except newlines (maintainer answer Q7). The justification is untrusted input: it never enters audit
+// params, logs or problem details. Additive (ADR 0013); a server that does not store it drops it.
 type SoftwareRequest struct {
-	User    string `json:"user"`
-	EntryID string `json:"entry_id"`
+	User          string `json:"user"`
+	EntryID       string `json:"entry_id"`
+	Justification string `json:"justification,omitempty"`
 }
 
 // SoftwareApplyFailed is the data of software.apply_failed: a package or a source (Source without Package) that could
@@ -411,7 +415,7 @@ var EventTypes = []string{
 	EventAgentRolledBack, EventAgentEventsDropped, EventSessionLogin,
 	EventLoginApplied, EventLoginApplyFailed, EventUserLockApplied, EventLoginsSuspensionApplied, EventSudoApplyFailed,
 	EventSudoUserUnresolved, EventTamperSudoGroupMember, EventTamperSudoersDFile, EventTamperSudoersChanged,
-	EventTamperProtectedFileChanged,
+	EventTamperProtectedFileChanged, EventLoginNSSShield,
 	EventLocalAdminRotated, EventLocalAdminRotationFailed, EventLocalAdminLogin, EventTamperLocalAdminChanged,
 	EventTamperKeyslotChanged,
 	EventRevocationTrustPinnedTOFU, EventRevocationRefused,
@@ -600,6 +604,16 @@ type (
 		// Reason classifies some failures, e.g. LoginFailureTimeout of stage apt.
 		Reason string `json:"reason,omitempty"`
 	}
+	// LoginNSSShield: the agent stopped himmelblaud around one of its own package transactions, so that a maintainer
+	// script can create a system user (Himmelblau's NSS module answers for every unknown name while the daemon runs),
+	// and started it again. Action is the transaction ("apt-get install", "dpkg -i"), DurationS how long himmelblaud
+	// was held, Outcome one of the NSSShield constants, Error why it was not restored or not held.
+	LoginNSSShield struct {
+		Action    string `json:"action"`
+		DurationS int64  `json:"duration_s"`
+		Outcome   string `json:"outcome"`
+		Error     string `json:"error,omitempty"`
+	}
 	// UserLockApplied: a newly locked user is blocked on the device and its sessions were locked or terminated.
 	UserLockApplied struct {
 		Username           string `json:"username"`
@@ -643,6 +657,21 @@ type (
 	TamperProtectedFileChanged struct {
 		File string `json:"file"`
 	}
+)
+
+// Outcomes of login.nss_shield.
+const (
+	// NSSShieldRestored: himmelblaud was started again when the transaction ended.
+	NSSShieldRestored = "restored"
+	// NSSShieldMaxHold: the transaction outlasted the maximum hold time; himmelblaud was started while it still ran.
+	NSSShieldMaxHold = "max_hold"
+	// NSSShieldRecovered: the agent ended during a hold; it started himmelblaud again at its next start.
+	NSSShieldRecovered = "recovered"
+	// NSSShieldRestoreFailed: starting himmelblaud again failed; the safety timer retries it.
+	NSSShieldRestoreFailed = "restore_failed"
+	// NSSShieldHoldFailed: himmelblaud could not be held safely (no safety timer, no stop); the transaction ran
+	// with himmelblaud running.
+	NSSShieldHoldFailed = "hold_failed"
 )
 
 // LoginFailureTimeout is the Reason of a package operation the agent killed at its timeout (plan M4b.1 step 6).

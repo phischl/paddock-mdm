@@ -1701,7 +1701,8 @@ not meet them yet, and the leader lock is decided anew (point 9). Where this cor
 
 **Adopted from the implementation (replaces the text named):**
 
-1. **C4, mirror passes instead of awaited targets.** A round creates one **mirror pass**: it covers the finished
+1. **C4, mirror passes instead of awaited targets** (amended by "Correction 2026-11-11 b" below: a busy target
+   makes the pass wait, it does not get `continues`). A round creates one **mirror pass**: it covers the finished
    runs without `mirrored_at` at that moment, minus the runs an open pass still covers. Per target the pass takes:
    the result of the lane this round started; `continues` at once when the target's lane is still mirroring an
    earlier set (its index lacks the pass's runs); `not_mounted` or `io` at once for a volume that is not mounted or
@@ -1727,6 +1728,7 @@ not meet them yet, and the leader lock is decided anew (point 9). Where this cor
    dump. A failed phase-2 write is logged and no longer fails the round.
 
 **Still binding, not in `f8fbb732` (PDK-989 MUST add them before it merges, each with a test):**
+(Both are implemented since `b8c73648`; see "Correction 2026-11-11 b" below.)
 
 7. **C3.7, a disabled or deleted target.** When a round finds a target disabled or deleted whose lane is in flight,
    it cancels that lane. A cancelled lane writes no status and no result; its pass takes no result for that target.
@@ -1783,3 +1785,36 @@ run has exactly one `platform.backup_completed` or `platform.backup_failed`, als
 Tests as built (`lanes_test.go`): `TestHangingLaneDoesNotDelayTheRound`, `TestSlowTargetDoesNotHoldTheFastOne`,
 `TestShutdownCancelsLanesAndRestartResumes`, `TestLocalExpireWaitsForLane`, `TestLanePrunesOnlyByThePDK972Rules`;
 they cover C9 rows 1–4 and 6–9 in the form of this correction.
+
+### Correction 2026-11-11 b — a run waits for a busy target's next lane; cancel and gauge as built (PDK-989, #593 `b8c73648`)
+
+Three points of "Correction 2026-11-11" above are out of date since PDK-989's fix rounds. Where this correction
+contradicts that one, it wins; everything else there stands, point 9 (leadership) included.
+
+1. **Point 1, a busy target (replaced).** A pass created while a target's lane still mirrors an earlier set does
+   **not** get `continues` for that target. The pass **waits** for that target: the target's next lane, which a
+   later round starts with a newer index that holds the pass's runs, takes over every waiting pass and settles each
+   of them when it ends. A result for a run therefore only ever comes from a lane that carried the run (this is
+   C4.3 of the amendment again). `continues` now comes from a lane alone: its copy budget ran out, or the local
+   `manifest.json` changed under it before it started reading. Consequences:
+   - a run's per-target results, `mirrored_at` and audit event follow the slowest target's **next** lane, so behind
+     a lane of hours they come hours later; there is no await limit (the 60 minutes stay dropped). The run itself
+     is finished and visible at once (phase 1), and `backup now --wait` returns at once;
+   - when every target is busy, a round runs no phase 2 at all;
+   - a volume target that is not mounted or unreachable when its next lane would start settles its waiting passes
+     with that class at once, as it does the new pass;
+   - a pass waiting for a target that is no longer enabled stops waiting for it and gets no result for it;
+   - shutdown and a lost leadership drop every pass of a cancelled lane and every waiting pass; the next
+     leadership's first pass covers those runs again.
+2. **Point 7, a disabled or deleted target (implemented).** A round that finds such a target with a lane in flight
+   cancels the lane. The cancelled lane writes nothing (no status, no run result, no deletion started after the
+   cancel) and frees what it held: the target's lane slot, its pin on the local expire (correction point 2) and its
+   gauge. The role logs the cancel at `Info`.
+3. **Point 8, the gauge (implemented).** `paddock_backup_target_mirror_started_timestamp_seconds{target}` carries
+   the start of the lane in flight and is absent without one. A lane that ran longer than one round interval is
+   logged at `Info` when it ends, with its duration, and the next lane of that target is logged at `Info` when it
+   starts.
+
+The heading "Still binding, not in `f8fbb732`" above is thereby settled: nothing of this amendment is open in
+PDK-989. AC-4 reads: every finished run has exactly one `platform.backup_completed` or `platform.backup_failed`,
+recorded when the lanes that carried it ended, also across a restart or a change of leadership.

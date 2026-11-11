@@ -24,7 +24,11 @@ type selfServiceGate struct {
 	anchor, offered     string // catalog entries: gateAnchor (required), ssOffered (available to everyone)
 	private, slow, hand string // ssPrivate (available to owner), ssSlow (available), gateApp (available, installed by hand)
 	fpApp, fpUserApp    string // ssFlatpakApp (system scope), ssFlatpakUserApp (user scope)
-	selfService         []string
+	sysUser             string // ssSysUser (required in SV10)
+	// tamperSeen are the device's device.tamper_service_stopped events before SV5: none may follow for himmelblaud
+	// from the agent's own holds (SV11).
+	tamperSeen  []string
+	selfService []string
 }
 
 // TestSelfServiceGates runs the device gates of plan M13b §9 on the VMs in parallel, each from a fresh
@@ -41,9 +45,15 @@ type selfServiceGate struct {
 //     installed system wide (Q14); with the user's automatic graphical login it lands in that user's installation;
 //   - SV3 the owner installs an available APT package: succeeded, the event on the server, the notification in the
 //     owner's session; another user cannot read the operation; the owner removes it again;
-//   - SV6 an agent restart while an install runs: failed/interrupted, and the package ends consistent;
+//   - SV6 the agent killed while an install runs with himmelblaud held: the safety timer starts himmelblaud without
+//     the agent, the agent reports the hold as recovered, the operation failed/interrupted, the package consistent;
 //   - SV8 a catalog icon reaches the socket; an entry without one has none (the app's glyph);
-//   - SV9 forbidding flatpak drops every Flatpak application (A10-9, flatpak_forbidden) and removes flatpak.
+//   - SV9 forbidding flatpak drops every Flatpak application (A10-9, flatpak_forbidden) and removes flatpak;
+//   - SV10 a required plain package whose postinst creates a system account installs under Himmelblau (PDK-983);
+//   - SV11 none of the agent's holds was reported as tampering, and a stop of himmelblaud by someone else is.
+//
+// SV5, SV6 and SV10 run with himmelblaud active, whose NSS module answers for every unknown name (PDK-983): the agent
+// holds it stopped around its package transactions (decisions §45).
 //
 // SV7 runs before SV3 because SV3's notification needs the session that SV7 starts only after its check without one.
 // The desktop app (PDK-802) and user names in the status (PDK-805) are not part of these gates.
@@ -51,13 +61,17 @@ func TestSelfServiceGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Gate(t, "selfservice")
 		vm.Fresh()
+		// The accounts exist before enrollment, while no Himmelblau answers their names (PDK-983).
+		suffix := unique()
+		owner := ssDirectoryUser(t, t, s, vm, suffix, "ss-owner", ssOwnerUID)
+		other := ssDirectoryUser(t, t, s, vm, suffix, "ss-other", ssOtherUID)
 		d := Install(t, s, vm, debDir(s))
-		g := &selfServiceGate{keep: t, repo: d.setupGateRepo()}
+		// SV11 waits for the login reconciler's drift pass.
+		d.SetDriftInterval()
+		g := &selfServiceGate{keep: t, repo: d.setupGateRepo(), owner: owner, other: other}
 		d.MustRootIn([]byte(ssRepoScript), "bash -s")
 		g.source, _ = d.softwareSource(g.repo)
 		g.fpSource, g.fpSlug = d.ssFlatpakSource(t, t, g.repo)
-		g.owner = d.ssDirectoryUser(t, t, "ss-owner", ssOwnerUID)
-		g.other = d.ssDirectoryUser(t, t, "ss-other", ssOtherUID)
 		uid, err := strconv.Atoi(d.MustRoot("id -u paddock"))
 		if err != nil {
 			t.Fatalf("UID of paddock: %v", err)
@@ -69,6 +83,7 @@ func TestSelfServiceGates(t *testing.T) {
 		g.private = d.catalogEntry(g.source, ssPrivate)
 		g.slow = d.catalogEntry(g.source, ssSlow)
 		g.hand = d.catalogEntry(g.source, gateApp)
+		g.sysUser = d.catalogEntry(g.source, ssSysUser)
 		g.fpApp = d.ssEntry(t, t, "flatpak app", g.fpSource, map[string]any{"flatpak_ref": ssFlatpakApp, "scope": "system"})
 		g.fpUserApp = d.ssEntry(t, t, "flatpak user app", g.fpSource, map[string]any{"flatpak_ref": ssFlatpakUserApp, "scope": "user"})
 		for _, gate := range []struct {
@@ -78,6 +93,7 @@ func TestSelfServiceGates(t *testing.T) {
 			{"SV1 socket", gateSV1}, {"SV2 audience", gateSV2}, {"SV4 managed applications", gateSV4},
 			{"SV5 flatpak remote", gateSV5}, {"SV7 user scope", gateSV7}, {"SV3 install", gateSV3},
 			{"SV6 interrupted", gateSV6}, {"SV8 icon", gateSV8}, {"SV9 forbid flatpak", gateSV9},
+			{"SV10 system account", gateSV10}, {"SV11 foreign stop", gateSV11},
 		} {
 			if !t.Run(gate.name, func(t *testing.T) { d.Bind(t); gate.fn(t, d, g) }) {
 				t.FailNow()
@@ -213,6 +229,8 @@ func gateSV5(t *testing.T, d *Device, g *selfServiceGate) {
 	if v := d.installedVersion("flatpak"); v != "" {
 		t.Fatalf("flatpak at %q before the agent acted; the setup purges it", v)
 	}
+	g.tamperSeen = d.eventIDs("device.tamper_service_stopped")
+	shields := d.requireSynthesized(t, "_flatpak")
 	installed := d.eventIDs("device.software_installed")
 	tamper := d.eventIDs("device.tamper_protected_file_changed")
 	d.ssAssign(t, g.keep, g.fpApp, "required", nil)
@@ -245,6 +263,7 @@ func gateSV5(t *testing.T, d *Device, g *selfServiceGate) {
 	if it, ok, err := healthSoftwareItem(d.Health(), "flatpak"); err != nil || !ok || it.Intent != "required" || it.State != "installed" {
 		t.Errorf("health item of the flatpak runtime package: %+v %v %v", it, ok, err)
 	}
+	d.requireSystemAccount(t, "_flatpak", shields)
 	d.waitNewEvent(t, "device.software_installed", installed, 5*time.Minute, func(p map[string]any) bool {
 		return p["package"] == "flatpak:"+ssFlatpakApp && p["catalog_entry_id"] == g.fpApp
 	})
@@ -366,7 +385,8 @@ func gateSV3(t *testing.T, d *Device, g *selfServiceGate) {
 	})
 }
 
-// gateSV6 (F4): the agent restarts while ssSlow's postinst runs. The operation ends failed/interrupted with the event;
+// gateSV6 (F4, PDK-983): the agent is killed while ssSlow's postinst runs with himmelblaud held, and stays down until
+// the safety timer started himmelblaud again; started, it reports the hold as recovered. The operation ends failed/interrupted with the event;
 // asked again, the install finishes the interrupted one (dpkg --configure -a), and the package ends installed at 1.0
 // with nothing left for dpkg --audit.
 func gateSV6(t *testing.T, d *Device, g *selfServiceGate) {
@@ -375,7 +395,24 @@ func gateSV6(t *testing.T, d *Device, g *selfServiceGate) {
 	Until(t, d.Name+": "+ssSlow+"'s postinst runs", 6*time.Minute, 3*time.Second, nil, func() bool {
 		return d.MustRoot("test -e "+ssSlowStarted+" && echo yes || echo no") == "yes"
 	})
-	d.Must("sudo systemctl restart paddock-supervisor")
+	if d.himmelblaudActive() {
+		t.Fatal("himmelblaud runs while the agent's transaction runs; the agent holds it stopped (PDK-983)")
+	}
+	if timer := d.MustRoot("systemctl is-active paddock-nss-shield-restore.timer || true"); timer != "active" {
+		t.Fatalf("safety timer %q during the hold, want active", timer)
+	}
+	shields := d.eventIDs("device.login_nss_shield")
+	// Killed, and kept down within its RestartSec: only the safety timer can start himmelblaud again.
+	d.Must("sudo systemctl kill -s SIGKILL paddock-supervisor && sudo systemctl stop paddock-supervisor")
+	Until(t, d.Name+": himmelblaud started by the safety timer", shieldTimerWait, 5*time.Second, nil, d.himmelblaudActive)
+	if st := d.MustRoot("systemctl is-active paddock-supervisor || true"); st == "active" {
+		t.Errorf("paddock-supervisor %s while the safety timer restored himmelblaud", st)
+	}
+	d.Must("sudo systemctl start paddock-supervisor")
+	if ev := d.waitNewEvent(t, "device.login_nss_shield", shields, 5*time.Minute, nil); ev["outcome"] != "recovered" ||
+		ev["action"] != "apt-get install" {
+		t.Errorf("device.login_nss_shield %v, want the hold reported as recovered", ev)
+	}
 	var op ssOperation
 	Until(t, d.Name+": interrupted operation after the restart", 3*time.Minute, 5*time.Second, nil, func() bool {
 		r, err := d.ssTry(g.owner, http.MethodGet, "/v1/operations/"+id)
@@ -483,5 +520,77 @@ func gateSV9(t *testing.T, d *Device, g *selfServiceGate) {
 	waitVersion(t, d, "flatpak", "", 8*time.Minute, true)
 	if v := d.installedVersion(gateAnchor); v != "1.0" {
 		t.Errorf("%s at %q after flatpak was forbidden", gateAnchor, v)
+	}
+}
+
+// shieldTimerWait bounds the wait for the safety timer of a development build (agent.DevNSSShieldMaxHold plus
+// agent.DevNSSShieldTimerGrace, 5 minutes) with a margin.
+const shieldTimerWait = 7 * time.Minute
+
+// himmelblaudActive reports whether himmelblaud runs.
+func (d *Device) himmelblaudActive() bool {
+	return d.MustRoot("systemctl is-active himmelblaud.service || true") == "active"
+}
+
+// requireSynthesized waits until himmelblaud runs and checks that Himmelblau's NSS module answers for account, which
+// /etc/passwd does not have, with a synthetic directory user: the condition under which adduser --system refuses
+// (PDK-983). It returns the device's login.nss_shield events so far.
+func (d *Device) requireSynthesized(t *testing.T, account string) []string {
+	t.Helper()
+	Until(t, d.Name+": himmelblaud active", 15*time.Minute, 10*time.Second, d.Checkin, d.himmelblaudActive)
+	if d.MustRoot("grep -c '^"+account+":' /etc/passwd || true") != "0" {
+		t.Fatalf("%s is a local account before the agent acted", account)
+	}
+	uid, err := strconv.Atoi(d.MustRoot("getent passwd " + account + " | cut -d: -f3"))
+	if err != nil || uid < 200000 {
+		t.Fatalf("getent passwd %s: UID %d %v, want Himmelblau's synthetic entry", account, uid, err)
+	}
+	return d.eventIDs("device.login_nss_shield")
+}
+
+// requireSystemAccount checks that the agent's installation created account as a local system account and held
+// himmelblaud around it: a login.nss_shield restored after an apt-get install, and himmelblaud running again.
+func (d *Device) requireSystemAccount(t *testing.T, account string, shields []string) {
+	t.Helper()
+	uid, err := strconv.Atoi(d.MustRoot("awk -F: '$1 == \"" + account + "\" {print $3}' /etc/passwd"))
+	if err != nil || uid < 100 || uid > 999 {
+		t.Errorf("%s in /etc/passwd: UID %d %v, want a system account (100–999)", account, uid, err)
+	}
+	ev := d.waitNewEvent(t, "device.login_nss_shield", shields, 5*time.Minute, func(p map[string]any) bool {
+		return p["action"] == "apt-get install"
+	})
+	if ev["outcome"] != "restored" {
+		t.Errorf("device.login_nss_shield %v, want restored", ev)
+	}
+	if !d.himmelblaudActive() {
+		t.Error("himmelblaud not running after the agent's installation")
+	}
+}
+
+// gateSV10 (PDK-983, decisions §45): a required plain package whose postinst runs adduser --system installs on a
+// device where Himmelblau answers for every unknown name, and its account is a local system account.
+func gateSV10(t *testing.T, d *Device, g *selfServiceGate) {
+	shields := d.requireSynthesized(t, ssSysAccount)
+	d.assign(g.keep, g.sysUser, "required", "")
+	softwareState(t, d, ssSysUser, "installed", "", 10*time.Minute, d.Checkin)
+	d.requireSystemAccount(t, ssSysAccount, shields)
+}
+
+// gateSV11 (decisions §45, protected area 4): none of the agent's own holds since SV5 was reported as tampering, and
+// a stop of himmelblaud by someone else is reported once as device.tamper_service_stopped; the agent does not start
+// it again.
+func gateSV11(t *testing.T, d *Device, g *selfServiceGate) {
+	himmelblaud := func(p map[string]any) bool { return p["unit"] == "himmelblaud.service" }
+	if own := d.newEvents("device.tamper_service_stopped", g.tamperSeen, himmelblaud); len(own) != 0 {
+		t.Errorf("the agent's own holds were reported as tampering: %v", own)
+	}
+	seen := d.eventIDs("device.tamper_service_stopped")
+	d.Must("sudo systemctl stop himmelblaud.service")
+	defer d.Must("sudo systemctl start himmelblaud.service himmelblaud-tasks.service")
+	if ev := d.waitNewEvent(t, "device.tamper_service_stopped", seen, 5*time.Minute, himmelblaud); ev["state"] != "inactive" {
+		t.Errorf("device.tamper_service_stopped %v, want state inactive", ev)
+	}
+	if d.himmelblaudActive() {
+		t.Error("the agent started himmelblaud after a foreign stop; it only reports it")
 	}
 }

@@ -94,6 +94,13 @@ func (a *Applier) WithWatch(w *reconcile.Watch) *Applier {
 	return a
 }
 
+// WithNSSShield tells the login reconciler the agent's own hold of himmelblaud (PDK-983), so that it reports only a
+// stop by someone else.
+func (a *Applier) WithNSSShield(s *reconcile.NSSShield) *Applier {
+	a.login.Shield = s
+	return a
+}
+
 // New creates an applier for sys; managed is the record of files Paddock wrote, events receives the device events
 // of the reconcilers.
 func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Events) *Applier {

@@ -28,6 +28,10 @@ const (
 	// ssSlowStarted is written by ssSlow's postinst when it starts; ssSlowRelease lets it finish.
 	ssSlowStarted = "/run/paddock-gate-slow.started"
 	ssSlowRelease = "/run/paddock-gate-slow.release"
+	// ssSysUser is a plain package whose postinst creates the system account ssSysAccount with adduser --system, as
+	// many daemon packages do (gate SV10, PDK-983).
+	ssSysUser    = "paddock-gate-sysuser"
+	ssSysAccount = "_paddock-gate"
 	// ssFlatpakURI is the gate's Flatpak repository, served by paddock-gate-repo next to the APT repository.
 	ssFlatpakURI = gateRepoURI + "flatpak/"
 	// ssFlatpakApp is the system-scope application of gate SV5, ssFlatpakUserApp the user-scope one of SV7.
@@ -47,7 +51,8 @@ const (
 // ssRepoScript adds the self-service packages to the gate's APT repository (gateRepoScript ran before) and builds the
 // gate's Flatpak repository below it, both signed with the gate's key: a runtime and two applications that need it,
 // exported with flatpak build-export (no flatpak-builder, no SDK, nothing from Flathub). flatpak is installed from the
-// distribution to build the repository and purged afterwards, so that SV5 sees the agent install it (Q12).
+// distribution to build the repository and purged afterwards with its system account, so that SV5 sees the agent
+// install it and create _flatpak under Himmelblau (Q12, PDK-983).
 //
 // apt-get runs with stdin from /dev/null because the script itself arrives on stdin (bash -s): a maintainer script
 // or a conffile prompt would read the rest of it. With stdout not a terminal, apt 3 sends dpkg's error messages to
@@ -83,6 +88,7 @@ build() {
 }
 build ` + ssOffered + ` ':'
 build ` + ssPrivate + ` ':'
+build ` + ssSysUser + ` 'adduser --system --group --no-create-home --quiet ` + ssSysAccount + `'
 build ` + ssSlow + ` 'touch ` + ssSlowStarted + `; i=0; while [ ! -e ` + ssSlowRelease + ` ] && [ $i -lt 900 ]; do sleep 1; i=$((i + 1)); done'
 cd "$dir/repo"
 apt-ftparchive packages . >Packages
@@ -90,7 +96,21 @@ apt-ftparchive release . >"$dir/Release"
 mv "$dir/Release" Release
 gpg --batch --yes --clearsign -o InRelease Release
 
-command -v flatpak >/dev/null || apt_get install flatpak
+# With himmelblaud running, flatpak's postinst cannot create its system account _flatpak (PDK-983). The install runs
+# as a hold of Paddock's own, under the agent's shield lock, so that the agent never reports the stop as tampering
+# (gate SV11). flock -o keeps the lock out of the installation's processes: a daemon it starts must not hold it.
+held_install() {
+	if systemctl is-active -q himmelblaud.service; then
+		# apt_get exits on a failure: the trap of the locked shell starts the daemon on every path.
+		trap 'systemctl start himmelblaud.service himmelblaud-tasks.service' EXIT
+		systemctl stop himmelblaud.service
+	fi
+	apt_get install "$@"
+}
+export -f apt_get held_install
+if ! command -v flatpak >/dev/null; then
+	flock -o ` + nssShieldLock + ` bash -c 'set -eu; held_install flatpak'
+fi
 key=$(gpg --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')
 arch=$(flatpak --default-arch)
 fb="$dir/flatpak-build"
@@ -112,11 +132,25 @@ done
 flatpak build-update-repo --gpg-sign="$key" --gpg-homedir="$GNUPGHOME" "$repo" >/dev/null
 python3 -c "import urllib.request; urllib.request.urlopen(\"` + ssFlatpakURI + `summary\", timeout=10)"
 apt_get purge flatpak
+# SV5 sees a device where flatpak never was: the agent's installation creates _flatpak itself.
+if grep -q '^_flatpak:' /etc/passwd; then deluser --system --quiet _flatpak; fi
+if grep -q '^_flatpak:' /etc/group; then delgroup --system --quiet _flatpak; fi
 `
+
+// nssShieldLock is the agent's shield lock (reconcile.NSSShieldLock).
+const nssShieldLock = "/var/lib/paddock/state/nss-shield.lock"
+
+// ssAs is the setpriv prefix that runs a command as u. It names the account and its group, never their numbers:
+// setpriv, id, chown and install read an argument as a name first, and Himmelblau's NSS module answers a number such
+// as 208071 as an unknown name with a synthetic directory user of another UID (PDK-983). The account's name is in
+// /etc/passwd, which NSS reads first.
+func ssAs(u *ssUser) string {
+	return "setpriv --reuid=" + shellQuote(u.name) + " --regid=\"$(id -gn " + shellQuote(u.name) + ")\" --clear-groups"
+}
 
 // ssUserScript creates the account $1 with UID $2 as Himmelblau would map a directory user (a UPN as its name, a UID
 // in the idmap range), with a home and GNOME's first-start setup marked done so that an automatic login opens the
-// desktop. useradd refuses an "@" without --badname (--badnames before shadow 4.14); only an unknown option falls
+// desktop; after useradd it names the account and its group, never the UID (see ssAs). useradd refuses an "@" without --badname (--badnames before shadow 4.14); only an unknown option falls
 // back, any other refusal of the first useradd is printed, since it names the real cause.
 const ssUserScript = `set -eu
 rc=0
@@ -131,10 +165,10 @@ if [ "$rc" -ne 0 ]; then
 	esac
 fi
 home=$(getent passwd "$2" | cut -d: -f6)
-gid=$(id -g "$2")
-install -d -o "$2" -g "$gid" "$home/.config"
+group=$(id -gn "$1")
+install -d -o "$1" -g "$group" "$home/.config"
 echo yes >"$home/.config/gnome-initial-setup-done"
-chown "$2:$gid" "$home/.config/gnome-initial-setup-done"
+chown "$1:$group" "$home/.config/gnome-initial-setup-done"
 `
 
 // ssClientScript sends one request to the self-service socket as the account it runs as and prints the status, the
@@ -244,7 +278,7 @@ func (d *Device) ssCall(t *testing.T, u *ssUser, method, path string) ssReply {
 	t.Helper()
 	cmd := "python3 - " + method + " " + shellQuote(path)
 	if u != nil {
-		cmd = fmt.Sprintf("setpriv --reuid=%d --regid=$(id -g %d) --clear-groups %s", u.uid, u.uid, cmd)
+		cmd = ssAs(u) + " " + cmd
 	}
 	r, err := parseSSReply(d.MustRootIn([]byte(ssClientScript), cmd))
 	if err != nil {
@@ -255,7 +289,7 @@ func (d *Device) ssCall(t *testing.T, u *ssUser, method, path string) ssReply {
 
 // ssTry is ssCall for a socket that may not be there (the agent restarts): an error instead of a failed test.
 func (d *Device) ssTry(u *ssUser, method, path string) (ssReply, error) {
-	cmd := fmt.Sprintf("setpriv --reuid=%d --regid=$(id -g %d) --clear-groups python3 - %s %s", u.uid, u.uid, method, shellQuote(path))
+	cmd := ssAs(u) + " python3 - " + method + " " + shellQuote(path)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	out, err := d.SSH(ctx, []byte(ssClientScript), rootCapture(cmd))
@@ -350,13 +384,14 @@ func ssName(u *ssUser) string {
 	return u.name
 }
 
-// ssDirectoryUser creates a local Paddock user of acme with the run's suffix (deleted when keep ends) and the same
-// account on the device with uid, as Himmelblau would map it.
-func (d *Device) ssDirectoryUser(t, keep *testing.T, prefix string, uid int) *ssUser {
+// ssDirectoryUser creates a local Paddock user of acme with suffix (deleted when keep ends) and the same account on
+// the VM with uid, as Himmelblau would map it. It runs before the device is enrolled: once himmelblaud is online,
+// Himmelblau answers the new UPN with a synthetic user and useradd refuses it as existing (PDK-983).
+func ssDirectoryUser(t, keep *testing.T, s *Stack, vm *VM, suffix, prefix string, uid int) *ssUser {
 	t.Helper()
-	d.s.StepUp(t) // a user who would receive root through grants to everyone needs a step-up
-	name := prefix + "-" + d.run + "@" + ssDomain
-	res := d.s.Call(t, http.MethodPost, "/api/v1/users", map[string]string{"username": name, "display_name": "systest " + prefix}, http.StatusCreated)
+	s.StepUp(t) // a user who would receive root through grants to everyone needs a step-up
+	name := prefix + "-" + suffix + "@" + ssDomain
+	res := s.Call(t, http.MethodPost, "/api/v1/users", map[string]string{"username": name, "display_name": "systest " + prefix}, http.StatusCreated)
 	var out struct {
 		User struct {
 			ID string `json:"id"`
@@ -365,11 +400,10 @@ func (d *Device) ssDirectoryUser(t, keep *testing.T, prefix string, uid int) *ss
 	if err := json.Unmarshal(res.Body, &out); err != nil || out.User.ID == "" {
 		t.Fatalf("created user %s: %v", res.Body, err)
 	}
-	s := d.s
 	keep.Cleanup(func() {
 		s.cleanupCall(keep, http.MethodDelete, "/api/v1/users/"+out.User.ID, http.StatusNoContent, http.StatusNotFound)
 	})
-	d.MustRootIn([]byte(ssUserScript), "bash -s -- "+shellQuote(name)+" "+strconv.Itoa(uid))
+	vm.MustRootIn([]byte(ssUserScript), "bash -s -- "+shellQuote(name)+" "+strconv.Itoa(uid))
 	return &ssUser{name: name, uid: uid, id: out.User.ID}
 }
 
