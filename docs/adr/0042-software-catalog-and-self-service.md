@@ -237,3 +237,12 @@ per device group rendered into the bundle, packages stored in Paddock through a 
 platform-shared catalog with a copy-into-organization flow. Maintainer decision 6 ("no approval workflow for
 now") is thereby lifted for M13c; decision 7 (shared catalog low priority) stands: it is the last ticket of M13c
 and may be dropped from the release.
+
+## Amendment 2026-11-11 — unknown event types are skipped, not refused (PDK-995)
+
+The constraint "the gateway rejects a whole event batch with 400 `unknown_event_type` … a newer agent must not send
+a type an older server does not know (ADR 0024)" changes in its first half: from 0.1.0-alpha.10 the gateway skips
+an event of an unknown type, answers 202 and records the skip once (ADR 0024, amendment 2026-11-11). The second
+half and "Event compatibility" of this ADR stay binding: the agent emits the `software.*` event types only while its
+bundle carries the section, attribute or capability that only a server knowing them renders. Reason: servers before
+0.1.0-alpha.10 still block the spool, and on a newer server the event would be dropped without an audit record.

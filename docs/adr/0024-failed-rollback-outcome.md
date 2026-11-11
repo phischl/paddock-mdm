@@ -120,3 +120,41 @@ release's rollout halt rate and skips the release until a newer one is offered. 
 accepted because telling a missing release from a bad signature would change the supervisor, and design contract 1
 (the supervisor is simple enough to need no updates) has priority. Pinned by
 `TestRestartWithRequestWithoutReleaseDirectory`.
+
+## Amendment 2026-11-11 — the gateway skips an event of an unknown type (PDK-995, `decisions-alpha10.md` §54)
+
+**Context.** This ADR's constraint was that the gateway rejects a whole `POST /v1/events` batch with 400
+`unknown_event_type` when one event has a type outside `protocol.EventTypes`, and that the agent then keeps the
+batch spooled. One event of a type the server does not know therefore blocked every later event of that device, the
+tamper events included, for as long as the server stayed older than the agent. That is not forward compatible: a
+single new event type turned a version skew into a silent device.
+
+**Options.** (a) Keep the 400 and rely on the sender rule alone (a new type is only emitted when the bundle shows
+that the server knows it): one missed case blocks a device's whole spool. (b) Accept the batch and skip the unknown
+event: the device's other events arrive; the skipped event is lost for this server. (c) Store unknown events
+unparsed for later: keeps data of a type the server cannot classify, which breaks the privacy rule that ingest only
+stores what its schema knows (architecture N5). **Decision: (b).**
+
+**Decision (from 0.1.0-alpha.10).**
+1. `POST /v1/events` no longer answers 400 `unknown_event_type`. An event whose type the server does not know is
+   **skipped**: the gateway clears its `data` before the batch leaves the gateway, so no data of an unknown type
+   is stored or logged, and answers **202** for the batch. `event_seq` and `occurred_at` are still validated for every
+   event; a malformed event still fails the batch with 400 `invalid_request`. Size, count and rate limits are
+   unchanged.
+2. The skipped event's sequence number is claimed like a recorded one (`device_event_seen`), so it is not reported
+   as a gap and a redelivery skips it again without a second record.
+3. Each skip is recorded **once**: a log line with the device and the cleaned type (control characters removed, at
+   most 64 bytes) and the counter `paddock_device_events_unknown_total` (no label for the type, which the device
+   chooses). No audit event is written: the closed registry has no code for an event the server cannot name.
+4. `unknown_event_type` stays in `pkg/protocol` and in the device contract's problem codes: servers before
+   0.1.0-alpha.10 still answer it.
+5. **The sender rule of this ADR stays binding.** An agent MUST NOT emit an event type unless its applied bundle
+   shows that the server understands it (a section, a package attribute or a capability the server renders), and a
+   new outcome of an existing type remains the preferred way to extend an event. Reason: servers before
+   0.1.0-alpha.10 still block the spool, and a skipped event is a lost event on every server.
+
+**Consequences.** A newer agent against a server from 0.1.0-alpha.10 on loses only the events that server does not
+know, never its spool. An auditor sees the skipped number as a sequence number without an audit event, as for the
+existing claim-only events; the counter and the log say why. Wherever ADR 0033, ADR 0042, plan M2a (decision 14)
+and later plans say "the gateway rejects the batch with 400 `unknown_event_type`", that describes servers before
+0.1.0-alpha.10.

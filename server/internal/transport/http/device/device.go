@@ -154,7 +154,6 @@ func (e *apiError) with(detail string) *apiError {
 
 var (
 	errInvalidRequest   = newError(http.StatusBadRequest, protocol.CodeInvalidRequest)
-	errUnknownEventType = newError(http.StatusBadRequest, protocol.CodeUnknownEventType)
 	errInvalidSignature = newError(http.StatusUnauthorized, protocol.CodeInvalidSignature)
 	errClockSkew        = newError(http.StatusUnauthorized, protocol.CodeClockSkew)
 	errReplay           = newError(http.StatusUnauthorized, protocol.CodeReplay)
