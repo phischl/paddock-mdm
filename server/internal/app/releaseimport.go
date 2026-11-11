@@ -291,7 +291,7 @@ func (r *ReleaseImports) verify(verify VerifyRelease, a agentrelease.SourceAsset
 	if len(body) == 0 {
 		return "", problem.InvalidRequest.WithDetail(a.Name + " is empty")
 	}
-	comment, err := checkFile(verify, a.Arch, body, base64.StdEncoding.EncodeToString(sig))
+	comment, err := checkFile(verify, a.Package, a.Arch, body, base64.StdEncoding.EncodeToString(sig))
 	if err != nil {
 		return "", problem.InvalidRequest.WithDetail(a.Name + ": the signature does not verify with the release public key")
 	}

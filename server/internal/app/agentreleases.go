@@ -192,7 +192,7 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 	var lease uploadLease
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
-			comment, err := a.checkUpload(ctx, q, a.verify, version, arch, binary, minisigB64)
+			comment, err := a.checkUpload(ctx, q, a.verify, version, "", arch, binary, minisigB64)
 			if err != nil {
 				return err
 			}
@@ -247,7 +247,7 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packag
 			if err := agentrelease.ValidatePackage(name, packageVersion); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
-			if _, err := a.checkUpload(ctx, q, a.packageVerifier(name), version, arch, deb, minisigB64); err != nil {
+			if _, err := a.checkUpload(ctx, q, a.packageVerifier(name), version, name, arch, deb, minisigB64); err != nil {
 				return err
 			}
 			var err error
@@ -313,10 +313,14 @@ func checkBinaryComment(comment, version, arch string) error {
 }
 
 // checkFile validates a release file on its own — architecture, size and signature — and returns the signature's
-// trusted comment.
-func checkFile(verify VerifyRelease, arch string, body []byte, minisigB64 string) (string, error) {
-	if err := agentrelease.ValidateArch(arch); err != nil {
-		return "", problem.InvalidRequest.WithDetail(err.Error())
+// trusted comment. name is the package of a Debian package and empty for paddockd.
+func checkFile(verify VerifyRelease, name, arch string, body []byte, minisigB64 string) (string, error) {
+	archErr := agentrelease.ValidateArch(arch)
+	if name != "" {
+		archErr = agentrelease.ValidatePackageArch(name, arch)
+	}
+	if archErr != nil {
+		return "", problem.InvalidRequest.WithDetail(archErr.Error())
 	}
 	if len(body) == 0 || len(body) > agentrelease.MaxArtifactBytes {
 		return "", problem.InvalidRequest.WithDetail("the file must have 1 byte to 128 MiB")
@@ -335,9 +339,9 @@ func checkFile(verify VerifyRelease, arch string, body []byte, minisigB64 string
 
 // checkUpload validates an upload of a release file — the file itself (checkFile) and a draft release — and returns
 // the signature's trusted comment.
-func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, verify VerifyRelease, version, arch string, body []byte,
-	minisigB64 string) (string, error) {
-	comment, err := checkFile(verify, arch, body, minisigB64)
+func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, verify VerifyRelease, version, name, arch string,
+	body []byte, minisigB64 string) (string, error) {
+	comment, err := checkFile(verify, name, arch, body, minisigB64)
 	if err != nil {
 		return "", err
 	}
@@ -536,7 +540,7 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 			problem.InvalidRequest.WithDetail("a release needs at least one agent binary"))
 	}
 	for _, art := range artifacts {
-		comment, err := checkFile(a.verify, art.Arch, art.Binary, base64.StdEncoding.EncodeToString(art.Minisig))
+		comment, err := checkFile(a.verify, "", art.Arch, art.Binary, base64.StdEncoding.EncodeToString(art.Minisig))
 		if err == nil {
 			err = checkBinaryComment(comment, version, art.Arch)
 		}
@@ -550,7 +554,7 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 		if err != nil {
 			err = problem.InvalidRequest.WithDetail(err.Error())
 		} else {
-			_, err = checkFile(a.packageVerifier(pkg.Name), pkg.Arch, pkg.Deb, base64.StdEncoding.EncodeToString(pkg.Minisig))
+			_, err = checkFile(a.packageVerifier(pkg.Name), pkg.Name, pkg.Arch, pkg.Deb, base64.StdEncoding.EncodeToString(pkg.Minisig))
 		}
 		if err != nil {
 			return ReleaseDetail{}, a.refuse(ctx, uploadSpec(version, pkg.Arch, pkg.Deb, "deb", pkg.Name, pkg.PackageVersion),

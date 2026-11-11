@@ -423,14 +423,20 @@ the system source's `signing_key` (`GET /api/v1/software-sources/{id}`) as `padd
 them with the intent `available`, and see why a required application is on their device (ADR 0049). Paddock does not
 install it on its own: an organization offers it like any other application, as a required catalog entry.
 
-- **Package.** `make deb` builds `bin/selfservice/paddock-self-service_<version>_all.deb` next to the agent packages
-  (`make selfservice-deb VERSION=<version>` builds it alone). Releases do not publish it yet; until they do, the
-  operator builds it from the release's source tag.
+- **Package.** Every release from `0.1.0-alpha.10` on publishes `paddock-self-service_<version>_all.deb`, signed with
+  the agent release key like the agent packages (`.minisig`, trusted comment `paddock-agent version=<version>
+  arch=all`; `docs/operations/agent-releases.md`). Take it from one of two places: from your own platform once the
+  release is imported or uploaded there, at `https://bundles.<domain>/packages/<version>/paddock-self-service_<version>_all.deb`
+  (the platform verified its signature before storing it, and the release detail lists its SHA-256), or from the GitHub
+  release, checked with `minisign -V -p paddock-release.pub -m paddock-self-service_<version>_all.deb`. For a release
+  before `0.1.0-alpha.10` build it from the release's source tag: `make deb` builds
+  `bin/selfservice/paddock-self-service_<version>_all.deb` next to the agent packages (`make selfservice-deb
+  VERSION=<version>` builds it alone).
 - **Requirements.** Ubuntu 24.04 or 26.04 with a graphical session. The package needs only Ubuntu's own `python3`,
   `python3-gi`, `gir1.2-gtk-4.0` and `gir1.2-adw-1`; apt installs them from the distribution, nothing comes from PyPI.
   The package is architecture independent and the agent update never delivers or changes it.
 - **Offering it as a required entry:**
-  1. Build the package of the release (above).
+  1. Take the package of the release (above).
   2. Upload it to the organization's repository (*Packages stored in Paddock*; architecture `all` is accepted).
   3. Create a catalog entry *Paddock Self-Service* with the source `paddock` and the package `paddock-self-service`.
   4. Assign the entry with the intent `required` to every device group (or the whole organization) whose users get

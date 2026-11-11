@@ -201,7 +201,7 @@ jobs:
           test -n "$RELEASE_KEY" || { echo "secret PADDOCK_RELEASE_KEY of the environment release is not set"; exit 1; }
           umask 077
           printf '%s\n' "$RELEASE_KEY" > "$RUNNER_TEMP/release.key"
-      - name: Sign and verify paddockd and the paddock-agent and paddock-supervisor packages
+      - name: Sign and verify paddockd and the paddock-agent, paddock-supervisor and paddock-self-service packages
         # minisign reads the passphrase from stdin when stdin is not a terminal; the script pipes it from the
         # environment, never via argv. paddock-revoke stays unsigned (revocation release key offline).
         env:
@@ -255,5 +255,5 @@ jobs:
           done
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag "${prerelease[@]}" \
             --title "Paddock $version" \
-            --notes "Draft. paddockd and the paddock-agent and paddock-supervisor packages are signed with the agent release key (.minisig). paddock-revoke is unsigned (-unsigned); sign it offline with the revocation release key before use (docs/operations/agent-releases.md). Verify the operator bundle as described in docs/operations/install.md before installing." \
+            --notes "Draft. paddockd and the paddock-agent, paddock-supervisor and paddock-self-service packages are signed with the agent release key (.minisig). paddock-revoke is unsigned (-unsigned); sign it offline with the revocation release key before use (docs/operations/agent-releases.md). Verify the operator bundle as described in docs/operations/install.md before installing." \
             "${files[@]}"

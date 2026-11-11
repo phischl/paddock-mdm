@@ -35,6 +35,12 @@ func TestValidate(t *testing.T) {
 	if k := PackageObjectKey("1.2.0", "paddock-agent", "", "amd64"); k != "packages/1.2.0/paddock-agent_1.2.0_amd64.deb" {
 		t.Errorf("package object key %s", k)
 	}
+	if ValidatePackage("paddock-self-service", "") != nil || ValidatePackage("paddock-self-service", "1.48.0") == nil {
+		t.Error("self-service package validation")
+	}
+	if k := PackageObjectKey("0.1.0-alpha.10", "paddock-self-service", "", "all"); k != "packages/0.1.0-alpha.10/paddock-self-service_0.1.0-alpha.10_all.deb" {
+		t.Errorf("self-service package object key %s", k)
+	}
 	if k := PackageObjectKey("1.2.0", "fleet-osquery", "1.48.0", "amd64"); k != "packages/1.2.0/fleet-osquery_1.48.0_amd64.deb" {
 		t.Errorf("fleetd package object key %s", k)
 	}
@@ -47,6 +53,27 @@ func TestValidate(t *testing.T) {
 		if ValidateWaves(w) == nil {
 			t.Errorf("waves %v accepted", w)
 		}
+	}
+}
+
+// TestValidatePackageArch holds plan M13b amendment 2026-11-11: all is valid for paddock-self-service only, and
+// paddock-self-service only with all.
+func TestValidatePackageArch(t *testing.T) {
+	for _, c := range []struct{ name, arch string }{{"paddock-self-service", "all"}, {"paddock-agent", "amd64"},
+		{"paddock-supervisor", "arm64"}, {"paddock-revoke", "amd64"}, {"fleet-osquery", "arm64"}} {
+		if err := ValidatePackageArch(c.name, c.arch); err != nil {
+			t.Errorf("%s %s refused: %v", c.name, c.arch, err)
+		}
+	}
+	for _, c := range []struct{ name, arch string }{{"paddock-self-service", "amd64"}, {"paddock-self-service", "arm64"},
+		{"paddock-self-service", ""}, {"paddock-agent", "all"}, {"paddock-supervisor", "all"}, {"paddock-revoke", "all"},
+		{"fleet-osquery", "all"}, {"paddock-agent", "386"}} {
+		if ValidatePackageArch(c.name, c.arch) == nil {
+			t.Errorf("%s %s accepted", c.name, c.arch)
+		}
+	}
+	if ValidateArch(ArchAll) == nil {
+		t.Error("all accepted as an agent architecture")
 	}
 }
 

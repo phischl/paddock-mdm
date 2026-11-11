@@ -145,7 +145,7 @@ func TestReleaseImportAPI(t *testing.T) {
 	}
 	imp.decode(t, &d)
 	if imp.status != http.StatusCreated || imp.header.Get("Location") != "/api/platform/v1/agent-releases/"+v ||
-		d.Release.Status != "published" || len(d.Artifacts) != 2 || len(d.Packages) != 2 {
+		d.Release.Status != "published" || len(d.Artifacts) != 2 || len(d.Packages) != 3 {
 		t.Fatalf("import: %d %s %s", imp.status, imp.header.Get("Location"), imp.body)
 	}
 
