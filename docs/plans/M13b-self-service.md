@@ -597,3 +597,10 @@ the package would import as complete).
 
 Documents (PDK-968): `docs/operations/agent-releases.md` (the asset, the package name and architecture) and
 `docs/operations/software.md`, "Self-service app" (releases publish the package; where an operator takes it from).
+
+### Correction 2026-11-11 (PDK-1002) to the amendment above, point 3
+
+"The import verifies signature and comment like every other asset" described the binaries only: until PDK-1002 the
+server checked a package's signature but not its trusted comment. From 0.1.0-alpha.10 the upload, the host publish
+and the import refuse a package whose trusted comment does not name the release and the architecture it is stored
+under (`arch=all` for `paddock-self-service`). Decision and exposure: ADR 0043, amendment 2026-11-11 b.
