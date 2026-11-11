@@ -192,6 +192,69 @@ func TestNSSShieldWarnsLockHeldHourly(t *testing.T) {
 	}
 }
 
+// TestLoginRestartWarnsLockHeldHourly (plan M5a amendment 2026-11-11 b, P4; PDK-1005): a configuration restart of
+// himmelblaud deferred behind a shield lock held by another process stays deferred, never forced, and logs a Warn at
+// most once an hour; once the lock is free, the next pass restarts himmelblaud and the restart is no longer pending.
+func TestLoginRestartWarnsLockHeldHourly(t *testing.T) {
+	sys, l, events := loginFixture(t)
+	ctx := context.Background()
+	l.Apply(ctx, loginResource(t, loginSpec()))
+	takeEvents(events)
+	now := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	lock := filepath.Join(t.TempDir(), "nss-shield.lock")
+	l.Shield = &reconcile.NSSShield{Sys: sys, Events: l.Events, LockFile: lock, LockWait: 10 * time.Millisecond,
+		Now: func() time.Time { return now }}
+	f, err := os.OpenFile(lock, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // a test temp file
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	logs := captureLogs(t)
+	const warning = "a configuration restart of himmelblaud is waiting"
+	spec := loginSpec()
+	spec.Himmelblau.EnableHello = false
+	r := loginResource(t, spec)
+	sys.TakeCalls()
+
+	for _, step := range []time.Duration{0, 30 * time.Minute, 29 * time.Minute, time.Minute, 10 * time.Minute} {
+		now = now.Add(step)
+		if res := l.Apply(ctx, r); res.Status == reconcile.Error {
+			t.Fatalf("Apply behind a held lock = %+v", res)
+		}
+	}
+	if got := strings.Count(logs.String(), warning); got != 2 {
+		t.Fatalf("%d warnings over 70 minutes, want 2:\n%s", got, logs)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "held_for=0s") ||
+		!strings.Contains(logs.String(), "held_for=1h0m0s") {
+		t.Errorf("warnings are not Warn or do not say how long the lock is held:\n%s", logs)
+	}
+	if calls := sys.TakeCalls(); slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "systemctl restart") }) {
+		t.Errorf("himmelblaud restarted behind a held lock: %v", calls)
+	}
+	if changes, _ := l.Plan(ctx, r); !slices.Contains(changes, "restart himmelblaud") {
+		t.Errorf("Plan behind a held lock = %v, want the restart pending", changes)
+	}
+
+	_ = f.Close()
+	logs.Reset()
+	if res := l.Apply(ctx, r); res.Status == reconcile.Error {
+		t.Fatalf("Apply with the lock free = %+v", res)
+	}
+	if calls := sys.TakeCalls(); !slices.Contains(calls, "systemctl restart himmelblaud.service") {
+		t.Errorf("no restart of himmelblaud once the lock is free: %v", calls)
+	}
+	if changes, _ := l.Plan(ctx, r); slices.Contains(changes, "restart himmelblaud") {
+		t.Errorf("Plan after the restart = %v, want nothing pending", changes)
+	}
+	if strings.Contains(logs.String(), warning) {
+		t.Errorf("a warning with the lock free:\n%s", logs)
+	}
+}
+
 // TestNSSShieldWithoutLockFile (plan M5a amendment 2026-11-11 b, P3; PDK-991): when the shield lock file cannot be
 // opened, the live marker of another process's hold is never finished: no start of himmelblaud, no recovered event,
 // the marker and the records kept; the transaction runs without a hold and is reported once as hold_failed. Recover

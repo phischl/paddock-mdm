@@ -119,8 +119,9 @@ type NSSShield struct {
 	semOnce sync.Once
 	mu      sync.Mutex
 	holding bool
-	// lockBusySince and lockWarnedAt rate-limit the warning that another process keeps the shield lock.
-	lockBusySince, lockWarnedAt time.Time
+	// lockBusySince, lockWarnedAt and restartWarnedAt rate-limit the warnings that another process keeps the shield
+	// lock: one for deferred package transactions, one for a deferred configuration restart of himmelblaud.
+	lockBusySince, lockWarnedAt, restartWarnedAt time.Time
 }
 
 // acquireResult is what acquire got.
@@ -268,30 +269,30 @@ func (s *NSSShield) tryAcquire(ctx context.Context) (release func(), ok bool) {
 	return nil, false
 }
 
-// noteLockBusy logs, at most once per shieldLockWarnEvery, that another process keeps the shield lock and since when
-// the agent has found it taken (plan M5a amendment 2026-11-11 b, P2); waitStart is when the deferred wait began.
-func (s *NSSShield) noteLockBusy(ctx context.Context, action string, waitStart time.Time) {
+// noteLockBusy logs msg at Warn, at most once per shieldLockWarnEvery and warnedAt, with since when the agent has
+// found the shield lock taken by another process (plan M5a amendment 2026-11-11 b, P2 and P4); waitStart is when the
+// deferred wait began. warnedAt is a field of s, guarded by s.mu.
+func (s *NSSShield) noteLockBusy(ctx context.Context, waitStart time.Time, warnedAt *time.Time, msg string, attrs ...any) {
 	now := s.now()
 	s.mu.Lock()
 	if s.lockBusySince.IsZero() {
 		s.lockBusySince = waitStart
 	}
 	since := s.lockBusySince
-	warn := s.lockWarnedAt.IsZero() || now.Sub(s.lockWarnedAt) >= shieldLockWarnEvery
+	warn := warnedAt.IsZero() || now.Sub(*warnedAt) >= shieldLockWarnEvery
 	if warn {
-		s.lockWarnedAt = now
+		*warnedAt = now
 	}
 	s.mu.Unlock()
 	if warn {
-		slog.WarnContext(ctx, "the himmelblaud shield lock is held by another process; package transactions deferred",
-			"action", action, "lock", s.LockFile, "held_for", now.Sub(since).Round(time.Second))
+		slog.WarnContext(ctx, msg, append(attrs, "lock", s.LockFile, "held_for", now.Sub(since).Round(time.Second))...)
 	}
 }
 
 // noteLockFree ends a streak of noteLockBusy, so that the next one warns at once.
 func (s *NSSShield) noteLockFree() {
 	s.mu.Lock()
-	s.lockBusySince, s.lockWarnedAt = time.Time{}, time.Time{}
+	s.lockBusySince, s.lockWarnedAt, s.restartWarnedAt = time.Time{}, time.Time{}, time.Time{}
 	s.mu.Unlock()
 }
 
@@ -332,7 +333,8 @@ func (s *NSSShield) Run(ctx context.Context, action string, run func() (string, 
 		slog.WarnContext(ctx, "another himmelblaud hold outlasted the wait; transaction deferred", "action", action)
 		return nssShieldBusyOutput, 100, ErrNSSShieldBusy
 	case acquireLockBusy:
-		s.noteLockBusy(ctx, action, waitStart)
+		s.noteLockBusy(ctx, waitStart, &s.lockWarnedAt,
+			"the himmelblaud shield lock is held by another process; package transactions deferred", "action", action)
 		return nssShieldBusyOutput, 100, ErrNSSShieldBusy
 	case acquireNoLock:
 		defer release()
@@ -652,11 +654,21 @@ func (s *NSSShield) Exclusive(ctx context.Context, fn func() error) (ran bool, e
 	if s == nil {
 		return true, fn()
 	}
+	waitStart := s.now()
 	release, res, lockErr, err := s.acquire(ctx, s.lockWait())
+	if err == nil && res == acquireLockBusy {
+		// The configuration file is already in place, but himmelblaud reads it only at start: a changed login allow
+		// list stays unapplied while the lock is held (plan M5a amendment 2026-11-11 b, P4).
+		s.noteLockBusy(ctx, waitStart, &s.restartWarnedAt,
+			"the himmelblaud shield lock is held by another process; a configuration restart of himmelblaud is waiting")
+	}
 	if err != nil || release == nil {
 		return false, err
 	}
 	defer release()
+	if res == acquireLocked {
+		s.noteLockFree()
+	}
 	if res == acquireNoLock {
 		// A restart stops the daemon, which a process without the lock must not do: it could cut into another
 		// process's hold (plan M5a amendment 2026-11-11 b, P3).
