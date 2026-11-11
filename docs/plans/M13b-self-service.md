@@ -552,5 +552,7 @@ failed whenever the daemon was online. The rule, its bounds and its options are 
     assigned as required; it installs, the account is a system account, and the hold's event exists.
   - SV11 (new): no `device.tamper_service_stopped` for `himmelblaud.service` since SV5 (the agent's own holds); a
     foreign `systemctl stop himmelblaud` is reported with the state `inactive`, and the daemon is not started again.
+  - SV12 (added 2026-11-11, PDK-988): a regular updates run that installs a package creating a system account,
+    with apt restricted to the gate's source for the step (plan M5a N8, accepted test-scope limit).
 - **Not covered:** a package a user installs with apt outside the agent (residual risk RR-133, with the workaround).
 - §6.6 gains the reference to RR-133; RR-116 and RR-117 are unchanged.
