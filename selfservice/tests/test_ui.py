@@ -45,6 +45,19 @@ def _labels(widget) -> list:
     return found
 
 
+_APPLICATIONS: list = []
+
+
+def _application(cls, client):
+    """One registered application for the whole module: GApplication exports its D-Bus object once per process."""
+    if not _APPLICATIONS:
+        application = cls(client)
+        application.set_flags(application.get_flags() | Gio.ApplicationFlags.NON_UNIQUE)
+        application.register(None)
+        _APPLICATIONS.append(application)
+    return _APPLICATIONS[0]
+
+
 @unittest.skipIf(Gtk is None, "no GTK 4 / libadwaita display")
 class WindowTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -67,10 +80,7 @@ class WindowTest(unittest.TestCase):
         from support import SyncScheduler
 
         self.agent.apps = [app("e1", "<b>bold</b> & <i>x", installable=True)]
-        application = Application(Client(self.agent.path))
-        application.set_flags(application.get_flags() | Gio.ApplicationFlags.NON_UNIQUE)
-        application.register(None)
-        window = Window(application, Client(self.agent.path), SyncScheduler())
+        window = Window(_application(Application, Client(self.agent.path)), Client(self.agent.path), SyncScheduler())
         window.controller.refresh()
         window.controller.acknowledge_notice()
         texts = {label.get_label(): label for label in _labels(window)}
@@ -78,6 +88,44 @@ class WindowTest(unittest.TestCase):
         self.assertFalse(texts["<b>bold</b> & <i>x"].get_use_markup())
         self.assertIn("Install", texts)
         window.destroy()
+
+    def _window(self):
+        from paddock_self_service.client import Client
+        from paddock_self_service.ui import Application, Window
+
+        from support import SyncScheduler
+
+        window = Window(_application(Application, Client(self.agent.path)), Client(self.agent.path), SyncScheduler())
+        window.controller.refresh()
+        window.controller.acknowledge_notice()
+        self.addCleanup(window.destroy)
+        return window
+
+    def test_denial_reason_is_not_markup(self) -> None:
+        script = "<script>alert(1)</script><b>x</b>"
+        self.agent.apps = [
+            app("e1", "gimp", approval="required", request={"state": "denied", "reason": script}),
+        ]
+        texts = {label.get_label(): label for label in _labels(self._window())}
+        self.assertIn(script, texts)
+        self.assertFalse(texts[script].get_use_markup())
+        self.assertIn("Denied", texts)
+
+    def test_request_dialog_limits_the_justification(self) -> None:
+        self.agent.apps = [app("e1", "gimp", approval="required", requestable=True)]
+        window = self._window()
+        self.assertIn("Request", {label.get_label() for label in _labels(window)})
+        dialog = window.request_dialog("e1")
+        self.assertEqual(dialog.get_heading(), "Request gimp")
+        buffer = dialog.text_view.get_buffer()
+        self.assertTrue(dialog.get_response_enabled("request"), "the justification is optional")
+        buffer.set_text("x" * 501)
+        self.assertFalse(dialog.get_response_enabled("request"))
+        buffer.set_text("<b>for work</b>")
+        self.assertTrue(dialog.get_response_enabled("request"))
+        dialog.emit("response", "request")
+        self.assertIn(("POST", "/v1/apps/e1/request"), self.agent.requests)
+        self.assertIn(b"<b>for work</b>", self.agent.bodies[-1])
 
 
 if __name__ == "__main__":

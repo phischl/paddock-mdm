@@ -62,6 +62,7 @@ class FakeAgent:
         self.op_reason = ""
         self.ops: dict[str, dict] = {}
         self.requests: list[tuple[str, str]] = []
+        self.bodies: list[bytes] = []
         self.raw: bytes | None = None
         self.problem: tuple[int, str] | None = None
         # The agent's per-UID rate limit (server.go allow): a fixed window that starts with the first request after
@@ -86,8 +87,11 @@ class FakeAgent:
 
             def do_POST(self) -> None:
                 length = int(self.headers.get("Content-Length") or 0)
-                self.rfile.read(length)
+                agent.bodies.append(self.rfile.read(length))
                 agent._handle(self, "POST")
+
+            def do_DELETE(self) -> None:
+                agent._handle(self, "DELETE")
 
         self._server = socketserver.ThreadingUnixStreamServer(self.path, Handler)
         self._server.daemon_threads = True
@@ -156,6 +160,20 @@ class FakeAgent:
                 self._reply(h, 200, data, ctype)
             else:
                 self._problem(h, 404, "not_found")
+        elif len(parts) == 4 and parts[1] == "apps" and parts[3] == "request" and method in ("POST", "DELETE"):
+            # The agent's request endpoints (plan M13c decision 9), with the state the agent keeps.
+            a = self.app_by_id(parts[2])
+            if parts[2] in self.refusals:
+                self._problem(h, *self.refusals[parts[2]])
+            elif a is None:
+                self._problem(h, 404, "unknown_entry")
+            elif method == "POST":
+                a.update(request={"state": "requested"}, requestable=False)
+                self._reply(h, 202, a)
+            else:
+                a.pop("request", None)
+                a.update(requestable=True)
+                self._reply(h, 200, a)
         elif method == "POST" and len(parts) == 4 and parts[1] == "apps":
             entry_id, action = parts[2], parts[3]
             if entry_id in self.refusals:

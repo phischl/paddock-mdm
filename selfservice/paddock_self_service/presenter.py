@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .i18n import _
-from .model import AppView, Operation
+from .model import MAX_JUSTIFICATION, AppView, Operation, clean_justification, justification_ok
 
 
 def reason_text(reason: str) -> str:
@@ -33,6 +33,11 @@ def reason_text(reason: str) -> str:
         "deferred_offline": _("Waits until the device is online"),
         "outside_window": _("Waits for the maintenance window"),
         "not_yet_applied": _("Not applied yet"),
+        "approval_required": _("Needs your organization's approval"),
+        "not_required": _("No approval is needed"),
+        "already_requested": _("Already requested"),
+        "denied": _("Your request was denied"),
+        "invalid_request": _("The justification is not plain text of at most 500 characters"),
     }
     return texts.get(reason, reason)
 
@@ -49,7 +54,49 @@ def state_text(state: str) -> str:
 
 
 def action_label(action: str) -> str:
-    return {"install": _("Install"), "remove": _("Remove"), "update": _("Update")}[action]
+    return {
+        "install": _("Install"),
+        "remove": _("Remove"),
+        "update": _("Update"),
+        "request": _("Request"),
+        "withdraw": _("Withdraw request"),
+    }[action]
+
+
+def request_text(app: AppView) -> str:
+    """The request state of an app that needs approval, empty for any other app. A denial's reason comes from an
+    administrator and is shown as plain text."""
+    if app.request_state == "requested":
+        return _("Requested")
+    if app.request_state == "denied":
+        if app.request_reason:
+            return _("Denied: {reason}").format(reason=app.request_reason)
+        return _("Denied")
+    return ""
+
+
+@dataclass(frozen=True)
+class RequestForm:
+    """What the request dialog shows for the justification typed so far."""
+
+    counter: str
+    can_send: bool
+
+
+def request_form(text: str) -> RequestForm:
+    """The counter and whether the dialog may send: the justification is optional and at most MAX_JUSTIFICATION
+    characters once cleaned."""
+    return RequestForm(
+        counter=_("{count} of {limit} characters").format(
+            count=len(clean_justification(text)), limit=MAX_JUSTIFICATION
+        ),
+        can_send=justification_ok(text),
+    )
+
+
+def needs_approval(app: AppView) -> bool:
+    """Report whether the user cannot install app without an administrator's approval."""
+    return not app.managed and app.approval == "required" and not app.installable and app.state != "installed"
 
 
 _GLYPHS = {
@@ -97,17 +144,34 @@ def card(app: AppView) -> Card:
     else:
         actions = tuple(
             a
-            for a, allowed in (("install", app.installable), ("update", app.updatable), ("remove", app.removable))
+            for a, allowed in (
+                ("install", app.installable),
+                ("update", app.updatable),
+                ("remove", app.removable),
+                ("request", app.requestable),
+                ("withdraw", app.request_state == "requested"),
+            )
             if allowed
         )
     detail = ""
     if app.state in ("failed", "pending") and app.reason:
         detail = reason_text(app.reason)
+    chip = state_text(app.state)
+    chip_kind = {"installed": "success", "failed": "error", "pending": "accent"}.get(app.state, "dim")
+    if needs_approval(app):
+        # The card stays small: the denial's reason, up to 500 characters, goes into the wrapping detail line.
+        if app.request_state == "requested":
+            chip, chip_kind = _("Requested"), "accent"
+        elif app.request_state == "denied":
+            chip, chip_kind = _("Denied"), "error"
+            detail = app.request_reason
+        else:
+            detail = reason_text("approval_required")
     return Card(
         entry_id=app.entry_id,
         title=app.name or app.entry_id,
-        chip=state_text(app.state),
-        chip_kind={"installed": "success", "failed": "error", "pending": "accent"}.get(app.state, "dim"),
+        chip=chip,
+        chip_kind=chip_kind,
         actions=actions,
         managed_text=managed,
         detail=detail,
@@ -125,6 +189,8 @@ def details(app: AppView) -> list[tuple[str, str]]:
         (_("Installed for"), scope),
         (_("State"), state_text(app.state)),
     ]
+    if needs_approval(app):
+        rows.append((_("Approval"), request_text(app) or reason_text("approval_required")))
     if app.managed:
         rows.append((_("Managed by your organization"), app.reason or _("Required on this device")))
     elif app.reason:

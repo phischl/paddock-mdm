@@ -14,6 +14,9 @@ MAX_NAME = 200
 MAX_DESCRIPTION = 4000
 MAX_SHORT = 200
 MAX_NOTICE = 4000
+# The agent's and the server's limit of a request's justification and of a denial's reason (plan M13c decision 8).
+MAX_JUSTIFICATION = 500
+MAX_REASON = 500
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
@@ -37,6 +40,18 @@ def plain(value: Any, limit: int, multiline: bool = False) -> str:
         if len(out) >= limit:
             break
     return "".join(out).strip()
+
+
+def clean_justification(text: str) -> str:
+    """Return a justification as the agent accepts it: line breaks as newlines, every other control character
+    removed, surrounding white space stripped. The length is not cut, so that the dialog can say it is too long."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(ch for ch in text if ch == "\n" or unicodedata.category(ch) != "Cc").strip()
+
+
+def justification_ok(text: str) -> bool:
+    """Report whether the cleaned justification fits MAX_JUSTIFICATION characters."""
+    return len(clean_justification(text)) <= MAX_JUSTIFICATION
 
 
 def valid_id(value: Any) -> bool:
@@ -75,6 +90,10 @@ class AppView:
     version: str
     reason: str
     icon: bool
+    approval: str = ""
+    requestable: bool = False
+    request_state: str = ""
+    request_reason: str = ""
 
     @classmethod
     def parse(cls, data: Any) -> AppView | None:
@@ -82,6 +101,7 @@ class AppView:
         d = _obj(data)
         if not valid_id(d.get("entry_id")):
             return None
+        request = _obj(d.get("request"))
         return cls(
             entry_id=d["entry_id"],
             name=plain(d.get("name"), MAX_NAME),
@@ -98,6 +118,10 @@ class AppView:
             version=plain(d.get("version"), MAX_SHORT),
             reason=plain(d.get("reason"), MAX_SHORT),
             icon=_bool(d.get("icon")),
+            approval=plain(d.get("approval"), MAX_SHORT),
+            requestable=_bool(d.get("requestable")),
+            request_state=plain(request.get("state"), MAX_SHORT),
+            request_reason=plain(request.get("reason"), MAX_REASON, multiline=True),
         )
 
 

@@ -519,10 +519,26 @@ type SoftwarePackage struct {
 	// the same package to without approval; only with Approval. A pointer like Audience, so SoftwarePackage stays
 	// comparable.
 	Approved *[]string `json:"approved,omitempty"`
+	// Denied are the users of the audience whose request an administrator denied on this device, each with the
+	// administrator's reason (sorted by user, 1 to MaxSoftwareAudience, ValidAudienceUser, none of them in Approved);
+	// only with Approval (architect decision A10-27). The agent shows each user only their own entry. The reason is
+	// untrusted text: the agent strips control characters before it shows it. Additive to schema 2 (ADR 0013); an
+	// agent before the compiler's approval gate never gets a package that requires approval (A10-6).
+	Denied *[]SoftwareDenial `json:"denied,omitempty"`
 	// Urgent marks a package of an assignment an administrator marked urgent with a step-up (plan M13c decision 7):
 	// the agent applies it outside the maintenance windows too. Absent otherwise.
 	Urgent bool `json:"urgent,omitempty"`
 }
+
+// SoftwareDenial is one user's denied request of a package that requires approval (architect decision A10-27).
+type SoftwareDenial struct {
+	User   string `json:"user"`
+	Reason string `json:"reason"`
+}
+
+// MaxSoftwareDenialReason bounds the reason of a SoftwareDenial in characters, the limit of
+// software_request.decision_reason (plan M13c decision 8).
+const MaxSoftwareDenialReason = 500
 
 // SoftwareApprovalRequired is the only value of SoftwarePackage.Approval (plan M13c decision 9).
 const SoftwareApprovalRequired = "required"
@@ -621,6 +637,9 @@ func ValidateSoftware(s SoftwareSpec) error {
 			return err
 		}
 		if err := validateApproval(p, name); err != nil {
+			return err
+		}
+		if err := validateDenied(p, name); err != nil {
 			return err
 		}
 		if p.FlatpakRef == "" && RefusedIntent(p.Package, p.Intent) {
@@ -764,6 +783,34 @@ func validateApproval(p SoftwarePackage, name string) error {
 	for i, u := range approved {
 		if !ValidAudienceUser(u) || i > 0 && approved[i-1] >= u {
 			return fmt.Errorf("bundle: the approved users of software package %q have an invalid or unsorted user %q", name, u)
+		}
+	}
+	return nil
+}
+
+// validateDenied checks the denied users of a package: only a package that requires approval lists them, as 1 to
+// MaxSoftwareAudience distinct user names in ascending order that are not approved, each with a reason of valid UTF-8
+// of at most MaxSoftwareDenialReason characters (architect decision A10-27).
+func validateDenied(p SoftwarePackage, name string) error {
+	switch {
+	case p.Denied == nil:
+		return nil
+	case p.Approval == "":
+		return fmt.Errorf("bundle: software package %q lists denied users without requiring approval", name)
+	case len(*p.Denied) == 0 || len(*p.Denied) > MaxSoftwareAudience:
+		return fmt.Errorf("bundle: software package %q must have 1 to %d denied users", name, MaxSoftwareAudience)
+	}
+	denied := *p.Denied
+	for i, d := range denied {
+		if !ValidAudienceUser(d.User) || i > 0 && denied[i-1].User >= d.User {
+			return fmt.Errorf("bundle: the denied users of software package %q have an invalid or unsorted user %q", name, d.User)
+		}
+		if p.Approved != nil && slices.Contains(*p.Approved, d.User) {
+			return fmt.Errorf("bundle: software package %q lists user %q as approved and denied", name, d.User)
+		}
+		if !utf8.ValidString(d.Reason) || utf8.RuneCountInString(d.Reason) > MaxSoftwareDenialReason {
+			return fmt.Errorf("bundle: the denial reason of user %q of software package %q is not valid UTF-8 of at most %d characters",
+				d.User, name, MaxSoftwareDenialReason)
 		}
 	}
 	return nil

@@ -1,6 +1,7 @@
 package selfservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,7 +26,8 @@ const (
 	// MaxConnsPerUID bounds the connections one UID holds at once, so one user cannot take every slot; a further
 	// connection of that UID is closed unanswered.
 	MaxConnsPerUID = 4
-	// MaxBody bounds a request body; no endpoint takes one.
+	// MaxBody bounds a request body; only POST /v1/apps/{id}/request takes one, a justification of at most
+	// MaxJustification characters (4 bytes each in UTF-8).
 	MaxBody = 4 << 10
 	// RatePerMinute bounds the requests of one UID per minute.
 	RatePerMinute = 60
@@ -237,6 +239,22 @@ func (s *Service) Handler() http.Handler {
 			reply(w, http.StatusAccepted, map[string]string{"operation_id": id}, err)
 		}))
 	}
+	mux.HandleFunc("POST /v1/apps/{id}/request", s.authed(func(w http.ResponseWriter, r *http.Request, p Principal) {
+		justification, err := parseRequestBody(r)
+		if err != nil {
+			reply(w, 0, nil, err)
+			return
+		}
+		app, err := s.Request(p, r.PathValue("id"), justification)
+		if err == nil {
+			slog.InfoContext(r.Context(), "software request recorded", "entry_id", app.EntryID, "uid", p.UID)
+		}
+		reply(w, http.StatusAccepted, app, err)
+	}))
+	mux.HandleFunc("DELETE /v1/apps/{id}/request", s.authed(func(w http.ResponseWriter, r *http.Request, p Principal) {
+		app, err := s.Withdraw(p, r.PathValue("id"))
+		reply(w, http.StatusOK, app, err)
+	}))
 	mux.HandleFunc("GET /v1/operations/{id}", s.authed(func(w http.ResponseWriter, r *http.Request, p Principal) {
 		op, ok := s.Operation(p, r.PathValue("id"))
 		if !ok {
@@ -264,10 +282,12 @@ func (s *Service) limited(h func(w http.ResponseWriter, r *http.Request, uid int
 			reply(w, 0, nil, &Problem{Status: http.StatusTooManyRequests, Code: CodeRateLimited, Detail: "too many requests"})
 			return
 		}
-		if _, err := io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, MaxBody)); err != nil {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBody))
+		if err != nil {
 			reply(w, 0, nil, &Problem{Status: http.StatusRequestEntityTooLarge, Code: CodeBodyTooLarge, Detail: "the request body is too large"})
 			return
 		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		h(w, r, pr.uid)
 	}
 }

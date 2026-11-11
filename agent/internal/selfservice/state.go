@@ -14,7 +14,8 @@ import (
 
 // Files of the self-service. Only root reads them (0600 below the agent's 0700 state directory).
 const (
-	// StateFile records the completed self-service installs (plan M13b decision 11); the queue lives in memory.
+	// StateFile records the completed self-service installs (plan M13b decision 11) and the pending software requests
+	// (plan M13c decision 9); the queue lives in memory.
 	StateFile = "/var/lib/paddock/state/selfservice.json"
 	// RunningFile holds the operation that is running: one left at start was interrupted by a restart (F4).
 	RunningFile = "/var/lib/paddock/state/selfservice-running.json"
@@ -35,7 +36,8 @@ type Install struct {
 
 // Record is the content of StateFile.
 type Record struct {
-	Installs []Install `json:"installs"`
+	Installs []Install        `json:"installs"`
+	Requests []PendingRequest `json:"requests,omitempty"`
 }
 
 // installedBy reports whether the install is pkg's, for uid when it is a user-scope one.

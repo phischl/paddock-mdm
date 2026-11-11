@@ -670,9 +670,11 @@ components:
             Since plan M13b software.self_service {user, entry_id, package or flatpak_ref, scope (system or user),
             action (install, remove or update), outcome (succeeded, failed or refused), reason, version}: one per
             operation a user asked for through the self-service socket.
-            Since plan M13c software.request {user, entry_id}: a user asked for an available application whose entry
-            requires approval; the agent sends it only while its bundle carries such a package. The server opens one
-            request per device, entry and user; a repeat while it is open changes nothing.
+            Since plan M13c software.request {user, entry_id, justification (optional, since PDK-811: plain text of
+            at most 500 characters without control characters except newlines; untrusted, never in audit params)}: a
+            user asked for an available application whose entry requires approval; the agent sends it only while its
+            bundle carries such a package. The server opens one request per device, entry and user; a repeat while it
+            is open changes nothing.
             Since plan M8e the phases of an in-place encryption, each with data.conversion_id:
             disk.conversion_prepared {layout (lvm|plain), volume (the LUKS UUID of the header to come), data_bytes},
             disk.conversion_started {volume, init_s, init_result (ok, <stage>:<reason> or unknown), after_cancel

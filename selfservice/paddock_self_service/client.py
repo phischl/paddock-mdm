@@ -14,7 +14,7 @@ import time
 from collections import deque
 from typing import Any, Callable
 
-from .model import AppView, Operation, Status, parse_apps, plain, valid_id
+from .model import AppView, Operation, Status, clean_justification, justification_ok, parse_apps, plain, valid_id
 
 SOCKET_PATH = "/run/paddock/selfservice.sock"
 TIMEOUT = 10.0
@@ -116,12 +116,19 @@ class Client:
         self._timeout = timeout
         self.budget = Budget(clock)
 
-    def _request(self, method: str, path: str, limit: int = MAX_BODY) -> tuple[int, str, bytes, int]:
+    def _request(
+        self, method: str, path: str, limit: int = MAX_BODY, body: bytes | None = None
+    ) -> tuple[int, str, bytes, int]:
         """Send one request; returns status, content type, body and, for 429, the Retry-After seconds."""
         conn = _UnixConnection(self._path, self._timeout)
+        headers = {"Accept": "application/json"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        elif method == "POST":
+            body = b""
         try:
             self.budget.record()
-            conn.request(method, path, body=b"" if method == "POST" else None, headers={"Accept": "application/json"})
+            conn.request(method, path, body=body, headers=headers)
             resp = conn.getresponse()
             retry_after = 0
             # Only the rate limit sends Retry-After; a full queue (busy) is also 429 but must not pause the app.
@@ -137,9 +144,9 @@ class Client:
         finally:
             conn.close()
 
-    def _json(self, method: str, path: str, ok: int = 200) -> Any:
-        status, _, body, retry_after = self._request(method, path)
-        data = _decode(body)
+    def _json(self, method: str, path: str, ok: int = 200, body: bytes | None = None) -> Any:
+        status, _, reply, retry_after = self._request(method, path, body=body)
+        data = _decode(reply)
         if status != ok:
             raise _problem(status, data, retry_after)
         if data is None:
@@ -183,6 +190,21 @@ class Client:
         if not valid_id(op_id):
             raise AgentUnavailable("the reply names no operation")
         return op_id
+
+    def request(self, entry_id: str, justification: str) -> AppView | None:
+        """Ask an administrator to approve an entry, with an optional justification (plain text, at most
+        MAX_JUSTIFICATION characters); returns the entry's new view."""
+        _check_id(entry_id)
+        if not justification_ok(justification):
+            raise ValueError("the justification is too long")
+        # UTF-8, not \u escapes: 500 characters then stay within the agent's 4 KiB body limit.
+        body = json.dumps({"justification": clean_justification(justification)}, ensure_ascii=False).encode("utf-8")
+        return AppView.parse(self._json("POST", f"/v1/apps/{entry_id}/request", ok=202, body=body))
+
+    def withdraw(self, entry_id: str) -> AppView | None:
+        """Withdraw the pending request of an entry; returns the entry's new view."""
+        _check_id(entry_id)
+        return AppView.parse(self._json("DELETE", f"/v1/apps/{entry_id}/request"))
 
     def operation(self, op_id: str) -> Operation:
         _check_id(op_id)

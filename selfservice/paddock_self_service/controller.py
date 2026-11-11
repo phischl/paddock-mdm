@@ -124,6 +124,41 @@ class Controller:
         self._acting.add(entry_id)
         self._sched.submit(lambda: self._client.act(entry_id, action), done)
 
+    def request(self, entry_id: str, justification: str) -> None:
+        """Ask an administrator to approve entry_id (plan M13c decision 9); the list shows the request afterwards."""
+        self._ask(entry_id, lambda: self._client.request(entry_id, justification), _("{name}: approval requested"))
+
+    def withdraw(self, entry_id: str) -> None:
+        """Withdraw the pending request of entry_id."""
+        self._ask(entry_id, lambda: self._client.withdraw(entry_id), _("{name}: request withdrawn"))
+
+    def _ask(self, entry_id: str, work: Callable[[], Any], success: str) -> None:
+        """Run a request call for entry_id, at most one at a time, and reload the list when it was accepted. A
+        refusal is shown with its reason; an agent that is unavailable (503 included) gets the banner and the retry."""
+        if entry_id in self._acting:
+            return
+        app = self.app(entry_id)
+        name = app.name if app is not None and app.name else entry_id
+
+        def done(_view: Any, error: BaseException | None) -> None:
+            self._acting.discard(entry_id)
+            if isinstance(error, ValueError):
+                self._view.show_message(_("{name}: {reason}").format(name=name, reason=reason_text("invalid_request")))
+                return
+            if isinstance(error, Problem) and error.status in (400, 403, 404, 409, 429):
+                self._view.show_message(_("{name}: {reason}").format(name=name, reason=reason_text(error.code)))
+                self.refresh()
+                return
+            if error is not None:
+                self._view.show_message(_("{name}: {reason}").format(name=name, reason=banner_text(error)))
+                self._unavailable(error)
+                return
+            self._view.show_message(success.format(name=name))
+            self.refresh()
+
+        self._acting.add(entry_id)
+        self._sched.submit(work, done)
+
     def _start_polling(self) -> None:
         """Poll at once for a new operation unless the poll timer already runs; it then joins the rotation."""
         if not self._polling:
