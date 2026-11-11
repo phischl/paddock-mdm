@@ -217,3 +217,57 @@ msgstr "Vorgänge, die Sie starten, erscheinen hier."
 
 msgid "Remove {name}?"
 msgstr "{name} entfernen?"
+
+msgid "Needs your organization's approval"
+msgstr "Erfordert die Freigabe Ihrer Organisation"
+
+msgid "No approval is needed"
+msgstr "Keine Freigabe erforderlich"
+
+msgid "Already requested"
+msgstr "Bereits angefragt"
+
+msgid "Your request was denied"
+msgstr "Ihre Anfrage wurde abgelehnt"
+
+msgid "The justification is not plain text of at most 500 characters"
+msgstr "Die Begründung ist kein reiner Text mit höchstens 500 Zeichen"
+
+msgid "Request"
+msgstr "Anfragen"
+
+msgid "Withdraw request"
+msgstr "Anfrage zurückziehen"
+
+msgid "Requested"
+msgstr "Angefragt"
+
+msgid "Denied: {reason}"
+msgstr "Abgelehnt: {reason}"
+
+msgid "Denied"
+msgstr "Abgelehnt"
+
+msgid "Approval"
+msgstr "Freigabe"
+
+msgid "{count} of {limit} characters"
+msgstr "{count} von {limit} Zeichen"
+
+msgid "{name}: approval requested"
+msgstr "{name}: Freigabe angefragt"
+
+msgid "{name}: request withdrawn"
+msgstr "{name}: Anfrage zurückgezogen"
+
+msgid "Request {name}"
+msgstr "{name} anfragen"
+
+msgid "An administrator of your organization decides. You can add a justification; it is sent with your user name."
+msgstr "Eine Administratorin oder ein Administrator Ihrer Organisation entscheidet. Sie können eine Begründung angeben; sie wird mit Ihrem Benutzernamen gesendet."
+
+msgid "Justification (optional)"
+msgstr "Begründung (optional)"
+
+msgid "Send request"
+msgstr "Anfrage senden"

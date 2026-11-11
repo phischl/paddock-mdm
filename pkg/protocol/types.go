@@ -381,12 +381,14 @@ type SoftwareSelfService struct {
 	Version    string `json:"version,omitempty"`
 }
 
-// SoftwareRequest is the data of software.request: the user name of the asking account (the UPN of a directory user)
-// and the catalog entry it asks for. The user's justification text is not part of it until the maintainer decides on
-// it (plan M13c §12 Q4).
+// SoftwareRequest is the data of software.request: the user name of the asking account (the UPN of a directory user),
+// the catalog entry it asks for and the user's justification, plain text of at most 500 characters without control
+// characters except newlines (maintainer answer Q7). The justification is untrusted input: it never enters audit
+// params, logs or problem details. Additive (ADR 0013); a server that does not store it drops it.
 type SoftwareRequest struct {
-	User    string `json:"user"`
-	EntryID string `json:"entry_id"`
+	User          string `json:"user"`
+	EntryID       string `json:"entry_id"`
+	Justification string `json:"justification,omitempty"`
 }
 
 // SoftwareApplyFailed is the data of software.apply_failed: a package or a source (Source without Package) that could

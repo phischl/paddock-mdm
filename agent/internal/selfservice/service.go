@@ -92,6 +92,8 @@ type Service struct {
 	iconWake  chan struct{}
 	reconcile bool
 	events    chan protocol.SoftwareSelfService
+	requests  chan protocol.SoftwareRequest
+	asked     map[int][]time.Time // the recent requests per UID (RequestsPerHour)
 }
 
 // snapshot is what the service knows of the applied bundle.
@@ -149,6 +151,11 @@ type AppView struct {
 	Version     string `json:"version,omitempty"`
 	Reason      string `json:"reason,omitempty"`
 	Icon        bool   `json:"icon"`
+	// Approval is bundle.SoftwareApprovalRequired for an entry that requires approval (plan M13c decision 9).
+	// Requestable is set when the caller may ask for it; Request is the caller's pending or denied request.
+	Approval    string       `json:"approval,omitempty"`
+	Requestable bool         `json:"requestable"`
+	Request     *RequestView `json:"request,omitempty"`
 }
 
 // Problem is a refusal of the socket API: an HTTP status and a stable code. Its detail never names another user's
@@ -192,7 +199,8 @@ func New(cfg Config) *Service {
 	}
 	return &Service{cfg: cfg, record: loadRecord(cfg.Sys), ops: map[string]*operation{}, installed: map[string]probe{},
 		failed: map[string]*operation{}, rate: map[int]*window{}, notices: map[int][]time.Time{}, icons: iconCache{tried: map[string]bool{}, gap: iconGap},
-		wake: make(chan struct{}, 1), iconWake: make(chan struct{}, 1), events: make(chan protocol.SoftwareSelfService, 64)}
+		wake: make(chan struct{}, 1), iconWake: make(chan struct{}, 1), events: make(chan protocol.SoftwareSelfService, 64),
+		requests: make(chan protocol.SoftwareRequest, 64), asked: map[int][]time.Time{}}
 }
 
 // Events delivers the software.self_service events; the run loop spools them (the spool is the loop's alone).
@@ -213,6 +221,14 @@ func (s *Service) SetBundle(b *bundle.Bundle, fetch IconFetch) {
 	s.mu.Lock()
 	s.snap = snap
 	s.reconcile = true
+	if snap.applied {
+		if kept, dropped := pruneRequests(s.record.Requests, snap.spec, s.cfg.Now()); dropped {
+			s.record.Requests = kept
+			if err := saveRecord(s.cfg.Sys, s.record); err != nil {
+				slog.Error("writing the self-service record failed", "error", err)
+			}
+		}
+	}
 	s.mu.Unlock()
 	signal(s.wake)
 	signal(s.iconWake)
@@ -303,6 +319,10 @@ func (s *Service) Enqueue(p Principal, entryID, action string) (string, error) {
 	if action == protocol.SelfServiceInstall && s.installed[probeKey(pkg, p.UID)].installed {
 		return "", &Problem{Status: http.StatusForbidden, Code: protocol.SelfServiceRequiredByPolicy,
 			Detail: "the application is already installed"}
+	}
+	if action == protocol.SelfServiceInstall && !approvedFor(pkg, p) {
+		return "", &Problem{Status: http.StatusForbidden, Code: CodeApprovalRequired,
+			Detail: "the application needs an administrator's approval"}
 	}
 	n := 0
 	for _, op := range s.queue {
@@ -435,6 +455,9 @@ func (s *Service) reauthorize(op *operation) string {
 		return protocol.SelfServiceRequiredByPolicy
 	case op.action == protocol.SelfServiceInstall && s.installed[probeKey(pkg, op.principal.UID)].installed:
 		return protocol.SelfServiceRequiredByPolicy
+	case op.action == protocol.SelfServiceInstall && !approvedFor(pkg, op.principal):
+		// The event's closed reason set has no approval reason; without approval the user is not offered the install.
+		return protocol.SelfServiceNotInAudience
 	}
 	op.pkg = pkg
 	return ""
@@ -717,6 +740,7 @@ func (s *Service) view(pkg bundle.SoftwarePackage, p Principal) AppView {
 		v.Removable = ownInstall && pr.installed
 		v.Updatable = v.Removable
 	}
+	s.requestView(&v, pkg, p, pr.installed, pending)
 	return v
 }
 

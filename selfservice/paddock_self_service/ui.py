@@ -20,7 +20,7 @@ from .client import Client  # noqa: E402
 from .controller import Controller, IconLoader  # noqa: E402
 from .i18n import _  # noqa: E402
 from .notice import NoticeState  # noqa: E402
-from .presenter import Activity, Card, action_label, details, glyph  # noqa: E402
+from .presenter import Activity, Card, action_label, details, glyph, request_form  # noqa: E402
 
 ICON_SIZE = 48
 
@@ -244,6 +244,12 @@ class Window(Adw.ApplicationWindow):
         return child
 
     def _on_action(self, _button: Gtk.Button, entry_id: str, action: str) -> None:
+        if action == "request":
+            self.request_dialog(entry_id).present(self)
+            return
+        if action == "withdraw":
+            self.controller.withdraw(entry_id)
+            return
         if action != "remove":
             self.controller.act(entry_id, action)
             return
@@ -258,6 +264,45 @@ class Window(Adw.ApplicationWindow):
         dialog.set_close_response("cancel")
         dialog.connect("response", lambda _d, r: r == "remove" and self.controller.act(entry_id, "remove"))
         dialog.present(self)
+
+    def request_dialog(self, entry_id: str) -> Adw.AlertDialog:
+        """The dialog that asks for an approval with an optional justification of at most 500 characters."""
+        app = self.controller.app(entry_id)
+        dialog = Adw.AlertDialog(heading_use_markup=False, body_use_markup=False)
+        dialog.set_heading(_("Request {name}").format(name=app.name if app else entry_id))
+        dialog.set_body(
+            _(
+                "An administrator of your organization decides. You can add a justification; it is sent with your "
+                "user name."
+            )
+        )
+        text = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, accepts_tab=False, top_margin=6, bottom_margin=6)
+        text.update_property([Gtk.AccessibleProperty.LABEL], [_("Justification (optional)")])
+        counter = _label("", "caption", "dim-label")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.append(Gtk.ScrolledWindow(child=text, min_content_height=96, hscrollbar_policy=Gtk.PolicyType.NEVER))
+        box.append(counter)
+        dialog.set_extra_child(box)
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("request", _("Send request"))
+        dialog.set_response_appearance("request", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("request")
+        dialog.set_close_response("cancel")
+
+        def typed() -> str:
+            buffer = text.get_buffer()
+            return buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
+
+        def changed(_buffer: Gtk.TextBuffer | None = None) -> None:
+            form = request_form(typed())
+            counter.set_text(form.counter)
+            dialog.set_response_enabled("request", form.can_send)
+
+        text.get_buffer().connect("changed", changed)
+        changed()
+        dialog.connect("response", lambda _d, r: r == "request" and self.controller.request(entry_id, typed()))
+        dialog.text_view = text
+        return dialog
 
     def _on_card_activated(self, _grid: Gtk.FlowBox, child: Gtk.FlowBoxChild) -> None:
         app = self.controller.app(getattr(child, "entry_id", ""))
