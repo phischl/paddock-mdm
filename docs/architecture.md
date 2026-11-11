@@ -132,7 +132,7 @@ The concept's IDs are kept. Each criterion names the role that must be able to o
 | N2 | **Ingest:** at-least-once, idempotent consumers; sustains 5 000 events/s with 3 worker replicas (reference load test). |
 | N3 | **Availability:** control plane target 99.5 % monthly; devices are unaffected by outages (C2). |
 | N4 | **Security:** all external traffic TLS 1.3 (1.2 allowed for device gateway behind legacy proxies); no plaintext signing or escrow key on any application node. |
-| N5 | **Privacy:** the negative list of the concept (no commands, processes, network connections, …) is enforced by schema: ingest rejects unknown event types. |
+| N5 | **Privacy:** the negative list of the concept (no commands, processes, network connections, …) is enforced by schema: ingest rejects unknown event types (amendment 2026-11-11: from 0.1.0-alpha.10 an event of an unknown type is skipped with its data dropped at the gateway and the batch accepted, ADR 0024; nothing of an unknown type is stored). |
 | N6 | **Localization:** no user-visible string in the portal is hard-coded; CI fails on missing English keys. |
 
 ---

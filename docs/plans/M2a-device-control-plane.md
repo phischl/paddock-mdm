@@ -103,7 +103,8 @@ synchronous device-to-database write.
     a reconcile loop (every 60 s) rewrites `bp:` for bundles newer than the cached pointer.
 14. **Events from devices (M2a):** `POST /v1/events` accepts a batch of at most 500 events, types (closed enum):
     `bundle.applied`, `bundle.rejected`, `config.drift_corrected`. Each event `{event_seq, type, occurred_at, data}`;
-    unknown type → 400 `unknown_event_type` for the whole batch. Worker turns them into audit events with codes
+    unknown type → 400 `unknown_event_type` for the whole batch (amended 2026-11-11: skipped, 202; see the amendment
+    at the end). Worker turns them into audit events with codes
     `device.bundle_applied`, `device.bundle_rejected`, `device.config_drift_corrected` (actor `{type:"device", id}`),
     deduplicated by `(device_id, event_seq)` (table `device_event_seen`, primary key, `ON CONFLICT DO NOTHING`).
 15. **Keys:** OpenBao Transit `bundle-signing` (`ed25519`, non-exportable); AppRole `paddock-compiler` with
@@ -427,3 +428,16 @@ the first check-in after a Valkey loss, and the first one of a device without `s
 (RR-97). Tests: `TestCheckinWithoutDeliveredSeqNotFlagged`, `TestCheckinCacheLossAfterAbandonedPublishes`. The
 `docs/architecture.md` text proposed above applies with "the rule applies only when `sd:` is known" in place of the
 counter fallback.
+
+## Amendment 2026-11-11 (PDK-995, ADR 0024 amendment 2026-11-11) — an unknown event type no longer fails the batch
+
+Decision 14 ("unknown type → 400 `unknown_event_type` for the whole batch") and the row `POST /v1/events` of the
+endpoint table change from 0.1.0-alpha.10:
+
+- An event of an unknown type is skipped: the gateway clears its `data`, the worker claims its `(device_id,
+  event_seq)` in `device_event_seen` without an audit event, logs the skip once with the device and the cleaned type
+  and increments `paddock_device_events_unknown_total`. The batch is answered **202**.
+- `POST /v1/events`: 202; errors 400 `invalid_request` (a malformed event, also one of an unknown type), 401, 413,
+  429. 400 `unknown_event_type` is no longer sent; the code stays in the contract for older servers.
+- Reason: one unknown event must not hold back every later event of a device (forward compatibility; ADR 0024,
+  amendment 2026-11-11). The type list stays a closed enum on the server: an unknown type is never stored.
