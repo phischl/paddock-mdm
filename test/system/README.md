@@ -20,6 +20,14 @@ inspection. Screenshots are kept in `bin/system-evidence/<vm>/`.
 regression sets it and runs them on their own, after the other gates (section
 [Backup and recovery](#backup-and-recovery-plan-m15) lists the prerequisites).
 
+## Users by name, never by number
+
+On an enrolled VM Himmelblau answers for every unknown name, a string of digits included: `208071` given where a
+tool accepts a user name can resolve to a synthetic directory user with another UID. Gates and fixtures therefore
+switch to and address a user **by name**: `setpriv --reuid <name>`, `id <name>`, `sudo -u <name>`, `chown <name>`,
+`install -o <name>`, `systemd-run --uid=<name>`. A UID read from the device is resolved to its name first
+(`/etc/passwd`, or the session's user), and compared as a number only (plan M5a, design note 2026-11-11).
+
 ## Worktrees
 
 `make system-test`, `make acceptance` and `make e2e` need the checkout's `deploy/compose/.env` and

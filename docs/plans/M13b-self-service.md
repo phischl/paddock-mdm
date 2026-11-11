@@ -530,8 +530,8 @@ failed whenever the daemon was online. The rule, its bounds and its options are 
   `himmelblaud` held stopped, the self-service executor's and the Flatpak runtime's included (M5a N2). While a user
   installs or removes an application in the self-service app, new logins and screen unlocks of directory users on
   that device wait: at most 10 minutes per transaction, with a systemd timer that starts the daemon after 12 minutes
-  if the agent died. Running sessions, the self-service app's included, continue (corrected 2026-11-11: their
-  users keep resolving; only directory users never seen on the device may not resolve during the hold, plan M5a N7). `flatpak` commands themselves are
+  if the agent died. Running sessions, the self-service app's included, continue (corrected 2026-11-11:
+  signed-in directory users resolve by name and UID during the hold, plan M5a N7). `flatpak` commands themselves are
   no transactions and run without a hold.
 - **One `device.login_nss_shield` per hold** (M5a N4), in addition to the `software.self_service` event of decision
   18. No change to the self-service socket, the bundle or the portal.

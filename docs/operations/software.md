@@ -159,8 +159,8 @@ configuration and are never touched by the catalog.
 (`himmelblaud`) around every package installation, removal and update run it carries out, so that packages can create
 their system accounts, and starts it again afterwards. Meanwhile new logins and screen unlocks of directory users
 wait: seconds, for large packages minutes, at most 10 minutes per installation. Running sessions continue, and
-directory users who are signed in or have signed in on the device before keep resolving, so `ls -l` and `sudo` work as
-usual. Only a directory user who has never been seen on the device may not resolve until the installation has
+signed-in directory users resolve by name and UID during the pause, so `ls -l` and `sudo` work as usual. Only a lookup
+of a directory user who has never signed in on the device can answer "no such user" until the installation has
 finished. Local accounts, the local administrator included, are not affected. Each pause is recorded as
 `device.login_nss_shield`. A maintenance window therefore also decides when logins may wait. Details and the bounds:
 [device-login.md](device-login.md), "Package installations pause directory logins" (residual risk RR-133).

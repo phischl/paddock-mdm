@@ -249,13 +249,24 @@ directory user can fail until the hold ends. Local accounts and the managed loca
 local files and are not affected. The operator documents and RR-133 MUST say this in these terms. The effect is
 confirmed by the logging step of the system gates on both VMs and recorded with PDK-983.
 
-**Corrected 2026-11-11 (`decisions-alpha10.md` §52; replaces the correction of 2026-11-10 above):** the system
-gates on both VMs show that the earlier correction went too far. While `himmelblaud` is stopped, a directory user
-who is signed in on the device, or who has signed in there before (cached), still resolves by name and by UID. So
-running sessions continue **and** their users keep resolving: `ls -l`, `id` and `sudo` in such a session behave as
-without a hold. Only a directory user who has **never been seen on the device** may not resolve during a hold (for
-example `id <user>` for such a name answers "no such user"). Local accounts and the managed local administrator are
-not affected. The operator documents and RR-133 MUST say this in these terms.
+**Corrected 2026-11-11 (`decisions-alpha10.md` §52; replaces the correction of 2026-11-10 above and with it §48
+point 1).** Final wording, confirmed by the system gates on Ubuntu 24.04 and 26.04: **running sessions continue;
+signed-in directory users resolve by name and UID during a hold.** `ls -l`, `id` and `sudo` in such a session
+behave as without a hold; the earlier statements about numeric IDs and failing `sudo` are withdrawn. Local accounts
+and the managed local administrator are not affected. The operator documents and RR-133 MUST use this wording.
+
+One caveat stays, because it is measured and is the mechanism of the hold itself: a name the device has never seen
+does not resolve while the daemon is stopped (PDK-983's probe on both releases: `getent passwd <unknown name>`
+answers with a synthetic user while `himmelblaud` runs and "not found" while it is stopped; that is why `adduser`
+then succeeds). A directory user who has never signed in on the device is such a name. It matters only for a
+lookup of that user during a hold, not for anybody who is signed in.
+
+**Design note 2026-11-11 — users are named, never numbered.** On an enrolled device Himmelblau synthesizes a user
+for any unknown name, a string of digits included: `208071` passed where a tool accepts a user **name** can resolve
+to a synthetic user with another UID than the number meant. Code, package scripts and tests MUST therefore switch
+to and address a user by name wherever a tool accepts a name or a number: `setpriv --reuid`, `id`, `sudo -u`,
+`chown`, `install -o`, `systemd-run --uid`. Where only a UID is at hand, it is first resolved to its name from the
+local files or from the session, or passed in a form the tool defines as numeric only (`sudo -u '#<uid>'`).
 
 ### N8 Tests and gates (names as implemented in PDK-983)
 
