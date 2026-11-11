@@ -321,7 +321,7 @@ paths:
             schema: { $ref: "#/components/schemas/EventsRequest" }
       responses:
         "202":
-          description: Accepted for processing; duplicates (same event_seq) are ignored.
+          description: Accepted for processing; duplicates (same event_seq) are ignored, and an event of an unknown type is skipped (see Event.type).
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "413": { $ref: "#/components/responses/Problem" }
@@ -661,6 +661,10 @@ components:
                  disk.conversion_unlock_restore_failed, software.installed, software.reinstalled,
                  software.removed, software.apply_failed, software.self_service, software.request]
           description: |
+            A server that does not know a type (an agent newer than the server) skips that event: it records its
+            event_seq once, without its data and without an audit event, and accepts the rest of the batch with 202
+            (PDK-995). Servers before 0.1.0-alpha.10 rejected the whole batch with 400 unknown_event_type, so an agent
+            sends a new type only when its bundle says the server understands it.
             Since plan M13a the software reconciler: software.installed and software.reinstalled {package, version,
             intent, catalog_entry_id, reason (first_install or locally_removed)}, software.removed {package, version,
             intent, catalog_entry_id}, software.apply_failed {package or source, stage (source_update, keyring,
