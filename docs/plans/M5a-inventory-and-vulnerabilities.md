@@ -366,6 +366,11 @@ this amendment contradicts N3, N5, N6.3 or N9, it wins.
   event, no new status reason: the transaction stays `pending` / `dpkg_locked` as today.
 - **Not closed:** a local administrator with root can also rewrite the marker, or stop the agent. That is the root
   bypass of RR-01; this rule removes the cheap, silent variant only.
+- **Accepted bound (added 2026-11-11, PDK-990/991 review 2):** the marker's age is measured on the wall clock,
+  across processes. When the device's clock steps forward by more than the bound (12 minutes) during a hold of the
+  updates process, the agent sees an old marker and reports one false `tamper.service_stopped` for that hold. A
+  step backward only lengthens the time a marker counts. One false report at a clock step is accepted over a
+  cross-process monotonic clock; RR-133 names it.
 - Tests (unit): lock taken, no marker, daemon stopped → reported once; fresh marker → not reported; marker older
   than the bound → reported once; the agent's own hold and a hold of the updates process inside the bound → not
   reported (the existing tests stay green).
@@ -390,7 +395,29 @@ this amendment contradicts N3, N5, N6.3 or N9, it wins.
   "exactly one event per hold" therefore holds while the state directory is writable. No further mechanism: a
   second event with the outcome `recovered` for a hold already reported is harmless and points at the failing
   directory.
+- **A second accepted duplicate (added 2026-11-11, PDK-990/991 review 2).** When the updates process alone cannot
+  take the cross-process lock, it writes its record to the report file without the lock while the agent may be
+  sending that file. A record the updates process re-read and wrote back can then be sent twice. The direction is
+  the harmless one: a duplicate event, never a lost one. Accepted for the same reason as the failed marker rewrite.
 - Tests (unit): an unopenable lock file with a live marker → no start of the daemon, no `recovered` event, the
   marker kept, the transaction runs with one `hold_failed`.
 - **Scope: 0.1.0-alpha.10** (PDK-991, implementer). Small, and since PDK-983 every package transaction passes this
   path, so the degraded mode must fail safe in the release that introduces the hold.
+
+### P4 PDK-1005 (added 2026-11-11): a deferred restart of `himmelblaud` is warned about
+
+- **Finding.** P2 made a package transaction deferred behind a shield lock held by another process log at `Warn`
+  once an hour. The second user of the lock is not covered: the restart that applies a changed `himmelblau.conf`
+  (`Login.restartAfterHolds`; for example a changed login allow list, which the daemon reads only at start). While
+  another process keeps the lock, the restart is deferred on every pass and the only trace is an `Info` line. A
+  changed login restriction then stays unapplied in the running daemon without a warning.
+- **Rule.** A restart deferred because the shield lock was not obtained within its wait MUST log at `Warn`, with
+  the same limit of once an hour and the same wording class as P2 (the lock is held by another process, since
+  when, and that a configuration restart of `himmelblaud` is waiting). No new event and no status reason: the
+  configuration file on disk is correct and re-verified, and who holds the lock for hours is root (RR-01).
+- Test (unit): next to `TestNSSShieldWarnsLockHeldHourly`: a deferred restart warns once within an hour and again
+  after it.
+- **Scope: 0.1.0-alpha.10** (PDK-1005, implementer): one log call in the code PDK-990 changes.
+- Considered for later, not decided: letting the restart go ahead when the lock is held but no fresh marker
+  exists (P2's rule), so that a held lock cannot delay a login restriction at all. It touches the ordering between
+  a restart and a hold that is about to begin and needs its own review.

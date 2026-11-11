@@ -258,3 +258,60 @@ every published release passes.
 replayed package. `docs/operations/agent-releases.md` states the rule. This amendment also corrects plan M13b,
 amendment 2026-11-11 (PDK-968), point 3: "the import verifies signature and comment like every other asset" is
 true for packages only with this change.
+
+## Amendment 2026-11-11 c — `paddock-revoke` and `fleet-osquery` are bound to their release too; control fields follow (PDK-1004, PDK-1003; architect decisions)
+
+Amendment b left two packages out of the trusted-comment check. This amendment ends that exemption and schedules
+the remaining gap. Binding language: **MUST** / **MUST NOT**.
+
+**How the two are signed today.**
+- `paddock-revoke`: offline, by the holders of the **revocation release key** (two-person rule); the server
+  verifies it with that key only and refuses it under the agent release key. It is uploaded through the platform
+  API and is never part of the GitHub import. The runbook says "signed like the binary", but the server never
+  checked a trusted comment, so none was required in practice.
+- `fleet-osquery` (fleetd): offline, with the **agent release key**, built for the release (`make fleetd-deb`),
+  stored as `fleet-osquery_<fleetd version>_<arch>.deb` under the release. It **is** imported from GitHub when
+  attached. No trusted comment was required.
+
+**Exposure.** Devices verify neither signature: the autoinstall installs `paddock-revoke`, and the agent installs
+`fleet-osquery`, by the URL and SHA-256 the server names. An older, validly signed file stored under a newer
+release would be installed.
+- fleetd: the same position as for the agent packages (a compromised GitHub release or account, or a platform
+  administrator) can attach an old fleetd, which runs as root on every device.
+- `paddock-revoke`: only through the platform upload (a platform administrator or a stolen session of one), since
+  it is never imported. The effect is the worst of the three: a newly installed device would carry an older
+  revocation module, the code that locks and destroys data.
+
+**Decision (0.1.0-alpha.10, server side only; PDK-1004).**
+1. The exemption of amendment b ends. Upload, host publish and import accept **every** package only with the
+   trusted comment `paddock-agent version=<release version> arch=<package arch>`, checked by the one shared check
+   of PDK-1002; `paddock-revoke` against the revocation release key as before, `fleet-osquery` against the agent
+   release key. The release version is the release the package is stored under, also for fleetd (its own fleetd
+   version stays in the file name and in `package_version`).
+2. The comment text is the same for all packages on purpose: the **key** separates the revocation module from
+   everything else, the comment binds the file to its release. No new comment format, no new key, no change to
+   `pkg/releasesig`.
+3. **No code of the revocation path changes** (`agent/internal/revoke/`, `agent/cmd/paddock-revoke/` are not
+   touched; the two-person rule for code does not apply). What changes is the **offline signing command** of both
+   packages, which MUST pass the comment:
+   `minisign -S -s <key> -m <package>.deb -t "paddock-agent version=<release version> arch=<arch>"`.
+   `docs/operations/agent-releases.md` (*Releasing*, step 4, and the offline steps 2 and 3) states it. The
+   development tooling (`make agent-release`, `test/acceptance/cmd/agentrelease`) signs both the same way.
+4. A package signed without that comment is refused with `release_signature_mismatch`; the holder signs again.
+   Releases already stored are not re-verified.
+5. Tests: per package and path, another version, another architecture and no comment are refused; a correctly
+   signed `paddock-revoke` under the agent key is still refused.
+
+This changes how the holders of the revocation release key sign from 0.1.0-alpha.10 on. It is a procedure of the
+isolated revocation path, so the maintainer is told before the release is signed. If the maintainer does not want
+the procedure changed for this release, the exemption stays for `paddock-revoke` alone for 0.1.0-alpha.10 and is
+recorded as a residual risk; fleetd is bound either way.
+
+**Control fields (0.1.0-alpha.11; PDK-1003, confirmed).** The comment names version and architecture, not the
+package. Within one release, architecture and key, a package can still be stored under another package's name: a
+`paddock-supervisor` file as `paddock-agent`, or an agent package as `fleet-osquery`. `paddock-revoke` cannot be
+swapped with any of them (its own key). From 0.1.0-alpha.11 the upload, the host publish and the import read each
+package's `control` file and refuse it unless `Package`, `Version` (the release version in Debian form; for
+fleetd its `package_version`) and `Architecture` match what it is stored as; one shared check, negative tests per
+path, with the Debian package reader the stored-packages upload already uses (plan M13c §3.4). Until then:
+residual risk RR-136.
