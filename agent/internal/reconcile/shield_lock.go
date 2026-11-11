@@ -40,16 +40,6 @@ func lockFile(ctx context.Context, path string, deadline <-chan time.Time) (*os.
 	}
 }
 
-// lockTaken reports whether another open file holds the flock on path; it takes the lock for a moment when it is free.
-func lockTaken(path string) bool {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // the shield lock of the agent layout
-	if err != nil {
-		return false
-	}
-	defer func() { _ = f.Close() }()
-	return errors.Is(syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB), syscall.EWOULDBLOCK)
-}
-
 // FrontendLockBusy returns a probe that reports whether another process holds dpkg's frontend lock at path (a POSIX
 // record lock, as dpkg and apt take it). It never takes the lock itself; a missing or unreadable file is not busy.
 func FrontendLockBusy(path string) func() bool {

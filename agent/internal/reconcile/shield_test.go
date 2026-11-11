@@ -599,9 +599,13 @@ func TestNSSShieldAcrossProcesses(t *testing.T) {
 		})
 	}()
 	<-held
-	// A fresh shield of the agent sees the other process's hold by its lock alone.
-	if fresh := (&reconcile.NSSShield{Sys: newShieldSys(true), LockFile: lock}); !fresh.Holds("himmelblaud.service") {
-		t.Error("the shield lock of another process's hold is not seen as Paddock's own hold")
+	// A fresh shield of the agent sees the other process's hold by its fresh marker, never by the lock alone
+	// (amendment 2026-11-11 b, P2).
+	if fresh := (&reconcile.NSSShield{Sys: sys, LockFile: lock, Now: clock.Now}); !fresh.Holds("himmelblaud.service") {
+		t.Error("the fresh marker of another process's hold is not seen as Paddock's own hold")
+	}
+	if bare := (&reconcile.NSSShield{Sys: newShieldSys(false), LockFile: lock, Now: clock.Now}); bare.Holds("himmelblaud.service") {
+		t.Error("the shield lock alone counts as a hold")
 	}
 	if _, _, err := agent.Run(context.Background(), "apt-get install", func() (string, int, error) {
 		t.Error("the agent's transaction ran inside another process's hold")
@@ -711,7 +715,8 @@ type holdDuringShow struct {
 func (h *holdDuringShow) Systemctl(ctx context.Context, args ...string) (string, int, error) {
 	if h.armed && args[0] == "show" {
 		h.armed = false
-		h.Files[reconcile.NSSShieldMarker] = &fakesys.File{Data: []byte(`{"action":"apt-get install"}`), Mode: 0o600}
+		h.Files[reconcile.NSSShieldMarker] = &fakesys.File{Data: []byte(`{"action":"apt-get install","started_at":"` +
+			time.Now().UTC().Format(time.RFC3339Nano) + `"}`), Mode: 0o600}
 		h.Units["himmelblaud.service"].Active = false
 	}
 	return h.System.Systemctl(ctx, args...)
