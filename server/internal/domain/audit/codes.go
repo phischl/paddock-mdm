@@ -321,10 +321,12 @@ const (
 	// Approvals for available entries (plan M13c decisions 9 and 10): a user's request reported by the device, the
 	// request the worker opened from it (a notification code), the administrator's decision and the worker's expiry.
 	CodeDeviceSoftwareRequested Code = "device.software_requested"
-	CodeSoftwareRequestOpened   Code = "software_request.opened"
-	CodeSoftwareRequestApproved Code = "software_request.approved"
-	CodeSoftwareRequestDenied   Code = "software_request.denied"
-	CodeSoftwareRequestExpired  Code = "software_request.expired"
+	// A user withdrew a pending request on the device; the worker closed it (PDK-811b).
+	CodeDeviceSoftwareRequestWithdrawn Code = "device.software_request_withdrawn"
+	CodeSoftwareRequestOpened          Code = "software_request.opened"
+	CodeSoftwareRequestApproved        Code = "software_request.approved"
+	CodeSoftwareRequestDenied          Code = "software_request.denied"
+	CodeSoftwareRequestExpired         Code = "software_request.expired"
 
 	// The backup key (plan M15 §6.4).
 	CodePlatformBackupKeyGenerated Code = "platform.backup_key_generated"
@@ -1960,6 +1962,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"event_seq", "occurred_at", "user", "entry_id"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded for every report; software_request.opened follows when it opened a request. A repeat while the request is open, a request within 24 hours of a denial, or one for an entry that does not exist or does not require approval opens none. The user's justification text is not recorded.",
+	},
+	CodeDeviceSoftwareRequestWithdrawn: {
+		Code: CodeDeviceSoftwareRequestWithdrawn, Emitted: true,
+		Description: "A user withdrew a pending software request through the self-service app of a device (actor: the device; user: the user name of the withdrawing account); the worker closed the open request of that device, entry and user as withdrawn.",
+		Params:      []string{"event_seq", "occurred_at", "user", "entry_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per report; a redelivered report records nothing. A report without an open request (an administrator decided it or it expired first) changes no request. Only an agent whose bundle carries the server's request_withdraw flag sends it; an older agent keeps the withdrawal on the device.",
 	},
 	CodeSoftwareRequestOpened: {
 		Code: CodeSoftwareRequestOpened, Emitted: true,

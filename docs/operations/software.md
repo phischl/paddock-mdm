@@ -290,9 +290,13 @@ for the application, and an organization administrator decides.
 asks for an optional justification (plain text, at most 500 characters, newlines allowed; the agent refuses control
 characters with 400 `invalid_request`). The agent reports the request once (`software.request`) and shows it as
 *Requested* until the bundle reflects a decision: an approved user sees *Install*, a denied user sees *Denied* with the
-administrator's reason, which the bundle shows to that user only. The user can withdraw a pending request in the app;
-the withdrawal stays on the device, and the server's request ends with a decision or after 30 days, as does the
-device's. A second request while one is pending answers 409 `already_requested`, one for an entry without approval 409
+administrator's reason, which the bundle shows to that user only. The user can withdraw a pending request in the app.
+An agent whose bundle carries the server's `request_withdraw` flag (set with every software section that has a package
+requiring approval, so only agents from 0.1.0-alpha.10) reports it once (`software.request_withdrawn`): the server
+closes the open request as *Withdrawn* and records `device.software_request_withdrawn`; a request an administrator
+decided first stays as decided. Without the flag (an older server) the withdrawal stays on the device, and the server's
+request ends with a decision or after 30 days, as does the device's. A withdrawal while the agent's event queue is full
+answers 429 `busy` and keeps the request. A second request while one is pending answers 409 `already_requested`, one for an entry without approval 409
 `not_required`; a user makes at most 10 requests an hour. Only directory users can ask: an approval names a user
 principal name.
 

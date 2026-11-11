@@ -1089,6 +1089,15 @@ func TestEvents(t *testing.T) {
 	if r := post([]protocol.Event{ev(protocol.EventSoftwareRequest)}, false); r.status != http.StatusAccepted {
 		t.Fatalf("software.request: %d %s", r.status, r.body)
 	}
+	// The contract and the gateway know software.request_withdrawn (PDK-811b): it is forwarded with its data.
+	if r := post([]protocol.Event{ev(protocol.EventSoftwareRequestWithdrawn)}, false); r.status != http.StatusAccepted {
+		t.Fatalf("software.request_withdrawn: %d %s", r.status, r.body)
+	}
+	batch = ingest.Events{}
+	_ = json.Unmarshal(e.pub.last(t).Body, &batch)
+	if len(batch.Events) != 1 || batch.Events[0].Type != protocol.EventSoftwareRequestWithdrawn || batch.Events[0].Data == nil {
+		t.Fatalf("software.request_withdrawn: published %+v", batch)
+	}
 	// An unknown type from a newer agent is forwarded without its data and the rest of the batch is accepted, so the
 	// device does not resend it forever (PDK-995); the worker claims its number.
 	for _, events := range [][]protocol.Event{{ev("bundle.applied"), ev("rm -rf")}, {ev("future.event")}} {

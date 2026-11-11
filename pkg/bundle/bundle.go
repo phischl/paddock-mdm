@@ -424,6 +424,11 @@ type SoftwareSpec struct {
 	// /etc/apt/auth.conf.d/paddock-repo.conf. Additive to schema 2 (ADR 0013): an agent before PDK-812 ignores it, and
 	// apt then fails that source with 401 (source_unreachable) and nothing else.
 	Repository *SoftwareRepositoryAuth `json:"repository,omitempty"`
+	// RequestWithdraw is the server's capability flag for software.request_withdrawn (PDK-811b, decisions §54): set,
+	// the agent reports a withdrawn request, and the server closes it; absent, the withdrawal stays on the device.
+	// Additive to schema 2 (ADR 0013); the compiler sets it with a package that requires approval, which an agent
+	// before the compiler's approval gate never gets (A10-17).
+	RequestWithdraw bool `json:"request_withdraw,omitempty"`
 }
 
 // SoftwareRepositoryAuth is an apt basic-auth entry: Host is the machine of apt's auth.conf, the source URI without

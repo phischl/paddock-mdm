@@ -93,6 +93,7 @@ type Service struct {
 	reconcile bool
 	events    chan protocol.SoftwareSelfService
 	requests  chan protocol.SoftwareRequest
+	withdrawn chan protocol.SoftwareRequestWithdrawn
 	asked     map[int][]time.Time // the recent requests per UID (RequestsPerHour)
 }
 
@@ -200,7 +201,8 @@ func New(cfg Config) *Service {
 	return &Service{cfg: cfg, record: loadRecord(cfg.Sys), ops: map[string]*operation{}, installed: map[string]probe{},
 		failed: map[string]*operation{}, rate: map[int]*window{}, notices: map[int][]time.Time{}, icons: iconCache{tried: map[string]bool{}, gap: iconGap},
 		wake: make(chan struct{}, 1), iconWake: make(chan struct{}, 1), events: make(chan protocol.SoftwareSelfService, 64),
-		requests: make(chan protocol.SoftwareRequest, 64), asked: map[int][]time.Time{}}
+		requests: make(chan protocol.SoftwareRequest, 64), withdrawn: make(chan protocol.SoftwareRequestWithdrawn, 64),
+		asked: map[int][]time.Time{}}
 }
 
 // Events delivers the software.self_service events; the run loop spools them (the spool is the loop's alone).
