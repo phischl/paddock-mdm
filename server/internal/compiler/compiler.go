@@ -218,6 +218,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 	var todo []rendered
 	var failures []renderFailure
 	var seen []pgstore.SetDeviceCompiledPlatformParams
+	// checked are the devices that rendered without failure, for the render time renderAt (architect decision A10-27).
+	var checked []uuid.UUID
+	renderAt := c.now()
 	warnings := map[uuid.UUID]deviceWarnings{}
 	keys, err := c.keys(ctx)
 	if err != nil {
@@ -249,7 +252,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
 			return err
 		}
-		if keys.Software, err = loadSoftware(ctx, q, org, c.cfg.Credentials, c.now()); err != nil {
+		if keys.Software, err = loadSoftware(ctx, q, org, c.cfg.Credentials, renderAt); err != nil {
 			return err
 		}
 		keys.Software.approvalGate = c.approvalAgent
@@ -279,6 +282,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 				failures = append(failures, *failure)
 			} else {
 				warnings[row.ID] = deviceWarnings{seq: row.BundleSeq, warnings: r.warnings}
+				checked = append(checked, row.ID)
 			}
 			// A blocked device is recorded too: its compile was attempted with these values, and the failure is
 			// recorded once, not on every reconcile round.
@@ -302,6 +306,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		seen = slices.DeleteFunc(seen, func(p pgstore.SetDeviceCompiledPlatformParams) bool {
 			return slices.ContainsFunc(todo, func(r rendered) bool { return r.device == p.ID }) && !slices.Contains(committed, p.ID)
 		})
+		checked = slices.DeleteFunc(checked, func(id uuid.UUID) bool {
+			return slices.ContainsFunc(todo, func(r rendered) bool { return r.device == id }) && !slices.Contains(committed, id)
+		})
 		for _, r := range todo {
 			if slices.Contains(committed, r.device) {
 				warnings[r.device] = deviceWarnings{seq: r.oldSeq + 1, warnings: r.warnings}
@@ -310,7 +317,21 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			}
 		}
 	}
-	return errors.Join(publishErr, c.recordPlatform(ctx, seen), c.recordWarnings(ctx, org, warnings))
+	return errors.Join(publishErr, c.recordPlatform(ctx, seen), c.recordDenialLocks(ctx, checked, renderAt),
+		c.recordWarnings(ctx, org, warnings))
+}
+
+// recordDenialLocks records renderAt for the devices whose bundle of this compile was committed or unchanged: every
+// denial lock that ended before renderAt is reflected in it, so the reconcile selects only locks that end later
+// (architect decision A10-27). The render time counts, not the publish time: a render before a lock's end that commits
+// after it still names the denial, and its device must be selected again.
+func (c *Compiler) recordDenialLocks(ctx context.Context, devices []uuid.UUID, renderAt time.Time) error {
+	if len(devices) == 0 {
+		return nil
+	}
+	return c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		return q.MarkDenialLockChecked(ctx, pgstore.MarkDenialLockCheckedParams{CheckedAt: renderAt, Ids: devices})
+	})
 }
 
 // recordPlatform stores the architecture, os-release and agent version the compile of each device read, after its

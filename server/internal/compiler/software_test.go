@@ -1465,7 +1465,8 @@ func TestSoftwareReconcileDenialLockConverges(t *testing.T) {
 		}
 	}
 	reconcile()
-	w.exec("UPDATE bundle SET created_at = now() - interval '2 hours' WHERE device_id = $1", d)
+	// The last compile rendered before the lock ended.
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", d)
 	before := w.version(d)
 	checked := func() *time.Time {
 		t.Helper()
@@ -1488,6 +1489,39 @@ func TestSoftwareReconcileDenialLockConverges(t *testing.T) {
 	}
 	if v := w.version(d); v != before {
 		t.Fatalf("an unchanged recompile wrote a bundle: version %d, want %d", v, before)
+	}
+}
+
+// TestSoftwareReconcileDenialLockRenderTime (architect decision A10-27, PDK-993 review 2): a compile that rendered
+// before a denial's lock ended and published after it names the denial in a bundle newer than the lock end. The
+// reconcile goes by the render time, so it selects the device once the lock has ended and the recompile drops the
+// denial.
+func TestSoftwareReconcileDenialLockRenderTime(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The lock ends an hour ago; the compile renders two hours ago and publishes now.
+	w.denyRequest(nano, d, alice, 25*time.Hour, "not licensed")
+	w.comp.SetNow(func() time.Time { return time.Now().Add(-2 * time.Hour) })
+	w.mustCompile(statechange.ScopeDevice, d)
+	w.comp.SetNow(time.Now)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != w.username(alice)+"=not licensed" {
+		t.Fatalf("rendered before the lock end: %q", got)
+	}
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the reconcile: %q", got)
 	}
 }
 
@@ -1518,9 +1552,9 @@ func TestSoftwareReconcileEndsDenialLock(t *testing.T) {
 	reconcile()
 	before := w.version(d)
 
-	// The lock ends: the denial is 25 hours old, and the bundle is from before its end.
+	// The lock ends: the denial is 25 hours old, and the last compile rendered before its end.
 	w.exec("UPDATE software_request SET decided_at = now() - interval '25 hours' WHERE device_id = $1", d)
-	w.exec("UPDATE bundle SET created_at = now() - interval '2 hours' WHERE device_id = $1", d)
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", d)
 	reconcile()
 	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
 		t.Fatalf("after the lock: %q", got)

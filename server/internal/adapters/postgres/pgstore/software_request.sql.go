@@ -330,11 +330,10 @@ func (q *Queries) ListApprovedSoftwareRequests(ctx context.Context) ([]ListAppro
 const listDevicesWithEndedDenialLock = `-- name: ListDevicesWithEndedDenialLock :many
 SELECT DISTINCT d.id FROM device d
 JOIN software_request r ON r.device_id = d.id
-JOIN LATERAL (SELECT created_at FROM bundle WHERE bundle.device_id = d.id ORDER BY version DESC LIMIT 1) b ON true
 WHERE d.state = 'active' AND r.state = 'denied' AND r.decided_at <= $1::timestamptz
   AND r.decided_at > $1::timestamptz - interval '7 days'
   AND r.decided_at + ($2::timestamptz - $1::timestamptz)
-    > greatest(b.created_at, coalesce(d.denial_lock_checked_at, '-infinity'::timestamptz))
+    > coalesce(d.denial_lock_checked_at, '-infinity'::timestamptz)
 ORDER BY d.id
 `
 
@@ -343,11 +342,12 @@ type ListDevicesWithEndedDenialLockParams struct {
 	Now       time.Time
 }
 
-// The active devices with a denial whose re-request lock ended at or before now but after both their latest bundle and
-// the last recompile for an ended lock (denial_lock_checked_at): the bundle may still name that denial, and the device
-// refuses a new request while it does (compiler reconcile, architect decision A10-27). An unchanged recompile writes no
-// bundle, so MarkDenialLockChecked is what ends the selection. Only locks that ended within the last week are read, so
-// the round does not scan every denial ever made; the reconcile runs every minute, so a lock is caught long before that.
+// The active devices with a denial whose re-request lock ended at or before now and after the render time of the
+// device's last compile (denial_lock_checked_at): that compile may have rendered the denial into the bundle, and the
+// device refuses a new request while the bundle names it (compiler reconcile, architect decision A10-27). The render
+// time, not the bundle's publish time, decides: a render before the lock end that commits after it still names the
+// denial. Only locks that ended within the last week are read, so the round does not scan every denial ever made; the
+// reconcile runs every minute, so a lock is caught long before that.
 func (q *Queries) ListDevicesWithEndedDenialLock(ctx context.Context, arg ListDevicesWithEndedDenialLockParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, listDevicesWithEndedDenialLock, arg.LockStart, arg.Now)
 	if err != nil {
@@ -589,7 +589,8 @@ type MarkDenialLockCheckedParams struct {
 	Ids       []uuid.UUID
 }
 
-// Records that the compiler recompiled the devices for the denial locks that ended at or before checked_at.
+// Records the render time of a compile whose bundle of each device was committed or unchanged: every denial lock that
+// ended before it is reflected in the device's bundle.
 func (q *Queries) MarkDenialLockChecked(ctx context.Context, arg MarkDenialLockCheckedParams) error {
 	_, err := q.db.Exec(ctx, markDenialLockChecked, arg.CheckedAt, arg.Ids)
 	return err

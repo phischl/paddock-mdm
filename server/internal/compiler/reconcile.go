@@ -85,7 +85,6 @@ func (c *Compiler) Reconcile(ctx context.Context) error {
 func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 	var latest []pgstore.Bundle
 	var outdated, platform, denials []uuid.UUID
-	now := c.now()
 	if err := c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
 		if latest, err = q.ListLatestBundles(ctx); err != nil {
@@ -97,6 +96,7 @@ func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 		if platform, err = q.ListDevicesWithOutdatedPlatform(ctx); err != nil {
 			return err
 		}
+		now := c.now()
 		denials, err = q.ListDevicesWithEndedDenialLock(ctx, pgstore.ListDevicesWithEndedDenialLockParams{
 			LockStart: now.Add(-software.RerequestAfterDenial), Now: now,
 		})
@@ -111,12 +111,9 @@ func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 	}
 	org, _ := principal.From(ctx)
 	if keysChanged {
-		if err := c.compileOrg(ctx, org.OrganizationID, []statechange.Event{
+		return c.compileOrg(ctx, org.OrganizationID, []statechange.Event{
 			{OrganizationID: org.OrganizationID, Scope: statechange.ScopeOrg, ID: org.OrganizationID},
-		}); err != nil {
-			return err
-		}
-		return c.markDenialLocks(ctx, denials, now)
+		})
 	}
 	outdated = mergeIDs(mergeIDs(outdated, platform), denials)
 	if len(outdated) == 0 {
@@ -128,21 +125,7 @@ func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 	}
 	slog.InfoContext(ctx, "recompiling devices whose agent schema, agent version, architecture or os-release changed or whose "+
 		"bundle names a denial past its re-request lock", "devices", len(outdated))
-	if err := c.compileOrg(ctx, org.OrganizationID, events); err != nil {
-		return err
-	}
-	return c.markDenialLocks(ctx, denials, now)
-}
-
-// markDenialLocks records that devices were recompiled for the denial locks that ended at or before now. An unchanged
-// recompile writes no bundle, so without the record the devices would be selected again every round.
-func (c *Compiler) markDenialLocks(ctx context.Context, devices []uuid.UUID, now time.Time) error {
-	if len(devices) == 0 {
-		return nil
-	}
-	return c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		return q.MarkDenialLockChecked(ctx, pgstore.MarkDenialLockCheckedParams{CheckedAt: now, Ids: devices})
-	})
+	return c.compileOrg(ctx, org.OrganizationID, events)
 }
 
 // mergeIDs is a followed by the IDs of b that a does not hold.

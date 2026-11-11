@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -21,6 +22,9 @@ const ApprovalAgent = approvalAgent
 
 // SetApprovalAgent makes c compile with gate as approvalAgent, so a test can run the approval flow under another gate.
 func (c *Compiler) SetApprovalAgent(gate string) { c.approvalAgent = gate }
+
+// SetNow makes c render and reconcile with the clock now, so a test can place a compile's render time.
+func (c *Compiler) SetNow(now func() time.Time) { c.now = now }
 
 // WithheldForApproval is withheldForApproval for the tests of the approval gate.
 func WithheldForApproval(intent, approval, agent, gate string) bool {
