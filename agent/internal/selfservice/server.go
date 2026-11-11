@@ -282,50 +282,14 @@ func (s *Service) authed(h func(w http.ResponseWriter, r *http.Request, p Princi
 			reply(w, 0, nil, errNoBundle)
 			return
 		}
-		p, err := s.authorize(r.Context(), uid, domain)
+		p, err := Authorize(r.Context(), s.cfg.Sys, uid, domain)
 		if err != nil {
-			var problem *Problem
-			if errors.As(err, &problem) {
-				w.Header().Set("Retry-After", loginPausedRetry)
-				reply(w, 0, nil, problem)
-				return
-			}
 			slog.WarnContext(r.Context(), "self-service caller not resolved", "uid", uid, "error", err)
 			reply(w, 0, nil, &Problem{Status: http.StatusForbidden, Code: CodeUnauthenticated, Detail: "the caller could not be identified"})
 			return
 		}
 		h(w, r, p)
 	})
-}
-
-// authorize is Authorize, aware of Paddock's holds of himmelblaud (PDK-983): a caller who does not resolve while a
-// hold is in progress is looked up again once the hold ended, waiting at most HoldWait; a hold that lasts longer is
-// the retryable problem login_paused, never the refusal unauthenticated.
-func (s *Service) authorize(ctx context.Context, uid int, domain string) (Principal, error) {
-	p, err := Authorize(ctx, s.cfg.Sys, uid, domain)
-	if err == nil || s.cfg.Holding == nil || !s.cfg.Holding() {
-		return p, err
-	}
-	wait := s.cfg.HoldWait
-	if wait <= 0 {
-		wait = holdWait
-	}
-	deadline := time.NewTimer(wait)
-	defer deadline.Stop()
-	tick := time.NewTicker(wait / 20)
-	defer tick.Stop()
-	for s.cfg.Holding() {
-		select {
-		case <-ctx.Done():
-			return Principal{}, ctx.Err()
-		case <-deadline.C:
-			slog.InfoContext(ctx, "self-service caller not resolved during a himmelblaud hold", "uid", uid, "error", err)
-			return Principal{}, &Problem{Status: http.StatusServiceUnavailable, Code: CodeLoginPaused,
-				Detail: "Paddock is installing software and has paused directory logins; try again shortly"}
-		case <-tick.C:
-		}
-	}
-	return Authorize(ctx, s.cfg.Sys, uid, domain)
 }
 
 // problemBody is the JSON of a problem (plan M13b §6.2).
