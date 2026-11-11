@@ -266,14 +266,16 @@ A catalog entry can require an administrator's approval (`approval: required` on
 for the application, and an organization administrator decides.
 
 1. The user asks on the device. The device reports the request (`device.software_requested`, with the user name and
-   the entry). The server opens a request when an available assignment of the entry offers it to that device and user
+   the entry; never the justification). The server opens a request, with the user's justification as plain text, when an available assignment of the entry offers it to that device and user
    (the organization, a device group of the device, or a user or user group the device's owner belongs to). It opens
    none for a repeat while one is open, for a user who already holds an approval of it on the device, or within 24
-   hours of a denial. An opened request records `software_request.opened` (a notification code for destinations with
+   hours of a denial, nor for a justification that is not plain text of at most 500 characters without control
+   characters except line breaks. An opened request records `software_request.opened` (a notification code for destinations with
    `all` or a custom list; not in the security preset) and shows in the attention list as `software_requests_open`.
 2. The administrator decides in the portal (*Software requests*) or with `POST
    /api/v1/software-requests/{id}/approve` (an optional reason) or `…/deny` (a reason the user sees, 1 to 500
-   characters). Deciding needs `org_admin` and no step-up of its own: trusting the entry's source needed one.
+   characters without control characters except line breaks). The portal and the API show the user's justification
+   (`justification`) as text only. Deciding needs `org_admin` and no step-up of its own: trusting the entry's source needed one.
    Operators and auditors read the requests (`GET /api/v1/software-requests`, filters `state`, `catalog_entry_id`,
    `device_id`, search by user name). A request that is no longer open, whose 30 days have run out, or whose entry
    changed its approval since cannot be decided (409 `invalid_state`).
@@ -294,10 +296,14 @@ device's. A second request while one is pending answers 409 `already_requested`,
 `not_required`; a user makes at most 10 requests an hour. Only directory users can ask: an approval names a user
 principal name.
 
-**Agents.** An approval-required package reaches no agent before the release with the request flow on the device
-(PDK-811); until then the users of such an entry see nothing of it, so nobody installs it without an approval. The
-server stores the justification and renders denials into the bundle with PDK-993 (see
+**Denials on the device.** A denial recompiles the device. Its bundle names the denied user with the reason for 24
+hours after the denial, the time in which the server opens no new request of that user; the compiler's reconcile loop
+recompiles the device once that time ends, so the user may ask again. Only the named user sees the reason (see
 [privacy](../compliance/privacy.md)).
+
+**Agents.** An approval-required package reaches no agent before 0.1.0-alpha.10, the release with the request flow on
+the device; the users of such an entry on an older agent see nothing of it, so nobody installs it without an approval.
+Development builds and the device simulator get it.
 
 ## States and reasons
 

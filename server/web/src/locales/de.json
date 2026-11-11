@@ -3638,6 +3638,7 @@
     "state": "Status",
     "requestedAt": "Angefragt",
     "expiresAt": "Verfällt",
+    "justification": "Begründung",
     "decision": "Entscheidung",
     "decidedBy": "von {name}",
     "states": {

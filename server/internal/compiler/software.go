@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -41,6 +43,9 @@ type orgSoftware struct {
 	icons map[uuid.UUID]catalogIcon
 	// approved are the users an administrator approved, by device and catalog entry, sorted (plan M13c decision 9).
 	approved map[uuid.UUID]map[uuid.UUID][]string
+	// denied are the users whose request was denied inside the re-request lock, by device and catalog entry (architect
+	// decision A10-27).
+	denied map[uuid.UUID]map[uuid.UUID][]bundle.SoftwareDenial
 	// approvalGate is the compiler's approvalAgent, the gate withheldForApproval applies.
 	approvalGate string
 	// windows are the maintenance windows by device group (plan M13c decision 4) that pass the bundle rules.
@@ -84,8 +89,8 @@ type softwareEntry struct {
 // an unchecked package name into a signed bundle, nor stop the organization's round. A failing source is left out (a
 // required package from it is then not installed, which is safe); a failing entry or assignment is kept with its
 // reason, and section fails every device it applies to (architect decision 2026-11-02, PDK-697): skipping it could
-// lift a forbid or let a competing intent win.
-func loadSoftware(ctx context.Context, q *pgstore.Queries, org uuid.UUID, creds CredentialDecrypter) (*orgSoftware, error) {
+// lift a forbid or let a competing intent win. now starts the re-request lock of the denials the bundles name.
+func loadSoftware(ctx context.Context, q *pgstore.Queries, org uuid.UUID, creds CredentialDecrypter, now time.Time) (*orgSoftware, error) {
 	sources, err := q.ListAllSoftwareSources(ctx)
 	if err != nil {
 		return nil, err
@@ -114,6 +119,10 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries, org uuid.UUID, creds 
 	if err != nil {
 		return nil, err
 	}
+	denials, err := q.ListSoftwareRequestDenials(ctx, now.Add(-software.RerequestAfterDenial))
+	if err != nil {
+		return nil, err
+	}
 	windows, err := q.ListAllMaintenanceWindows(ctx)
 	if err != nil {
 		return nil, err
@@ -123,6 +132,7 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries, org uuid.UUID, creds 
 		invalidAssignments: map[uuid.UUID]error{}, owners: map[uuid.UUID][]deviceOwner{}, members: map[uuid.UUID][]uuid.UUID{},
 		icons:    make(map[uuid.UUID]catalogIcon, len(icons)),
 		approved: map[uuid.UUID]map[uuid.UUID][]string{},
+		denied:   map[uuid.UUID]map[uuid.UUID][]bundle.SoftwareDenial{},
 		windows:  make(map[uuid.UUID]bundle.SoftwareWindow, len(windows))}
 	for _, ic := range icons {
 		// The api checked the icon on upload; a row changed outside it must not reach object storage, so the entry then
@@ -139,6 +149,13 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries, org uuid.UUID, creds 
 			s.approved[a.DeviceID] = map[uuid.UUID][]string{}
 		}
 		s.approved[a.DeviceID][a.CatalogEntryID] = append(s.approved[a.DeviceID][a.CatalogEntryID], a.Username)
+	}
+	for _, d := range denials {
+		if s.denied[d.DeviceID] == nil {
+			s.denied[d.DeviceID] = map[uuid.UUID][]bundle.SoftwareDenial{}
+		}
+		s.denied[d.DeviceID][d.CatalogEntryID] = append(s.denied[d.DeviceID][d.CatalogEntryID],
+			bundle.SoftwareDenial{User: d.Username, Reason: denialReason(ctx, d)})
 	}
 	for _, row := range windows {
 		w := maintenanceWindow(row)
@@ -440,7 +457,9 @@ func (pa *packageApproval) add(entry uuid.UUID, gated bool, audience *bundle.Sof
 }
 
 // applyApproval marks an available package that an entry requiring approval offers (plan M13c decision 9): Approval
-// required and Approved the users of its audience an administrator approved on this device. Whichever entry supplies
+// required, Approved the users of its audience an administrator approved on this device, and Denied the users of its
+// audience whose request on this device was denied inside the re-request lock, with the reason (architect decision
+// A10-27); an approved user is never listed as denied. Whichever entry supplies
 // the merged package, an entry requiring approval keeps it, and a user another entry offers the package to without
 // approval counts as approved; when that entry offers it to everyone, no approval is left. When every user of a listed
 // audience is approved, nothing is left to ask for and both are omitted. The approved users come only from the requests
@@ -468,18 +487,44 @@ func (s *orgSoftware) applyApproval(p *bundle.SoftwarePackage, device uuid.UUID,
 		approved = approved[:min(len(approved), bundle.MaxSoftwareAudience)]
 		p.Approved = &approved
 	}
+	var denied []bundle.SoftwareDenial
+	for _, entry := range pa.gated {
+		for _, d := range s.denied[device][entry] {
+			// An approved user, through another entry or a later decision, may install: a denial would contradict it.
+			if bundle.ValidAudienceUser(d.User) && (p.Audience.All || slices.Contains(p.Audience.Users, d.User)) &&
+				!slices.Contains(approved, d.User) && !slices.ContainsFunc(denied, func(x bundle.SoftwareDenial) bool { return x.User == d.User }) {
+				denied = append(denied, d)
+			}
+		}
+	}
+	if len(denied) > 0 {
+		slices.SortFunc(denied, func(a, b bundle.SoftwareDenial) int { return strings.Compare(a.User, b.User) })
+		denied = denied[:min(len(denied), bundle.MaxSoftwareAudience)]
+		p.Denied = &denied
+	}
+}
+
+// denialReason is the reason of a denial as a bundle carries it: untrusted text the api checked when the
+// administrator denied (maintainer answer Q7, architect decision A10-27). A row changed outside the api that fails
+// that check is rendered without its reason, so the device still learns of the denial and never shows the text.
+func denialReason(ctx context.Context, d pgstore.ListSoftwareRequestDenialsRow) string {
+	if err := software.ValidateDecisionReason(d.Reason, false); err != nil ||
+		utf8.RuneCountInString(d.Reason) > bundle.MaxSoftwareDenialReason {
+		slog.ErrorContext(ctx, "denial reason left out of the bundle: it fails the reason rules", "device_id", d.DeviceID,
+			"catalog_entry_id", d.CatalogEntryID, "error", err)
+		return ""
+	}
+	return d.Reason
 }
 
 // approvalAgent is the first agent release that honours SoftwarePackage.Approval, the first with PDK-811 (architect
 // decision A10-17). An older agent would offer Install to every user of the audience, so it never gets a package whose
 // entry requires approval. It is its own gate, not selfServiceAgent, so it follows PDK-811's release alone.
 //
-// It is empty while no agent has PDK-811: then every agent, a development build included, is withheld these packages.
-// A development build counts as current under A10-6 because it is built from this tree, and this tree has no PDK-811
-// yet, so a 0.0.0-dev or devicesim agent would offer an approval-required package without approval; an agent release
-// cut from this tree would as well. PDK-811 sets the release it ships in, and from then on development builds get the
-// packages again, so the approval flow stays testable on development stacks and with the device simulator.
-const approvalAgent = ""
+// PDK-811 ships in 0.1.0-alpha.10 (PDK-811a). A development build counts as current under A10-6, since it is built
+// from a tree with PDK-811, so development stacks and the device simulator get the packages and the approval flow stays
+// testable there. An empty gate would withhold the packages from every agent, development builds included.
+const approvalAgent = "0.1.0-alpha.10"
 
 // withheldForApproval reports whether an available package whose entry has approval is left out for agent: it requires
 // approval and agent is a release before gate (A10-17, with the A10-6 gating mechanism), or gate is empty (no agent

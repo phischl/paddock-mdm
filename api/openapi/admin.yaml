@@ -3948,8 +3948,10 @@ paths:
       tags: [software]
       description: |
         Roles: org_admin. Denies an open request with a reason, which the user sees; no step-up of its own. The user
-        may ask again after 24 hours. 400 invalid_request without a reason, 409 invalid_state unless the request is
-        open, 404 not_found for another organization's request.
+        may ask again after 24 hours; until then the device's bundle names the denial with its reason. The reason is
+        plain text of at most 500 characters without control, format or invisible characters except line breaks.
+        400 invalid_request without a reason or for a reason that breaks these rules, 409 invalid_state unless the
+        request is open, 404 not_found for another organization's request.
       x-paddock-audit: software_request.denied
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -10528,7 +10530,7 @@ components:
     SoftwareRequest:
       type: object
       required: [id, catalog_entry_id, entry_name, entry_approval, device_id, hostname, user_id, username, state, requested_at,
-        expires_at, decided_by, decided_at, decision_reason]
+        expires_at, decided_by, decided_at, decision_reason, justification]
       properties:
         id: { type: string, format: uuid }
         catalog_entry_id: { type: string, format: uuid }
@@ -10543,7 +10545,14 @@ components:
         expires_at: { type: string, format: date-time, description: When an open request expires without a decision. }
         decided_by: { type: string, nullable: true, description: The deciding administrator's display name. }
         decided_at: { type: string, format: date-time, nullable: true, description: When it was decided or expired. }
-        decision_reason: { type: string, nullable: true }
+        decision_reason: { type: string, nullable: true, description: "Untrusted plain text; render it as text only. A denial's reason reaches the user's device." }
+        justification:
+          type: string
+          maxLength: 500
+          description: >-
+            The user's justification as the device sent it; empty when the user gave none. Untrusted plain text of at
+            most 500 characters without control characters except line breaks: render it as text only, never as HTML
+            or markdown. It never appears in audit events, logs or notifications.
     SoftwareRequestPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

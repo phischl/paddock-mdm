@@ -136,7 +136,7 @@ func (q *Queries) GetSoftwareCatalogEntryApproval(ctx context.Context, id uuid.U
 const getSoftwareRequest = `-- name: GetSoftwareRequest :one
 SELECT r.id, r.organization_id, r.catalog_entry_id, e.name AS entry_name, e.approval AS entry_approval, r.device_id,
   d.hostname, r.user_id, r.username, r.state, r.requested_at, r.expires_at, r.decided_by, r.decided_at,
-  r.decision_reason
+  r.decision_reason, r.justification
 FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id JOIN device d ON d.id = r.device_id
 WHERE r.id = $1
 `
@@ -157,6 +157,7 @@ type GetSoftwareRequestRow struct {
 	DecidedBy      *string
 	DecidedAt      *time.Time
 	DecisionReason *string
+	Justification  string
 }
 
 func (q *Queries) GetSoftwareRequest(ctx context.Context, id uuid.UUID) (GetSoftwareRequestRow, error) {
@@ -178,6 +179,7 @@ func (q *Queries) GetSoftwareRequest(ctx context.Context, id uuid.UUID) (GetSoft
 		&i.DecidedBy,
 		&i.DecidedAt,
 		&i.DecisionReason,
+		&i.Justification,
 	)
 	return i, err
 }
@@ -229,9 +231,9 @@ func (q *Queries) GetUserIDByUsername(ctx context.Context, username string) (uui
 
 const insertSoftwareRequest = `-- name: InsertSoftwareRequest :execrows
 INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state, requested_at,
-  expires_at, approval_epoch)
+  expires_at, approval_epoch, justification)
 VALUES ($1, $2, $3, $4, $5, $6, 'requested', $7,
-  $8, $9)
+  $8, $9, $10)
 ON CONFLICT (device_id, catalog_entry_id, username) WHERE state = 'requested' DO NOTHING
 `
 
@@ -245,6 +247,7 @@ type InsertSoftwareRequestParams struct {
 	RequestedAt    time.Time
 	ExpiresAt      time.Time
 	ApprovalEpoch  int32
+	Justification  string
 }
 
 // Opens a request; none while one of the device, entry and user is open (software_request_open_idx).
@@ -259,6 +262,7 @@ func (q *Queries) InsertSoftwareRequest(ctx context.Context, arg InsertSoftwareR
 		arg.RequestedAt,
 		arg.ExpiresAt,
 		arg.ApprovalEpoch,
+		arg.Justification,
 	)
 	if err != nil {
 		return 0, err
@@ -323,13 +327,95 @@ func (q *Queries) ListApprovedSoftwareRequests(ctx context.Context) ([]ListAppro
 	return items, nil
 }
 
+const listDevicesWithEndedDenialLock = `-- name: ListDevicesWithEndedDenialLock :many
+SELECT DISTINCT d.id FROM device d
+JOIN software_request r ON r.device_id = d.id
+JOIN LATERAL (SELECT created_at FROM bundle WHERE bundle.device_id = d.id ORDER BY version DESC LIMIT 1) b ON true
+WHERE d.state = 'active' AND r.state = 'denied' AND r.decided_at <= $1::timestamptz
+  AND r.decided_at > $1::timestamptz - interval '7 days'
+  AND b.created_at < r.decided_at + ($2::timestamptz - $1::timestamptz)
+ORDER BY d.id
+`
+
+type ListDevicesWithEndedDenialLockParams struct {
+	LockStart time.Time
+	Now       time.Time
+}
+
+// The active devices whose latest bundle was compiled before the re-request lock of one of their denials ended, which
+// is at or before now: the bundle still names that denial, and the device refuses a new request while it does
+// (compiler reconcile, architect decision A10-27). Only locks that ended within the last week are read, so the round
+// does not scan every denial ever made; the reconcile runs every minute, so a lock is caught long before that.
+func (q *Queries) ListDevicesWithEndedDenialLock(ctx context.Context, arg ListDevicesWithEndedDenialLockParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listDevicesWithEndedDenialLock, arg.LockStart, arg.Now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSoftwareRequestDenials = `-- name: ListSoftwareRequestDenials :many
+SELECT DISTINCT ON (r.device_id, r.catalog_entry_id, r.username) r.device_id, r.catalog_entry_id, r.username,
+  coalesce(r.decision_reason, '')::text AS reason
+FROM software_request r
+WHERE r.state = 'denied' AND r.decided_at > $1::timestamptz
+ORDER BY r.device_id, r.catalog_entry_id, r.username, r.decided_at DESC
+`
+
+type ListSoftwareRequestDenialsRow struct {
+	DeviceID       uuid.UUID
+	CatalogEntryID uuid.UUID
+	Username       string
+	Reason         string
+}
+
+// The denials the device's next bundle names (compiler, architect decision A10-27): per device, entry and user the
+// latest denial decided after lock_start, the start of the re-request lock (software.RerequestAfterDenial), the window
+// in which the worker opens no new request (LastSoftwareRequestDenial). Like that lock, it ignores the approval epoch.
+func (q *Queries) ListSoftwareRequestDenials(ctx context.Context, lockStart time.Time) ([]ListSoftwareRequestDenialsRow, error) {
+	rows, err := q.db.Query(ctx, listSoftwareRequestDenials, lockStart)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSoftwareRequestDenialsRow{}
+	for rows.Next() {
+		var i ListSoftwareRequestDenialsRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.CatalogEntryID,
+			&i.Username,
+			&i.Reason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSoftwareRequests = `-- name: ListSoftwareRequests :many
 SELECT id, organization_id, catalog_entry_id, entry_name, entry_approval, device_id, hostname, user_id, username, state,
-  requested_at, expires_at, decided_by, decided_at, decision_reason
+  requested_at, expires_at, decided_by, decided_at, decision_reason, justification
 FROM (
   SELECT r.id, r.organization_id, r.catalog_entry_id, e.name AS entry_name, e.approval AS entry_approval, r.device_id,
     d.hostname, r.user_id, r.username, r.state, r.requested_at, r.expires_at, r.decided_by, r.decided_at,
-    r.decision_reason
+    r.decision_reason, r.justification
   FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id JOIN device d ON d.id = r.device_id
   WHERE ($1::text IS NULL OR r.username ILIKE $1::text ESCAPE '\')
     AND ($2::text[] IS NULL OR r.state = ANY($2::text[]))
@@ -375,6 +461,7 @@ type ListSoftwareRequestsRow struct {
 	DecidedBy      *string
 	DecidedAt      *time.Time
 	DecisionReason *string
+	Justification  string
 }
 
 // The rows are read through a subquery, so the sort columns are unambiguous (device has a state too).
@@ -411,6 +498,7 @@ func (q *Queries) ListSoftwareRequests(ctx context.Context, arg ListSoftwareRequ
 			&i.DecidedBy,
 			&i.DecidedAt,
 			&i.DecisionReason,
+			&i.Justification,
 		); err != nil {
 			return nil, err
 		}

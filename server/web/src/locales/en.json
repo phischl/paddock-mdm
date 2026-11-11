@@ -3638,6 +3638,7 @@
     "state": "State",
     "requestedAt": "Requested",
     "expiresAt": "Expires",
+    "justification": "Justification",
     "decision": "Decision",
     "decidedBy": "by {name}",
     "states": {

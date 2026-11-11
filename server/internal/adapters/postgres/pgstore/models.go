@@ -1206,6 +1206,7 @@ type SoftwareRequest struct {
 	DecidedBy      *string
 	DecidedAt      *time.Time
 	DecisionReason *string
+	Justification  string
 }
 
 type SoftwareSource struct {

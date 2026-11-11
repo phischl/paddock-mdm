@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "c79f79ef4ebf7d8b61388afbe05665ff949ce898b6caafb4662bcf0cb89b1511"
+const Version = "d02fb85b90dfd7b8d4cc775d5513e4f36396ab5262c1e7a2277d30ce5a7350a7"
 
 var tools = []Tool{
 	{
@@ -1049,7 +1049,7 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "software_request.denied",
 		Summary:     "",
-		Description: "Roles: org_admin. Denies an open request with a reason, which the user sees; no step-up of its own. The user may ask again after 24 hours. 400 invalid_request without a reason, 409 invalid_state unless the request is open, 404 not_found for another organization's request.\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: org_admin. Denies an open request with a reason, which the user sees; no step-up of its own. The user may ask again after 24 hours; until then the device's bundle names the denial with its reason. The reason is plain text of at most 500 characters without control, format or invisible characters except line breaks. 400 invalid_request without a reason or for a reason that breaks these rules, 409 invalid_state unless the request is open, 404 not_found for another organization's request.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"reason\":{\"description\":\"Required: the user sees it. Trimmed; must not be empty.\",\"maxLength\":500,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"reason\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{

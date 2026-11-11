@@ -249,7 +249,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
 			return err
 		}
-		if keys.Software, err = loadSoftware(ctx, q, org, c.cfg.Credentials); err != nil {
+		if keys.Software, err = loadSoftware(ctx, q, org, c.cfg.Credentials, c.now()); err != nil {
 			return err
 		}
 		keys.Software.approvalGate = c.approvalAgent
