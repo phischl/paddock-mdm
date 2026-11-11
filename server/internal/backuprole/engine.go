@@ -176,6 +176,8 @@ type Engine struct {
 	passes []*mirrorPass
 	// waiting holds, per target whose lane mirrored an earlier set when they began, the passes its next lane settles.
 	waiting map[uuid.UUID][]*mirrorPass
+	// longLane holds the targets whose last lane ran longer than a round interval: their next lane's start is logged.
+	longLane map[uuid.UUID]bool
 	// laneWG counts the running lanes; Run waits for them on shutdown.
 	laneWG sync.WaitGroup
 	// reachable is the result of each target's last finished mirror for paddock_backup_target_reachable.
@@ -194,7 +196,7 @@ func NewEngine(cfg Config, lock LeaderLocker, store Store, keys Decrypter, snap 
 		pushed: map[uuid.UUID]map[string]fileInfo{}, fleetFailed: map[string]time.Time{}, stall: mirrorStall,
 		budget: mirrorBudget, minRate: mirrorMinRate, busy: map[uuid.UUID]bool{}, checking: map[uuid.UUID]bool{}, testing: map[uuid.UUID]bool{},
 		held: map[uuid.UUID]int{}, lanes: map[uuid.UUID]*lane{}, reachable: map[uuid.UUID]bool{},
-		waiting: map[uuid.UUID][]*mirrorPass{}}
+		waiting: map[uuid.UUID][]*mirrorPass{}, longLane: map[uuid.UUID]bool{}}
 }
 
 // Run leads the backup role for the life of the process (decisions-alpha10 §50): it holds the leader lock on one

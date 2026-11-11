@@ -465,7 +465,7 @@ func TestLaneEndingWithTheLeadershipFreesItsSlot(t *testing.T) {
 	}
 
 	// settle after the leadership ended: nothing written, slot and pin released.
-	l := &lane{idx: pin}
+	l := &lane{idx: pin, ctx: context.Background(), cancel: func() {}}
 	f.engine.lanes[rec.ID] = l
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -478,7 +478,7 @@ func TestLaneEndingWithTheLeadershipFreesItsSlot(t *testing.T) {
 	}
 
 	// A slot a dead lane left behind blocks the target and pins its files, until the leadership's end clears it.
-	f.engine.lanes[rec.ID] = &lane{idx: pin}
+	f.engine.lanes[rec.ID] = &lane{idx: pin, ctx: context.Background(), cancel: func() {}}
 	f.round(t)
 	if !exists() || len(dst.ops) != 0 {
 		t.Fatalf("with a stale slot: expired snapshot kept %v, target ops %v", exists(), dst.ops)
@@ -491,5 +491,57 @@ func TestLaneEndingWithTheLeadershipFreesItsSlot(t *testing.T) {
 	}
 	if _, ok := dst.files[backupset.ManifestPath]; !ok {
 		t.Errorf("the next leadership started no lane for the target: %v", dst.ops)
+	}
+}
+
+// TestRemovedTargetCancelsItsLane: when a round finds a target disabled or deleted while its lane is in flight, it
+// cancels the lane; the lane writes nothing more, frees its slot, pin and started gauge, and its run takes no result
+// for that target, while the other target's result stands (amendment 2026-11-11, C3.7 and C3.8).
+func TestRemovedTargetCancelsItsLane(t *testing.T) {
+	for _, how := range []string{"disabled", "deleted"} {
+		t.Run(how, func(t *testing.T) {
+			f := newFixture(t)
+			f.confirmKey()
+			f.engine.stall = time.Hour
+			slow := newHangingTarget()
+			t.Cleanup(func() { close(slow.release) })
+			slowRec := f.addTarget(t, backupset.TypeS3, slow)
+			fastRec := f.addTarget(t, backupset.TypeS3, newMemTarget())
+			roundWithin(t, f)
+			<-slow.entered
+			gauge := f.metrics.mirrorStarted.WithLabelValues(slowRec.Name)
+			if got := testutil.ToFloat64(gauge); got <= 0 || got > float64(time.Now().Unix()) {
+				t.Errorf("mirror started %v while the lane runs, want its start", got)
+			}
+			waitFor(t, "the other target's lane", func() bool {
+				_, ok := f.store.statusOf(fastRec.ID, KindOpenBao)
+				return ok
+			})
+			if how == "disabled" {
+				f.store.targets[0].Enabled = false
+			} else {
+				f.store.targets = f.store.targets[1:]
+			}
+			f.now = f.now.Add(time.Minute)
+			roundWithin(t, f)
+			f.engine.waitLanes()
+
+			if _, ok := f.store.statusOf(slowRec.ID, KindOpenBao); ok {
+				t.Error("the cancelled lane wrote a target status")
+			}
+			if len(slow.files) != 0 {
+				t.Errorf("the cancelled lane wrote %v", slow.files)
+			}
+			if len(f.engine.lanes) != 0 || len(f.engine.pinned()) != 0 {
+				t.Errorf("after the cancel: lanes %v, pins %d", f.engine.lanes, len(f.engine.pinned()))
+			}
+			if n := testutil.CollectAndCount(f.metrics.mirrorStarted); n != 0 {
+				t.Errorf("%d mirror started series after the cancel, want none", n)
+			}
+			r, _ := f.store.runOf(KindOpenBao, 0)
+			if !r.mirrored || len(r.Targets) != 1 || r.Targets[0].TargetID != fastRec.ID.String() || !r.Targets[0].OK {
+				t.Errorf("run after the cancel: %+v, want only the other target's ok", r)
+			}
+		})
 	}
 }

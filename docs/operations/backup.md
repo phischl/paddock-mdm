@@ -182,7 +182,8 @@ longer than a round; meanwhile the later rounds' backups wait for that target's 
 and get their mirror results and audit event when it ended. The target is not current until it has finished: `./paddock backup status`
 and the *Overview* grid show per target and kind when its last mirror succeeded. A file the local retention would
 remove stays in the local repository while a mirror still copies the set that holds it, and goes in the first round
-after that mirror ended.
+after that mirror ended. Disabling or deleting a target stops its running mirror at the next round: nothing more is
+written to or deleted on that target, and the runs that waited for it are recorded without it.
 
 ## Schedule and retention
 
@@ -310,7 +311,9 @@ The backup role exports `paddock_backup_last_success_timestamp_seconds{kind,targ
 repository), `paddock_backup_target_reachable{target}`, `paddock_backup_target_held_files{target}`,
 `paddock_backup_key_confirmed`, `paddock_backup_runs_total{kind,outcome}`, `paddock_backup_repo_bytes{what}`,
 `paddock_backup_wal_last_archived_timestamp_seconds{stanza}`, `paddock_backup_escrow_unevidenced_missing`,
-`paddock_backup_escrow_listing_suspicious`, `paddock_backup_leader` (1 while the process holds the role's leader lock)
+`paddock_backup_escrow_listing_suspicious`, `paddock_backup_target_mirror_started_timestamp_seconds{target}` (when
+the mirror to the target that is still running started; absent while none runs), `paddock_backup_leader` (1 while the
+process holds the role's leader lock)
 and `paddock_backup_leader_lost_total`. Only the process that holds the leader lock runs rounds and mirrors; it holds
 the lock on one database connection for its whole life. When that connection stops answering, it stops its rounds and
 mirrors before writing anything more, logs `backup role lost its leader lock` and takes the lock again once it is

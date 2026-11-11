@@ -22,6 +22,12 @@ import (
 type lane struct {
 	idx    repoIndex
 	passes []*mirrorPass
+	// ctx ends when a round finds the target disabled or deleted (cancel); target is the name the lane's gauge
+	// carries, started the lane's start.
+	ctx     context.Context
+	cancel  context.CancelFunc
+	target  string
+	started time.Time
 }
 
 // mirrorPass is the mirror of one round's set: the runs it covers, the finished runs without mirror results when the
@@ -41,7 +47,9 @@ type mirrorPass struct {
 // A target whose lane still mirrors an earlier set makes the pass wait for the target's next lane, which a later round
 // starts with a newer index: that index holds this round's runs, the in-flight lane's does not. A volume target the
 // host has not mounted gets its result at once, in this pass and in every pass waiting for it. A pass waiting for a
-// target that is no longer enabled stops waiting for it. The lanes run with ctx.
+// target that is no longer enabled stops waiting for it, and the lane of such a target is cancelled: an administrator
+// who disables or deletes a target expects Paddock to stop writing to it (amendment 2026-11-11, C3.7). The lanes run
+// with ctx.
 func (e *Engine) startMirrors(ctx context.Context, idx repoIndex, targets []TargetRecord, kinds map[string]kindInfo,
 	ret retention) error {
 	due, err := e.store.UnmirroredRuns(ctx)
@@ -85,8 +93,13 @@ func (e *Engine) startMirrors(ctx context.Context, idx repoIndex, targets []Targ
 		case backupset.Mounted(t.Type) && t.HostState == HostUnreachable:
 			settled = append(settled, immediate{t, ClassIO, passes})
 		default:
-			l := &lane{idx: idx, passes: passes}
+			l := &lane{idx: idx, passes: passes, target: t.Name, started: time.Now()}
+			l.ctx, l.cancel = context.WithCancel(ctx)
 			e.lanes[t.ID] = l
+			e.metrics.mirrorStarted.WithLabelValues(t.Name).Set(unix(l.started))
+			if e.longLane[t.ID] {
+				slog.InfoContext(ctx, "mirror to backup target starts", "target", t.Name)
+			}
 			e.laneWG.Add(1)
 			go e.runLane(ctx, l, t, kinds, ret)
 		}
@@ -96,6 +109,13 @@ func (e *Engine) startMirrors(ctx context.Context, idx repoIndex, targets []Targ
 		if !enabled[id] {
 			abandoned = append(abandoned, passes...)
 			delete(e.waiting, id)
+		}
+	}
+	for id, l := range e.lanes {
+		if !enabled[id] && l.ctx.Err() == nil {
+			slog.InfoContext(ctx, "mirror to backup target cancelled: the target was disabled or deleted",
+				"target", l.target)
+			l.cancel()
 		}
 	}
 	e.metrics.series.Set(float64(len(backupset.Kinds) * (1 + len(e.enabled))))
@@ -113,13 +133,15 @@ func (e *Engine) startMirrors(ctx context.Context, idx repoIndex, targets []Targ
 
 // runLane mirrors the set to t and settles the result in the lane's passes. A lane that ends because ctx ended
 // (shutdown, lost leadership) records nothing: its passes are dropped, and the next leader mirrors from the recorded
-// state.
+// state. A lane cancelled because its target was disabled or deleted records nothing either; its passes take no
+// result for that target (settle).
 func (e *Engine) runLane(ctx context.Context, l *lane, t TargetRecord, kinds map[string]kindInfo, ret retention) {
 	defer e.laneWG.Done()
-	held, err := e.mirrorLane(ctx, l.idx, t, ret)
+	defer l.cancel()
+	held, err := e.mirrorLane(l.ctx, l.idx, t, ret)
 	if ctx.Err() != nil {
 		e.laneMu.Lock()
-		delete(e.lanes, t.ID)
+		e.freeSlot(t.ID, l)
 		for _, pass := range l.passes {
 			pass.dropped = true
 		}
@@ -129,6 +151,7 @@ func (e *Engine) runLane(ctx context.Context, l *lane, t TargetRecord, kinds map
 	}
 	class := ""
 	switch {
+	case l.ctx.Err() != nil:
 	case errors.Is(err, errBudget), errors.Is(err, errSetMoved):
 		class = ClassContinues
 		slog.InfoContext(ctx, "mirror to backup target continues next round", "target", t.Name, "reason", err)
@@ -151,17 +174,21 @@ func (e *Engine) mirrorLane(ctx context.Context, idx repoIndex, t TargetRecord, 
 
 // settle records the result of t, from its lane own or decided at once (own nil), in passes: the target's status per
 // kind, its state for the metrics, and the run result; the last result due in a pass runs its phase 2. Nothing is
-// written once ctx ended: a process that lost the lead must not write beside the next leader.
+// written once ctx ended: a process that lost the lead must not write beside the next leader. A lane cancelled for a
+// disabled or deleted target writes nothing either, and its passes take no result for the target.
 func (e *Engine) settle(ctx context.Context, own *lane, passes []*mirrorPass, t TargetRecord, kinds map[string]kindInfo,
 	class string, held int) {
-	if ctx.Err() != nil {
+	if cancelled := own != nil && own.ctx.Err() != nil; ctx.Err() != nil || cancelled {
 		// The lane slot and its pin go all the same: a slot left behind would keep the target from ever getting a lane
 		// again and its index from ever being expired.
 		e.laneMu.Lock()
-		if own != nil && e.lanes[t.ID] == own {
-			delete(e.lanes, t.ID)
-		}
+		e.freeSlot(t.ID, own)
 		e.laneMu.Unlock()
+		if ctx.Err() == nil {
+			for _, pass := range passes {
+				e.release(ctx, pass)
+			}
+		}
 		return
 	}
 	for _, kind := range backupset.Kinds {
@@ -175,9 +202,15 @@ func (e *Engine) settle(ctx context.Context, own *lane, passes []*mirrorPass, t 
 		}
 	}
 	e.laneMu.Lock()
-	if own != nil && e.lanes[t.ID] == own {
-		delete(e.lanes, t.ID)
+	if own != nil {
+		took := time.Since(own.started)
+		e.longLane[t.ID] = took > e.cfg.RoundInterval
+		if e.longLane[t.ID] {
+			slog.InfoContext(ctx, "mirror to backup target ended", "target", t.Name, "duration", took,
+				"error_class", class)
+		}
 	}
+	e.freeSlot(t.ID, own)
 	if class == "" || class == ClassUnknownPath {
 		e.held[t.ID] = held
 	}
@@ -249,6 +282,15 @@ func (e *Engine) publishTargets() {
 	}
 }
 
+// freeSlot ends own's hold on the target's lane slot: the slot, its pin and its started gauge. The caller holds laneMu.
+func (e *Engine) freeSlot(id uuid.UUID, own *lane) {
+	if own == nil || e.lanes[id] != own {
+		return
+	}
+	delete(e.lanes, id)
+	e.metrics.mirrorStarted.DeleteLabelValues(own.target)
+}
+
 // pinned returns the indexes of the lanes in flight, whose files the local expire keeps.
 func (e *Engine) pinned() []repoIndex {
 	e.laneMu.Lock()
@@ -272,4 +314,5 @@ func (e *Engine) forgetPasses() {
 	e.laneMu.Lock()
 	defer e.laneMu.Unlock()
 	e.passes, e.waiting, e.lanes = nil, map[uuid.UUID][]*mirrorPass{}, map[uuid.UUID]*lane{}
+	e.metrics.mirrorStarted.Reset()
 }
