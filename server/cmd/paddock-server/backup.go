@@ -77,9 +77,9 @@ func serveBackup(ctx context.Context, l *config.Loader, common config.Common) er
 		return err
 	}
 	defer pool.Close()
-	// The platform pool holds the round's leader lock and reads the schema version; every write goes through
-	// paddock_backup.
-	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-backup-lock", MaxConns: 2})
+	// The platform pool holds the leader lock on one connection for the life of the process (decisions-alpha10 §50)
+	// and reads the schema version on the others; every write goes through paddock_backup.
+	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-backup-lock", MaxConns: 3})
 	if err != nil {
 		return err
 	}

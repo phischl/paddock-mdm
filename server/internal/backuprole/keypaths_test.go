@@ -141,7 +141,7 @@ func TestLocalExpireKeepsActiveAndIncompleteReplacement(t *testing.T) {
 				e.mod = old
 				idx[p] = e
 			}
-			f.engine.expire(context.Background(), repo, idx, ret)
+			f.engine.expire(context.Background(), repo, idx, ret, nil)
 			_, err := repo.Stat(pathOld)
 			if pruned := os.IsNotExist(err); pruned != c.pruned {
 				t.Errorf("retired repository pruned %v, want %v (%v)", pruned, c.pruned, err)

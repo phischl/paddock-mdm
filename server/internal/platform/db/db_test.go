@@ -756,6 +756,68 @@ func TestWithLeaderLocks(t *testing.T) {
 	}
 }
 
+// TestLead (decisions-alpha10 §50): Lead holds the lock for as long as fn runs, so a second process does not lead;
+// when the holding session dies, fn's context ends with ErrLeadershipLost, Lead returns it, and the other process
+// leads next.
+func TestLead(t *testing.T) {
+	env := sharedPaddock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	first, err := db.NewPlatformPool(ctx, env.Platform, db.Options{MaxConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(first.Close)
+	second, err := db.NewPlatformPool(ctx, env.Platform, db.Options{MaxConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(second.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(context.Background()) })
+	const key = int64(0x7465737433)
+
+	leading := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		ok, err := first.Lead(ctx, key, 50*time.Millisecond, func(ctx context.Context) error {
+			close(leading)
+			<-ctx.Done()
+			if !errors.Is(context.Cause(ctx), db.ErrLeadershipLost) {
+				return fmt.Errorf("fn ended with cause %v", context.Cause(ctx))
+			}
+			return nil
+		})
+		if !ok {
+			err = errors.Join(errors.New("first did not lead"), err)
+		}
+		result <- err
+	}()
+	<-leading
+	ok, err := second.Lead(ctx, key, time.Second, func(context.Context) error { return nil })
+	if ok || err != nil {
+		t.Fatalf("second process while the first leads: ok %v, err %v", ok, err)
+	}
+	if _, err := super.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
+		WHERE locktype = 'advisory' AND ((classid::bigint << 32) | objid::bigint) = $1`, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; !errors.Is(err, db.ErrLeadershipLost) {
+		t.Fatalf("first after its session died: %v, want ErrLeadershipLost", err)
+	}
+	ran := false
+	ok, err = second.Lead(ctx, key, time.Second, func(context.Context) error {
+		ran = true
+		return nil
+	})
+	if !ok || !ran || err != nil {
+		t.Fatalf("second after the first lost the lock: ok %v, ran %v, err %v", ok, ran, err)
+	}
+}
+
 // TestInOrgSnapshot: every query of an InOrgSnapshot transaction sees the snapshot of its first query, so a change
 // committed in between is invisible (the compiler reads its definitions and the rollout overlay this way).
 func TestInOrgSnapshot(t *testing.T) {
