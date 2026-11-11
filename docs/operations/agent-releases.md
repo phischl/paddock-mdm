@@ -59,10 +59,17 @@ Then give the key to the release workflow (once, and again after a rotation):
 The trusted comment is part of the signature and must be exactly `paddock-agent version=<version> arch=<arch>`
 (`amd64` or `arm64`): the server refuses other comments at upload (422 `release_signature_mismatch`), and the
 supervisor installs a binary only as the version and architecture its comment names (plan M4b.1 decision 10). The
+same comment binds the `paddock-agent`, `paddock-supervisor` and `paddock-self-service` packages to their release:
+`paddock-agent version=<version> arch=<package arch>`, with `arch=all` for `paddock-self-service`. The upload, the
+host command and the GitHub import refuse a package whose comment names another version or architecture, or that
+has no such comment (422 `release_signature_mismatch`), and store nothing of it, so that a package signed for an
+older release cannot be stored under a newer one (ADR 0043 amendment 2026-11-11 b). `paddock-revoke` and
+`fleet-osquery` are not checked for this comment. Releases stored before this check are not verified again. The
 workflow and the offline fallback both sign with it:
 
 ```sh
 minisign -S -s paddock-release.key -m paddockd -t "paddock-agent version=<version> arch=<arch>"
+minisign -S -s paddock-release.key -m paddock-agent_<version>_amd64.deb -t "paddock-agent version=<version> arch=amd64"
 ```
 
 minisign reads the passphrase from stdin when stdin is not a terminal (one line; minisign 0.11 of Ubuntu 24.04 and
@@ -87,7 +94,8 @@ variable `PADDOCK_RELEASE_KEY_PASSPHRASE`, so it never appears on a command line
    `X-Paddock-Minisig: <base64 of the .minisig file>`. The server stores it in `paddock-agent-artifacts` under
    `releases/<version>/<arch>/paddockd`.
 4. Upload the Debian packages `paddock-agent`, `paddock-supervisor` and `paddock-revoke` of the release (built by
-   `make deb`), each signed like the binary — `paddock-revoke` with the revocation release key, never with the agent
+   `make deb`), each signed like the binary, with the trusted comment of its release and architecture (above) —
+   `paddock-revoke` with the revocation release key, never with the agent
    release key, and never built with `REVOKE_TAGS` (the test build tag `paddock_revoke_testtarget`; `make
    agent-release` refuses it): `PUT /api/platform/v1/agent-releases/<version>/packages/<name>/<arch>` with the package
    as body and `X-Paddock-Minisig`. The server stores them under
@@ -151,8 +159,9 @@ and `paddock-supervisor_<version>_amd64.deb`, and from `0.1.0-alpha.10` on also 
 (an earlier release never had it and is imported without it); packages of other architectures and `fleet-osquery_<fleetd
 version>_<arch>.deb` are imported when they are attached with their signature. A missing file or signature refuses
 the import (422 `release_incomplete`, naming the file). Every file is verified with the release public key
-(`PADDOCK_RELEASE_PUBLIC_KEY_FILE`) — the binaries also with the trusted comment `paddock-agent version=<v>
-arch=<arch>` — before anything is stored; GitHub is transport only, and `SHA256SUMS` and its Sigstore bundle are not
+(`PADDOCK_RELEASE_PUBLIC_KEY_FILE`) — the binaries and the `paddock-agent`, `paddock-supervisor` and
+`paddock-self-service` packages also with the trusted comment `paddock-agent version=<v> arch=<arch>` (`arch=all`
+for `paddock-self-service`; a mismatch fails the import with `release_signature_mismatch`) — before anything is stored; GitHub is transport only, and `SHA256SUMS` and its Sigstore bundle are not
 checked (RR-84). The release is published, ready for a rollout; the import never starts one.
 
 **What is never imported.** `paddock-revoke` stays on the offline two-person path: sign it with the revocation key and

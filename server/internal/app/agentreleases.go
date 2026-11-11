@@ -247,10 +247,13 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packag
 			if err := agentrelease.ValidatePackage(name, packageVersion); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
-			if _, err := a.checkUpload(ctx, q, a.packageVerifier(name), version, name, arch, deb, minisigB64); err != nil {
+			comment, err := a.checkUpload(ctx, q, a.packageVerifier(name), version, name, arch, deb, minisigB64)
+			if err != nil {
 				return err
 			}
-			var err error
+			if err := checkPackageComment(name, comment, version, arch); err != nil {
+				return err
+			}
 			lease, err = takeUploadLease(ctx, q, version, pkg.ObjectKey, a.storeTimeout)
 			return err
 		},
@@ -310,6 +313,17 @@ func checkBinaryComment(comment, version, arch string) error {
 		return problem.ReleaseSignatureMismatch.WithDetail(fmt.Sprintf("the signed comment must be %q", releasesig.Comment(version, arch)))
 	}
 	return nil
+}
+
+// checkPackageComment requires the trusted comment of a Debian package to name the release it is stored under and the
+// package's architecture, arch all for paddock-self-service (ADR 0043 amendment 2026-11-11 b), so that a package signed
+// for another release cannot be stored under this one. paddock-revoke and fleet-osquery are not bound to the release by
+// their comment and are not checked.
+func checkPackageComment(name, comment, version, arch string) error {
+	if name == agentrelease.PackageRevoke || name == agentrelease.PackageFleetd {
+		return nil
+	}
+	return checkBinaryComment(comment, version, arch)
 }
 
 // checkFile validates a release file on its own — architecture, size and signature — and returns the signature's
@@ -554,7 +568,11 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 		if err != nil {
 			err = problem.InvalidRequest.WithDetail(err.Error())
 		} else {
-			_, err = checkFile(a.packageVerifier(pkg.Name), pkg.Name, pkg.Arch, pkg.Deb, base64.StdEncoding.EncodeToString(pkg.Minisig))
+			var comment string
+			comment, err = checkFile(a.packageVerifier(pkg.Name), pkg.Name, pkg.Arch, pkg.Deb, base64.StdEncoding.EncodeToString(pkg.Minisig))
+			if err == nil {
+				err = checkPackageComment(pkg.Name, comment, version, pkg.Arch)
+			}
 		}
 		if err != nil {
 			return ReleaseDetail{}, a.refuse(ctx, uploadSpec(version, pkg.Arch, pkg.Deb, "deb", pkg.Name, pkg.PackageVersion),

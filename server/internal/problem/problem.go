@@ -92,8 +92,8 @@ var (
 	DomainTaken            = &Error{Code: "domain_taken", Status: http.StatusConflict}
 	AttributeOwnedUpstream = &Error{Code: "attribute_owned_upstream", Status: http.StatusConflict}
 	InvalidCommand         = &Error{Code: "invalid_command", Status: http.StatusUnprocessableEntity}
-	// ReleaseSignatureMismatch: the signed trusted comment of an agent binary names another version or architecture
-	// (plan M4b.1 decision 12).
+	// ReleaseSignatureMismatch: the signed trusted comment of an agent binary or package names another version or
+	// architecture (plan M4b.1 decision 12, ADR 0043 amendment 2026-11-11 b).
 	ReleaseSignatureMismatch = &Error{Code: "release_signature_mismatch", Status: http.StatusUnprocessableEntity}
 	// Agent release import (ADR 0043 decision 7): the source is switched off (recorded as denied), the source did not
 	// answer or answered outside its bounds, the version is not newer than the newest published release, or the release

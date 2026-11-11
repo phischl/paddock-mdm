@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"aead.dev/minisign"
-
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
@@ -27,7 +25,7 @@ func TestSupervisorPackage(t *testing.T) {
 	t.Cleanup(func() { haltRunningRollouts(t, root) })
 	v := gateRelease(t, root, true, false)
 	deb := []byte("!<arch>\ngate supervisor " + v)
-	expectStatus(t, uploadPackage(t, root, v, "paddock-supervisor", deb, minisign.Sign(releaseKey(t), deb)), http.StatusOK, "")
+	expectStatus(t, uploadPackage(t, root, v, "paddock-supervisor", deb, signPackage(t, deb, v)), http.StatusOK, "")
 	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/publish", nil), http.StatusOK, "")
 	d := v2Device(t, alice, "", bundle.SchemaVersion, bundle.SchemaVersion2)
 	d.Arch = protocol.ArchAMD64

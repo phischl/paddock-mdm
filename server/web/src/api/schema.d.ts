@@ -4160,7 +4160,10 @@ export interface paths {
         /**
          * @description Roles: platform_admin. Uploads a Debian package of a draft release (at most 128 MiB), signed like the
          *     binary: the server verifies the minisign signature with the configured release public key, paddock-revoke with
-         *     the revocation release public key (400 otherwise).
+         *     the revocation release public key (400 otherwise). Except for paddock-revoke and fleet-osquery, the signed
+         *     trusted comment must be `paddock-agent version=<version> arch=<arch>` for this release and architecture
+         *     (422 release_signature_mismatch otherwise), so that a package signed for another release cannot be stored
+         *     under this one.
          *     Packages are stored below packages/ in the artifact bucket and served without authentication at
          *     https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb; the Paddock autoinstall pins their
          *     SHA-256 (plan M4b decision 1). fleet-osquery (fleetd, plan M5a decision 3) needs package_version, the fleetd
@@ -16997,6 +17000,7 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
         };
     };

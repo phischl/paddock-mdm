@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"strings"
 	"testing"
 
 	"aead.dev/minisign"
@@ -22,7 +23,8 @@ func (h releaseHarness) hostFiles(version string) ([]app.HostArtifact, []app.Hos
 	deb := []byte("paddock-agent deb " + version)
 	return []app.HostArtifact{{Arch: "amd64", Binary: bin,
 			Minisig: minisign.SignWithComments(h.priv, bin, releasesig.Comment(version, "amd64"), "")}},
-		[]app.HostPackage{{Name: agentrelease.PackageAgent, Arch: "amd64", Deb: deb, Minisig: minisign.Sign(h.priv, deb)}}
+		[]app.HostPackage{{Name: agentrelease.PackageAgent, Arch: "amd64", Deb: deb,
+			Minisig: minisign.SignWithComments(h.priv, deb, releasesig.Comment(version, "amd64"), "")}}
 }
 
 // TestAgentReleasePublishFromHost: the host command publishes through the API's use cases with their audit events
@@ -59,8 +61,8 @@ func TestAgentReleasePublishFromHost(t *testing.T) {
 	}
 }
 
-// TestAgentReleasePublishFromHostRefusesBadSignatures: a file signed with another key or a binary signed for another
-// release creates nothing and stores nothing.
+// TestAgentReleasePublishFromHostRefusesBadSignatures: a file signed with another key or a binary or package signed
+// for another release or arch (ADR 0043 amendment 2026-11-11 b) creates nothing and stores nothing.
 func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 	h := newReleaseHarness(t, false)
 	_, otherKey, err := minisign.GenerateKey(rand.Reader)
@@ -78,13 +80,31 @@ func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 		"binary signed for another release": func(_ string, arts []app.HostArtifact, _ []app.HostPackage) {
 			arts[0].Minisig = minisign.SignWithComments(h.priv, arts[0].Binary, releasesig.Comment("9.9.9", "amd64"), "")
 		},
+		"package signed for another release": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[0].Minisig = minisign.SignWithComments(h.priv, pkgs[0].Deb, releasesig.Comment("0.0.1", "amd64"), "")
+		},
+		"package signed for another arch": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[0].Minisig = minisign.SignWithComments(h.priv, pkgs[0].Deb, releasesig.Comment(v, "arm64"), "")
+		},
+		"package signed without a release comment": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[0].Minisig = minisign.Sign(h.priv, pkgs[0].Deb)
+		},
+		"package signed with a garbled comment": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[0].Minisig = minisign.SignWithComments(h.priv, pkgs[0].Deb, "paddock-agent "+v+" amd64", "")
+		},
 	} {
 		v := uniqueVersion()
 		arts, pkgs := h.hostFiles(v)
 		tamper(v, arts, pkgs)
 		before := len(h.store.puts)
-		if _, err := h.releases.PublishFromHost(ctx, v, arts, pkgs); err == nil {
+		_, err := h.releases.PublishFromHost(ctx, v, arts, pkgs)
+		if err == nil {
 			t.Errorf("%s: published", name)
+		}
+		if strings.Contains(name, "comment") || strings.Contains(name, "another release") || strings.Contains(name, "another arch") {
+			if problem.From(err).Code != problem.ReleaseSignatureMismatch.Code {
+				t.Errorf("%s: err = %v, want release_signature_mismatch", name, err)
+			}
 		}
 		if n := countRows(t, h.super, "SELECT count(*) FROM agent_release WHERE version = $1", v); n != 0 {
 			t.Errorf("%s: the release was created", name)

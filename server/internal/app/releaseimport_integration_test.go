@@ -73,9 +73,9 @@ func (h releaseHarness) addRelease(f *fakeSource, v string) {
 		if !a.Required {
 			continue
 		}
-		comment := a.Package + " " + v + " " + a.Arch
-		if a.Package == "" {
-			comment = releasesig.Comment(v, a.Arch)
+		comment := releasesig.Comment(v, a.Arch)
+		if a.Package == agentrelease.PackageFleetd {
+			comment = a.Package + " " + v + " " + a.Arch
 		}
 		h.addSigned(f, v, a.Name, []byte("content of "+a.Name), comment)
 	}
@@ -171,7 +171,7 @@ func TestReleaseImport(t *testing.T) {
 	v2 := sourceVersion()
 	h.addRelease(src, v2)
 	deb := []byte("arm64 deb")
-	h.addSigned(src, v2, "paddock-agent_"+v2+"_arm64.deb", deb, "paddock-agent "+v2+" arm64")
+	h.addSigned(src, v2, "paddock-agent_"+v2+"_arm64.deb", deb, releasesig.Comment(v2, "arm64"))
 	ctx, _, corr = steppedUpAdmin()
 	if d, err = imp.Import(ctx, v2); err != nil || len(d.Packages) != 4 {
 		t.Fatalf("import with an arm64 package: %d packages, %v", len(d.Packages), err)
@@ -296,6 +296,34 @@ func TestReleaseImportRefusals(t *testing.T) {
 			h.addRelease(src, v)
 			name := "paddockd_" + v + "_linux_amd64"
 			src.files[name+".minisig"] = minisign.SignWithComments(h.priv, src.files[name], releasesig.Comment(published, "amd64"), "")
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"package signed for another version": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-supervisor_" + v + "_amd64.deb"
+			src.files[name+".minisig"] = minisign.SignWithComments(h.priv, src.files[name], releasesig.Comment(published, "amd64"), "")
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"package signed for another arch": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-self-service_" + v + "_all.deb"
+			src.files[name+".minisig"] = minisign.SignWithComments(h.priv, src.files[name], releasesig.Comment(v, "amd64"), "")
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"package signed without a release comment": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-agent_" + v + "_amd64.deb"
+			src.files[name+".minisig"] = minisign.Sign(h.priv, src.files[name])
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"package signed with a garbled comment": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-agent_" + v + "_amd64.deb"
+			src.files[name+".minisig"] = minisign.SignWithComments(h.priv, src.files[name], "paddock-agent "+v+" amd64", "")
 			return v
 		}, problem.ReleaseSignatureMismatch, "failure"},
 	} {

@@ -131,11 +131,14 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		signer := priv
+		signer, comment := priv, releasesig.Comment(*version, arch)
 		if name == "paddock-revoke" { // signed with the revocation release key (plan M4c decision 4)
 			signer = revokePriv
 		}
-		sig := minisign.SignWithComments(signer, deb, fmt.Sprintf("%s %s %s", name, *version, arch), "paddock agent package")
+		if name == "paddock-revoke" || name == "fleet-osquery" { // not bound to the release (ADR 0043 amendment 2026-11-11 b)
+			comment = fmt.Sprintf("%s %s %s", name, *version, arch)
+		}
+		sig := minisign.SignWithComments(signer, deb, comment, "paddock agent package")
 		target := base + "/packages/" + name + "/" + arch
 		if packageVersion != "" {
 			target += "?package_version=" + packageVersion
