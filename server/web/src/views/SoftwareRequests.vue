@@ -136,6 +136,7 @@ async function decide(verb: 'approve' | 'deny', r: SoftwareRequest): Promise<voi
         <span
           v-if="item.justification"
           class="request-text"
+          dir="auto"
           data-testid="request-justification"
         >{{ item.justification }}</span>
         <span
@@ -193,6 +194,7 @@ async function decide(verb: 'approve' | 'deny', r: SoftwareRequest): Promise<voi
 
 <style scoped>
 .request-text {
+  unicode-bidi: isolate;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

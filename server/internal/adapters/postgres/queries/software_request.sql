@@ -170,14 +170,20 @@ WHERE r.state = 'denied' AND r.decided_at > sqlc.arg(lock_start)::timestamptz
 ORDER BY r.device_id, r.catalog_entry_id, r.username, r.decided_at DESC;
 
 -- name: ListDevicesWithEndedDenialLock :many
--- The active devices whose latest bundle was compiled before the re-request lock of one of their denials ended, which
--- is at or before now: the bundle still names that denial, and the device refuses a new request while it does
--- (compiler reconcile, architect decision A10-27). Only locks that ended within the last week are read, so the round
--- does not scan every denial ever made; the reconcile runs every minute, so a lock is caught long before that.
+-- The active devices with a denial whose re-request lock ended at or before now but after both their latest bundle and
+-- the last recompile for an ended lock (denial_lock_checked_at): the bundle may still name that denial, and the device
+-- refuses a new request while it does (compiler reconcile, architect decision A10-27). An unchanged recompile writes no
+-- bundle, so MarkDenialLockChecked is what ends the selection. Only locks that ended within the last week are read, so
+-- the round does not scan every denial ever made; the reconcile runs every minute, so a lock is caught long before that.
 SELECT DISTINCT d.id FROM device d
 JOIN software_request r ON r.device_id = d.id
 JOIN LATERAL (SELECT created_at FROM bundle WHERE bundle.device_id = d.id ORDER BY version DESC LIMIT 1) b ON true
 WHERE d.state = 'active' AND r.state = 'denied' AND r.decided_at <= sqlc.arg(lock_start)::timestamptz
   AND r.decided_at > sqlc.arg(lock_start)::timestamptz - interval '7 days'
-  AND b.created_at < r.decided_at + (sqlc.arg(now)::timestamptz - sqlc.arg(lock_start)::timestamptz)
+  AND r.decided_at + (sqlc.arg(now)::timestamptz - sqlc.arg(lock_start)::timestamptz)
+    > greatest(b.created_at, coalesce(d.denial_lock_checked_at, '-infinity'::timestamptz))
 ORDER BY d.id;
+
+-- name: MarkDenialLockChecked :exec
+-- Records that the compiler recompiled the devices for the denial locks that ended at or before checked_at.
+UPDATE device SET denial_lock_checked_at = sqlc.arg(checked_at)::timestamptz WHERE id = ANY(sqlc.arg(ids)::uuid[]);

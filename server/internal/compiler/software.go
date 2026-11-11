@@ -510,7 +510,8 @@ func (s *orgSoftware) applyApproval(p *bundle.SoftwarePackage, device uuid.UUID,
 func denialReason(ctx context.Context, d pgstore.ListSoftwareRequestDenialsRow) string {
 	if err := software.ValidateDecisionReason(d.Reason, false); err != nil ||
 		utf8.RuneCountInString(d.Reason) > bundle.MaxSoftwareDenialReason {
-		slog.ErrorContext(ctx, "denial reason left out of the bundle: it fails the reason rules", "device_id", d.DeviceID,
+		// Warn, not Error: the row stays until an administrator acts, so every compile of the organization repeats it.
+		slog.WarnContext(ctx, "denial reason left out of the bundle: it fails the reason rules", "device_id", d.DeviceID,
 			"catalog_entry_id", d.CatalogEntryID, "error", err)
 		return ""
 	}

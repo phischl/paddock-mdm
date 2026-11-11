@@ -96,6 +96,7 @@ describe('SoftwareRequests', () => {
     expect(list().querySelector('script, img, a[href="https://evil.test"], strong')).toBeNull()
     expect((window as unknown as { pwned?: boolean }).pwned).toBeUndefined()
     expect(getComputedStyle(shown[0]).whiteSpace).toBe('pre-wrap')
+    expect(shown[0].getAttribute('dir')).toBe('auto')
   })
 
   it('lists the requests with state, user, device and the decision; the reason stays inert text', async () => {

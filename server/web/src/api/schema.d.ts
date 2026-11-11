@@ -2460,8 +2460,10 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin. Approves an open request, optionally with a reason; no step-up of its own (the entry's source
-         *     needed one). The device's next bundle lets the user install the application. 409 invalid_state unless the
-         *     request is open, 404 not_found for another organization's request.
+         *     needed one). The device's next bundle lets the user install the application. The reason is plain text of at
+         *     most 500 characters without control, format or invisible characters except line breaks (no tabs). 400
+         *     invalid_request for a reason that breaks these rules, 409 invalid_state unless the request is open, 404
+         *     not_found for another organization's request.
          */
         post: operations["approveSoftwareRequest"];
         delete?: never;
@@ -7190,11 +7192,11 @@ export interface components {
             sort: string;
         };
         SoftwareRequestDecision: {
-            /** @description Optional; trimmed. */
+            /** @description Optional; trimmed. Plain text without control, format or invisible characters except line breaks (no tabs). */
             reason?: string;
         };
         SoftwareRequestDenial: {
-            /** @description Required: the user sees it. Trimmed; must not be empty. */
+            /** @description Required: the user sees it. Trimmed; must not be empty. Plain text without control, format or invisible characters except line breaks (no tabs). */
             reason: string;
         };
         SoftwareCatalogEntryPage: {

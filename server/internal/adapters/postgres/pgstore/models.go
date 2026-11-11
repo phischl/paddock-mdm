@@ -360,6 +360,7 @@ type Device struct {
 	CompiledOsID                string
 	CompiledOsVersionID         string
 	CompiledAgentVersion        string
+	DenialLockCheckedAt         *time.Time
 }
 
 type DeviceAlert struct {

@@ -333,7 +333,8 @@ JOIN software_request r ON r.device_id = d.id
 JOIN LATERAL (SELECT created_at FROM bundle WHERE bundle.device_id = d.id ORDER BY version DESC LIMIT 1) b ON true
 WHERE d.state = 'active' AND r.state = 'denied' AND r.decided_at <= $1::timestamptz
   AND r.decided_at > $1::timestamptz - interval '7 days'
-  AND b.created_at < r.decided_at + ($2::timestamptz - $1::timestamptz)
+  AND r.decided_at + ($2::timestamptz - $1::timestamptz)
+    > greatest(b.created_at, coalesce(d.denial_lock_checked_at, '-infinity'::timestamptz))
 ORDER BY d.id
 `
 
@@ -342,10 +343,11 @@ type ListDevicesWithEndedDenialLockParams struct {
 	Now       time.Time
 }
 
-// The active devices whose latest bundle was compiled before the re-request lock of one of their denials ended, which
-// is at or before now: the bundle still names that denial, and the device refuses a new request while it does
-// (compiler reconcile, architect decision A10-27). Only locks that ended within the last week are read, so the round
-// does not scan every denial ever made; the reconcile runs every minute, so a lock is caught long before that.
+// The active devices with a denial whose re-request lock ended at or before now but after both their latest bundle and
+// the last recompile for an ended lock (denial_lock_checked_at): the bundle may still name that denial, and the device
+// refuses a new request while it does (compiler reconcile, architect decision A10-27). An unchanged recompile writes no
+// bundle, so MarkDenialLockChecked is what ends the selection. Only locks that ended within the last week are read, so
+// the round does not scan every denial ever made; the reconcile runs every minute, so a lock is caught long before that.
 func (q *Queries) ListDevicesWithEndedDenialLock(ctx context.Context, arg ListDevicesWithEndedDenialLockParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, listDevicesWithEndedDenialLock, arg.LockStart, arg.Now)
 	if err != nil {
@@ -576,6 +578,21 @@ func (q *Queries) ListSoftwareRequestsToExpire(ctx context.Context, arg ListSoft
 		return nil, err
 	}
 	return items, nil
+}
+
+const markDenialLockChecked = `-- name: MarkDenialLockChecked :exec
+UPDATE device SET denial_lock_checked_at = $1::timestamptz WHERE id = ANY($2::uuid[])
+`
+
+type MarkDenialLockCheckedParams struct {
+	CheckedAt time.Time
+	Ids       []uuid.UUID
+}
+
+// Records that the compiler recompiled the devices for the denial locks that ended at or before checked_at.
+func (q *Queries) MarkDenialLockChecked(ctx context.Context, arg MarkDenialLockCheckedParams) error {
+	_, err := q.db.Exec(ctx, markDenialLockChecked, arg.CheckedAt, arg.Ids)
+	return err
 }
 
 const softwareRequestApprovalHolds = `-- name: SoftwareRequestApprovalHolds :one

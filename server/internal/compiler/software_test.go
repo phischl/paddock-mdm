@@ -1445,6 +1445,52 @@ func TestSoftwareDenialsGated(t *testing.T) {
 	}
 }
 
+// TestSoftwareReconcileDenialLockConverges (architect decision A10-27, PDK-993 review 1): a denial whose lock ended but
+// that the bundle never named (its entry no longer requires approval) makes the reconcile recompile the device once;
+// the unchanged recompile writes no bundle, and the next rounds select the device no more.
+func TestSoftwareReconcileDenialLockConverges(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.assignTo(nano, "user_id", alice, "available")
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	w.denyRequest(nano, d, alice, 25*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	reconcile := func() {
+		t.Helper()
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcile()
+	w.exec("UPDATE bundle SET created_at = now() - interval '2 hours' WHERE device_id = $1", d)
+	before := w.version(d)
+	checked := func() *time.Time {
+		t.Helper()
+		var at *time.Time
+		if err := w.super.QueryRow(context.Background(), "SELECT denial_lock_checked_at FROM device WHERE id = $1", d).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	reconcile()
+	first := checked()
+	if first == nil {
+		t.Fatal("the reconcile did not record the recompile for the ended lock")
+	}
+	for range 3 {
+		reconcile()
+	}
+	if at := checked(); at == nil || !at.Equal(*first) {
+		t.Fatalf("a later round recompiled the device again: checked at %v, first %v", at, first)
+	}
+	if v := w.version(d); v != before {
+		t.Fatalf("an unchanged recompile wrote a bundle: version %d, want %d", v, before)
+	}
+}
+
 // TestSoftwareReconcileEndsDenialLock (architect decision A10-27): once the re-request lock of a denial ends, the
 // reconcile loop recompiles the device, so its bundle no longer names the denial and the user may ask again; a device
 // whose bundle was compiled after the lock ended is left alone.

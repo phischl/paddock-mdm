@@ -3919,8 +3919,10 @@ paths:
       tags: [software]
       description: |
         Roles: org_admin. Approves an open request, optionally with a reason; no step-up of its own (the entry's source
-        needed one). The device's next bundle lets the user install the application. 409 invalid_state unless the
-        request is open, 404 not_found for another organization's request.
+        needed one). The device's next bundle lets the user install the application. The reason is plain text of at
+        most 500 characters without control, format or invisible characters except line breaks (no tabs). 400
+        invalid_request for a reason that breaks these rules, 409 invalid_state unless the request is open, 404
+        not_found for another organization's request.
       x-paddock-audit: software_request.approved
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -10569,13 +10571,13 @@ components:
       type: object
       additionalProperties: false
       properties:
-        reason: { type: string, maxLength: 500, description: Optional; trimmed. }
+        reason: { type: string, maxLength: 500, description: "Optional; trimmed. Plain text without control, format or invisible characters except line breaks (no tabs)." }
     SoftwareRequestDenial:
       type: object
       required: [reason]
       additionalProperties: false
       properties:
-        reason: { type: string, minLength: 1, maxLength: 500, description: "Required: the user sees it. Trimmed; must not be empty." }
+        reason: { type: string, minLength: 1, maxLength: 500, description: "Required: the user sees it. Trimmed; must not be empty. Plain text without control, format or invisible characters except line breaks (no tabs)." }
     SoftwareCatalogEntryPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
