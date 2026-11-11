@@ -114,7 +114,7 @@ func (s *Software) runFlatpak(ctx context.Context, args ...string) (string, erro
 func (s *Software) runUserFlatpak(ctx context.Context, uid int, args ...string) (string, error) {
 	full := append([]string{"--machine=" + strconv.Itoa(uid) + "@.host", "--user", "--wait", "--pipe", "--quiet", "--collect",
 		"--property=RuntimeMaxSec=" + strconv.Itoa(int(PackageTimeout.Seconds())), "--setenv=LC_ALL=C", "flatpak"}, args...)
-	out, exit, err := s.Sys.SystemdRun(ctx, full...)
+	out, exit, err := s.Sys.SystemdRun(ctx, nil, full...)
 	return out, flatpakErr("flatpak "+args[0]+" (uid "+strconv.Itoa(uid)+")", out, exit, err)
 }
 

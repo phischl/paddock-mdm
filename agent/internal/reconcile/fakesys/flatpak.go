@@ -54,11 +54,12 @@ func (s *System) Flatpak(_ context.Context, args ...string) (string, int, error)
 
 // SystemdRun implements reconcile.System for `systemd-run --machine=<uid>@.host --user … flatpak …` on the user's
 // installation in FlatpakUsers; a UID without one has no service manager to reach.
-func (s *System) SystemdRun(_ context.Context, args ...string) (string, int, error) {
+func (s *System) SystemdRun(_ context.Context, stdin []byte, args ...string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	line := strings.Join(append([]string{"systemd-run"}, args...), " ")
 	s.FlatpakCalls = append(s.FlatpakCalls, line)
+	s.FlatpakStdin = append(s.FlatpakStdin, stdin)
 	if r, ok := s.FlatpakScript[line]; ok {
 		return string(r.Data), r.Exit, r.Err
 	}
