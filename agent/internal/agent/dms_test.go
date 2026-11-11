@@ -159,3 +159,25 @@ func TestDMSDeleteSelfLockDropsWarnings(t *testing.T) {
 		t.Fatalf("after delete_self_lock: warnings %v, issue %q, self-locks %v", w.notified, w.issue(t), w.elapsed)
 	}
 }
+
+// TestNotifySessionsByUID (PDK-994): the warning addresses each user's session by UID, because systemd splits
+// --machine at the first "@" and a UPN user name would leave an invalid machine name; a user with two sessions is
+// notified once, and a greeter not at all.
+func TestNotifySessionsByUID(t *testing.T) {
+	loginctl := func(_ context.Context, args ...string) (string, int, error) {
+		if args[0] == "list-sessions" {
+			return "1 811622788 dave@acme.test seat0 tty2\n2 811622788 dave@acme.test - pts/0\nc1 60578 gdm-greeter seat0 tty1\n", 0, nil
+		}
+		return "Id=1\nName=dave@acme.test\nUser=811622788\nClass=user\n\n" +
+			"Id=2\nName=dave@acme.test\nUser=811622788\nClass=user\n\n" +
+			"Id=c1\nName=gdm-greeter\nUser=60578\nClass=greeter\n", 0, nil
+	}
+	var calls [][]string
+	notifySessions(context.Background(), loginctl, func(_ context.Context, args ...string) error {
+		calls = append(calls, args)
+		return nil
+	}, "locks in 1 day")
+	if len(calls) != 1 || calls[0][0] != "systemd-run" || calls[0][1] != "--machine=811622788@.host" || calls[0][2] != "--user" {
+		t.Fatalf("calls %q, want one systemd-run --machine=811622788@.host --user", calls)
+	}
+}
