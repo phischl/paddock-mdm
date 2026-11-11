@@ -80,7 +80,9 @@ func lookup(ctx context.Context, sys reconcile.System, key string) (getent.Passw
 		return getent.Passwd{}, err
 	}
 	if exit != 0 {
-		return getent.Passwd{}, fmt.Errorf("getent passwd %s: exit %d", key, exit)
+		// The output names an NSS module's complaint when there is one, which tells a missing account from a failing module.
+		line, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
+		return getent.Passwd{}, fmt.Errorf("getent passwd %s: exit %d: %.120s", key, exit, line)
 	}
 	return getent.ParsePasswd(out)
 }

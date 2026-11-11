@@ -471,6 +471,7 @@ On the device:
 | `pending`, `deferred_offline` for a long time | the device cannot reach the server; check its network and the last contact on the device page |
 | `pending`, `dpkg_locked` for a long time | a package operation hangs on the device (`ps -C apt,apt-get,dpkg,unattended-upgr`); `sudo dpkg --configure -a` after it ended |
 | `not_applicable` although the package exists | the entry has no package name for the device's distribution, release or architecture; add one |
+| `sudo apt install` of a package fails with *already exists, but is not a system user* (or useradd exit 9) | its maintainer script creates a system account and Himmelblau's NSS module answered for the name (PDK-983); the agent holds `himmelblaud` stopped around its own installations, not around yours: stop it around the installation as described in [device-login.md](device-login.md#package-installations-pause-directory-logins) |
 | A required application keeps being reinstalled | a user or a tool removes it again and again: each removal is a `device.software_reinstalled` event (RR-80) |
 
 ## Residual risks

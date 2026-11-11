@@ -114,6 +114,7 @@ const (
 	// Identity and privileges reported by devices (plan M3b decision 5).
 	CodeDeviceLoginApplied               Code = "device.login_applied"
 	CodeDeviceLoginApplyFailed           Code = "device.login_apply_failed"
+	CodeDeviceLoginNSSShield             Code = "device.login_nss_shield"
 	CodeDeviceUserLockApplied            Code = "device.user_lock_applied"
 	CodeDeviceLoginsSuspensionApplied    Code = "device.logins_suspension_applied"
 	CodeDeviceSudoApplyFailed            Code = "device.sudo_apply_failed"
@@ -717,6 +718,13 @@ var registry = map[Code]Definition{
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "stage is apt, config, restart, deny_list, pam, sessions or notice; pam means the deny-list PAM profile is not in place (`dpkg-reconfigure paddock-agent` restores it); reason timeout marks an apt-get or dpkg run killed after 15 minutes.",
 	},
+	CodeDeviceLoginNSSShield: {
+		Code: CodeDeviceLoginNSSShield, Emitted: true,
+		Description: "A device held its login daemon (himmelblaud) stopped around one of the agent's package installations, so that packages can create local system users, and started it again; new logins and screen unlocks waited meanwhile (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "PDK-983: action is the package transaction (apt-get install, dpkg -i, …), duration_s how long the daemon was stopped, outcome restored, max_hold (started while the transaction still ran), recovered (the agent ended during the hold and finished it at its next start), restore_failed (a systemd timer retries) or hold_failed (the transaction ran with the daemon running); error says why.",
+	},
 	CodeDeviceUserLockApplied: {
 		Code: CodeDeviceUserLockApplied, Emitted: true,
 		Description: "A device blocked a newly locked user locally (login, offline login, screen unlock) and locked or terminated the user's sessions (actor: the device).",
@@ -1225,10 +1233,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperServiceStopped: {
 		Code: CodeDeviceTamperServiceStopped, Emitted: true,
-		Description: "A device found a service stopped outside Paddock: a service Paddock keeps running, which it started again, or a watched third-party service, which it only reports (actor: the device).",
+		Description: "A device found a service stopped outside Paddock: a service Paddock keeps running, which it started again, the login daemon himmelblaud, or a watched third-party service, both of which it only reports (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
+		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent), himmelblaud.service (the login daemon, stopped by someone other than Paddock's own package holds; reported only, never started again, state inactive or failed; PDK-983) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
 	},
 	CodeVulnerabilityCriticalSummary: {
 		Code: CodeVulnerabilityCriticalSummary, Emitted: true,

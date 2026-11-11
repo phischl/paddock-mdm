@@ -2,6 +2,7 @@ package osupdates
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -47,7 +48,7 @@ func TestRunRegular(t *testing.T) {
 		}
 		return "", 0, nil
 	}
-	r := RunRegular(context.Background(), apt, noDpkg, now, func() bool { return true })
+	r := RunRegular(context.Background(), apt, noDpkg, nil, now, func() bool { return true })
 	if r.Kind != protocol.UpdatesKindRegular || r.Result != protocol.UpdatesResultOK || r.Upgraded != 3 || len(r.HeldBack) != 2 ||
 		!r.RebootRequired || !r.FinishedAt.After(r.StartedAt) {
 		t.Fatalf("%+v", r)
@@ -83,7 +84,7 @@ func TestRunRegularRecoversDpkgAndIgnoresCancellation(t *testing.T) {
 		interrupted = false
 		return "", 0, nil
 	}
-	r := RunRegular(ctx, apt, dpkg, time.Now, func() bool { return false })
+	r := RunRegular(ctx, apt, dpkg, nil, time.Now, func() bool { return false })
 	if r.Result != protocol.UpdatesResultOK || r.Upgraded != 3 || !slices.Equal(calls, []string{"update", "dpkg --configure -a", "update", "dist-upgrade"}) {
 		t.Fatalf("%+v %q", r, calls)
 	}
@@ -94,7 +95,7 @@ func TestRunRegularFailures(t *testing.T) {
 	failing := func(_ context.Context, _ time.Duration, args ...string) (string, int, error) {
 		return "E: Failed to fetch http://archive.ubuntu.com/ubuntu\n", 100, nil
 	}
-	if r := RunRegular(context.Background(), failing, noDpkg, now, func() bool { return false }); r.Result != protocol.UpdatesResultFailed ||
+	if r := RunRegular(context.Background(), failing, noDpkg, nil, now, func() bool { return false }); r.Result != protocol.UpdatesResultFailed ||
 		!strings.Contains(r.Error, "apt-get update: exit 100: E: Failed to fetch") {
 		t.Fatalf("%+v", r)
 	}
@@ -104,13 +105,13 @@ func TestRunRegularFailures(t *testing.T) {
 		}
 		return "", 0, nil
 	}
-	if r := RunRegular(context.Background(), timeout, noDpkg, now, func() bool { return false }); r.Result != protocol.UpdatesResultTimeout {
+	if r := RunRegular(context.Background(), timeout, noDpkg, nil, now, func() bool { return false }); r.Result != protocol.UpdatesResultTimeout {
 		t.Fatalf("%+v", r)
 	}
 	long := func(context.Context, time.Duration, ...string) (string, int, error) {
 		return strings.Repeat("x", 1000), 1, nil
 	}
-	if r := RunRegular(context.Background(), long, noDpkg, now, func() bool { return false }); len(r.Error) > maxError {
+	if r := RunRegular(context.Background(), long, noDpkg, nil, now, func() bool { return false }); len(r.Error) > maxError {
 		t.Fatalf("error of %d bytes", len(r.Error))
 	}
 }
@@ -185,5 +186,43 @@ func TestResultRoundTrip(t *testing.T) {
 	}
 	if RebootRequired(l) {
 		t.Fatal("reboot required without the marker")
+	}
+}
+
+// TestRunRegularHold (plan M5a N6.1): the dist-upgrade runs as one hold named apt-get dist-upgrade, with its dpkg
+// --configure -a repair and retry inside it; the package list update runs before the hold. A hold that defers the
+// transaction (another package operation) fails the run with the hold's message.
+func TestRunRegularHold(t *testing.T) {
+	var calls []string
+	interrupted := true
+	apt := func(_ context.Context, _ time.Duration, args ...string) (string, int, error) {
+		calls = append(calls, args[len(args)-1])
+		if interrupted && args[len(args)-1] == "dist-upgrade" {
+			return "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.\n", 100, nil
+		}
+		return distUpgrade, 0, nil
+	}
+	dpkg := func(_ context.Context, _ time.Duration, args ...string) (string, int, error) {
+		calls = append(calls, "dpkg "+strings.Join(args, " "))
+		interrupted = false
+		return "", 0, nil
+	}
+	hold := func(_ context.Context, action string, run func() (string, int, error)) (string, int, error) {
+		calls = append(calls, "hold "+action)
+		out, exit, err := run()
+		calls = append(calls, "release")
+		return out, exit, err
+	}
+	r := RunRegular(context.Background(), apt, dpkg, hold, time.Now, func() bool { return false })
+	want := []string{"update", "hold apt-get dist-upgrade", "dist-upgrade", "dpkg --configure -a", "dist-upgrade", "release"}
+	if r.Result != protocol.UpdatesResultOK || r.Upgraded != 3 || !slices.Equal(calls, want) {
+		t.Fatalf("%+v %q, want %q", r, calls, want)
+	}
+
+	busy := func(context.Context, string, func() (string, int, error)) (string, int, error) {
+		return "E: Could not get lock /var/lib/dpkg/lock-frontend: another package operation is running\n", 100, errors.New("busy")
+	}
+	if r := RunRegular(context.Background(), apt, dpkg, busy, time.Now, func() bool { return false }); r.Result != protocol.UpdatesResultFailed {
+		t.Errorf("deferred hold: %+v", r)
 	}
 }

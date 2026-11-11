@@ -82,6 +82,7 @@ export const auditCodes = [
   'device.login_applied',
   'device.login_apply_failed',
   'device.login_assignment_changed',
+  'device.login_nss_shield',
   'device.logins_resumed',
   'device.logins_suspended',
   'device.logins_suspension_applied',
