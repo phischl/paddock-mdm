@@ -264,6 +264,13 @@ func TestSoftwareStatusScopes(t *testing.T) {
 	if got := devices(str("system")); got != "system:installed" {
 		t.Fatalf("devices of the entry in system scope %q", got)
 	}
+	// PDK-999: an entry that reaches the device without a device assignment (through its owners) lists the device that
+	// reported it, as the device's managed software does.
+	got, err := status.CatalogDevices(reader, e2, app.SoftwareCatalogDeviceQuery{Page: app.ListPage{Sort: "hostname", Limit: 100}})
+	if err != nil || len(got.Items) != 1 || got.Items[0].DeviceID != dev || got.Items[0].Scope != "system" ||
+		got.Items[0].State != "installed" || got.Items[0].Intent != "available" {
+		t.Fatalf("devices of an entry without a device assignment %+v, %v", got.Items, err)
+	}
 	otherOrg, _ := h.device(t)
 	if _, err := status.DeviceManagedSoftware(adminCtx(otherOrg, principal.RoleOrgAuditor, "auditor"), dev,
 		app.DeviceManagedSoftwareQuery{Page: app.ListPage{Sort: "name", Limit: 10}, Scope: str("user")}); !errors.Is(err, problem.NotFound) {

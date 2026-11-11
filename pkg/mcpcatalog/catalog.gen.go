@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "f7faf56588f9ed17b4f7bcd82d61f8acecb67eeb92a9d408a78504983f100f21"
+const Version = "a7f180949668efe8c605ab49bbdfabc7456478273329baa23d00d2a8cafc2d2e"
 
 var tools = []Tool{
 	{
@@ -3461,7 +3461,7 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, with what they reported or the derived state not_applicable or unknown (see the device's managed software). A device with a system and a user-scope row for the entry is listed once per scope (plan M13b decision 17). The search matches the hostname. 404 not_found for another organization's entry.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: hostname, state, reported_at), q (search over: hostname).",
+		Description: "Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, and the active devices that reported it (an entry that reaches a device through its owners), with what they reported or the derived state not_applicable or unknown (see the device's managed software). A device with a system and a user-scope row for the entry is listed once per scope (plan M13b decision 17). The search matches the hostname. 404 not_found for another organization's entry.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: hostname, state, reported_at), q (search over: hostname).",
 		InputSchema: json.RawMessage("{\"properties\":{\"device_group_id\":{\"description\":\"Only members of this device group.\",\"format\":\"uuid\",\"type\":\"string\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"},\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"scope\":{\"description\":\"Only rows of this scope, reported or derived.\",\"enum\":[\"system\",\"user\"],\"type\":\"string\"},\"sort\":{\"default\":\"hostname\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The hostname, then the device id, are the tie-breakers.\",\"enum\":[\"hostname\",\"-hostname\",\"state\",\"-state\",\"reported_at\",\"-reported_at\"],\"type\":\"string\"},\"state\":{\"description\":\"installed, held, absent, pending and failed are what the device reported; not_applicable (no package for the\\ndevice's os-release and architecture) and unknown (applicable, not reported yet) are derived on read.\\n\",\"enum\":[\"installed\",\"held\",\"absent\",\"pending\",\"failed\",\"not_applicable\",\"unknown\"],\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
