@@ -580,20 +580,27 @@ func (q *Queries) ListSoftwareRequestsToExpire(ctx context.Context, arg ListSoft
 	return items, nil
 }
 
-const markDenialLockChecked = `-- name: MarkDenialLockChecked :exec
-UPDATE device SET denial_lock_checked_at = $1::timestamptz WHERE id = ANY($2::uuid[])
+const markDenialLockChecked = `-- name: MarkDenialLockChecked :execrows
+UPDATE device SET denial_lock_checked_at = $1::timestamptz
+WHERE id = $2::uuid AND bundle_seq = $3::bigint
 `
 
 type MarkDenialLockCheckedParams struct {
 	CheckedAt time.Time
-	Ids       []uuid.UUID
+	ID        uuid.UUID
+	BundleSeq int64
 }
 
-// Records the render time of a compile whose bundle of each device was committed or unchanged: every denial lock that
-// ended before it is reflected in the device's bundle.
-func (q *Queries) MarkDenialLockChecked(ctx context.Context, arg MarkDenialLockCheckedParams) error {
-	_, err := q.db.Exec(ctx, markDenialLockChecked, arg.CheckedAt, arg.Ids)
-	return err
+// Records the render time of a compile for a device while its bundle_seq is still the one that compile left: the
+// bundle it committed, or the unchanged (or blocked) one it kept. Every denial lock that ended before checked_at is
+// then reflected in that bundle. A concurrent compile that changed bundle_seq records its own render time instead, so
+// a later render time never lands on a bundle rendered earlier.
+func (q *Queries) MarkDenialLockChecked(ctx context.Context, arg MarkDenialLockCheckedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markDenialLockChecked, arg.CheckedAt, arg.ID, arg.BundleSeq)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const softwareRequestApprovalHolds = `-- name: SoftwareRequestApprovalHolds :one

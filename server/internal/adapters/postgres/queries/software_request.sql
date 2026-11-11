@@ -184,7 +184,10 @@ WHERE d.state = 'active' AND r.state = 'denied' AND r.decided_at <= sqlc.arg(loc
     > coalesce(d.denial_lock_checked_at, '-infinity'::timestamptz)
 ORDER BY d.id;
 
--- name: MarkDenialLockChecked :exec
--- Records the render time of a compile whose bundle of each device was committed or unchanged: every denial lock that
--- ended before it is reflected in the device's bundle.
-UPDATE device SET denial_lock_checked_at = sqlc.arg(checked_at)::timestamptz WHERE id = ANY(sqlc.arg(ids)::uuid[]);
+-- name: MarkDenialLockChecked :execrows
+-- Records the render time of a compile for a device while its bundle_seq is still the one that compile left: the
+-- bundle it committed, or the unchanged (or blocked) one it kept. Every denial lock that ended before checked_at is
+-- then reflected in that bundle. A concurrent compile that changed bundle_seq records its own render time instead, so
+-- a later render time never lands on a bundle rendered earlier.
+UPDATE device SET denial_lock_checked_at = sqlc.arg(checked_at)::timestamptz
+WHERE id = sqlc.arg(id)::uuid AND bundle_seq = sqlc.arg(bundle_seq)::bigint;

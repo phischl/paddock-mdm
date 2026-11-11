@@ -1525,6 +1525,178 @@ func TestSoftwareReconcileDenialLockRenderTime(t *testing.T) {
 	}
 }
 
+// denialLockChecked reads device.denial_lock_checked_at.
+func (w *world) denialLockChecked(t *testing.T, dev uuid.UUID) *time.Time {
+	t.Helper()
+	var at *time.Time
+	if err := w.super.QueryRow(context.Background(), "SELECT denial_lock_checked_at FROM device WHERE id = $1", dev).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+// TestSoftwareDenialLockNotRecordedOnPublishFailure (architect decision A10-27, PDK-993 review 3): a bundle that was
+// rendered but not committed does not record its render time, so the next round selects the device again and the
+// retried bundle drops the denial.
+func TestSoftwareDenialLockNotRecordedOnPublishFailure(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.denyRequest(nano, d, alice, 23*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got == "" {
+		t.Fatal("the denial is not named in the bundle")
+	}
+	// The lock has ended and the last recorded render time lies before its end.
+	w.exec("UPDATE software_request SET decided_at = decided_at - interval '2 hours' WHERE device_id = $1", d)
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", d)
+	stamp := w.denialLockChecked(t, d)
+	w.store.broken.Store(true)
+	if err := w.comp.Reconcile(context.Background()); err == nil {
+		t.Fatal("reconcile succeeded although the upload failed")
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.Equal(*stamp) {
+		t.Fatalf("the failed publish recorded a render time: %v -> %v", stamp, got)
+	}
+	w.store.broken.Store(false)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the retry: %q", got)
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.After(time.Now().Add(-time.Minute)) {
+		t.Fatalf("the retry did not record its render time: %v", got)
+	}
+}
+
+// TestSoftwareDenialLockRecordedOnRenderFailure (architect decision A10-27, PDK-993 review 3): a device whose render is
+// blocked keeps its bundle, and the compile records its render time like the platform it saw, so a denial lock that
+// ended does not select the device every round: one round recompiles it, records one failure, and later rounds leave
+// it alone.
+func TestSoftwareDenialLockRecordedOnRenderFailure(t *testing.T) {
+	w := newWorld(t)
+	dev := w.v2Device("{1,2}")
+	dave := w.user("dave", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	profile := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO permission_profile (id, organization_id, name, class) VALUES ($1, $2, 'root', 'full')", profile, w.org)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	before := w.version(dev)
+
+	w.validator.reject = "NOPASSWD"
+	w.exec("UPDATE permission_profile SET require_password = false WHERE id = $1", profile)
+	w.exec("INSERT INTO profile_assignment (id, organization_id, profile_id, subject_type, subject_id) VALUES ($1, $2, $3, 'user', $4)",
+		uuid.Must(uuid.NewV7()), w.org, profile, dave)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	if w.version(dev) != before {
+		t.Fatal("a bundle with an invalid sudo entry was published")
+	}
+	if got := w.denialLockChecked(t, dev); got == nil || got.Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("the blocked render did not record its render time: %v", got)
+	}
+
+	// A denial whose lock ended after the last recorded render time selects the device once.
+	w.denyRequest(nano, dev, dave, 25*time.Hour, "not licensed")
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", dev)
+	failures := func() int {
+		t.Helper()
+		var n int
+		if err := w.super.QueryRow(context.Background(), `SELECT count(*) FROM action WHERE organization_id = $1
+			AND code = 'device.bundle_render_failed' AND target->>'id' = $2`, w.org, dev.String()).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first, stamp := failures(), w.denialLockChecked(t, dev)
+	if stamp == nil || stamp.Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("the reconcile's blocked render did not record its render time: %v", stamp)
+	}
+	for range 3 {
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := w.denialLockChecked(t, dev); got == nil || !got.Equal(*stamp) {
+		t.Fatalf("a later round recompiled the blocked device again: %v -> %v", stamp, got)
+	}
+	if n := failures(); n != first {
+		t.Fatalf("device.bundle_render_failed %d after three more rounds, %d after the first", n, first)
+	}
+	if w.version(dev) != before {
+		t.Fatal("a blocked device's bundle was published")
+	}
+}
+
+// TestSoftwareDenialLockConcurrentCompile (architect decision A10-27, PDK-993 review 3): a slower compile that rendered
+// after a denial's lock ended, without the denial and unchanged at bundle seq n, records its render time only while the
+// device is still at n. When a concurrent compile that rendered before the lock end has meanwhile published n+1 naming
+// the denial, the slower compile's later render time is not recorded, so the reconcile still selects the device and
+// drops the denial.
+func TestSoftwareDenialLockConcurrentCompile(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.denyRequest(nano, d, alice, 25*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeDevice, d)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("rendered after the lock end: %q", got)
+	}
+	slower := w.version(d)
+
+	// The concurrent compile renders two hours ago, before the lock end, and publishes slower+1 with the denial.
+	w.comp.SetNow(func() time.Time { return time.Now().Add(-2 * time.Hour) })
+	w.mustCompile(statechange.ScopeDevice, d)
+	w.comp.SetNow(time.Now)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != w.username(alice)+"=not licensed" || w.version(d) != slower+1 {
+		t.Fatalf("the concurrent compile: %q at version %d", got, w.version(d))
+	}
+	stamp := w.denialLockChecked(t, d)
+
+	// The slower compile's write arrives last.
+	if err := w.comp.RecordDenialLockAt(context.Background(), w.org, d, slower, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.Equal(*stamp) {
+		t.Fatalf("the slower compile recorded its render time on a newer bundle: %v -> %v", stamp, got)
+	}
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the reconcile: %q", got)
+	}
+	// A write for the bundle the device still has is recorded.
+	at := time.Now().Add(time.Minute).Truncate(time.Microsecond)
+	if err := w.comp.RecordDenialLockAt(context.Background(), w.org, d, w.version(d), at); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.Equal(at) {
+		t.Fatalf("a write for the current bundle: %v, want %v", got, at)
+	}
+}
+
 // TestSoftwareReconcileEndsDenialLock (architect decision A10-27): once the re-request lock of a denial ends, the
 // reconcile loop recompiles the device, so its bundle no longer names the denial and the user may ask again; a device
 // whose bundle was compiled after the lock ended is left alone.

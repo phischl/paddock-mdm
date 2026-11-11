@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 )
 
 // RecordWarningsAt records warnings with codes for device as a compile that saw bundle seq would, so a test can
@@ -22,6 +24,12 @@ const ApprovalAgent = approvalAgent
 
 // SetApprovalAgent makes c compile with gate as approvalAgent, so a test can run the approval flow under another gate.
 func (c *Compiler) SetApprovalAgent(gate string) { c.approvalAgent = gate }
+
+// RecordDenialLockAt records the render time at for device as a compile that left bundle seq would, so a test can
+// replay a slower compile's write after a newer one.
+func (c *Compiler) RecordDenialLockAt(ctx context.Context, org, device uuid.UUID, seq int64, at time.Time) error {
+	return c.recordDenialLocks(systemContext(ctx, org), []pgstore.MarkDenialLockCheckedParams{{ID: device, BundleSeq: seq, CheckedAt: at}})
+}
 
 // SetNow makes c render and reconcile with the clock now, so a test can place a compile's render time.
 func (c *Compiler) SetNow(now func() time.Time) { c.now = now }
