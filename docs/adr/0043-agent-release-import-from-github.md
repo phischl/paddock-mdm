@@ -210,3 +210,11 @@ bound by the upload lease of plan M2b, amendment 2026-10-30. Each file takes a l
 of its write. The publish refuses while a lease is unexpired, and it verifies every stored object against its
 SHA-256 within a 2-minute bound. Only a 4xx on a write's only attempt counts as a definitive rejection. An import
 that meets a running upload of the same version therefore fails with `invalid_state` and can be repeated after it.
+
+## Amendment 2026-11-11 — the self-service package is a required asset from 0.1.0-alpha.10 (PDK-968)
+
+Decision 4's asset list gains `paddock-self-service_<v>_all.deb` with its `.minisig` (trusted comment
+`paddock-agent version=<v> arch=all`): required for a release from `0.1.0-alpha.10` on, absent from the list for an
+earlier one. The release registry gains the package name `paddock-self-service` and the package architecture
+`all`, valid only together. The sign job signs it, so the rule "the sign job signs exactly the required assets"
+holds unchanged. Decision and reasons: plan M13b, amendment 2026-11-11 (PDK-968).
