@@ -2334,8 +2334,9 @@ export interface paths {
         };
         /**
          * @description Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment
-         *     of the organization or of one of their groups, with what they reported or the derived state not_applicable or
-         *     unknown (see the device's managed software). A device with a system and a user-scope row for the entry is
+         *     of the organization or of one of their groups, and the active devices that reported it (an entry that reaches a
+         *     device through its owners), with what they reported or the derived state not_applicable or unknown (see the
+         *     device's managed software). A device with a system and a user-scope row for the entry is
          *     listed once per scope (plan M13b decision 17). The search matches the hostname. 404 not_found for another
          *     organization's entry.
          */
