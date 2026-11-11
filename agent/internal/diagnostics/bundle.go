@@ -17,7 +17,7 @@ const bundleNote = "Redacted rendering of the applied bundle.dsse: every field t
 // for every key of a map and "resources.spec:<type>" for the spec of a resource of that type. The server is ahead of
 // the agent during every staged rollout, so a field this agent does not know — a new secret among them — must fail
 // closed. inventory.enroll_secret, software.repository.password and resources.spec:file.content are deliberately
-// absent.
+// absent, and so is software.packages.denied.reason: an administrator's free text about a person (M13c decision 9).
 func publicBundleFields() map[string]bool {
 	fields := []string{
 		"schema_version", "bundle_version", "device_id", "organization_id", "issued_at", "mode",
@@ -43,7 +43,7 @@ func publicBundleFields() map[string]bool {
 		// resources.spec:sudo.entries.username and login.locked_users do (plan M13b decision 7, A10-11, M13c decision 9).
 		"software.packages.flatpak_ref", "software.packages.scope", "software.packages.audience.all",
 		"software.packages.audience.users", "software.packages.users", "software.packages.approval",
-		"software.packages.approved",
+		"software.packages.approved", "software.packages.denied.user",
 		"software.packages.urgent", "software.windows.days", "software.windows.start_minute",
 		"software.windows.duration_minutes", "software.windows.timezone",
 		// The repository user is the same constant for every organization (app.RepositoryUsername), so it reveals

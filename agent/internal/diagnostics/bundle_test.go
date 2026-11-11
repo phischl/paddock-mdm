@@ -15,7 +15,8 @@ import (
 // secretBundleFields are the bundle fields that never leave the device in clear: the Fleet enroll secret, the read
 // credential of the organization's Paddock repository and the content of a managed file, which an administrator may
 // fill with anything.
-var secretBundleFields = []string{"inventory.enroll_secret", "software.repository.password", "resources.spec:file.content"}
+var secretBundleFields = []string{"inventory.enroll_secret", "software.repository.password", "resources.spec:file.content",
+	"software.packages.denied.reason"}
 
 // resourceSpecs are the spec types of the resource types the server puts into bundle.Resources.
 var resourceSpecs = map[string]reflect.Type{
