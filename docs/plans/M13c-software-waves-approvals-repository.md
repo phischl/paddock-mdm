@@ -503,7 +503,8 @@ entry's deletion. Outside that revert, the guard is unchanged.
 - **The catalog entry's `approval`** is optional on `PATCH /api/v1/software-catalog/{id}`: when it is absent, the
   stored value is kept, so a client that does not know the field never clears it. In the declarative
   `software_catalog` section it is optional, and an absent value means `none`. Withdrawal by the user (`withdrawn`)
-  needs a device-side signal that the plan does not define yet; the state exists, and PDK-811 defines the signal.
+  needs a device-side signal that the plan does not define yet; the state exists, and PDK-811 defines the signal
+  (amended 2026-11-11: PDK-811b defines it, see "Amendment 2026-11-11 b", E4).
 
 ### Clarification 2026-11-09: approvals (architect decision A10-17)
 
@@ -1075,3 +1076,150 @@ the compiler recompiles the active devices that have a denial whose lock ended.
 - `docs/architecture.md`: §12.5 and the amendments of §16 and §17.1 dated 2026-11-11 (written with this amendment).
 - Open before PDK-993 closes: `TestSoftwareRequests` against a running stack and the browser check of the
   *Justification* column.
+
+## Amendment 2026-11-11 b (architect; PDK-811c): the device side of approvals and the withdrawal signal (PDK-811, PDK-811b)
+
+Records what PDK-811 (merged) and PDK-811b (in review at `1e75077e`) built on the device, which decision 9 and §6
+only sketched. It completes the amendment 2026-11-11 above (A10-27: `denied[]`, gating, the 24 h lock) and replaces
+"PDK-811 defines the signal" of the PDK-810 amendment. Binding language: **MUST** / **MUST NOT**.
+
+### E1 Self-service socket (additions to ADR 0049 decision 2; `agent/internal/selfservice`)
+
+```
+POST   /v1/apps/{entry_id}/request   body exactly {"justification": string}   → 202 + the app view
+DELETE /v1/apps/{entry_id}/request                                             → 200 + the app view
+GET    /v1/apps, /v1/apps/{entry_id}  view gains: approval, requestable, request{state, reason}
+```
+
+| Answer | When |
+| --- | --- |
+| 404 `unknown_entry` | the caller cannot see the entry (also for another user's entry) |
+| 403 `required_by_policy` | a managed entry |
+| 403 `not_in_audience` | the caller is a local account: an approval names a UPN |
+| 409 `not_required` | the entry needs no approval, or the caller is approved already |
+| 409 `already_requested` | a request of the caller is pending |
+| 409 `denied` | the bundle names the caller in `denied[]` (the 24 h lock, amendment 2026-11-11 D3) |
+| 429 `busy` | more than 10 requests of that UID in an hour (`RequestsPerHour`), or the event channel is full |
+| 400 `invalid_request` | the body is not exactly that object, or the justification is not valid UTF-8, exceeds 500 characters or holds a control character other than a newline; the detail never repeats the text |
+| 404 `not_found` (DELETE) | the caller has no pending request |
+| 403 `approval_required` (install) | an install of an approval-required entry by a caller who is not in `approved[]` |
+
+- **View.** `approval` (`required` or absent), `requestable` (the caller may ask now), `request` = `{state:
+  "requested" | "denied", reason}` for the caller's own request only. For a caller without approval `installable`
+  is false; a caller in `approved[]` installs as for any available entry.
+- **Caller identity** is the socket's peer UID (ADR 0049 decision 2). Every rule above is evaluated for that
+  caller alone; no answer reveals whether another user asked, was approved or was denied.
+- **The justification is never logged** and never kept on the device beyond the event spool.
+
+### E2 Pending requests on the device
+
+- The agent keeps the caller's pending requests in its root-only self-service state file (`selfservice.json`,
+  `requests[]`: entry, UPN, time; **no justification**). They survive a restart.
+- A pending request is dropped when the bundle names the user in `approved[]` or `denied[]`, when the entry no
+  longer offers approval to that user, or after 30 days (`RequestValidity`, the server's `expires_at`).
+- The event `software.request{entry_id, user, justification}` is emitted once per request, only for a package with
+  `approval: required` (sender rule, ADR 0024).
+
+### E3 The desktop app
+
+- Buttons *Request* and *Withdraw request*; chips *Requested* and *Denied*; "Needs your organization's approval"
+  for a user who cannot ask (a local account).
+- The request dialog takes an optional justification with a counter "n of 500 characters"; *Send request* is
+  disabled above 500. The app cleans and checks the text before it sends it.
+- A denial's reason is shown in the card's detail line and in the details as "Denied: <reason>". Every text from
+  the socket is set as plain text (no markup).
+- A refusal is shown as a notice with its reason; 503 shows the banner and retries, as for every operation.
+
+### E4 Withdrawal reaches the server only behind a capability flag (PDK-811b, `decisions-alpha10.md` §54)
+
+- **Bundle (additive, ADR 0013):** `SoftwareSpec.RequestWithdraw bool` (`request_withdraw,omitempty`). The compiler
+  sets it when the section holds a package with `approval: required`. Such a section only reaches agents from
+  `0.1.0-alpha.10` on, so an older agent never sees the field. It is a typed flag of the software section, not a
+  general capability list; a general list is a later architect decision when a second use exists.
+- **Sender rule:** the agent emits the new event type `software.request_withdrawn{user, entry_id}` **only while its
+  applied bundle carries the flag**. Without the flag (an older server) the withdrawal stays **device-local**: the
+  pending request is dropped on the device and the server's request ends with a decision or after 30 days. This
+  MUST NOT rely on servers being upgraded first.
+- With the flag, a withdrawal whose event cannot be queued (channel full) answers 429 `busy` and keeps the request
+  pending, so the device never hides a request the server still holds open.
+- **Server:** the event is recorded as `device.software_request_withdrawn` (new code in the closed registry;
+  device as actor; params `event_seq`, `occurred_at`, `user`, `entry_id`; exactly one event per device event, also
+  when no request was open). In the same transaction the open request (`requested`) of that device, entry and user
+  becomes `withdrawn` (`decided_at` = receive time, no `decided_by`). An approved, denied or expired request is not
+  changed. A device can only close requests it opened itself; RLS scopes the write to its organization.
+- The portal shows a withdrawn request's decision as "by the user on the device".
+
+### E5 Amended texts
+
+- §6 "self-service socket": `POST/DELETE /v1/apps/{id}/request`, the view fields of E1.
+- §6 "Bundle": `SoftwareSpec + windows[], repository{…}, request_withdraw`; `SoftwarePackage + urgent, approval,
+  approved[], denied[]{user, reason}`.
+- §6 "Events": `software.request` (with `justification`), `software.request_withdrawn`; audit
+  `device.software_request_withdrawn`.
+- §3.7, request states: `requested → withdrawn` is caused by the device's withdrawal event (E4); before PDK-811b no
+  path set it.
+- ADR 0049 (amendment 2026-11-11) and `docs/architecture.md` §12.5 carry the same.
+
+## Amendment 2026-11-11 c (architect decision; PDK-811d): a withdrawal must not depend on the order of events
+
+**Context.** The worker processes event batches concurrently and in any order. PDK-811b's withdrawal depends on
+order. Two cases (PDK-811b review 1): (1) a withdrawal processed **before** its request closes nothing; the request
+then opens and stays open and approvable although the user withdrew it. (2) Request A, withdrawal W, request B,
+processed A, B, W: B is ignored as a repeat of the open A, then W closes A; the device shows B as pending and the
+server holds none. Both need batches of two check-ins to overtake each other (a retry or a queue backlog); events
+of one check-in share a batch and are processed in order. Both degrade to the behaviour before PDK-811b.
+
+**Options.**
+(a) *A `withdrawn_at` compared with the request time.* Uses the device's clock for the withdrawal and the server's
+    receive time for the request (or two device clocks across a clock step); a row must exist to carry it, so case
+    1 still needs a placeholder. Rejected.
+(b) *A placeholder request in state `withdrawn`* inserted by an early withdrawal: administrators would see requests
+    nobody made. Rejected.
+(c) *The device's `event_seq` as the order, plus a withdrawal tombstone.* `event_seq` is the order in which the
+    device emitted its events, independent of clocks and of the order of processing. **Chosen.**
+
+**Decision (data model; one forward-only migration).**
+
+```sql
+ALTER TABLE software_request ADD COLUMN request_event_seq bigint;   -- event_seq of the newest software.request
+CREATE TABLE software_request_withdrawal (                          -- newest withdrawal per device, entry and user
+  organization_id uuid NOT NULL,
+  device_id uuid NOT NULL,
+  catalog_entry_id uuid NOT NULL REFERENCES software_catalog_entry(id) ON DELETE CASCADE,
+  username text NOT NULL,
+  event_seq bigint NOT NULL,
+  received_at timestamptz NOT NULL,
+  PRIMARY KEY (device_id, catalog_entry_id, username),
+  FOREIGN KEY (organization_id, device_id) REFERENCES device (organization_id, id) ON DELETE CASCADE
+);
+-- ENABLE and FORCE ROW LEVEL SECURITY, policy on current_setting('paddock.org_id')::uuid without missing_ok;
+-- paddock_worker SELECT, INSERT, UPDATE, DELETE; no other role.
+```
+
+**Rules (binding; `r` = `event_seq` of a request event, `w` = of a withdrawal event, same device, entry and user).**
+
+1. **Withdrawal `w`:** upsert the tombstone to the greater `event_seq` with the receive time. Close the open request
+   iff its `request_event_seq < w`; a request with `request_event_seq IS NULL` (opened before this migration) is
+   closed as today.
+2. **Request `r`:** when a tombstone exists with `event_seq > r` and `received_at` within the last **24 hours**,
+   open nothing (the user withdrew a later state). Otherwise: when a request of that device, entry and user is
+   open, set its `request_event_seq` to the greater of the two and, if `r` is the greater, its justification to
+   this event's; else open a request with `request_event_seq = r`. Every other rule of opening (offered, 24 h
+   denial lock, valid justification) is unchanged and comes first.
+3. Case 1 (W, then A; `w > r`): the tombstone stops A. Case 2 (A, B, W; `r_A < w < r_B`): B raises the open
+   request's sequence to `r_B`, W does not close it. In order (A, W, B): W closes A, B opens anew. All three end
+   in the state the device shows.
+4. **The 24-hour bound of a tombstone** guards against a device whose event counter restarted (lower numbers after
+   a reinstall): an old tombstone must not block that device's new requests for ever. Overtaking spans minutes to
+   hours, never days. The worker's request round deletes tombstones older than 24 hours.
+5. **Audit:** `device.software_request_withdrawn` is still recorded once per event. Its registry description is
+   corrected to "the device reported that a user withdrew a software request" (it is recorded whether or not a
+   request was closed). No new param.
+6. Tests (integration, `server/internal/app`): the withdrawal batch before the request batch; A, B, W; A, W, B; a
+   tombstone older than 24 hours does not block; a redelivered withdrawal changes nothing; another device and
+   another organization cannot affect the request (RLS, positive and negative).
+
+**Scope: 0.1.0-alpha.11**, ticket PDK-811d, residual risk **RR-135** until then. Reason: it is not small — a new
+organization-scoped table with its isolation tests and a change of two status transitions under concurrency, which
+needs the external review of a high-risk ticket — while the defect needs two check-ins' batches to overtake each
+other, loses no data and falls back to the behaviour every release before PDK-811b had.

@@ -1835,6 +1835,16 @@ the shared catalog follow (plan M13c §3.4 to §3.6).
 > administrators, operators and auditors as text only; it never enters audit params or logs. Plan M13c, amendment
 > 2026-11-11.
 
+> **Amendment 2026-11-11 b (M13c, PDK-811 and PDK-811b):** on the device a user asks through the self-service
+> socket (`POST`/`DELETE /v1/apps/{id}/request`, ADR 0049 amendment 2026-11-11); the agent keeps the pending request
+> (entry, user, time; no justification) in its root-only self-service state until the bundle reflects a decision
+> or 30 days passed. The bundle's software section gains the additive flag `request_withdraw`, rendered with every
+> approval-required package: only while the applied bundle carries it does the agent report a user's withdrawal
+> as the new device event `software.request_withdrawn` (ADR 0024 sender rule); without it the withdrawal stays on
+> the device. The server records the event as `device.software_request_withdrawn` and sets the device's open
+> request for that entry and user to `withdrawn`. Making that close independent of the order in which event
+> batches are processed is planned for 0.1.0-alpha.11 (plan M13c, amendment 2026-11-11 c; RR-135).
+
 ### 12.6 Dead man's switch (F14)
 
 - Contact anchor: every check-in response carries a **time ticket** `{organization_id, issued_at}`

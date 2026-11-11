@@ -49,7 +49,7 @@ func (s *System) Flatpak(_ context.Context, args ...string) (string, int, error)
 	if s.FlatpakSystem == nil {
 		s.FlatpakSystem = NewFlatpakInstallation()
 	}
-	return s.flatpak(s.FlatpakSystem, "system", nil, args)
+	return s.flatpak(s.FlatpakSystem, "system", args)
 }
 
 // SystemdRun implements reconcile.System for `systemd-run --machine=<uid>@.host --user … flatpak …` on the user's
@@ -81,11 +81,11 @@ func (s *System) SystemdRun(_ context.Context, stdin []byte, args ...string) (st
 	case !s.Packages["flatpak"]:
 		return "systemd-run: flatpak: No such file or directory\n", 1, nil
 	}
-	return s.flatpak(inst, "user", stdin, args[i+1:])
+	return s.flatpak(inst, "user", args[i+1:])
 }
 
 // flatpak runs one flatpak command on inst; scope is "system" or "user", the option the command must name.
-func (s *System) flatpak(inst *FlatpakInstallation, scope string, stdin []byte, args []string) (string, int, error) {
+func (s *System) flatpak(inst *FlatpakInstallation, scope string, args []string) (string, int, error) {
 	if len(args) == 0 {
 		return "usage", 1, nil
 	}
@@ -142,9 +142,14 @@ func (s *System) flatpak(inst *FlatpakInstallation, scope string, stdin []byte, 
 		}
 		r := &FlatpakRemote{URL: pos[1]}
 		if path, ok := flag("--gpg-import"); ok {
+			// flatpak 1.14 imports nothing from "-" (PDK-996).
 			if path == "-" {
-				r.Key = stdin
+				return "error: GPG: Unable to export keys: GPGME: No data", 1, nil
 			} else if f := s.Files[path]; f != nil {
+				// A user's flatpak runs as the user: a key file of root's that others cannot read is out of reach.
+				if scope == "user" && f.UID == 0 && f.Mode&0o004 == 0 {
+					return "error: The file " + path + " specified for --gpg-import was not found: Permission denied", 1, nil
+				}
 				r.Key = f.Data
 			} else {
 				return "error: " + path + ": No such file or directory", 1, nil
