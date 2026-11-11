@@ -96,13 +96,21 @@ apt-ftparchive release . >"$dir/Release"
 mv "$dir/Release" Release
 gpg --batch --yes --clearsign -o InRelease Release
 
-# The workaround for an apt run of a local administrator (PDK-983): with himmelblaud running, flatpak's postinst
-# cannot create its system account _flatpak.
-if systemctl is-active -q himmelblaud.service; then
-	trap 'systemctl start himmelblaud.service himmelblaud-tasks.service' EXIT
-	systemctl stop himmelblaud.service
+# With himmelblaud running, flatpak's postinst cannot create its system account _flatpak (PDK-983). The install runs
+# as a hold of Paddock's own, under the agent's shield lock, so that the agent never reports the stop as tampering
+# (gate SV11). flock -o keeps the lock out of the installation's processes: a daemon it starts must not hold it.
+held_install() {
+	if systemctl is-active -q himmelblaud.service; then
+		# apt_get exits on a failure: the trap of the locked shell starts the daemon on every path.
+		trap 'systemctl start himmelblaud.service himmelblaud-tasks.service' EXIT
+		systemctl stop himmelblaud.service
+	fi
+	apt_get install "$@"
+}
+export -f apt_get held_install
+if ! command -v flatpak >/dev/null; then
+	flock -o ` + nssShieldLock + ` bash -c 'set -eu; held_install flatpak'
 fi
-command -v flatpak >/dev/null || apt_get install flatpak
 key=$(gpg --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')
 arch=$(flatpak --default-arch)
 fb="$dir/flatpak-build"
@@ -128,6 +136,9 @@ apt_get purge flatpak
 if grep -q '^_flatpak:' /etc/passwd; then deluser --system --quiet _flatpak; fi
 if grep -q '^_flatpak:' /etc/group; then delgroup --system --quiet _flatpak; fi
 `
+
+// nssShieldLock is the agent's shield lock (reconcile.NSSShieldLock).
+const nssShieldLock = "/var/lib/paddock/state/nss-shield.lock"
 
 // ssAs is the setpriv prefix that runs a command as u. It names the account and its group, never their numbers:
 // setpriv, id, chown and install read an argument as a name first, and Himmelblau's NSS module answers a number such
@@ -373,13 +384,14 @@ func ssName(u *ssUser) string {
 	return u.name
 }
 
-// ssDirectoryUser creates a local Paddock user of acme with the run's suffix (deleted when keep ends) and the same
-// account on the device with uid, as Himmelblau would map it.
-func (d *Device) ssDirectoryUser(t, keep *testing.T, prefix string, uid int) *ssUser {
+// ssDirectoryUser creates a local Paddock user of acme with suffix (deleted when keep ends) and the same account on
+// the VM with uid, as Himmelblau would map it. It runs before the device is enrolled: once himmelblaud is online,
+// Himmelblau answers the new UPN with a synthetic user and useradd refuses it as existing (PDK-983).
+func ssDirectoryUser(t, keep *testing.T, s *Stack, vm *VM, suffix, prefix string, uid int) *ssUser {
 	t.Helper()
-	d.s.StepUp(t) // a user who would receive root through grants to everyone needs a step-up
-	name := prefix + "-" + d.run + "@" + ssDomain
-	res := d.s.Call(t, http.MethodPost, "/api/v1/users", map[string]string{"username": name, "display_name": "systest " + prefix}, http.StatusCreated)
+	s.StepUp(t) // a user who would receive root through grants to everyone needs a step-up
+	name := prefix + "-" + suffix + "@" + ssDomain
+	res := s.Call(t, http.MethodPost, "/api/v1/users", map[string]string{"username": name, "display_name": "systest " + prefix}, http.StatusCreated)
 	var out struct {
 		User struct {
 			ID string `json:"id"`
@@ -388,11 +400,10 @@ func (d *Device) ssDirectoryUser(t, keep *testing.T, prefix string, uid int) *ss
 	if err := json.Unmarshal(res.Body, &out); err != nil || out.User.ID == "" {
 		t.Fatalf("created user %s: %v", res.Body, err)
 	}
-	s := d.s
 	keep.Cleanup(func() {
 		s.cleanupCall(keep, http.MethodDelete, "/api/v1/users/"+out.User.ID, http.StatusNoContent, http.StatusNotFound)
 	})
-	d.MustRootIn([]byte(ssUserScript), "bash -s -- "+shellQuote(name)+" "+strconv.Itoa(uid))
+	vm.MustRootIn([]byte(ssUserScript), "bash -s -- "+shellQuote(name)+" "+strconv.Itoa(uid))
 	return &ssUser{name: name, uid: uid, id: out.User.ID}
 }
 

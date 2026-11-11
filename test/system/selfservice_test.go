@@ -61,15 +61,17 @@ func TestSelfServiceGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Gate(t, "selfservice")
 		vm.Fresh()
+		// The accounts exist before enrollment, while no Himmelblau answers their names (PDK-983).
+		suffix := unique()
+		owner := ssDirectoryUser(t, t, s, vm, suffix, "ss-owner", ssOwnerUID)
+		other := ssDirectoryUser(t, t, s, vm, suffix, "ss-other", ssOtherUID)
 		d := Install(t, s, vm, debDir(s))
 		// SV11 waits for the login reconciler's drift pass.
 		d.SetDriftInterval()
-		g := &selfServiceGate{keep: t, repo: d.setupGateRepo()}
+		g := &selfServiceGate{keep: t, repo: d.setupGateRepo(), owner: owner, other: other}
 		d.MustRootIn([]byte(ssRepoScript), "bash -s")
 		g.source, _ = d.softwareSource(g.repo)
 		g.fpSource, g.fpSlug = d.ssFlatpakSource(t, t, g.repo)
-		g.owner = d.ssDirectoryUser(t, t, "ss-owner", ssOwnerUID)
-		g.other = d.ssDirectoryUser(t, t, "ss-other", ssOtherUID)
 		uid, err := strconv.Atoi(d.MustRoot("id -u paddock"))
 		if err != nil {
 			t.Fatalf("UID of paddock: %v", err)
