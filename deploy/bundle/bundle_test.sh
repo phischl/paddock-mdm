@@ -851,12 +851,12 @@ echo 7 >"$work/t/bundle-seq/high-water"
 paddock_t check
 [[ $rc == 0 && "$out" == *"PASS  $item"* && "$out" != *"WARN  $item"* ]] &&
   pass "check passes the bundle-seq leftover item without leftovers" || fail "check without leftovers: exit $rc, $out"
-mkdir -p "$work/t/.bundle-seq.replaced.aB3dE9" "$work/t/.bundle-seq.replaced.Zz01xy"
+mkdir -p "$work/t/.bundle-seq.replaced.aB3dE9" "$work/t/.bundle-seq.replaced.zz01xy"
 echo 3 >"$work/t/.bundle-seq.replaced.aB3dE9/high-water"
 paddock_t check
 [[ $rc == 0 && "$out" == *"WARN  $item"* && "$out" != *"PASS  $item"* &&
-  "$out" == *"- $work/t/.bundle-seq.replaced.aB3dE9: "* && "$out" == *"- $work/t/.bundle-seq.replaced.Zz01xy: "* &&
-  "$out" == *"sudo rm -rf $work/t/.bundle-seq.replaced.aB3dE9 $work/t/.bundle-seq.replaced.Zz01xy"* &&
+  "$out" == *"- $work/t/.bundle-seq.replaced.aB3dE9: "* && "$out" == *"- $work/t/.bundle-seq.replaced.zz01xy: "* &&
+  "$out" == *"sudo rm -rf $work/t/.bundle-seq.replaced.aB3dE9 $work/t/.bundle-seq.replaced.zz01xy"* &&
   "$out" != *"$work/t/bundle-seq "* && "$out" != *"$work/t/bundle-seq:"* &&
   -d "$work/t/.bundle-seq.replaced.aB3dE9" && "$(cat "$work/t/bundle-seq/high-water")" == 7 ]] &&
   pass "check warns about leftover bundle-seq directories with their paths and the removal command, exit 0" ||
@@ -864,7 +864,7 @@ paddock_t check
 FAKE_PRODCHECK_RC=1 paddock_t check
 [[ $rc == 1 && "$out" == *"WARN  $item"* ]] &&
   pass "the leftover warning leaves a failing check failing" || fail "check with leftovers and a FAIL: exit $rc, $out"
-rm -rf "$work/t/.bundle-seq.replaced.aB3dE9" "$work/t/.bundle-seq.replaced.Zz01xy"
+rm -rf "$work/t/.bundle-seq.replaced.aB3dE9" "$work/t/.bundle-seq.replaced.zz01xy"
 # PDK-733 review 2 (R2-m1): bash writes a here-string above 64 KiB to a temp file (sh-thd.*), so a large render with the
 # passwords must reach the loop and base64 through pipes. Without strace the backup-target branch is read instead.
 big="$fixture# $(head -c 60000 /dev/zero | tr '\0' x)
