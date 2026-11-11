@@ -3,7 +3,9 @@ package reconcile_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -229,5 +231,105 @@ func TestNSSShieldWithoutLockFile(t *testing.T) {
 				t.Errorf("event %+v, want one hold_failed with the lock error", ev)
 			}
 		})
+	}
+}
+
+// TestLoginRestartWithoutLockFile (plan M5a amendment 2026-11-11 b, P3; Review 1 of PDK-990): a configuration change
+// on an agent that cannot open the shield lock file does not restart himmelblaud, which could cut into another
+// process's hold; the restart stays pending for a later pass and the missing lock is logged.
+func TestLoginRestartWithoutLockFile(t *testing.T) {
+	sys, l, events := loginFixture(t)
+	ctx := context.Background()
+	l.Apply(ctx, loginResource(t, loginSpec()))
+	takeEvents(events)
+	l.Shield = &reconcile.NSSShield{Sys: sys, Events: l.Events, LockFile: filepath.Join(t.TempDir(), "missing", "nss-shield.lock")}
+	logs := captureLogs(t)
+	sys.TakeCalls()
+
+	spec := loginSpec()
+	spec.Himmelblau.EnableHello = false
+	r := loginResource(t, spec)
+	if res := l.Apply(ctx, r); res.Status == reconcile.Error {
+		t.Fatalf("Apply without the shield lock = %+v", res)
+	}
+	if calls := sys.TakeCalls(); slices.ContainsFunc(calls, func(c string) bool {
+		return strings.HasPrefix(c, "systemctl restart") || strings.HasPrefix(c, "systemctl stop himmelblaud")
+	}) {
+		t.Errorf("himmelblaud stopped or restarted without the shield lock: %v", calls)
+	}
+	if !sys.Units["himmelblaud.service"].Active {
+		t.Error("himmelblaud left stopped")
+	}
+	if changes, _ := l.Plan(ctx, r); !slices.Contains(changes, "restart himmelblaud") {
+		t.Errorf("Plan without the shield lock = %v, want the restart pending", changes)
+	}
+	if !strings.Contains(logs.String(), "himmelblaud not restarted") {
+		t.Errorf("the deferred restart is not logged:\n%s", logs)
+	}
+}
+
+// appendWhileSending is a device on which `paddockd updates run` appends a record while the agent sends the earlier
+// ones: the append happens when the agent reads the records it moved aside (not at its check for a leftover file).
+type appendWhileSending struct {
+	*shieldSys
+	append func()
+}
+
+func (a *appendWhileSending) ReadFile(path string) ([]byte, fs.FileInfo, error) {
+	data, info, err := a.shieldSys.ReadFile(path)
+	if path == reconcile.NSSShieldReport+".sending" && err == nil && a.append != nil {
+		a.append()
+		a.append = nil
+	}
+	return data, info, err
+}
+
+// TestNSSShieldRecordAppendedWhileSending (Review 1 of PDK-990, finding 3): a record that an updates run without the
+// shield lock appends while the agent sends the records is not removed unsent; it goes out in the next pass, and every
+// record is emitted exactly once.
+func TestNSSShieldRecordAppendedWhileSending(t *testing.T) {
+	base, _, _, events := shieldFixture(true)
+	sys := &appendWhileSending{shieldSys: base}
+	agent := &reconcile.NSSShield{Sys: sys, Events: &reconcile.Events{Emit: func(typ string, data any) {
+		b, _ := json.Marshal(data)
+		*events = append(*events, event{typ, string(b)})
+	}}}
+	rec := reconcile.NSSShieldRecorder(base)
+	rec.Emit(protocol.EventLoginNSSShield, protocol.LoginNSSShield{Action: "apt-get dist-upgrade", Outcome: protocol.NSSShieldRestored})
+	sys.append = func() {
+		rec.Emit(protocol.EventLoginNSSShield, protocol.LoginNSSShield{Action: "apt-get dist-upgrade", Outcome: protocol.NSSShieldHoldFailed})
+	}
+
+	agent.Recover(context.Background())
+	if ev := shieldEvent(t, *events); ev.Outcome != protocol.NSSShieldRestored {
+		t.Fatalf("first pass emitted %+v", ev)
+	}
+	if !agent.Pending(context.Background()) {
+		t.Fatal("the record appended while sending is not pending")
+	}
+	*events = nil
+	agent.Recover(context.Background())
+	if ev := shieldEvent(t, *events); ev.Outcome != protocol.NSSShieldHoldFailed {
+		t.Errorf("second pass emitted %+v", ev)
+	}
+	if _, _, files := base.snapshot(); files != 0 || agent.Pending(context.Background()) {
+		t.Errorf("%d files left, records still pending", files)
+	}
+}
+
+// TestNSSShieldSendsLeftoverRecords: records moved aside by a pass that died before it removed them are sent by the
+// next pass, before the records file, and none is lost.
+func TestNSSShieldSendsLeftoverRecords(t *testing.T) {
+	sys, agent, _, events := shieldFixture(true)
+	sys.files[reconcile.NSSShieldReport+".sending"] = []byte(`[{"action":"dpkg -i","outcome":"restored"}]`)
+	sys.files[reconcile.NSSShieldReport] = []byte(`[{"action":"apt-get dist-upgrade","outcome":"restored"}]`)
+	agent.Recover(context.Background())
+	if ev := shieldEvent(t, *events); ev.Action != "dpkg -i" {
+		t.Fatalf("first pass emitted %+v", ev)
+	}
+	*events = nil
+	agent.Recover(context.Background())
+	if ev := shieldEvent(t, *events); ev.Action != "apt-get dist-upgrade" {
+		t.Errorf("second pass emitted %+v", ev)
 	}
 }

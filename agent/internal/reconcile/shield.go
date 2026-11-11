@@ -28,6 +28,10 @@ const NSSShieldReport = "/var/lib/paddock/state/nss-shield-report.json"
 
 const nssShieldMaxRecords = 16
 
+// nssShieldSending is the private name the agent moves NSSShieldReport to before it reads it, so that a record the
+// updates process appends meanwhile lands in a new NSSShieldReport instead of being removed unsent.
+const nssShieldSending = NSSShieldReport + ".sending"
+
 // NSSShieldLock is the lock file whose exclusive flock a hold keeps from before its check of the daemon until its
 // marker is gone, across the agent and `paddockd updates run` (plan M5a N6.2). It serializes the holds and keeps
 // Recover off a hold in progress; it never makes a stopped himmelblaud count as held, because any local administrator
@@ -80,6 +84,7 @@ type shieldSys interface {
 	ReadFile(path string) ([]byte, fs.FileInfo, error)
 	WriteFileAtomic(path string, data []byte, mode fs.FileMode, uid, gid int) error
 	Remove(path string) error
+	Rename(oldPath, newPath string) error
 	Systemctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	SystemdRun(ctx context.Context, stdin []byte, args ...string) (output string, exit int, err error)
 }
@@ -512,8 +517,12 @@ func (s *NSSShield) Pending(ctx context.Context) bool {
 }
 
 func (s *NSSShield) recordsExist() bool {
-	data, _, err := s.Sys.ReadFile(NSSShieldReport)
-	return err == nil && data != nil
+	for _, path := range []string{NSSShieldReport, nssShieldSending} {
+		if data, _, err := s.Sys.ReadFile(path); err == nil && data != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // Recover finishes what no hold in progress owns, under the shield lock taken without waiting (plan M5a N3.2, N6.3):
@@ -567,25 +576,36 @@ func (s *NSSShield) finishStale(ctx context.Context) {
 	s.settle(m, restoreErr)
 }
 
-// readRecords returns the records of NSSShieldReport; a missing file has none.
-func (s *NSSShield) readRecords() ([]protocol.LoginNSSShield, error) {
-	data, _, err := s.Sys.ReadFile(NSSShieldReport)
+// readRecords returns the records of a record file; a missing file has none.
+func (s *NSSShield) readRecords(path string) ([]protocol.LoginNSSShield, error) {
+	data, _, err := s.Sys.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) || (err == nil && data == nil) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", NSSShieldReport, err)
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	var records []protocol.LoginNSSShield
 	if err := json.Unmarshal(data, &records); err != nil {
-		return nil, fmt.Errorf("decode %s: %w", NSSShieldReport, err)
+		return nil, fmt.Errorf("decode %s: %w", path, err)
 	}
 	return records, nil
 }
 
-// sendRecords emits the records of `paddockd updates run` as login.nss_shield and removes the file.
+// sendRecords emits the records of `paddockd updates run` as login.nss_shield and removes them: it moves the file to
+// a private name first and removes only that, because an updates run without the shield lock (plan M5a amendment
+// 2026-11-11 b, P3) may append a hold_failed record at any time. A private file left by an earlier pass is sent
+// first; the records file then waits for the next pass.
 func (s *NSSShield) sendRecords(ctx context.Context) {
-	records, err := s.readRecords()
+	if data, _, err := s.Sys.ReadFile(nssShieldSending); errors.Is(err, fs.ErrNotExist) || (err == nil && data == nil) {
+		if err := s.Sys.Rename(NSSShieldReport, nssShieldSending); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				slog.WarnContext(ctx, "moving the shield records aside failed", "error", err)
+			}
+			return
+		}
+	}
+	records, err := s.readRecords(nssShieldSending)
 	if err != nil {
 		slog.WarnContext(ctx, "dropping unreadable shield records", "error", err)
 	}
@@ -596,7 +616,7 @@ func (s *NSSShield) sendRecords(ctx context.Context) {
 	for _, r := range records {
 		s.Events.emit(protocol.EventLoginNSSShield, r)
 	}
-	if rmErr := s.Sys.Remove(NSSShieldReport); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+	if rmErr := s.Sys.Remove(nssShieldSending); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 		slog.WarnContext(ctx, "removing the shield records failed", "error", rmErr)
 	}
 }
@@ -610,7 +630,7 @@ func NSSShieldRecorder(sys shieldSys) *Events {
 		if !ok {
 			return
 		}
-		records, err := shield.readRecords()
+		records, err := shield.readRecords(NSSShieldReport)
 		if err != nil {
 			slog.Error("replacing unreadable shield records", "error", err)
 		}
@@ -638,9 +658,10 @@ func (s *NSSShield) Exclusive(ctx context.Context, fn func() error) (ran bool, e
 	}
 	defer release()
 	if res == acquireNoLock {
-		// A configuration restart is not a hold: it never leaves the daemon stopped, so it runs rather than leave a
-		// changed allow list unapplied while the state directory is broken.
-		slog.WarnContext(ctx, "shield lock unavailable; restarting himmelblaud without it", "error", lockErr)
+		// A restart stops the daemon, which a process without the lock must not do: it could cut into another
+		// process's hold (plan M5a amendment 2026-11-11 b, P3).
+		slog.WarnContext(ctx, "shield lock unavailable; himmelblaud not restarted", "error", lockErr)
+		return false, nil
 	}
 	return true, fn()
 }
