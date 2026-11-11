@@ -225,20 +225,22 @@ func procUptime() (time.Duration, string, error) {
 	return time.Duration(secs * float64(time.Second)), string(bytes.TrimSpace(boot)), nil
 }
 
-// notifySessions sends a desktop notification to the user of every user session (`systemd-run --machine=<user>@
+// notifySessions sends a desktop notification to the user of every user session (`systemd-run --machine=<uid>@.host
 // --user notify-send`); a session without a desktop just fails.
 func notifySessions(ctx context.Context, loginctl sessions.Loginctl, run func(ctx context.Context, args ...string) error, msg string) {
 	list, err := sessions.List(ctx, loginctl)
 	if err != nil {
 		return
 	}
-	done := map[string]bool{}
+	done := map[int]bool{}
 	for _, s := range list {
-		if !strings.HasPrefix(s.Class, "user") || done[s.User] {
+		if !strings.HasPrefix(s.Class, "user") || done[s.UID] {
 			continue
 		}
-		done[s.User] = true
-		if err := run(ctx, "systemd-run", "--machine="+s.User+"@", "--user", "--quiet", "--collect",
+		done[s.UID] = true
+		// The UID, not the name: systemd splits --machine at the first "@", which a UPN user name contains (PDK-994);
+		// an all-numeric user is read as a UID, never looked up as a name.
+		if err := run(ctx, "systemd-run", "--machine="+strconv.Itoa(s.UID)+"@.host", "--user", "--quiet", "--collect",
 			"notify-send", "--urgency=critical", "--app-name=Paddock", "Paddock", msg); err != nil {
 			slog.InfoContext(ctx, "desktop notification not shown", "user", s.User, "error", err)
 		}

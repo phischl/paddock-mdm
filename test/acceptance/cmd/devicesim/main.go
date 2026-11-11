@@ -6,6 +6,7 @@
 //	devicesim disk --hostname <name> --health <json> < enrollment-config.json
 //	devicesim config-report --hostname <name> --resource <id>=<status>[:<message>] ... < enrollment-config.json
 //	devicesim diagnostics --hostname <name> < enrollment-config.json
+//	devicesim software-request --hostname <name> --entry <id> --user <name> --justification <text> < enrollment-config.json
 //
 // enroll prints {"enrollment_id", "device_id", "status"} once the enrollment left "processing". local-admin needs an
 // auto-approving token: it enrolls, escrows a first local administrator password like an agent (encrypted to the
@@ -18,7 +19,9 @@
 // auto-approving token, too: it enrolls, prints {"device_id"} at once, checks in until a collect_status command arrives
 // (requested by the test meanwhile), seals a small fixed archive like an agent (ADR 0048 decision 3, with the
 // escrow-wrap version of its bundle), announces and uploads it, reports the result and prints {"archive_sha256"} of the
-// plain archive.
+// plain archive. software-request needs an auto-approving token, too: it enrolls, prints {"device_id"} at once, checks in
+// as a schema 2 agent until its bundle offers the catalog entry (the test adds the device to a group meanwhile), sends the
+// user's software.request with the justification like the self-service app does and prints {"requested": entry}.
 package main
 
 import (
@@ -29,6 +32,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,18 +53,22 @@ func main() {
 	}
 }
 
-const usage = "usage: devicesim enroll|local-admin|inventory|disk|config-report|diagnostics --hostname <name> [--enrollment-method autoinstall|adopted] " +
-	"[--package <name>=<version> ...] [--health <json>] [--resource <id>=<status>[:<message>] ...] < enrollment-config.json"
+const usage = "usage: devicesim enroll|local-admin|inventory|disk|config-report|diagnostics|software-request --hostname <name> " +
+	"[--enrollment-method autoinstall|adopted] [--package <name>=<version> ...] [--health <json>] [--resource <id>=<status>[:<message>] ...] " +
+	"[--entry <id> --user <name> --justification <text>] < enrollment-config.json"
 
 func run(args []string) error {
 	if len(args) == 0 || (args[0] != "enroll" && args[0] != "local-admin" && args[0] != "inventory" && args[0] != "disk" && args[0] != "config-report" &&
-		args[0] != "diagnostics") {
+		args[0] != "diagnostics" && args[0] != "software-request") {
 		return errors.New(usage)
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	hostname := fs.String("hostname", "", "hostname to report")
 	health := fs.String("health", "", "check-in health to report (disk)")
 	method := fs.String("enrollment-method", "", "enrollment method to send: autoinstall or adopted (none by default)")
+	entry := fs.String("entry", "", "catalog entry ID to request (software-request)")
+	user := fs.String("user", "", "user who requests the entry (software-request)")
+	justification := fs.String("justification", "", "the user's justification (software-request)")
 	var packages [][2]string
 	fs.Func("package", "deb package <name>=<version> to report to Fleet (inventory)", func(v string) error {
 		name, version, ok := strings.Cut(v, "=")
@@ -80,7 +88,8 @@ func run(args []string) error {
 		resources = append(resources, map[string]string{"id": id, "status": status, "message": message})
 		return nil
 	})
-	if err := fs.Parse(args[1:]); err != nil || *hostname == "" || (args[0] == "disk" && !json.Valid([]byte(*health))) {
+	if err := fs.Parse(args[1:]); err != nil || *hostname == "" || (args[0] == "disk" && !json.Valid([]byte(*health))) ||
+		(args[0] == "software-request" && (*entry == "" || *user == "")) {
 		return errors.New(usage)
 	}
 	var cfg protocol.EnrollmentConfig
@@ -97,8 +106,8 @@ func run(args []string) error {
 	}
 	dev.EnrollmentMethod = *method
 	timeout := 2 * time.Minute
-	if args[0] == "diagnostics" {
-		timeout = 5 * time.Minute // the test requests the collection after the enrollment
+	if args[0] == "diagnostics" || args[0] == "software-request" {
+		timeout = 5 * time.Minute // the test requests the collection or offers the entry after the enrollment
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -141,6 +150,15 @@ func run(args []string) error {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]string{"archive_sha256": sum})
+	}
+	if args[0] == "software-request" {
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]string{"device_id": s.DeviceID}); err != nil {
+			return err
+		}
+		if err := requestSoftware(ctx, dev, *entry, *user, *justification); err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"requested": *entry})
 	}
 	if args[0] == "config-report" {
 		if err := reportConfig(ctx, dev, resources); err != nil {
@@ -195,6 +213,41 @@ func reportConfig(ctx context.Context, dev *devicesim.Device, resources []map[st
 		case <-time.After(2500 * time.Millisecond):
 		}
 	}
+}
+
+// requestSoftware checks in as a schema 2 agent until a bundle offers the entry and sends user's software.request for it.
+// The server opens a request only for an entry the device is offered, so the event waits for that bundle.
+func requestSoftware(ctx context.Context, dev *devicesim.Device, entry, user, justification string) error {
+	dev.SchemaVersions = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
+	for {
+		out, res, err := dev.Checkin(ctx)
+		if err != nil || res.Status != http.StatusOK {
+			return fmt.Errorf("checkin: %v HTTP %d", err, res.Status)
+		}
+		if out.Bundle != nil {
+			b, err := dev.Fetch(ctx, out.Bundle)
+			if err != nil {
+				return err
+			}
+			if b.Software != nil && slices.ContainsFunc(b.Software.Packages, func(p bundle.SoftwarePackage) bool { return p.CatalogEntryID == entry }) {
+				break
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("no bundle offers catalog entry %s", entry)
+		case <-time.After(2500 * time.Millisecond):
+		}
+	}
+	data, err := json.Marshal(protocol.SoftwareRequest{User: user, EntryID: entry, Justification: justification})
+	if err != nil {
+		return err
+	}
+	res, err := dev.SendEvents(ctx, []protocol.Event{{EventSeq: 1, Type: protocol.EventSoftwareRequest, OccurredAt: time.Now(), Data: data}})
+	if err != nil || res.Status != http.StatusAccepted {
+		return fmt.Errorf("software.request event: %v HTTP %d %s", err, res.Status, res.Body)
+	}
+	return nil
 }
 
 // reportInventory enrolls the device's osquery host in Fleet and answers Fleet's queries until it has the packages.

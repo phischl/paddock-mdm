@@ -145,7 +145,7 @@ func TestRoleMembership(t *testing.T) {
 	if err := ak.AddToGroup(ctx, first.name, admins); err != nil {
 		t.Fatal(err)
 	}
-	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", body)
+	res := createOrg(t, root, body)
 	expectStatus(t, res, http.StatusCreated, "")
 	org := responseID(t, res)
 	expectRoleEvent(t, "R4", waitRoleEvents(t, idx, org, "admin.role_granted", first.name, roleEventWait),

@@ -999,7 +999,7 @@ CROSS JOIN LATERAL (
     AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
       OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = a.device_group_id))
 ) t
-WHERE d.state = 'active' AND t.intents IS NOT NULL
+WHERE d.state = 'active' AND (st.device_id IS NOT NULL OR t.intents IS NOT NULL)
   AND ($2::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = $2::uuid))
   AND ($3::text IS NULL OR d.hostname ILIKE $3::text ESCAPE '\')
@@ -1031,8 +1031,9 @@ type ListSoftwareCatalogDevicesRow struct {
 	ReportedAt     *time.Time
 }
 
-// The active devices the entry is assigned to, through the organization or one of their groups, with the rows they
-// reported for it (state ”: none; one per scope) and the intents of the assignments. The page filters and sorts the derived
+// The active devices the entry is assigned to, through the organization or one of their groups, and those that reported a
+// row for it (an entry that reaches a device through its owners, plan M13b), with the rows they reported for it
+// (state ”: none; one per scope) and the intents of the assignments (NULL: none). The page filters and sorts the derived
 // states in memory (ADR 0028), so the query returns every match in hostname order.
 func (q *Queries) ListSoftwareCatalogDevices(ctx context.Context, arg ListSoftwareCatalogDevicesParams) ([]ListSoftwareCatalogDevicesRow, error) {
 	rows, err := q.db.Query(ctx, listSoftwareCatalogDevices, arg.CatalogEntryID, arg.DeviceGroupID, arg.QPattern)
