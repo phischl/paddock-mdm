@@ -73,11 +73,7 @@ func (h releaseHarness) addRelease(f *fakeSource, v string) {
 		if !a.Required {
 			continue
 		}
-		comment := releasesig.Comment(v, a.Arch)
-		if a.Package == agentrelease.PackageFleetd {
-			comment = a.Package + " " + v + " " + a.Arch
-		}
-		h.addSigned(f, v, a.Name, []byte("content of "+a.Name), comment)
+		h.addSigned(f, v, a.Name, []byte("content of "+a.Name), releasesig.Comment(v, a.Arch))
 	}
 	f.add(v, "paddock-revoke_"+v+"_amd64-unsigned.deb", []byte("revoke"))
 	f.add(v, "SHA256SUMS", []byte("sums"))
@@ -191,7 +187,7 @@ func TestReleaseImport(t *testing.T) {
 	v4 := sourceVersion()
 	h.addRelease(src, v4)
 	fleetd := []byte("fleetd deb")
-	h.addSigned(src, v4, "fleet-osquery_1.48.0_amd64.deb", fleetd, "fleet-osquery 1.48.0 amd64")
+	h.addSigned(src, v4, "fleet-osquery_1.48.0_amd64.deb", fleetd, releasesig.Comment(v4, "amd64"))
 	ctx, _, _ = steppedUpAdmin()
 	if d, err = imp.Import(ctx, v4); err != nil {
 		t.Fatal(err)
@@ -287,8 +283,8 @@ func TestReleaseImportRefusals(t *testing.T) {
 		"two fleetd packages of one arch": {func() string {
 			v := sourceVersion()
 			h.addRelease(src, v)
-			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), "fleet-osquery 1.48.0 amd64")
-			h.addSigned(src, v, "fleet-osquery_1.49.0_amd64.deb", []byte("fleetd 1.49.0"), "fleet-osquery 1.49.0 amd64")
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), releasesig.Comment(v, "amd64"))
+			h.addSigned(src, v, "fleet-osquery_1.49.0_amd64.deb", []byte("fleetd 1.49.0"), releasesig.Comment(v, "amd64"))
 			return v
 		}, problem.InvalidRequest, "failure"},
 		"signed for another version": {func() string {
@@ -324,6 +320,30 @@ func TestReleaseImportRefusals(t *testing.T) {
 			h.addRelease(src, v)
 			name := "paddock-agent_" + v + "_amd64.deb"
 			src.files[name+".minisig"] = minisign.SignWithComments(h.priv, src.files[name], "paddock-agent "+v+" amd64", "")
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"fleetd signed for another version": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), releasesig.Comment(published, "amd64"))
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"fleetd signed for its fleetd version": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), releasesig.Comment("1.48.0", "amd64"))
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"fleetd signed for another arch": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), releasesig.Comment(v, "arm64"))
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"fleetd signed without a release comment": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), "fleet-osquery 1.48.0 amd64")
 			return v
 		}, problem.ReleaseSignatureMismatch, "failure"},
 	} {

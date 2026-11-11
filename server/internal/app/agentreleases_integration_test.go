@@ -275,9 +275,9 @@ func (h releaseHarness) device(t *testing.T) (org, dev uuid.UUID) {
 	return org, dev
 }
 
-// TestPackageTrustedComment holds ADR 0043 amendment 2026-11-11 b for the upload: a package of the release key is
-// stored only when its trusted comment names the release and the package's arch; paddock-revoke and fleet-osquery are
-// not bound by their comment.
+// TestPackageTrustedComment holds ADR 0043 amendments 2026-11-11 b and c for the upload: a package of the release key
+// is stored only when its trusted comment names the release and the package's arch — for fleet-osquery the release it
+// is stored under, not its fleetd version; paddock-revoke is not bound by its comment.
 func TestPackageTrustedComment(t *testing.T) {
 	h := newReleaseHarness(t, false)
 	ctx := platformAdmin()
@@ -285,20 +285,25 @@ func TestPackageTrustedComment(t *testing.T) {
 	if _, err := h.releases.Create(ctx, v); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct{ name, arch, otherArch string }{
-		{agentrelease.PackageAgent, "amd64", "arm64"},
-		{agentrelease.PackageSupervisor, "arm64", "amd64"},
-		{agentrelease.PackageSelfService, agentrelease.ArchAll, "amd64"},
+	for _, c := range []struct{ name, packageVersion, arch, otherArch string }{
+		{agentrelease.PackageAgent, "", "amd64", "arm64"},
+		{agentrelease.PackageSupervisor, "", "arm64", "amd64"},
+		{agentrelease.PackageSelfService, "", agentrelease.ArchAll, "amd64"},
+		{agentrelease.PackageFleetd, "1.48.0", "amd64", "arm64"},
 	} {
 		deb := []byte(c.name + " " + c.arch + " " + v)
-		for label, sig := range map[string][]byte{
+		wrong := map[string][]byte{
 			"older release": minisign.SignWithComments(h.priv, deb, releasesig.Comment("0.0.1", c.arch), ""),
 			"other arch":    minisign.SignWithComments(h.priv, deb, releasesig.Comment(v, c.otherArch), ""),
 			"no comment":    minisign.Sign(h.priv, deb),
 			"garbled":       minisign.SignWithComments(h.priv, deb, c.name+" "+v+" "+c.arch, ""),
 			"suffix":        minisign.SignWithComments(h.priv, deb, releasesig.Comment(v, c.arch)+" extra", ""),
-		} {
-			_, err := h.releases.UploadPackage(ctx, v, c.name, "", c.arch, deb, base64.StdEncoding.EncodeToString(sig))
+		}
+		if c.packageVersion != "" {
+			wrong["fleetd version"] = minisign.SignWithComments(h.priv, deb, releasesig.Comment(c.packageVersion, c.arch), "")
+		}
+		for label, sig := range wrong {
+			_, err := h.releases.UploadPackage(ctx, v, c.name, c.packageVersion, c.arch, deb, base64.StdEncoding.EncodeToString(sig))
 			if problem.From(err).Code != problem.ReleaseSignatureMismatch.Code {
 				t.Errorf("%s %s (%s): err = %v, want release_signature_mismatch", c.name, c.arch, label, err)
 			}
@@ -306,20 +311,16 @@ func TestPackageTrustedComment(t *testing.T) {
 		if len(h.store.puts) != 0 {
 			t.Fatalf("%s: a package with a wrong trusted comment was stored", c.name)
 		}
-		pkg, err := h.releases.UploadPackage(ctx, v, c.name, "", c.arch, deb, h.signPackage(deb, v, c.arch))
+		pkg, err := h.releases.UploadPackage(ctx, v, c.name, c.packageVersion, c.arch, deb, h.signPackage(deb, v, c.arch))
 		if err != nil || string(h.store.puts[pkg.ObjectKey]) != string(deb) {
 			t.Fatalf("%s %s: %+v, %v", c.name, c.arch, pkg, err)
 		}
 		delete(h.store.puts, pkg.ObjectKey)
 	}
-	for _, c := range []struct{ name, packageVersion string }{
-		{agentrelease.PackageRevoke, ""}, {agentrelease.PackageFleetd, "1.48.0"},
-	} {
-		deb := []byte(c.name + " " + v)
-		sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(h.priv, deb, c.name+" 0.0.1 arm64", ""))
-		if _, err := h.releases.UploadPackage(ctx, v, c.name, c.packageVersion, "amd64", deb, sig); err != nil {
-			t.Errorf("%s: %v", c.name, err)
-		}
+	revoke := []byte(agentrelease.PackageRevoke + " " + v)
+	sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(h.priv, revoke, agentrelease.PackageRevoke+" 0.0.1 arm64", ""))
+	if _, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageRevoke, "", "amd64", revoke, sig); err != nil {
+		t.Errorf("%s: %v", agentrelease.PackageRevoke, err)
 	}
 	var mismatches int
 	if err := h.super.QueryRow(context.Background(),
@@ -327,8 +328,8 @@ func TestPackageTrustedComment(t *testing.T) {
 		   AND params->>'version' = $1 AND error_code = 'release_signature_mismatch'`, v).Scan(&mismatches); err != nil {
 		t.Fatal(err)
 	}
-	if mismatches != 15 {
-		t.Errorf("audited mismatches = %d, want 15 (one per refused upload)", mismatches)
+	if mismatches != 21 {
+		t.Errorf("audited mismatches = %d, want 21 (one per refused upload)", mismatches)
 	}
 }
 

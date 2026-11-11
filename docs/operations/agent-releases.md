@@ -59,12 +59,13 @@ Then give the key to the release workflow (once, and again after a rotation):
 The trusted comment is part of the signature and must be exactly `paddock-agent version=<version> arch=<arch>`
 (`amd64` or `arm64`): the server refuses other comments at upload (422 `release_signature_mismatch`), and the
 supervisor installs a binary only as the version and architecture its comment names (plan M4b.1 decision 10). The
-same comment binds the `paddock-agent`, `paddock-supervisor` and `paddock-self-service` packages to their release:
-`paddock-agent version=<version> arch=<package arch>`, with `arch=all` for `paddock-self-service`. The upload, the
-host command and the GitHub import refuse a package whose comment names another version or architecture, or that
-has no such comment (422 `release_signature_mismatch`), and store nothing of it, so that a package signed for an
-older release cannot be stored under a newer one (ADR 0043 amendment 2026-11-11 b). `paddock-revoke` and
-`fleet-osquery` are not checked for this comment. Releases stored before this check are not verified again. The
+same comment binds the `paddock-agent`, `paddock-supervisor`, `paddock-self-service` and `fleet-osquery` packages to
+their release: `paddock-agent version=<version> arch=<package arch>`, with `arch=all` for `paddock-self-service`. For
+`fleet-osquery` `<version>` is the release it is stored under, not its fleetd version. The upload, the host command
+and the GitHub import refuse a package whose comment names another version or architecture, or that has no such
+comment (422 `release_signature_mismatch`), and store nothing of it, so that a package signed for an older release
+cannot be stored under a newer one (ADR 0043 amendments 2026-11-11 b and c). `paddock-revoke` is not checked for
+this comment. Releases stored before this check are not verified again. The
 workflow and the offline fallback both sign with it:
 
 ```sh
@@ -100,7 +101,8 @@ variable `PADDOCK_RELEASE_KEY_PASSPHRASE`, so it never appears on a command line
    agent-release` refuses it): `PUT /api/platform/v1/agent-releases/<version>/packages/<name>/<arch>` with the package
    as body and `X-Paddock-Minisig`. The server stores them under
    `packages/<version>/<name>_<version>_<arch>.deb`; the Paddock autoinstall installs new devices from them.
-   fleetd (plan M5a) is uploaded the same way as package `fleet-osquery`, signed with the agent release key, with the
+   fleetd (plan M5a) is uploaded the same way as package `fleet-osquery`, signed with the agent release key and the
+   trusted comment `paddock-agent version=<version> arch=<arch>` of the release it is stored under, with the
    query parameter `package_version=<fleetd version>`; it is stored as
    `packages/<version>/fleet-osquery_<fleetd version>_<arch>.deb` and installed by the agent, never by the autoinstall
    (`docs/operations/fleet.md`).
@@ -159,9 +161,9 @@ and `paddock-supervisor_<version>_amd64.deb`, and from `0.1.0-alpha.10` on also 
 (an earlier release never had it and is imported without it); packages of other architectures and `fleet-osquery_<fleetd
 version>_<arch>.deb` are imported when they are attached with their signature. A missing file or signature refuses
 the import (422 `release_incomplete`, naming the file). Every file is verified with the release public key
-(`PADDOCK_RELEASE_PUBLIC_KEY_FILE`) — the binaries and the `paddock-agent`, `paddock-supervisor` and
-`paddock-self-service` packages also with the trusted comment `paddock-agent version=<v> arch=<arch>` (`arch=all`
-for `paddock-self-service`; a mismatch fails the import with `release_signature_mismatch`) — before anything is stored; GitHub is transport only, and `SHA256SUMS` and its Sigstore bundle are not
+(`PADDOCK_RELEASE_PUBLIC_KEY_FILE`) — the binaries and the `paddock-agent`, `paddock-supervisor`,
+`paddock-self-service` and `fleet-osquery` packages also with the trusted comment `paddock-agent version=<v>
+arch=<arch>` (`<v>` the release version, also for `fleet-osquery`; `arch=all` for `paddock-self-service`; a mismatch fails the import with `release_signature_mismatch`) — before anything is stored; GitHub is transport only, and `SHA256SUMS` and its Sigstore bundle are not
 checked (RR-84). The release is published, ready for a rollout; the import never starts one.
 
 **What is never imported.** `paddock-revoke` stays on the offline two-person path: sign it with the revocation key and
@@ -341,7 +343,9 @@ Then, for each draft release:
 2. **paddock-revoke (offline, unchanged):** the two holders of the revocation release key sign
    `paddock-revoke_<version>_<arch>-unsigned.deb` offline as `paddock-revoke_<version>_<arch>.deb` (two-person rule).
 3. Build fleetd for the release with `make fleetd-deb` (needs outbound HTTPS to Fleet's update server) and sign it
-   offline with the custodians' backup copy of the agent release key.
+   offline with the custodians' backup copy of the agent release key and the trusted comment of the release (not of
+   the fleetd version; the server refuses any other comment with 422 `release_signature_mismatch`):
+   `minisign -S -s paddock-release.key -m fleet-osquery_<fleetd version>_<arch>.deb -t "paddock-agent version=<release version> arch=<arch>"`.
 4. Upload and publish through the platform API as under *Releasing* (`<version>` is the release version, e.g.
    `0.1.0-alpha.1`, while `dpkg-deb -f` shows the Debian version `0.1.0~alpha.1`; the upload takes name, version and
    architecture from the URL, not from the file name), then attach the remaining `.minisig` files to the GitHub
