@@ -17,6 +17,7 @@ import (
 	"aead.dev/minisign"
 
 	"github.com/phischl/paddock-mdm/pkg/releasesig"
+	"github.com/phischl/paddock-mdm/pkg/semver"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
@@ -118,8 +119,22 @@ func signedSourceRelease(t *testing.T, v string) fixtureRelease {
 	for _, pkg := range []string{"paddock-agent", "paddock-supervisor"} {
 		addSignedPackage(t, files, pkg, v, "amd64")
 	}
+	addSignedPackage(t, files, "paddock-self-service", v, "all")
 	files["paddock-revoke_"+v+"_amd64-unsigned.deb"] = []byte("unsigned revoke")
 	return fixtureRelease{tag: "v" + v, files: files}
+}
+
+// selfServiceFirstVersion mirrors agentrelease.SelfServiceFirstVersion (ADR 0043 amendment 2026-11-11): the import
+// requires and imports the self-service package from this release on and ignores it before.
+const selfServiceFirstVersion = "0.1.0-alpha.10"
+
+// selfServicePackages is the number of self-service packages an import of v stores: 1 from selfServiceFirstVersion
+// on, 0 before. The gate's versions follow the newest release of the stack, so either side can occur.
+func selfServicePackages(v string) int {
+	if semver.Compare(v, selfServiceFirstVersion) >= 0 {
+		return 1
+	}
+	return 0
 }
 
 func addSignedPackage(t *testing.T, files map[string][]byte, pkg, v, arch string) {
@@ -259,6 +274,7 @@ func TestAgentReleaseImport(t *testing.T) {
 			Sha256 string `json:"sha256"`
 		} `json:"artifacts"`
 		Packages []struct {
+			Name string `json:"name"`
 			Arch string `json:"arch"`
 		} `json:"packages"`
 		Rollout any `json:"rollout"`
@@ -266,9 +282,19 @@ func TestAgentReleaseImport(t *testing.T) {
 	if err := res.JSON(&detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.Release.Status != "published" || len(detail.Artifacts) != 2 || len(detail.Packages) != 2 ||
-		detail.Packages[0].Arch != "amd64" || detail.Packages[1].Arch != "amd64" || detail.Rollout != nil {
+	selfService := selfServicePackages(v)
+	if detail.Release.Status != "published" || len(detail.Artifacts) != 2 || len(detail.Packages) != 2+selfService ||
+		detail.Rollout != nil {
 		t.Fatalf("imported release: %s", res.Body)
+	}
+	for _, p := range detail.Packages {
+		want := "amd64"
+		if p.Name == "paddock-self-service" {
+			want = "all"
+		}
+		if p.Arch != want {
+			t.Fatalf("imported package %s with arch %s: %s", p.Name, p.Arch, res.Body)
+		}
 	}
 	sum := sha256.Sum256(current.files["paddockd_"+v+"_linux_amd64"])
 	for _, a := range detail.Artifacts {
@@ -277,7 +303,7 @@ func TestAgentReleaseImport(t *testing.T) {
 		}
 	}
 	ev := importEvent(t, idx, res, "success")
-	if ev.Params["version"] != v || ev.Params["source"] != "phischl/paddock-mdm" || fmt.Sprint(ev.Params["files"]) != "4" {
+	if ev.Params["version"] != v || ev.Params["source"] != "phischl/paddock-mdm" || fmt.Sprint(ev.Params["files"]) != fmt.Sprint(4+selfService) {
 		t.Fatalf("import event params %v", ev.Params)
 	}
 	get := call(t, root, http.MethodGet, "/api/platform/v1/agent-releases/"+v, nil)
@@ -341,7 +367,7 @@ func TestAgentReleaseImport(t *testing.T) {
 	freshStepUp(t, root, env.PlatformAdmin)
 	res = importRelease(t, root, v5)
 	expectStatus(t, res, http.StatusCreated, "")
-	if err := res.JSON(&detail); err != nil || len(detail.Packages) != 3 {
+	if err := res.JSON(&detail); err != nil || len(detail.Packages) != 3+selfServicePackages(v5) {
 		t.Fatalf("import with an arm64 package: %s", res.Body)
 	}
 
@@ -349,6 +375,21 @@ func TestAgentReleaseImport(t *testing.T) {
 	res = importRelease(t, root, v6)
 	expectStatus(t, res, http.StatusUnprocessableEntity, "release_incomplete")
 	expectNoRelease(t, root, v6)
+
+	// 11. From selfServiceFirstVersion on, a release without the self-service package is incomplete.
+	if v7 := base.version(6); selfServicePackages(v7) == 1 {
+		withoutApp := signedSourceRelease(t, v7)
+		delete(withoutApp.files, "paddock-self-service_"+v7+"_all.deb")
+		writeGitHubFixture(t, dir, append([]fixtureRelease{current, withoutApp}, others...)...)
+		freshStepUp(t, root, env.PlatformAdmin)
+		res = importRelease(t, root, v7)
+		expectStatus(t, res, http.StatusUnprocessableEntity, "release_incomplete")
+		if !strings.Contains(string(res.Body), "paddock-self-service_"+v7+"_all.deb") {
+			t.Fatalf("the refusal does not name the missing self-service package: %s", res.Body)
+		}
+		importEvent(t, idx, res, "failure")
+		expectNoRelease(t, root, v7)
+	}
 }
 
 // importAuditCases are the A3 cases of POST /api/platform/v1/agent-releases/import (ADR 0043 decision 7); they live in

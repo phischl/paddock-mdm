@@ -180,7 +180,8 @@ func run(args []string) error {
 }
 
 // debName splits <name>_<version>_<arch>.deb and checks the version; nfpm writes a pre-release version such as
-// 1.2.0-rc.1 as 1.2.0~rc.1 (Debian ordering). fleet-osquery carries the fleetd version, returned as packageVersion.
+// 1.2.0-rc.1 as 1.2.0~rc.1 (Debian ordering). fleet-osquery carries the fleetd version, returned as packageVersion;
+// paddock-self-service carries the release version and the arch all, which the server accepts for it alone.
 func debName(file, version string) (name, packageVersion, arch string, err error) {
 	parts := strings.Split(strings.TrimSuffix(file, ".deb"), "_")
 	if len(parts) == 3 && strings.HasSuffix(file, ".deb") && parts[0] == "fleet-osquery" {

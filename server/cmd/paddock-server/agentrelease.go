@@ -138,13 +138,13 @@ func parseDebName(file, version string) (app.HostPackage, error) {
 		return app.HostPackage{}, fmt.Errorf("%s: not <name>_<version>_<arch>.deb", file)
 	}
 	pkg := app.HostPackage{Name: parts[0], Arch: parts[2]}
-	if err := agentrelease.ValidateArch(pkg.Arch); err != nil {
+	if err := agentrelease.ValidatePackageArch(pkg.Name, pkg.Arch); err != nil {
 		return app.HostPackage{}, fmt.Errorf("%s: %w", file, err)
 	}
 	switch pkg.Name {
 	case agentrelease.PackageFleetd:
 		pkg.PackageVersion = parts[1]
-	case agentrelease.PackageAgent, agentrelease.PackageSupervisor, agentrelease.PackageRevoke:
+	case agentrelease.PackageAgent, agentrelease.PackageSupervisor, agentrelease.PackageRevoke, agentrelease.PackageSelfService:
 		if parts[1] != version && parts[1] != strings.Replace(version, "-", "~", 1) {
 			return app.HostPackage{}, fmt.Errorf("%s: not a package of release %s", file, version)
 		}

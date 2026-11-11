@@ -269,6 +269,46 @@ func (h releaseHarness) device(t *testing.T) (org, dev uuid.UUID) {
 	return org, dev
 }
 
+// TestSelfServicePackage holds plan M13b amendment 2026-11-11: paddock-self-service is stored with arch all, the
+// only architecture valid for it, and all is valid for no other package — in the API and in the database.
+func TestSelfServicePackage(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v := uniqueVersion()
+	if _, err := h.releases.Create(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	deb := []byte("self-service package")
+	sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(h.priv, deb, "paddock-agent version="+v+" arch=all", ""))
+	for _, c := range []struct{ name, arch string }{
+		{agentrelease.PackageSelfService, "amd64"}, {agentrelease.PackageSelfService, "arm64"},
+		{agentrelease.PackageAgent, "all"}, {agentrelease.PackageSupervisor, "all"}, {agentrelease.PackageRevoke, "all"},
+	} {
+		_, err := h.releases.UploadPackage(ctx, v, c.name, "", c.arch, deb, sig)
+		expectProblem(t, err, problem.InvalidRequest)
+	}
+	_, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageFleetd, "1.48.0", "all", deb, sig)
+	expectProblem(t, err, problem.InvalidRequest)
+	if len(h.store.puts) != 0 {
+		t.Fatal("a refused package was stored")
+	}
+	pkg, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageSelfService, "", "all", deb, sig)
+	if err != nil || pkg.Arch != "all" || pkg.ObjectKey != "packages/"+v+"/paddock-self-service_"+v+"_all.deb" ||
+		string(h.store.puts[pkg.ObjectKey]) != string(deb) {
+		t.Fatalf("self-service upload: %+v, %v", pkg, err)
+	}
+
+	for _, c := range []struct{ name, arch string }{
+		{"paddock-self-service", "amd64"}, {"paddock-agent", "all"}, {"fleet-osquery", "all"}, {"paddock-self-service", "noarch"},
+	} {
+		_, err := h.super.Exec(context.Background(), `INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key, package_version)
+			VALUES ($1, $2, $3, repeat('a', 64), 1, 'sig', 'k', CASE WHEN $2 = 'fleet-osquery' THEN '1.48.0' END)`, v, c.name, c.arch)
+		if err == nil || !strings.Contains(err.Error(), "agent_package_arch_check") {
+			t.Errorf("database accepted %s %s: %v", c.name, c.arch, err)
+		}
+	}
+}
+
 func TestRolloutRoundHaltsOnFailures(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	h.haltAll(t)

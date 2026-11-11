@@ -4151,8 +4151,8 @@ export interface paths {
             path: {
                 /** @description Semantic version of an agent release. */
                 version: components["parameters"]["Version"];
-                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
-                arch: "amd64" | "arm64";
+                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery" | "paddock-self-service";
+                arch: "amd64" | "arm64" | "all";
             };
             cookie?: never;
         };
@@ -4165,7 +4165,10 @@ export interface paths {
          *     https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb; the Paddock autoinstall pins their
          *     SHA-256 (plan M4b decision 1). fleet-osquery (fleetd, plan M5a decision 3) needs package_version, the fleetd
          *     version its file is named after (packages/<version>/fleet-osquery_<package_version>_<arch>.deb); the agent
-         *     installs it, the autoinstall never. Uploading again replaces the package while the release is a draft.
+         *     installs it, the autoinstall never. paddock-self-service (the self-service app, plan M13b amendment
+         *     2026-11-11) is architecture-independent: it is uploaded with arch all, the only architecture valid for it, and
+         *     all is valid for no other package (400 invalid_request otherwise); neither the autoinstall nor the agent update
+         *     installs it. Uploading again replaces the package while the release is a draft.
          *     Audited as an artifact upload with kind deb.
          */
         put: operations["uploadAgentPackage"];
@@ -5271,11 +5274,11 @@ export interface components {
         };
         AgentPackage: {
             /** @enum {string} */
-            name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
+            name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery" | "paddock-self-service";
             /** @description The fleetd version of fleet-osquery; absent for Paddock's packages. */
             package_version?: string;
             /** @enum {string} */
-            arch: "amd64" | "arm64";
+            arch: "amd64" | "arm64" | "all";
             /** @description Hex SHA-256 of the package. */
             sha256: string;
             /** Format: int64 */
@@ -16969,8 +16972,8 @@ export interface operations {
             path: {
                 /** @description Semantic version of an agent release. */
                 version: components["parameters"]["Version"];
-                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
-                arch: "amd64" | "arm64";
+                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery" | "paddock-self-service";
+                arch: "amd64" | "arm64" | "all";
             };
             cookie?: never;
         };
