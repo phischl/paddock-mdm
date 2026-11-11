@@ -158,10 +158,9 @@ configuration and are never touched by the catalog.
 **Installations pause directory logins.** On a device with directory logins the agent stops the login service
 (`himmelblaud`) around every package installation, removal and update run it carries out, so that packages can create
 their system accounts, and starts it again afterwards. Meanwhile new logins and screen unlocks of directory users
-wait: seconds, for large packages minutes, at most 10 minutes per installation. Running sessions are not ended, but
-directory users and groups may not resolve meanwhile: `ls -l` shows numeric IDs in place of names, and `sudo` by a
-directory user can fail until the installation has finished. Local accounts, the local administrator included, are
-not affected. Each pause is recorded as `device.login_nss_shield`. A maintenance window therefore also decides
+wait: seconds, for large packages minutes, at most 10 minutes per installation. Running sessions continue, and
+signed-in directory users keep resolving by name and UID from Himmelblau's cache. Local accounts, the local
+administrator included, are not affected. Each pause is recorded as `device.login_nss_shield`. A maintenance window therefore also decides
 when logins may wait. Details and the bounds: [device-login.md](device-login.md), "Package installations pause
 directory logins" (residual risk RR-133).
 
