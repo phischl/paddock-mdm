@@ -347,3 +347,84 @@ func TestRequestRate(t *testing.T) {
 		t.Errorf("next hour: %d", code)
 	}
 }
+
+func (f *fixture) withdraw(t *testing.T, uid int, entry string) (int, map[string]any) {
+	t.Helper()
+	return f.send(t, uid, http.MethodDelete, "/v1/apps/"+entry+"/request", "")
+}
+
+func (f *fixture) noWithdrawEvent(t *testing.T) {
+	t.Helper()
+	select {
+	case ev := <-f.svc.Withdrawals():
+		t.Fatalf("unexpected software.request_withdrawn %+v", ev)
+	default:
+	}
+}
+
+// TestWithdrawSignal (PDK-811b, decisions §54): with the server's request_withdraw flag a withdrawal is reported once
+// as software.request_withdrawn with the user and the entry; a second withdrawal finds nothing and reports nothing.
+func TestWithdrawSignal(t *testing.T) {
+	f := newFixture(t)
+	sp := approvalSpec(nil)
+	sp.RequestWithdraw = true
+	f.svc.SetBundle(softwareBundle(sp), nil)
+	f.request(t, alice, entryB, "")
+	f.requestEvent(t)
+	if code, body := f.withdraw(t, alice, entryB); code != http.StatusOK || body["request"] != nil {
+		t.Fatalf("withdraw: %d %v", code, body)
+	}
+	select {
+	case ev := <-f.svc.Withdrawals():
+		if ev != (protocol.SoftwareRequestWithdrawn{User: "alice@example.org", EntryID: entryB}) {
+			t.Errorf("event %+v", ev)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no software.request_withdrawn event")
+	}
+	if code, _ := f.withdraw(t, alice, entryB); code != http.StatusNotFound {
+		t.Errorf("second withdraw: %d", code)
+	}
+	f.noWithdrawEvent(t)
+}
+
+// TestWithdrawSignalCompat (decisions §54, ADR 0024): a bundle from a server without the request_withdraw flag keeps
+// the withdrawal on the device and sends no event, because such a server rejects an unknown event type with its batch.
+func TestWithdrawSignalCompat(t *testing.T) {
+	var sp bundle.SoftwareSpec
+	if err := json.Unmarshal([]byte(`{"sources":[],"packages":[{"package":"gimp-apt","intent":"available","version":null,`+
+		`"source":"","catalog_entry_id":"`+entryB+`","audience":{"all":true},"approval":"required"}]}`), &sp); err != nil {
+		t.Fatal(err)
+	}
+	if err := bundle.ValidateSoftware(sp); err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t)
+	f.svc.SetBundle(softwareBundle(sp), nil)
+	f.request(t, alice, entryB, "")
+	f.requestEvent(t)
+	if code, body := f.withdraw(t, alice, entryB); code != http.StatusOK || body["request"] != nil {
+		t.Fatalf("withdraw: %d %v", code, body)
+	}
+	f.noWithdrawEvent(t)
+}
+
+// TestWithdrawSignalBusy: when the event channel is full the withdrawal is refused with 429 busy and the request stays
+// pending, so the device never hides a request the server still holds open.
+func TestWithdrawSignalBusy(t *testing.T) {
+	f := newFixture(t)
+	sp := approvalSpec(nil)
+	sp.RequestWithdraw = true
+	f.svc.SetBundle(softwareBundle(sp), nil)
+	f.request(t, alice, entryB, "")
+	f.requestEvent(t)
+	for range cap(f.svc.withdrawn) {
+		f.svc.withdrawn <- protocol.SoftwareRequestWithdrawn{}
+	}
+	if code, body := f.withdraw(t, alice, entryB); code != http.StatusTooManyRequests || body["code"] != CodeBusy {
+		t.Fatalf("withdraw with a full channel: %d %v", code, body)
+	}
+	if _, body := f.call(t, alice, http.MethodGet, "/v1/apps/"+entryB); requestState(body) != RequestRequested {
+		t.Errorf("the request after a refused withdrawal: %v", body)
+	}
+}

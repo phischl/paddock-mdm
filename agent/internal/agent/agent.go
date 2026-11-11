@@ -415,9 +415,11 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 	nextAt := a.d.Now()
 	var selfService <-chan protocol.SoftwareSelfService
 	var requests <-chan protocol.SoftwareRequest
+	var withdrawals <-chan protocol.SoftwareRequestWithdrawn
 	if a.d.SelfService != nil {
 		selfService = a.d.SelfService.Events()
 		requests = a.d.SelfService.Requests()
+		withdrawals = a.d.SelfService.Withdrawals()
 	}
 	for {
 		select {
@@ -427,6 +429,8 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 			a.event(protocol.EventSoftwareSelfService, ev)
 		case ev := <-requests:
 			a.event(protocol.EventSoftwareRequest, ev)
+		case ev := <-withdrawals:
+			a.event(protocol.EventSoftwareRequestWithdrawn, ev)
 		case <-drift.C:
 			a.drift(ctx)
 			a.refreshSelfService()

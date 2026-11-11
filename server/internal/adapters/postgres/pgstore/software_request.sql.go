@@ -653,3 +653,31 @@ func (q *Queries) SoftwareRequestOffered(ctx context.Context, arg SoftwareReques
 	err := row.Scan(&offered)
 	return offered, err
 }
+
+const withdrawSoftwareRequest = `-- name: WithdrawSoftwareRequest :execrows
+UPDATE software_request SET state = 'withdrawn', decided_at = $1
+WHERE device_id = $2 AND catalog_entry_id = $3 AND username = $4 AND state = 'requested'
+  AND requested_at <= $1
+`
+
+type WithdrawSoftwareRequestParams struct {
+	DecidedAt      *time.Time
+	DeviceID       uuid.UUID
+	CatalogEntryID uuid.UUID
+	Username       string
+}
+
+// Closes the open request of the device, entry and user a device reported withdrawn (PDK-811b); the partial unique
+// index allows one at most. A request opened after the report was received is a newer one and stays.
+func (q *Queries) WithdrawSoftwareRequest(ctx context.Context, arg WithdrawSoftwareRequestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, withdrawSoftwareRequest,
+		arg.DecidedAt,
+		arg.DeviceID,
+		arg.CatalogEntryID,
+		arg.Username,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}

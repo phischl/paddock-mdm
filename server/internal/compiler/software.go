@@ -425,6 +425,11 @@ func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uu
 		return nil, nil, conflicts, warnings, nil
 	}
 	addFlatpakRuntime(spec)
+	// Only an agent past the approval gate gets a package requiring approval, so the flag never reaches an agent that
+	// does not know it (decisions §54).
+	spec.RequestWithdraw = slices.ContainsFunc(spec.Packages, func(p bundle.SoftwarePackage) bool {
+		return p.Approval == bundle.SoftwareApprovalRequired
+	})
 	spec.Windows = s.deviceWindows(ctx, device, groups)
 	if r := s.repository; r != nil && slices.ContainsFunc(spec.Sources, func(x bundle.SoftwareSource) bool { return x.Slug == r.slug }) {
 		auth := r.auth

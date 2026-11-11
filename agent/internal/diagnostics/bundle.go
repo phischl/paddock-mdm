@@ -44,7 +44,7 @@ func publicBundleFields() map[string]bool {
 		"software.packages.flatpak_ref", "software.packages.scope", "software.packages.audience.all",
 		"software.packages.audience.users", "software.packages.users", "software.packages.approval",
 		"software.packages.approved", "software.packages.denied.user",
-		"software.packages.urgent", "software.windows.days", "software.windows.start_minute",
+		"software.packages.urgent", "software.request_withdraw", "software.windows.days", "software.windows.start_minute",
 		"software.windows.duration_minutes", "software.windows.timezone",
 		// The repository user is the same constant for every organization (app.RepositoryUsername), so it reveals
 		// nothing; software.repository.password is the organization's read credential and is deliberately absent.
