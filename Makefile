@@ -276,6 +276,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/dev-instance_test.sh
 	bash test/vms/virtualbox/lib_test.sh
 	bash packaging/release_test.sh
+	bash packaging/maintainer-scripts_test.sh
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/upgrade-check_test.sh
 	bash deploy/bundle/upgrade_test.sh
@@ -426,7 +427,7 @@ fleetd-deb: ## Build the fleetd Debian package fleet-osquery (amd64) with fleetc
 	@ls -1 bin/fleetd/fleet-osquery_*_amd64.deb
 
 .PHONY: agent-release
-agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd, sign them with the development release key and upload and publish them
+agent-release: ## Build paddockd, the Debian packages VERSION (TAGS), the self-service app and fleetd, sign them with the development release key and upload and publish them
 	@test -n "$(filter-out 0.0.0-dev,$(VERSION))" || { echo "usage: make agent-release VERSION=x.y.z [TAGS=...]"; exit 1; }
 	@test -z "$(REVOKE_TAGS)" || { echo "agent-release never builds paddock-revoke with REVOKE_TAGS ($(REVOKE_TAGS))"; exit 1; }
 	@test -z "$(filter paddock_testbroken_supervisor,$(subst $(comma), ,$(TAGS)))" || { echo "agent-release never builds a broken supervisor (TAGS=$(TAGS))"; exit 1; }
@@ -435,7 +436,7 @@ agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd,
 	$(MAKE) --no-print-directory fleetd-deb
 	go run ./test/acceptance/cmd/agentrelease --version $(VERSION) --publish \
 		--artifact amd64=bin/agent/amd64/paddockd --artifact arm64=bin/agent/arm64/paddockd \
-		$$(for f in bin/deb/*.deb bin/fleetd/*.deb; do printf -- '--deb %s ' "$$f"; done)
+		$$(for f in bin/deb/*.deb bin/selfservice/*.deb bin/fleetd/*.deb; do printf -- '--deb %s ' "$$f"; done)
 
 .PHONY: up
 # dev-secrets first: it only creates missing files, so a stack started before a new secret existed gets it on upgrade.
@@ -765,11 +766,12 @@ release-images: release-check ## Build and push the three images for RELEASE_PLA
 	[ -n "$(DRY_RUN)" ] || cat $(RELEASE_DIR)/images.txt
 
 # Agent binaries and Debian packages, unsigned; the sign job of the release workflow signs paddockd and the
-# paddock-agent and paddock-supervisor packages (packaging/sign-release.sh, ADR 0006 amendment 2026-10-11), and
-# paddock-revoke stays unsigned (revocation release key offline). GitHub renames release assets with characters such
+# paddock-agent, paddock-supervisor and paddock-self-service packages (packaging/sign-release.sh, ADR 0006 amendment
+# 2026-10-11, plan M13b amendment 2026-11-11), and paddock-revoke stays unsigned (revocation release key offline). GitHub renames release assets with characters such
 # as ~, so a pre-release's packages (Debian version x.y.z~alpha.N inside) are named
 # <name>_<release version>_<arch>-unsigned.deb.
 RELEASE_DEB_DIR ?= bin/deb
+RELEASE_SELFSERVICE_DIR ?= bin/selfservice
 
 .PHONY: release-packages
 release-packages: release-key-check ## Build the unsigned agent binaries and Debian packages of RELEASE_VERSION into dist/release/<version>/
@@ -780,7 +782,7 @@ release-packages: release-key-check ## Build the unsigned agent binaries and Deb
 
 .PHONY: release-debs
 release-debs: release-check
-	@for f in $(RELEASE_DEB_DIR)/*.deb; do b=$$(basename "$$f" .deb); \
+	@for f in $(RELEASE_DEB_DIR)/*.deb $(RELEASE_SELFSERVICE_DIR)/*.deb; do b=$$(basename "$$f" .deb); \
 		cp "$$f" "$(RELEASE_DIR)/$${b%%_*}_$(RELEASE_VERSION)_$${b##*_}-unsigned.deb" || exit 1; done
 
 .PHONY: release-names-check
@@ -789,8 +791,8 @@ release-names-check:
 		test -z "$$bad" || { echo "release file names GitHub would rename: $$bad"; exit 2; }
 
 # The publish job replaces each -unsigned agent file with its signed file and .minisig from RELEASE_SIGNED_DIR (the
-# sign job's output) before release-sums, so SHA256SUMS names the published files. No paddockd, paddock-agent or
-# paddock-supervisor file may stay unsigned; paddock-revoke is never in RELEASE_SIGNED_DIR.
+# sign job's output) before release-sums, so SHA256SUMS names the published files. No paddockd, paddock-agent,
+# paddock-supervisor or paddock-self-service file may stay unsigned; paddock-revoke is never in RELEASE_SIGNED_DIR.
 RELEASE_SIGNED_DIR ?=
 
 .PHONY: release-merge-signed
@@ -804,7 +806,7 @@ release-merge-signed: release-check
 			*) test -f "$$f.minisig" || { echo "$$b without $$b.minisig"; exit 2; }; rm -f "$(RELEASE_DIR)/$$b-unsigned" ;; \
 		esac; cp "$$f" "$(RELEASE_DIR)/$$b"; done
 	@left=$$(find $(RELEASE_DIR) -maxdepth 1 -type f \( -name 'paddockd_*-unsigned' -o -name 'paddock-agent_*-unsigned.deb' \
-		-o -name 'paddock-supervisor_*-unsigned.deb' \) -printf '%f\n'); \
+		-o -name 'paddock-supervisor_*-unsigned.deb' -o -name 'paddock-self-service_*-unsigned.deb' \) -printf '%f\n'); \
 		test -z "$$left" || { echo "agent files without a signed counterpart: $$left"; exit 2; }
 
 # One SPDX SBOM per image and platform, read by syft from the registry (decision 7).

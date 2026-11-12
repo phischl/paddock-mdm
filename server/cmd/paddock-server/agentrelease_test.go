@@ -14,6 +14,7 @@ func TestParseDebName(t *testing.T) {
 		{"paddock-supervisor_0.1.0-alpha.1_amd64.deb", "0.1.0-alpha.1", "paddock-supervisor", "", "amd64"},
 		{"paddock-revoke_0.1.0~alpha.1_arm64.deb", "0.1.0-alpha.1", "paddock-revoke", "", "arm64"},
 		{"fleet-osquery_1.48.0_amd64.deb", "1.2.0", "fleet-osquery", "1.48.0", "amd64"},
+		{"paddock-self-service_0.1.0~alpha.10_all.deb", "0.1.0-alpha.10", "paddock-self-service", "", "all"},
 	} {
 		got, err := parseDebName(c.file, c.version)
 		if err != nil || got.Name != c.name || got.PackageVersion != c.packageVersion || got.Arch != c.arch {
@@ -26,6 +27,9 @@ func TestParseDebName(t *testing.T) {
 		{"paddock-agent-1.2.0-amd64.deb", "1.2.0"},
 		{"other_1.2.0_amd64.deb", "1.2.0"},
 		{"paddock-agent_1.2.0_amd64.rpm", "1.2.0"},
+		{"paddock-agent_1.2.0_all.deb", "1.2.0"},
+		{"paddock-self-service_1.2.0_amd64.deb", "1.2.0"},
+		{"paddock-self-service_1.1.0_all.deb", "1.2.0"},
 	} {
 		if _, err := parseDebName(c.file, c.version); err == nil {
 			t.Errorf("parseDebName(%q, %q) accepted", c.file, c.version)

@@ -195,6 +195,13 @@ func TestSlowTargetDoesNotHoldTheFastOne(t *testing.T) {
 		st, ok := f.store.statusOf(fastRec.ID, KindOpenBao)
 		return ok && st.Error == "" && !st.LastSuccess.IsZero()
 	})
+	// The lane writes the status before it publishes the gauges, so the end of the lane is what the gauge waits for
+	// (PDK-1006).
+	waitFor(t, "the fast target's lane", func() bool {
+		f.engine.laneMu.Lock()
+		defer f.engine.laneMu.Unlock()
+		return f.engine.lanes[fastRec.ID] == nil
+	})
 	if _, ok := fast.files[backupset.ManifestPath]; !ok {
 		t.Fatal("the fast target got no manifest")
 	}
@@ -543,5 +550,61 @@ func TestRemovedTargetCancelsItsLane(t *testing.T) {
 				t.Errorf("run after the cancel: %+v, want only the other target's ok", r)
 			}
 		})
+	}
+}
+
+// TestTargetGaugesNeverGap: publishing the per-target gauges again never lets a concurrent scrape see fewer series, and
+// a removed target's series go away while the remaining target's stay (PDK-1006).
+func TestTargetGaugesNeverGap(t *testing.T) {
+	f := newFixture(t)
+	f.confirmKey()
+	f.addTarget(t, backupset.TypeS3, newMemTarget())
+	keep := f.addTarget(t, backupset.TypeS3, newMemTarget())
+	roundWithin(t, f)
+	f.engine.waitLanes()
+	reachable, held, last := testutil.CollectAndCount(f.metrics.reachable), testutil.CollectAndCount(f.metrics.held),
+		testutil.CollectAndCount(f.metrics.lastSuccess)
+	if reachable != 2 || held != 2 || last == 0 {
+		t.Fatalf("series after the first round: reachable %d, held %d, last success %d", reachable, held, last)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 2000 {
+			f.engine.laneMu.Lock()
+			f.engine.publishTargets()
+			f.engine.laneMu.Unlock()
+		}
+	}()
+	for running := true; running; {
+		select {
+		case <-done:
+			running = false
+		default:
+		}
+		if n := testutil.CollectAndCount(f.metrics.reachable); n != reachable {
+			t.Fatalf("a scrape saw %d reachable series while they were published again, want %d", n, reachable)
+		}
+		if n := testutil.CollectAndCount(f.metrics.lastSuccess); n != last {
+			t.Fatalf("a scrape saw %d last success series while they were published again, want %d", n, last)
+		}
+	}
+
+	f.store.targets[0].Enabled = false
+	f.now = f.now.Add(time.Minute)
+	roundWithin(t, f)
+	f.engine.waitLanes()
+	if n := testutil.CollectAndCount(f.metrics.reachable); n != 1 {
+		t.Errorf("%d reachable series after a target was disabled, want 1", n)
+	}
+	if n := testutil.CollectAndCount(f.metrics.held); n != 1 {
+		t.Errorf("%d held series after a target was disabled, want 1", n)
+	}
+	if n := testutil.CollectAndCount(f.metrics.lastSuccess); n >= last {
+		t.Errorf("%d last success series after a target was disabled, want fewer than %d", n, last)
+	}
+	if got := testutil.ToFloat64(f.metrics.reachable.WithLabelValues(keep.Name)); got != 1 {
+		t.Errorf("the remaining target's reachable %v, want 1", got)
 	}
 }

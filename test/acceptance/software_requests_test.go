@@ -177,6 +177,8 @@ func requestEvent(t *testing.T, viewer *env.Portal, code, id string) env.AuditEv
 //   - Deny needs a reason, the device's bundle names the denial with that reason, a re-request within 24 hours opens
 //     nothing; approve with or without a reason; a decided request cannot be decided again (409 invalid_state); an
 //     approved user's re-request opens nothing.
+//   - Withdraw (PDK-811b): the bundle carries the request_withdraw flag; the device's software.request_withdrawn closes
+//     the open request as withdrawn with one device.software_request_withdrawn event, also when redelivered.
 //   - Expiry by the worker's request round: validity_ended after expires_at, approval_removed for open and approved
 //     requests once the entry no longer requires approval; deciding such a request is 409 invalid_state at once.
 func TestSoftwareRequests(t *testing.T) {
@@ -299,6 +301,24 @@ func TestSoftwareRequests(t *testing.T) {
 		if open := requestsOf(t, alice, entry, "requested"); len(open) != 0 {
 			t.Fatalf("a request beside an approval opened one: %+v", open)
 		}
+	})
+
+	t.Run("withdraw", func(t *testing.T) {
+		// The server's capability flag (PDK-811b, decisions §54): only with it does an agent send the withdrawal.
+		latestBundle(t, f.device, 2*time.Minute, func(b *bundle.Bundle) bool { return b.Software != nil && b.Software.RequestWithdraw })
+		u5 := "swreq-u5-" + suffix + "@acme.test"
+		f.ask(t, entry, u5)
+		waitRequest(t, alice, entry, u5, "requested", time.Minute)
+		f.seq++
+		for range 2 {
+			sendBundleEvent(t, f.device, f.seq, protocol.EventSoftwareRequestWithdrawn, map[string]any{"user": u5, "entry_id": entry})
+		}
+		r := waitRequest(t, alice, entry, u5, "withdrawn", time.Minute)
+		if r.DecidedBy != nil || r.DecisionReason != nil {
+			t.Fatalf("withdrawn request %+v", r)
+		}
+		waitDeviceEvents(t, alice, "device.software_request_withdrawn", f.device.DeviceID, 1)
+		expectStatus(t, call(t, alice, http.MethodPost, softwareRequests+"/"+r.ID+"/approve", nil), http.StatusConflict, "invalid_state")
 	})
 
 	t.Run("expiry", func(t *testing.T) {

@@ -2334,9 +2334,9 @@ export interface paths {
         };
         /**
          * @description Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment
-         *     of the organization or of one of their groups, and the active devices that reported it (an entry that reaches a
-         *     device through its owners), with what they reported or the derived state not_applicable or unknown (see the
-         *     device's managed software). A device with a system and a user-scope row for the entry is
+         *     of the organization, of one of their groups or of one of their owners (a user, or a user group with a member who
+         *     owns the device), and the active devices that reported it, with what they reported or the derived state
+         *     not_applicable or unknown (see the device's managed software). A device with a system and a user-scope row for the entry is
          *     listed once per scope (plan M13b decision 17). The search matches the hostname. 404 not_found for another
          *     organization's entry.
          */
@@ -3629,7 +3629,9 @@ export interface paths {
         };
         /**
          * @description Roles: org_admin, org_operator, org_auditor. The catalog applications the device manages (plan M13a §3.4): what
-         *     the device reported for each, and for an application assigned to it that it has not reported on the derived state
+         *     the device reported for each, and for an application assigned to it (through the organization, one of its groups
+         *     or one of its owners, a user or a user group with a member who owns the device) that it has not reported on the
+         *     derived state
          *     not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package
          *     applies, no report yet). An application the device reports in system and in user scope is listed once per scope
          *     (plan M13b decision 17). The state, intent and scope filters apply to derived entries too; derived entries have
@@ -4152,8 +4154,8 @@ export interface paths {
             path: {
                 /** @description Semantic version of an agent release. */
                 version: components["parameters"]["Version"];
-                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
-                arch: "amd64" | "arm64";
+                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery" | "paddock-self-service";
+                arch: "amd64" | "arm64" | "all";
             };
             cookie?: never;
         };
@@ -4161,12 +4163,19 @@ export interface paths {
         /**
          * @description Roles: platform_admin. Uploads a Debian package of a draft release (at most 128 MiB), signed like the
          *     binary: the server verifies the minisign signature with the configured release public key, paddock-revoke with
-         *     the revocation release public key (400 otherwise).
+         *     the revocation release public key (400 otherwise). The signed trusted comment must be
+         *     `paddock-agent version=<version> arch=<arch>` for this release and architecture, for fleet-osquery and
+         *     paddock-revoke too (the release version, not fleet-osquery's package_version; 422 release_signature_mismatch
+         *     otherwise), so that a package
+         *     signed for another release cannot be stored under this one.
          *     Packages are stored below packages/ in the artifact bucket and served without authentication at
          *     https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb; the Paddock autoinstall pins their
          *     SHA-256 (plan M4b decision 1). fleet-osquery (fleetd, plan M5a decision 3) needs package_version, the fleetd
          *     version its file is named after (packages/<version>/fleet-osquery_<package_version>_<arch>.deb); the agent
-         *     installs it, the autoinstall never. Uploading again replaces the package while the release is a draft.
+         *     installs it, the autoinstall never. paddock-self-service (the self-service app, plan M13b amendment
+         *     2026-11-11) is architecture-independent: it is uploaded with arch all, the only architecture valid for it, and
+         *     all is valid for no other package (400 invalid_request otherwise); neither the autoinstall nor the agent update
+         *     installs it. Uploading again replaces the package while the release is a draft.
          *     Audited as an artifact upload with kind deb.
          */
         put: operations["uploadAgentPackage"];
@@ -5272,11 +5281,11 @@ export interface components {
         };
         AgentPackage: {
             /** @enum {string} */
-            name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
+            name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery" | "paddock-self-service";
             /** @description The fleetd version of fleet-osquery; absent for Paddock's packages. */
             package_version?: string;
             /** @enum {string} */
-            arch: "amd64" | "arm64";
+            arch: "amd64" | "arm64" | "all";
             /** @description Hex SHA-256 of the package. */
             sha256: string;
             /** Format: int64 */
@@ -16970,8 +16979,8 @@ export interface operations {
             path: {
                 /** @description Semantic version of an agent release. */
                 version: components["parameters"]["Version"];
-                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
-                arch: "amd64" | "arm64";
+                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery" | "paddock-self-service";
+                arch: "amd64" | "arm64" | "all";
             };
             cookie?: never;
         };
@@ -16995,6 +17004,7 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
         };
     };

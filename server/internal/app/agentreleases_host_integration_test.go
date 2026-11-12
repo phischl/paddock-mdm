@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"strings"
 	"testing"
 
 	"aead.dev/minisign"
@@ -22,7 +23,57 @@ func (h releaseHarness) hostFiles(version string) ([]app.HostArtifact, []app.Hos
 	deb := []byte("paddock-agent deb " + version)
 	return []app.HostArtifact{{Arch: "amd64", Binary: bin,
 			Minisig: minisign.SignWithComments(h.priv, bin, releasesig.Comment(version, "amd64"), "")}},
-		[]app.HostPackage{{Name: agentrelease.PackageAgent, Arch: "amd64", Deb: deb, Minisig: minisign.Sign(h.priv, deb)}}
+		[]app.HostPackage{{Name: agentrelease.PackageAgent, Arch: "amd64", Deb: deb,
+			Minisig: minisign.SignWithComments(h.priv, deb, releasesig.Comment(version, "amd64"), "")}}
+}
+
+// hostFleetd is fleetd 1.48.0 for amd64 signed with the agent release key and the trusted comment comment.
+func (h releaseHarness) hostFleetd(comment string) app.HostPackage {
+	deb := []byte("fleet-osquery deb 1.48.0")
+	return app.HostPackage{Name: agentrelease.PackageFleetd, PackageVersion: "1.48.0", Arch: "amd64", Deb: deb,
+		Minisig: minisign.SignWithComments(h.priv, deb, comment, "")}
+}
+
+// hostRevoke is paddock-revoke for amd64 signed with key and the trusted comment comment.
+func (h releaseHarness) hostRevoke(key minisign.PrivateKey, comment string) app.HostPackage {
+	deb := []byte("paddock-revoke deb")
+	return app.HostPackage{Name: agentrelease.PackageRevoke, Arch: "amd64", Deb: deb, Minisig: minisign.SignWithComments(key, deb, comment, "")}
+}
+
+// TestAgentReleasePublishFromHostRevoke holds ADR 0043 amendment 2026-11-11 c for the host command (PDK-1004):
+// paddock-revoke signed with the revocation release key and the comment of its release is published.
+func TestAgentReleasePublishFromHostRevoke(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := httpx.WithRequestID(context.Background(), uuid.NewString())
+	v := uniqueVersion()
+	arts, pkgs := h.hostFiles(v)
+	revoke := h.hostRevoke(h.revokePriv, releasesig.Comment(v, "amd64"))
+	d, err := h.releases.PublishFromHost(ctx, v, arts, append(pkgs, revoke))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := agentrelease.PackageObjectKey(v, agentrelease.PackageRevoke, "", "amd64")
+	if len(d.Packages) != 2 || string(h.store.puts[key]) != string(revoke.Deb) {
+		t.Fatalf("paddock-revoke not published: %+v", d.Packages)
+	}
+}
+
+// TestAgentReleasePublishFromHostFleetd holds ADR 0043 amendment 2026-11-11 c for the host command: fleetd signed with
+// the comment of the release it is stored under, not of its fleetd version, is published.
+func TestAgentReleasePublishFromHostFleetd(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := httpx.WithRequestID(context.Background(), uuid.NewString())
+	v := uniqueVersion()
+	arts, pkgs := h.hostFiles(v)
+	fleetd := h.hostFleetd(releasesig.Comment(v, "amd64"))
+	d, err := h.releases.PublishFromHost(ctx, v, arts, append(pkgs, fleetd))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := agentrelease.PackageObjectKey(v, agentrelease.PackageFleetd, "1.48.0", "amd64")
+	if len(d.Packages) != 2 || string(h.store.puts[key]) != string(fleetd.Deb) {
+		t.Fatalf("fleetd not published: %+v", d.Packages)
+	}
 }
 
 // TestAgentReleasePublishFromHost: the host command publishes through the API's use cases with their audit events
@@ -59,8 +110,9 @@ func TestAgentReleasePublishFromHost(t *testing.T) {
 	}
 }
 
-// TestAgentReleasePublishFromHostRefusesBadSignatures: a file signed with another key or a binary signed for another
-// release creates nothing and stores nothing.
+// TestAgentReleasePublishFromHostRefusesBadSignatures: a file signed with another key or a binary or package signed
+// for another release or arch (ADR 0043 amendments 2026-11-11 b and c), also paddock-revoke (PDK-1004), creates nothing
+// and stores nothing.
 func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 	h := newReleaseHarness(t, false)
 	_, otherKey, err := minisign.GenerateKey(rand.Reader)
@@ -78,13 +130,56 @@ func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 		"binary signed for another release": func(_ string, arts []app.HostArtifact, _ []app.HostPackage) {
 			arts[0].Minisig = minisign.SignWithComments(h.priv, arts[0].Binary, releasesig.Comment("9.9.9", "amd64"), "")
 		},
+		"package signed for another release": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[0].Minisig = minisign.SignWithComments(h.priv, pkgs[0].Deb, releasesig.Comment("0.0.1", "amd64"), "")
+		},
+		"package signed for another arch": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[0].Minisig = minisign.SignWithComments(h.priv, pkgs[0].Deb, releasesig.Comment(v, "arm64"), "")
+		},
+		"package signed without a release comment": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[0].Minisig = minisign.Sign(h.priv, pkgs[0].Deb)
+		},
+		"package signed with a garbled comment": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[0].Minisig = minisign.SignWithComments(h.priv, pkgs[0].Deb, "paddock-agent "+v+" amd64", "")
+		},
+		"fleetd signed for another release": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[1] = h.hostFleetd(releasesig.Comment("0.0.1", "amd64"))
+		},
+		"fleetd signed with the comment of its fleetd version": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[1] = h.hostFleetd(releasesig.Comment("1.48.0", "amd64"))
+		},
+		"fleetd signed for another arch": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[1] = h.hostFleetd(releasesig.Comment(v, "arm64"))
+		},
+		"fleetd signed without a release comment": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[1] = h.hostFleetd("fleet-osquery 1.48.0 amd64")
+		},
+		"paddock-revoke signed with the agent release key": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[2] = h.hostRevoke(h.priv, releasesig.Comment(v, "amd64"))
+		},
+		"paddock-revoke signed for another release": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[2] = h.hostRevoke(h.revokePriv, releasesig.Comment("0.0.1", "amd64"))
+		},
+		"paddock-revoke signed for another arch": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[2] = h.hostRevoke(h.revokePriv, releasesig.Comment(v, "arm64"))
+		},
+		"paddock-revoke signed without a release comment": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[2] = h.hostRevoke(h.revokePriv, "paddock-revoke "+v+" amd64")
+		},
 	} {
 		v := uniqueVersion()
 		arts, pkgs := h.hostFiles(v)
+		pkgs = append(pkgs, h.hostFleetd(releasesig.Comment(v, "amd64")), h.hostRevoke(h.revokePriv, releasesig.Comment(v, "amd64")))
 		tamper(v, arts, pkgs)
 		before := len(h.store.puts)
-		if _, err := h.releases.PublishFromHost(ctx, v, arts, pkgs); err == nil {
+		_, err := h.releases.PublishFromHost(ctx, v, arts, pkgs)
+		if err == nil {
 			t.Errorf("%s: published", name)
+		}
+		if strings.Contains(name, "comment") || strings.Contains(name, "another release") || strings.Contains(name, "another arch") {
+			if problem.From(err).Code != problem.ReleaseSignatureMismatch.Code {
+				t.Errorf("%s: err = %v, want release_signature_mismatch", name, err)
+			}
 		}
 		if n := countRows(t, h.super, "SELECT count(*) FROM agent_release WHERE version = $1", v); n != 0 {
 			t.Errorf("%s: the release was created", name)

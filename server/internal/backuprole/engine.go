@@ -186,6 +186,16 @@ type Engine struct {
 	// a lane publishes when it ends refer to.
 	enabled   []TargetRecord
 	repoKinds map[string]kindInfo
+	// published are the label values of the target gauges the last publishTargets set, so that the next one deletes
+	// only the series that went away (guarded by laneMu).
+	published publishedSeries
+}
+
+// publishedSeries are the label values of the per-target gauges: target names of paddock_backup_target_reachable and
+// paddock_backup_target_held_files, kind and target of paddock_backup_last_success_timestamp_seconds.
+type publishedSeries struct {
+	reachable, held map[string]bool
+	lastSuccess     map[[2]string]bool
 }
 
 // NewEngine creates the engine.

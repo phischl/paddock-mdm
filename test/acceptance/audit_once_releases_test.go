@@ -156,9 +156,14 @@ func signedUpload(t *testing.T, p *env.Portal, v string) env.Response {
 	return uploadArtifact(t, p, v, bin, signBinary(t, bin, v))
 }
 
+// signPackage signs an amd64 Debian package of release v as the sign job does (ADR 0043 amendment 2026-11-11 b).
+func signPackage(t *testing.T, deb []byte, v string) []byte {
+	return minisign.SignWithComments(releaseKey(t), deb, releasesig.Comment(v, "amd64"), "")
+}
+
 func signedPackage(t *testing.T, p *env.Portal, v string) env.Response {
 	deb := []byte("gate package " + v)
-	return uploadPackage(t, p, v, "paddock-agent", deb, minisign.Sign(releaseKey(t), deb))
+	return uploadPackage(t, p, v, "paddock-agent", deb, signPackage(t, deb, v))
 }
 
 // releaseAuditCases are the A3 cases of the agent release operations (plan M2b decision 20).

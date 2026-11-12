@@ -247,6 +247,10 @@ const (
 	// agent emits it only while its bundle carries a package with approval required, which only a server that knows
 	// approvals renders (ADR 0024).
 	EventSoftwareRequest = "software.request" // data: SoftwareRequest
+	// A user withdrew a pending software request on the device (PDK-811b, decisions §54). The agent emits it only while
+	// its bundle's software section sets RequestWithdraw: a server before it rejected an unknown type with the whole
+	// batch (ADR 0024).
+	EventSoftwareRequestWithdrawn = "software.request_withdrawn" // data: SoftwareRequestWithdrawn
 )
 
 // Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial; helper_failed when
@@ -391,6 +395,13 @@ type SoftwareRequest struct {
 	Justification string `json:"justification,omitempty"`
 }
 
+// SoftwareRequestWithdrawn is the data of software.request_withdrawn: the user name of the account that withdrew its
+// pending request and the catalog entry the request was for.
+type SoftwareRequestWithdrawn struct {
+	User    string `json:"user"`
+	EntryID string `json:"entry_id"`
+}
+
 // SoftwareApplyFailed is the data of software.apply_failed: a package or a source (Source without Package) that could
 // not be applied. Error is at most 200 characters.
 type SoftwareApplyFailed struct {
@@ -426,7 +437,7 @@ var EventTypes = []string{
 	EventDiskConversionPrepared, EventDiskConversionStarted, EventDiskConversionCompleted, EventDiskConversionFailed,
 	EventDiskConversionAborted, EventDiskConversionNeutralizeFailed, EventDiskConversionUnlockRestoreFailed,
 	EventSoftwareInstalled, EventSoftwareReinstalled, EventSoftwareRemoved, EventSoftwareApplyFailed,
-	EventSoftwareSelfService, EventSoftwareRequest,
+	EventSoftwareSelfService, EventSoftwareRequest, EventSoftwareRequestWithdrawn,
 }
 
 // SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass

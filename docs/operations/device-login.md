@@ -285,8 +285,10 @@ with maintainer scripts of:
 - the dracut installation of in-place disk encryption;
 - the regular updates (`paddockd updates run`).
 
-Package list updates and simulations run without a hold. Not covered are the supervisor upgrade and the uninstall
-helper (PDK-985), and every package operation a user or another tool starts.
+Package list updates and simulations run without a hold. The supervisor upgrade and the uninstall helper run without
+a hold too, because they install nothing that creates a system user: the maintainer scripts of `paddock-supervisor` and
+`paddock-agent` create and look up no user or group, and a packaging test (`make test`) keeps it that way. Not covered
+is every package operation a user or another tool starts.
 
 - **Effect.** While Paddock installs software, **new logins and screen unlocks of directory users wait** (seconds,
   for large packages or a regular update minutes). Running sessions continue: a signed-in directory user still

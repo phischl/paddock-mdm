@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Signs the agent release files with the agent release key (ADR 0006, amendment 2026-10-11; sign job of
-# .github/workflows/release.yml): paddockd for amd64 and arm64 and every paddock-agent and paddock-supervisor package
-# of <in>, each with the trusted comment "paddock-agent version=<version> arch=<arch>". Writes each file under its
+# .github/workflows/release.yml): paddockd for amd64 and arm64, every paddock-agent and paddock-supervisor package of
+# <in> and the paddock-self-service package (arch all, plan M13b amendment 2026-11-11), each with the trusted comment
+# "paddock-agent version=<version> arch=<arch>". Writes each file under its
 # final name (without -unsigned) and its .minisig to <out>, and verifies every signature and trusted comment against
 # the public key. paddock-revoke is never signed here: the revocation release key stays offline (two holders).
 #   sign-release.sh --version <version> --in <dir> --out <dir> --key <secret key> --public-key <public key>
@@ -86,3 +87,4 @@ for pkg in paddock-agent paddock-supervisor; do
     exit 2
   }
 done
+sign "paddock-self-service_${version}_all-unsigned.deb" "paddock-self-service_${version}_all.deb" all

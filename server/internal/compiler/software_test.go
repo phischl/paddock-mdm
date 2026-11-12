@@ -1334,6 +1334,34 @@ func TestSoftwareApprovalAgentGate(t *testing.T) {
 	}
 }
 
+// TestSoftwareRequestWithdrawFlag (PDK-811b, decisions §54, compat): a section with a package that requires approval
+// carries the server's request_withdraw flag; an agent before the approval gate never gets it, and its section still
+// passes the frozen alpha.9 rules; without a package that requires approval the flag is absent.
+func TestSoftwareRequestWithdrawFlag(t *testing.T) {
+	w := approvalWorld(t)
+	devices := w.devicesAt("0.1.0-alpha.9", approvalRelease, "0.0.0-dev")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for v, d := range devices {
+		s := w.fetch(d).Software
+		if want := v != "0.1.0-alpha.9"; s.RequestWithdraw != want {
+			t.Errorf("agent %s: request_withdraw %v, want %v", v, s.RequestWithdraw, want)
+		}
+	}
+	raw, err := json.Marshal(w.fetch(devices["0.1.0-alpha.9"]).Software)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := alpha9Accepts(raw); err != nil {
+		t.Errorf("the alpha.9 agent refuses the section: %v", err)
+	}
+
+	w.exec("UPDATE software_catalog_entry SET approval = 'none' WHERE organization_id = $1", w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if s := w.fetch(devices[approvalRelease]).Software; s.RequestWithdraw || pkgOf(s, "gated") == nil {
+		t.Errorf("a section without a package requiring approval: %+v", s)
+	}
+}
+
 // denyRequest records a denial of user's request for entry on dev, decided at decidedAgo before now, with reason.
 func (w *world) denyRequest(entry, dev, user uuid.UUID, decidedAgo time.Duration, reason string) {
 	w.t.Helper()

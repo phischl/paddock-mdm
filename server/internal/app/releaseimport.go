@@ -268,7 +268,7 @@ func (r *ReleaseImports) fetch(ctx context.Context, version string) ([]HostArtif
 		if err := agentrelease.ValidatePackage(want.Package, pv); err != nil {
 			return nil, nil, problem.InvalidRequest.WithDetail(want.Name + ": " + err.Error())
 		}
-		if _, err := r.verify(r.releases.packageVerifier(want.Package), want, body, sig, ""); err != nil {
+		if _, err := r.verify(r.releases.packageVerifier(want.Package), want, body, sig, version); err != nil {
 			return nil, nil, err
 		}
 		pkgs = append(pkgs, HostPackage{Name: want.Package, PackageVersion: pv, Arch: want.Arch, Deb: body, Minisig: sig})
@@ -285,20 +285,22 @@ func (r *ReleaseImports) download(ctx context.Context, a githubreleases.Asset, m
 	return body, nil
 }
 
-// verify checks one downloaded file with checkFile and names the asset in the refusal; for an agent binary
-// (binaryVersion set) the trusted comment must name the release and arch (checkBinaryComment).
-func (r *ReleaseImports) verify(verify VerifyRelease, a agentrelease.SourceAsset, body, sig []byte, binaryVersion string) (string, error) {
+// verify checks one downloaded file of release version with checkFile and names the asset in the refusal; the trusted
+// comment must name the release and arch (checkBinaryComment for an agent binary, checkPackageComment for a package).
+func (r *ReleaseImports) verify(verify VerifyRelease, a agentrelease.SourceAsset, body, sig []byte, version string) (string, error) {
 	if len(body) == 0 {
 		return "", problem.InvalidRequest.WithDetail(a.Name + " is empty")
 	}
-	comment, err := checkFile(verify, a.Arch, body, base64.StdEncoding.EncodeToString(sig))
+	comment, err := checkFile(verify, a.Package, a.Arch, body, base64.StdEncoding.EncodeToString(sig))
 	if err != nil {
 		return "", problem.InvalidRequest.WithDetail(a.Name + ": the signature does not verify with the release public key")
 	}
-	if binaryVersion != "" {
-		if err := checkBinaryComment(comment, binaryVersion, a.Arch); err != nil {
-			return "", fmt.Errorf("%s: %w", a.Name, err)
-		}
+	commentErr := checkBinaryComment(comment, version, a.Arch)
+	if a.Package != "" {
+		commentErr = checkPackageComment(a.Package, comment, version, a.Arch)
+	}
+	if commentErr != nil {
+		return "", fmt.Errorf("%s: %w", a.Name, commentErr)
 	}
 	return comment, nil
 }

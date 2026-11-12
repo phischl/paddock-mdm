@@ -264,9 +264,11 @@ smoke_agent_release() {
   for deb in "$artifacts"/*_amd64-unsigned.deb; do
     name="$(basename "$deb" -unsigned.deb).deb"
     cp "$deb" "$W/agent/$name"
-    key=minisign
-    [[ "$name" == paddock-revoke_* ]] && key=revoke-minisign
-    minisign_sign -s "$W/keys/$key.key" -m "$W/agent/$name"
+    if [[ "$name" == paddock-revoke_* ]]; then
+      minisign_sign -s "$W/keys/revoke-minisign.key" -m "$W/agent/$name" -t "paddock-agent version=$version arch=amd64"
+    else
+      minisign_sign -s "$W/keys/minisign.key" -m "$W/agent/$name" -t "paddock-agent version=$version arch=amd64"
+    fi
   done
   cp_paddock agent-release "$version" "$W/agent" | tee "$W/agent-release.json"
   grep -q '"status": "published"' "$W/agent-release.json" || fail "agent-release did not publish $version"

@@ -25,6 +25,7 @@ const rows = [
     id: 'r2', username: 'bob@acme.test', state: 'denied', decided_by: 'Carol Admin', decided_at: '2026-11-02T10:00:00Z',
     decision_reason: '<img src=x onerror=alert(1)> not licensed',
   }),
+  request({ id: 'r3', username: 'dave@acme.test', state: 'withdrawn', decided_at: '2026-11-03T10:00:00Z' }),
 ]
 const decide = vi.hoisted(() => vi.fn())
 const asked = vi.hoisted(() => ({ options: [] as { message: string; reason?: { required: boolean } }[], answer: false as false | { reason: string } }))
@@ -99,10 +100,11 @@ describe('SoftwareRequests', () => {
     expect(shown[0].getAttribute('dir')).toBe('auto')
   })
 
-  it('lists the requests with state, user, device and the decision; the reason stays inert text', async () => {
+  it('lists the requests with state, user, device and the decision (a withdrawal by the user, PDK-811b); the reason stays inert text', async () => {
     await mountList('org_admin')
     const text = list().textContent ?? ''
-    for (const expected of ['GIMP', 'alice@acme.test', 'lap-0421', 'Waiting', 'Denied', 'by Carol Admin', '<img src=x onerror=alert(1)> not licensed']) {
+    for (const expected of ['GIMP', 'alice@acme.test', 'lap-0421', 'Waiting', 'Denied', 'by Carol Admin', '<img src=x onerror=alert(1)> not licensed',
+      'Withdrawn', 'by the user on the device']) {
       expect(text).toContain(expected)
     }
     expect(list().querySelector('img')).toBeNull()

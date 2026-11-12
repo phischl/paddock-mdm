@@ -2,6 +2,7 @@ package system
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,6 +20,7 @@ type selfServiceGate struct {
 	keep                *testing.T
 	repo                gateRepo
 	source, fpSource    string
+	slug                string // the gate source's slug (SV12)
 	fpSlug              string
 	owner, other, local *ssUser
 	anchor, offered     string // catalog entries: gateAnchor (required), ssOffered (available to everyone)
@@ -50,10 +52,13 @@ type selfServiceGate struct {
 //   - SV8 a catalog icon reaches the socket; an entry without one has none (the app's glyph);
 //   - SV9 forbidding flatpak drops every Flatpak application (A10-9, flatpak_forbidden) and removes flatpak;
 //   - SV10 a required plain package whose postinst creates a system account installs under Himmelblau (PDK-983);
+//   - SV12 the regular updates run upgrades a package to a version whose new dependency creates a system account,
+//     under one hold that the run reports through its report file (PDK-988, plan M5a N6);
 //   - SV11 none of the agent's holds was reported as tampering, and a stop of himmelblaud by someone else is.
 //
-// SV5, SV6 and SV10 run with himmelblaud active, whose NSS module answers for every unknown name (PDK-983): the agent
-// holds it stopped around its package transactions (decisions §45).
+// SV5, SV6, SV10 and SV12 run with himmelblaud active, whose NSS module answers for every unknown name (PDK-983): the agent
+// holds it stopped around its package transactions (decisions §45). SV12 runs before SV11 so that SV11's check covers
+// the updates run's hold as well.
 //
 // SV7 runs before SV3 because SV3's notification needs the session that SV7 starts only after its check without one.
 // The desktop app (PDK-802) and user names in the status (PDK-805) are not part of these gates.
@@ -70,7 +75,7 @@ func TestSelfServiceGates(t *testing.T) {
 		d.SetDriftInterval()
 		g := &selfServiceGate{keep: t, repo: d.setupGateRepo(), owner: owner, other: other}
 		d.MustRootIn([]byte(ssRepoScript), "bash -s")
-		g.source, _ = d.softwareSource(g.repo)
+		g.source, g.slug = d.softwareSource(g.repo)
 		g.fpSource, g.fpSlug = d.ssFlatpakSource(t, t, g.repo)
 		uid, err := strconv.Atoi(d.MustRoot("id -u paddock"))
 		if err != nil {
@@ -93,7 +98,7 @@ func TestSelfServiceGates(t *testing.T) {
 			{"SV1 socket", gateSV1}, {"SV2 audience", gateSV2}, {"SV4 managed applications", gateSV4},
 			{"SV5 flatpak remote", gateSV5}, {"SV7 user scope", gateSV7}, {"SV3 install", gateSV3},
 			{"SV6 interrupted", gateSV6}, {"SV8 icon", gateSV8}, {"SV9 forbid flatpak", gateSV9},
-			{"SV10 system account", gateSV10}, {"SV11 foreign stop", gateSV11},
+			{"SV10 system account", gateSV10}, {"SV12 updates run", gateSV12}, {"SV11 foreign stop", gateSV11},
 		} {
 			if !t.Run(gate.name, func(t *testing.T) { d.Bind(t); gate.fn(t, d, g) }) {
 				t.FailNow()
@@ -574,6 +579,78 @@ func gateSV10(t *testing.T, d *Device, g *selfServiceGate) {
 	d.assign(g.keep, g.sysUser, "required", "")
 	softwareState(t, d, ssSysUser, "installed", "", 10*time.Minute, d.Checkin)
 	d.requireSystemAccount(t, ssSysAccount, shields)
+}
+
+// gateSV12 (PDK-988, plan M5a N6 and N8): the regular updates run, paddock-updates.service started directly, upgrades
+// ssUpgrade from 1.0, installed by hand, to 1.1, whose new dependency creates a system account with adduser --system
+// while Himmelblau answers for every unknown name. The run reports ok, the account is a local system account, the
+// run's hold reaches the server exactly once as device.login_nss_shield through the report file, himmelblaud runs
+// again, and no device.tamper_service_stopped names it.
+func gateSV12(t *testing.T, d *Device, g *selfServiceGate) {
+	Until(t, d.Name+": paddock-updates.service installed", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
+		return d.MustRoot("test -e /etc/systemd/system/paddock-updates.service && echo yes || echo no") == "yes"
+	})
+	d.MustRootIn([]byte(ssUpgradeScript), "bash -s base")
+	d.dpkgInstall(t, ssUpgradeBase)
+	if v := d.installedVersion(ssUpgrade); v != "1.0" {
+		t.Fatalf("%s at %q before the run, want 1.0", ssUpgrade, v)
+	}
+	shields := d.requireSynthesized(t, ssUpgradeAccount)
+	tamper := d.eventIDs("device.tamper_service_stopped")
+	runs := d.eventIDs("device.updates_run")
+	d.MustRootIn([]byte(ssUpgradeScript), "bash -s publish")
+	// The distribution's and Himmelblau's updates stay out of the run: an upgrade of himmelblau restarts the daemon
+	// within the hold, and a long distribution upgrade can outlast the development build's maximum hold of 4 minutes,
+	// which starts himmelblaud before the account is created. List-Cleanup keeps the other sources' lists for later.
+	d.MustRoot("printf '%s\\n' 'Dir::Etc::sourcelist \"sources.list.d/paddock-" + g.slug + ".sources\";' " +
+		"'Dir::Etc::sourceparts \"-\";' 'APT::Get::List-Cleanup \"0\";' >" + ssUpgradeAptConf)
+	defer d.MustRoot("rm -f " + ssUpgradeAptConf)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	out, err := d.SSH(ctx, nil, "sudo systemctl start paddock-updates.service")
+	cancel()
+	if err != nil {
+		journal := d.MustRoot("journalctl -u paddock-updates.service --since -30min --no-pager -o cat | tail -n 80")
+		t.Fatalf("%s: paddock-updates.service: %v %s\n%s", d.Name, err, out, journal)
+	}
+	t.Logf("%s: %s after the run: %s", d.Name, nssShieldReport, d.MustRoot("cat "+nssShieldReport+" 2>/dev/null || echo absent"))
+	run := d.waitNewEvent(t, "device.updates_run", runs, 5*time.Minute, func(p map[string]any) bool { return p["kind"] == "regular" })
+	if run["result"] != "ok" {
+		t.Errorf("updates.run %v", run)
+	}
+	if v := d.installedVersion(ssUpgrade); v != "1.1" {
+		t.Errorf("%s at %q after the regular run, want 1.1", ssUpgrade, v)
+	}
+	if v := d.installedVersion(ssUpgradeDep); v != "1.0" {
+		t.Errorf("%s at %q after the regular run, want 1.0", ssUpgradeDep, v)
+	}
+	uid, err := strconv.Atoi(d.MustRoot("awk -F: '$1 == \"" + ssUpgradeAccount + "\" {print $3}' /etc/passwd"))
+	if err != nil || uid < 100 || uid > 999 {
+		t.Errorf("%s in /etc/passwd: UID %d %v, want a system account (100–999)", ssUpgradeAccount, uid, err)
+	}
+
+	fromRun := func(p map[string]any) bool { return p["action"] == "apt-get dist-upgrade" }
+	if ev := d.waitNewEvent(t, "device.login_nss_shield", shields, 5*time.Minute, fromRun); ev["outcome"] != "restored" {
+		t.Errorf("device.login_nss_shield %v, want restored", ev)
+	}
+	// The agent emits every record of the file in one pass and removes it then; a second record of the run would
+	// arrive with the next check-in.
+	Until(t, d.Name+": report file emitted", 3*time.Minute, 5*time.Second, nil, func() bool {
+		return d.MustRoot("test -e "+nssShieldReport+" && echo present || echo absent") == "absent"
+	})
+	time.Sleep(65 * time.Second)
+	d.Checkin()
+	time.Sleep(30 * time.Second)
+	if evs := d.newEvents("device.login_nss_shield", shields, fromRun); len(evs) != 1 {
+		t.Errorf("%d device.login_nss_shield of the updates run, want exactly one: %v", len(evs), evs)
+	}
+	if !d.himmelblaudActive() {
+		t.Error("himmelblaud not running after the regular updates run")
+	}
+	himmelblaud := func(p map[string]any) bool { return p["unit"] == "himmelblaud.service" }
+	if own := d.newEvents("device.tamper_service_stopped", tamper, himmelblaud); len(own) != 0 {
+		t.Errorf("the updates run's hold was reported as tampering: %v", own)
+	}
 }
 
 // gateSV11 (decisions §45, protected area 4): none of the agent's own holds since SV5 was reported as tampering, and

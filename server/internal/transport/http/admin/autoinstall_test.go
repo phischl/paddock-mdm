@@ -31,7 +31,7 @@ func (e *env) installRelease(t *testing.T) string {
 	}
 	for _, name := range []string{"paddock-agent", "paddock-supervisor"} {
 		deb := []byte(name + " " + v)
-		sig := base64.StdEncoding.EncodeToString(minisign.Sign(e.release, deb))
+		sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(e.release, deb, releasesig.Comment(v, "amd64"), ""))
 		if r := e.do(call{method: "PUT", path: base + "/packages/" + name + "/amd64", rawBody: string(deb), contentType: "application/octet-stream",
 			headers: map[string]string{"X-Paddock-Minisig": sig}, cookie: root}); r.status != http.StatusOK {
 			t.Fatalf("upload %s: %d %s", name, r.status, r.body)
