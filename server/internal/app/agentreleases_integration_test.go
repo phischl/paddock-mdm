@@ -81,7 +81,10 @@ type releaseHarness struct {
 	platform *db.PlatformPool
 	store    *fakeArtifactStore
 	priv     minisign.PrivateKey
-	super    *pgx.Conn
+	// revokePriv is the revocation release key, separate from the agent release key priv as in production (plan M4c
+	// decision 4), so that a test can show that one does not stand in for the other.
+	revokePriv minisign.PrivateKey
+	super      *pgx.Conn
 }
 
 func newReleaseHarness(t *testing.T, development bool) releaseHarness {
@@ -107,12 +110,16 @@ func newReleaseHarness(t *testing.T, development bool) releaseHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	revokePub, revokePriv, err := minisign.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store := &fakeArtifactStore{puts: map[string][]byte{}}
 	runner := app.NewActionRunner(worker, platform, httpx.RequestID)
-	verify := app.NewReleaseVerifier(pub)
 	return releaseHarness{
-		releases: app.NewAgentReleases(runner, platform, store, verify, verify, development),
-		reports:  app.NewDeviceReports(runner, worker), runner: runner, platform: platform, store: store, priv: priv, super: super,
+		releases: app.NewAgentReleases(runner, platform, store, app.NewReleaseVerifier(pub), app.NewReleaseVerifier(revokePub), development),
+		reports:  app.NewDeviceReports(runner, worker), runner: runner, platform: platform, store: store, priv: priv,
+		revokePriv: revokePriv, super: super,
 	}
 }
 
@@ -139,6 +146,12 @@ func (h releaseHarness) signBinary(bin []byte, version, arch string) string {
 // arch (ADR 0043 amendment 2026-11-11 b).
 func (h releaseHarness) signPackage(deb []byte, version, arch string) string {
 	return h.signBinary(deb, version, arch)
+}
+
+// signRevoke signs a paddock-revoke package as its holders do offline: with the revocation release key and the trusted
+// comment of the release and the package's arch (ADR 0043 amendment 2026-11-11 c, PDK-1004).
+func (h releaseHarness) signRevoke(deb []byte, version, arch string) string {
+	return base64.StdEncoding.EncodeToString(minisign.SignWithComments(h.revokePriv, deb, releasesig.Comment(version, arch), ""))
 }
 
 func (h releaseHarness) published(t *testing.T) string {
@@ -275,9 +288,9 @@ func (h releaseHarness) device(t *testing.T) (org, dev uuid.UUID) {
 	return org, dev
 }
 
-// TestPackageTrustedComment holds ADR 0043 amendments 2026-11-11 b and c for the upload: a package of the release key
-// is stored only when its trusted comment names the release and the package's arch — for fleet-osquery the release it
-// is stored under, not its fleetd version; paddock-revoke is not bound by its comment.
+// TestPackageTrustedComment holds ADR 0043 amendments 2026-11-11 b and c for the upload: a package is stored only when
+// its trusted comment names the release and the package's arch — for fleet-osquery the release it is stored under, not
+// its fleetd version, and for paddock-revoke, signed with the revocation release key, the same (PDK-1004).
 func TestPackageTrustedComment(t *testing.T) {
 	h := newReleaseHarness(t, false)
 	ctx := platformAdmin()
@@ -285,22 +298,26 @@ func TestPackageTrustedComment(t *testing.T) {
 	if _, err := h.releases.Create(ctx, v); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct{ name, packageVersion, arch, otherArch string }{
-		{agentrelease.PackageAgent, "", "amd64", "arm64"},
-		{agentrelease.PackageSupervisor, "", "arm64", "amd64"},
-		{agentrelease.PackageSelfService, "", agentrelease.ArchAll, "amd64"},
-		{agentrelease.PackageFleetd, "1.48.0", "amd64", "arm64"},
+	for _, c := range []struct {
+		name, packageVersion, arch, otherArch string
+		key                                   minisign.PrivateKey
+	}{
+		{agentrelease.PackageAgent, "", "amd64", "arm64", h.priv},
+		{agentrelease.PackageSupervisor, "", "arm64", "amd64", h.priv},
+		{agentrelease.PackageSelfService, "", agentrelease.ArchAll, "amd64", h.priv},
+		{agentrelease.PackageFleetd, "1.48.0", "amd64", "arm64", h.priv},
+		{agentrelease.PackageRevoke, "", "arm64", "amd64", h.revokePriv},
 	} {
 		deb := []byte(c.name + " " + c.arch + " " + v)
 		wrong := map[string][]byte{
-			"older release": minisign.SignWithComments(h.priv, deb, releasesig.Comment("0.0.1", c.arch), ""),
-			"other arch":    minisign.SignWithComments(h.priv, deb, releasesig.Comment(v, c.otherArch), ""),
-			"no comment":    minisign.Sign(h.priv, deb),
-			"garbled":       minisign.SignWithComments(h.priv, deb, c.name+" "+v+" "+c.arch, ""),
-			"suffix":        minisign.SignWithComments(h.priv, deb, releasesig.Comment(v, c.arch)+" extra", ""),
+			"older release": minisign.SignWithComments(c.key, deb, releasesig.Comment("0.0.1", c.arch), ""),
+			"other arch":    minisign.SignWithComments(c.key, deb, releasesig.Comment(v, c.otherArch), ""),
+			"no comment":    minisign.Sign(c.key, deb),
+			"garbled":       minisign.SignWithComments(c.key, deb, c.name+" "+v+" "+c.arch, ""),
+			"suffix":        minisign.SignWithComments(c.key, deb, releasesig.Comment(v, c.arch)+" extra", ""),
 		}
 		if c.packageVersion != "" {
-			wrong["fleetd version"] = minisign.SignWithComments(h.priv, deb, releasesig.Comment(c.packageVersion, c.arch), "")
+			wrong["fleetd version"] = minisign.SignWithComments(c.key, deb, releasesig.Comment(c.packageVersion, c.arch), "")
 		}
 		for label, sig := range wrong {
 			_, err := h.releases.UploadPackage(ctx, v, c.name, c.packageVersion, c.arch, deb, base64.StdEncoding.EncodeToString(sig))
@@ -311,16 +328,12 @@ func TestPackageTrustedComment(t *testing.T) {
 		if len(h.store.puts) != 0 {
 			t.Fatalf("%s: a package with a wrong trusted comment was stored", c.name)
 		}
-		pkg, err := h.releases.UploadPackage(ctx, v, c.name, c.packageVersion, c.arch, deb, h.signPackage(deb, v, c.arch))
+		sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(c.key, deb, releasesig.Comment(v, c.arch), ""))
+		pkg, err := h.releases.UploadPackage(ctx, v, c.name, c.packageVersion, c.arch, deb, sig)
 		if err != nil || string(h.store.puts[pkg.ObjectKey]) != string(deb) {
 			t.Fatalf("%s %s: %+v, %v", c.name, c.arch, pkg, err)
 		}
 		delete(h.store.puts, pkg.ObjectKey)
-	}
-	revoke := []byte(agentrelease.PackageRevoke + " " + v)
-	sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(h.priv, revoke, agentrelease.PackageRevoke+" 0.0.1 arm64", ""))
-	if _, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageRevoke, "", "amd64", revoke, sig); err != nil {
-		t.Errorf("%s: %v", agentrelease.PackageRevoke, err)
 	}
 	var mismatches int
 	if err := h.super.QueryRow(context.Background(),
@@ -328,8 +341,43 @@ func TestPackageTrustedComment(t *testing.T) {
 		   AND params->>'version' = $1 AND error_code = 'release_signature_mismatch'`, v).Scan(&mismatches); err != nil {
 		t.Fatal(err)
 	}
-	if mismatches != 21 {
-		t.Errorf("audited mismatches = %d, want 21 (one per refused upload)", mismatches)
+	if mismatches != 26 {
+		t.Errorf("audited mismatches = %d, want 26 (one per refused upload)", mismatches)
+	}
+}
+
+// TestRevokePackageKeys holds plan M4c decision 4 and ADR 0043 amendment 2026-11-11 c point 5: paddock-revoke verifies
+// only with the revocation release key, even when the agent release key signed it with the right release comment, and
+// no other package verifies with the revocation release key. Neither is stored, and neither counts as a comment
+// mismatch: the signature itself does not verify.
+func TestRevokePackageKeys(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v := uniqueVersion()
+	if _, err := h.releases.Create(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	revoke := []byte(agentrelease.PackageRevoke + " " + v)
+	_, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageRevoke, "", "amd64", revoke, h.signPackage(revoke, v, "amd64"))
+	expectProblem(t, err, problem.InvalidRequest)
+	for _, name := range []string{agentrelease.PackageAgent, agentrelease.PackageSupervisor, agentrelease.PackageFleetd} {
+		packageVersion := ""
+		if name == agentrelease.PackageFleetd {
+			packageVersion = "1.48.0"
+		}
+		deb := []byte(name + " " + v)
+		_, err := h.releases.UploadPackage(ctx, v, name, packageVersion, "amd64", deb, h.signRevoke(deb, v, "amd64"))
+		expectProblem(t, err, problem.InvalidRequest)
+	}
+	deb := []byte(agentrelease.PackageSelfService + " " + v)
+	_, err = h.releases.UploadPackage(ctx, v, agentrelease.PackageSelfService, "", agentrelease.ArchAll, deb, h.signRevoke(deb, v, agentrelease.ArchAll))
+	expectProblem(t, err, problem.InvalidRequest)
+	if len(h.store.puts) != 0 {
+		t.Fatal("a package signed with the wrong key was stored")
+	}
+	pkg, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageRevoke, "", "amd64", revoke, h.signRevoke(revoke, v, "amd64"))
+	if err != nil || string(h.store.puts[pkg.ObjectKey]) != string(revoke) {
+		t.Fatalf("paddock-revoke signed with the revocation release key: %+v, %v", pkg, err)
 	}
 }
 

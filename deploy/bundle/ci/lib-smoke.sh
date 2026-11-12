@@ -265,7 +265,7 @@ smoke_agent_release() {
     name="$(basename "$deb" -unsigned.deb).deb"
     cp "$deb" "$W/agent/$name"
     if [[ "$name" == paddock-revoke_* ]]; then
-      minisign_sign -s "$W/keys/revoke-minisign.key" -m "$W/agent/$name"
+      minisign_sign -s "$W/keys/revoke-minisign.key" -m "$W/agent/$name" -t "paddock-agent version=$version arch=amd64"
     else
       minisign_sign -s "$W/keys/minisign.key" -m "$W/agent/$name" -t "paddock-agent version=$version arch=amd64"
     fi
