@@ -261,25 +261,45 @@ func (e *Engine) release(ctx context.Context, pass *mirrorPass) {
 // publishTargets sets the per-target gauges from the state of the targets' last finished mirrors. The caller holds
 // laneMu.
 func (e *Engine) publishTargets() {
-	e.metrics.reachable.Reset()
-	e.metrics.held.Reset()
-	e.metrics.lastSuccess.Reset()
+	// Set first, then delete what went away: a Reset before setting would let a scrape in between see the series
+	// missing (PDK-1006).
+	now := publishedSeries{reachable: map[string]bool{}, held: map[string]bool{}, lastSuccess: map[[2]string]bool{}}
 	for kind, k := range e.repoKinds {
 		e.metrics.lastSuccess.WithLabelValues(kind, RepoTarget).Set(unix(k.at))
+		now.lastSuccess[[2]string{kind, RepoTarget}] = true
 	}
 	for _, t := range e.enabled {
 		e.metrics.held.WithLabelValues(t.Name).Set(float64(e.held[t.ID]))
+		now.held[t.Name] = true
 		if ok, seen := e.reachable[t.ID]; seen {
 			v := 0.0
 			if ok {
 				v = 1
 			}
 			e.metrics.reachable.WithLabelValues(t.Name).Set(v)
+			now.reachable[t.Name] = true
 		}
 		for kind, at := range e.mirrored[t.Name] {
 			e.metrics.lastSuccess.WithLabelValues(kind, t.Name).Set(unix(at))
+			now.lastSuccess[[2]string{kind, t.Name}] = true
 		}
 	}
+	for name := range e.published.reachable {
+		if !now.reachable[name] {
+			e.metrics.reachable.DeleteLabelValues(name)
+		}
+	}
+	for name := range e.published.held {
+		if !now.held[name] {
+			e.metrics.held.DeleteLabelValues(name)
+		}
+	}
+	for l := range e.published.lastSuccess {
+		if !now.lastSuccess[l] {
+			e.metrics.lastSuccess.DeleteLabelValues(l[0], l[1])
+		}
+	}
+	e.published = now
 }
 
 // freeSlot ends own's hold on the target's lane slot: the slot, its pin and its started gauge. The caller holds laneMu.
