@@ -61,7 +61,7 @@ func TestNSSShieldHoldsOnlyFreshMarker(t *testing.T) {
 		held   bool
 	}{
 		{"none", false, nil, false},
-		{"just written", false, func(now time.Time) []byte { return markerStartedAt(now) }, true},
+		{"just written", false, markerStartedAt, true},
 		{"one second inside the bound", false, func(now time.Time) []byte { return markerStartedAt(now.Add(-bound + time.Second)) }, true},
 		{"at the bound", false, func(now time.Time) []byte { return markerStartedAt(now.Add(-bound)) }, false},
 		{"past the bound", false, func(now time.Time) []byte { return markerStartedAt(now.Add(-time.Hour)) }, false},
