@@ -27,6 +27,31 @@ func (h releaseHarness) hostFiles(version string) ([]app.HostArtifact, []app.Hos
 			Minisig: minisign.SignWithComments(h.priv, deb, releasesig.Comment(version, "amd64"), "")}}
 }
 
+// hostFleetd is fleetd 1.48.0 for amd64 signed with the agent release key and the trusted comment comment.
+func (h releaseHarness) hostFleetd(comment string) app.HostPackage {
+	deb := []byte("fleet-osquery deb 1.48.0")
+	return app.HostPackage{Name: agentrelease.PackageFleetd, PackageVersion: "1.48.0", Arch: "amd64", Deb: deb,
+		Minisig: minisign.SignWithComments(h.priv, deb, comment, "")}
+}
+
+// TestAgentReleasePublishFromHostFleetd holds ADR 0043 amendment 2026-11-11 c for the host command: fleetd signed with
+// the comment of the release it is stored under, not of its fleetd version, is published.
+func TestAgentReleasePublishFromHostFleetd(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := httpx.WithRequestID(context.Background(), uuid.NewString())
+	v := uniqueVersion()
+	arts, pkgs := h.hostFiles(v)
+	fleetd := h.hostFleetd(releasesig.Comment(v, "amd64"))
+	d, err := h.releases.PublishFromHost(ctx, v, arts, append(pkgs, fleetd))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := agentrelease.PackageObjectKey(v, agentrelease.PackageFleetd, "1.48.0", "amd64")
+	if len(d.Packages) != 2 || string(h.store.puts[key]) != string(fleetd.Deb) {
+		t.Fatalf("fleetd not published: %+v", d.Packages)
+	}
+}
+
 // TestAgentReleasePublishFromHost: the host command publishes through the API's use cases with their audit events
 // and the system actor of the host commands (plan M7b decision 31).
 func TestAgentReleasePublishFromHost(t *testing.T) {
@@ -62,7 +87,7 @@ func TestAgentReleasePublishFromHost(t *testing.T) {
 }
 
 // TestAgentReleasePublishFromHostRefusesBadSignatures: a file signed with another key or a binary or package signed
-// for another release or arch (ADR 0043 amendment 2026-11-11 b) creates nothing and stores nothing.
+// for another release or arch (ADR 0043 amendments 2026-11-11 b and c) creates nothing and stores nothing.
 func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 	h := newReleaseHarness(t, false)
 	_, otherKey, err := minisign.GenerateKey(rand.Reader)
@@ -92,9 +117,22 @@ func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 		"package signed with a garbled comment": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
 			pkgs[0].Minisig = minisign.SignWithComments(h.priv, pkgs[0].Deb, "paddock-agent "+v+" amd64", "")
 		},
+		"fleetd signed for another release": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[1] = h.hostFleetd(releasesig.Comment("0.0.1", "amd64"))
+		},
+		"fleetd signed with the comment of its fleetd version": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[1] = h.hostFleetd(releasesig.Comment("1.48.0", "amd64"))
+		},
+		"fleetd signed for another arch": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[1] = h.hostFleetd(releasesig.Comment(v, "arm64"))
+		},
+		"fleetd signed without a release comment": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[1] = h.hostFleetd("fleet-osquery 1.48.0 amd64")
+		},
 	} {
 		v := uniqueVersion()
 		arts, pkgs := h.hostFiles(v)
+		pkgs = append(pkgs, h.hostFleetd(releasesig.Comment(v, "amd64")))
 		tamper(v, arts, pkgs)
 		before := len(h.store.puts)
 		_, err := h.releases.PublishFromHost(ctx, v, arts, pkgs)
