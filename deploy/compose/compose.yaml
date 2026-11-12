@@ -274,7 +274,15 @@ services:
     logging: *paddock-logging
     image: ${RUSTFS_IMAGE}
     restart: unless-stopped
+    # The image runs as its rustfs user (10001) and its entrypoint only creates missing data directories it already
+    # owns, so it needs no capability; it writes nothing outside /data and /tmp (plan M12h §3.4, PDK-823).
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_RUSTFS_MEM_LIMIT:-2g}
     environment:
       RUSTFS_ACCESS_KEY_FILE: /run/secrets/rustfs_root_user
       RUSTFS_SECRET_KEY_FILE: /run/secrets/rustfs_root_password
@@ -296,9 +304,17 @@ services:
     logging: *paddock-logging
     image: ${OPENBAO_IMAGE}
     restart: unless-stopped
-    pids_limit: 256
-    command: ["bao", "server", "-config=/openbao/config/config.hcl"]
+    # The image's own openbao user (decision Q10, plan M12h §3.4): the entrypoint only chowns paths not owned by it,
+    # which the image's directories and the data volume it populates never are, so it needs no CHOWN, SETUID or
+    # SETGID. Pinned here so that an image whose default user changes cannot run OpenBao as root unnoticed.
+    user: "100:1000"
+    cap_drop: [ALL]
     cap_add: [IPC_LOCK]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_OPENBAO_MEM_LIMIT:-1g}
+    command: ["bao", "server", "-config=/openbao/config/config.hcl"]
     volumes:
       - ./openbao/config.hcl:/openbao/config/config.hcl:ro
       - openbao-data:/openbao/file

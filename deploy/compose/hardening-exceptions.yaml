@@ -44,30 +44,13 @@ services:
     mem_limit:
       reason: pending PDK-910 (memory limits of the Paddock roles and Caddy)
 
+  # OpenBao runs as the image's openbao user (100:1000, decision Q10). Q10 grants IPC_LOCK for mlock(2); measured in
+  # PDK-823, the non-root process holds it in the bounding set only (CapEff 0, VmLck 0) and OpenBao 2.7.2 locks no
+  # memory with or without it, so removing it is an open maintainer question, not a functional change.
   openbao:
     cap_add:
       value: [IPC_LOCK]
-      reason: pending PDK-823 (mlock of the stock entrypoint)
-    cap_drop:
-      reason: pending PDK-823
-    no_new_privileges:
-      reason: pending PDK-823
-    mem_limit:
-      reason: pending PDK-823
-  rustfs:
-    cap_drop:
-      reason: pending PDK-823
-    no_new_privileges:
-      reason: pending PDK-823
-    mem_limit:
-      reason: pending PDK-823
-  audit-rustfs:
-    cap_drop:
-      reason: pending PDK-823
-    no_new_privileges:
-      reason: pending PDK-823
-    mem_limit:
-      reason: pending PDK-823
+      reason: mlock of OpenBao's memory (decision Q10); the process runs as the non-root openbao user
 
   # Fleet's MySQL: the image's entrypoint starts as root, chowns the data directory (find … ! -user mysql) and drops to
   # mysql via gosu. Verified on fresh and existing volumes (PDK-824).

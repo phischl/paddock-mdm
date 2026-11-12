@@ -80,7 +80,14 @@ services:
     logging: *paddock-logging
     image: ${RUSTFS_IMAGE}
     restart: unless-stopped
+    # As rustfs in compose.yaml: the image's rustfs user, no capability, writes to /data and /tmp only (PDK-823).
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_AUDIT_RUSTFS_MEM_LIMIT:-4g}
     environment:
       RUSTFS_ACCESS_KEY_FILE: /run/secrets/rustfs_audit_root_user
       RUSTFS_SECRET_KEY_FILE: /run/secrets/rustfs_audit_root_password

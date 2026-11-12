@@ -327,6 +327,9 @@ without a limit yet are listed in `deploy/compose/hardening-exceptions.yaml`.
 | `fleet-redis` | control plane | 512 MiB | `PADDOCK_FLEET_REDIS_MEM_LIMIT` | 4–5 MiB |
 | `fleet-mysql` | control plane | 2 GiB | `PADDOCK_FLEET_MYSQL_MEM_LIMIT` | 645–655 MiB |
 | `rabbitmq` | control plane | 1 GiB | `PADDOCK_RABBITMQ_MEM_LIMIT` | 155–170 MiB |
+| `openbao` | control plane | 1 GiB | `PADDOCK_OPENBAO_MEM_LIMIT` | 30–45 MiB; 137 MiB peak |
+| `rustfs` | control plane | 2 GiB | `PADDOCK_RUSTFS_MEM_LIMIT` | 240–350 MiB |
+| `audit-rustfs` | audit | 4 GiB | `PADDOCK_AUDIT_RUSTFS_MEM_LIMIT` | 2.0–2.7 GiB after many acceptance runs; 90 MiB on a fresh volume |
 | `fleet` | control plane | 3 GiB | `PADDOCK_FLEET_MEM_LIMIT` | 90–120 MiB; 810 MiB during a vulnerability run |
 | `prometheus` | control plane | 1 GiB | `PADDOCK_PROMETHEUS_MEM_LIMIT` | 60–65 MiB |
 | `authentik-server` | control plane | 2 GiB | `PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT` | 860 MiB–1.05 GiB idle with 4 web workers; 1.1 GiB peak at the first start |
@@ -351,6 +354,13 @@ with a log warning only and sizes the alarm from the host's RAM, so `prod-check`
 about 0.5 GiB. The default of 2 GiB fits the default of 4 workers with headroom for simultaneous logins; raise
 `PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT` by 256 MiB for every worker you add with `PADDOCK_AUTHENTIK_WEB_WORKERS`. The
 peaks are the cgroup's `memory.peak` of a scratch project's first start, which applies every blueprint.
+
+RustFS's resident memory grows with the objects it serves: 90 MiB on a fresh volume, 2.0–2.7 GiB on the
+development stack's `audit-rustfs` after many acceptance runs (anonymous memory; its cgroup's `memory.peak`, page
+cache included, reached 7.4 GiB, which the kernel reclaims below the limit). When an object store is killed at its
+limit, clients see failed uploads and the audit writer retries; raise `PADDOCK_AUDIT_RUSTFS_MEM_LIMIT` (or
+`PADDOCK_RUSTFS_MEM_LIMIT`) and the host's RAM together. OpenBao holds its keys and the Raft index in memory and stays
+small.
 
 ## Request limits
 
