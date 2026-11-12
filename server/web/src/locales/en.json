@@ -282,6 +282,8 @@
     "invalid_state": "This action is not possible in the current state.",
     "conflict": "This conflicts with an existing item.",
     "already_exists": "This is already managed for the same devices.",
+    "unsupported_compression": "The package's control archive uses a compression Paddock does not read. Build it with dpkg-deb -Zgzip or -Zzstd.",
+    "repository_not_ready": "The repository's signing key is still being generated. Try again in a minute.",
     "in_use": "This item is still in use. Remove what uses it first.",
     "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the denied paths.",
     "unit_not_allowed": "This unit is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected.",
@@ -434,6 +436,7 @@
       "bundle_entry_omitted": "The bundle of {target} leaves out the sudo rights of {username}: a permission profile holds a command that is no longer allowed",
       "login_applied": "The device {target} applied its login configuration",
       "login_apply_failed": "The device {target} could not apply its login configuration (stage {stage})",
+      "login_nss_shield": "The device {target} paused directory logins for {duration_s, number} s while the agent installed packages{outcome, select, restored {} max_hold { (maximum hold reached)} recovered { (finished after an agent restart)} restore_failed { – the login service did not start again} hold_failed { – not paused, installed with logins active} other { ({outcome})}}",
       "user_lock_applied": "The device {target} blocked the locked user {username}",
       "logins_suspension_applied": "The device {target} suspended directory logins and ended {sessions_terminated, number} sessions",
       "sudo_apply_failed": "The device {target} could not apply sudo rights",
@@ -445,7 +448,7 @@
       "tamper_local_admin_changed": "The device {target} found its local administrator account changed ({field})",
       "tamper_keyslot_changed": "The device {target} found the keyslots of its disk changed",
       "header_escrow_refused": "A LUKS header of {target} was not escrowed: the device already escrows 32 volumes",
-      "tamper_service_stopped": "The device {target} found the service {unit} stopped and started it again",
+      "tamper_service_stopped": "The device {target} found the service {unit} stopped",
       "tamper_agent_not_running": "fleetd reports that the Paddock agent does not run on {target}",
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
       "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
@@ -465,6 +468,7 @@
       "software_apply_failed": "The device {target} could not apply a software package or source ({stage}: {reason})",
       "software_self_service": "{outcome, select, succeeded {{user} {action, select, install {installed} update {updated} remove {removed} other {changed}} an application on the device {target} through self-service} refused {The device {target} refused the self-service {action} of {user} ({reason})} other {The self-service {action} of {user} failed on the device {target} ({reason})}}",
       "software_requested": "{user} asked on the device {target} for an application that needs approval",
+      "software_request_withdrawn": "{user} withdrew a request on the device {target} for an application that needs approval",
       "stale_warning": "The device {target} has not contacted Paddock for {threshold_h, number} hours (warning)",
       "stale_critical": "The device {target} has not contacted Paddock for {threshold_h, number} hours and is presumed lost",
       "stale_cleared": "The device {target} contacted Paddock again",
@@ -600,6 +604,16 @@
       "created": "{actor} held the package {package}",
       "updated": "{actor} changed the hold of the package {package}",
       "deleted": "{actor} released the package {package}"
+    },
+    "software_package": {
+      "uploaded": "{actor} uploaded the package {package} {version} ({architecture}) into the Paddock repository",
+      "deleted": "{actor} deleted the package {package} {version} ({architecture}) from the Paddock repository"
+    },
+    "software_repository": {
+      "credential_rotated": "{actor} replaced the read credential of the Paddock repository",
+      "key_rotated": "{actor} rotated the signing key of the Paddock repository",
+      "built": "{actor} published build {generation} of the Paddock repository, signed with the key {fingerprint}",
+      "build_failed": "{actor} could not build the Paddock repository: {error}"
     },
     "software_source": {
       "created": "{actor} added the package source {name} with the key {fingerprint}",
@@ -3626,8 +3640,10 @@
     "state": "State",
     "requestedAt": "Requested",
     "expiresAt": "Expires",
+    "justification": "Justification",
     "decision": "Decision",
     "decidedBy": "by {name}",
+    "withdrawnByUser": "by the user on the device",
     "states": {
       "requested": "Waiting",
       "approved": "Approved",

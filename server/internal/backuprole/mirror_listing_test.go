@@ -52,7 +52,7 @@ func (s *slowListS3) ListSizesPaged(ctx context.Context, prefix string, page fun
 	return out, nil
 }
 
-func (s *slowListS3) Newest(context.Context, string) (time.Time, bool, error) {
+func (s *slowListS3) NewestPaged(context.Context, string, func()) (time.Time, bool, error) {
 	return time.Time{}, false, nil
 }
 
@@ -165,8 +165,14 @@ func TestSlowListingReachesDeletions(t *testing.T) {
 }
 
 // hangingListS3 is an S3 endpoint whose listing delivers one page and then never another, until the request is
-// cancelled.
+// cancelled. Its Ping blocks until its request is given up, as an endpoint that went away: an answering endpoint
+// would keep the mirror alive until the target's page limit instead.
 type hangingListS3 struct{ *slowListS3 }
+
+func (h *hangingListS3) Ping(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
 
 func (h *hangingListS3) ListSizesPaged(ctx context.Context, _ string, page func()) (map[string]int64, error) {
 	page()
@@ -174,15 +180,19 @@ func (h *hangingListS3) ListSizesPaged(ctx context.Context, _ string, page func(
 	return nil, ctx.Err()
 }
 
-// TestHangingListingTripsTheWatchdog: a listing whose next page never arrives fails the mirror after the stall
-// deadline, and the error names the listing, not a copy rate (PDK-865, decisions-alpha9 item 66).
+// TestHangingListingTripsTheWatchdog: a listing whose next page never arrives while the endpoint answers no probe
+// either fails the mirror after the stall deadline, and the error names the listing, not a copy rate (PDK-865,
+// decisions-alpha9 item 66; PDK-972).
 func TestHangingListingTripsTheWatchdog(t *testing.T) {
 	f := newFixture(t)
 	f.engine.stall = 200 * time.Millisecond
 	repo, idx := openSet(t, map[string]string{backupset.ManifestPath: string(testManifest(t, InstallationID(42), nil)),
 		"openbao/20261105T060000Z.snap.enc": "a"})
 	s3 := &hangingListS3{&slowListS3{objects: map[string]string{}}}
-	rec := f.addTarget(t, backupset.TypeS3, NewS3Target(s3, "site"))
+	dst := NewS3Target(s3, "site").(*s3Target)
+	// Probes far below the stall deadline, so the silent endpoint is what the test relies on, not a long default.
+	dst.probeEvery, dst.probeTimeout, dst.pageLimit = 20*time.Millisecond, 20*time.Millisecond, time.Minute
+	rec := f.addTarget(t, backupset.TypeS3, dst)
 	start := time.Now()
 	_, err := f.engine.mirrorTarget(context.Background(), repo, idx, rec, testRetention(time.Now()))
 	if !errors.Is(err, errStalled) || !strings.Contains(err.Error(), "while "+phaseList) {

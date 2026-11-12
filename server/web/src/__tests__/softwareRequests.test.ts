@@ -16,14 +16,16 @@ import de from '../locales/de.json'
 const request = (over: Partial<SoftwareRequest>): SoftwareRequest => ({
   id: 'r1', catalog_entry_id: 'e1', entry_name: 'GIMP', entry_approval: 'required', device_id: 'd1', hostname: 'lap-0421', user_id: 'u1',
   username: 'alice@acme.test', state: 'requested', requested_at: '2026-11-01T10:00:00Z', expires_at: '2026-12-01T10:00:00Z', decided_by: null,
-  decided_at: null, decision_reason: null, ...over,
+  decided_at: null, decision_reason: null, justification: '', ...over,
 })
+const justification = '<script>window.pwned = true</script>\n<img src=x onerror=alert(2)> **bold** [link](https://evil.test)'
 const rows = [
-  request({}),
+  request({ justification }),
   request({
     id: 'r2', username: 'bob@acme.test', state: 'denied', decided_by: 'Carol Admin', decided_at: '2026-11-02T10:00:00Z',
     decision_reason: '<img src=x onerror=alert(1)> not licensed',
   }),
+  request({ id: 'r3', username: 'dave@acme.test', state: 'withdrawn', decided_at: '2026-11-03T10:00:00Z' }),
 ]
 const decide = vi.hoisted(() => vi.fn())
 const asked = vi.hoisted(() => ({ options: [] as { message: string; reason?: { required: boolean } }[], answer: false as false | { reason: string } }))
@@ -86,10 +88,23 @@ function list(): Element {
 }
 
 describe('SoftwareRequests', () => {
-  it('lists the requests with state, user, device and the decision; the reason stays inert text', async () => {
+  it('shows the justification as inert text: no element, no markdown, line breaks kept (Q7)', async () => {
+    await mountList('org_admin')
+    const shown = list().querySelectorAll('[data-testid="request-justification"]')
+    expect(shown).toHaveLength(1)
+    expect(shown[0].textContent).toBe(justification)
+    expect(shown[0].children).toHaveLength(0)
+    expect(list().querySelector('script, img, a[href="https://evil.test"], strong')).toBeNull()
+    expect((window as unknown as { pwned?: boolean }).pwned).toBeUndefined()
+    expect(getComputedStyle(shown[0]).whiteSpace).toBe('pre-wrap')
+    expect(shown[0].getAttribute('dir')).toBe('auto')
+  })
+
+  it('lists the requests with state, user, device and the decision (a withdrawal by the user, PDK-811b); the reason stays inert text', async () => {
     await mountList('org_admin')
     const text = list().textContent ?? ''
-    for (const expected of ['GIMP', 'alice@acme.test', 'lap-0421', 'Waiting', 'Denied', 'by Carol Admin', '<img src=x onerror=alert(1)> not licensed']) {
+    for (const expected of ['GIMP', 'alice@acme.test', 'lap-0421', 'Waiting', 'Denied', 'by Carol Admin', '<img src=x onerror=alert(1)> not licensed',
+      'Withdrawn', 'by the user on the device']) {
       expect(text).toContain(expected)
     }
     expect(list().querySelector('img')).toBeNull()

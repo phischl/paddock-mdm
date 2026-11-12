@@ -398,13 +398,14 @@ func TestPlanValidate(t *testing.T) {
 	}
 }
 
-// TestSoftwareSources (plan M13a decision 29): in both modes the software catalog's sources, keyrings and forbid pins
-// go and the package lists are refreshed; the Himmelblau source and keyring stay for the himmelblau step (reset) or
+// TestSoftwareSources (plan M13a decision 29, plan M13c decision 15): in both modes the software catalog's sources,
+// keyrings, forbid pins and the Paddock repository's credential go and the package lists are refreshed; the Himmelblau source and keyring stay for the himmelblau step (reset) or
 // the device (leave), the installed applications stay, and a failing refresh is reported without stopping the rest.
 func TestSoftwareSources(t *testing.T) {
 	software := []string{"/etc/apt/sources.list.d/paddock-vendor.sources", "/etc/apt/sources.list.d/paddock-other.sources",
-		"/etc/apt/keyrings/paddock-vendor.gpg", "/etc/apt/keyrings/paddock-other.gpg", "/etc/apt/preferences.d/51paddock-software"}
-	foreign := []string{"/etc/apt/sources.list.d/ubuntu.sources", "/etc/apt/keyrings/docker.gpg"}
+		"/etc/apt/keyrings/paddock-vendor.gpg", "/etc/apt/keyrings/paddock-other.gpg", "/etc/apt/preferences.d/51paddock-software",
+		"/etc/apt/auth.conf.d/paddock-repo.conf"}
+	foreign := []string{"/etc/apt/sources.list.d/ubuntu.sources", "/etc/apt/keyrings/docker.gpg", "/etc/apt/auth.conf.d/vendor.conf"}
 	for _, mode := range []string{"leave", "reset"} {
 		t.Run(mode, func(t *testing.T) {
 			w := newWorld(t)

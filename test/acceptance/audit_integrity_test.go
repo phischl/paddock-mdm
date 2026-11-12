@@ -31,7 +31,7 @@ func TestAuditIntegrity(t *testing.T) {
 	ctx := testContext(t, 10*time.Minute)
 	root := login(t, env.PlatformAdmin)
 	body := newOrg()
-	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", body)
+	res := createOrg(t, root, body)
 	expectStatus(t, res, http.StatusCreated, "")
 	org := responseID(t, res)
 	user, pw := tempUser(t, "integrity", env.RoleGroup(body["slug"], "admins"))

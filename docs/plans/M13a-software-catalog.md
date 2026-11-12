@@ -205,6 +205,7 @@ state of every application on every device. The managed source files and keyring
     assignments (devices of the assignment's groups, or every active device for an organization-wide assignment)
     with the status row or the derived state `not_applicable` (no package for the device's `os_release`/`arch`,
     computed in Go with `Resolve`) or `unknown` (targeted, applicable, no row yet).
+    (Amended 2026-11-11: "targeted" includes devices reached through their owners; see the amendment at the end.)
     `GET /api/v1/devices/{id}/managed-software` lists the device's rows joined with the entry name and the derived
     `not_applicable` entries. Both follow the list contract (§6.1).
 
@@ -1320,3 +1321,37 @@ Where this amendment and §9 differ, this amendment wins.
   `python3` (`fcntl.lockf`) in a transient unit, not with `flock(1)`: a flock(2) lock is independent of fcntl locks on
   Linux and blocks neither apt nor dpkg. The gate first proves that the lock blocks (`dpkg --configure -a` fails on the
   lock) before it assigns the package.
+
+## Amendment 2026-11-11 (architect) — decision 19 and devices targeted through their owners (PDK-1000, found in PDK-999)
+
+**Context.** Decision 19 lists "the devices targeted by the entry's assignments" and gives a targeted device without
+a status row the state `unknown`. It was written when an assignment targeted the organization or a device group.
+Plan M13b added user and user-group targets, which reach a device through its **owners**. The two read paths
+(`GET /api/v1/software-catalog/{id}/devices`, `GET /api/v1/devices/{id}/managed-software`) still derive targets
+from organization and device-group assignments only. Since PDK-999 they also list a device that **reported** a row
+for the entry. A device that is offered an entry through its owners and has not reported yet appears in neither
+list, although the compiler already renders the entry for it.
+
+**Options.** (a) Leave it: owner-targeted devices appear with their first report. No query change; but an offline
+or failing device is exactly the one that never reports, and the two lists disagree with the compiler. (b) Apply
+decision 19 to every target kind: a device the compiler offers the entry to is listed, `unknown` until it reports.
+(c) A separate state for "offered through an owner": a new enum value in the admin API for no operator benefit.
+**Decision: (b).** It is the meaning decision 19 already has; no product call is needed.
+
+**Rule (binding).**
+- "Targeted" in decision 19 means: the entry has an assignment that the compiler resolves to the device — the whole
+  organization, a device group of the device, a user who is an owner of the device, or a user group with a member
+  who is an owner of the device. Both read paths MUST use the owner predicate the compiler and
+  `SoftwareRequestOffered` use (`device_owner`, `user_group_member`), for every intent, not only `available`.
+- A targeted, applicable device without a row has the state `unknown`; `not_applicable` as before. The row's
+  `intents` include the intents of the owner assignments. A device that reported a row is listed whether or not it
+  is still targeted (PDK-999, unchanged).
+- A device without owners is not targeted by a user or user-group assignment (RR-116) and is not listed for it.
+- No contract change: the response shape, the states and the filters are unchanged; the lists gain rows. The
+  portal needs no change.
+- Tests (integration, `TestSoftwareStatusScopes` or next to it): an entry assigned to a user and to a user group
+  lists the owners' devices as `unknown` before any report, in both reads; a device of another owner and a device
+  without owners are not listed; another organization's devices never (RLS unchanged).
+
+**Scope.** Ticket PDK-1000. It is a read-path completeness fix of low risk and does not block 0.1.0-alpha.10: the
+gap closes with a device's first report, and the acceptance gate passes since PDK-999.

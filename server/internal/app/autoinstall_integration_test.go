@@ -2,10 +2,7 @@ package app_test
 
 import (
 	"context"
-	"encoding/base64"
 	"testing"
-
-	"aead.dev/minisign"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
@@ -32,7 +29,7 @@ func (h releaseHarness) withPackages(t *testing.T, names ...string) string {
 		if name == "fleet-osquery" {
 			packageVersion = "1.48.0"
 		}
-		if _, err := h.releases.UploadPackage(ctx, v, name, packageVersion, "amd64", deb, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, deb))); err != nil {
+		if _, err := h.releases.UploadPackage(ctx, v, name, packageVersion, "amd64", deb, h.signPackage(deb, v, "amd64")); err != nil {
 			t.Fatal(err)
 		}
 	}

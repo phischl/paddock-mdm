@@ -19,7 +19,7 @@ func TestAgentPackagesPublic(t *testing.T) {
 	root := login(t, env.PlatformAdmin)
 	v := gateRelease(t, root, false, false)
 	deb := []byte("!<arch>\ngate package " + v)
-	expectStatus(t, uploadPackage(t, root, v, "paddock-supervisor", deb, minisign.Sign(releaseKey(t), deb)), http.StatusOK, "")
+	expectStatus(t, uploadPackage(t, root, v, "paddock-supervisor", deb, signPackage(t, deb, v)), http.StatusOK, "")
 
 	client, err := env.NewHTTPClient()
 	if err != nil {

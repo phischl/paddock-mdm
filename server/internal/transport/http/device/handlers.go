@@ -453,7 +453,9 @@ func (g *gateway) bundleRef(r *http.Request, dev device, applied int64) (*protoc
 	return &protocol.BundleRef{Version: p.Version, SHA256: p.SHA256, URL: url}, nil
 }
 
-// events accepts a batch of at most 500 events of the closed set of types (plan M2a decision 14).
+// events accepts a batch of at most 500 events (plan M2a decision 14). An event of a type outside the closed set, from a
+// newer agent, is forwarded without its data so that the worker claims its number and records it once; the rest of the
+// batch is accepted (PDK-995).
 func (g *gateway) events(w http.ResponseWriter, r *http.Request) {
 	dev, err := g.authenticateDevice(w, r, maxEventsBody)
 	if err != nil {
@@ -469,10 +471,9 @@ func (g *gateway) events(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, errInvalidRequest.with("a batch has 1 to 500 events"))
 		return
 	}
-	for _, ev := range req.Events {
+	for i, ev := range req.Events {
 		if !slices.Contains(protocol.EventTypes, ev.Type) {
-			g.fail(w, r, errUnknownEventType.with("unknown event type "+ev.Type))
-			return
+			req.Events[i].Data = nil
 		}
 		if ev.EventSeq < 0 || ev.OccurredAt.IsZero() {
 			g.fail(w, r, errInvalidRequest.with("every event needs event_seq ≥ 0 and occurred_at"))

@@ -161,6 +161,26 @@ func TestSoftwareEventCodes(t *testing.T) {
 	}
 }
 
+// TestLoginNSSShieldEvent (PDK-983): login.nss_shield is audited as device.login_nss_shield with the transaction, the
+// hold's duration, its outcome and the error; nothing else the device sends is recorded.
+func TestLoginNSSShieldEvent(t *testing.T) {
+	data := `{"action":"apt-get install","duration_s":42,"outcome":"restore_failed","error":"start himmelblaud.service: exit 1","pid":7}`
+	entry, ok := eventEntry(uuid.New(), protocol.Event{EventSeq: 4, Type: protocol.EventLoginNSSShield, OccurredAt: time.Now(), Data: json.RawMessage(data)}, time.Now())
+	if !ok || entry.Spec.Code != audit.CodeDeviceLoginNSSShield || !audit.CodeDeviceLoginNSSShield.Registered() {
+		t.Fatalf("entry %v %s", ok, entry.Spec.Code)
+	}
+	params := eventParams(protocol.Event{EventSeq: 4, OccurredAt: time.Now(), Data: json.RawMessage(data)})
+	for k, want := range map[string]any{"action": "apt-get install", "duration_s": int64(42), "outcome": "restore_failed",
+		"error": "start himmelblaud.service: exit 1"} {
+		if params[k] != want {
+			t.Errorf("param %s = %v, want %v", k, params[k], want)
+		}
+	}
+	if _, ok := params["pid"]; ok {
+		t.Errorf("undocumented field recorded: %v", params)
+	}
+}
+
 // TestSoftwareSelfServiceEvent (plan M13b decision 18): software.self_service is audited as
 // device.software_self_service with every field of the event; succeeded is a success, failed and refused are failures
 // with their own error code, and an outcome that is missing or unknown is a failure. Every param is registered.

@@ -41,9 +41,9 @@ ORDER BY decided_at DESC LIMIT 1;
 -- name: InsertSoftwareRequest :execrows
 -- Opens a request; none while one of the device, entry and user is open (software_request_open_idx).
 INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state, requested_at,
-  expires_at, approval_epoch)
+  expires_at, approval_epoch, justification)
 VALUES (@id, @organization_id, @catalog_entry_id, @device_id, sqlc.narg(user_id), @username, 'requested', @requested_at,
-  @expires_at, @approval_epoch)
+  @expires_at, @approval_epoch, @justification)
 ON CONFLICT (device_id, catalog_entry_id, username) WHERE state = 'requested' DO NOTHING;
 
 -- name: ListSoftwareRequestsToExpire :many
@@ -97,7 +97,7 @@ WHERE r.id = @id AND e.id = r.catalog_entry_id AND r.state IN ('requested', 'app
 -- name: GetSoftwareRequest :one
 SELECT r.id, r.organization_id, r.catalog_entry_id, e.name AS entry_name, e.approval AS entry_approval, r.device_id,
   d.hostname, r.user_id, r.username, r.state, r.requested_at, r.expires_at, r.decided_by, r.decided_at,
-  r.decision_reason
+  r.decision_reason, r.justification
 FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id JOIN device d ON d.id = r.device_id
 WHERE r.id = @id;
 
@@ -114,14 +114,21 @@ UPDATE software_request SET state = @state, decided_by = @decided_by, decided_at
   decision_reason = sqlc.narg(decision_reason)
 WHERE id = @id AND state = 'requested';
 
+-- name: WithdrawSoftwareRequest :execrows
+-- Closes the open request of the device, entry and user a device reported withdrawn (PDK-811b); the partial unique
+-- index allows one at most. A request opened after the report was received is a newer one and stays.
+UPDATE software_request SET state = 'withdrawn', decided_at = @decided_at
+WHERE device_id = @device_id AND catalog_entry_id = @catalog_entry_id AND username = @username AND state = 'requested'
+  AND requested_at <= @decided_at;
+
 -- name: ListSoftwareRequests :many
 -- The rows are read through a subquery, so the sort columns are unambiguous (device has a state too).
 SELECT id, organization_id, catalog_entry_id, entry_name, entry_approval, device_id, hostname, user_id, username, state,
-  requested_at, expires_at, decided_by, decided_at, decision_reason
+  requested_at, expires_at, decided_by, decided_at, decision_reason, justification
 FROM (
   SELECT r.id, r.organization_id, r.catalog_entry_id, e.name AS entry_name, e.approval AS entry_approval, r.device_id,
     d.hostname, r.user_id, r.username, r.state, r.requested_at, r.expires_at, r.decided_by, r.decided_at,
-    r.decision_reason
+    r.decision_reason, r.justification
   FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id JOIN device d ON d.id = r.device_id
   WHERE (sqlc.narg(q_pattern)::text IS NULL OR r.username ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
     AND (sqlc.narg(states)::text[] IS NULL OR r.state = ANY(sqlc.narg(states)::text[]))
@@ -158,3 +165,36 @@ SELECT r.device_id, r.catalog_entry_id, r.username
 FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id
 WHERE r.state = 'approved' AND e.approval = 'required' AND r.approval_epoch = e.approval_epoch
 ORDER BY r.device_id, r.catalog_entry_id, r.username;
+
+-- name: ListSoftwareRequestDenials :many
+-- The denials the device's next bundle names (compiler, architect decision A10-27): per device, entry and user the
+-- latest denial decided after lock_start, the start of the re-request lock (software.RerequestAfterDenial), the window
+-- in which the worker opens no new request (LastSoftwareRequestDenial). Like that lock, it ignores the approval epoch.
+SELECT DISTINCT ON (r.device_id, r.catalog_entry_id, r.username) r.device_id, r.catalog_entry_id, r.username,
+  coalesce(r.decision_reason, '')::text AS reason
+FROM software_request r
+WHERE r.state = 'denied' AND r.decided_at > sqlc.arg(lock_start)::timestamptz
+ORDER BY r.device_id, r.catalog_entry_id, r.username, r.decided_at DESC;
+
+-- name: ListDevicesWithEndedDenialLock :many
+-- The active devices with a denial whose re-request lock ended at or before now and after the render time of the
+-- device's last compile (denial_lock_checked_at): that compile may have rendered the denial into the bundle, and the
+-- device refuses a new request while the bundle names it (compiler reconcile, architect decision A10-27). The render
+-- time, not the bundle's publish time, decides: a render before the lock end that commits after it still names the
+-- denial. Only locks that ended within the last week are read, so the round does not scan every denial ever made; the
+-- reconcile runs every minute, so a lock is caught long before that.
+SELECT DISTINCT d.id FROM device d
+JOIN software_request r ON r.device_id = d.id
+WHERE d.state = 'active' AND r.state = 'denied' AND r.decided_at <= sqlc.arg(lock_start)::timestamptz
+  AND r.decided_at > sqlc.arg(lock_start)::timestamptz - interval '7 days'
+  AND r.decided_at + (sqlc.arg(now)::timestamptz - sqlc.arg(lock_start)::timestamptz)
+    > coalesce(d.denial_lock_checked_at, '-infinity'::timestamptz)
+ORDER BY d.id;
+
+-- name: MarkDenialLockChecked :execrows
+-- Records the render time of a compile for a device while its bundle_seq is still the one that compile left: the
+-- bundle it committed, or the unchanged (or blocked) one it kept. Every denial lock that ended before checked_at is
+-- then reflected in that bundle. A concurrent compile that changed bundle_seq records its own render time instead, so
+-- a later render time never lands on a bundle rendered earlier.
+UPDATE device SET denial_lock_checked_at = sqlc.arg(checked_at)::timestamptz
+WHERE id = sqlc.arg(id)::uuid AND bundle_seq = sqlc.arg(bundle_seq)::bigint;

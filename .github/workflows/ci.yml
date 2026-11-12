@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0 # lint-migrations-frozen compares with the previous release tag
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache-dependency-path: "**/go.sum"
       # The lint image builds, golangci-lint, govulncheck and go-licenses take the workspace's dependencies, govulncheck
       # included, from the runner's module cache instead of the module proxy (PDK-540, PDK-516, PDK-550). go.work makes
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache-dependency-path: "**/go.sum"
       - run: make test
       - run: make fuzz
@@ -175,7 +175,7 @@ jobs:
       - uses: ./.github/actions/free-disk
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache-dependency-path: "**/go.sum"
       - run: make dev-secrets
       # The image builds take the server module's dependencies from the runner's module cache instead of the module
@@ -233,7 +233,7 @@ jobs:
       - uses: ./.github/actions/free-disk
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache-dependency-path: "**/go.sum"
       - run: make dev-secrets
       # The image builds take the server module's dependencies from the runner's module cache instead of the module
@@ -293,11 +293,11 @@ jobs:
 
   # The upgrade gate (plan M16 decisions 10–12, ADR 0047 decision 5), gated like acceptance-e2e: the previous release
   # (the newest v* tag) installed from its published, cosign-verified bundle and agent artifacts, seeded, upgraded to a
-  # bundle of this tree, probed, restored from a backup and rolled back (deploy/bundle/ci/upgrade.sh). The candidate
-  # carries the release under development as its version (the last entry of the binary's release sequence), so the
-  # upgrade checks judge the real pair. Its images are built here and stay on the runner: nothing of a pull request is
-  # pushed to the registry (decisions-alpha9 item 54); the bundle names them by tag and ./paddock pull keeps images
-  # that are present. A flake follows the flake rule (docs/operations/testing-strategy.md).
+  # bundle of this tree, probed, rolled back, upgraded again and restored from a backup (deploy/bundle/ci/upgrade.sh).
+  # The candidate carries the release under development as its version (the last entry of the binary's release
+  # sequence), so the upgrade checks judge the real pair. Its images are built here and stay on the runner: nothing of a
+  # pull request is pushed to the registry (decisions-alpha9 item 54); the bundle names them by tag and ./paddock pull
+  # keeps images that are present. A flake follows the flake rule (docs/operations/testing-strategy.md).
   upgrade:
     name: upgrade (previous release to this tree)
     needs: [acceptance-scope, lint, test, web, secrets, trivy]
@@ -313,7 +313,7 @@ jobs:
       - uses: ./.github/actions/free-disk
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache-dependency-path: "**/go.sum"
       - name: Previous release (gh release download, cosign verify-blob)
         id: previous
@@ -345,7 +345,7 @@ jobs:
         run: |
           df -h /
           docker system df || true
-      - name: Upgrade from the previous release, restore drill, rollback
+      - name: Upgrade from the previous release, rollback, upgrade again, restore drill
         env:
           UPGRADE_CANDIDATE_UNRELEASED: "1"
           PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
@@ -416,7 +416,7 @@ jobs:
       - uses: ./.github/actions/free-disk
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache-dependency-path: "**/go.sum"
       - name: Pinned binfmt and BuildKit images (deploy/compose/versions.env)
         id: pins

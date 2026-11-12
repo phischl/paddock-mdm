@@ -289,6 +289,12 @@ const (
 	FieldURL       ContextField = "url"
 	FieldSecret    ContextField = "secret"
 	FieldPseudonym ContextField = "pseudonym"
+	// FieldRepositoryCredential is the field of the read credential of an organization's Paddock repository (Transit
+	// key software-repo-credential, plan M13c amendment 2026-11-09 (PDK-812)).
+	FieldRepositoryCredential ContextField = "repository_credential"
+	// FieldRepositorySigningKey is the field of the private signing key of an organization's Paddock repository (Transit
+	// key software-repo-wrap, the worker's alone; ADR 0050 decision 3, PDK-813).
+	FieldRepositorySigningKey ContextField = "repository_signing_key"
 )
 
 // OrganizationContext is the Transit context of a derived key (ADR 0031 amendment 2026-10-31): the lowercase canonical

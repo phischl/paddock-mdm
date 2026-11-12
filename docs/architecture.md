@@ -132,7 +132,7 @@ The concept's IDs are kept. Each criterion names the role that must be able to o
 | N2 | **Ingest:** at-least-once, idempotent consumers; sustains 5 000 events/s with 3 worker replicas (reference load test). |
 | N3 | **Availability:** control plane target 99.5 % monthly; devices are unaffected by outages (C2). |
 | N4 | **Security:** all external traffic TLS 1.3 (1.2 allowed for device gateway behind legacy proxies); no plaintext signing or escrow key on any application node. |
-| N5 | **Privacy:** the negative list of the concept (no commands, processes, network connections, …) is enforced by schema: ingest rejects unknown event types. |
+| N5 | **Privacy:** the negative list of the concept (no commands, processes, network connections, …) is enforced by schema: ingest rejects unknown event types (amendment 2026-11-11: from 0.1.0-alpha.10 an event of an unknown type is skipped with its data dropped at the gateway and the batch accepted, ADR 0024; nothing of an unknown type is stored). |
 | N6 | **Localization:** no user-visible string in the portal is hard-coded; CI fails on missing English keys. |
 
 ---
@@ -1398,10 +1398,10 @@ the rollback (§11.2).
 **Parent rule for managed paths (ADR 0051 AG-1, plan M12h decision 12).** Every write, rename and delete of a
 reconciler (files, software, login, sudoers quarantine) and of the uninstall resolves the parent directory component
 by component from `/` with `O_PATH|O_NOFOLLOW|O_DIRECTORY` and acts relative to the final directory descriptor
-(`openat`, `renameat`, `unlinkat`). A component that is a symlink or not a directory, not owned by root, or writable by
-group or others (except the sticky root-owned `/tmp` and `/var/tmp`) refuses the operation: the resource fails with
-`parent_not_trusted`, nothing is written. Writes into the agent's own layout (`/var/lib/paddock`, `/etc/paddock`) keep
-the plain atomic write.
+(`openat`, `renameat`, `unlinkat`). A component that is a symlink or not a directory, not owned by root, writable by
+others (except the sticky root-owned `/tmp` and `/var/tmp`), writable by a group other than gid 0, or group-writable
+and carrying an access ACL (PDK-963) refuses the operation: the resource fails with `parent_not_trusted`, nothing is
+written. Writes into the agent's own layout (`/var/lib/paddock`, `/etc/paddock`) keep the plain atomic write.
 
 ### 11.2 Update with A/B, self-test, watchdog (design contract 1–6)
 
@@ -1819,6 +1819,31 @@ while open, valid 30 days), an organization administrator approves or denies it 
 request round expires what is left open or no longer holds. Until the agent release with the request flow (PDK-811)
 the compiler gives no agent an approval-required package. Packages stored in Paddock, the patch compliance report and
 the shared catalog follow (plan M13c §3.4 to §3.6).
+
+> **Amendment 2026-11-11 (M13c, architect decision A10-27):** the request flow on the device ships with agent
+> `0.1.0-alpha.10`; from that release on an agent receives approval-required packages, an older agent receives
+> neither the package nor the fields below. The bundle's software package gains the additive field
+> `denied[]{user, reason}` (ADR 0013) next to `approval` and `approved[]`: the users of the audience whose latest
+> request for that device and entry an administrator denied less than 24 hours ago, each with the administrator's
+> reason. The reason is untrusted plain text of at most 500 characters; the agent shows a denial only to the user
+> it names (the caller's peer UID on the self-service socket) and refuses that user's new request with 409
+> `denied` while the bundle names them. The bundle carries no expiry: the compiler's reconcile loop recompiles a
+> device once a denial's 24 hours ended (lock ends of the last 7 days; `device.denial_lock_checked_at` holds the
+> render time of the device's last compile and is written only for the bundle sequence that compile left). A device
+> whose bundle is blocked keeps an expired denial until the compile that clears the block. The user's
+> justification (at most 500 characters of plain text) is stored with the request and shown to the organization's
+> administrators, operators and auditors as text only; it never enters audit params or logs. Plan M13c, amendment
+> 2026-11-11.
+
+> **Amendment 2026-11-11 b (M13c, PDK-811 and PDK-811b):** on the device a user asks through the self-service
+> socket (`POST`/`DELETE /v1/apps/{id}/request`, ADR 0049 amendment 2026-11-11); the agent keeps the pending request
+> (entry, user, time; no justification) in its root-only self-service state until the bundle reflects a decision
+> or 30 days passed. The bundle's software section gains the additive flag `request_withdraw`, rendered with every
+> approval-required package: only while the applied bundle carries it does the agent report a user's withdrawal
+> as the new device event `software.request_withdrawn` (ADR 0024 sender rule); without it the withdrawal stays on
+> the device. The server records the event as `device.software_request_withdrawn` and sets the device's open
+> request for that entry and user to `withdrawn`. Making that close independent of the order in which event
+> batches are processed is planned for 0.1.0-alpha.11 (plan M13c, amendment 2026-11-11 c; RR-135).
 
 ### 12.6 Dead man's switch (F14)
 
@@ -2427,6 +2452,11 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > carries `rollout`, `rollout_id`, `urgent_reason`, `reverts_change_set_id`, `reverted_by` and `before_available`, and
 > `EffectiveConfig` carries `rollout`. Guide: `docs/operations/configuration-rollouts.md`.
 
+> **Amendment 2026-11-11 (M13c, architect decision A10-27):** `software_request` gains `justification` (plain text,
+> at most 500 characters, no control characters except newlines; migration `00123`), which replaces "no
+> justification text" of the amendment 2026-11-09; `device` gains `denial_lock_checked_at`, and `software_request`
+> the partial index `software_request_denied_idx` on denied requests (migration `00124`).
+
 > **Amendment 2026-11-09 (M13c, plan M13c §6):** `PUT`/`GET /api/v1/config` carry the sections `software_sources`
 > (a change needs a step-up; an API token's apply is refused with 403 `step_up_required`, the plan names it in
 > `requires_step_up`), `software_catalog` (with `approval`) and `software_assignments`, and a device group's
@@ -2439,6 +2469,11 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > step-up. `ConfigRollout` gains `wave_success_threshold_percent`, `stall_warning_hours`, `wave_first_applied_at`,
 > `stalled_since` and the counts `waiting` and `awaiting_retry`; the rollout device list gains `waiting_for_window` and
 > `awaiting_retry` (also a filter). Guide: `docs/operations/software.md`.
+
+> **Amendment 2026-11-11 (M13c, architect decision A10-27):** `SoftwareRequest` carries `justification` (untrusted
+> text, at most 500 characters; list and detail). The reason of `…/approve` and `…/deny` is refused with 400
+> `invalid_request` when it holds a control character other than a newline (a tab included); a denial's reason
+> reaches the requesting user's device in the bundle. A decision queues a compile of the request's device.
 
 > **Amendment 2026-11-06 (M12, ADR 0048, ADR 0031 amendment 2026-11-04, plan M12):** new endpoints
 > `POST`/`GET /api/v1/devices/{id}/diagnostics` (request with a reason, `org_admin` and `org_operator`; the device's list),

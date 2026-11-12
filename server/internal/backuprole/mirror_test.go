@@ -288,7 +288,7 @@ func (f *fakeS3) ListSizesPaged(ctx context.Context, prefix string, page func())
 	}
 	return out, err
 }
-func (f *fakeS3) Newest(context.Context, string) (time.Time, bool, error) {
+func (f *fakeS3) NewestPaged(context.Context, string, func()) (time.Time, bool, error) {
 	return time.Time{}, false, nil
 }
 func (f *fakeS3) Open(_ context.Context, key string) (io.ReadCloser, error) {
@@ -357,6 +357,8 @@ func TestStalledTargetDoesNotBlockTheRound(t *testing.T) {
 	case <-time.After(time.Minute):
 		t.Fatal("the round stayed blocked by the stalled target")
 	}
+	// The round returned at once; the lanes end at the stall deadline or the page limit.
+	f.engine.waitLanes()
 	if _, ok := good.files[backupset.ManifestPath]; !ok {
 		t.Error("the reachable target got no manifest")
 	}

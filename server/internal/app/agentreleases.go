@@ -192,7 +192,7 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 	var lease uploadLease
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
-			comment, err := a.checkUpload(ctx, q, a.verify, version, arch, binary, minisigB64)
+			comment, err := a.checkUpload(ctx, q, a.verify, version, "", arch, binary, minisigB64)
 			if err != nil {
 				return err
 			}
@@ -247,10 +247,13 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packag
 			if err := agentrelease.ValidatePackage(name, packageVersion); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
-			if _, err := a.checkUpload(ctx, q, a.packageVerifier(name), version, arch, deb, minisigB64); err != nil {
+			comment, err := a.checkUpload(ctx, q, a.packageVerifier(name), version, name, arch, deb, minisigB64)
+			if err != nil {
 				return err
 			}
-			var err error
+			if err := checkPackageComment(name, comment, version, arch); err != nil {
+				return err
+			}
 			lease, err = takeUploadLease(ctx, q, version, pkg.ObjectKey, a.storeTimeout)
 			return err
 		},
@@ -312,11 +315,31 @@ func checkBinaryComment(comment, version, arch string) error {
 	return nil
 }
 
+// revokeCommentExempt keeps paddock-revoke out of the trusted-comment check until the maintainer decides whether the
+// offline signing procedure of the revocation release key changes for 0.1.0-alpha.10 (ADR 0043 amendment 2026-11-11 c,
+// PDK-1004); it is the only switch to flip when that exemption ends.
+const revokeCommentExempt = true
+
+// checkPackageComment requires the trusted comment of a Debian package to name the release it is stored under and the
+// package's architecture, arch all for paddock-self-service (ADR 0043 amendment 2026-11-11 b), so that a package signed
+// for another release cannot be stored under this one. fleet-osquery is bound to the release it is stored under, not
+// to its fleetd version (amendment 2026-11-11 c). paddock-revoke is not checked while revokeCommentExempt holds.
+func checkPackageComment(name, comment, version, arch string) error {
+	if name == agentrelease.PackageRevoke && revokeCommentExempt {
+		return nil
+	}
+	return checkBinaryComment(comment, version, arch)
+}
+
 // checkFile validates a release file on its own — architecture, size and signature — and returns the signature's
-// trusted comment.
-func checkFile(verify VerifyRelease, arch string, body []byte, minisigB64 string) (string, error) {
-	if err := agentrelease.ValidateArch(arch); err != nil {
-		return "", problem.InvalidRequest.WithDetail(err.Error())
+// trusted comment. name is the package of a Debian package and empty for paddockd.
+func checkFile(verify VerifyRelease, name, arch string, body []byte, minisigB64 string) (string, error) {
+	archErr := agentrelease.ValidateArch(arch)
+	if name != "" {
+		archErr = agentrelease.ValidatePackageArch(name, arch)
+	}
+	if archErr != nil {
+		return "", problem.InvalidRequest.WithDetail(archErr.Error())
 	}
 	if len(body) == 0 || len(body) > agentrelease.MaxArtifactBytes {
 		return "", problem.InvalidRequest.WithDetail("the file must have 1 byte to 128 MiB")
@@ -335,9 +358,9 @@ func checkFile(verify VerifyRelease, arch string, body []byte, minisigB64 string
 
 // checkUpload validates an upload of a release file — the file itself (checkFile) and a draft release — and returns
 // the signature's trusted comment.
-func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, verify VerifyRelease, version, arch string, body []byte,
-	minisigB64 string) (string, error) {
-	comment, err := checkFile(verify, arch, body, minisigB64)
+func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, verify VerifyRelease, version, name, arch string,
+	body []byte, minisigB64 string) (string, error) {
+	comment, err := checkFile(verify, name, arch, body, minisigB64)
 	if err != nil {
 		return "", err
 	}
@@ -536,7 +559,7 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 			problem.InvalidRequest.WithDetail("a release needs at least one agent binary"))
 	}
 	for _, art := range artifacts {
-		comment, err := checkFile(a.verify, art.Arch, art.Binary, base64.StdEncoding.EncodeToString(art.Minisig))
+		comment, err := checkFile(a.verify, "", art.Arch, art.Binary, base64.StdEncoding.EncodeToString(art.Minisig))
 		if err == nil {
 			err = checkBinaryComment(comment, version, art.Arch)
 		}
@@ -550,7 +573,11 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 		if err != nil {
 			err = problem.InvalidRequest.WithDetail(err.Error())
 		} else {
-			_, err = checkFile(a.packageVerifier(pkg.Name), pkg.Arch, pkg.Deb, base64.StdEncoding.EncodeToString(pkg.Minisig))
+			var comment string
+			comment, err = checkFile(a.packageVerifier(pkg.Name), pkg.Name, pkg.Arch, pkg.Deb, base64.StdEncoding.EncodeToString(pkg.Minisig))
+			if err == nil {
+				err = checkPackageComment(pkg.Name, comment, version, pkg.Arch)
+			}
 		}
 		if err != nil {
 			return ReleaseDetail{}, a.refuse(ctx, uploadSpec(version, pkg.Arch, pkg.Deb, "deb", pkg.Name, pkg.PackageVersion),

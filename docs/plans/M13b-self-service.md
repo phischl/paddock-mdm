@@ -321,6 +321,9 @@ Errors are problem objects `{code, detail}`; nothing names other users' entries 
 
 ### 6.6 Residual risks (RR-116, RR-117; RR-79 written)
 
+**Amended 2026-11-10:** RR-133 (packages that create a system user; logins pause during agent installs), see
+"Amendment 2026-11-10" at the end of this plan.
+
 | ID | Risk | Mitigation | ISMS |
 | --- | --- | --- | --- |
 | RR-79 | Flathub (or any remote) is an external trust anchor; a remote's key or content change is outside Paddock | per-remote key pinned by fingerprint in the signed bundle; a mismatch installs nothing; step-up for every source change | which remotes are allowed |
@@ -514,3 +517,90 @@ bundle, so none of them applies organization-wide or fails a bundle in between.
   GET (the signed headers never reach the object store) and accepts only 200 `image/png` of at most 64 KiB with the
   PNG signature; anything else is an error, and the self-service app shows the category glyph (decision 16 unchanged).
   Re-fetching an icon whose `icon_sha256` changed and checking the digest is a follow-up of the agent's icon cache.
+
+## Amendment 2026-11-10 (maintainer decision, `decisions-alpha10.md` §45 and §47, PDK-983)
+
+On an enrolled device a package whose maintainer script creates a system account fails while `himmelblaud` runs:
+Himmelblau 4.0.8 answers every unknown name with a synthetic user, so `adduser --system` stops with "already exists,
+but is not a system user". `flatpak` creates `_flatpak`; the Flatpak runtime of decision 10 and gate SV5 therefore
+failed whenever the daemon was online. The rule, its bounds and its options are in plan M5a, "Amendment 2026-11-10"
+(N1–N9); this amendment records what changes for self-service.
+
+- **Installs and removals pause directory logins.** Every apt and dpkg transaction of the agent runs with
+  `himmelblaud` held stopped, the self-service executor's and the Flatpak runtime's included (M5a N2). While a user
+  installs or removes an application in the self-service app, new logins and screen unlocks of directory users on
+  that device wait: at most 10 minutes per transaction, with a systemd timer that starts the daemon after 12 minutes
+  if the agent died. Running sessions, the self-service app's included, continue (corrected 2026-11-11:
+  signed-in directory users resolve by name and UID during the hold, plan M5a N7). `flatpak` commands themselves are
+  no transactions and run without a hold.
+- **One `device.login_nss_shield` per hold** (M5a N4), in addition to the `software.self_service` event of decision
+  18. No change to the self-service socket, the bundle or the portal.
+- **F4 (agent restart mid-install)** is unchanged for the operation (`failed/interrupted`). Added: the daemon comes
+  back without the agent, by the timer, and the agent reports the hold as `recovered` at its next start.
+- **System gates (`TestSelfServiceGates`), replacing the SV5 and SV6 texts of §9 and adding two steps:**
+  - Setup: the gate builds its Flatpak repository with the documented workaround for a local administrator
+    (`himmelblaud` stopped, restarted by a trap), then purges `flatpak` and deletes `_flatpak`, so that Flatpak is
+    not preinstalled.
+  - SV5: precondition `himmelblaud` active and `getent passwd _flatpak` answered by Himmelblau; after the agent's
+    install `_flatpak` is in `/etc/passwd` with a system UID, and a `device.login_nss_shield` with the outcome
+    `restored` exists. The remote and rogue-remote assertions are unchanged.
+  - SV6: while the slow postinst runs, `himmelblaud` is stopped and the timer `paddock-nss-shield-restore` is
+    active; the supervisor is killed (`SIGKILL`) and stopped; `himmelblaud` is active again within 7 minutes with the
+    agent still down (development build: timer after 5 minutes); after the start the hold is reported as
+    `recovered`. The rest of SV6 is unchanged.
+  - SV10 (new): the fixture package `paddock-gate-sysuser` (postinst `adduser --system --group _paddock-gate`) is
+    assigned as required; it installs, the account is a system account, and the hold's event exists.
+  - SV11 (new): no `device.tamper_service_stopped` for `himmelblaud.service` since SV5 (the agent's own holds); a
+    foreign `systemctl stop himmelblaud` is reported with the state `inactive`, and the daemon is not started again.
+  - SV12 (added 2026-11-11, PDK-988): a regular updates run that installs a package creating a system account,
+    with apt restricted to the gate's source for the step (plan M5a N8, accepted test-scope limit).
+- **Not covered:** a package a user installs with apt outside the agent (residual risk RR-133, with the workaround).
+- §6.6 gains the reference to RR-133; RR-116 and RR-117 are unchanged.
+
+## Amendment 2026-11-11 (architect decision; PDK-968): the self-service package is part of every release
+
+Decision 15 says the app package is "signed and published like the agent debs", and ADR 0049 decision 1 that it
+"comes from `bundles.<domain>/packages/<version>/` like the agent packages and is signed with the agent release
+key". The release tooling and the platform's release registry only knew architecture-specific packages, so the
+package was built but not published. Three points are decided. Binding language: **MUST** / **MUST NOT**.
+
+1. **The platform's agent release carries it.** New package name `paddock-self-service`, new package architecture
+   `all`. `all` is valid for `paddock-self-service` only, and `paddock-self-service` only with `all`; every other
+   combination is refused (API 400 `invalid_request`, and by the database constraint). It is **not** a required
+   package of the autoinstall (`RequiredPackages` unchanged) and `all` is **not** an agent architecture (`Arches`
+   unchanged). The package constraints change by a **new forward migration** with the next free number; migration
+   `00023` is not edited. `AgentPackageName` and `AgentPackageArch` of `api/openapi/admin.yaml` gain the two values
+   (additive). `make agent-release` uploads it; the platform serves it at
+   `bundles.<domain>/packages/<version>/paddock-self-service_<version>_all.deb`.
+2. **Required in the GitHub import from `0.1.0-alpha.10` on.** `agentrelease.SourceAssets(v)` lists
+   `paddock-self-service_<v>_all.deb` as required when `v` is `0.1.0-alpha.10` or later (one named constant for
+   that first version), and not at all for an earlier `v`: releases before it never had the package and stay
+   importable. An import of a later release without the package or its signature fails as incomplete, like a
+   missing agent package. `TestSourceAssetsMatchTheSignJob` keeps its rule (the sign job signs exactly the required
+   assets) and is not weakened; a test covers a version on each side of the constant.
+3. **Signed with the agent release key, same format.** `packaging/sign-release.sh` signs it with `releasesig`
+   (`.minisig`), trusted comment `paddock-agent version=<v> arch=all`; `release-merge-signed` refuses it unsigned;
+   the import verifies signature and comment like every other asset.
+
+**Checked against agent design contract 5 and ADR 0049.** Contract 5 (signed artifacts, verified before
+installation, the public key with the supervisor) governs the agent's own update. It is not touched: the
+supervisor never installs this package, and the agent update never delivers or changes it (ADR 0049). The trusted
+comment `arch=all` can never satisfy the supervisor's check for its own architecture, so this signature cannot be
+replayed as an agent artifact. On a device the package is still installed as a catalog entry from the
+organization's package source, verified by apt against that source's key (decision 15, `docs/operations/
+software.md`, "Self-service app"); the release signature protects the way from the release to the platform and to
+the operator who takes the package from there. No new trust anchor, no new dependency, no device contract change.
+
+Alternatives rejected: publishing it on GitHub only (the platform import would not verify it, and an installation
+without internet access could not get it from its own platform); an optional import asset (a release stripped of
+the package would import as complete).
+
+Documents (PDK-968): `docs/operations/agent-releases.md` (the asset, the package name and architecture) and
+`docs/operations/software.md`, "Self-service app" (releases publish the package; where an operator takes it from).
+
+### Correction 2026-11-11 (PDK-1002) to the amendment above, point 3
+
+"The import verifies signature and comment like every other asset" described the binaries only: until PDK-1002 the
+server checked a package's signature but not its trusted comment. From 0.1.0-alpha.10 the upload, the host publish
+and the import refuse a package whose trusted comment does not name the release and the architecture it is stored
+under (`arch=all` for `paddock-self-service`). Decision and exposure: ADR 0043, amendment 2026-11-11 b.

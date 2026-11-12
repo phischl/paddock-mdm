@@ -136,7 +136,7 @@ func (q *Queries) GetSoftwareCatalogEntryApproval(ctx context.Context, id uuid.U
 const getSoftwareRequest = `-- name: GetSoftwareRequest :one
 SELECT r.id, r.organization_id, r.catalog_entry_id, e.name AS entry_name, e.approval AS entry_approval, r.device_id,
   d.hostname, r.user_id, r.username, r.state, r.requested_at, r.expires_at, r.decided_by, r.decided_at,
-  r.decision_reason
+  r.decision_reason, r.justification
 FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id JOIN device d ON d.id = r.device_id
 WHERE r.id = $1
 `
@@ -157,6 +157,7 @@ type GetSoftwareRequestRow struct {
 	DecidedBy      *string
 	DecidedAt      *time.Time
 	DecisionReason *string
+	Justification  string
 }
 
 func (q *Queries) GetSoftwareRequest(ctx context.Context, id uuid.UUID) (GetSoftwareRequestRow, error) {
@@ -178,6 +179,7 @@ func (q *Queries) GetSoftwareRequest(ctx context.Context, id uuid.UUID) (GetSoft
 		&i.DecidedBy,
 		&i.DecidedAt,
 		&i.DecisionReason,
+		&i.Justification,
 	)
 	return i, err
 }
@@ -229,9 +231,9 @@ func (q *Queries) GetUserIDByUsername(ctx context.Context, username string) (uui
 
 const insertSoftwareRequest = `-- name: InsertSoftwareRequest :execrows
 INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state, requested_at,
-  expires_at, approval_epoch)
+  expires_at, approval_epoch, justification)
 VALUES ($1, $2, $3, $4, $5, $6, 'requested', $7,
-  $8, $9)
+  $8, $9, $10)
 ON CONFLICT (device_id, catalog_entry_id, username) WHERE state = 'requested' DO NOTHING
 `
 
@@ -245,6 +247,7 @@ type InsertSoftwareRequestParams struct {
 	RequestedAt    time.Time
 	ExpiresAt      time.Time
 	ApprovalEpoch  int32
+	Justification  string
 }
 
 // Opens a request; none while one of the device, entry and user is open (software_request_open_idx).
@@ -259,6 +262,7 @@ func (q *Queries) InsertSoftwareRequest(ctx context.Context, arg InsertSoftwareR
 		arg.RequestedAt,
 		arg.ExpiresAt,
 		arg.ApprovalEpoch,
+		arg.Justification,
 	)
 	if err != nil {
 		return 0, err
@@ -323,13 +327,97 @@ func (q *Queries) ListApprovedSoftwareRequests(ctx context.Context) ([]ListAppro
 	return items, nil
 }
 
+const listDevicesWithEndedDenialLock = `-- name: ListDevicesWithEndedDenialLock :many
+SELECT DISTINCT d.id FROM device d
+JOIN software_request r ON r.device_id = d.id
+WHERE d.state = 'active' AND r.state = 'denied' AND r.decided_at <= $1::timestamptz
+  AND r.decided_at > $1::timestamptz - interval '7 days'
+  AND r.decided_at + ($2::timestamptz - $1::timestamptz)
+    > coalesce(d.denial_lock_checked_at, '-infinity'::timestamptz)
+ORDER BY d.id
+`
+
+type ListDevicesWithEndedDenialLockParams struct {
+	LockStart time.Time
+	Now       time.Time
+}
+
+// The active devices with a denial whose re-request lock ended at or before now and after the render time of the
+// device's last compile (denial_lock_checked_at): that compile may have rendered the denial into the bundle, and the
+// device refuses a new request while the bundle names it (compiler reconcile, architect decision A10-27). The render
+// time, not the bundle's publish time, decides: a render before the lock end that commits after it still names the
+// denial. Only locks that ended within the last week are read, so the round does not scan every denial ever made; the
+// reconcile runs every minute, so a lock is caught long before that.
+func (q *Queries) ListDevicesWithEndedDenialLock(ctx context.Context, arg ListDevicesWithEndedDenialLockParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listDevicesWithEndedDenialLock, arg.LockStart, arg.Now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSoftwareRequestDenials = `-- name: ListSoftwareRequestDenials :many
+SELECT DISTINCT ON (r.device_id, r.catalog_entry_id, r.username) r.device_id, r.catalog_entry_id, r.username,
+  coalesce(r.decision_reason, '')::text AS reason
+FROM software_request r
+WHERE r.state = 'denied' AND r.decided_at > $1::timestamptz
+ORDER BY r.device_id, r.catalog_entry_id, r.username, r.decided_at DESC
+`
+
+type ListSoftwareRequestDenialsRow struct {
+	DeviceID       uuid.UUID
+	CatalogEntryID uuid.UUID
+	Username       string
+	Reason         string
+}
+
+// The denials the device's next bundle names (compiler, architect decision A10-27): per device, entry and user the
+// latest denial decided after lock_start, the start of the re-request lock (software.RerequestAfterDenial), the window
+// in which the worker opens no new request (LastSoftwareRequestDenial). Like that lock, it ignores the approval epoch.
+func (q *Queries) ListSoftwareRequestDenials(ctx context.Context, lockStart time.Time) ([]ListSoftwareRequestDenialsRow, error) {
+	rows, err := q.db.Query(ctx, listSoftwareRequestDenials, lockStart)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSoftwareRequestDenialsRow{}
+	for rows.Next() {
+		var i ListSoftwareRequestDenialsRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.CatalogEntryID,
+			&i.Username,
+			&i.Reason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSoftwareRequests = `-- name: ListSoftwareRequests :many
 SELECT id, organization_id, catalog_entry_id, entry_name, entry_approval, device_id, hostname, user_id, username, state,
-  requested_at, expires_at, decided_by, decided_at, decision_reason
+  requested_at, expires_at, decided_by, decided_at, decision_reason, justification
 FROM (
   SELECT r.id, r.organization_id, r.catalog_entry_id, e.name AS entry_name, e.approval AS entry_approval, r.device_id,
     d.hostname, r.user_id, r.username, r.state, r.requested_at, r.expires_at, r.decided_by, r.decided_at,
-    r.decision_reason
+    r.decision_reason, r.justification
   FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id JOIN device d ON d.id = r.device_id
   WHERE ($1::text IS NULL OR r.username ILIKE $1::text ESCAPE '\')
     AND ($2::text[] IS NULL OR r.state = ANY($2::text[]))
@@ -375,6 +463,7 @@ type ListSoftwareRequestsRow struct {
 	DecidedBy      *string
 	DecidedAt      *time.Time
 	DecisionReason *string
+	Justification  string
 }
 
 // The rows are read through a subquery, so the sort columns are unambiguous (device has a state too).
@@ -411,6 +500,7 @@ func (q *Queries) ListSoftwareRequests(ctx context.Context, arg ListSoftwareRequ
 			&i.DecidedBy,
 			&i.DecidedAt,
 			&i.DecisionReason,
+			&i.Justification,
 		); err != nil {
 			return nil, err
 		}
@@ -490,6 +580,29 @@ func (q *Queries) ListSoftwareRequestsToExpire(ctx context.Context, arg ListSoft
 	return items, nil
 }
 
+const markDenialLockChecked = `-- name: MarkDenialLockChecked :execrows
+UPDATE device SET denial_lock_checked_at = $1::timestamptz
+WHERE id = $2::uuid AND bundle_seq = $3::bigint
+`
+
+type MarkDenialLockCheckedParams struct {
+	CheckedAt time.Time
+	ID        uuid.UUID
+	BundleSeq int64
+}
+
+// Records the render time of a compile for a device while its bundle_seq is still the one that compile left: the
+// bundle it committed, or the unchanged (or blocked) one it kept. Every denial lock that ended before checked_at is
+// then reflected in that bundle. A concurrent compile that changed bundle_seq records its own render time instead, so
+// a later render time never lands on a bundle rendered earlier.
+func (q *Queries) MarkDenialLockChecked(ctx context.Context, arg MarkDenialLockCheckedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markDenialLockChecked, arg.CheckedAt, arg.ID, arg.BundleSeq)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const softwareRequestApprovalHolds = `-- name: SoftwareRequestApprovalHolds :one
 SELECT EXISTS (
   SELECT 1 FROM software_request r JOIN software_catalog_entry e ON e.id = r.catalog_entry_id
@@ -539,4 +652,32 @@ func (q *Queries) SoftwareRequestOffered(ctx context.Context, arg SoftwareReques
 	var offered bool
 	err := row.Scan(&offered)
 	return offered, err
+}
+
+const withdrawSoftwareRequest = `-- name: WithdrawSoftwareRequest :execrows
+UPDATE software_request SET state = 'withdrawn', decided_at = $1
+WHERE device_id = $2 AND catalog_entry_id = $3 AND username = $4 AND state = 'requested'
+  AND requested_at <= $1
+`
+
+type WithdrawSoftwareRequestParams struct {
+	DecidedAt      *time.Time
+	DeviceID       uuid.UUID
+	CatalogEntryID uuid.UUID
+	Username       string
+}
+
+// Closes the open request of the device, entry and user a device reported withdrawn (PDK-811b); the partial unique
+// index allows one at most. A request opened after the report was received is a newer one and stays.
+func (q *Queries) WithdrawSoftwareRequest(ctx context.Context, arg WithdrawSoftwareRequestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, withdrawSoftwareRequest,
+		arg.DecidedAt,
+		arg.DeviceID,
+		arg.CatalogEntryID,
+		arg.Username,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

@@ -155,6 +155,27 @@ The source files, keyrings and the forbid pin file are a **protected area**: an 
 `device.tamper_protected_file_changed` naming the file (RR-80). The Himmelblau source and keyring belong to the login
 configuration and are never touched by the catalog.
 
+**Installations pause directory logins.** On a device with directory logins the agent stops the login service
+(`himmelblaud`) around every package installation, removal and update run it carries out, so that packages can create
+their system accounts, and starts it again afterwards. Meanwhile new logins and screen unlocks of directory users
+wait: seconds, for large packages minutes, at most 10 minutes per installation. Running sessions continue, and
+signed-in directory users resolve by name and UID during the pause, so `ls -l` and `sudo` work as usual. Only a lookup
+of a directory user who has never signed in on the device can answer "no such user" until the installation has
+finished. Local accounts, the local administrator included, are not affected. Each pause is recorded as
+`device.login_nss_shield`. A maintenance window therefore also decides when logins may wait. Details and the bounds:
+[device-login.md](device-login.md), "Package installations pause directory logins" (residual risk RR-133).
+
+**Packages a user installs with apt are not covered.** `sudo apt install` of a package that creates a system account
+fails on such a device with *already exists, but is not a system user*. Stop the login service around it:
+
+```sh
+sudo systemctl stop himmelblaud.service
+sudo apt install <package>          # after a failed attempt: sudo dpkg --configure -a
+sudo systemctl start himmelblaud.service himmelblaud-tasks.service
+```
+
+The agent reports that stop as `device.tamper_service_stopped` and does not undo it.
+
 ## Waves
 
 With configuration rollouts switched on (*Settings* → *Rollouts*, [configuration rollouts](configuration-rollouts.md)),
@@ -245,14 +266,16 @@ A catalog entry can require an administrator's approval (`approval: required` on
 for the application, and an organization administrator decides.
 
 1. The user asks on the device. The device reports the request (`device.software_requested`, with the user name and
-   the entry). The server opens a request when an available assignment of the entry offers it to that device and user
+   the entry; never the justification). The server opens a request, with the user's justification as plain text, when an available assignment of the entry offers it to that device and user
    (the organization, a device group of the device, or a user or user group the device's owner belongs to). It opens
    none for a repeat while one is open, for a user who already holds an approval of it on the device, or within 24
-   hours of a denial. An opened request records `software_request.opened` (a notification code for destinations with
+   hours of a denial, nor for a justification that is not plain text of at most 500 characters without control
+   characters except line breaks. An opened request records `software_request.opened` (a notification code for destinations with
    `all` or a custom list; not in the security preset) and shows in the attention list as `software_requests_open`.
 2. The administrator decides in the portal (*Software requests*) or with `POST
    /api/v1/software-requests/{id}/approve` (an optional reason) or `…/deny` (a reason the user sees, 1 to 500
-   characters). Deciding needs `org_admin` and no step-up of its own: trusting the entry's source needed one.
+   characters without control characters except line breaks). The portal and the API show the user's justification
+   (`justification`) as text only. Deciding needs `org_admin` and no step-up of its own: trusting the entry's source needed one.
    Operators and auditors read the requests (`GET /api/v1/software-requests`, filters `state`, `catalog_entry_id`,
    `device_id`, search by user name). A request that is no longer open, whose 30 days have run out, or whose entry
    changed its approval since cannot be decided (409 `invalid_state`).
@@ -263,10 +286,28 @@ for the application, and an organization administrator decides.
    and approved requests whose entry no longer requires approval (`approval_removed`) or that no available assignment
    offers any longer (`assignment_removed`), each with `software_request.expired`.
 
-**Agents.** An approval-required package reaches no agent before the release with the request flow on the device
-(PDK-811); until then the users of such an entry see nothing of it, so nobody installs it without an approval. The
-user's justification text is not stored yet; it follows with the request flow on the device (see
+**On the device.** The self-service app shows *Request* instead of *Install* for an entry that requires approval and
+asks for an optional justification (plain text, at most 500 characters, newlines allowed; the agent refuses control
+characters with 400 `invalid_request`). The agent reports the request once (`software.request`) and shows it as
+*Requested* until the bundle reflects a decision: an approved user sees *Install*, a denied user sees *Denied* with the
+administrator's reason, which the bundle shows to that user only. The user can withdraw a pending request in the app.
+An agent whose bundle carries the server's `request_withdraw` flag (set with every software section that has a package
+requiring approval, so only agents from 0.1.0-alpha.10) reports it once (`software.request_withdrawn`): the server
+closes the open request as *Withdrawn* and records `device.software_request_withdrawn`; a request an administrator
+decided first stays as decided. Without the flag (an older server) the withdrawal stays on the device, and the server's
+request ends with a decision or after 30 days, as does the device's. A withdrawal while the agent's event queue is full
+answers 429 `busy` and keeps the request. A second request while one is pending answers 409 `already_requested`, one for an entry without approval 409
+`not_required`; a user makes at most 10 requests an hour. Only directory users can ask: an approval names a user
+principal name.
+
+**Denials on the device.** A denial recompiles the device. Its bundle names the denied user with the reason for 24
+hours after the denial, the time in which the server opens no new request of that user; the compiler's reconcile loop
+recompiles the device once that time ends, so the user may ask again. Only the named user sees the reason (see
 [privacy](../compliance/privacy.md)).
+
+**Agents.** An approval-required package reaches no agent before 0.1.0-alpha.10, the release with the request flow on
+the device; the users of such an entry on an older agent see nothing of it, so nobody installs it without an approval.
+Development builds and the device simulator get it.
 
 ## States and reasons
 
@@ -300,11 +341,135 @@ day; the portal shows when it was reported (RR-82).
 When a device manages more applications than fit into its check-in, it leaves out applied items first (never a failed
 one) and the device's managed software is marked as truncated.
 
+## Packages stored in Paddock
+
+An organization without an APT repository of its own uploads its `.deb` packages to Paddock (ADR 0050). Paddock keeps
+one repository per organization at `https://bundles.<domain>/apt/<organization slug>/` (suite `paddock`, component
+`main`); its system source (kind `paddock`, slug `paddock`) is maintained by Paddock and cannot be changed or deleted
+through the API or the declarative configuration, which leaves it out of the export and names it by its slug in
+catalog entries.
+
+1. **The repository.** The first `GET /api/v1/software-repository` (any role) or the first upload attempt creates the
+   repository with a random read credential and queues the generation of its signing key. Until the key exists the
+   state is `disabled`: `source` and `fingerprint` are `null`, an upload is refused with 409 `repository_not_ready`
+   (recorded as `denied`) and the repository publishes nothing (404).
+2. **Uploading.** `POST /api/v1/software-packages` (multipart form field `file`, at most 256 MiB; optional `package`,
+   `version`, `architecture`, which must equal the package's control file), `org_admin` with a step-up (API tokens
+   never). **Uploading a package is root-equivalent on every device it is assigned to:** its maintainer scripts run as
+   root, and Paddock scans nothing inside it (RR-114). The api reads only the archive structure and the control file
+   and never runs anything from the package. It accepts an `ar` archive of exactly `debian-binary` (`2.0`),
+   `control.tar`, `control.tar.gz` or `control.tar.zst` and `data.tar.*`, with a control file of one paragraph whose
+   `Package`, `Version` and `Architecture` (`amd64`, `arm64` or `all`) pass the Debian rules and which sets none of
+   the index fields `Filename`, `Size`, `MD5sum`, `SHA1`, `SHA256`, `SHA512` or `Description-md5`. A control archive in
+   xz (`dpkg-deb -Zxz`) or any other compression is refused with 415 `unsupported_compression`: build with `dpkg-deb
+   -Zgzip` or `-Zzstd` (the default of Ubuntu 21.10 and later). The same name, version and architecture again is 409
+   `already_exists`. The audit event `software_package.uploaded` records the package, version, architecture, size and
+   the SHA-256 of the file. The file is stored as `pool/main/<p>/<package>/<package>_<version>_<arch>.deb` of the
+   repository (the version without its epoch) and the repository is rebuilt in the background.
+3. **Assigning.** A catalog entry whose source is the `paddock` source names the uploaded package names; it is
+   assigned like any other entry.
+4. **Deleting.** `DELETE /api/v1/software-packages/{id}` (`org_admin`, step-up; `software_package.deleted`). While a
+   catalog entry of the `paddock` source names the package, every stored version of it is kept (409 `in_use`): an
+   assignment may pin any of them. Change or delete the entry first.
+5. **The read credential.** apt reads the repository with HTTP basic authentication, user `paddock`. Every device whose
+   bundle names the `paddock` source receives the credential with its bundle and keeps it in
+   `/etc/apt/auth.conf.d/paddock-repo.conf` (mode 0600, root). That file is protected: a change, a looser mode or its
+   removal is reverted at the next drift pass and reported as `tamper.protected_file_changed`; a bundle without the
+   repository removes it, and so does the removal of Paddock. The secret never appears in an event, the log or the
+   health report. `POST /api/v1/software-repository/rotate-credential` (`org_admin`, step-up;
+   `software_repository.credential_rotated`) replaces it and shows the new secret once; every device's bundle changes,
+   and the previous secret stays valid for 24 hours (`previous_credential_valid_until`). A device that stays offline
+   longer fails `apt-get update` for the repository with 401 (`source_unreachable`) until its next check-in. The
+   credential is one per organization, not per device (RR-115).
+6. **Build and signing key.** The worker builds the repository every minute when it is due (PDK-813): after an upload
+   or a delete, a key rotation, and after a failed build. It writes `dists/paddock/main/binary-{amd64,arm64}/Packages`
+   and `Packages.gz` (a package of architecture `all` is listed for both), the same lists again below
+   `by-hash/SHA256/<sha256>` of their directory, `Release` with their SHA-256 and `Acquire-By-Hash: yes`, the detached
+   `Release.gpg` and the clearsigned `InRelease`, which it writes last. apt fetches the lists by their hash, so a build
+   that fails halfway leaves the previous build readable. Older `by-hash` files stay in the bucket. The first build generates the organization's signing key, an Ed25519 OpenPGP key `Paddock <slug>`; its
+   private key exists in clear only in the worker while it signs, is stored encrypted with the Transit key
+   `software-repo-wrap`, which no other role can use, and never appears in the log. The first build also creates the
+   system source with the public key, so `GET /api/v1/software-repository` shows `fingerprint` and `source` and uploads
+   are accepted from then on. Every published build is recorded as `software_repository.built` (generation,
+   fingerprint, package count). A failed build (OpenBao sealed, the object store unreachable) keeps the previous build
+   published; it is shown as `state: failed` with `last_error`, recorded once per distinct error as
+   `software_repository.build_failed`, and retried every minute. An error of OpenBao or the object store is recorded as
+   its step and class (for example `upload InRelease: AccessDenied, HTTP 403` or `network error`); the full message,
+   with the request ID, is in the worker's log (`software repository round failed`).
+7. **Rotating the signing key.** `POST /api/v1/software-repository/rotate-key` (`org_admin`, step-up;
+   `software_repository.key_rotated` with the replaced fingerprint) answers 202 with `key_rotation_requested_at` set.
+   Within a minute the worker generates the new key, signs the repository with it and only then gives the system
+   source the new key; every device receives it with its next bundle, writes the keyring before it updates, and finds
+   `InRelease` signed with the key it has. For 30 days the worker signs `InRelease` and `Release.gpg` with the previous
+   key (`previous_fingerprint`) as well, so a device that has not received the new key yet, also one that is offline
+   meanwhile, keeps updating from the repository; 30 days after the new key was first published the worker drops the
+   previous key and rebuilds with the new key alone. A build that fails does not start the 30 days. A device that has
+   not checked in for 30 days after a rotation fails `apt-get update` for this repository until its next check-in
+   brings the new key. Rotating again while the previous rotation has not been published yet (its build failed and
+   `state` is `failed`) is safe: the unpublished key is replaced and the key the devices have keeps signing. A second
+   rotation after the first was published ends the overlap of the first: only the key it replaces keeps signing, so a
+   device that had not fetched the first new key before the second rotation fails `apt-get update` for this repository
+   until its next check-in brings the current key. Leave a device poll interval between two rotations unless the key
+   is compromised.
+8. **Serving.** On the bundles host, `GET /apt/<slug>/<path>` answers 401 with a `Basic` challenge without the
+   credential, 302 to a presigned download URL (valid for 10 minutes) with it, and 404 for a path the repository does
+   not have. At most `PADDOCK_RATELIMIT_BUNDLES_APT` requests a minute (default 60) per client address are answered;
+   more get 429. Many devices behind one address can exceed it during a package roll-out: raise the limit then.
+
+To read the repository by hand: `curl -u paddock:<secret> -I https://bundles.<domain>/apt/<slug>/pool/main/…` answers
+302. To check the signature as apt does: download `dists/paddock/InRelease` with `curl -L -u paddock:<secret>`, save
+the system source's `signing_key` (`GET /api/v1/software-sources/{id}`) as `paddock.asc`, and run
+`gpg --dearmor <paddock.asc >paddock.gpg && gpgv --keyring ./paddock.gpg InRelease`.
+
+## Self-service app
+
+*Paddock Self-Service* is the desktop app through which users install, update and remove the applications offered to
+them with the intent `available`, and see why a required application is on their device (ADR 0049). Paddock does not
+install it on its own: an organization offers it like any other application, as a required catalog entry.
+
+- **Package.** Every release from `0.1.0-alpha.10` on publishes `paddock-self-service_<version>_all.deb`, signed with
+  the agent release key like the agent packages (`.minisig`, trusted comment `paddock-agent version=<version>
+  arch=all`; `docs/operations/agent-releases.md`). Take it from one of two places: from your own platform once the
+  release is imported or uploaded there, at `https://bundles.<domain>/packages/<version>/paddock-self-service_<version>_all.deb`
+  (the platform verified its signature before storing it, and the release detail lists its SHA-256), or from the GitHub
+  release, checked with `minisign -V -p paddock-release.pub -m paddock-self-service_<version>_all.deb`. For a release
+  before `0.1.0-alpha.10` build it from the release's source tag: `make deb` builds
+  `bin/selfservice/paddock-self-service_<version>_all.deb` next to the agent packages (`make selfservice-deb
+  VERSION=<version>` builds it alone).
+- **Requirements.** Ubuntu 24.04 or 26.04 with a graphical session. The package needs only Ubuntu's own `python3`,
+  `python3-gi`, `gir1.2-gtk-4.0` and `gir1.2-adw-1`; apt installs them from the distribution, nothing comes from PyPI.
+  The package is architecture independent and the agent update never delivers or changes it.
+- **Offering it as a required entry:**
+  1. Take the package of the release (above).
+  2. Upload it to the organization's repository (*Packages stored in Paddock*; architecture `all` is accepted).
+  3. Create a catalog entry *Paddock Self-Service* with the source `paddock` and the package `paddock-self-service`.
+  4. Assign the entry with the intent `required` to every device group (or the whole organization) whose users get
+     self-service. With each release, upload the new version; the assignment's update rule decides when devices take it.
+- **What the user sees.** *Apps* lists the applications the device offers to the user, each with its state and
+  *Install*, *Update* or *Remove*; every application the organization manages (any intent but `available`) shows
+  *Managed by your organization* and has no buttons. *Details* names the version, the source, whether it is installed
+  for all users or only the user, and the reason of a failure. *Activity* follows the operations the user started in
+  this session (queued with the position, running, done, failed or refused with the reason). On the first start the app
+  shows the transparency notice once per notice text: the organization's text when one is set, otherwise the default
+  text. While the agent does not answer the app shows *Paddock is not running* and tries again every 10 seconds; before
+  the first policy it shows *Waiting for your organization's policy*. The texts are in English or German, following the
+  session's language.
+- **What it does not do.** The app runs as the logged-in user and refuses to start as root. It talks only to the agent's
+  socket `/run/paddock/selfservice.sock`, makes no network connection and holds no credential; the agent identifies the
+  user by the socket's peer credentials. It shows everything it receives as plain text, never as markup, and accepts
+  icons only as PNG of at most 64 KiB. The only file it writes is `~/.config/paddock-self-service/state.json` (which
+  notice text the user has acknowledged).
+
+An installation or removal a user starts in the app pauses new directory logins and screen unlocks on that device
+until it has finished ("Installations pause directory logins" under [What the device does](#what-the-device-does));
+the user's own session continues.
+
 ## Uninstalling Paddock
 
 The removal of Paddock from a device (both modes, `leave` and `reset`, `docs/operations/uninstall.md`) removes every
 `/etc/apt/sources.list.d/paddock-*.sources`, every `/etc/apt/keyrings/paddock-*.gpg` and
-`/etc/apt/preferences.d/51paddock-software`, then refreshes the package lists. **Installed applications stay
+`/etc/apt/preferences.d/51paddock-software` and `/etc/apt/auth.conf.d/paddock-repo.conf`, then refreshes the package
+lists. **Installed applications stay
 installed.** The summary names the step `software_sources`.
 
 ## Troubleshooting
@@ -325,6 +490,7 @@ On the device:
 | Symptom | Cause and fix |
 | --- | --- |
 | `failed`, `source_unreachable`, error with `NO_PUBKEY`, `Missing key` or `No good signature` | the vendor signs with a new key: verify the new fingerprint out of band and change the source's key |
+| `failed`, `source_unreachable` for the `paddock` source with `401` | the device's credential is older than the overlap of a rotation, or `/etc/apt/auth.conf.d/paddock-repo.conf` is missing; it is restored with the device's next bundle or drift pass |
 | `failed`, `source_unreachable`, certificate error | the device does not trust the repository's TLS certificate; fix the certificate or the device's trust store |
 | `failed`, `no_candidate` for a pinned version | the repository no longer offers the version (RR-83); pin another version or switch to `latest` |
 | `failed`, `would_remove_dependents` | another installed package depends on the package (removal) or conflicts with it (install); resolve it on the device or change the assignment |
@@ -338,4 +504,6 @@ On the device:
 RR-77 (a source key is root-equivalent), RR-78 (maintainer scripts run as root), RR-79 (reserved for Flathub, M13b),
 RR-80 (local root bypasses pins and holds), RR-81 (refused operations stay refused), RR-82 (status can lag), RR-83
 (pinned versions vanish) and RR-118 (maintenance windows defer security-relevant removals), in
-[residual-risks.md](../compliance/residual-risks.md#software-catalog-m13a).
+[residual-risks.md](../compliance/residual-risks.md#software-catalog-m13a). RR-133 (packages that create a system
+user: manual installations fail, agent installations pause directory logins), in
+[residual-risks.md](../compliance/residual-risks.md#login-and-identity).

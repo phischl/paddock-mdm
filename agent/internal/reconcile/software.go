@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
@@ -30,6 +31,9 @@ const (
 	SoftwarePrefix     = "paddock-"
 	// SoftwareForbidFile blocks the forbidden packages for apt; it sorts after the updates pin file 50paddock.
 	SoftwareForbidFile = "/etc/apt/preferences.d/51paddock-software"
+	// SoftwareAuthFile holds the read credential of the organization's Paddock repository for apt (plan M13c decision
+	// 15); root-only, as apt requires for credentials.
+	SoftwareAuthFile = "/etc/apt/auth.conf.d/paddock-repo.conf"
 	// softwareInstalledRecord lists the required packages the reconciler saw installed, one per line: a recorded
 	// package that is gone was removed locally and is reinstalled as such.
 	softwareInstalledRecord = "/var/lib/paddock/state/software-installed"
@@ -88,6 +92,8 @@ type Software struct {
 	// session the last pass or NewUserSession saw.
 	userScoped   bool
 	seenSessions []int
+	// keySeq names the key file of each user remote-add (addUserRemote).
+	keySeq atomic.Uint64
 }
 
 type softwareRetry struct {
@@ -352,6 +358,9 @@ func (s *Software) Plan(ctx context.Context, r bundle.Resource) ([]string, error
 	if _, differs := s.forbidPins(sp); differs {
 		changes = append(changes, "file "+SoftwareForbidFile)
 	}
+	if s.authDiffers(sp) {
+		changes = append(changes, "file "+SoftwareAuthFile)
+	}
 	for _, op := range s.ops(sp) {
 		changes = append(changes, op.line())
 	}
@@ -561,6 +570,18 @@ func (s *Software) writeFiles(sp bundle.SoftwareSpec, pass *softwarePass) (updat
 		slog.Info("software source file removed", "path", p)
 		pass.changed = true
 	}
+	// The credential before the sources: the scoped update of a new Paddock source needs it.
+	authChanged, err := s.writeAuth(sp, pass)
+	if err != nil {
+		return nil, err
+	}
+	if authChanged && sp.Repository != nil {
+		for _, src := range sp.Sources {
+			if !flatpakSource(src) && slices.Contains(src.URIs, "https://"+sp.Repository.Host) {
+				updated = append(updated, src.Slug)
+			}
+		}
+	}
 	for _, src := range sp.Sources {
 		if flatpakSource(src) {
 			continue
@@ -597,8 +618,10 @@ func (s *Software) writeFiles(sp bundle.SoftwareSpec, pass *softwarePass) (updat
 			}
 			wrote = true
 		}
-		if wrote {
+		if wrote && !slices.Contains(updated, src.Slug) {
 			updated = append(updated, src.Slug)
+		}
+		if wrote {
 			pass.changed = true
 		}
 	}
@@ -619,6 +642,44 @@ func (s *Software) writeFiles(sp bundle.SoftwareSpec, pass *softwarePass) (updat
 		pass.changed = true
 	}
 	return updated, s.pruneSourceRecord()
+}
+
+// renderRepositoryAuth renders the credential as one line of apt's auth.conf (nil: no file). bundle.ValidateSoftware
+// admits no white space in its parts, so the line cannot carry a second entry.
+func renderRepositoryAuth(r *bundle.SoftwareRepositoryAuth) []byte {
+	if r == nil {
+		return nil
+	}
+	return []byte("machine " + r.Host + " login " + r.Username + " password " + r.Password + "\n")
+}
+
+// authDiffers reports whether the credential file differs from what the spec asks for. A bundle without the section
+// removes the file too: its name is Paddock's.
+func (s *Software) authDiffers(sp bundle.SoftwareSpec) bool {
+	if want := renderRepositoryAuth(sp.Repository); want != nil {
+		return !fileHas(s.Sys, SoftwareAuthFile, want, 0o600)
+	}
+	return !s.absent(SoftwareAuthFile)
+}
+
+// writeAuth writes or removes the repository credential file (a protected area, plan M13c decision 15) and reports
+// whether it changed. A change while the spec is the one applied before is tamper. Only the path is ever logged or
+// reported, never the content.
+func (s *Software) writeAuth(sp bundle.SoftwareSpec, pass *softwarePass) (bool, error) {
+	if !s.authDiffers(sp) {
+		return false, nil
+	}
+	s.tamper(pass, SoftwareAuthFile)
+	pass.changed = true
+	want := renderRepositoryAuth(sp.Repository)
+	if want == nil {
+		if err := s.Sys.Remove(SoftwareAuthFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return false, err
+		}
+		slog.Info("software repository credential removed", "path", SoftwareAuthFile)
+		return true, nil
+	}
+	return true, s.Sys.WriteFileAtomic(SoftwareAuthFile, want, 0o600, 0, 0)
 }
 
 // recordSource adds slug to the record of written sources before its first file is written.
@@ -1303,13 +1364,15 @@ func (s *Software) Status() *protocol.SoftwareHealth {
 }
 
 // Residue reports whether the device has software state Paddock wrote for an earlier section: the files of a recorded
-// source, forbid pins with Paddock's header, the record of installed packages or of Flatpak remotes and masks. A bundle without the section then
+// source, forbid pins with Paddock's header, the repository credential, the record of installed packages or of Flatpak
+// remotes and masks. A bundle without the section then
 // still runs the reconciler with an empty section, which removes those files and nothing else (architect decision
 // 2026-11-03); installed packages stay.
 func (s *Software) Residue() bool {
 	empty := bundle.SoftwareSpec{}
 	_, pins := s.forbidPins(empty)
 	return len(s.unmanaged(empty)) > 0 || pins || !s.absent(softwareInstalledRecord) || !s.absent(softwareSourcesRecord) ||
+		!s.absent(SoftwareAuthFile) ||
 		!s.absent(flatpakRemotesRecord) || !s.absent(flatpakMasksRecord)
 }
 

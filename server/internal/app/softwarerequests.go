@@ -103,7 +103,8 @@ func (s *SoftwareRequests) Approve(ctx context.Context, id uuid.UUID, reason str
 }
 
 // Deny denies an open request with a reason, which is required (audited: software_request.denied). The user may ask
-// again after software.RerequestAfterDenial.
+// again after software.RerequestAfterDenial; until then the compiler renders the denial with its reason into the
+// device's bundle (architect decision A10-27).
 func (s *SoftwareRequests) Deny(ctx context.Context, id uuid.UUID, reason string) (SoftwareRequest, error) {
 	return s.decide(ctx, SpecSoftwareRequestDeny, id, software.RequestDenied, reason)
 }
@@ -155,9 +156,9 @@ func (s *SoftwareRequests) decide(ctx context.Context, spec ActionSpec, id uuid.
 		if n == 0 {
 			return problem.InvalidState.WithDetail("the request is no longer open")
 		}
-		if state == software.RequestApproved {
-			rec.StateChanged(statechange.ScopeDevice, cur.DeviceID)
-		}
+		// A denial recompiles the device too: its bundle names the denial with the reason while the re-request lock
+		// holds (architect decision A10-27).
+		rec.StateChanged(statechange.ScopeDevice, cur.DeviceID)
 		out, err = q.GetSoftwareRequest(ctx, id)
 		return err
 	})
@@ -223,15 +224,16 @@ type openedRequest struct {
 }
 
 // openSoftwareRequest opens the request a software.request event of the device reports, received at receivedAt (plan
-// M13c decision 9), in the transaction of its claim: one per device, entry and user while it is open. It opens none
-// — and returns nil — for malformed data, an entry that is not the organization's or does not require approval, an
+// M13c decision 9), in the transaction of its claim: one per device, entry and user while it is open, with the user's
+// justification as untrusted plain text (maintainer answer Q7). It opens none — and returns nil — for malformed data,
+// a justification that fails software.ValidJustification, an entry that is not the organization's or does not require approval, an
 // entry no available assignment offers to the user on the device (architect decision A10-17), a user who holds an
 // approval of it on the device already, a repeat while the request is open, or a request within
 // software.RerequestAfterDenial of a denial (§3.7).
 func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID uuid.UUID, data json.RawMessage,
 	receivedAt time.Time) (*openedRequest, error) {
 	var ev protocol.SoftwareRequest
-	if json.Unmarshal(data, &ev) != nil || !software.ValidRequestUsername(ev.User) {
+	if json.Unmarshal(data, &ev) != nil || !software.ValidRequestUsername(ev.User) || !software.ValidJustification(ev.Justification) {
 		return nil, nil
 	}
 	entry, err := uuid.Parse(ev.EntryID)
@@ -276,7 +278,7 @@ func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID 
 	n, err := q.InsertSoftwareRequest(ctx, pgstore.InsertSoftwareRequestParams{
 		ID: id, OrganizationID: org, CatalogEntryID: entry, DeviceID: deviceID,
 		UserID: uuid.NullUUID{UUID: user, Valid: user != uuid.Nil}, Username: ev.User, RequestedAt: receivedAt, ExpiresAt: expires,
-		ApprovalEpoch: approval.ApprovalEpoch,
+		ApprovalEpoch: approval.ApprovalEpoch, Justification: ev.Justification,
 	})
 	if err != nil || n != 1 {
 		return nil, err
@@ -292,15 +294,51 @@ func openSoftwareRequest(ctx context.Context, q *pgstore.Queries, org, deviceID 
 	}}, nil
 }
 
+// withdrawSoftwareRequest closes the open request a software.request_withdrawn event of the device reports, received
+// at receivedAt (PDK-811b), in the transaction of its claim. Malformed data, or no open request of that device, entry
+// and user (an administrator decided it or it expired first), changes nothing. No event of its own is recorded: the
+// device's device.software_request_withdrawn is the one audit event of the withdrawal.
+func withdrawSoftwareRequest(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, data json.RawMessage, receivedAt time.Time) error {
+	var ev protocol.SoftwareRequestWithdrawn
+	if json.Unmarshal(data, &ev) != nil || !software.ValidRequestUsername(ev.User) {
+		return nil
+	}
+	entry, err := uuid.Parse(ev.EntryID)
+	if err != nil {
+		return nil //nolint:nilerr // a malformed entry ID closes nothing; the event itself is still recorded
+	}
+	_, err = q.WithdrawSoftwareRequest(ctx, pgstore.WithdrawSoftwareRequestParams{
+		DecidedAt: &receivedAt, DeviceID: deviceID, CatalogEntryID: entry, Username: ev.User,
+	})
+	return err
+}
+
 // softwareRequestEntry adds to the once-entry of a software.request event the opening of its request and, when it
-// opened one, the software_request.opened event in the same transaction. Every other entry is returned unchanged.
+// opened one, the software_request.opened event in the same transaction; to that of a software.request_withdrawn event
+// the closing of the open request. Every other entry is returned unchanged.
 func (d *DeviceReports) softwareRequestEntry(entry OnceEntry, deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) OnceEntry {
-	if ev.Type != protocol.EventSoftwareRequest {
+	code, ok := map[string]audit.Code{
+		protocol.EventSoftwareRequest:          audit.CodeDeviceSoftwareRequested,
+		protocol.EventSoftwareRequestWithdrawn: audit.CodeDeviceSoftwareRequestWithdrawn,
+	}[ev.Type]
+	if !ok {
 		return entry
 	}
-	// Only the documented fields: whatever else a device sends, such as a justification text, is not recorded.
-	def, _ := audit.Lookup(audit.CodeDeviceSoftwareRequested)
+	// Only the documented fields: whatever else a device sends, such as the justification, never reaches the audit log;
+	// openSoftwareRequest stores the justification in the request alone (maintainer answer Q7).
+	def, _ := audit.Lookup(code)
 	maps.DeleteFunc(entry.Spec.Params, func(k string, _ any) bool { return !slices.Contains(def.Params, k) })
+	if ev.Type == protocol.EventSoftwareRequestWithdrawn {
+		claim := entry.Claim
+		entry.Claim = func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+			fresh, err := claim(ctx, q)
+			if err != nil || !fresh {
+				return fresh, err
+			}
+			return true, withdrawSoftwareRequest(ctx, q, deviceID, ev.Data, receivedAt)
+		}
+		return entry
+	}
 	claim := entry.Claim
 	var opened *openedRequest
 	entry.Claim = func(ctx context.Context, q *pgstore.Queries) (bool, error) {

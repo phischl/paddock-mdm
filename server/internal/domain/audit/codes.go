@@ -114,6 +114,7 @@ const (
 	// Identity and privileges reported by devices (plan M3b decision 5).
 	CodeDeviceLoginApplied               Code = "device.login_applied"
 	CodeDeviceLoginApplyFailed           Code = "device.login_apply_failed"
+	CodeDeviceLoginNSSShield             Code = "device.login_nss_shield"
 	CodeDeviceUserLockApplied            Code = "device.user_lock_applied"
 	CodeDeviceLoginsSuspensionApplied    Code = "device.logins_suspension_applied"
 	CodeDeviceSudoApplyFailed            Code = "device.sudo_apply_failed"
@@ -294,6 +295,15 @@ const (
 	CodeSoftwareSourceUpdated Code = "software_source.updated"
 	CodeSoftwareSourceDeleted Code = "software_source.deleted"
 
+	// Packages stored in Paddock (plan M13c decision 12, ADR 0050).
+	CodeSoftwarePackageUploaded             Code = "software_package.uploaded"
+	CodeSoftwarePackageDeleted              Code = "software_package.deleted"
+	CodeSoftwareRepositoryCredentialRotated Code = "software_repository.credential_rotated"
+	// The worker's build and the signing key of the repository (plan M13c decision 13, ADR 0050 decision 3).
+	CodeSoftwareRepositoryKeyRotated  Code = "software_repository.key_rotated"
+	CodeSoftwareRepositoryBuilt       Code = "software_repository.built"
+	CodeSoftwareRepositoryBuildFailed Code = "software_repository.build_failed"
+
 	// Software catalog entries and assignments (plan M13a §6.3).
 	CodeSoftwareCatalogEntryCreated Code = "software_catalog_entry.created"
 	CodeSoftwareCatalogEntryUpdated Code = "software_catalog_entry.updated"
@@ -311,10 +321,12 @@ const (
 	// Approvals for available entries (plan M13c decisions 9 and 10): a user's request reported by the device, the
 	// request the worker opened from it (a notification code), the administrator's decision and the worker's expiry.
 	CodeDeviceSoftwareRequested Code = "device.software_requested"
-	CodeSoftwareRequestOpened   Code = "software_request.opened"
-	CodeSoftwareRequestApproved Code = "software_request.approved"
-	CodeSoftwareRequestDenied   Code = "software_request.denied"
-	CodeSoftwareRequestExpired  Code = "software_request.expired"
+	// A user withdrew a pending request on the device; the worker closed it (PDK-811b).
+	CodeDeviceSoftwareRequestWithdrawn Code = "device.software_request_withdrawn"
+	CodeSoftwareRequestOpened          Code = "software_request.opened"
+	CodeSoftwareRequestApproved        Code = "software_request.approved"
+	CodeSoftwareRequestDenied          Code = "software_request.denied"
+	CodeSoftwareRequestExpired         Code = "software_request.expired"
 
 	// The backup key (plan M15 §6.4).
 	CodePlatformBackupKeyGenerated Code = "platform.backup_key_generated"
@@ -707,6 +719,13 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "stage is apt, config, restart, deny_list, pam, sessions or notice; pam means the deny-list PAM profile is not in place (`dpkg-reconfigure paddock-agent` restores it); reason timeout marks an apt-get or dpkg run killed after 15 minutes.",
+	},
+	CodeDeviceLoginNSSShield: {
+		Code: CodeDeviceLoginNSSShield, Emitted: true,
+		Description: "A device held its login daemon (himmelblaud) stopped around one of the agent's package installations, so that packages can create local system users, and started it again; new logins and screen unlocks waited meanwhile (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "PDK-983: action is the package transaction (apt-get install, dpkg -i, …), duration_s how long the daemon was stopped, outcome restored, max_hold (started while the transaction still ran), recovered (the agent ended during the hold and finished it at its next start), restore_failed (a systemd timer retries) or hold_failed (the transaction ran with the daemon running); error says why.",
 	},
 	CodeDeviceUserLockApplied: {
 		Code: CodeDeviceUserLockApplied, Emitted: true,
@@ -1216,10 +1235,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperServiceStopped: {
 		Code: CodeDeviceTamperServiceStopped, Emitted: true,
-		Description: "A device found a service stopped outside Paddock: a service Paddock keeps running, which it started again, or a watched third-party service, which it only reports (actor: the device).",
+		Description: "A device found a service stopped outside Paddock: a service Paddock keeps running, which it started again, the login daemon himmelblaud, or a watched third-party service, both of which it only reports (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
+		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent), himmelblaud.service (the login daemon, stopped by someone other than Paddock's own package holds; reported only, never started again, state inactive or failed; PDK-983) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
 	},
 	CodeVulnerabilityCriticalSummary: {
 		Code: CodeVulnerabilityCriticalSummary, Emitted: true,
@@ -1824,6 +1843,46 @@ var registry = map[Code]Definition{
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with in_use while a catalog entry references the source.",
 	},
+	CodeSoftwarePackageUploaded: {
+		Code: CodeSoftwarePackageUploaded, Emitted: true,
+		Description: "An organization administrator uploaded a Debian package into the organization's Paddock repository; the SHA-256 and size of the file are recorded. Uploading a package is root-equivalent on every device it is assigned to: its maintainer scripts run as root, and Paddock scans nothing inside it (RR-114).",
+		Params:      []string{"package", "version", "architecture", "sha256", "size"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role, repository_not_ready while the repository's signing key is being generated; failure with invalid_request for a file that is no Debian package or whose control fields fail the rules or differ from the request, unsupported_compression for a control archive in xz or another compression than gzip or zstd, already_exists for a package with the same name, version and architecture.",
+	},
+	CodeSoftwarePackageDeleted: {
+		Code: CodeSoftwarePackageDeleted, Emitted: true,
+		Description: "An organization administrator deleted a package from the organization's Paddock repository; the repository is rebuilt without it.",
+		Params:      []string{"package", "version", "architecture", "sha256"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with in_use while a catalog entry of the Paddock source names the package, not_found for another organization's package.",
+	},
+	CodeSoftwareRepositoryCredentialRotated: {
+		Code: CodeSoftwareRepositoryCredentialRotated, Emitted: true,
+		Description: "An organization administrator replaced the read credential of the organization's Paddock repository; every device receives the new one with its next bundle, and the previous one stays valid until previous_valid_until (24 hours). The secret is shown once in the answer and never recorded.",
+		Params:      []string{"previous_valid_until"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role.",
+	},
+	CodeSoftwareRepositoryKeyRotated: {
+		Code: CodeSoftwareRepositoryKeyRotated, Emitted: true,
+		Description: "An organization administrator rotated the signing key of the organization's Paddock repository: the worker generates a new key at its next round (within a minute), signs the repository with it and only then gives it to the devices with their next bundle, so a device that received the new key always finds the repository signed with it. For 30 days the repository is signed with the previous key (previous_fingerprint) as well, so a device that has not received the new key yet keeps updating; the software_repository.built event names the new fingerprint.",
+		Params:      []string{"previous_fingerprint"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role, repository_not_ready while the first signing key is being generated.",
+	},
+	CodeSoftwareRepositoryBuilt: {
+		Code: CodeSoftwareRepositoryBuilt, Emitted: true,
+		Description: "The worker published a new build of the organization's Paddock repository (actor: system): the package lists, the Release file and its signatures (InRelease, Release.gpg) made with the signing key named by fingerprint and, for 30 days after a rotation, also with the previous key. key_generated is true when the build generated that key, the first one or one an administrator's rotation requested.",
+		Params:      []string{"generation", "fingerprint", "package_count", "key_generated"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeSoftwareRepositoryBuildFailed: {
+		Code: CodeSoftwareRepositoryBuildFailed, Emitted: true,
+		Description: "A build of the organization's Paddock repository failed (actor: system), e.g. because OpenBao is sealed or the object store is unreachable; the previous build stays published and devices keep using it. The worker retries every minute; the event is recorded when the error first occurs or changes, not for every retry. The error is also shown as last_error of the repository; an error of OpenBao or the object store is recorded as its step and class (error code, HTTP status or network error), the full message is in the worker's log.",
+		Params:      []string{"error"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
 	CodeSoftwareCatalogEntryCreated: {
 		Code: CodeSoftwareCatalogEntryCreated, Emitted: true,
 		Description: "An application was added to the software catalog with its package names per distribution, release and architecture.",
@@ -1903,6 +1962,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"event_seq", "occurred_at", "user", "entry_id"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded for every report; software_request.opened follows when it opened a request. A repeat while the request is open, a request within 24 hours of a denial, or one for an entry that does not exist or does not require approval opens none. The user's justification text is not recorded.",
+	},
+	CodeDeviceSoftwareRequestWithdrawn: {
+		Code: CodeDeviceSoftwareRequestWithdrawn, Emitted: true,
+		Description: "A user withdrew a pending software request through the self-service app of a device (actor: the device; user: the user name of the withdrawing account); the worker closed the open request of that device, entry and user as withdrawn.",
+		Params:      []string{"event_seq", "occurred_at", "user", "entry_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per report; a redelivered report records nothing. A report without an open request (an administrator decided it or it expired first) changes no request. Only an agent whose bundle carries the server's request_withdraw flag sends it; an older agent keeps the withdrawal on the device.",
 	},
 	CodeSoftwareRequestOpened: {
 		Code: CodeSoftwareRequestOpened, Emitted: true,

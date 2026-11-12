@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,7 +153,11 @@ func (h requestHarness) user(t *testing.T, org uuid.UUID, username string) uuid.
 }
 
 func requestEvent(seq int64, user string, entry uuid.UUID) protocol.Event {
-	data, _ := json.Marshal(map[string]string{"user": user, "entry_id": entry.String(), "justification": "secret text"})
+	return justifiedRequestEvent(seq, user, entry, "secret text")
+}
+
+func justifiedRequestEvent(seq int64, user string, entry uuid.UUID, justification string) protocol.Event {
+	data, _ := json.Marshal(map[string]string{"user": user, "entry_id": entry.String(), "justification": justification})
 	return protocol.Event{EventSeq: seq, Type: protocol.EventSoftwareRequest, OccurredAt: time.Now().UTC(), Data: data}
 }
 
@@ -172,7 +178,7 @@ func (h requestHarness) events(t *testing.T, code string) int {
 // TestSoftwareRequestIngest (plan M13c decisions 9 and 10): a device's software.request opens one request per device,
 // entry and user with device.software_requested and software_request.opened; a repeat while it is open, a redelivery,
 // an entry without approval, another organization's entry and malformed data open none, and the justification a device
-// sends is never recorded.
+// sends is stored with the request but never recorded in an audit event.
 func TestSoftwareRequestIngest(t *testing.T) {
 	h := newRequestHarness(t)
 	alice := "alice-" + h.org.String()[24:] + "@acme.test"
@@ -210,6 +216,9 @@ func TestSoftwareRequestIngest(t *testing.T) {
 	}
 	if n := h.count(t, "SELECT count(*) FROM action WHERE organization_id = $1 AND params::text LIKE '%secret text%'", h.org); n != 0 {
 		t.Fatalf("the justification was recorded in %d events", n)
+	}
+	if n := h.count(t, "SELECT count(*) FROM software_request WHERE device_id = $1 AND justification = 'secret text'", h.dev); n != 2 {
+		t.Fatalf("the justification is stored with %d requests, want 2 (alice and bob)", n)
 	}
 	var params map[string]any
 	if err := h.super.QueryRow(context.Background(), `SELECT params FROM action WHERE organization_id = $1
@@ -316,8 +325,56 @@ func TestSoftwareRequestDecisions(t *testing.T) {
 		t.Fatalf("approved params %v", params)
 	}
 	if n := h.count(t, `SELECT count(*) FROM outbox WHERE organization_id = $1 AND payload->>'scope' = 'device' AND payload->>'id' = $2`,
-		h.org, h.dev.String()); n != 1 {
-		t.Fatalf("approval queued %d compiles of the device, want 1", n)
+		h.org, h.dev.String()); n != 2 {
+		t.Fatalf("the approval and the denial queued %d compiles of the device, want 2", n)
+	}
+}
+
+// TestSoftwareRequestJustification (maintainer answer Q7): the justification is untrusted plain text. An HTML or script
+// payload and line breaks are stored verbatim and come back unchanged through the API, never in an audit event; a text
+// over 500 characters or with another control character opens no request, while the device's event is still recorded.
+func TestSoftwareRequestJustification(t *testing.T) {
+	h := newRequestHarness(t)
+	entry := h.entry(t, h.org, "required")
+	payload := "<script>alert(\"x\")</script>\n<img src=x onerror=alert(1)> **bold** 👩‍💻"
+	long := strings.Repeat("ä", software.MaxJustificationLength)
+	events := []protocol.Event{
+		justifiedRequestEvent(1, "html@acme.test", entry, payload),
+		justifiedRequestEvent(2, "long@acme.test", entry, long),
+		justifiedRequestEvent(3, "toolong@acme.test", entry, long+"a"),
+		justifiedRequestEvent(4, "tab@acme.test", entry, "a\tb"),
+		justifiedRequestEvent(5, "escape@acme.test", entry, "a\x1b[31mb"),
+		justifiedRequestEvent(6, "c1@acme.test", entry, "a\u0085b"),
+		justifiedRequestEvent(7, "none@acme.test", entry, ""),
+	}
+	if err := h.reports.RecordEvents(systemCtx(h.org), h.dev, time.Now(), events); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.events(t, "device.software_requested"); got != len(events) {
+		t.Fatalf("device.software_requested: %d, want %d", got, len(events))
+	}
+	list, err := h.api.List(adminCtx(h.org, principal.RoleOrgAuditor, "aud"), app.SoftwareRequestQuery{
+		Page: app.ListPage{Sort: "username", Limit: 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range list.Items {
+		got[r.Username] = r.Justification
+	}
+	want := map[string]string{"html@acme.test": payload, "long@acme.test": long, "none@acme.test": ""}
+	if !maps.Equal(got, want) {
+		t.Fatalf("stored justifications %q, want %q", got, want)
+	}
+	id, _ := h.request(t, entry, "html@acme.test")
+	if r, err := h.api.Get(adminCtx(h.org, principal.RoleOrgAuditor, "aud"), id); err != nil || r.Justification != payload {
+		t.Fatalf("get %q, %v", r.Justification, err)
+	}
+	if n := h.count(t, "SELECT count(*) FROM action WHERE organization_id = $1 AND params::text LIKE '%onerror%'", h.org); n != 0 {
+		t.Fatalf("the justification was recorded in %d events", n)
+	}
+	if _, err := h.super.Exec(context.Background(), "UPDATE software_request SET justification = 'a' || chr(7) WHERE id = $1", id); err == nil {
+		t.Fatal("the column accepted a control character")
 	}
 }
 

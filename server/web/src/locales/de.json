@@ -282,6 +282,8 @@
     "invalid_state": "Diese Aktion ist im aktuellen Zustand nicht möglich.",
     "conflict": "Das steht im Konflikt mit einem vorhandenen Eintrag.",
     "already_exists": "Das wird für dieselben Geräte bereits verwaltet.",
+    "unsupported_compression": "Das Steuerarchiv des Pakets ist mit einem Verfahren komprimiert, das Paddock nicht liest. Bauen Sie es mit dpkg-deb -Zgzip oder -Zzstd.",
+    "repository_not_ready": "Der Signaturschlüssel des Repositorys wird noch erzeugt. Versuchen Sie es in einer Minute erneut.",
     "in_use": "Dieser Eintrag wird noch verwendet. Entfernen Sie zuerst, was ihn verwendet.",
     "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der gesperrten Pfade.",
     "unit_not_allowed": "Diese Unit ist nicht erlaubt. Units von Paddock, Himmelblau, Fleet, SSH, GDM und systemd selbst sind geschützt.",
@@ -434,6 +436,7 @@
       "bundle_entry_omitted": "Das Bundle für {target} lässt die sudo-Rechte von {username} aus: Ein Berechtigungsprofil enthält einen Befehl, der nicht mehr erlaubt ist",
       "login_applied": "Das Gerät {target} hat seine Anmeldekonfiguration angewendet",
       "login_apply_failed": "Das Gerät {target} konnte seine Anmeldekonfiguration nicht anwenden (Schritt {stage})",
+      "login_nss_shield": "Das Gerät {target} hat Verzeichnisanmeldungen für {duration_s, number} s pausiert, während der Agent Pakete installierte{outcome, select, restored {} max_hold { (maximale Pausendauer erreicht)} recovered { (nach einem Agent-Neustart beendet)} restore_failed { – der Anmeldedienst startete nicht wieder} hold_failed { – nicht pausiert, mit aktiven Anmeldungen installiert} other { ({outcome})}}",
       "user_lock_applied": "Das Gerät {target} hat den gesperrten Benutzer {username} blockiert",
       "logins_suspension_applied": "Das Gerät {target} hat Verzeichnisanmeldungen ausgesetzt und {sessions_terminated, number} Sitzungen beendet",
       "sudo_apply_failed": "Das Gerät {target} konnte die sudo-Rechte nicht anwenden",
@@ -445,7 +448,7 @@
       "tamper_local_admin_changed": "Das Gerät {target} hat eine Änderung an seinem lokalen Administratorkonto festgestellt ({field})",
       "tamper_keyslot_changed": "Das Gerät {target} hat eine Änderung an den Keyslots seiner Festplatte festgestellt",
       "header_escrow_refused": "Ein LUKS-Header von {target} wurde nicht hinterlegt: Das Gerät hinterlegt bereits 32 Volumes",
-      "tamper_service_stopped": "Das Gerät {target} hat den gestoppten Dienst {unit} festgestellt und neu gestartet",
+      "tamper_service_stopped": "Das Gerät {target} hat den Dienst {unit} gestoppt vorgefunden",
       "tamper_agent_not_running": "fleetd meldet, dass der Paddock-Agent auf {target} nicht läuft",
       "revocation_trust_pinned_tofu": "Das Gerät {target} hat die Widerrufsschlüssel seines ersten Bundles, das sie enthielt, festgeschrieben (Trust on First Use)",
       "escrow_destroyed": "Die in der Treuhand-Ablage hinterlegten Festplattenschlüssel von {hostname} wurden vernichtet und die Vernichtung des Geräts wurde ausgestellt",
@@ -465,6 +468,7 @@
       "software_apply_failed": "Das Gerät {target} konnte ein Softwarepaket oder eine Paketquelle nicht anwenden ({stage}: {reason})",
       "software_self_service": "{outcome, select, succeeded {{user} hat über den Self-Service auf dem Gerät {target} eine Anwendung {action, select, install {installiert} update {aktualisiert} remove {entfernt} other {geändert}}} refused {Das Gerät {target} hat die Self-Service-Aktion {action} von {user} abgelehnt ({reason})} other {Die Self-Service-Aktion {action} von {user} ist auf dem Gerät {target} fehlgeschlagen ({reason})}}",
       "software_requested": "{user} hat auf dem Gerät {target} eine Anwendung angefragt, die eine Freigabe braucht",
+      "software_request_withdrawn": "{user} hat auf dem Gerät {target} die Anfrage nach einer Anwendung zurückgezogen, die eine Freigabe braucht",
       "stale_warning": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert (Warnung)",
       "stale_critical": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert und gilt als vermutlich verloren",
       "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert",
@@ -600,6 +604,16 @@
       "created": "{actor} hält das Paket {package} zurück",
       "updated": "{actor} hat das Zurückhalten des Pakets {package} geändert",
       "deleted": "{actor} hat das Paket {package} freigegeben"
+    },
+    "software_package": {
+      "uploaded": "{actor} hat das Paket {package} {version} ({architecture}) in das Paddock-Repository hochgeladen",
+      "deleted": "{actor} hat das Paket {package} {version} ({architecture}) aus dem Paddock-Repository gelöscht"
+    },
+    "software_repository": {
+      "credential_rotated": "{actor} hat die Lesezugangsdaten des Paddock-Repositorys ersetzt",
+      "key_rotated": "{actor} hat den Signaturschlüssel des Paddock-Repositorys ersetzt",
+      "built": "{actor} hat Stand {generation} des Paddock-Repositorys veröffentlicht, signiert mit dem Schlüssel {fingerprint}",
+      "build_failed": "{actor} konnte das Paddock-Repository nicht erstellen: {error}"
     },
     "software_source": {
       "created": "{actor} hat die Paketquelle {name} mit dem Schlüssel {fingerprint} hinzugefügt",
@@ -3626,8 +3640,10 @@
     "state": "Status",
     "requestedAt": "Angefragt",
     "expiresAt": "Verfällt",
+    "justification": "Begründung",
     "decision": "Entscheidung",
     "decidedBy": "von {name}",
+    "withdrawnByUser": "vom Benutzer auf dem Gerät",
     "states": {
       "requested": "Wartet",
       "approved": "Freigegeben",

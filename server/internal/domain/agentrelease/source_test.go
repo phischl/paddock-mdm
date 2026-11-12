@@ -37,6 +37,32 @@ func TestSourceAssets(t *testing.T) {
 	}
 }
 
+// TestSourceAssetsSelfService holds ADR 0043 amendment 2026-11-11: the self-service package is a required asset from
+// SelfServiceFirstVersion on and absent before it.
+func TestSourceAssetsSelfService(t *testing.T) {
+	selfService := func(v string) []SourceAsset {
+		var out []SourceAsset
+		for _, a := range SourceAssets(v) {
+			if a.Package == PackageSelfService {
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	for _, v := range []string{"0.1.0-alpha.9", "0.1.0-alpha.6", "0.1.0-alpha.1", "0.0.9"} {
+		if got := selfService(v); len(got) != 0 {
+			t.Errorf("SourceAssets(%s) lists %+v", v, got)
+		}
+	}
+	for _, v := range []string{SelfServiceFirstVersion, "0.1.0-alpha.11", "0.1.0-beta.1", "0.1.0", "1.2.3"} {
+		want := []SourceAsset{{Name: "paddock-self-service_" + v + "_all.deb", Arch: ArchAll, Package: PackageSelfService,
+			Required: true}}
+		if got := selfService(v); !slices.Equal(got, want) {
+			t.Errorf("SourceAssets(%s) self-service = %+v, want %+v", v, got, want)
+		}
+	}
+}
+
 // TestSourceAssetsMatchTheSignJob holds the required set equal to the signed files packaging/release_test.sh expects
 // from the sign job (ADR 0043 decision 4): a change to the release workflow's assets must change both.
 func TestSourceAssetsMatchTheSignJob(t *testing.T) {

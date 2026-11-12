@@ -321,7 +321,7 @@ paths:
             schema: { $ref: "#/components/schemas/EventsRequest" }
       responses:
         "202":
-          description: Accepted for processing; duplicates (same event_seq) are ignored.
+          description: Accepted for processing; duplicates (same event_seq) are ignored, and an event of an unknown type is skipped (see Event.type).
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "413": { $ref: "#/components/responses/Problem" }
@@ -651,6 +651,7 @@ components:
           type: string
           enum: [bundle.applied, bundle.rejected, config.drift_corrected, agent.updated, agent.update_failed,
                  agent.rolled_back, agent.events_dropped, session.login, login.applied, login.apply_failed,
+                 login.nss_shield,
                  user.lock_applied, logins.suspension_applied, sudo.apply_failed, sudo.user_unresolved,
                  tamper.sudo_group_member, tamper.sudoers_d_file, tamper.sudoers_changed,
                  tamper.protected_file_changed, local_admin.rotated, local_admin.rotation_failed, local_admin.login,
@@ -659,8 +660,13 @@ components:
                  agent.uninstalled, disk.conversion_prepared, disk.conversion_started, disk.conversion_completed,
                  disk.conversion_failed, disk.conversion_aborted, disk.conversion_neutralize_failed,
                  disk.conversion_unlock_restore_failed, software.installed, software.reinstalled,
-                 software.removed, software.apply_failed, software.self_service, software.request]
+                 software.removed, software.apply_failed, software.self_service, software.request,
+                 software.request_withdrawn]
           description: |
+            A server that does not know a type (an agent newer than the server) skips that event: it records its
+            event_seq once, without its data and without an audit event, and accepts the rest of the batch with 202
+            (PDK-995). Servers before 0.1.0-alpha.10 rejected the whole batch with 400 unknown_event_type, so an agent
+            sends a new type only when its bundle says the server understands it.
             Since plan M13a the software reconciler: software.installed and software.reinstalled {package, version,
             intent, catalog_entry_id, reason (first_install or locally_removed)}, software.removed {package, version,
             intent, catalog_entry_id}, software.apply_failed {package or source, stage (source_update, keyring,
@@ -670,9 +676,15 @@ components:
             Since plan M13b software.self_service {user, entry_id, package or flatpak_ref, scope (system or user),
             action (install, remove or update), outcome (succeeded, failed or refused), reason, version}: one per
             operation a user asked for through the self-service socket.
-            Since plan M13c software.request {user, entry_id}: a user asked for an available application whose entry
-            requires approval; the agent sends it only while its bundle carries such a package. The server opens one
-            request per device, entry and user; a repeat while it is open changes nothing.
+            Since plan M13c software.request {user, entry_id, justification (optional, since PDK-811: plain text of
+            at most 500 characters without control characters except newlines; untrusted, never in audit params)}: a
+            user asked for an available application whose entry requires approval; the agent sends it only while its
+            bundle carries such a package. The server opens one request per device, entry and user; a repeat while it
+            is open changes nothing. It stores the justification with the request (PDK-993) and opens none for a
+            justification that breaks these rules.
+            Since PDK-811b software.request_withdrawn {user, entry_id}: the user withdrew a pending request on the
+            device; the agent sends it only while its bundle's software section sets request_withdraw. The server
+            closes the open request of that device, entry and user as withdrawn; with none open it changes nothing.
             Since plan M8e the phases of an in-place encryption, each with data.conversion_id:
             disk.conversion_prepared {layout (lvm|plain), volume (the LUKS UUID of the header to come), data_bytes},
             disk.conversion_started {volume, init_s, init_result (ok, <stage>:<reason> or unknown), after_cancel

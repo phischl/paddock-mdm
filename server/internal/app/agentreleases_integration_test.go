@@ -135,6 +135,12 @@ func (h releaseHarness) signBinary(bin []byte, version, arch string) string {
 	return base64.StdEncoding.EncodeToString(minisign.SignWithComments(h.priv, bin, releasesig.Comment(version, arch), ""))
 }
 
+// signPackage signs a Debian package as the sign job does: the trusted comment names the release and the package's
+// arch (ADR 0043 amendment 2026-11-11 b).
+func (h releaseHarness) signPackage(deb []byte, version, arch string) string {
+	return h.signBinary(deb, version, arch)
+}
+
 func (h releaseHarness) published(t *testing.T) string {
 	t.Helper()
 	ctx := platformAdmin()
@@ -201,7 +207,7 @@ func TestAgentReleaseLifecycle(t *testing.T) {
 		t.Fatalf("upload: %+v, %v", art, err)
 	}
 	deb := []byte("debian package")
-	debSig := base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, deb))
+	debSig := h.signPackage(deb, v, "amd64")
 	_, err = h.releases.UploadPackage(ctx, v, "paddock-agent", "", "amd64", deb, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin)))
 	expectProblem(t, err, problem.InvalidRequest)
 	_, err = h.releases.UploadPackage(ctx, v, "../paddockd", "", "amd64", deb, debSig)
@@ -267,6 +273,104 @@ func (h releaseHarness) device(t *testing.T) (org, dev uuid.UUID) {
 		t.Fatal(err)
 	}
 	return org, dev
+}
+
+// TestPackageTrustedComment holds ADR 0043 amendments 2026-11-11 b and c for the upload: a package of the release key
+// is stored only when its trusted comment names the release and the package's arch — for fleet-osquery the release it
+// is stored under, not its fleetd version; paddock-revoke is not bound by its comment.
+func TestPackageTrustedComment(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v := uniqueVersion()
+	if _, err := h.releases.Create(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, packageVersion, arch, otherArch string }{
+		{agentrelease.PackageAgent, "", "amd64", "arm64"},
+		{agentrelease.PackageSupervisor, "", "arm64", "amd64"},
+		{agentrelease.PackageSelfService, "", agentrelease.ArchAll, "amd64"},
+		{agentrelease.PackageFleetd, "1.48.0", "amd64", "arm64"},
+	} {
+		deb := []byte(c.name + " " + c.arch + " " + v)
+		wrong := map[string][]byte{
+			"older release": minisign.SignWithComments(h.priv, deb, releasesig.Comment("0.0.1", c.arch), ""),
+			"other arch":    minisign.SignWithComments(h.priv, deb, releasesig.Comment(v, c.otherArch), ""),
+			"no comment":    minisign.Sign(h.priv, deb),
+			"garbled":       minisign.SignWithComments(h.priv, deb, c.name+" "+v+" "+c.arch, ""),
+			"suffix":        minisign.SignWithComments(h.priv, deb, releasesig.Comment(v, c.arch)+" extra", ""),
+		}
+		if c.packageVersion != "" {
+			wrong["fleetd version"] = minisign.SignWithComments(h.priv, deb, releasesig.Comment(c.packageVersion, c.arch), "")
+		}
+		for label, sig := range wrong {
+			_, err := h.releases.UploadPackage(ctx, v, c.name, c.packageVersion, c.arch, deb, base64.StdEncoding.EncodeToString(sig))
+			if problem.From(err).Code != problem.ReleaseSignatureMismatch.Code {
+				t.Errorf("%s %s (%s): err = %v, want release_signature_mismatch", c.name, c.arch, label, err)
+			}
+		}
+		if len(h.store.puts) != 0 {
+			t.Fatalf("%s: a package with a wrong trusted comment was stored", c.name)
+		}
+		pkg, err := h.releases.UploadPackage(ctx, v, c.name, c.packageVersion, c.arch, deb, h.signPackage(deb, v, c.arch))
+		if err != nil || string(h.store.puts[pkg.ObjectKey]) != string(deb) {
+			t.Fatalf("%s %s: %+v, %v", c.name, c.arch, pkg, err)
+		}
+		delete(h.store.puts, pkg.ObjectKey)
+	}
+	revoke := []byte(agentrelease.PackageRevoke + " " + v)
+	sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(h.priv, revoke, agentrelease.PackageRevoke+" 0.0.1 arm64", ""))
+	if _, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageRevoke, "", "amd64", revoke, sig); err != nil {
+		t.Errorf("%s: %v", agentrelease.PackageRevoke, err)
+	}
+	var mismatches int
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT count(*) FROM action WHERE code = 'agent_release.artifact_uploaded' AND outcome = 'failure'
+		   AND params->>'version' = $1 AND error_code = 'release_signature_mismatch'`, v).Scan(&mismatches); err != nil {
+		t.Fatal(err)
+	}
+	if mismatches != 21 {
+		t.Errorf("audited mismatches = %d, want 21 (one per refused upload)", mismatches)
+	}
+}
+
+// TestSelfServicePackage holds plan M13b amendment 2026-11-11: paddock-self-service is stored with arch all, the
+// only architecture valid for it, and all is valid for no other package — in the API and in the database.
+func TestSelfServicePackage(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := platformAdmin()
+	v := uniqueVersion()
+	if _, err := h.releases.Create(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	deb := []byte("self-service package")
+	sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(h.priv, deb, "paddock-agent version="+v+" arch=all", ""))
+	for _, c := range []struct{ name, arch string }{
+		{agentrelease.PackageSelfService, "amd64"}, {agentrelease.PackageSelfService, "arm64"},
+		{agentrelease.PackageAgent, "all"}, {agentrelease.PackageSupervisor, "all"}, {agentrelease.PackageRevoke, "all"},
+	} {
+		_, err := h.releases.UploadPackage(ctx, v, c.name, "", c.arch, deb, sig)
+		expectProblem(t, err, problem.InvalidRequest)
+	}
+	_, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageFleetd, "1.48.0", "all", deb, sig)
+	expectProblem(t, err, problem.InvalidRequest)
+	if len(h.store.puts) != 0 {
+		t.Fatal("a refused package was stored")
+	}
+	pkg, err := h.releases.UploadPackage(ctx, v, agentrelease.PackageSelfService, "", "all", deb, sig)
+	if err != nil || pkg.Arch != "all" || pkg.ObjectKey != "packages/"+v+"/paddock-self-service_"+v+"_all.deb" ||
+		string(h.store.puts[pkg.ObjectKey]) != string(deb) {
+		t.Fatalf("self-service upload: %+v, %v", pkg, err)
+	}
+
+	for _, c := range []struct{ name, arch string }{
+		{"paddock-self-service", "amd64"}, {"paddock-agent", "all"}, {"fleet-osquery", "all"}, {"paddock-self-service", "noarch"},
+	} {
+		_, err := h.super.Exec(context.Background(), `INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key, package_version)
+			VALUES ($1, $2, $3, repeat('a', 64), 1, 'sig', 'k', CASE WHEN $2 = 'fleet-osquery' THEN '1.48.0' END)`, v, c.name, c.arch)
+		if err == nil || !strings.Contains(err.Error(), "agent_package_arch_check") {
+			t.Errorf("database accepted %s %s: %v", c.name, c.arch, err)
+		}
+	}
 }
 
 func TestRolloutRoundHaltsOnFailures(t *testing.T) {
@@ -872,8 +976,7 @@ func TestPublishedBetweenCheckAndUpsert(t *testing.T) {
 		t.Fatal(err)
 	}
 	deb := []byte("supervisor " + v)
-	firstPkg, err := h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", deb,
-		base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, deb)))
+	firstPkg, err := h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", deb, h.signPackage(deb, v, "amd64"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -902,8 +1005,7 @@ func TestPublishedBetweenCheckAndUpsert(t *testing.T) {
 		t.Fatal(err)
 	}
 	otherDeb := []byte("supervisor rebuilt " + v)
-	_, err = h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", otherDeb,
-		base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, otherDeb)))
+	_, err = h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", otherDeb, h.signPackage(otherDeb, v, "amd64"))
 	expectProblem(t, err, problem.InvalidState)
 
 	d, err := h.releases.Get(ctx, v)

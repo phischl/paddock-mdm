@@ -360,6 +360,7 @@ type Device struct {
 	CompiledOsID                string
 	CompiledOsVersionID         string
 	CompiledAgentVersion        string
+	DenialLockCheckedAt         *time.Time
 }
 
 type DeviceAlert struct {
@@ -1155,6 +1156,43 @@ type SoftwareCatalogEntry struct {
 	ApprovalEpoch  int32
 }
 
+type SoftwarePackage struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Package        string
+	Version        string
+	Architecture   string
+	Size           int64
+	Sha256         string
+	ObjectKey      string
+	Control        json.RawMessage
+	UploadedBy     string
+	UploadedAt     time.Time
+}
+
+type SoftwareRepository struct {
+	OrganizationID              uuid.UUID
+	SigningPublicKey            *string
+	SigningFingerprint          *string
+	SigningPrivateCiphertext    *string
+	PreviousPublicKey           *string
+	PreviousFingerprint         *string
+	PreviousRetiredAt           *time.Time
+	CredentialCiphertext        string
+	CredentialSha256            []byte
+	PreviousCredentialSha256    []byte
+	PreviousCredentialExpiresAt *time.Time
+	CredentialRotatedAt         time.Time
+	Generation                  int64
+	RebuildRequestedAt          *time.Time
+	LastBuiltAt                 *time.Time
+	LastError                   *string
+	CreatedAt                   time.Time
+	UpdatedAt                   time.Time
+	KeyRotationRequestedAt      *time.Time
+	PreviousPrivateCiphertext   *string
+}
+
 type SoftwareRequest struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
@@ -1169,6 +1207,7 @@ type SoftwareRequest struct {
 	DecidedBy      *string
 	DecidedAt      *time.Time
 	DecisionReason *string
+	Justification  string
 }
 
 type SoftwareSource struct {

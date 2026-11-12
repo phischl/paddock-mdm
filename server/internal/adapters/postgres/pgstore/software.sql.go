@@ -744,7 +744,10 @@ CROSS JOIN LATERAL (
   FROM software_assignment a
   WHERE a.catalog_entry_id = e.id
     AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
-      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = $1 AND m.device_group_id = a.device_group_id))
+      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = $1 AND m.device_group_id = a.device_group_id)
+      OR EXISTS (SELECT 1 FROM device_owner o WHERE o.device_id = $1 AND o.user_id = a.user_id)
+      OR EXISTS (SELECT 1 FROM user_group_member g JOIN device_owner o ON o.user_id = g.user_id
+                 WHERE o.device_id = $1 AND g.group_id = a.user_group_id))
 ) t
 WHERE (s.device_id IS NOT NULL OR t.intents IS NOT NULL)
   AND ($2::text IS NULL OR e.name ILIKE $2::text ESCAPE '\')
@@ -771,10 +774,11 @@ type ListDeviceManagedSoftwareRow struct {
 	ReportedAt     *time.Time
 }
 
-// The entries a device manages: those assigned to it, through the organization or one of its groups, and those it
-// reported a row for, with the intents of the assignments (NULL: none) and the reported rows (state ”: none; one per
-// scope, plan M13b decision 17). The page derives not_applicable and unknown from the rest and filters and sorts them
-// in memory (ADR 0028).
+// The entries a device manages: those assigned to it, through the organization, one of its groups or one of its owners
+// (a user or a user group with a member who owns it, plan M13a amendment 2026-11-11), and those it reported a row for,
+// with the intents of the assignments (NULL: none) and the reported rows (state ”: none; one per scope, plan M13b
+// decision 17). The page derives not_applicable and unknown from the rest and filters and sorts them in memory
+// (ADR 0028).
 func (q *Queries) ListDeviceManagedSoftware(ctx context.Context, arg ListDeviceManagedSoftwareParams) ([]ListDeviceManagedSoftwareRow, error) {
 	rows, err := q.db.Query(ctx, listDeviceManagedSoftware, arg.DeviceID, arg.QPattern)
 	if err != nil {
@@ -997,9 +1001,12 @@ CROSS JOIN LATERAL (
   FROM software_assignment a
   WHERE a.catalog_entry_id = $1
     AND ((a.device_group_id IS NULL AND a.user_id IS NULL AND a.user_group_id IS NULL)
-      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = a.device_group_id))
+      OR EXISTS (SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = a.device_group_id)
+      OR EXISTS (SELECT 1 FROM device_owner o WHERE o.device_id = d.id AND o.user_id = a.user_id)
+      OR EXISTS (SELECT 1 FROM user_group_member g JOIN device_owner o ON o.user_id = g.user_id
+                 WHERE o.device_id = d.id AND g.group_id = a.user_group_id))
 ) t
-WHERE d.state = 'active' AND t.intents IS NOT NULL
+WHERE d.state = 'active' AND (st.device_id IS NOT NULL OR t.intents IS NOT NULL)
   AND ($2::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_group_member m WHERE m.device_id = d.id AND m.device_group_id = $2::uuid))
   AND ($3::text IS NULL OR d.hostname ILIKE $3::text ESCAPE '\')
@@ -1031,8 +1038,10 @@ type ListSoftwareCatalogDevicesRow struct {
 	ReportedAt     *time.Time
 }
 
-// The active devices the entry is assigned to, through the organization or one of their groups, with the rows they
-// reported for it (state ”: none; one per scope) and the intents of the assignments. The page filters and sorts the derived
+// The active devices the entry is assigned to, through the organization, one of their groups or one of their owners (a
+// user or a user group with a member who owns the device, plan M13a amendment 2026-11-11), and those that reported a
+// row for it (PDK-999), with the rows they reported for it
+// (state ”: none; one per scope) and the intents of the assignments (NULL: none). The page filters and sorts the derived
 // states in memory (ADR 0028), so the query returns every match in hostname order.
 func (q *Queries) ListSoftwareCatalogDevices(ctx context.Context, arg ListSoftwareCatalogDevicesParams) ([]ListSoftwareCatalogDevicesRow, error) {
 	rows, err := q.db.Query(ctx, listSoftwareCatalogDevices, arg.CatalogEntryID, arg.DeviceGroupID, arg.QPattern)

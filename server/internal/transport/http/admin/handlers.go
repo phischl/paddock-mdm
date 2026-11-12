@@ -76,6 +76,8 @@ type handlers struct {
 	notifications *app.Notifications
 	// softwareSources are the APT package sources (plan M13a decisions 1–6).
 	softwareSources *app.SoftwareSources
+	// softwarePackages are the packages stored in Paddock and the organization's repository (plan M13c decision 12).
+	softwarePackages *app.SoftwarePackages
 	// softwareCatalog are the catalog entries and their assignments (plan M13a decisions 7–11).
 	softwareCatalog *app.SoftwareCatalog
 	// softwareRequests are the users' requests for entries that require approval (plan M13c decisions 9 and 10).

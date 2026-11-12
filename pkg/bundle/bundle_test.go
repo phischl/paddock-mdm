@@ -451,7 +451,31 @@ func TestValidateSoftware(t *testing.T) {
 		change func(*SoftwareSpec)
 		ok     bool
 	}{
-		"valid":                    {func(*SoftwareSpec) {}, true},
+		"valid": {func(*SoftwareSpec) {}, true},
+		// The credential of the Paddock repository (plan M13c decision 15) names a source's host and path.
+		"repository credential": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com:8443/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com:8443/apt/acme/", Username: "paddock", Password: strings.Repeat("aZ0_-", 9)}
+		}, true},
+		"repository credential for no source": {func(s *SoftwareSpec) {
+			s.Repository = &SoftwareRepositoryAuth{Host: "evil.example.com/apt/acme/", Username: "paddock", Password: strings.Repeat("a", 43)}
+		}, false},
+		"repository password with a newline": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock", Password: strings.Repeat("a", 40) + "\nmachine x"}
+		}, false},
+		"repository password with a space": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock", Password: strings.Repeat("a", 40) + " login x"}
+		}, false},
+		"repository short password": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock", Password: "short"}
+		}, false},
+		"repository user with a space": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock x", Password: strings.Repeat("a", 43)}
+		}, false},
 		"required without version": {func(s *SoftwareSpec) { s.Packages[0].Version = nil }, true},
 		"hold with version":        {func(s *SoftwareSpec) { s.Packages[1].Intent, s.Packages[1].Version = SoftwareHold, &v }, true},
 		"flat repository":          {func(s *SoftwareSpec) { s.Sources[0].Suites, s.Sources[0].Components = []string{"./"}, nil }, true},
@@ -651,6 +675,59 @@ func TestValidateSoftware(t *testing.T) {
 		"approved upper-case": {func(s *SoftwareSpec) {
 			available(s, &SoftwareAudience{All: true})
 			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"Alice@example.org"}
+		}, false},
+		// Architect decision A10-27: the denied users of a package that requires approval, with their reasons.
+		"denied with reason": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"alice@example.org"}
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: "Use the licensed\nalternative"}, {User: "carol@example.org"}}
+		}, true},
+		"denied reason 500 characters": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: strings.Repeat("ä", MaxSoftwareDenialReason)}}
+		}, true},
+		"denied reason 501 characters": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: strings.Repeat("a", MaxSoftwareDenialReason+1)}}
+		}, false},
+		"denied reason invalid utf-8": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: "\xff"}}
+		}, false},
+		"denied without approval": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: "no"}}
+		}, false},
+		"denied empty": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Denied = SoftwareApprovalRequired, &[]SoftwareDenial{}
+		}, false},
+		"denied unsorted": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org"}, {User: "alice@example.org"}}
+		}, false},
+		"denied invalid user": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "Bob@example.org"}}
+		}, false},
+		"denied and approved": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"bob@example.org"}
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org"}}
+		}, false},
+		"denied 201 users": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			denied := make([]SoftwareDenial, MaxSoftwareAudience+1)
+			for i, u := range audienceOf(MaxSoftwareAudience + 1) {
+				denied[i].User = u
+			}
+			s.Packages[1].Denied = &denied
 		}, false},
 		// Architect decision A10-11: the targeted users of a user-scope application, with the limits of an audience.
 		"flatpak user required for users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, "alice@example.org", "bob@example.org") }, true},

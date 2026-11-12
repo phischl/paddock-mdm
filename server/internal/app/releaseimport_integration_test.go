@@ -73,11 +73,7 @@ func (h releaseHarness) addRelease(f *fakeSource, v string) {
 		if !a.Required {
 			continue
 		}
-		comment := a.Package + " " + v + " " + a.Arch
-		if a.Package == "" {
-			comment = releasesig.Comment(v, a.Arch)
-		}
-		h.addSigned(f, v, a.Name, []byte("content of "+a.Name), comment)
+		h.addSigned(f, v, a.Name, []byte("content of "+a.Name), releasesig.Comment(v, a.Arch))
 	}
 	f.add(v, "paddock-revoke_"+v+"_amd64-unsigned.deb", []byte("revoke"))
 	f.add(v, "SHA256SUMS", []byte("sums"))
@@ -118,7 +114,7 @@ func TestReleaseImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Release.Status != agentrelease.StatusPublished || len(d.Artifacts) != 2 || len(d.Packages) != 2 || d.Rollout != nil {
+	if d.Release.Status != agentrelease.StatusPublished || len(d.Artifacts) != 2 || len(d.Packages) != 3 || d.Rollout != nil {
 		t.Fatalf("release %+v, %d artifacts, %d packages, rollout %v", d.Release, len(d.Artifacts), len(d.Packages), d.Rollout)
 	}
 	for _, art := range d.Artifacts {
@@ -135,7 +131,11 @@ func TestReleaseImport(t *testing.T) {
 	for _, pkg := range d.Packages {
 		name := pkg.Name + "_" + v + "_" + pkg.Arch + ".deb"
 		sum := sha256.Sum256(src.files[name])
-		if pkg.Arch != "amd64" || pkg.Sha256 != hex.EncodeToString(sum[:]) || pkg.PackageVersion != nil ||
+		wantArch := "amd64"
+		if pkg.Name == agentrelease.PackageSelfService {
+			wantArch = agentrelease.ArchAll
+		}
+		if pkg.Arch != wantArch || pkg.Sha256 != hex.EncodeToString(sum[:]) || pkg.PackageVersion != nil ||
 			pkg.ObjectKey != agentrelease.PackageObjectKey(v, pkg.Name, "", pkg.Arch) {
 			t.Errorf("package %+v does not match %s", pkg, name)
 		}
@@ -144,7 +144,7 @@ func TestReleaseImport(t *testing.T) {
 		t.Error("paddock-revoke was imported")
 	}
 	for code, want := range map[string]int{
-		"agent_release.imported": 1, "agent_release.created": 1, "agent_release.artifact_uploaded": 4, "agent_release.published": 1,
+		"agent_release.imported": 1, "agent_release.created": 1, "agent_release.artifact_uploaded": 5, "agent_release.published": 1,
 	} {
 		if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = $2
 			AND outcome = 'success' AND actor->>'type' = 'platform_admin' AND actor->>'id' = $3`, corr, code, admin.String()); n != want {
@@ -153,7 +153,7 @@ func TestReleaseImport(t *testing.T) {
 	}
 	if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'agent_release.imported'
 		AND params->>'source' = 'phischl/paddock-mdm' AND params->>'source_url' = 'http://github-fixture:8080'
-		AND params->>'version' = $2 AND params ? 'newest_stored' AND params->>'files' = '4'
+		AND params->>'version' = $2 AND params ? 'newest_stored' AND params->>'files' = '5'
 		AND (actor->>'step_up')::boolean`, corr, v); n != 1 {
 		t.Error("the import event lacks its params or the step-up")
 	}
@@ -167,14 +167,14 @@ func TestReleaseImport(t *testing.T) {
 	v2 := sourceVersion()
 	h.addRelease(src, v2)
 	deb := []byte("arm64 deb")
-	h.addSigned(src, v2, "paddock-agent_"+v2+"_arm64.deb", deb, "paddock-agent "+v2+" arm64")
+	h.addSigned(src, v2, "paddock-agent_"+v2+"_arm64.deb", deb, releasesig.Comment(v2, "arm64"))
 	ctx, _, corr = steppedUpAdmin()
-	if d, err = imp.Import(ctx, v2); err != nil || len(d.Packages) != 3 {
+	if d, err = imp.Import(ctx, v2); err != nil || len(d.Packages) != 4 {
 		t.Fatalf("import with an arm64 package: %d packages, %v", len(d.Packages), err)
 	}
 	if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'agent_release.imported'
-		AND outcome = 'success' AND params->>'files' = '5' AND params->>'newest_stored' = $2`, corr, v); n != 1 {
-		t.Error("the import of the arm64 package does not record 5 files and the previous newest release")
+		AND outcome = 'success' AND params->>'files' = '6' AND params->>'newest_stored' = $2`, corr, v); n != 1 {
+		t.Error("the import of the arm64 package does not record 6 files and the previous newest release")
 	}
 
 	v3 := sourceVersion()
@@ -187,7 +187,7 @@ func TestReleaseImport(t *testing.T) {
 	v4 := sourceVersion()
 	h.addRelease(src, v4)
 	fleetd := []byte("fleetd deb")
-	h.addSigned(src, v4, "fleet-osquery_1.48.0_amd64.deb", fleetd, "fleet-osquery 1.48.0 amd64")
+	h.addSigned(src, v4, "fleet-osquery_1.48.0_amd64.deb", fleetd, releasesig.Comment(v4, "amd64"))
 	ctx, _, _ = steppedUpAdmin()
 	if d, err = imp.Import(ctx, v4); err != nil {
 		t.Fatal(err)
@@ -254,6 +254,26 @@ func TestReleaseImportRefusals(t *testing.T) {
 				"paddockd_"+v+"_linux_arm64")
 			return v
 		}, problem.ReleaseIncomplete, "failure"},
+		"missing self-service package": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			src.releases[len(src.releases)-1].Assets = withoutAsset(src.releases[len(src.releases)-1].Assets,
+				"paddock-self-service_"+v+"_all.deb")
+			return v
+		}, problem.ReleaseIncomplete, "failure"},
+		"missing self-service signature": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			src.releases[len(src.releases)-1].Assets = withoutAsset(src.releases[len(src.releases)-1].Assets,
+				"paddock-self-service_"+v+"_all.deb.minisig")
+			return v
+		}, problem.ReleaseIncomplete, "failure"},
+		"tampered self-service package": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			src.files["paddock-self-service_"+v+"_all.deb"] = []byte("tampered")
+			return v
+		}, problem.InvalidRequest, "failure"},
 		"tampered body": {func() string {
 			v := sourceVersion()
 			h.addRelease(src, v)
@@ -263,8 +283,8 @@ func TestReleaseImportRefusals(t *testing.T) {
 		"two fleetd packages of one arch": {func() string {
 			v := sourceVersion()
 			h.addRelease(src, v)
-			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), "fleet-osquery 1.48.0 amd64")
-			h.addSigned(src, v, "fleet-osquery_1.49.0_amd64.deb", []byte("fleetd 1.49.0"), "fleet-osquery 1.49.0 amd64")
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), releasesig.Comment(v, "amd64"))
+			h.addSigned(src, v, "fleet-osquery_1.49.0_amd64.deb", []byte("fleetd 1.49.0"), releasesig.Comment(v, "amd64"))
 			return v
 		}, problem.InvalidRequest, "failure"},
 		"signed for another version": {func() string {
@@ -272,6 +292,58 @@ func TestReleaseImportRefusals(t *testing.T) {
 			h.addRelease(src, v)
 			name := "paddockd_" + v + "_linux_amd64"
 			src.files[name+".minisig"] = minisign.SignWithComments(h.priv, src.files[name], releasesig.Comment(published, "amd64"), "")
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"package signed for another version": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-supervisor_" + v + "_amd64.deb"
+			src.files[name+".minisig"] = minisign.SignWithComments(h.priv, src.files[name], releasesig.Comment(published, "amd64"), "")
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"package signed for another arch": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-self-service_" + v + "_all.deb"
+			src.files[name+".minisig"] = minisign.SignWithComments(h.priv, src.files[name], releasesig.Comment(v, "amd64"), "")
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"package signed without a release comment": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-agent_" + v + "_amd64.deb"
+			src.files[name+".minisig"] = minisign.Sign(h.priv, src.files[name])
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"package signed with a garbled comment": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-agent_" + v + "_amd64.deb"
+			src.files[name+".minisig"] = minisign.SignWithComments(h.priv, src.files[name], "paddock-agent "+v+" amd64", "")
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"fleetd signed for another version": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), releasesig.Comment(published, "amd64"))
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"fleetd signed for its fleetd version": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), releasesig.Comment("1.48.0", "amd64"))
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"fleetd signed for another arch": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), releasesig.Comment(v, "arm64"))
+			return v
+		}, problem.ReleaseSignatureMismatch, "failure"},
+		"fleetd signed without a release comment": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), "fleet-osquery 1.48.0 amd64")
 			return v
 		}, problem.ReleaseSignatureMismatch, "failure"},
 	} {

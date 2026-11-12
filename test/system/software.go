@@ -379,13 +379,14 @@ func assignmentBody(intent, version string) map[string]any {
 }
 
 // assign assigns the entry to the device's group with intent and version ("" for none) and returns the
-// assignment's ID; it is deleted when the test ends, before its entry (cleanups run last in, first out).
-func (d *Device) assign(entry, intent, version string) string {
+// assignment's ID; it is deleted when keep ends, before its entry (cleanups run last in, first out). keep is the
+// VM's test for an assignment later gates use: d.t is the bound subtest, whose cleanup would delete it too early.
+func (d *Device) assign(keep *testing.T, entry, intent, version string) string {
 	d.t.Helper()
 	body := assignmentBody(intent, version)
 	body["catalog_entry_id"], body["device_group_id"], body["reason"] = entry, d.Group, "system test "+d.run
 	id := d.s.ID(d.t, d.s.Call(d.t, http.MethodPost, "/api/v1/software-assignments", body, http.StatusCreated))
-	d.s.DeleteOnCleanup(d.t, "/api/v1/software-assignments/"+id)
+	d.s.DeleteOnCleanup(keep, "/api/v1/software-assignments/"+id)
 	return id
 }
 

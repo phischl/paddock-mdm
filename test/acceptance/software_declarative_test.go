@@ -112,8 +112,10 @@ func TestSoftwareRollout(t *testing.T) {
 	canary := namedGroup(t, admin.Portal, "m13c canary")
 	a := activeDevice(t, admin.Portal, canary, "swr-a-"+suffix)
 	c := activeDevice(t, admin.Portal, "", "swr-c-"+suffix)
-	for _, d := range []string{a.DeviceID, c.DeviceID} {
-		waitBundleVersion(t, admin.Portal, d)
+	// The compiler emits the software section only in schema-v2 bundles.
+	for _, d := range []*devicesim.Device{a, c} {
+		d.SchemaVersions = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
+		waitBundleVersion(t, admin.Portal, d.DeviceID)
 	}
 	expectStatus(t, call(t, admin.Portal, http.MethodPut, "/api/v1/settings/rollout", map[string]any{
 		"enabled": true, "waves": []int{1, 100}, "min_wave_minutes": 60, "failure_threshold_percent": 0,

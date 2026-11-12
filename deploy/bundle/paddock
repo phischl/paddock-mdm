@@ -94,17 +94,72 @@ case "$cmd" in
       cp -a "$old/$targets" "$tmp" || die "migrate-from: could not copy $old/$targets; nothing changed"
     fi
     # The bundle sequence's high-water file (decisions-alpha9 item 68) moves too: until the new directory's first
-    # successful backup round it is the only source of a disaster restore. It is uid 999's; as for .secrets/, cp -p
-    # keeps the owner only for root, and the backup role may still replace it in its directory. Never lowered.
+    # successful backup round it is the only source of a disaster restore. The new file is the operator's, mode 0644;
+    # the backup role may still replace it in its directory. Never lowered.
     hw="$old/bundle-seq/high-water"
-    if [[ -f "$hw" ]]; then
-      [[ "$(head -n 1 "$hw")" =~ ^[0-9]{1,18}$ ]] || die "migrate-from: $hw holds no bundle sequence; correct or remove it"
-      mkdir -p "$BUNDLE_DIR/bundle-seq"
-      if [[ ! -f "$BUNDLE_DIR/bundle-seq/high-water" ]] ||
-        (($(head -n 1 "$BUNDLE_DIR/bundle-seq/high-water" 2>/dev/null || echo 0) < $(head -n 1 "$hw"))); then
-        cp -p "$hw" "$BUNDLE_DIR/bundle-seq/high-water.tmp" &&
-          mv -f "$BUNDLE_DIR/bundle-seq/high-water.tmp" "$BUNDLE_DIR/bundle-seq/high-water" ||
-          die "migrate-from: could not copy $hw to $BUNDLE_DIR/bundle-seq/"
+    seq_dir="$BUNDLE_DIR/bundle-seq"
+    # Both files are read as one validated number and never copied: B's is written by uid 999, and bash arithmetic
+    # runs a command found in a subscript such as PATH[$(…)]. An entry that is not a regular file, or a value that is
+    # not one number, is refused rather than read as none or 0: it may hide a higher sequence (decisions-alpha10 §43).
+    seq_value() {
+      local f="$1" fix="$2" v
+      seq_v=
+      if [[ -L "$f" ]] || [[ -e "$f" && ! -f "$f" ]]; then
+        die "migrate-from: $f is not a regular file; $fix; nothing changed"
+      fi
+      [[ -e "$f" ]] || return 0
+      [[ -r "$f" ]] || die "migrate-from: cannot read $f; $fix; nothing changed"
+      # Bounded, no-follow and non-blocking (PDK-984): uid 999 may swap in a symlink, /dev/zero or a FIFO after the
+      # type check. 32 bytes hold any valid value; anything longer fails the pattern below.
+      v="$(dd if="$f" iflag=nofollow,nonblock bs=32 count=1 status=none)" ||
+        die "migrate-from: cannot read $f; $fix; nothing changed"
+      [[ "$v" =~ ^[0-9]{1,18}$ ]] || die "migrate-from: $f holds no single bundle sequence; $fix; nothing changed"
+      seq_v="$((10#$v))"
+    }
+    if [[ -L "$seq_dir" ]] || [[ -e "$seq_dir" && ! -d "$seq_dir" ]]; then
+      die "migrate-from: $seq_dir is not a directory; remove it; nothing changed"
+    fi
+    seq_value "$hw" "correct it (one number, the highest bundle sequence) or remove it"
+    old_seq="$seq_v"
+    if [[ -n "$old_seq" ]]; then
+      seq_value "$seq_dir/high-water" \
+        "as root, correct it (one number, the highest bundle sequence this release reached) or remove it"
+      if [[ -z "$seq_v" ]] || ((seq_v < old_seq)); then
+        mkdir -p "$seq_dir" || die "migrate-from: cannot create $seq_dir; nothing changed"
+        # Written in place only in a directory this user owns (PDK-984): in uid 999's, a planted name could redirect
+        # root's write to any file. mktemp creates the temp file exclusively and never follows a name.
+        if [[ -O "$seq_dir" && -w "$seq_dir" ]]; then
+          seq_tmp="$(mktemp "$seq_dir/.high-water.XXXXXX")" ||
+            die "migrate-from: cannot write $seq_dir; nothing changed"
+          if ! { chmod 0644 "$seq_tmp" && printf '%s\n' "$old_seq" >"$seq_tmp" &&
+            mv -f "$seq_tmp" "$seq_dir/high-water"; }; then
+            rm -f "$seq_tmp"
+            die "migrate-from: could not write $old_seq to $seq_dir/high-water; nothing changed"
+          fi
+        else
+          # An upgrade again after a rollback (PDK-980): this release ran here, and its postgres container handed
+          # bundle-seq/ to uid 999. The operator owns this directory, so a new bundle-seq/ with the higher value
+          # replaces it by rename, which needs no write access to the old one and writes nothing inside it; the next
+          # ./paddock up hands the new one to uid 999 again. The old one is kept aside: only root can delete it.
+          seq_owner="$(stat -c %u "$seq_dir")"
+          new_seq="$(mktemp -d "$BUNDLE_DIR/.bundle-seq.new.XXXXXX")" || die "migrate-from: cannot write $BUNDLE_DIR"
+          aside="$(mktemp -d "$BUNDLE_DIR/.bundle-seq.replaced.XXXXXX")" || {
+            rm -rf "$new_seq"
+            die "migrate-from: cannot write $BUNDLE_DIR"
+          }
+          if ! { chmod 0755 "$new_seq" && (umask 022 && printf '%s\n' "$old_seq" >"$new_seq/high-water") &&
+            mv -T "$seq_dir" "$aside"; }; then
+            rm -rf "$new_seq" "$aside"
+            die "migrate-from: could not replace $seq_dir (owned by uid $seq_owner) with one holding $old_seq; nothing changed"
+          fi
+          mv -T "$new_seq" "$seq_dir" || {
+            mv -T "$aside" "$seq_dir" ||
+              die "migrate-from: could not move the new high-water file into $seq_dir, nor the old bundle-seq/ back: it is at $aside; move it back to $seq_dir (mv -T) before anything else"
+            rm -rf "$new_seq"
+            die "migrate-from: could not move the new high-water file into $seq_dir; nothing changed"
+          }
+          echo "bundle-seq/ of an earlier run here is kept as $aside (uid $seq_owner's; remove it with: sudo rm -rf $aside)"
+        fi
       fi
     fi
     cp -a "$old/.env" "$BUNDLE_DIR/.env"
@@ -276,6 +331,25 @@ case "$cmd" in
     else
       echo "WARN  networks: edge subnet free on this host"
       echo "      - not checked: listing the host's Docker networks failed"
+    fi
+    # An upgrade again after a rollback keeps the replaced bundle-seq/ aside (PDK-980), owned by uid 999, so only root
+    # can remove it. Its high-water is lower than the live one and must not be picked by hand after a disaster restore
+    # (decisions-alpha10 §44, plan M16 note 2026-11-11). A warning only: the directories are inert, and the check never
+    # touches them or bundle-seq/ itself.
+    if backup_host; then
+      leftovers=()
+      for d in "$BUNDLE_DIR"/.bundle-seq.replaced.*; do
+        [[ ! -e "$d" && ! -L "$d" ]] || leftovers+=("$d")
+      done
+      if ((${#leftovers[@]} == 0)); then
+        echo "PASS  upgrade: no leftover bundle-seq directories"
+      else
+        echo "WARN  upgrade: no leftover bundle-seq directories"
+        for d in "${leftovers[@]}"; do
+          echo "      - $d: a bundle-seq/ replaced by an upgrade after a rollback; nothing reads it, its high-water is outdated"
+        done
+        echo "      - remove them (root, they belong to uid 999): sudo rm -rf$(printf ' %q' "${leftovers[@]}")"
+      fi
     fi
     # Online, the project's running containers against the hardening matrix of hardening-exceptions.yaml (plan M12h
     # decision 10): their `docker inspect` goes in as a file, because stdin carries the configuration. As above, a
