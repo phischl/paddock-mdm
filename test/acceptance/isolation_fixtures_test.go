@@ -280,9 +280,11 @@ func seedGlobexSoftwarePackage(t *testing.T, w *isolationWorld) {
 	defer func() { _ = conn.Close(context.Background()) }()
 	id, org := uuid.NewString(), orgOf(t, w.carol)
 	pkg := "globex-iso-" + uniqueSuffix()
+	// The object key gets the organization as its own text parameter: PostgreSQL deduces one type per parameter, and
+	// organization_id is uuid while the concatenation needs text (42P08).
 	if _, err := conn.Exec(testContext(t, time.Minute), `INSERT INTO software_package (id, organization_id, package, version,
 		architecture, size, sha256, object_key, control, uploaded_by) VALUES ($1, $2, $3, '1.0', 'amd64', 1, repeat('0', 64),
-		'apt/' || $2 || '/pool/main/g/' || $3 || '/x.deb', '{}', 'gate')`, id, org, pkg); err != nil {
+		'apt/' || $4 || '/pool/main/g/' || $3 || '/x.deb', '{}', 'gate')`, id, org, pkg, org.String()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
