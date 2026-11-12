@@ -346,6 +346,8 @@ Then, for each draft release:
    the trusted comment of the release, from 0.1.0-alpha.10 on (ADR 0043 amendment 2026-11-11 c; the server refuses
    any other comment with 422 `release_signature_mismatch`):
    `minisign -S -s paddock-revoke-release.key -m paddock-revoke_<version>_<arch>.deb -t "paddock-agent version=<release version> arch=<arch>"`.
+   `paddock-revoke-release.key` and `.pub` are the revocation release key pair (*Keys* above), never the agent release
+   key `paddock-release.key`.
    `<release version>` is the release version as uploaded (`0.1.0-alpha.10`, not the Debian form `0.1.0~alpha.10`),
    `<arch>` is `amd64` or `arm64`. Check the comment before uploading:
    `minisign -V -p paddock-revoke-release.pub -m paddock-revoke_<version>_<arch>.deb` prints it as
