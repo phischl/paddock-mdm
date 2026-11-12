@@ -310,7 +310,11 @@ is every package operation a user or another tool starts.
   `restore_failed` (the timer and the agent retry) or `hold_failed` (the transaction ran with `himmelblaud` running and
   may have failed). The agent reports the holds of the regular updates in its next pass after the run.
 - **Tampering.** A stop of `himmelblaud` by anyone other than these holds is reported once per stop as
-  `device.tamper_service_stopped` (unit `himmelblaud.service`). The agent does not start it again.
+  `device.tamper_service_stopped` (unit `himmelblaud.service`). The agent does not start it again. A stop counts as a
+  hold only for 12 minutes after the hold began (5 minutes in a development build); holding the lock file alone never
+  counts. If another process keeps the lock file, the agent's transactions stay deferred (`pending`, `dpkg_locked`)
+  and the agent logs a warning at most once an hour. If the lock file cannot be opened at all, a transaction runs
+  without a hold and is reported as `hold_failed`, and the agent leaves an unfinished hold alone.
 
 **Package installations of a local administrator are not covered.** `sudo apt install <package>` of a package that
 creates a system account fails the same way. Stop the daemon around the installation:

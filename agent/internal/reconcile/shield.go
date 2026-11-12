@@ -17,8 +17,9 @@ import (
 )
 
 // NSSShieldMarker records a hold that is not finished: himmelblaud was stopped by a Paddock process (the agent or
-// `paddockd updates run`) and not yet started again, or starting it failed. While it exists the hold is Paddock's own,
-// never tampering; the agent finishes it when no process holds the shield lock any more (decisions §45, §47).
+// `paddockd updates run`) and not yet started again, or starting it failed. While it is younger than the maximum hold
+// plus the timer grace the hold is Paddock's own, never tampering (plan M5a amendment 2026-11-11 b, P2); the agent
+// finishes it when no process holds the shield lock any more (decisions §45, §47).
 const NSSShieldMarker = "/var/lib/paddock/state/nss-shield.json"
 
 // NSSShieldReport is the JSON array of the login.nss_shield records of `paddockd updates run`, which has no event
@@ -27,9 +28,14 @@ const NSSShieldReport = "/var/lib/paddock/state/nss-shield-report.json"
 
 const nssShieldMaxRecords = 16
 
+// nssShieldSending is the private name the agent moves NSSShieldReport to before it reads it, so that a record the
+// updates process appends meanwhile lands in a new NSSShieldReport instead of being removed unsent.
+const nssShieldSending = NSSShieldReport + ".sending"
+
 // NSSShieldLock is the lock file whose exclusive flock a hold keeps from before its check of the daemon until its
-// marker is gone, across the agent and `paddockd updates run` (plan M5a N6.2): the lock, not the marker, says that a
-// hold is in progress.
+// marker is gone, across the agent and `paddockd updates run` (plan M5a N6.2). It serializes the holds and keeps
+// Recover off a hold in progress; it never makes a stopped himmelblaud count as held, because any local administrator
+// can take it (plan M5a amendment 2026-11-11 b, P2).
 const NSSShieldLock = "/var/lib/paddock/state/nss-shield.lock"
 
 // DpkgFrontendLock is dpkg's frontend lock: a process that holds it is running a package operation.
@@ -67,6 +73,9 @@ var nssShieldUnit = himmelblauUnits[0]
 // restores.
 const shieldRestoreTimeout = 2 * time.Minute
 
+// shieldLockWarnEvery bounds the warning that another process keeps the shield lock past a transaction's wait.
+const shieldLockWarnEvery = time.Hour
+
 // shieldPoll is the interval of the waits for the shield lock and the dpkg lock.
 const shieldPoll = 250 * time.Millisecond
 
@@ -75,6 +84,7 @@ type shieldSys interface {
 	ReadFile(path string) ([]byte, fs.FileInfo, error)
 	WriteFileAtomic(path string, data []byte, mode fs.FileMode, uid, gid int) error
 	Remove(path string) error
+	Rename(oldPath, newPath string) error
 	Systemctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	SystemdRun(ctx context.Context, stdin []byte, args ...string) (output string, exit int, err error)
 }
@@ -96,7 +106,8 @@ type NSSShield struct {
 	// MaxHold, TimerGrace, LockWait and HoldWait default to NSSShieldMaxHold, NSSShieldTimerGrace, NSSShieldLockWait
 	// and NSSShieldHoldWait.
 	MaxHold, TimerGrace, LockWait, HoldWait time.Duration
-	// LockFile is the device path of NSSShieldLock (root included); "" serializes within the process only.
+	// LockFile is the device path of NSSShieldLock (root included); "" serializes within the process only, which
+	// only unit tests do.
 	LockFile string
 	// DpkgBusy reports whether another process holds the dpkg frontend lock (FrontendLockBusy); nil: never.
 	DpkgBusy func() bool
@@ -108,7 +119,24 @@ type NSSShield struct {
 	semOnce sync.Once
 	mu      sync.Mutex
 	holding bool
+	// lockBusySince, lockWarnedAt and restartWarnedAt rate-limit the warnings that another process keeps the shield
+	// lock: one for deferred package transactions, one for a deferred configuration restart of himmelblaud.
+	lockBusySince, lockWarnedAt, restartWarnedAt time.Time
 }
+
+// acquireResult is what acquire got.
+type acquireResult int
+
+const (
+	// acquireBusy: another hold of this process kept the semaphore past the wait.
+	acquireBusy acquireResult = iota
+	// acquireLockBusy: another process kept the shield lock past the wait.
+	acquireLockBusy
+	// acquireLocked: the semaphore and the cross-process lock (or no LockFile is configured).
+	acquireLocked
+	// acquireNoLock: the semaphore only; the lock file could not be opened or locked.
+	acquireNoLock
+)
 
 type shieldMarker struct {
 	Action    string    `json:"action"`
@@ -143,9 +171,16 @@ func (s *NSSShield) maxHold() time.Duration  { return orDefault(s.MaxHold, NSSSh
 func (s *NSSShield) lockWait() time.Duration { return orDefault(s.LockWait, NSSShieldLockWait) }
 func (s *NSSShield) holdWait() time.Duration { return orDefault(s.HoldWait, NSSShieldHoldWait) }
 
-// Holds reports whether unit is stopped by one of Paddock's own holds: the shield lock is taken (a hold of this or
-// another process is in progress) or the marker exists (a hold whose holder died or whose restore failed, which
-// Recover finishes). The login reconciler never reports such a stop as tampering (plan M5a N6.3).
+// markerBound is the age up to which a marker counts as a hold: every hold ends at the maximum hold, and the safety
+// timer has fired by the grace after it.
+func (s *NSSShield) markerBound() time.Duration {
+	return s.maxHold() + orDefault(s.TimerGrace, NSSShieldTimerGrace)
+}
+
+// Holds reports whether unit is stopped by one of Paddock's own holds: this process holds it, or a marker exists
+// whose start is younger than the maximum hold plus the timer grace (a hold of this or another process in progress,
+// or one whose holder died or whose restore failed). The shield lock alone never counts. The login reconciler never
+// reports such a stop as tampering (plan M5a amendment 2026-11-11 b, P2).
 func (s *NSSShield) Holds(unit string) bool {
 	if s == nil || !slices.Contains(himmelblauUnits, unit) {
 		return false
@@ -153,7 +188,24 @@ func (s *NSSShield) Holds(unit string) bool {
 	s.mu.Lock()
 	holding := s.holding
 	s.mu.Unlock()
-	return holding || s.markerExists() || (s.LockFile != "" && lockTaken(s.LockFile))
+	return holding || s.freshMarker()
+}
+
+// freshMarker reports whether a marker exists whose start is within the bound of now. An unreadable marker or one
+// without a start is not fresh: no hold of Paddock writes one.
+func (s *NSSShield) freshMarker() bool {
+	data, _, err := s.Sys.ReadFile(NSSShieldMarker)
+	if err != nil || data == nil {
+		return false
+	}
+	var m shieldMarker
+	if json.Unmarshal(data, &m) != nil || m.StartedAt.IsZero() {
+		return false
+	}
+	age := s.now().Sub(m.StartedAt)
+	// The bound applies in both directions, so that a clock stepped back a little keeps a hold held while a marker
+	// dated far into the future cannot suppress the report for ever.
+	return age < s.markerBound() && -age < s.markerBound()
 }
 
 func (s *NSSShield) markerExists() bool {
@@ -167,9 +219,11 @@ func (s *NSSShield) setHolding(v bool) {
 	s.mu.Unlock()
 }
 
-// acquire takes the semaphore and the shield lock within wait (both are tried at once first); ok is false when
-// another hold kept them that long.
-func (s *NSSShield) acquire(ctx context.Context, wait time.Duration) (release func(), ok bool, err error) {
+// acquire takes the semaphore and the shield lock within wait (both are tried at once first). release is non-nil for
+// acquireLocked and acquireNoLock; lockErr is the reason of acquireNoLock. With acquireNoLock the caller MUST NOT
+// stop himmelblaud, finish a marker or send the records: a hold of another process cannot be told from a dead one
+// (plan M5a amendment 2026-11-11 b, P3).
+func (s *NSSShield) acquire(ctx context.Context, wait time.Duration) (release func(), res acquireResult, lockErr, err error) {
 	s.semOnce.Do(func() { s.sem = make(chan struct{}, 1) })
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
@@ -179,36 +233,67 @@ func (s *NSSShield) acquire(ctx context.Context, wait time.Duration) (release fu
 		select {
 		case s.sem <- struct{}{}:
 		case <-ctx.Done():
-			return nil, false, ctx.Err()
+			return nil, acquireBusy, nil, ctx.Err()
 		case <-deadline.C:
-			return nil, false, nil
+			return nil, acquireBusy, nil, nil
 		}
 	}
-	unlock := func() {}
-	if s.LockFile != "" {
-		f, err := lockFile(ctx, s.LockFile, deadline.C)
-		switch {
-		case errors.Is(err, errLockTimeout):
-			<-s.sem
-			return nil, false, nil
-		case err != nil && ctx.Err() != nil:
-			<-s.sem
-			return nil, false, ctx.Err()
-		case err != nil:
-			// Without the lock file, holds in this process are still serialized; another process's hold shows as an
-			// inactive himmelblaud and its transaction runs without a hold of its own.
-			slog.WarnContext(ctx, "shield lock unavailable; serializing within the process only", "error", err)
-		default:
-			unlock = func() { _ = f.Close() }
-		}
+	if s.LockFile == "" {
+		return func() { <-s.sem }, acquireLocked, nil, nil
 	}
-	return func() { unlock(); <-s.sem }, true, nil
+	f, err := lockFile(ctx, s.LockFile, deadline.C)
+	switch {
+	case errors.Is(err, errLockTimeout):
+		<-s.sem
+		return nil, acquireLockBusy, nil, nil
+	case err != nil && ctx.Err() != nil:
+		<-s.sem
+		return nil, acquireBusy, nil, ctx.Err()
+	case err != nil:
+		return func() { <-s.sem }, acquireNoLock, err, nil
+	}
+	return func() { _ = f.Close(); <-s.sem }, acquireLocked, nil, nil
 }
 
-// tryAcquire takes the semaphore and the shield lock if both are free now.
+// tryAcquire takes the semaphore and the cross-process shield lock if both are free now. With only the semaphore it
+// logs and gives it back: nothing that needs the lock may run without it.
 func (s *NSSShield) tryAcquire(ctx context.Context) (release func(), ok bool) {
-	release, ok, _ = s.acquire(ctx, 0)
-	return release, ok
+	release, res, lockErr, _ := s.acquire(ctx, 0)
+	switch res {
+	case acquireLocked:
+		return release, true
+	case acquireNoLock:
+		release()
+		slog.WarnContext(ctx, "shield lock unavailable; an unfinished himmelblaud hold is left alone", "error", lockErr)
+	}
+	return nil, false
+}
+
+// noteLockBusy logs msg at Warn, at most once per shieldLockWarnEvery and warnedAt, with since when the agent has
+// found the shield lock taken by another process (plan M5a amendment 2026-11-11 b, P2 and P4); waitStart is when the
+// deferred wait began. warnedAt is a field of s, guarded by s.mu.
+func (s *NSSShield) noteLockBusy(ctx context.Context, waitStart time.Time, warnedAt *time.Time, msg string, attrs ...any) {
+	now := s.now()
+	s.mu.Lock()
+	if s.lockBusySince.IsZero() {
+		s.lockBusySince = waitStart
+	}
+	since := s.lockBusySince
+	warn := warnedAt.IsZero() || now.Sub(*warnedAt) >= shieldLockWarnEvery
+	if warn {
+		*warnedAt = now
+	}
+	s.mu.Unlock()
+	if warn {
+		slog.WarnContext(ctx, msg, append(attrs, "lock", s.LockFile, "held_for", now.Sub(since).Round(time.Second))...)
+	}
+}
+
+// noteLockFree ends a streak of noteLockBusy, so that the next one warns at once.
+func (s *NSSShield) noteLockFree() {
+	s.mu.Lock()
+	s.lockBusySince, s.lockWarnedAt, s.restartWarnedAt = time.Time{}, time.Time{}, time.Time{}
+	s.mu.Unlock()
 }
 
 // waitDpkg waits until no other process holds the dpkg frontend lock, at most LockWait.
@@ -238,15 +323,28 @@ func (s *NSSShield) Run(ctx context.Context, action string, run func() (string, 
 	if s == nil {
 		return run()
 	}
-	release, ok, err := s.acquire(ctx, s.holdWait())
+	waitStart := s.now()
+	release, res, lockErr, err := s.acquire(ctx, s.holdWait())
 	if err != nil {
 		return "", -1, err
 	}
-	if !ok {
+	switch res {
+	case acquireBusy:
 		slog.WarnContext(ctx, "another himmelblaud hold outlasted the wait; transaction deferred", "action", action)
 		return nssShieldBusyOutput, 100, ErrNSSShieldBusy
+	case acquireLockBusy:
+		s.noteLockBusy(ctx, waitStart, &s.lockWarnedAt,
+			"the himmelblaud shield lock is held by another process; package transactions deferred", "action", action)
+		return nssShieldBusyOutput, 100, ErrNSSShieldBusy
+	case acquireNoLock:
+		defer release()
+		err := fmt.Errorf("take the shield lock: %w", lockErr)
+		slog.ErrorContext(ctx, "himmelblaud not held for a package transaction", "action", action, "error", err)
+		s.report(action, 0, protocol.NSSShieldHoldFailed, err)
+		return run()
 	}
 	defer release()
+	s.noteLockFree()
 	// A marker under the lock is a hold whose holder died: it is finished and reported before a new hold writes its
 	// own marker over it (plan M5a N4); `paddockd updates run` never calls Recover.
 	s.finishStale(ctx)
@@ -404,16 +502,13 @@ func (s *NSSShield) report(action string, held time.Duration, outcome string, er
 	s.Events.emit(protocol.EventLoginNSSShield, ev)
 }
 
-// Pending reports whether Recover has work: records of `paddockd updates run`, or a marker while no process holds the
-// shield lock.
+// Pending reports whether Recover has work: records of `paddockd updates run` or a marker, while this process can take
+// the shield lock and no process holds it.
 func (s *NSSShield) Pending(ctx context.Context) bool {
 	if s == nil {
 		return false
 	}
-	if data, _, err := s.Sys.ReadFile(NSSShieldReport); err == nil && data != nil {
-		return true
-	}
-	if !s.markerExists() {
+	if !s.recordsExist() && !s.markerExists() {
 		return false
 	}
 	release, ok := s.tryAcquire(ctx)
@@ -423,8 +518,18 @@ func (s *NSSShield) Pending(ctx context.Context) bool {
 	return ok
 }
 
+func (s *NSSShield) recordsExist() bool {
+	for _, path := range []string{NSSShieldReport, nssShieldSending} {
+		if data, _, err := s.Sys.ReadFile(path); err == nil && data != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // Recover finishes what no hold in progress owns, under the shield lock taken without waiting (plan M5a N3.2, N6.3):
-// a taken lock means a hold of this or another process is in progress, and nothing is touched. A marker is a hold
+// a taken lock means a hold of this or another process is in progress, and nothing is touched; a lock that cannot be
+// taken at all touches nothing either and is logged (amendment 2026-11-11 b, P3). A marker is a hold
 // whose holder died, or whose start failed: the Himmelblau daemons are started (the safety timer may have done so),
 // the hold is reported once (recovered, or restore_failed while the start fails) and the marker is kept until the
 // start succeeds. Then the records of `paddockd updates run` are emitted and removed. Without a marker a stopped
@@ -473,25 +578,36 @@ func (s *NSSShield) finishStale(ctx context.Context) {
 	s.settle(m, restoreErr)
 }
 
-// readRecords returns the records of NSSShieldReport; a missing file has none.
-func (s *NSSShield) readRecords() ([]protocol.LoginNSSShield, error) {
-	data, _, err := s.Sys.ReadFile(NSSShieldReport)
+// readRecords returns the records of a record file; a missing file has none.
+func (s *NSSShield) readRecords(path string) ([]protocol.LoginNSSShield, error) {
+	data, _, err := s.Sys.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) || (err == nil && data == nil) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", NSSShieldReport, err)
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	var records []protocol.LoginNSSShield
 	if err := json.Unmarshal(data, &records); err != nil {
-		return nil, fmt.Errorf("decode %s: %w", NSSShieldReport, err)
+		return nil, fmt.Errorf("decode %s: %w", path, err)
 	}
 	return records, nil
 }
 
-// sendRecords emits the records of `paddockd updates run` as login.nss_shield and removes the file.
+// sendRecords emits the records of `paddockd updates run` as login.nss_shield and removes them: it moves the file to
+// a private name first and removes only that, because an updates run without the shield lock (plan M5a amendment
+// 2026-11-11 b, P3) may append a hold_failed record at any time. A private file left by an earlier pass is sent
+// first; the records file then waits for the next pass.
 func (s *NSSShield) sendRecords(ctx context.Context) {
-	records, err := s.readRecords()
+	if data, _, err := s.Sys.ReadFile(nssShieldSending); errors.Is(err, fs.ErrNotExist) || (err == nil && data == nil) {
+		if err := s.Sys.Rename(NSSShieldReport, nssShieldSending); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				slog.WarnContext(ctx, "moving the shield records aside failed", "error", err)
+			}
+			return
+		}
+	}
+	records, err := s.readRecords(nssShieldSending)
 	if err != nil {
 		slog.WarnContext(ctx, "dropping unreadable shield records", "error", err)
 	}
@@ -502,7 +618,7 @@ func (s *NSSShield) sendRecords(ctx context.Context) {
 	for _, r := range records {
 		s.Events.emit(protocol.EventLoginNSSShield, r)
 	}
-	if rmErr := s.Sys.Remove(NSSShieldReport); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+	if rmErr := s.Sys.Remove(nssShieldSending); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 		slog.WarnContext(ctx, "removing the shield records failed", "error", rmErr)
 	}
 }
@@ -516,7 +632,7 @@ func NSSShieldRecorder(sys shieldSys) *Events {
 		if !ok {
 			return
 		}
-		records, err := shield.readRecords()
+		records, err := shield.readRecords(NSSShieldReport)
 		if err != nil {
 			slog.Error("replacing unreadable shield records", "error", err)
 		}
@@ -538,11 +654,27 @@ func (s *NSSShield) Exclusive(ctx context.Context, fn func() error) (ran bool, e
 	if s == nil {
 		return true, fn()
 	}
-	release, ok, err := s.acquire(ctx, s.lockWait())
-	if err != nil || !ok {
+	waitStart := s.now()
+	release, res, lockErr, err := s.acquire(ctx, s.lockWait())
+	if err == nil && res == acquireLockBusy {
+		// The configuration file is already in place, but himmelblaud reads it only at start: a changed login allow
+		// list stays unapplied while the lock is held (plan M5a amendment 2026-11-11 b, P4).
+		s.noteLockBusy(ctx, waitStart, &s.restartWarnedAt,
+			"the himmelblaud shield lock is held by another process; a configuration restart of himmelblaud is waiting")
+	}
+	if err != nil || release == nil {
 		return false, err
 	}
 	defer release()
+	if res == acquireLocked {
+		s.noteLockFree()
+	}
+	if res == acquireNoLock {
+		// A restart stops the daemon, which a process without the lock must not do: it could cut into another
+		// process's hold (plan M5a amendment 2026-11-11 b, P3).
+		slog.WarnContext(ctx, "shield lock unavailable; himmelblaud not restarted", "error", lockErr)
+		return false, nil
+	}
 	return true, fn()
 }
 
