@@ -132,10 +132,10 @@ func run(args []string) error {
 			return err
 		}
 		signer, comment := priv, releasesig.Comment(*version, arch)
-		// paddock-revoke: the revocation release key (plan M4c decision 4); its comment is not yet bound to the release
-		// (ADR 0043 amendment 2026-11-11 c, PDK-1004).
+		// paddock-revoke: the revocation release key (plan M4c decision 4), with the same release comment as every other
+		// package (ADR 0043 amendment 2026-11-11 c, PDK-1004).
 		if name == "paddock-revoke" {
-			signer, comment = revokePriv, fmt.Sprintf("%s %s %s", name, *version, arch)
+			signer = revokePriv
 		}
 		sig := minisign.SignWithComments(signer, deb, comment, "paddock agent package")
 		target := base + "/packages/" + name + "/" + arch

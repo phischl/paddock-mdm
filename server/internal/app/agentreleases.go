@@ -315,15 +315,16 @@ func checkBinaryComment(comment, version, arch string) error {
 	return nil
 }
 
-// revokeCommentExempt keeps paddock-revoke out of the trusted-comment check until the maintainer decides whether the
-// offline signing procedure of the revocation release key changes for 0.1.0-alpha.10 (ADR 0043 amendment 2026-11-11 c,
-// PDK-1004); it is the only switch to flip when that exemption ends.
-const revokeCommentExempt = true
+// revokeCommentExempt kept paddock-revoke out of the trusted-comment check until the maintainer decided on the offline
+// signing procedure of the revocation release key (ADR 0043 amendment 2026-11-11 c, PDK-1004). The maintainer ended the
+// exemption from 0.1.0-alpha.10 on: paddock-revoke is signed offline with the release comment like every other package.
+const revokeCommentExempt = false
 
 // checkPackageComment requires the trusted comment of a Debian package to name the release it is stored under and the
 // package's architecture, arch all for paddock-self-service (ADR 0043 amendment 2026-11-11 b), so that a package signed
 // for another release cannot be stored under this one. fleet-osquery is bound to the release it is stored under, not
-// to its fleetd version (amendment 2026-11-11 c). paddock-revoke is not checked while revokeCommentExempt holds.
+// to its fleetd version (amendment 2026-11-11 c). paddock-revoke is bound the same way, signed with the revocation
+// release key.
 func checkPackageComment(name, comment, version, arch string) error {
 	if name == agentrelease.PackageRevoke && revokeCommentExempt {
 		return nil

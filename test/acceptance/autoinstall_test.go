@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"aead.dev/minisign"
 	"github.com/oasdiff/yaml"
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
@@ -33,7 +32,7 @@ func installRelease(t *testing.T, root *env.Portal) string {
 		t.Fatal(err)
 	}
 	deb := []byte("!<arch>\npaddock-revoke " + v)
-	expectStatus(t, uploadPackage(t, root, v, "paddock-revoke", deb, minisign.Sign(revokeKey, deb)), http.StatusOK, "")
+	expectStatus(t, uploadPackage(t, root, v, "paddock-revoke", deb, signRevokePackage(t, revokeKey, deb, v)), http.StatusOK, "")
 	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/publish", nil), http.StatusOK, "")
 	return v
 }

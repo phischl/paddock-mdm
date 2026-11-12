@@ -56,17 +56,18 @@ Then give the key to the release workflow (once, and again after a rotation):
    EOF
    ```
 
-The trusted comment is part of the signature and must be exactly `paddock-agent version=<version> arch=<arch>`
-(`amd64` or `arm64`): the server refuses other comments at upload (422 `release_signature_mismatch`), and the
-supervisor installs a binary only as the version and architecture its comment names (plan M4b.1 decision 10). The
-same comment binds the `paddock-agent`, `paddock-supervisor`, `paddock-self-service` and `fleet-osquery` packages to
-their release: `paddock-agent version=<version> arch=<package arch>`, with `arch=all` for `paddock-self-service`. For
-`fleet-osquery` `<version>` is the release it is stored under, not its fleetd version. The upload, the host command
-and the GitHub import refuse a package whose comment names another version or architecture, or that has no such
-comment (422 `release_signature_mismatch`), and store nothing of it, so that a package signed for an older release
-cannot be stored under a newer one (ADR 0043 amendments 2026-11-11 b and c). `paddock-revoke` is not checked for
-this comment. Releases stored before this check are not verified again. The
-workflow and the offline fallback both sign with it:
+The trusted comment is part of the signature and must be exactly `paddock-agent version=<version> arch=<arch>` (`amd64`
+or `arm64`): the server refuses other comments at upload (422 `release_signature_mismatch`), and the supervisor installs
+a binary only as the version and architecture its comment names (plan M4b.1 decision 10). The same comment binds the
+`paddock-agent`, `paddock-supervisor`, `paddock-self-service`, `fleet-osquery` and, from 0.1.0-alpha.10 on,
+`paddock-revoke` packages to their release: `paddock-agent version=<version> arch=<package arch>`, with `arch=all` for
+`paddock-self-service`. For `fleet-osquery` `<version>` is the release it is stored under, not its fleetd version. The
+upload, the host command and the GitHub import refuse a package whose comment names another version or architecture, or
+that has no such comment (422 `release_signature_mismatch`), and store nothing of it, so that a package signed for an
+older release cannot be stored under a newer one (ADR 0043 amendments 2026-11-11 b and c). `paddock-revoke` carries the
+same comment, signed with the revocation release key (*Signing in the release workflow*, step 2, has the command);
+signed with the agent release key it is refused even with the right comment (400). Releases stored before this check are
+not verified again. The workflow and the offline fallback both sign with it:
 
 ```sh
 minisign -S -s paddock-release.key -m paddockd -t "paddock-agent version=<version> arch=<arch>"
@@ -96,7 +97,7 @@ variable `PADDOCK_RELEASE_KEY_PASSPHRASE`, so it never appears on a command line
    `releases/<version>/<arch>/paddockd`.
 4. Upload the Debian packages `paddock-agent`, `paddock-supervisor` and `paddock-revoke` of the release (built by
    `make deb`), each signed like the binary, with the trusted comment of its release and architecture (above) —
-   `paddock-revoke` with the revocation release key, never with the agent
+   `paddock-revoke` with the revocation release key and the same comment, never with the agent
    release key, and never built with `REVOKE_TAGS` (the test build tag `paddock_revoke_testtarget`; `make
    agent-release` refuses it): `PUT /api/platform/v1/agent-releases/<version>/packages/<name>/<arch>` with the package
    as body and `X-Paddock-Minisig`. The server stores them under
@@ -167,9 +168,9 @@ arch=<arch>` (`<v>` the release version, also for `fleet-osquery`; `arch=all` fo
 checked (RR-84). The release is published, ready for a rollout; the import never starts one.
 
 **What is never imported.** `paddock-revoke` stays on the offline two-person path: sign it with the revocation key and
-upload it with the host command or the package upload above, with or without a signature on GitHub. Unsigned files,
-`SHA256SUMS*` and every other asset are ignored. fleetd that is not attached to the GitHub release is uploaded by hand
-as above.
+the trusted comment of the release (*Signing in the release workflow*, step 2) and upload it with the host command or
+the package upload above, with or without a signature on GitHub. Unsigned files, `SHA256SUMS*` and every other asset are
+ignored. fleetd that is not attached to the GitHub release is uploaded by hand as above.
 
 **Configuration** (environment of the `paddock-api` service, `.env`):
 
@@ -340,8 +341,17 @@ Then, for each draft release:
 1. Download the files, `SHA256SUMS` and `SHA256SUMS.sigstore.json`; check the checksums with `cosign verify-blob`
    (above), the files with `sha256sum -c SHA256SUMS` (the asset names are the names in `SHA256SUMS`, also for a
    pre-release) and each agent file with `minisign -V -p paddock-release.pub -m <file>`.
-2. **paddock-revoke (offline, unchanged):** the two holders of the revocation release key sign
-   `paddock-revoke_<version>_<arch>-unsigned.deb` offline as `paddock-revoke_<version>_<arch>.deb` (two-person rule).
+2. **paddock-revoke (offline, two-person rule):** the two holders of the revocation release key remove the suffix
+   (`paddock-revoke_<version>_<arch>-unsigned.deb` → `paddock-revoke_<version>_<arch>.deb`) and sign it offline with
+   the trusted comment of the release, from 0.1.0-alpha.10 on (ADR 0043 amendment 2026-11-11 c; the server refuses
+   any other comment with 422 `release_signature_mismatch`):
+   `minisign -S -s paddock-revoke-release.key -m paddock-revoke_<version>_<arch>.deb -t "paddock-agent version=<release version> arch=<arch>"`.
+   `paddock-revoke-release.key` and `.pub` are the revocation release key pair (*Keys* above), never the agent release
+   key `paddock-release.key`.
+   `<release version>` is the release version as uploaded (`0.1.0-alpha.10`, not the Debian form `0.1.0~alpha.10`),
+   `<arch>` is `amd64` or `arm64`. Check the comment before uploading:
+   `minisign -V -p paddock-revoke-release.pub -m paddock-revoke_<version>_<arch>.deb` prints it as
+   `Trusted comment: paddock-agent version=<release version> arch=<arch>`.
 3. Build fleetd for the release with `make fleetd-deb` (needs outbound HTTPS to Fleet's update server) and sign it
    offline with the custodians' backup copy of the agent release key and the trusted comment of the release (not of
    the fleetd version; the server refuses any other comment with 422 `release_signature_mismatch`):

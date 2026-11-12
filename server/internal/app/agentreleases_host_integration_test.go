@@ -34,6 +34,30 @@ func (h releaseHarness) hostFleetd(comment string) app.HostPackage {
 		Minisig: minisign.SignWithComments(h.priv, deb, comment, "")}
 }
 
+// hostRevoke is paddock-revoke for amd64 signed with key and the trusted comment comment.
+func (h releaseHarness) hostRevoke(key minisign.PrivateKey, comment string) app.HostPackage {
+	deb := []byte("paddock-revoke deb")
+	return app.HostPackage{Name: agentrelease.PackageRevoke, Arch: "amd64", Deb: deb, Minisig: minisign.SignWithComments(key, deb, comment, "")}
+}
+
+// TestAgentReleasePublishFromHostRevoke holds ADR 0043 amendment 2026-11-11 c for the host command (PDK-1004):
+// paddock-revoke signed with the revocation release key and the comment of its release is published.
+func TestAgentReleasePublishFromHostRevoke(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := httpx.WithRequestID(context.Background(), uuid.NewString())
+	v := uniqueVersion()
+	arts, pkgs := h.hostFiles(v)
+	revoke := h.hostRevoke(h.revokePriv, releasesig.Comment(v, "amd64"))
+	d, err := h.releases.PublishFromHost(ctx, v, arts, append(pkgs, revoke))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := agentrelease.PackageObjectKey(v, agentrelease.PackageRevoke, "", "amd64")
+	if len(d.Packages) != 2 || string(h.store.puts[key]) != string(revoke.Deb) {
+		t.Fatalf("paddock-revoke not published: %+v", d.Packages)
+	}
+}
+
 // TestAgentReleasePublishFromHostFleetd holds ADR 0043 amendment 2026-11-11 c for the host command: fleetd signed with
 // the comment of the release it is stored under, not of its fleetd version, is published.
 func TestAgentReleasePublishFromHostFleetd(t *testing.T) {
@@ -87,7 +111,8 @@ func TestAgentReleasePublishFromHost(t *testing.T) {
 }
 
 // TestAgentReleasePublishFromHostRefusesBadSignatures: a file signed with another key or a binary or package signed
-// for another release or arch (ADR 0043 amendments 2026-11-11 b and c) creates nothing and stores nothing.
+// for another release or arch (ADR 0043 amendments 2026-11-11 b and c), also paddock-revoke (PDK-1004), creates nothing
+// and stores nothing.
 func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 	h := newReleaseHarness(t, false)
 	_, otherKey, err := minisign.GenerateKey(rand.Reader)
@@ -129,10 +154,22 @@ func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 		"fleetd signed without a release comment": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
 			pkgs[1] = h.hostFleetd("fleet-osquery 1.48.0 amd64")
 		},
+		"paddock-revoke signed with the agent release key": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[2] = h.hostRevoke(h.priv, releasesig.Comment(v, "amd64"))
+		},
+		"paddock-revoke signed for another release": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[2] = h.hostRevoke(h.revokePriv, releasesig.Comment("0.0.1", "amd64"))
+		},
+		"paddock-revoke signed for another arch": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[2] = h.hostRevoke(h.revokePriv, releasesig.Comment(v, "arm64"))
+		},
+		"paddock-revoke signed without a release comment": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[2] = h.hostRevoke(h.revokePriv, "paddock-revoke "+v+" amd64")
+		},
 	} {
 		v := uniqueVersion()
 		arts, pkgs := h.hostFiles(v)
-		pkgs = append(pkgs, h.hostFleetd(releasesig.Comment(v, "amd64")))
+		pkgs = append(pkgs, h.hostFleetd(releasesig.Comment(v, "amd64")), h.hostRevoke(h.revokePriv, releasesig.Comment(v, "amd64")))
 		tamper(v, arts, pkgs)
 		before := len(h.store.puts)
 		_, err := h.releases.PublishFromHost(ctx, v, arts, pkgs)
