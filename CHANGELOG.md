@@ -307,6 +307,10 @@ Agents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10
 - The backup role no longer clears its per-target metrics (`paddock_backup_target_reachable`,
   `paddock_backup_target_held_files`, `paddock_backup_last_success_timestamp_seconds`) before setting them again, so a
   Prometheus scrape at that moment can no longer miss those series.
+- `./paddock rollback` no longer refuses every rollback after a release that changed the schema: the upgrade now
+  records the schema versions of the pre-upgrade backup before its first `up`, and the rollback restores that point
+  with them instead of the schema the new release's backups report; a rollback point without them is refused with a
+  pointer to `./paddock restore`.
 
 ### Security
 
