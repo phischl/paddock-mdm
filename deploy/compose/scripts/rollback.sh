@@ -46,6 +46,34 @@ rb_mark_started() {
   [[ -z "$RB_RECORD" ]] || printf 'rollback-started=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$RB_RECORD"
 }
 
+# rb_record_schema <record>: the schema.* lines the upgrade recorded for the pre-upgrade set (ug_set_schema); fails
+# when the record has none or an invalid one.
+rb_record_schema() {
+  local lines
+  lines="$(grep '^schema\.' "$1")" || return 1
+  ! grep -qvE '^schema\.[a-z][a-z0-9_]*=[0-9]+$' <<<"$lines" || return 1
+  printf '%s\n' "$lines"
+}
+
+# rb_check_schema <old version>: refuses when the old bundle (its `migrate --version`) does not know every schema
+# version recorded for the pre-upgrade set: its images could not start on the restored data.
+rb_check_schema() {
+  local name v line have bundle
+  declare -A bundle_schema=()
+  while read -r name v; do
+    [[ "$name" =~ ^[a-z][a-z0-9_]*$ && "$v" =~ ^[0-9]+$ ]] && bundle_schema["$name"]="$v"
+  done < <(restore_backup_run -- migrate --version </dev/null) || true
+  ((${#bundle_schema[@]} > 0)) ||
+    restore_die "cannot read the schema versions of $1's bundle (paddock-server migrate --version); nothing was changed"
+  for line in "${RB_SCHEMA[@]}"; do
+    name="${line%%=*}" have="${line#*=}"
+    bundle="${bundle_schema[${name#schema.}]:-}"
+    if [[ -z "$bundle" ]] || ((have > bundle)); then
+      restore_die "the pre-upgrade set's ${name#schema.} schema is version $have (.upgrade-rollback), $1's bundle knows up to ${bundle:-none}: it cannot start on that data; restore by hand with ./paddock restore (docs/operations/restore.md); nothing was changed"
+    fi
+  done
+}
+
 # rb_restore <old dir> <new dir> <at> <yes> <components…>: in a subshell with the old directory's libraries. Every
 # precondition of the old release's restore (the key, its preflight: schema versions, stanzas, the oldest backup, the
 # OpenBao snapshot and the Fleet dump at the point) and its confirmation run before anything stops (Agent design
@@ -64,6 +92,22 @@ rb_restore() {
   # shellcheck source=/dev/null # the old release's library, not this bundle's
   . "$old/scripts/restore.sh"
   restore_trap_set
+  # The manifest names the schema of the newest backup, which the new release's backup role wrote soon after its
+  # `up`; the restored point has the schema the upgrade recorded before that `up` (decisions-alpha10 item 62). A
+  # wrapper, not a single override: restore_run's preflight reads the set again (a copy of the old release's function,
+  # which stays its interface).
+  declare -F restore_read_set >/dev/null ||
+    restore_die "the old release's restore.sh has no restore_read_set; nothing was changed"
+  eval "rb_restore_read_set() $(declare -f restore_read_set | tail -n +2)"
+  # shellcheck disable=SC2317 # called by the old release's restore_preflight
+  restore_read_set() {
+    local name line
+    rb_restore_read_set
+    for name in "${!RESTORE_SET[@]}"; do
+      [[ "$name" != schema.* ]] || unset 'RESTORE_SET[$name]'
+    done
+    for line in "${RB_SCHEMA[@]}"; do RESTORE_SET["${line%%=*}"]="${line#*=}"; done
+  }
   # shellcheck disable=SC2034 # read by the old release's restore.sh
   RESTORE_SOURCE=repo RESTORE_SOURCE_LABEL="the local backup repository" RESTORE_ONLY=("$@") RESTORE_HIGH_WATER="$hw"
   # shellcheck disable=SC2034 # read by the old release's restore.sh
@@ -84,6 +128,7 @@ rb_restore() {
     [[ "$fp" == "${RESTORE_SET[key_fingerprint]}" ]] ||
       restore_die "the key entered has fingerprint ${fp:-invalid}, the set needs ${RESTORE_SET[key_fingerprint]}; nothing was changed"
   fi
+  rb_check_schema "$(sed -n 's/^version=//p' "$old/VERSION" 2>/dev/null | head -n 1)"
   restore_preflight
   [[ -n "$yes" ]] || restore_confirm
   # The WAL the new stack wrote after the rollback point lets the recovery find its end; best effort, as in a restore.
@@ -232,6 +277,9 @@ rollback_main() {
     else
       [[ -f "$old/scripts/restore.sh" ]] ||
         rb_die "the old release $old_version ships no scripts/restore.sh; follow docs/operations/upgrade.md for this rollback; nothing was changed"
+      mapfile -t RB_SCHEMA < <(rb_record_schema "$record" || true)
+      ((${#RB_SCHEMA[@]} > 0)) ||
+        rb_die "the rollback point in .upgrade-rollback records no valid schema version of the pre-upgrade set (schema.<name>=<version>): the restore cannot tell which schema it brings back; restore by hand with ./paddock restore (docs/operations/restore.md); nothing was changed"
     fi
   fi
 

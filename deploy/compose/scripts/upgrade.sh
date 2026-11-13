@@ -249,9 +249,27 @@ ug_forget_backup() {
   fi
 }
 
+# ug_set_schema: the schema.* lines of the pre-upgrade set's manifest, read through the OLD release's backup role
+# before the first `up`. The new release's backup role rewrites the manifest with its own schema soon after `up`, and
+# the old release's restore preflight compares the manifest's schema with its own bundle (decisions-alpha10 item 62):
+# ./paddock rollback restores the point with the schema recorded here. Fails without a schema line.
+ug_set_schema() {
+  local out lines
+  out="$("$UG_OLD/paddock" compose --profile paddock run --rm --no-deps -T -e PADDOCK_LOG_LEVEL=error paddock-backup \
+    backup manifest /backup-repo </dev/null)" || return 1
+  lines="$(grep -E '^schema\.[a-z][a-z0-9_]*=[0-9]+$' <<<"$out")" || return 1
+  printf '%s\n' "$lines"
+}
+
 ug_record_rollback_point() {
-  local at attempt backup=no
+  local at attempt backup=no schema=""
   [[ "$UG_BACKUP" != yes ]] || backup=yes
+  if [[ "$backup" == yes ]] && ! la8_applies "$UG_OLD_VERSION"; then
+    schema="$(ug_set_schema)" || {
+      echo "upgrade: cannot read the schema versions of the pre-upgrade set (./paddock backup manifest in $UG_OLD)" >&2
+      return 1
+    }
+  fi
   at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
   attempt="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')" || return 1
   [[ "$attempt" =~ ^[0-9a-f]{16}$ ]] || return 1
@@ -265,6 +283,7 @@ ug_record_rollback_point() {
     printf 'old=%s\nfrom=%s\nto=%s\nbackup=%s\nlabel=%s\nat=%s\nattempt=%s\n' "$UG_OLD" "$UG_OLD_VERSION" \
       "$UG_NEW_VERSION" "$backup" "$UG_LABEL" "$at" "$attempt"
     if [[ "$backup" == yes ]] && la8_applies "$UG_OLD_VERSION"; then la8_record_fields "$UG_STATE"; fi
+    if [[ -n "$schema" ]]; then printf '%s\n' "$schema"; fi
   } >"$UG_NEW/.upgrade-rollback.tmp" || return 1
   mv -T "$UG_NEW/.upgrade-rollback.tmp" "$UG_NEW/.upgrade-rollback" || return 1
   printf 'attempt=%s\nup-started=%s\n' "$attempt" "$at" >>"$UG_STATE"
