@@ -17,9 +17,9 @@ Before the upgrade, remove an explicit `PADDOCK_TRUSTED_PROXY_CIDRS` or `PADDOCK
 (`./paddock upgrade-check` names them; a lab sets them again with `PADDOCK_EDGE_TRUSTED_PROXIES`). Run the upgrade
 with `BAO_TOKEN` set, so that it creates the new Transit keys of the organization repositories and the changed
 policies, then `./paddock bootstrap buckets` and `./paddock up` once more. The containers move to networks by trust
-zone and Valkey gets one user per role; `./paddock up` creates the new secrets, and no stateful image changes. Upgrade
-the server first, then roll out this release's agent; agents of 0.1.0-alpha.8 and 0.1.0-alpha.9 keep working in the
-meantime. Installations of 0.1.0-alpha.8 upgrade to 0.1.0-alpha.9 first.
+zone and Valkey gets one user per role; `./paddock up` creates the new secrets. No stateful image changes; Fleet
+moves to v4.94.1 and Caddy to 2.11.9. Upgrade the server first, then roll out this release's agent; agents of
+0.1.0-alpha.8 and 0.1.0-alpha.9 keep working in the meantime. Installations of 0.1.0-alpha.8 upgrade to 0.1.0-alpha.9 first.
 
 Self-service (plan M13b, ADR 0049): the desktop app *Paddock Self-Service* lets users install, update and remove the
 applications their organization offers them, including Flatpak applications and applications assigned to users and
@@ -220,6 +220,8 @@ Agents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10
 - Documentation: the software guide explains how changes to software assignments roll out in waves, when a catalog
   entry can be deleted, and how software requests are approved, denied and expire; the privacy notice lists what a
   software request records.
+- Updated the pinned third-party images: Fleet and fleetctl 4.94.1, Fleet vulnerability data 202611090045, Caddy 2.11.9,
+  Prometheus 3.16.0, AWS CLI 2.39.6, rc 0.1.37, Playwright 1.65.0, BuildKit 0.34.2, Syft 1.57.0 and Trivy 0.76.2.
 
 ### Fixed
 
