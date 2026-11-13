@@ -851,6 +851,7 @@ func TestUserIDsSkipsForeignLines(t *testing.T) {
 		"signed uid":           {out: "+1000 paddock no active\n", foreign: []int{1}},
 		"negative uid":         {out: "-1 paddock no active\n", foreign: []int{1}},
 		"uid beyond 32 bits":   {out: "4294967296 paddock no active\n", foreign: []int{1}},
+		"uid beyond int32":     {out: "2147483648 paddock no active\n1000 paddock no active\n", want: []int{1000}, users: 1, foreign: []int{1}},
 		"three columns":        {out: "1000 paddock no\n", foreign: []int{1}},
 		"five columns":         {out: "1000 paddock no active extra\n", foreign: []int{1}},
 		"linger not a boolean": {out: "1000 paddock maybe active\n", foreign: []int{1}},

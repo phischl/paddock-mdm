@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -533,7 +534,7 @@ func userIDs(out string) (uids []int, users int, foreign []foreignLine) {
 			continue
 		}
 		uid, err := strconv.ParseUint(f[0], 10, 32)
-		if err != nil || len(f) != 4 || (f[2] != "yes" && f[2] != "no") || !userState(f[3]) {
+		if err != nil || uid > math.MaxInt32 || len(f) != 4 || (f[2] != "yes" && f[2] != "no") || !userState(f[3]) {
 			foreign = append(foreign, foreignLine{number: n + 1, text: line})
 			continue
 		}
