@@ -19,7 +19,7 @@ personal data only as long as the retention schedule says. Signed agent releases
 button and rolled out in waves. Configuration changes are safe to make: each device reports what it applied, every
 change can be reverted, changes can reach the fleet in waves that halt on failures, and existing laptops are adopted
 in a report-only phase first. A software catalog installs, pins, holds, removes or forbids applications from trusted
-APT sources with verified signing keys. Backups are encrypted with a key the administrator confirms, mirrored to local,
+APT sources with verified signing keys, rolls software out in waves and maintenance windows, lets users request applications that need an administrator's approval, and hosts an organization's own packages in a repository Paddock signs; users install the applications offered to them with the desktop app Paddock Self-Service. Backups are encrypted with a key the administrator confirms, mirrored to local,
 SMB, NFS or S3 targets and restored with one command; a release upgrades from the one before it with one command and
 rolls back the same way. Administrators collect a diagnostics bundle from a device, review who held which role, and
 stream audit events to syslog receivers. Administrators can let an AI assistant work with Paddock through the MCP, within
@@ -58,14 +58,16 @@ identity can switch between the platform administrator role and its organization
 </p>
 
 > [!WARNING]
-> **Alpha.** Paddock 0.1.0-alpha.9 is the current pre-release (milestones M0–M8a, the M8s hardening, the lab fixes
+> **Alpha.** Paddock 0.1.0-alpha.10 is the current pre-release (milestones M0–M8a, the M8s hardening, the lab fixes
 > M8x and M8f, the device lifecycle M8d, the device name M8h, the optional automatic unseal M8u, the in-place
 > encryption of installed devices M8e, the evidence integrity M8b, the notifications and findings M9, evidence
-> exports, privacy and retention M10, safe configuration changes M11, the operator toolbox M12, the software catalog
-> M13a, AI assistants through the MCP M14, backup and recovery M15 and the upgrade path M16), meant for evaluation, not
-> for production fleets. From 0.1.0-alpha.8 on, every release upgrades from the one before it with `./paddock upgrade`
-> and rolls back with `./paddock rollback` (ADR 0047); 0.1.0-alpha.9 is the first such step. 0.1.0-alpha.7 upgrades to
-> 0.1.0-alpha.8 first, and 0.1.0-alpha.6 and earlier are installed fresh (`docs/operations/upgrade.md`). Revocation (Lock,
+> exports, privacy and retention M10, safe configuration changes M11, the operator toolbox M12, the control-plane
+> hardening M12h, the software catalog M13a, self-service M13b, software waves, approvals and repository M13c, AI
+> assistants through the MCP M14, backup and recovery M15 and the upgrade path M16), meant for evaluation, not for
+> production fleets. From 0.1.0-alpha.8 on, every release upgrades from the one before it with `./paddock upgrade`
+> and rolls back with `./paddock rollback` (ADR 0047); 0.1.0-alpha.10 upgrades from 0.1.0-alpha.9. Older releases
+> upgrade release by release, 0.1.0-alpha.7 to 0.1.0-alpha.8 first, and 0.1.0-alpha.6 and earlier are installed fresh
+> (`docs/operations/upgrade.md`). Revocation (Lock,
 > Destroy, dead man's switch) stays disabled behind `PADDOCK_REVOCATION_ENABLED` until its code has passed the
 > second-person review and an installation has passed its hardware acceptance (`docs/operations/revocation-acceptance.md`).
 

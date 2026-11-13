@@ -1,5 +1,5 @@
 {
-  "release": "0.1.0-alpha.8",
+  "release": "0.1.0-alpha.10",
   "device_id": "0190f000-0000-7000-8000-00000000d001",
   "organization_id": "0190f000-0000-7000-8000-00000000a001",
   "schema_versions": [
@@ -9,13 +9,13 @@
   "bundle_keys": [
     {
       "key_id": "bundle-signing:fixture",
-      "public_key": "jW3xTOW1jEjx1HVdBvaMM3Ynt7Gf8yLz58nzcxCxJPc="
+      "public_key": "6iI0bO9aQ40YcF5xMBk2l0USec2yYVPDxMxxUhYgTUM="
     }
   ],
   "command_keys": [
     {
       "key_id": "command-signing:fixture",
-      "public_key": "9rNdkzZmYDQPbNV2xQt+1JsuafTzInxFf8g5oSU35ww="
+      "public_key": "Kn9QC2FFQccKUgaj/SHkR6Hys6BYXNoX8tVl4j2Zp1c="
     }
   ],
   "command_verify_at": "2026-11-04T09:00:00Z"

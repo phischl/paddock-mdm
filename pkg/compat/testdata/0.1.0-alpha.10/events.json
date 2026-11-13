@@ -110,134 +110,158 @@
     },
     {
       "event_seq": 19,
-      "type": "local_admin.rotated",
+      "type": "login.nss_shield",
       "occurred_at": "2026-11-04T08:00:18Z",
       "data": {}
     },
     {
       "event_seq": 20,
-      "type": "local_admin.rotation_failed",
+      "type": "local_admin.rotated",
       "occurred_at": "2026-11-04T08:00:19Z",
       "data": {}
     },
     {
       "event_seq": 21,
-      "type": "local_admin.login",
+      "type": "local_admin.rotation_failed",
       "occurred_at": "2026-11-04T08:00:20Z",
       "data": {}
     },
     {
       "event_seq": 22,
-      "type": "tamper.local_admin_changed",
+      "type": "local_admin.login",
       "occurred_at": "2026-11-04T08:00:21Z",
       "data": {}
     },
     {
       "event_seq": 23,
-      "type": "tamper.keyslot_changed",
+      "type": "tamper.local_admin_changed",
       "occurred_at": "2026-11-04T08:00:22Z",
       "data": {}
     },
     {
       "event_seq": 24,
-      "type": "revocation.trust_pinned_tofu",
+      "type": "tamper.keyslot_changed",
       "occurred_at": "2026-11-04T08:00:23Z",
       "data": {}
     },
     {
       "event_seq": 25,
-      "type": "revocation.refused",
+      "type": "revocation.trust_pinned_tofu",
       "occurred_at": "2026-11-04T08:00:24Z",
       "data": {}
     },
     {
       "event_seq": 26,
-      "type": "tamper.service_stopped",
+      "type": "revocation.refused",
       "occurred_at": "2026-11-04T08:00:25Z",
       "data": {}
     },
     {
       "event_seq": 27,
-      "type": "updates.run",
+      "type": "tamper.service_stopped",
       "occurred_at": "2026-11-04T08:00:26Z",
       "data": {}
     },
     {
       "event_seq": 28,
-      "type": "agent.supervisor_updated",
+      "type": "updates.run",
       "occurred_at": "2026-11-04T08:00:27Z",
       "data": {}
     },
     {
       "event_seq": 29,
-      "type": "agent.uninstalled",
+      "type": "agent.supervisor_updated",
       "occurred_at": "2026-11-04T08:00:28Z",
       "data": {}
     },
     {
       "event_seq": 30,
-      "type": "disk.conversion_prepared",
+      "type": "agent.uninstalled",
       "occurred_at": "2026-11-04T08:00:29Z",
       "data": {}
     },
     {
       "event_seq": 31,
-      "type": "disk.conversion_started",
+      "type": "disk.conversion_prepared",
       "occurred_at": "2026-11-04T08:00:30Z",
       "data": {}
     },
     {
       "event_seq": 32,
-      "type": "disk.conversion_completed",
+      "type": "disk.conversion_started",
       "occurred_at": "2026-11-04T08:00:31Z",
       "data": {}
     },
     {
       "event_seq": 33,
-      "type": "disk.conversion_failed",
+      "type": "disk.conversion_completed",
       "occurred_at": "2026-11-04T08:00:32Z",
       "data": {}
     },
     {
       "event_seq": 34,
-      "type": "disk.conversion_aborted",
+      "type": "disk.conversion_failed",
       "occurred_at": "2026-11-04T08:00:33Z",
       "data": {}
     },
     {
       "event_seq": 35,
-      "type": "disk.conversion_neutralize_failed",
+      "type": "disk.conversion_aborted",
       "occurred_at": "2026-11-04T08:00:34Z",
       "data": {}
     },
     {
       "event_seq": 36,
-      "type": "disk.conversion_unlock_restore_failed",
+      "type": "disk.conversion_neutralize_failed",
       "occurred_at": "2026-11-04T08:00:35Z",
       "data": {}
     },
     {
       "event_seq": 37,
-      "type": "software.installed",
+      "type": "disk.conversion_unlock_restore_failed",
       "occurred_at": "2026-11-04T08:00:36Z",
       "data": {}
     },
     {
       "event_seq": 38,
-      "type": "software.reinstalled",
+      "type": "software.installed",
       "occurred_at": "2026-11-04T08:00:37Z",
       "data": {}
     },
     {
       "event_seq": 39,
-      "type": "software.removed",
+      "type": "software.reinstalled",
       "occurred_at": "2026-11-04T08:00:38Z",
       "data": {}
     },
     {
       "event_seq": 40,
-      "type": "software.apply_failed",
+      "type": "software.removed",
       "occurred_at": "2026-11-04T08:00:39Z",
+      "data": {}
+    },
+    {
+      "event_seq": 41,
+      "type": "software.apply_failed",
+      "occurred_at": "2026-11-04T08:00:40Z",
+      "data": {}
+    },
+    {
+      "event_seq": 42,
+      "type": "software.self_service",
+      "occurred_at": "2026-11-04T08:00:41Z",
+      "data": {}
+    },
+    {
+      "event_seq": 43,
+      "type": "software.request",
+      "occurred_at": "2026-11-04T08:00:42Z",
+      "data": {}
+    },
+    {
+      "event_seq": 44,
+      "type": "software.request_withdrawn",
+      "occurred_at": "2026-11-04T08:00:43Z",
       "data": {}
     }
   ]

@@ -206,6 +206,19 @@ older notes are in the *Archive*.
 
 ### 0.1.0-alpha.10, from 0.1.0-alpha.9
 
+The release notes of this release carry these lines (the lines of `CHANGELOG.md` are authoritative):
+
+```text
+Schema: migrations 00113–00125 (control-plane database; new tables, columns, constraints, policies and grants, 00115 fills its new column); audit unchanged.
+Upgrade: from 0.1.0-alpha.9: steps: remove an explicit PADDOCK_TRUSTED_PROXY_CIDRS or PADDOCK_INTERNAL_CIDRS from .env (a lab sets them again), BAO_TOKEN for ./paddock upgrade, then ./paddock bootstrap buckets and ./paddock up
+Agents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10
+```
+
+**Organization repositories (ADR 0050).** Run `./paddock upgrade` with `BAO_TOKEN` set: it creates the Transit keys
+`software-repo-wrap` and `software-repo-credential` and the changed policies through `./paddock bootstrap openbao`.
+Then run `./paddock bootstrap buckets`, which creates the bundles credentials of the api and the worker that
+`./paddock secrets` added during the upgrade, and `./paddock up` once more.
+
 **Networks by trust zone (ADR 0051 decision 1).** The flat network `cp` is replaced by `edge`, `data` and the internal
 `authentik` (architecture §4.1). `./paddock up` recreates every container on the new networks; nothing else is needed.
 The old network `cp` stays behind unused (it is what a rollback to 0.1.0-alpha.9 attaches to again) and may be removed
