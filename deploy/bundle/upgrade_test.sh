@@ -264,6 +264,14 @@ if grep -qx 'schema.paddock=104' "$work/t/new/.upgrade-rollback"; then pass "it 
 setup controlplane "Schema: migrations 00105–00106"
 FIXTURE_SET_SCHEMA="" run 1 "a manifest without a schema stops before up" "$work/t/old" --yes
 not_called "no up without a schema in the manifest" "$UP"
+has "the missing schema is named" 'cannot read the schema versions of the pre-upgrade set'
+if [[ ! -e "$work/t/new/.upgrade-rollback" ]] && ! grep -q '^up-started=' "$work/t/new/.upgrade-state"; then
+  pass "no record and no up-started without a schema in the manifest"
+else fail "record or up-started without a schema in the manifest"; fi
+setup controlplane "Schema: migrations 00105–00106"
+FIXTURE_SET_SCHEMA=$'schema.paddock=104\nschema.audit=x' run 1 "a manifest with an invalid schema stops before up" "$work/t/old" --yes
+not_called "no up with an invalid schema in the manifest" "$UP"
+if [[ ! -e "$work/t/new/.upgrade-rollback" ]]; then pass "no record with an invalid schema"; else fail "a record with an invalid schema"; fi
 
 # An old release other than 0.1.0-alpha.8 without the labelled backup: refused before anything runs.
 setup controlplane "Schema: migrations 00105–00106"

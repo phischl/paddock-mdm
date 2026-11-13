@@ -170,14 +170,15 @@ confirmation is answered by it too); `<old dir>` is the directory the upgrade ra
 - **A lab host without backups** (`PADDOCK_LAB_BACKUP` not `yes`) refuses a rollback after a schema change: there is no
   set to restore.
 
-**Before anything stops**, the command checks, in this order: the rollback record belongs to this upgrade attempt and
-names a point, for a restore also the schema versions of the pre-upgrade set (else it refuses and points at
-`./paddock restore`, `docs/operations/restore.md`); the running stack is B (the version label of its containers; a
-later upgrade from this directory supersedes the record). It then prints the steps and *every change after the point
-is lost* and asks for `yes` (unless `--yes`). Still before `./paddock down`, a restore checks that A's bundle knows
+**Before anything stops**, the command checks, in this order: the rollback record belongs to this upgrade attempt; the
+running stack is B (the version label of its containers; a later upgrade from this directory supersedes the record);
+the record names a point, for a restore also the schema versions of the pre-upgrade set (else it refuses and points at
+`./paddock restore`, `docs/operations/restore.md`). It then prints the steps and *every change after the point is
+lost* and asks for `yes` (unless `--yes`). Still before `./paddock down`, a restore checks that A's bundle knows
 every recorded schema version (`migrate --version`), that the key matches the set's manifest and that A's preflight
 passes (the recorded schema versions, stanzas, the oldest backup at or before the point, the OpenBao snapshot and the
-Fleet dump), and asks its own confirmation `restore` (`--yes` answers it). A failure before `down` leaves the running stack untouched.
+Fleet dump), and asks its own confirmation `restore` (`--yes` answers it). A failure before `down` leaves the running
+stack untouched.
 
 **Bundle sequence after a rollback.** Before `./paddock down`, the rollback reads the highest bundle sequence of B's
 running stack and records it in B's high-water file (`bundle-seq/high-water`). The rollback to 0.1.0-alpha.8 reads it

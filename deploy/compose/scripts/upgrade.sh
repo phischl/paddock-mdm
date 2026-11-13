@@ -252,12 +252,14 @@ ug_forget_backup() {
 # ug_set_schema: the schema.* lines of the pre-upgrade set's manifest, read through the OLD release's backup role
 # before the first `up`. The new release's backup role rewrites the manifest with its own schema soon after `up`, and
 # the old release's restore preflight compares the manifest's schema with its own bundle (decisions-alpha10 item 62):
-# ./paddock rollback restores the point with the schema recorded here. Fails without a schema line.
+# ./paddock rollback restores the point with the schema recorded here. Fails without a schema line or with an invalid
+# one.
 ug_set_schema() {
   local out lines
   out="$("$UG_OLD/paddock" compose --profile paddock run --rm --no-deps -T -e PADDOCK_LOG_LEVEL=error paddock-backup \
     backup manifest /backup-repo </dev/null)" || return 1
-  lines="$(grep -E '^schema\.[a-z][a-z0-9_]*=(0|[1-9][0-9]*)$' <<<"$out")" || return 1
+  lines="$(grep '^schema\.' <<<"$out")" || return 1
+  ! grep -qvE '^schema\.[a-z][a-z0-9_]*=(0|[1-9][0-9]*)$' <<<"$lines" || return 1
   printf '%s\n' "$lines"
 }
 
