@@ -94,6 +94,8 @@ func TestMaintenanceWindow(t *testing.T) {
 	expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 	expectOneEvent(t, alice, res.RequestID, "software_assignment.updated", "failure")
 	urgent["reason"] = "CVE-2026-0001 in nano"
+	// The step-up of adminUser may have expired by now, and createAPIToken can renew a step-up only for dev users.
+	admin.stepUp(t)
 	token := createAPIToken(t, admin.Portal, admin.username, "org_admin")
 	res = call(t, tokenPortal(t, token.Secret), http.MethodPatch, assignment, urgent)
 	expectRefusal(t, alice, res, http.StatusForbidden, "step_up_required", "software_assignment.updated")
