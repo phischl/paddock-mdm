@@ -405,6 +405,9 @@ Agents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10
   `release_signature_mismatch`, and a `paddock-revoke` signed with the agent release key stays refused. The holders of
   the revocation release key sign it offline with `-t "paddock-agent version=<release version> arch=<arch>"`
   (`docs/operations/agent-releases.md`); releases already stored are not verified again.
+- When the agent cannot report a directory user's sign-in because the user's name does not resolve to the session's
+  user ID, its log warning now names only that user ID, no longer the user's name or the account entry the lookup
+  returned.
 
 ## [0.1.0-alpha.9] - 2026-11-07
 

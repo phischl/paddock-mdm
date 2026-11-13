@@ -52,7 +52,8 @@ func (a *Agent) trackSessions(ctx context.Context) {
 	for _, s := range logins {
 		upn, err := a.upn(ctx, s, domain)
 		if err != nil {
-			slog.WarnContext(ctx, "session.login not reported: no UPN for the session's user", "error", err)
+			// The error names the user and carries getent's passwd output, which stays out of the log.
+			slog.WarnContext(ctx, "session.login not reported: no UPN for the session's user", "uid", s.UID)
 			continue
 		}
 		at := now
