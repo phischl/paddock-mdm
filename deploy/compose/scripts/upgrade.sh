@@ -257,7 +257,7 @@ ug_set_schema() {
   local out lines
   out="$("$UG_OLD/paddock" compose --profile paddock run --rm --no-deps -T -e PADDOCK_LOG_LEVEL=error paddock-backup \
     backup manifest /backup-repo </dev/null)" || return 1
-  lines="$(grep -E '^schema\.[a-z][a-z0-9_]*=[0-9]+$' <<<"$out")" || return 1
+  lines="$(grep -E '^schema\.[a-z][a-z0-9_]*=(0|[1-9][0-9]*)$' <<<"$out")" || return 1
   printf '%s\n' "$lines"
 }
 

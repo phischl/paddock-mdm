@@ -51,12 +51,13 @@ rb_mark_started() {
 rb_record_schema() {
   local lines
   lines="$(grep '^schema\.' "$1")" || return 1
-  ! grep -qvE '^schema\.[a-z][a-z0-9_]*=[0-9]+$' <<<"$lines" || return 1
+  ! grep -qvE '^schema\.[a-z][a-z0-9_]*=(0|[1-9][0-9]*)$' <<<"$lines" || return 1
   printf '%s\n' "$lines"
 }
 
 # rb_check_schema <old version>: refuses when the old bundle (its `migrate --version`) does not know every schema
-# version recorded for the pre-upgrade set: its images could not start on the restored data.
+# version recorded for the pre-upgrade set: its images could not start on the restored data. The old preflight checks
+# the same, but its refusal sends the operator to a newer bundle; this one names the record and the manual restore.
 rb_check_schema() {
   local name v line have bundle
   declare -A bundle_schema=()
@@ -68,7 +69,7 @@ rb_check_schema() {
   for line in "${RB_SCHEMA[@]}"; do
     name="${line%%=*}" have="${line#*=}"
     bundle="${bundle_schema[${name#schema.}]:-}"
-    if [[ -z "$bundle" ]] || ((have > bundle)); then
+    if [[ -z "$bundle" ]] || ((10#$have > 10#$bundle)); then
       restore_die "the pre-upgrade set's ${name#schema.} schema is version $have (.upgrade-rollback), $1's bundle knows up to ${bundle:-none}: it cannot start on that data; restore by hand with ./paddock restore (docs/operations/restore.md); nothing was changed"
     fi
   done
@@ -114,6 +115,8 @@ rb_restore() {
   RESTORE_AT="$(restore_normalize_at "$at")" || restore_die "the rollback point $at is no RFC 3339 time; nothing was changed"
   restore_set_opts
   restore_read_set
+  # Before the key prompt: a schema the old bundle cannot start on needs no key.
+  rb_check_schema "$(sed -n 's/^version=//p' "$old/VERSION" 2>/dev/null | head -n 1)"
   [[ "${RESTORE_SET[key_fingerprint]:-}" =~ ^[0-9a-f]{16}$ ]] ||
     restore_die "the backup set at $at names no key fingerprint; nothing was changed"
   # The legacy key file of the old directory (PDK-732) when it made the set, else the key the operator enters.
@@ -128,7 +131,6 @@ rb_restore() {
     [[ "$fp" == "${RESTORE_SET[key_fingerprint]}" ]] ||
       restore_die "the key entered has fingerprint ${fp:-invalid}, the set needs ${RESTORE_SET[key_fingerprint]}; nothing was changed"
   fi
-  rb_check_schema "$(sed -n 's/^version=//p' "$old/VERSION" 2>/dev/null | head -n 1)"
   restore_preflight
   [[ -n "$yes" ]] || restore_confirm
   # The WAL the new stack wrote after the rollback point lets the recovery find its end; best effort, as in a restore.

@@ -138,10 +138,10 @@ migrations).
 
 **The rollback point.** Right before the first `./paddock up`, the upgrade writes `.upgrade-rollback` in B's directory:
 A's directory, both versions, whether a backup was taken, its label `pre-upgrade-<B>`, the time `at`, a random
-attempt ID that `.upgrade-state` carries too, and with a backup the schema versions of the pre-upgrade set
-(`schema.<name>=<version>`, read from its manifest through A's backup role; if it cannot be read, `up` does not run). B's
-backup role rewrites the manifest with B's schema soon after `up`, so the rollback takes the schema from this record,
-not from the manifest. A rollback uses the record only for the upgrade attempt that wrote it. A
+attempt ID that `.upgrade-state` carries too, and with a backup (not from 0.1.0-alpha.8) the schema versions of the
+pre-upgrade set (`schema.<name>=<version>`, read from its manifest through A's backup role; if they cannot be read,
+`up` does not run). B's backup role rewrites the manifest with B's schema soon after `up`, so the rollback takes the
+schema from this record, not from the manifest. A rollback uses the record only for the upgrade attempt that wrote it. A
 later upgrade from A's directory renames A's own record to `.upgrade-rollback.superseded-by-<version>`: a rollback from
 there would stop the newer release and restore a point before every change since.
 
@@ -171,14 +171,13 @@ confirmation is answered by it too); `<old dir>` is the directory the upgrade ra
   set to restore.
 
 **Before anything stops**, the command checks, in this order: the rollback record belongs to this upgrade attempt and
-names a point (else it refuses and points at `./paddock restore`, `docs/operations/restore.md`); the running stack is
-B (the version label of its containers; a later upgrade from this directory supersedes the record). It then prints the
-steps and *every change after the point is lost* and asks for `yes` (unless `--yes`); a restore also needs the recorded
-schema versions (a record without them is refused with a pointer to `./paddock restore`). Still before
-`./paddock down`, a restore checks that A's bundle knows every recorded schema version, that the key matches the set's
-manifest and that A's preflight passes (the recorded schema versions, stanzas, the
-oldest backup at or before the point, the OpenBao snapshot and the Fleet dump), and asks its own confirmation `restore`
-(`--yes` answers it). A failure before `down` leaves the running stack untouched.
+names a point, for a restore also the schema versions of the pre-upgrade set (else it refuses and points at
+`./paddock restore`, `docs/operations/restore.md`); the running stack is B (the version label of its containers; a
+later upgrade from this directory supersedes the record). It then prints the steps and *every change after the point
+is lost* and asks for `yes` (unless `--yes`). Still before `./paddock down`, a restore checks that A's bundle knows
+every recorded schema version (`migrate --version`), that the key matches the set's manifest and that A's preflight
+passes (the recorded schema versions, stanzas, the oldest backup at or before the point, the OpenBao snapshot and the
+Fleet dump), and asks its own confirmation `restore` (`--yes` answers it). A failure before `down` leaves the running stack untouched.
 
 **Bundle sequence after a rollback.** Before `./paddock down`, the rollback reads the highest bundle sequence of B's
 running stack and records it in B's high-water file (`bundle-seq/high-water`). The rollback to 0.1.0-alpha.8 reads it
