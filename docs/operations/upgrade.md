@@ -256,6 +256,14 @@ these when something in front of or behind Caddy depends on the old behaviour:
   below each Paddock host name (for example `*.admin.<domain>`) for a year; a page that framed Authentik or Fleet no
   longer works.
 
+**Third-party images (2026-11-13).** Fleet moves to v4.94.1; because `FLEET_IMAGE` changed, a rollback restores the
+Fleet dump of the pre-upgrade backup of the step `backup`. The AWS CLI image of the bucket bootstrap scripts
+(`./paddock bootstrap buckets`, `./paddock bootstrap audit-bucket`, a restore onto a fresh installation) moves to
+2.39.6. `./paddock pull` does not fetch it, because it is no Compose service: on a host without registry access, load
+the image `AWS_CLI_IMAGE` of B's `versions.env` (`docker save` on a connected host, `docker load` here) before one of
+these commands runs. Caddy moves to 2.11.9, which validates its configuration more strictly; the shipped Caddyfiles
+validate, so only a locally modified Caddyfile needs checking (`caddy validate`) before the upgrade.
+
 ### 0.1.0-alpha.9, from 0.1.0-alpha.8
 
 The release notes of this release carry these lines (the lines of `CHANGELOG.md` are authoritative):
