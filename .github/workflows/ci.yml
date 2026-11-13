@@ -295,7 +295,8 @@ jobs:
   # (the newest v* tag) installed from its published, cosign-verified bundle and agent artifacts, seeded, upgraded to a
   # bundle of this tree, probed, rolled back, upgraded again and restored from a backup (deploy/bundle/ci/upgrade.sh).
   # The candidate carries the release under development as its version (the last entry of the binary's release
-  # sequence), so the upgrade checks judge the real pair. Its images are built here and stay on the runner: nothing of a
+  # sequence, or the newest CHANGELOG section while it has no tag: the release being prepared), so the upgrade checks
+  # judge the real pair. Its images are built here and stay on the runner: nothing of a
   # pull request is pushed to the registry (decisions-alpha9 item 54); the bundle names them by tag and ./paddock pull
   # keeps images that are present. A flake follows the flake rule (docs/operations/testing-strategy.md).
   upgrade:
@@ -328,6 +329,10 @@ jobs:
       - name: Candidate images and bundle from the tree
         run: |
           v="$(sed -n 's/^\t\t"\(.*\)",$/\1/p' server/internal/buildinfo/releases.gen.go | tail -n 1)"
+          # The release-prep commit assembles the release's CHANGELOG section and moves the release list on to N+1 in
+          # one step; until the release is tagged, its untagged section names the version being released.
+          prepared="$(sed -n 's/^## \[\([0-9][^]]*\)\] - .*/\1/p' CHANGELOG.md | head -n 1)"
+          if [[ -n "$prepared" ]] && ! git rev-parse -q --verify "refs/tags/v$prepared" >/dev/null; then v="$prepared"; fi
           [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]] || { echo "no release under development in releases.gen.go: '$v'"; exit 1; }
           echo "CANDIDATE_VERSION=$v" >> "$GITHUB_ENV"
           images=(IMAGE=paddock-server:upgrade-ci COMPILER_IMAGE=paddock-compiler:upgrade-ci PGBACKREST_IMAGE=paddock-pgbackrest:upgrade-ci)

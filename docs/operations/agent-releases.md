@@ -265,7 +265,9 @@ three lines.
    and a missing or malformed `changelog.d/_release.md`.
 3. Move the release under development to the next one in the same commit: set `-current` in `server/gen.go` to N+1
    (the release after the one being cut) and run `make gen`, so that `releases.gen.go` ends with N, then N+1. The
-   `upgrade` job of `ci.yml` builds its candidate with the last entry of that list as its version. If the entry
+   `upgrade` job of `ci.yml` builds its candidate with the last entry of that list as its version, except while the
+   newest `CHANGELOG.md` section has no tag: then that section's version, so the release-prep pull request is checked
+   as the release it prepares (N−1 to N). If the entry
    still named N after the tag, every pull request's candidate would equal the newest tag, and the job's
    `upgrade-check` would fail "versions adjacent" (decisions-alpha9 item 55).
 4. Write the release summary under the new heading (upgrade order, Fleet version, the schema details), review the
