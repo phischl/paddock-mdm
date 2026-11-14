@@ -119,11 +119,13 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work" "$notes_dir"' EXIT
 mkdir -p "$work/deb" "$work/out"
+mkdir -p "$work/selfservice"
 for pkg in paddock-agent paddock-supervisor paddock-revoke; do : >"$work/deb/${pkg}_0.1.0~alpha.1_amd64.deb"; done
+: >"$work/selfservice/paddock-self-service_0.1.0~alpha.1_all.deb"
 make -s -C "$root" --no-print-directory release-debs RELEASE_VERSION=0.1.0-alpha.1 RELEASE_DEB_DIR="$work/deb" \
-  RELEASE_DIR="$work/out"
+  RELEASE_SELFSERVICE_DIR="$work/selfservice" RELEASE_DIR="$work/out"
 check "release package names" "$(ls "$work/out" | LC_ALL=C sort | tr '\n' ' ')" \
-  "paddock-agent_0.1.0-alpha.1_amd64-unsigned.deb paddock-revoke_0.1.0-alpha.1_amd64-unsigned.deb paddock-supervisor_0.1.0-alpha.1_amd64-unsigned.deb "
+  "paddock-agent_0.1.0-alpha.1_amd64-unsigned.deb paddock-revoke_0.1.0-alpha.1_amd64-unsigned.deb paddock-self-service_0.1.0-alpha.1_all-unsigned.deb paddock-supervisor_0.1.0-alpha.1_amd64-unsigned.deb "
 if ls "$work/out" | grep -qv '^[A-Za-z0-9._+-]*$'; then got=1; else got=0; fi
 check "release file names keep to [A-Za-z0-9._+-]" "$got" 0
 if make -s -C "$root" --no-print-directory release-names-check RELEASE_DIR="$work/out" >/dev/null 2>&1; then got=0; else got=1; fi
@@ -133,7 +135,8 @@ if make -s -C "$root" --no-print-directory release-names-check RELEASE_DIR="$wor
 check "release-names-check rejects a ~ in a file name" "$got" 1
 
 # Signing in the sign job (ADR 0006 amendment 2026-10-11): a throwaway key pair with a passphrase, read from
-# PADDOCK_RELEASE_KEY_PASSPHRASE on stdin; the four agent files lose -unsigned, paddock-revoke stays unsigned, and
+# PADDOCK_RELEASE_KEY_PASSPHRASE on stdin; the four agent files and the self-service package lose -unsigned,
+# paddock-revoke stays unsigned, and
 # SHA256SUMS names exactly the files the publish job attaches.
 v=0.1.0-alpha.1
 rel="$work/rel/$v" signed="$work/signed" keys="$work/keys"
@@ -143,6 +146,7 @@ printf 'throwaway passphrase\n' | "$keys/minisign" -G -p "$keys/release.pub" -s 
 printf 'other passphrase\n' | "$keys/minisign" -G -p "$keys/other.pub" -s "$keys/other.key" >/dev/null
 for arch in amd64 arm64; do echo "paddockd $arch" >"$rel/paddockd_${v}_linux_${arch}-unsigned"; done
 for pkg in paddock-agent paddock-supervisor paddock-revoke; do echo "$pkg" >"$rel/${pkg}_${v}_amd64-unsigned.deb"; done
+echo paddock-self-service >"$rel/paddock-self-service_${v}_all-unsigned.deb"
 echo bundle >"$rel/paddock-deploy-$v.tar.gz"
 echo old >"$rel/SHA256SUMS"
 echo old >"$rel/SHA256SUMS.sigstore.json"
@@ -156,13 +160,16 @@ if PADDOCK_RELEASE_KEY_PASSPHRASE='throwaway passphrase' sign_release --out "$si
 else got=1; fi
 check "sign-release signs with the passphrase from the environment" "$got" 0
 check "sign-release output" "$(find "$signed" -type f -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ')" \
-  "paddock-agent_${v}_amd64.deb paddock-agent_${v}_amd64.deb.minisig paddock-supervisor_${v}_amd64.deb paddock-supervisor_${v}_amd64.deb.minisig paddockd_${v}_linux_amd64 paddockd_${v}_linux_amd64.minisig paddockd_${v}_linux_arm64 paddockd_${v}_linux_arm64.minisig "
+  "paddock-agent_${v}_amd64.deb paddock-agent_${v}_amd64.deb.minisig paddock-self-service_${v}_all.deb paddock-self-service_${v}_all.deb.minisig paddock-supervisor_${v}_amd64.deb paddock-supervisor_${v}_amd64.deb.minisig paddockd_${v}_linux_amd64 paddockd_${v}_linux_amd64.minisig paddockd_${v}_linux_arm64 paddockd_${v}_linux_arm64.minisig "
 check "trusted comment of paddockd arm64" \
   "$("$keys/minisign" -V -p "$keys/release.pub" -m "$signed/paddockd_${v}_linux_arm64" -Q)" \
   "Trusted comment: paddock-agent version=$v arch=arm64"
 check "trusted comment of paddock-supervisor" \
   "$("$keys/minisign" -V -p "$keys/release.pub" -m "$signed/paddock-supervisor_${v}_amd64.deb" -Q)" \
   "Trusted comment: paddock-agent version=$v arch=amd64"
+check "trusted comment of paddock-self-service" \
+  "$("$keys/minisign" -V -p "$keys/release.pub" -m "$signed/paddock-self-service_${v}_all.deb" -Q)" \
+  "Trusted comment: paddock-agent version=$v arch=all"
 check "sign-release copies the files unchanged" "$(cat "$signed/paddockd_${v}_linux_amd64")" "paddockd amd64"
 if PADDOCK_RELEASE_KEY_PASSPHRASE='wrong' sign_release --out "$work/s-wrong" --public-key "$keys/release.pub"; then
   got=0
@@ -180,6 +187,12 @@ PADDOCK_RELEASE_KEY_PASSPHRASE='throwaway passphrase' sign_release --out "$work/
   --public-key "$keys/release.pub" || got=$?
 check "sign-release refuses a release without paddockd for arm64 (exit 2)" "$got" 2
 mv "$work/arm64" "$rel/paddockd_${v}_linux_arm64-unsigned"
+mv "$rel/paddock-self-service_${v}_all-unsigned.deb" "$work/selfservice.deb"
+got=0
+PADDOCK_RELEASE_KEY_PASSPHRASE='throwaway passphrase' sign_release --out "$work/s-noapp" \
+  --public-key "$keys/release.pub" || got=$?
+check "sign-release refuses a release without the self-service package (exit 2)" "$got" 2
+mv "$work/selfservice.deb" "$rel/paddock-self-service_${v}_all-unsigned.deb"
 
 make -s -C "$root" --no-print-directory release-merge-signed RELEASE_VERSION="$v" RELEASE_DIR="$rel" \
   RELEASE_SIGNED_DIR="$signed" >/dev/null
@@ -187,7 +200,7 @@ make -s -C "$root" --no-print-directory release-sums RELEASE_VERSION="$v" RELEAS
 published="$(find "$rel" -maxdepth 1 -type f ! -name images.txt ! -name SHA256SUMS ! -name '*.sigstore.json' \
   -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ')"
 check "published files after signing" "$published" \
-  "paddock-agent_${v}_amd64.deb paddock-agent_${v}_amd64.deb.minisig paddock-deploy-$v.tar.gz paddock-revoke_${v}_amd64-unsigned.deb paddock-supervisor_${v}_amd64.deb paddock-supervisor_${v}_amd64.deb.minisig paddockd_${v}_linux_amd64 paddockd_${v}_linux_amd64.minisig paddockd_${v}_linux_arm64 paddockd_${v}_linux_arm64.minisig "
+  "paddock-agent_${v}_amd64.deb paddock-agent_${v}_amd64.deb.minisig paddock-deploy-$v.tar.gz paddock-revoke_${v}_amd64-unsigned.deb paddock-self-service_${v}_all.deb paddock-self-service_${v}_all.deb.minisig paddock-supervisor_${v}_amd64.deb paddock-supervisor_${v}_amd64.deb.minisig paddockd_${v}_linux_amd64 paddockd_${v}_linux_amd64.minisig paddockd_${v}_linux_arm64 paddockd_${v}_linux_arm64.minisig "
 check "SHA256SUMS names exactly the published files" \
   "$(awk '{print $2}' "$rel/SHA256SUMS" | tr '\n' ' ')" "$published"
 if (cd "$rel" && sha256sum --quiet -c SHA256SUMS >/dev/null 2>&1); then got=0; else got=1; fi
@@ -215,6 +228,19 @@ rm "$work/signed2/paddock-revoke_${v}_amd64.deb" "$work/signed2/paddock-revoke_$
 if make -s -C "$root" --no-print-directory release-merge-signed RELEASE_VERSION="$v" RELEASE_DIR="$work/rel2" \
   RELEASE_SIGNED_DIR="$work/signed2" >/dev/null 2>&1; then got=0; else got=1; fi
 check "release-merge-signed refuses a file without its .minisig" "$got" 1
+cp "$signed/paddockd_${v}_linux_arm64.minisig" "$work/signed2/"
+echo x >"$work/rel2/paddock-self-service_${v}_all-unsigned.deb"
+if make -s -C "$root" --no-print-directory release-merge-signed RELEASE_VERSION="$v" RELEASE_DIR="$work/rel2" \
+  RELEASE_SIGNED_DIR="$work/signed2" >/dev/null 2>&1; then got=0; else got=1; fi
+check "release-merge-signed refuses the self-service package left unsigned" "$got" 1
+cp "$signed/paddock-self-service_${v}_all.deb" "$work/signed2/"
+if make -s -C "$root" --no-print-directory release-merge-signed RELEASE_VERSION="$v" RELEASE_DIR="$work/rel2" \
+  RELEASE_SIGNED_DIR="$work/signed2" >/dev/null 2>&1; then got=0; else got=1; fi
+check "release-merge-signed refuses the self-service package without its .minisig" "$got" 1
+cp "$signed/paddock-self-service_${v}_all.deb.minisig" "$work/signed2/"
+if make -s -C "$root" --no-print-directory release-merge-signed RELEASE_VERSION="$v" RELEASE_DIR="$work/rel2" \
+  RELEASE_SIGNED_DIR="$work/signed2" >/dev/null 2>&1; then got=0; else got=1; fi
+check "release-merge-signed accepts the signed self-service package" "$got" 0
 
 # The broken supervisor of gate S-UP2b (plan M8d decision 34) never reaches a published release.
 for tags in paddock_testbroken_supervisor "paddock_dev,paddock_testbroken_supervisor"; do

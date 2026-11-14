@@ -918,6 +918,10 @@ verified. (Supersedes decision 17's `verify --set=<label>`: the whole-stanza ver
 
 ### A3 Mirror state table (one target, one round; the order is binding)
 
+**Amended 2026-11-10:** the keep window uses the effective full interval (B1), and an unknown path no longer stops the
+deletions of step 6 (B2); see "Amendment 2026-11-10" at the end of this plan. **Amended 2026-11-11:** "one round"
+no longer holds: the steps run in the target's lane (amendment 2026-11-11).
+
 ```
 step 0  read T/manifest.json (if any): parse error or another installation_id → foreign_set: stop, write nothing
 step 1  list T (paths and sizes); for retired paths also T.Newest
@@ -932,7 +936,8 @@ step 2  GUARD (no write before it passed):
                max(T.Newest(P), retired_at) older than retention_full × full_interval → DELETE-PATH(P) later
              P retired, otherwise                     → HOLD(P)
              P unknown to the database                → HOLD(P), result class unknown_path (target run fails
-                                                         after the put phase; nothing deleted on T this round)
+                                                         after step 6; amended 2026-11-10, B2: the deletions
+                                                         of step 6 run, nothing below P is touched)
         G4 kind files, escrow, WAL: never shrink; they are decided in step 6
 step 3  PUT, in this order, only files of L (skip a label directory until L holds its backup.manifest):
         (1) WAL segments  (2) full directories: data files, backup.manifest.copy, backup.manifest last
@@ -979,7 +984,7 @@ and loses nothing; (I7) the mirror never reads an object's content from T except
 | L8 | **Key rotation** (`A` = new path, old path `P'` retired) | `switch_repo_path`: stanza in `A`, full at once; `P'` untouched | `A`'s WAL, info and the first full are put as they appear (G3 does not fire: L holds `P'`); the target manifest's empty `LastFull` is irrelevant (listing-based). `P'` on T follows A2's retired rule: HOLD until `A` is complete and `max(T.Newest(P'), retired_at)` is older than `retention_full × full_interval`, then DELETE-PATH |  none |
 | L9 | **Rotation, then L1/L3** (L lacks `P'` entirely, `A` fresh) | as L3 for `A` | G3: `P'` retired but `A` not complete → **HOLD(P')**; `A` on T: G1 → SHRUNK while T holds `A` fulls L lacks (L3), else puts continue. In every case `P'` stays byte for byte until A2's rule holds on T's own copy | as L1/L3 |
 | L10 | **Retired path expired locally, T missed the last files** (outage before the rotation) | n/a | G3 with `max(T.Newest, retired_at)`: T never loses `P'` earlier than L would have (review 5 minor 4) | none |
-| L11 | **A path on T unknown to the database** (a discarded key never has a path; a foreign-key path can only come from a damaged target) | n/a | HOLD(P), class `unknown_path`: puts run, no delete anywhere on T this round, the target run fails so an operator sees it | empty the path on the share or bucket by hand, or restore |
+| L11 | **A path on T unknown to the database** (a discarded key never has a path; a foreign-key path can only come from a damaged target) | n/a | HOLD(P), class `unknown_path`: puts run, nothing below P is deleted, every deletion the D-rules allow elsewhere on T runs (retired paths past the keep window included), the path is logged and noted in `./paddock backup status`, and the target run fails so an operator sees it (amended 2026-11-10, B2; before: no delete anywhere on T) | empty the path on the share or bucket by hand, or restore |
 | L12 | **T lost files** (share restored from an older snapshot, object store pruned) | n/a | the put phase re-copies every file L holds and T lacks; nothing is deleted (D-rules only remove what L lacks) | none |
 
 ### A5 Repository restore from a target (new component `backup-repo`; PDK-734 scope, documented in restore.md)
@@ -1007,7 +1012,7 @@ modification times, a fake clock, the key list from a fake store)
 | L8 | `TestMirrorRotationPutsNewPathHoldsOld` | retired P1 (retired_at = now − 1 d), A = P2 with info + WAL, no full yet; T: P1 complete | ops: puts of P2 files only; no delete under P1; `held` counts P1's files; subtest "A complete, T.Newest(P1) older than keep": P1 deleted whole |
 | L9 | `TestMirrorRotationThenLossKeepsOldPath` | as L8 but L lacks P1 entirely; subtest a: A has no full → ops empty except puts, P1 held; subtest b: T also holds P2 fulls L lacks → `errSetShrunk`, ops empty | P1 byte for byte identical before and after |
 | L10 | `TestMirrorRetiredPathAgeFromRetiredAt` | T.Newest(P1) = now − 20 d, retired_at = now − 2 d, keep 14 d | P1 held (age base is retired_at); subtest retired_at = now − 15 d: deleted |
-| L11 | `TestMirrorUnknownPathHeld` | T holds `pgbackrest/bk-20000101-deadbeef/…` unknown to the store | puts run; no delete; error class `unknown_path` |
+| L11 | `TestMirrorUnknownPathHeld` | T holds `pgbackrest/bk-20000101-deadbeef/…` unknown to the store, a retired path past the keep window and an expired snapshot | puts run; the unknown path is kept and named in the error; the retired path and the expired snapshot are deleted; error class `unknown_path` (amended 2026-11-10, B2; before: no delete) |
 | L12 | `TestMirrorRefillsTarget` | T lacks half of L's files | every missing file put, nothing deleted |
 | order | `TestMirrorOrderGuardPutVerifyManifestDelete` | fake target records ops | first op after `Read manifest`/`List` is a put; `Put manifest.json` after every other put; every `Delete` after the second `List`; with a failing put: no manifest, no delete |
 | partial | `TestMirrorPartialErrorStopsBeforeDelete` | a put fails midway | ops end at the failing put; T manifest unchanged; next round (fake fixed) completes the puts, then deletes |
@@ -1021,6 +1026,9 @@ L8/L9, `TestMirrorGuardIgnoresEmptyLastFull` → L8, `TestMirrorGuardPartialInfo
 `manifest.json`, `TestMirrorKeepsEscrowWhenLocalEscrowLost` → L7.
 
 ### A7 Consequences for other decisions and tickets
+
+**Amended 2026-11-11:** each target's mirror runs in a lane of its own and the round never waits for it; see
+"Amendment 2026-11-11" at the end of this plan.
 
 - Decision 16 c: the escrow expire rule (A2) is added; the OpenBao/Fleet and retired-path rules are unchanged.
 - Decision 16 e: replaced by A3.
@@ -1220,6 +1228,8 @@ doubled. The header records `# revisions:` (for the online check item of decisio
 - Listings (step 1 and step 4) are not charged against the budget. Only the stall watchdog guards them: the S3
   listing reports progress after every page, a mounted target's walk every 1 024 entries, and a listing whose next
   page does not arrive within the stall window fails the mirror. Once the copies are done, step 6 stays reachable.
+  **Amended 2026-11-10 (B3 of the amendment 2026-11-10):** on an S3 target a page may take longer than the stall
+  window while the endpoint answers a probe; one page is bounded at 20 minutes.
 - The watchdog's error names the phase (for example `no progress for 2m0s while listing the target`); a copy-rate
   error is only ever reported for a copy.
 - Step 6 is not bounded by the budget yet. After a long target outage, the first successful mirror can hold the role
@@ -1233,7 +1243,8 @@ doubled. The header records `# revisions:` (for the online check item of decisio
   marker, timeout), before the round's mirror: the `backup_run` row (or the answered request, which ends
   `backup now --wait`) with outcome, times, bytes, error class and `targets = []`. Restore plans and the history see
   the backup at once; before, a mirror of hours (item 67) kept it out of the database for as long.
-- **Phase 2.** After `mirrorAll`, every finished run without `mirrored_at` gets the round's per-target results and its
+- **Phase 2** (amended 2026-11-11, C4 of the amendment 2026-11-11: recorded when the targets' lanes finish, not
+  after the round's mirror). After `mirrorAll`, every finished run without `mirrored_at` gets the round's per-target results and its
   audit event `platform.backup_completed` / `platform.backup_failed` as before (§6.4; params gain `completed_at`, the
   local completion). That covers this round's runs and any an earlier round could not finish because the role
   stopped between the phases: exactly one event per run; a target the set did not reach counts as `targets_failed`.
@@ -1280,3 +1291,530 @@ doubled. The header records `# revisions:` (for the online check item of decisio
 - **Share outage.** The host state of a volume target is `unreachable` when its mount or marker returns an error of a
   share whose server is gone (EIO, EHOSTDOWN, ETIMEDOUT, ESTALE and the like, as a soft CIFS or NFS mount does), and
   `pending_host` only while the marker is absent or not what the host step wrote (decision 2, gate BS1).
+
+## Amendment 2026-11-10 — keep window, unknown paths, slow S3 listings, versioned buckets (A10-25; PDK-972, PDK-977)
+
+Decision (architect lead, `decisions-alpha10.md` §42, after the alpha.10 regression): on a long-lived development
+stack the mirror to the S3 target failed for days as "stalled", six key paths (about 160 GB) were never removed, and
+the bucket kept every deleted object as a version. The rules of the amendment 2026-11-05 (A2, A3) stay; this
+amendment corrects four points. Where it contradicts A1–A6 or the note 2026-11-07, it wins. Bounding step 6 by the
+round budget (PDK-869, RR-126) is **not** part of it.
+
+Binding language: **MUST** / **MUST NOT** / **SHOULD** / **MAY**. Ticket: PDK-972, which also carries the
+development bootstrap of PDK-977 (B4). The amendment was written while PDK-972 was in review and records its rules
+as implemented; the one point it still has to meet is the retired-path listing of B3.
+
+### B1 The keep window follows the effective full interval (amends A1 "retention inputs", A2, A3 G3, note 2026-11-05 b)
+
+- **Effective full interval** = the interval at which pgBackRest takes a full backup, i.e. the value the role writes
+  to `schedule.env` as `PADDOCK_BACKUP_FULL_INTERVAL_S` (decision 16 a): the schedule's `full_interval_hours`, or
+  `backuprole.Config.FullInterval` when it is greater than zero. `Config.FullInterval` is only ever set from
+  `PADDOCK_BACKUP_FULL_INTERVAL_S` with `PADDOCK_ENV=development` (`loadBackupRole` refuses it otherwise), so in
+  production the effective full interval **is** the schedule's.
+- **Keep window** = `retention_full × effective full interval`. It replaces `retention_full × full_interval` in A2
+  (retired path), A3 G3, A4 L8–L10 and in the escrow rule of the note 2026-11-05 b. There is one keep window per
+  round (`retention.keep`); the retired-path rule and the escrow rule MUST NOT use different windows. Reason: the
+  window stands for the time span the retained fulls cover, and that span is `retention_full` effective intervals.
+- Defaults: production 14 × 24 h = 14 days (unchanged). Development (`compose.backup.dev.yaml`,
+  `PADDOCK_BACKUP_FULL_INTERVAL_S: "1200"`): 14 × 20 min = 4 h 40 min, before this amendment 14 days.
+- `Engine.retention` and `Engine.writeRuntime` MUST take the effective full interval from one unexported method
+  `Engine.fullInterval(sched backupset.Schedule) time.Duration`, so the two cannot diverge again.
+- The escrow rule shortens with it in development: about 4.7 h instead of 14 days (B8 point 1).
+- The rule for a retired path `P'` is otherwise unchanged: `P'` is removed from L (role `expire`) and from a target
+  (G3 → D6) only when `A` holds a completed full of every stanza **and** `max(newest file of P', retired_at)` is
+  older than the keep window.
+- Invariants (tests assert them, in addition to I1–I7):
+  - (I8) no rule ever deletes below the active path `A` as a whole; `A` only loses what D1 and D2 allow.
+  - (I9) no retired path is deleted, locally or on a target, while its replacement lacks a completed full of every
+    stanza. The **replacement** of every retired path is the active path `A`: it is the only path that receives
+    backups, so an older retired path is not protected by a newer retired one but by `A` alone.
+  - (I10) a path that is neither `A` nor retired (discarded, legacy, unknown) is never deleted.
+
+### B2 An unknown path is held and no longer blocks deletions (replaces the `unknown` line of A3 G3, A4 L11, A6 L11)
+
+An **unknown path** is a repository path `pgbackrest/<key_id>` on a target that no key row names. It is no sign of a
+damaged target alone: a database restored to a point before a key was created, or a development database that was
+reset, leaves the paths of the lost key rows behind. Under A3 such a path stopped **every** deletion on the target
+(`judge` counted every deletable object as held and `mirrorSet` returned before step 6), so the target could never
+reclaim space.
+
+```
+G3      P unknown to the database → HOLD(P); remember P in plan.unknown (the list of unknown repository paths)
+step 3–5 unchanged
+step 6  runs in full: every deletion D1–D6 allows is carried out, on every path outside the HOLD paths:
+        expired fulls and WAL of the active path (D1, D2), OpenBao snapshots and Fleet dumps (D4), escrowed
+        headers (D5) and retired paths past the keep window (D6). D3 and D7 never delete, as before.
+        Nothing below an unknown path is written, read or deleted.
+end     when plan.unknown is not empty and steps 3–6 ended without another error, the target run ends with
+        errUnknownPath, wrapped with the unknown paths (class unknown_path). Any other error of steps 3–6 wins.
+```
+
+- **The rule is the broad one, on purpose.** `decisions-alpha10.md` §42 asks that an unknown path never blocks the
+  deletion of known retired paths; the implementation lets every D-rule go on, and that is the binding rule. Reason:
+  each D-rule is decided against L on its own (I4) and none reads the unknown path. A key path is a self-contained
+  pgBackRest repository (fulls, WAL and info files below it, all held), and its key is in the operator's custody,
+  not in a target object. Holding all deletions protected nothing a restore needs.
+- **What still stops everything:** G1 and G2 (`set_shrunk`) and `foreign_set` are unchanged: nothing written, nothing
+  deleted. Without a local manifest (step 5) there is no delete phase, with or without an unknown path.
+- **One consequence to know:** when the unknown path is the newer timeline (the database was restored to a point
+  before that key existed), the OpenBao snapshots and Fleet dumps that belong to it now leave the target after their
+  keep days (D4), as every other snapshot does. Before, they stayed for ever by accident. An operator who wants to
+  keep a lost timeline restorable beyond the keep days copies the target before that (restore.md).
+- The class `unknown_path`, the target run's outcome (not ok), `backup_target_status.last_error`, the gauge
+  `paddock_backup_target_reachable` (0) and the alert `PaddockBackupTargetUnreachable` are unchanged: the operator
+  still sees the target as failing until the path is gone (A4 L11: "empty the path on the share or bucket by hand,
+  or restore"). No schema change, no API change.
+- **Logged:** the engine's WARN `mirror to backup target failed` (attributes `target`, `error_class`, `error`) names
+  the unknown paths through the wrapped error. The path is a key ID, not a secret.
+- **Surfaced:** `./paddock backup status` shows the class `unknown_path` in the `ERROR` column of the target's rows
+  and prints, below the target table, one note per such target. The note names the target and says that the path is
+  kept, that the retention's deletions go on elsewhere, that the `paddock-backup` log names the path, and that the
+  operator removes the path by hand. The database stores the class only, so the status cannot name the path.
+
+### B3 Slow S3 listings: probe the endpoint while a page is outstanding (amends the note 2026-11-07, second bullet)
+
+Measured on RustFS 1.0.4 with 55 000 objects: the object count is not the cost (first page 0.55 s). On a versioned
+bucket the server walks every deleted object (delete marker and noncurrent versions) that sorts before the next live
+key, about 0.5 ms each: 50 000 deleted objects ahead of the first live key delay the first page to 23.6 s, a few
+hundred thousand to more than the stall window. The endpoint is alive the whole time.
+
+The sentence "a listing whose next page does not arrive within the stall window fails the mirror" of the note
+2026-11-07 is replaced for **S3 targets** by:
+
+| Situation while a listing waits for a page | Result |
+| --- | --- |
+| No page for 20 s (`listProbeEvery`) | the target sends `HeadBucket` (timeout 10 s, `listProbeTimeout`) and repeats it every 20 s until the page arrives |
+| A probe succeeds | counts as progress for the stall watchdog, like a page |
+| No page and no successful probe for 2 min (`mirrorStall`, the stall window) | the mirror fails: `no progress for 2m0s while listing the target`, class `io` (unchanged) |
+| The endpoint keeps answering, but one page does not arrive within 20 min (`listPageLimit`) | the listing ends: `errStalled`, `no page of the listing for 20m0s`, class `io` |
+
+- **Every listing of an S3 target inside a mirror is under this rule**, not only the listings of step 1 and step 4:
+  the listing of a retired path for its newest file (`Target.Newest`, A3 step 1 and G3) MUST report progress per
+  page and be probed and bounded the same way, or G3 MUST take the modification times from the step-1 listing so
+  that it needs no second listing. Which of the two is the implementer's choice. Retired paths are the large,
+  delete-marker-heavy prefixes; a listing outside the rule would stall the mirror exactly when a retired path is due.
+- A probe that fails (any error, a 403 included) is no progress. A probe in flight is abandoned as soon as the
+  listing returns, and a probe answer never counts after the listing returned.
+- **Mounted targets** (`dirTarget`: local, SMB, NFS) are unchanged: the walk reports progress every 1 024 entries,
+  and a walk without progress for the stall window fails the mirror.
+- The three durations are fields of `s3Target`, set by `NewS3Target` from the constants; no environment variable.
+- Trade-off (accepted, residual risk **RR-132** in `docs/compliance/residual-risks.md`, added with this amendment):
+  an S3 endpoint that answers `HeadBucket` while one list request hangs holds the role for up to 20 min per page
+  instead of 2 min. It is the trade-off of the note 2026-11-07 (PDK-865): listings are not charged against the
+  round budget. A round that mirrors still ends only after its targets (RR-127).
+
+### B4 Versioned buckets need an expiry for noncurrent versions (PDK-977, delivered with PDK-972)
+
+On a versioned bucket a deletion of the mirror frees no space: the object stays as a noncurrent version plus a
+delete marker, and both slow every later listing (B3). Paddock does not manage an operator's bucket; it states the
+requirement and follows it in development.
+
+1. **Requirement (operator):** a versioned backup bucket MUST have a lifecycle rule that expires noncurrent versions
+   (30 days, the value the privacy pack and RR-94 name) and removes expired object delete markers.
+   `docs/operations/backup.md`, "S3 targets", says so with the reason (space, listing time).
+2. **Development bootstrap** (`deploy/compose/scripts/rustfs-backup-bootstrap.sh`): after `put-bucket-versioning` it
+   sets, idempotently, this lifecycle configuration on the development bucket:
+
+   ```json
+   {"Rules":[{"ID":"paddock-expire-noncurrent","Status":"Enabled","Filter":{"Prefix":""},
+     "NoncurrentVersionExpiration":{"NoncurrentDays":1},"Expiration":{"ExpiredObjectDeleteMarker":true}}]}
+   ```
+
+   One day is the shortest expiry S3 allows. RustFS 1.0.4 accepts the rule and returns it; that it removes the
+   versions after a day is observed on a long-lived development stack and recorded with the release regression.
+3. **No `./paddock check` item in alpha.10.** `decisions-alpha10.md` §42 asked for a warning "if that is detectable
+   through the S3 API". It is not, with the credential the runbook asks for: list, read, write and delete below the
+   prefix grant neither `s3:GetBucketVersioning` nor `s3:GetLifecycleConfiguration`, so the item would report "not
+   checked" on every correctly restricted target. `backup.md` therefore says that Paddock cannot check the rule.
+   A check for targets whose credential carries the two read-only permissions would change the operator contract
+   (two optional permissions in the runbook) and needs a subcommand in the backup role, which alone decrypts target
+   credentials; it is an open point (B8), not part of this amendment.
+
+### B5 Document texts (PDK-972 writes them; this amendment's pull request adds RR-132 only)
+
+- `docs/operations/backup.md`, "S3 targets": the lifecycle rule of B4.1 with its reason, and that Paddock cannot
+  check it.
+- `docs/operations/backup.md`, "Status of a target", class `unknown_path`, and the retention table's row "Anything
+  else": the copy and the retention's deletions go on, the path itself is kept until the operator removes it, the
+  status notes the target and the log names the path.
+- `docs/operations/backup.md`, "Schedule and retention": no change; the sentence on a retired key's repository keeps
+  "`retention_full` full intervals", which is the effective full interval in production.
+- `docs/compliance/residual-risks.md`: RR-132 (B3's trade-off) is added with this amendment's pull request. RR-127's
+  "the target's listings (each page within the stall deadline)" SHOULD become "(each page within 2 minutes of the
+  endpoint's last answer, at most 20 minutes, RR-132)" in PDK-972.
+- Changelog: `changelog.d/PDK-972.fixed.md` names the listing rule and the unknown-path rule. The keep window and
+  the bootstrap rule change nothing an operator of a production installation sees.
+
+### B6 Tests (`server/internal/backuprole` unless stated; the names are those of PDK-972, not binding)
+
+| Rule | Test | Asserts |
+| --- | --- | --- |
+| B1 | `TestRetiredKeepFollowsEffectiveFullInterval` | the keep window is 336 h without `Config.FullInterval` and 4 h 40 min with 20 min |
+| B1, I8, I9 | `TestRetiredPathPruning` (S3 fake and directory target) | replacement without a full, path past the window: kept; replacement complete, path inside the window: kept; replacement complete, path past the window: removed; the active path's files stay in every case |
+| B1, I8, I9 | `TestLocalExpireKeepsActiveAndIncompleteReplacement` | the local expire never removes the active path, however old; a retired path only once the active path is complete |
+| B1 | `TestMirrorRotationPutsNewPathHoldsOld`, `TestMirrorRotationThenLossKeepsOldPath`, `TestMirrorRetiredPathAgeFromRetiredAt` (A6 L8–L10) | unchanged and green |
+| B2 | `TestMirrorUnknownPathHeld` (A6 L11, new expectation) | the unknown path is kept byte for byte, the error names it, a retired path past the window and an expired snapshot are deleted, the newest snapshot of its kind stays |
+| B2, I8–I10 | `TestMirrorInvariants` (randomized matrix) | every deletion the D-rules allow is expected with an unknown path present; a stanza without a full on the active path holds every retired path |
+| B2 | `TestPrintBackupStatusNamesUnknownPathTarget` (`server/cmd/paddock-server`) | the note for a target with `unknown_path`, none without |
+| B3 | `TestSlowFirstPageFromAnsweringEndpointIsNoStall`, `TestSlowFirstPageFromSilentEndpointStalls`, `TestListingPageLimit`, `TestHungListingOnAnsweringEndpointEndsAtPageLimit`, `TestListingEndAbandonsProbeInFlight` | the four rows of B3; a hung target does not keep the round from mirroring the next target |
+| B3 | a test for the retired-path listing (name free; PDK-972 review 2 finding 1) | a retired path due for removal on an S3 fake whose newest-file listing answers after more than the stall window while the endpoint answers probes: the mirror succeeds and the path is removed; with a silent endpoint the mirror stalls |
+| B3 | `TestHangingListingTripsTheWatchdog`, `TestDirTargetListingTicks` | unchanged assertions; mounted targets unchanged |
+
+The new expectation of `TestMirrorUnknownPathHeld` and of the matrix follows this amendment's rule change and
+asserts more than before; it is no weakened test. No acceptance gate changes. The backup gates (`TestBackupRuns`,
+`TestBackupRotation`, `TestBackupTargets`) MUST be green on a development stack whose target bucket holds at least
+50 000 objects; that run is recorded with PDK-972.
+
+### B7 Acceptance criteria
+
+- **AC-1 (operator):** given a retired key path older than the keep window and an active path with a full of every
+  stanza, when a mirror succeeds, then the retired path is gone locally and on the target, and
+  `./paddock backup status` shows the target's last success.
+- **AC-2 (operator):** given the same with an active path that lacks a full of one stanza, then no retired path
+  loses a file, however old it is.
+- **AC-3 (developer):** given the development stack with a 20-minute full interval, then a retired key path leaves
+  the local set and the development target 4 h 40 min after its rotation at the earliest, not after 14 days.
+- **AC-4 (operator):** given a target that holds an unknown path, when a round runs, then expired fulls, WAL,
+  snapshots and retired paths are deleted as without it, the unknown path is byte for byte unchanged, the role's log
+  names the path, and `./paddock backup status` shows `unknown_path` and the note for that target.
+- **AC-5 (operator):** given an S3 target whose listing page (of the whole target or of a retired path) takes longer
+  than 2 minutes while the endpoint answers, then the mirror succeeds; given an endpoint that answers nothing, then
+  the mirror fails after 2 minutes; given a page that never arrives, then the mirror fails after 20 minutes. Each
+  failure shows the class `io`.
+- **AC-6 (developer):** given a fresh development stack, then the development backup bucket carries the rule of
+  B4.2.
+
+### B8 Decided and open points
+
+Decided with this amendment:
+
+1. **The escrow rule follows the effective full interval too (B1).** `decisions-alpha10.md` §42 names only retired
+   paths; PDK-972 review 2 (finding 2) asked for a record. There is one keep window. In development the escrowed
+   header of a destroyed device therefore leaves the local set and the targets about 4.7 h (4 h 40 min) after the
+   Destroy instead of 14 days; production is unchanged (14 days with the default schedule). A separate window for
+   the escrow rule was rejected: it would let the two rules disagree about the span of the retained fulls.
+2. **Every D-rule goes on beside an unknown path (B2)**, not only the removal of retired paths.
+3. **A target with an unknown path stays failed (B2).** The class, the status row and the alert exist and need no
+   schema change, and a stray repository should not go unnoticed. Cost: `LAST SUCCESS` of that target does not
+   advance although its copy is current, and the standing alert can hide a second failure.
+
+Open (no work in alpha.10 without a decision of the architect lead):
+
+4. A warning state per target instead of a failed run for an unknown path (a new column and an API field).
+5. A `./paddock check --online` warning for versioned buckets without the rule, for targets whose credential may
+   read the bucket's versioning and lifecycle (B4.3).
+6. RR-126 stays open: after this amendment the first successful mirror of a long-failing target deletes its whole
+   backlog in one round; PDK-869 bounds it.
+
+Stop conditions for PDK-972: a second place besides `retention.keep` derives a window from `full_interval_hours`; a
+change to `backup_target_status`, the admin API or the portal seems necessary; any need to touch step 6's budget
+(PDK-869); RustFS rejects the lifecycle configuration of B4.2.
+
+## Amendment 2026-11-11 — one mirror lane per target; the round never waits for a mirror (A10-26; PDK-989)
+
+Decision (architect lead, `decisions-alpha10.md` §50). Binding language: **MUST** / **MUST NOT** / **SHOULD** /
+**MAY**. Ticket: PDK-989 (alpha.10 blocker). Where this amendment contradicts decision 16, A3's "one target, one
+round", A7, the notes 2026-11-07 (all three) or B3, it wins. The mirror's steps 0–6, the guard, the D-rules and the
+invariants I1–I10 are **unchanged**; only who runs them and when changes.
+
+### C0 Why
+
+A round ran its targets' mirrors itself and ended only after the last one. On the development stack a round that
+started at 21:05 UTC mirrored to a versioned bucket with a large backlog of delete markers (left by the first prune
+after the amendment 2026-11-10). The listing was slow but alive, so by B3 it was no stall, and the number of pages
+is unbounded. For more than 40 minutes the role served nothing else: requested backups (`backup now`) stayed
+`requested`, no OpenBao snapshot and no Fleet dump was taken, the effects of a key confirmation and requested target
+tests waited, and four acceptance gates timed out. Only what does not depend on the round went on (WAL archiving and
+pgBackRest's own fulls).
+
+Options: (a) **a time slice**: the mirror yields after a budget, the listing included, and resumes next round. A
+slice cannot interrupt a list page in flight (up to 20 minutes, RR-132); cancelling the page wastes it and the next
+round asks for the same page again, so a first page slower than the slice never arrives (livelock). A continuation
+token only helps between pages. (b) **a lane per target**: the mirror runs beside the rounds and the round only
+starts it and looks at its state. **Decision: (b).**
+
+### C1 Vocabulary
+
+- **Lane** = the one mirror in flight of one target: steps 0–6 of A3 for that target, from start to its result. At
+  most one lane per target exists; the number of lanes is bounded by the number of enabled targets.
+- **Snapshot** = what a round hands to a lane at its start and the lane uses to its end: the index of the local set
+  (`repoIndex`), the retention inputs (A1, B1) with `wal_ok` and `manifestOK`, the kind state, the bytes of the
+  local `manifest.json`, and the target record. A lane MUST NOT read the database or the schedule for its decisions.
+- **Abandoned lane** = a lane whose watchdog gave up (stall, page limit, trickle) while its call has not returned.
+  Its result is recorded; no new lane of that target starts until the call returned.
+- **Awaited target** = a target whose lane result a finished run still needs for its phase 2 (C4).
+
+### C2 The round (replaces decision 16 e's place in the round and "after `mirrorAll`" of the note 2026-11-07 b)
+
+In every round, in this order, and **without waiting for any lane**:
+
+1. host states and requested target tests (C6);
+2. the key: active key, `schedule.env`, key file (decision 16 a), so the effects of a key confirmation take place
+   in the first round after it;
+3. the due and the requested runs of every kind, recorded in phase 1 as before (OpenBao snapshot, escrow pass,
+   Fleet dump, pgBackRest marker, timeouts);
+4. the local expire, `manifest.json`, the index, the metrics of the local set;
+5. for every enabled target (C3): start a lane with this round's snapshot, or leave the lane in flight alone;
+6. phase 2 for every run whose awaited targets all have a result (C4);
+7. the high-water file.
+
+A round's duration therefore no longer depends on any target. A requested run starts at the latest one round
+interval (`PADDOCK_BACKUP_ROUND_INTERVAL`, default 1 minute) after the round in flight ended.
+
+### C3 Lanes
+
+1. **Start.** A lane is started only by a round that holds the leader lock, for a target that is enabled, whose
+   host state allows a mirror (`mounted` or `n/a`), and that has no lane in flight and no abandoned lane. A target
+   in `pending_host` or `unreachable` gets no lane and its result at once (`not_mounted`, `io`), as before.
+2. **In flight.** While a lane is in flight the rounds write nothing for that target: no `backup_target_status`, no
+   metric change, no error. The error "the previous mirror has not returned" is no longer produced for a running
+   lane; it stays for an abandoned one.
+3. **Watchdog and limits** run inside the lane, unchanged: the stall window (2 minutes), the probe and the page
+   limit of S3 listings (B3), the copy budget (10 minutes, counted from the lane's first copied file) and the
+   trickle cap. A lane that used its copy budget ends with the class `continues`; the next round starts a new lane
+   with a fresh snapshot. Listings and step 6 are still not bounded by the budget (RR-126, PDK-869).
+4. **Deletions stay in the lane.** Step 6 runs in the lane that listed, guarded, copied and verified, after its own
+   step 5, on its own snapshot. No other goroutine deletes on a target. I1–I10 hold per lane.
+5. **Finish.** When a lane ends (success, error, `continues`, watchdog), it alone writes the target's
+   `backup_target_status` per kind, the gauges `paddock_backup_target_reachable` and
+   `paddock_backup_target_held_files` of its target, and its result for the runs that await it (C4). The values are
+   those the round wrote before (note 2026-11-07 b, "Copy budget" included). A round MUST NOT reset the gauges of
+   targets it did not touch.
+6. **Per-target state** (`pushed`, the held count, the newest mirrored time per kind) is owned by the target's lane
+   or guarded by one mutex; the race detector MUST be clean.
+7. **Cancel.** The engine cancels a target's lane when a round finds the target disabled or deleted, when a round
+   did not obtain the leader lock, and at shutdown (C7). A cancelled lane writes no status and no run result.
+   Other changes of a target take effect with its next lane.
+8. **Visibility.** New gauge `paddock_backup_target_mirror_started_timestamp_seconds{target}`: the start of the
+   lane in flight, absent without one. The role logs the start of a lane at `Info` when the previous lane of that
+   target ran longer than one round interval, and the end of every such lane with its duration and class.
+
+### C4 "Mirrored" is recorded when the lanes finish (replaces phase 2 of the note 2026-11-07 b)
+
+1. Phase 1 is unchanged: a run is recorded right after its local step with `targets = []` and `mirrored_at` NULL.
+2. A round **registers** every finished run without `mirrored_at` that it has not registered yet: its awaited
+   targets are the targets enabled in that round. A target without a lane (C3.1) gives its result at once.
+3. A target's result for a registered run is the result of the **first lane of that target that started in or after
+   the registering round**. A lane already in flight at the registration does not count: its snapshot may lack the
+   run's files.
+4. When every awaited target has a result, the run gets its per-target results, `mirrored_at` and its one audit
+   event (`platform.backup_completed` / `platform.backup_failed`), exactly as phase 2 did. A target that was
+   disabled or deleted meanwhile is dropped from the awaited targets and from the results.
+5. **Await limit: 60 minutes.** A run still awaiting a target 60 minutes after its registration is recorded then;
+   every target without a result gets `RunTarget{ok: false, error_class: "continues"}` (the existing class and
+   portal text). Reason: one long lane must not hold a run's audit event for hours.
+6. The registrations live in memory. After a restart every finished run without `mirrored_at` is registered again
+   by the first round, so it gets its results from the first lanes after the restart; the guard
+   `mirrored_at IS NULL` of the write keeps "exactly one event per run".
+7. The skip list of the note 2026-11-07 c is no longer needed: a run recorded after a round's index is registered
+   by the next round. The Fleet watcher of that note MAY be removed, because the next round seals the dump one
+   round interval later; if it stays, it MUST NOT wait for a lane.
+
+### C5 A lane reads only completed sets
+
+1. A lane reads from the local repository only paths of its snapshot, plus pgBackRest's label directories under
+   the existing rule (skipped until `backup.manifest` exists, A3 step 3). It puts the snapshot's `manifest.json`
+   bytes in step 5, never the file a later round wrote.
+2. Every file the role itself writes into the set (`openbao/`, `fleet/`, `escrow/`, `manifest.json`) MUST appear
+   under its final name only when complete (write to a temporary name in the same directory, then rename).
+   pgBackRest writes its own files that way. With that, the snapshot is the lock: no further lock is taken between
+   the round and the lanes.
+3. A path of the snapshot that a later round's expire removed is skipped (the existing `fs.ErrNotExist` rule). A
+   path rewritten meanwhile is verified against the bytes actually put (step 4, unchanged).
+4. The D-rules are decided against the snapshot. That is safe while the lane runs: the local set only gains newer
+   fulls, and what a rule allowed to delete at the snapshot stays expired; after a lost local repository the lane's
+   own puts and verify precede its deletions, so the target keeps a restorable copy (A4 L1–L3 unchanged for the
+   next lane, whose guard sees the shrunk set).
+
+### C6 Target tests
+
+A requested connection test runs in the round with its own timeout, opens its own connection and never waits for a
+lane, also when the target's lane is in flight. Its result is written by the round as before (decision 11).
+
+### C7 Shutdown and restart
+
+- Shutdown cancels every lane and waits for them at most 10 seconds; a call blocked in a file system returns
+  later on its own. Nothing is recorded for a cancelled lane.
+- A restart needs no lane state: every step of the mirror is idempotent (A3 step 3), the next lane lists the
+  target again, in-place rewritten files are put again once, and the runs are registered again (C4.6).
+- With more than one backup role process, only the leader's rounds start lanes (C3.1, C3.7). The supported
+  topology stays one process.
+
+### C8 Consequences for earlier texts
+
+- A7: "round budget" reads "the lane's copy budget". The note 2026-11-07: listings and step 6 hold the target's
+  lane, not the role. B3's trade-off and RR-132: a hung page holds the lane, not the round.
+- RR-127: a key confirmation takes effect in the next round, at most one round interval later; it no longer waits
+  for a copy. A lane in flight ends on its snapshot with the previous key's path; the new path follows with the
+  target's next lane.
+- No schema change, no API change, no portal change, no new dependency.
+
+### C9 Tests (`server/internal/backuprole`; names free, one test per row; all with `-race`)
+
+| # | Asserts |
+| --- | --- |
+| 1 | With a fake S3 target whose listing hangs while the endpoint answers probes: a round returns within its own work; in the following rounds a requested run of every kind is answered, a due OpenBao snapshot is taken, a key change reaches `schedule.env` and the key file, and a requested target test of that same target gets its result |
+| 2 | The same with a listing that is slow but completes: the lane ends, the target status is written once, by the lane |
+| 3 | At most one lane per target: ten rounds during one lane start no second one; a second target's lane runs and finishes meanwhile |
+| 4 | C4.3: a run recorded while a lane is in flight is not marked mirrored by that lane, but by the next one; its audit event is emitted exactly once |
+| 5 | C4.5: a run awaiting a target for 60 minutes (fake clock) is recorded with `continues` for that target |
+| 6 | C4.6: an engine created anew with an unmirrored run in the store registers it and records it after the first lanes |
+| 7 | C3.7 and C7: disabling a target, a round without the leader lock and shutdown each cancel the lane; a cancelled lane writes no status and no run result; shutdown returns within the wait although a lane's call blocks |
+| 8 | C5: a lane puts the snapshot's `manifest.json` although a later round rewrote the local one; a snapshot path removed by a later expire is skipped |
+| 9 | The invariants under lanes: the existing mirror tests (A6 L1–L12, `TestMirrorInvariants`, the tests of B6) run unchanged against the lane entry point and stay green; in particular no deletion happens on a listing that did not complete, and none outside the lane |
+| 10 | An abandoned lane: its result is recorded, and no new lane starts until its call returned |
+
+Gates after the fix: `TestBackupRuns`, `TestBackupRotation`, `TestBackupTargets`, the key confirmation and restore
+plan gates MUST be green on a development stack whose S3 target answers its listing slower than one round interval.
+No gate is weakened.
+
+### C10 Acceptance criteria
+
+- **AC-1 (platform administrator):** given a target whose mirror takes longer than an hour, when the administrator
+  requests a backup in the portal or with `./paddock backup now`, then every kind's run leaves `requested` within
+  two round intervals plus the kind's own duration, and `backup now --wait` returns.
+- **AC-2 (platform administrator):** given the same target, when a new backup key is confirmed, then the next full
+  backup uses the new key's path within one round interval, and a requested test of any target shows its result
+  within the portal's 60 seconds.
+- **AC-3 (operator):** given the same target, then OpenBao snapshots and Fleet dumps appear at their intervals in
+  `./paddock backup status`, and the gauge of C3.8 shows since when that target's mirror runs.
+- **AC-4 (auditor):** every finished run has exactly one `platform.backup_completed` or `platform.backup_failed`,
+  at the latest 60 minutes after the round that registered it, also across a restart of the role.
+- **AC-5 (operator):** given a restart of the role during a mirror, then the target's copy is completed by the next
+  lane, and nothing was deleted on the target that the D-rules do not allow.
+
+### C11 Freedoms, stop conditions, open points
+
+- Free: the type and function names of lanes and of the registration, the shape of the store call that records a
+  run's results, whether the Fleet watcher stays (C4.7), the log wording.
+- Stop and report: a writer of the set that cannot write by rename (C5.2); a need for a schema, API or portal
+  change; any deletion on a target outside its lane; a need to bound step 6 (PDK-869).
+- Open, default chosen: (1) the await limit of 60 minutes (C4.5); a longer limit delays audit events, a shorter one
+  records more runs with `continues`. (2) A lane in flight is visible to an operator only through the gauge and the
+  log; showing it in `./paddock backup status` and the portal needs a column and an API field (later release).
+
+### Correction 2026-11-11 — the lane amendment aligned with PDK-989 as built (commit `f8fbb732`, in review)
+
+The amendment above was written before the implementation existed. PDK-989 solved four points differently; three
+are adopted because they are simpler or safer, two points of the amendment stay binding although the code does
+not meet them yet, and the leader lock is decided anew (point 9). Where this correction contradicts C3–C11, it wins.
+
+**Adopted from the implementation (replaces the text named):**
+
+1. **C4, mirror passes instead of awaited targets** (amended by "Correction 2026-11-11 b" below: a busy target
+   makes the pass wait, it does not get `continues`). A round creates one **mirror pass**: it covers the finished
+   runs without `mirrored_at` at that moment, minus the runs an open pass still covers. Per target the pass takes:
+   the result of the lane this round started; `continues` at once when the target's lane is still mirroring an
+   earlier set (its index lacks the pass's runs); `not_mounted` or `io` at once for a volume that is not mounted or
+   unreachable. Phase 2 of a pass (the per-target results, `mirrored_at` and the one audit event of each of its
+   runs) runs exactly once, when the last of its lanes ended. A pass stays open until then, so no run is covered
+   twice. C4.2–C4.6 and the await limit of 60 minutes (C4.5, C9 row 5, AC-4's bound, open point 1) are **dropped**:
+   a run recorded while a target is busy gets `continues` for that target at once and is not held. Only the runs of
+   the pass that started a long lane wait for that lane, as they did before lanes.
+2. **C5.3, the local expire waits for lanes.** The role's own expire (A2: OpenBao and Fleet files, escrow copies, a
+   retired path as a whole) MUST NOT remove a file that the index of a lane in flight holds, nor a retired path
+   such an index holds; they go in the first round after that lane ended. pgBackRest's own expire is not held back;
+   a file it removed is skipped by the lane as before. This is stricter than "skip what vanished" and replaces it.
+3. **C5.1, the manifest.** The lane reads the local `manifest.json` once, at its start, and it must still be the
+   file its index holds (size and modification time); if a later round already replaced it, the lane ends with
+   `continues` and the next lane takes the newer set. The bytes read at the start are the ones put in step 5.
+4. **C7, shutdown.** At shutdown the lanes are cancelled and `Run` returns once they returned; the 10-second bound
+   of C7 is dropped. A shutdown-cancelled lane records nothing and its pass is dropped; the first pass after a
+   restart covers every run still without `mirrored_at`. The leader lock is decided in point 9.
+5. **C1 and C9 row 10, abandoned lanes.** A mirror call still blocked in the file system after the watchdog gave up
+   is tracked as before: the target's next lane ends at once with "the previous mirror has not returned" (class
+   `io`) until the call returned.
+6. **C4.7.** The Fleet watcher and the skip list of the note 2026-11-07 c are removed; the next round seals the
+   dump. A failed phase-2 write is logged and no longer fails the round.
+
+**Still binding, not in `f8fbb732` (PDK-989 MUST add them before it merges, each with a test):**
+(Both are implemented since `b8c73648`; see "Correction 2026-11-11 b" below.)
+
+7. **C3.7, a disabled or deleted target.** When a round finds a target disabled or deleted whose lane is in flight,
+   it cancels that lane. A cancelled lane writes no status and no result; its pass takes no result for that target.
+   Reason: an administrator who disables or deletes a target expects Paddock to stop writing to it and deleting on
+   it, and a lane can run for hours.
+8. **C3.8, the gauge** `paddock_backup_target_mirror_started_timestamp_seconds{target}` (the start of the lane in
+   flight, absent without one). It is the only way an operator sees that a target's copy has been running for
+   hours; RR-132 names it. `docs/operations/monitoring.md` lists it with the other backup metrics.
+
+9. **Leadership for the process lifetime (decision M1 of A10-26, `decisions-alpha10.md` §50; replaces C3.1's "a
+   round that holds the leader lock", C3.7's leader-lock clause and the third bullet of C7).** `f8fbb732` takes the
+   advisory lock per round and releases it when the round returns, so the lanes run without it and a second process
+   could take every other round. Options: (a) declare the role single-instance and leave the lock per round: no
+   code, but the documented guard (`docs/architecture.md` §3.2, role `backup`: exactly 1 active replica, leader
+   lock) would no longer cover the mirror; (b) hold the lock for the process lifetime. **Decision: (b).**
+   - The backup role takes the leader lock (`LockKey`) **once**, on **one dedicated database connection**, and holds
+     it until the process ends. Rounds and lanes run only while the process is leader. A process that does not get
+     the lock is a **standby**: it runs no round, starts no lane, writes nothing, and tries again every round
+     interval.
+   - The dedicated connection is exactly one connection held in addition to the pool the rounds use. When the pool
+     cannot spare it, the pool is sized by one more; falling back to (a) is not allowed.
+   - **Losing the connection is losing leadership.** The role MUST then cancel every round and every lane **before
+     any further write** to the database, the local set or a target, log the loss at `Warn`, and try to become
+     leader again as a standby does. A lane cancelled this way writes no status and no result and its pass is
+     dropped, as at shutdown; after the role is leader again, its first pass covers every run without `mirrored_at`.
+   - A file system call that cannot be interrupted may still complete one write after the cancel; that is the
+     abandoned-lane case of point 5 and is accepted. No new write starts.
+   - **Residual window without a fence (accepted; residual risk RR-134).** The role notices a lost lock connection
+     by a periodic check of that connection; between a silent loss and its detection lie up to the check interval
+     plus its ping timeout, about 10 seconds. Statements already in flight on the role's pool can still commit in
+     that window, and its lanes still write to their targets. An overlap with a new leader needs the database to
+     release the lock while the old process has not noticed: a kill of exactly the lock session. A database restart
+     ends the pool's connections too, and on a network partition the server keeps the lock longer than the role
+     needs to stop. The writes are safe to repeat: the target status is an upsert, a run is marked mirrored only
+     while `mirrored_at IS NULL`, a request is answered only once, and the mirror's puts and deletions follow rules
+     both processes derive from the same local set. Worst case: one extra `platform.backup_failed` for a run the
+     other leader already recorded; no run is mirrored twice. A fence inside the write transactions with the same
+     advisory lock does not work (they run in other sessions than the lock's). A real fence needs a lease row with
+     an epoch that every write checks: a data-model change, **not alpha.10**, a follow-up for the architect.
+   - Tests (binding): losing leadership stops the lanes and no status or run result is written afterwards; a second
+     engine on the same lock starts no round and no lane while the first is leader, and takes over after the first
+     released it. `docs/architecture.md` §3.2 needs no change: it already states the rule the code now meets.
+
+**The eight points PDK-989 listed for this amendment, and where they are:** (1) one lane per enabled target, the
+round never waits, the lane copies its index and that index's `manifest.json`: C2, C3, point 3. (2) the 10-minute
+budget is a lane's copy budget and targets mirror in parallel: C3.3, C8. (3) phase 2 per mirror pass: point 1.
+(4) the Fleet watcher is replaced by the next round: point 6. (5) the local expire keeps what a lane in flight
+indexes: point 2. (6) target tests run every round with their own timeout of 30 seconds, independent of a lane on
+the same target: C6. (7) lanes and the leader lock: point 9, which overrules the single-instance assumption.
+(8) RR-126 and PDK-869 are unchanged in substance, an unbounded step 6 holds only its lane: C3.3, C8.
+
+**Unchanged:** C0, C2, C3.1–C3.6 (C3.1 with point 9), C5.2, C5.4, C6, C8, the gates, AC-1 to AC-3 and AC-5. AC-4 reads: every finished
+run has exactly one `platform.backup_completed` or `platform.backup_failed`, also across a restart of the role.
+Tests as built (`lanes_test.go`): `TestHangingLaneDoesNotDelayTheRound`, `TestSlowTargetDoesNotHoldTheFastOne`,
+`TestShutdownCancelsLanesAndRestartResumes`, `TestLocalExpireWaitsForLane`, `TestLanePrunesOnlyByThePDK972Rules`;
+they cover C9 rows 1–4 and 6–9 in the form of this correction.
+
+### Correction 2026-11-11 b — a run waits for a busy target's next lane; cancel and gauge as built (PDK-989, #593 `b8c73648`)
+
+Three points of "Correction 2026-11-11" above are out of date since PDK-989's fix rounds. Where this correction
+contradicts that one, it wins; everything else there stands, point 9 (leadership) included.
+
+1. **Point 1, a busy target (replaced).** A pass created while a target's lane still mirrors an earlier set does
+   **not** get `continues` for that target. The pass **waits** for that target: the target's next lane, which a
+   later round starts with a newer index that holds the pass's runs, takes over every waiting pass and settles each
+   of them when it ends. A result for a run therefore only ever comes from a lane that carried the run (this is
+   C4.3 of the amendment again). `continues` now comes from a lane alone: its copy budget ran out, or the local
+   `manifest.json` changed under it before it started reading. Consequences:
+   - a run's per-target results, `mirrored_at` and audit event follow the slowest target's **next** lane, so behind
+     a lane of hours they come hours later; there is no await limit (the 60 minutes stay dropped). The run itself
+     is finished and visible at once (phase 1), and `backup now --wait` returns at once;
+   - when every target is busy, a round runs no phase 2 at all;
+   - a volume target that is not mounted or unreachable when its next lane would start settles its waiting passes
+     with that class at once, as it does the new pass;
+   - a pass waiting for a target that is no longer enabled stops waiting for it and gets no result for it;
+   - shutdown and a lost leadership drop every pass of a cancelled lane and every waiting pass; the next
+     leadership's first pass covers those runs again.
+2. **Point 7, a disabled or deleted target (implemented).** A round that finds such a target with a lane in flight
+   cancels the lane. The cancelled lane writes nothing (no status, no run result, no deletion started after the
+   cancel) and frees what it held: the target's lane slot, its pin on the local expire (correction point 2) and its
+   gauge. The role logs the cancel at `Info`.
+3. **Point 8, the gauge (implemented).** `paddock_backup_target_mirror_started_timestamp_seconds{target}` carries
+   the start of the lane in flight and is absent without one. A lane that ran longer than one round interval is
+   logged at `Info` when it ends, with its duration, and the next lane of that target is logged at `Info` when it
+   starts.
+
+The heading "Still binding, not in `f8fbb732`" above is thereby settled: nothing of this amendment is open in
+PDK-989. AC-4 reads: every finished run has exactly one `platform.backup_completed` or `platform.backup_failed`,
+recorded when the lanes that carried it ended, also across a restart or a change of leadership.

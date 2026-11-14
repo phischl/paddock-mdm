@@ -181,6 +181,9 @@ docker compose … run --rm --no-deps paddock-worker admin recompile --all
 | `admin recompile --all` | Publishes a new bundle version for every active device, also when its content is unchanged. | `organization.recompile_requested`, one per organization |
 | `admin security-review` | Prints, per organization, the unconfirmed root grants, the unconfirmed files on sensitive paths and the files on denied paths (ADR 0034); run once after the upgrade that introduced them. | `organization.security_review_required`, one per organization with a count above zero |
 
+The commands that touch Valkey (`rebuild-cache`, and `end-sessions`, `allowlist` and `upgrade-check`) authenticate as
+the Valkey user `worker` of the container they run in (plan M12h §14.8).
+
 Each prints one line (`raised bundle_seq of 42 devices to at least 2000003`, `bumped bundle_seq of 42 devices by 1000000`, `cache rebuilt for 2 organizations`,
 `recompile requested for 2 organizations`) and exits with 0, 1 (failure) or 2 (usage). `paddock-server audit verify`
 stays the command to verify the audit trail. It needs the audit domain's credentials, which stay on the audit host.

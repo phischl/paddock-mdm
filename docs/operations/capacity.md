@@ -245,7 +245,8 @@ Every portal login, step-up, device login and every call of the worker's identit
 - **Sizing:** one worker per core you give Authentik. The default of 4 matches the minimum of 4 vCPU of the control
   plane (`install.md`) and of the lab (`lab-install.md`); the workers only use a core while they serve requests. On a
   larger host with many simultaneous logins (shift start, a large device rollout) raise it with the cores and plan
-  about 250 MiB RAM per worker. Apply a change with `./paddock up` (it recreates `authentik-server`).
+  about 250 MiB RAM per worker (raise `PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT` with it, section "Memory limits"). Apply a
+  change with `./paddock up` (it recreates `authentik-server`).
 - `./paddock check` fails the item `authentik web workers` unless the value is an integer of at least 1: Authentik
   falls back to 2 workers on a value it cannot parse and serves no login with 0.
 - Authentik's API throttle for anonymous requests counts in a cache of each worker process, so its per-address ceiling
@@ -293,15 +294,146 @@ Measure the size of one full backup with `./paddock compose run --rm --no-deps p
 role. Every backup target holds another copy of the same set, so size those disks the same way. The figures of
 `docs/operations/backup.md` ("What is backed up") are the defaults the sizing assumes.
 
+## Memory limits
+
+Every container of the stack gets a memory limit (ADR 0051 decision 4, plan M12h §3.4), so that a runaway or attacked
+service cannot starve the host that also runs OpenBao. When a container reaches its limit, the kernel's OOM killer
+kills the largest process inside it, which is not necessarily the container's main process (RR-120):
+
+- PostgreSQL (`postgres`, `authentik-postgres`, `audit-postgres`): usually a backend process is killed. The postmaster
+  terminates the other connections, runs crash recovery and accepts connections again; the container keeps running and
+  its restart count does not change. Clients see dropped connections and failed transactions.
+- Valkey (`valkey`, `fleet-redis`): the killed process may be the child of a background save or AOF rewrite. The
+  server keeps running and retries later; after a failed background save it refuses writes until a save succeeds
+  (`stop-writes-on-bgsave-error`, on by default), and `INFO persistence` shows `rdb_last_bgsave_status:err` or
+  `aof_last_bgrewrite_status:err`. If the server itself is killed, Docker restarts the container and the restart
+  count rises.
+
+Neither a Paddock alert nor the restart count reliably shows such a kill (`PaddockRoleDown` covers only the Paddock
+roles). The evidence is `docker inspect --format '{{.State.OOMKilled}}' <container>` (set when the container's main
+process was killed), the `oom_kill` counter in the container's cgroup `memory.events`
+(`docker exec <container> cat /sys/fs/cgroup/memory.events`), and the kernel log (`journalctl -k | grep -i oom`).
+
+The limits are set from the measured working set with headroom and can be raised per installation in `.env`; apply a
+change with `./paddock up` (it recreates the container). The table grows with each hardened service group; services
+without a limit yet are listed in `deploy/compose/hardening-exceptions.yaml`.
+
+| Service | Host | Default limit | `.env` variable | Snapshot (development stack, 2026-11-09) |
+| --- | --- | --- | --- | --- |
+| `postgres` | control plane | 2 GiB | `PADDOCK_POSTGRES_MEM_LIMIT` | 190–245 MiB |
+| `authentik-postgres` | control plane | 1 GiB | `PADDOCK_AUTHENTIK_POSTGRES_MEM_LIMIT` | 210–215 MiB |
+| `audit-postgres` | audit | 1 GiB | `PADDOCK_AUDIT_POSTGRES_MEM_LIMIT` | 50–75 MiB |
+| `valkey` | control plane | 512 MiB | `PADDOCK_VALKEY_MEM_LIMIT` | 6–12 MiB |
+| `fleet-redis` | control plane | 512 MiB | `PADDOCK_FLEET_REDIS_MEM_LIMIT` | 4–5 MiB |
+| `fleet-mysql` | control plane | 2 GiB | `PADDOCK_FLEET_MYSQL_MEM_LIMIT` | 645–655 MiB |
+| `rabbitmq` | control plane | 1 GiB | `PADDOCK_RABBITMQ_MEM_LIMIT` | 155–170 MiB |
+| `openbao` | control plane | 1 GiB | `PADDOCK_OPENBAO_MEM_LIMIT` | 30–45 MiB; 137 MiB peak |
+| `rustfs` | control plane | 2 GiB | `PADDOCK_RUSTFS_MEM_LIMIT` | 240–350 MiB |
+| `audit-rustfs` | audit | 4 GiB | `PADDOCK_AUDIT_RUSTFS_MEM_LIMIT` | 2.0–2.7 GiB after many acceptance runs; 90 MiB on a fresh volume |
+| `fleet` | control plane | 3 GiB | `PADDOCK_FLEET_MEM_LIMIT` | 90–120 MiB; 810 MiB during a vulnerability run |
+| `prometheus` | control plane | 1 GiB | `PADDOCK_PROMETHEUS_MEM_LIMIT` | 60–65 MiB |
+| `authentik-server` | control plane | 2 GiB | `PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT` | 860 MiB–1.05 GiB idle with 4 web workers; 1.1 GiB peak at the first start |
+| `authentik-worker` | control plane | 1 GiB | `PADDOCK_AUTHENTIK_WORKER_MEM_LIMIT` | 265–330 MiB; 370 MiB peak at the first start |
+
+The snapshot is the resident memory (`docker stats`) of two idle development stacks after their acceptance runs, not
+a peak under load. PostgreSQL's page cache does not count against the limit beyond what the kernel can reclaim, so a
+larger database grows into the host's page cache instead; raise `PADDOCK_POSTGRES_MEM_LIMIT` when you raise
+`shared_buffers` or the number of connections. Valkey holds sessions, device keys, nonces and counters only; a limit
+reached there points to a leak, not to a larger installation.
+
+The vulnerability figure for `fleet` is the cgroup peak (`memory.peak`, page cache included) of one run of
+`fleet vuln_processing` that downloaded every feed into an empty volume (850 MiB on disk), measured on a scratch stack
+without enrolled hosts; matching the software of many hosts adds to it, hence the headroom. RabbitMQ does not see its
+container limit by itself: `rabbitmq.conf` passes `PADDOCK_RABBITMQ_MEM_LIMIT` as its total memory, so its memory
+alarm blocks publishers at 60 % of the limit (the healthcheck `check_local_alarms` then fails) before the kernel would
+kill the broker. The alarm reads the suffixes as decimal units (`1g` = 10⁹ bytes), slightly below Docker's binary
+ones. The limit must be a whole number with an optional unit (`1536m`, not `1.5g`): RabbitMQ ignores any other value
+with a log warning only and sizes the alarm from the host's RAM, so `prod-check` rejects it.
+
+`authentik-server` grows with its web workers (section "Authentik web workers"): about 250 MiB per worker on top of
+about 0.5 GiB. The default of 2 GiB fits the default of 4 workers with headroom for simultaneous logins; raise
+`PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT` by 256 MiB for every worker you add with `PADDOCK_AUTHENTIK_WEB_WORKERS`. The
+peaks are the cgroup's `memory.peak` of a scratch project's first start, which applies every blueprint.
+
+RustFS's resident memory grows with the objects it serves: 90 MiB on a fresh volume, 2.0–2.7 GiB on the
+development stack's `audit-rustfs` after many acceptance runs (anonymous memory; its cgroup's `memory.peak`, page
+cache included, reached 7.4 GiB, which the kernel reclaims below the limit). When an object store is killed at its
+limit, clients see failed uploads and the audit writer retries; raise `PADDOCK_AUDIT_RUSTFS_MEM_LIMIT` (or
+`PADDOCK_RUSTFS_MEM_LIMIT`) and the host's RAM together. OpenBao holds its keys and the Raft index in memory and stays
+small.
+
+## PostgreSQL connection budget
+
+Every Paddock role opens its own connection pools, and every connection counts against the database's
+`max_connections`, PostgreSQL's default of 100, of which it keeps 3 for the superuser
+(`superuser_reserved_connections`): 97 for the roles. The pools open connections only on demand and close them after 5
+minutes idle, so the figures below are the most a role can hold at once, not what it holds at rest. Every pool has a
+fixed size; none grows with the host's CPUs.
+
+Control-plane database (`postgres`):
+
+| Role | Pools | Maximum connections |
+| --- | --- | --- |
+| `paddock-api` | organization 8, platform 4 | 12 |
+| `paddock-worker` | organization 8, platform 8, leader locks 12, readiness 2 | 30 |
+| `paddock-notifier` | notifier 8, platform 2 | 10 |
+| `paddock-compiler` | 8 | 8 |
+| `paddock-backup` | backup 4, platform 3 | 7 |
+| `paddock-escrow-reader` | 4 | 4 |
+| `paddock-revocation-issuer` | 4 | 4 |
+| `paddock-outbox-relay` | 4 | 4 |
+| `paddock-unsealer` (automatic unseal only) | 2 | 2 |
+| operator commands (`paddock-server admin`, `agent-release`, `backup now`, `restore`, …) | 2–4 each | 4 |
+
+Together the long-running roles of one control plane hold at most **81** connections, 85 while an operator command
+runs (operator commands run one at a time), which leaves 12 for pgBackRest and `paddock-migrate`. The worker runs 19
+rounds that each hold a leader lock connection for their whole duration; with 12 lock connections a round that finds
+them all taken waits for one, while its queries and the readiness check keep pools of their own. At many
+organizations up to 9 rounds run for minutes (identity, inventory, osv, staleness, findings, retention), so a short
+round such as commands or escrow waits only when they all run at once. A further api replica adds 12 and uses up the
+spare. A further worker replica (`--scale paddock-worker=N`, as in the ingest test N2 above) adds up to 30 and does
+not fit: the budget then holds only while not every pool is full at once, and otherwise roles fail with
+`too many clients already`.
+
+Do not raise `max_connections` on the database: PostgreSQL writes the value into its WAL and into every backup, and a
+restore or a rollback onto a release that starts the database with a lower value stays read-only ("hot standby is not
+possible because of insufficient parameter settings").
+
+The audit database (`audit-postgres`) keeps the same default: the api's audit reader (8), the audit writer (8 per
+replica), the notifier's audit reader (2) and an operator command (`paddock-server audit …` 8, the restore's escrow
+check 2) together hold at most 28.
+
+## Request limits
+
+The fixed limits that bound one request (ADR 0051 decisions 3 and 6, architecture §4.1). They are sized above every
+legitimate request; a request beyond them is refused, not queued.
+
+| Limit | Value | Where | Beyond it |
+| --- | --- | --- | --- |
+| Request body, `admin.` | 2 MiB; 256.5 MiB for the platform uploads (a stored package of at most 256 MiB with its multipart framing) | Caddy | 413 from the edge |
+| Request body, `auth.`, `device.`, `bundles.` | 1 MiB (`bundles.`: 33 MiB for an escrowed LUKS header) | Caddy | 413 from the edge |
+| Request body, `fleet.` | 64 MiB | Caddy | 413 from the edge |
+| Reading a request (api, gateway, escrow-reader) | headers 10 s, whole request 60 s | Go server | connection closed; a body sent at 1 byte/s ends after 60 s (about 120 s when the server answers a POST, PUT, PATCH or DELETE successfully without reading the body: residual risk RR-131) |
+| Writing a response (api, gateway, escrow-reader) | 120 s; 30 min for agent release and package uploads; the audit export download 60 s per write, in total max(10 min, size at 64 KiB/s), at most 24 h | Go server | connection closed |
+| Idle keep-alive connection | 120 s | Go server | connection closed |
+| Requests per minute | `PADDOCK_RATELIMIT_*`, `PADDOCK_DEVICE_PER_IP_LIMIT` (`install.md` section 4) | api, gateway | 429 `rate_limited` |
+
+A 128 MiB agent artifact over a link of 1 Mbit/s takes about 17 minutes and fits the 30-minute upload deadline; on a
+slower link upload from a host closer to the control plane. An audit export download breaks off when the client
+accepts no data for 60 s or reads slower than 64 KiB/s on average (at least 10 minutes are always allowed, at most
+24 hours); the client detects the short body against `Content-Length` and `X-Paddock-Package-SHA256` and downloads
+again.
+
 ## Method
 
 The load generator is k6 (`K6_IMAGE` in `deploy/compose/versions.env`, a tool only, never shipped). It runs as a
-container on the Compose network `paddock_cp` and talks to one gateway replica directly
+container on the Compose networks `paddock_edge` and `paddock_data` (the ingest scenario reads Prometheus there) and
+talks to one gateway replica directly
 (`http://paddock-gateway:8081`), without the edge (Caddy) in front: N1 is the cost of the gateway node. Each device
 signs its requests exactly like the agent (architecture §6.3, ECDSA P-256 with k6's WebCrypto; the P1363 signature
 is converted to ASN.1 DER) and sends its own address in `X-Paddock-Client-IP`, so the per-IP limit of the gateway (300
 per minute) sees a fleet instead of one load generator. The gateway honours that header only from the addresses in
-`PADDOCK_TRUSTED_PROXY_CIDRS`; the development stack trusts the private ranges, which include the Compose network. The per-key limit (30 per minute) is respected by spreading the
+`PADDOCK_TRUSTED_PROXY_CIDRS`; the development stack's gateway trusts the edge subnet, production Caddy alone. The per-key limit (30 per minute) is respected by spreading the
 rate over enough devices: 10 000 devices check in every 10 s at 1 000/s.
 
 1. **Identities.** Create auto-approving enrollment tokens in a dedicated organization (at most 1 000 devices per

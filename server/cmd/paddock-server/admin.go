@@ -218,7 +218,7 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 		}
 		fmt.Fprintf(os.Stdout, "recompile requested for %d organizations\n", n)
 	case "rebuild-cache":
-		vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password})
+		vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Username: vkCfg.Username, Password: vkCfg.Password})
 		if err != nil {
 			return err
 		}
@@ -239,7 +239,7 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 		}
 		return err
 	case "end-sessions":
-		vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password})
+		vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Username: vkCfg.Username, Password: vkCfg.Password})
 		if err != nil {
 			return err
 		}
@@ -271,7 +271,7 @@ func runUpgradeCheck(ctx context.Context, cmd adminCommand, pool *db.OrgPool, pl
 		return err
 	}
 	var sessionCounter app.UpgradeSessionCounter
-	if vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password}); err == nil {
+	if vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Username: vkCfg.Username, Password: vkCfg.Password}); err == nil {
 		defer vk.Close()
 		sessionCounter = sessions.NewStore(vk)
 	}
@@ -394,7 +394,7 @@ func writeAutoUnseal(out io.Writer, s autounseal.Setting) {
 // version in Valkey; when Valkey is unreachable they reload within 60 s anyway.
 func runAllowlist(ctx context.Context, cmd adminCommand, runner *app.ActionRunner, platformPool *db.PlatformPool, vkCfg config.Valkey) error {
 	var version app.Version
-	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password})
+	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Username: vkCfg.Username, Password: vkCfg.Password})
 	if err == nil {
 		defer vk.Close()
 		version = allowlistcache.NewVersion(vk)

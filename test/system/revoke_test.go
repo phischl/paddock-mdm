@@ -32,7 +32,7 @@ type revokeTarget struct {
 // override of paddock-revoke test builds (plan M4c decision 13).
 func loopTarget(t *testing.T, d *Device) *revokeTarget {
 	t.Helper()
-	dev := d.Must(`sudo sh -c 'truncate -s 64M /root/revoke-target.img && losetup -f --show /root/revoke-target.img'`)
+	dev := d.MustDevice(`truncate -s 64M /root/revoke-target.img && losetup -f --show /root/revoke-target.img`)
 	if !strings.HasPrefix(dev, "/dev/loop") {
 		t.Fatalf("loop device %q", dev)
 	}
@@ -64,7 +64,7 @@ func keyslotCount(t *testing.T, vm *VM, device string) int {
 	var md struct {
 		Keyslots map[string]json.RawMessage `json:"keyslots"`
 	}
-	if err := json.Unmarshal([]byte(vm.Must("sudo cryptsetup luksDump --dump-json-metadata "+device)), &md); err != nil {
+	if err := json.Unmarshal([]byte(vm.MustRoot("cryptsetup luksDump --dump-json-metadata "+device)), &md); err != nil {
 		t.Fatal(err)
 	}
 	return len(md.Keyslots)
@@ -228,7 +228,8 @@ func TestRevocationRefusalGates(t *testing.T) {
 			field, _ := json.Marshal(map[string]any{"expires_at": time.Now().Add(time.Hour).UTC(), "envelope": json.RawMessage(env)})
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			script := fmt.Sprintf(`REDISCLI_AUTH="$(cat /run/secrets/valkey_password)" valkey-cli --no-auth-warning HSET cmd:%s %s '%s'`,
+			// As the worker, which writes cmd:<device_id> (plan M12h §14.10.2).
+			script := fmt.Sprintf(`REDISCLI_AUTH="$(cat /run/secrets/valkey_worker_password)" valkey-cli --no-auth-warning --user worker HSET cmd:%s %s '%s'`,
 				d.ID, uuid.NewString(), string(field))
 			if out, err := portal.Compose(ctx, "exec", "-T", "valkey", "sh", "-c", script); err != nil {
 				t.Fatalf("valkey: %v %s", err, out)
@@ -443,6 +444,10 @@ cryptsetup luksHeaderRestore -q ` + target.device + ` --header-backup-file /run/
 	})
 }
 
+// dmsWarnedUser is the account of gate R6 whose graphical session receives the warning: a local account named like a
+// UPN, in Himmelblau's idmap range, whose session systemd-run must address by UID (PDK-994).
+var dmsWarnedUser = ssUser{name: "dms-warned@" + ssDomain, uid: 208073}
+
 // dmsPeriod is the dead man's switch period of gate R6 in days of the development builds, which are minutes: longer
 // than the longest check-in interval (6 min), so the switch never fires while the stack answers.
 const dmsPeriod = 8
@@ -474,7 +479,7 @@ func dmsState(t *testing.T, d *Device) (ticketAt time.Time, triggered bool) {
 		TicketAt  time.Time `json:"ticket_at"`
 		Triggered bool      `json:"triggered"`
 	}
-	if out := d.Must("sudo cat /var/lib/paddock/state/dms.json 2>/dev/null || echo '{}'"); json.Unmarshal([]byte(out), &st) != nil {
+	if out := d.MustRoot("cat /var/lib/paddock/state/dms.json 2>/dev/null || echo '{}'"); json.Unmarshal([]byte(out), &st) != nil {
 		t.Fatalf("dms.json %q", out)
 	}
 	return st.TicketAt, st.Triggered
@@ -487,13 +492,24 @@ func issue(d *Device) string {
 // TestDeadMansSwitchGate is gate R6 of plan M4c (AC4) with the development builds, whose days are minutes: on each VM
 // with the stack unreachable, the device warns 3 and 1 periods' days before the end, locks itself only after the
 // period of uptime — wall-clock jumps neither defer nor trigger it — and with the switch off nothing happens for
-// three periods. The VMs run in parallel; the acme switch is turned on and off for both at once.
+// three periods. The first warning also reaches the graphical session of a user named like a UPN (PDK-994). The VMs
+// run in parallel; the acme switch is turned on and off for both at once.
 func TestDeadMansSwitchGate(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Fresh()
 		vm.Gate(t, "R6")
+		warned := dmsWarnedUser
+		// The account exists before enrollment, while no Himmelblau answers its name (PDK-983).
+		vm.MustRootIn([]byte(ssUserScript), "bash -s -- "+shellQuote(warned.name)+" "+strconv.Itoa(warned.uid))
 		d := Install(t, s, vm, debDir(s))
 		target := loopTarget(t, d)
+		t.Logf("%s: graphical session of %s: %+v", vm.Name, warned.name, d.Autologin(t, warned.name))
+		ssNotifyMonitor(d, &warned)
+		notified := `h=$(getent passwd ` + shellQuote(warned.name) + ` | cut -d: -f6); cat "$h/` + ssNotifyLog + `" 2>/dev/null || true`
+		// dbus-monitor writes its first line (NameAcquired) once it is connected to the session bus.
+		Until(t, vm.Name+": D-Bus monitor in the session of "+warned.name, time.Minute, 2*time.Second, nil, func() bool {
+			return d.MustRoot(notified) != ""
+		})
 		t.Cleanup(func() {
 			vm.Together(t, "R6", "switch off at the end", func() string { setDMS(t, s, false); return "" })
 		})
@@ -543,6 +559,9 @@ func TestDeadMansSwitchGate(t *testing.T) {
 			}
 			d.Must("sudo date -s '-6 days' >/dev/null") // must not defer
 			first := waitFor("first warning", dmsPeriod-3+1.5, func() bool { return strings.Contains(issue(d), "locks itself in 3 minutes") })
+			Until(t, vm.Name+": first warning in the session of "+warned.name, time.Minute, 5*time.Second, nil, func() bool {
+				return strings.Contains(d.MustRoot(notified), "locks itself in 3 minutes")
+			})
 			second := waitFor("second warning", dmsPeriod-1+1.5, func() bool { return strings.Contains(issue(d), "locks itself in 1 minutes") })
 			if first < dmsPeriod-3-early || second < dmsPeriod-1-early || wouldReboot() || target.slots(t) != 2 {
 				t.Fatalf("warnings at %.2f and %.2f min, self-lock %v, %d keyslots", first, second, wouldReboot(), target.slots(t))

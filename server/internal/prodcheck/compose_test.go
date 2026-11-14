@@ -174,8 +174,8 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 			t.Error("the AppRole or the backup database credential reaches the escrow step, or the audit reader the backup role")
 		}
 		networks := slices.Sorted(maps.Keys(cfg.Services["backup-restore-escrow"].Networks))
-		if !slices.Equal(networks, []string{"audit-index", "cp"}) {
-			t.Errorf("backup-restore-escrow networks %v, want [audit-index cp]", networks)
+		if !slices.Equal(networks, []string{"audit-index", "data"}) {
+			t.Errorf("backup-restore-escrow networks %v, want [audit-index data]", networks)
 		}
 		if _, ok := cfg.Services["paddock-backup"].Networks["audit-index"]; ok {
 			t.Error("paddock-backup joins audit-index")
@@ -248,8 +248,10 @@ func TestCaddyfilesEdge(t *testing.T) {
 			}
 		}
 	}
-	if proxies != 4 {
-		t.Errorf("found %d proxies to Paddock roles, want 4 (admin_site, device. in the three Caddyfiles)", proxies)
+	// The bundles host proxies GET and HEAD of /apt/* to the api, which checks the repository credential and redirects
+	// to a presigned GET (plan M13c decision 14, ADR 0050, PDK-812): one more role proxy in each Caddyfile.
+	if proxies != 7 {
+		t.Errorf("found %d proxies to Paddock roles, want 7 (admin_site, device. and bundles. /apt/* in the three Caddyfiles)", proxies)
 	}
 	// Plan M8s decision 31: every proxy to a role or an upstream is preceded by a request body limit in its block.
 	limited := 0
@@ -272,8 +274,34 @@ func TestCaddyfilesEdge(t *testing.T) {
 		!strings.Contains(g, "int({http.request.header.Content-Length}) > {args[1]}") {
 		t.Error("guards.caddy has no body_limit snippet with a Content-Length check and request_body")
 	}
-	if limited != 17 {
-		t.Errorf("found %d proxies to roles and upstreams, want 17 (2 in the guards, 5 in each Caddyfile)", limited)
+	// The bundles host's /apt/* proxy to the api (PDK-812) is the sixth in each Caddyfile.
+	if limited != 20 {
+		t.Errorf("found %d proxies to roles and upstreams, want 20 (2 in the guards, 6 in each Caddyfile)", limited)
+	}
+	// Plan M12h decision 16: every site imports the hardening headers, and the snippet sets all four.
+	g := read("guards.caddy")
+	for _, want := range []string{"(hardening_headers) {", "\t\tdefer\n", "X-Content-Type-Options nosniff",
+		`Strict-Transport-Security "max-age=31536000; includeSubDomains"`, "X-Frame-Options DENY",
+		"header ?Referrer-Policy strict-origin-when-cross-origin"} {
+		if !strings.Contains(g, want) {
+			t.Errorf("guards.caddy: hardening_headers lacks %q", want)
+		}
+	}
+	for _, name := range []string{"Caddyfile", "Caddyfile.prod", "Caddyfile.lab"} {
+		lines := strings.Split(read(name), "\n")
+		sites := 0
+		for i, line := range lines {
+			if !strings.HasSuffix(line, " {") || strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "{") {
+				continue
+			}
+			sites++
+			if i+1 >= len(lines) || lines[i+1] != "\timport hardening_headers" {
+				t.Errorf("%s:%d: site %q does not import hardening_headers first", name, i+1, line)
+			}
+		}
+		if sites < 5 {
+			t.Errorf("%s: found %d sites, want at least 5", name, sites)
+		}
 	}
 }
 
@@ -313,7 +341,10 @@ func TestProductionEdge(t *testing.T) {
 	}
 	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{}) {
 		switch r.Item {
-		case "edge client address", "role trusted proxies", "container hardening":
+		case "edge client address", "role trusted proxies", "container hardening", "networks: caddy on edge only",
+			"networks: no datastore on edge", "networks: fleet, caddy and authentik not on data",
+			"trusted proxies: caddy's address only", "edge: internal ranges are not private_ranges",
+			"rabbitmq: management bound to loopback", "rabbitmq: memory limit readable by the memory alarm":
 			if !r.OK {
 				t.Errorf("%s:\n%s", r.Item, r.Detail)
 			}
@@ -352,6 +383,13 @@ func TestLabEdge(t *testing.T) {
 		"lab: roles resolve the public names to the proxy":      false,
 		"only Caddy's HTTP port published, on the bind address": false,
 		"container hardening":                                   false,
+		"networks: caddy on edge only":                          false,
+		"networks: no datastore on edge":                        false,
+		"networks: fleet, caddy and authentik not on data":      false,
+		"trusted proxies: caddy's address only":                 false,
+		"edge: internal ranges are not private_ranges":          false,
+		"rabbitmq: management bound to loopback":                false,
+		"rabbitmq: memory limit readable by the memory alarm":   false,
 	}
 	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{Host: prodcheck.HostLab}) {
 		if _, ok := want[r.Item]; !ok {
@@ -366,6 +404,85 @@ func TestLabEdge(t *testing.T) {
 		if !seen {
 			t.Errorf("no item %q", item)
 		}
+	}
+}
+
+// TestNetworkSegmentation renders every host file set that runs Caddy (ADR 0051 decision 1): Caddy is on edge alone
+// at the fixed address, no datastore is on edge, Fleet, Caddy and Authentik are off data, Authentik's worker and
+// database are on the internal network authentik only, and the roles trust Caddy's address alone. The development
+// stack keeps the production topology.
+func TestNetworkSegmentation(t *testing.T) {
+	cases := map[string]struct {
+		files    []string
+		envFiles []string
+	}{
+		"production control plane": {prodFiles(t, "controlplane"), []string{"prod.env.example"}},
+		"production control plane with automatic unseal": {append(prodFiles(t, "controlplane"), "compose.auto-unseal.yaml"),
+			[]string{"prod.env.example"}},
+		"lab":              {prodFiles(t, "lab"), []string{"lab.env.example"}},
+		"lab with backups": {append(prodFiles(t, "lab"), libFiles(t, "LAB_BACKUP_FILES")...), []string{"lab.env.example"}},
+		"development":      {libFiles(t, "DEV_FILES"), []string{".env.example"}},
+		"development with backups": {append(libFiles(t, "DEV_FILES"), libFiles(t, "DEV_BACKUP_FILES")...),
+			[]string{".env.example"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := renderConfig(t, tc.files, tc.envFiles...)
+			caddy := cfg.Services["caddy"]
+			if got := slices.Sorted(maps.Keys(caddy.Networks)); !slices.Equal(got, []string{"edge"}) ||
+				caddy.Networks["edge"].IPv4Address != "172.28.0.10" {
+				t.Errorf("caddy networks %v at %q, want [edge] at 172.28.0.10", got, caddy.Networks["edge"].IPv4Address)
+			}
+			if subnets := cfg.Networks["edge"].IPAM.Config; len(subnets) != 1 || subnets[0].Subnet != "172.28.0.0/24" ||
+				subnets[0].IPRange != "172.28.0.128/25" {
+				t.Errorf("edge subnets %+v, want 172.28.0.0/24 with the dynamic pool 172.28.0.128/25", subnets)
+			}
+			for role, alias := range map[string]string{"paddock-worker": "worker-ops",
+				"paddock-escrow-reader": "escrow-reader-ops", "paddock-revocation-issuer": "revocation-issuer-ops"} {
+				s := cfg.Services[role]
+				if v := s.Environment["PADDOCK_OPS_ADDR"]; v == nil || *v != alias+":9090" {
+					t.Errorf("%s: PADDOCK_OPS_ADDR %v, want %s:9090", role, v, alias)
+				}
+				if !slices.Contains(s.Networks["data"].Aliases, alias) || len(s.Networks["edge"].Aliases) != 0 {
+					t.Errorf("%s: aliases on data %v, on edge %v, want %s on data only", role, s.Networks["data"].Aliases,
+						s.Networks["edge"].Aliases, alias)
+				}
+			}
+			if !cfg.Networks["authentik"].Internal {
+				t.Error("network authentik is not internal")
+			}
+			if _, ok := cfg.Networks["cp"]; ok {
+				t.Error("network cp still exists")
+			}
+			for svc, s := range cfg.Services {
+				if _, ok := s.Networks["cp"]; ok {
+					t.Errorf("%s is on network cp", svc)
+				}
+			}
+			for _, svc := range []string{"postgres", "valkey", "rabbitmq", "openbao", "authentik-postgres", "fleet-mysql",
+				"fleet-redis", "audit-postgres", "audit-rustfs"} {
+				if _, ok := cfg.Services[svc].Networks["edge"]; ok {
+					t.Errorf("%s is on network edge", svc)
+				}
+			}
+			for _, svc := range []string{"caddy", "fleet", "authentik-server", "authentik-worker"} {
+				if _, ok := cfg.Services[svc].Networks["data"]; ok {
+					t.Errorf("%s is on network data", svc)
+				}
+			}
+			for svc, want := range map[string][]string{"authentik-worker": {"authentik"}, "authentik-postgres": {"authentik"},
+				"authentik-server": {"authentik", "edge"}, "fleet": {"edge", "fleet"}} {
+				if got := slices.Sorted(maps.Keys(cfg.Services[svc].Networks)); !slices.Equal(got, want) {
+					t.Errorf("%s networks %v, want %v", svc, got, want)
+				}
+			}
+			for _, role := range []string{"paddock-api", "paddock-escrow-reader", "paddock-revocation-issuer", "paddock-worker",
+				"paddock-compiler", "paddock-notifier", "paddock-outbox-relay"} {
+				if v := cfg.Services[role].Environment["PADDOCK_TRUSTED_PROXY_CIDRS"]; v == nil || *v != "172.28.0.10/32" {
+					t.Errorf("%s trusts %v, want Caddy's 172.28.0.10/32", role, v)
+				}
+			}
+		})
 	}
 }
 
@@ -872,8 +989,8 @@ func TestNotifierCompose(t *testing.T) {
 				networks = append(networks, nw)
 			}
 			slices.Sort(networks)
-			if !slices.Equal(networks, []string{"audit-index", "cp"}) {
-				t.Errorf("networks %v, want [audit-index cp]", networks)
+			if !slices.Equal(networks, []string{"audit-index", "data"}) {
+				t.Errorf("networks %v, want [audit-index data]", networks)
 			}
 			if len(n.ExtraHosts) != 0 {
 				t.Errorf("extra_hosts %v, want none", n.ExtraHosts)

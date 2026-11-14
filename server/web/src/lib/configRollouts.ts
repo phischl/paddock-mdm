@@ -86,6 +86,37 @@ export function rolloutOpen(r: ConfigRollout): boolean {
   return r.status === 'running' || r.status === 'halted'
 }
 
+/** A key an open rollout stages: the key's parts as the plan names them, and the rollout. */
+export interface StagedKey {
+  parts: unknown[]
+  rolloutID: string
+}
+
+/**
+ * The keys of a section that the organization's open rollouts stage (plan M11 decision 29), read from their change
+ * sets' plans; empty when they cannot be read, so a list still renders without its chips.
+ */
+export async function openRolloutStagedKeys(section: string): Promise<StagedKey[]> {
+  const out: StagedKey[] = []
+  try {
+    const { data } = await api.GET('/api/v1/config-rollouts', {
+      params: { query: { page: 1, page_size: 10, sort: '-started_at', status: ['running', 'halted'] } },
+    })
+    for (const r of data?.items ?? []) {
+      const detail = await getConfigRollout(r.id)
+      if (typeof detail === 'string') continue
+      for (const c of detail.change_set.plan.changes) {
+        if (c.section !== section || c.key === '') continue
+        const parts: unknown = JSON.parse(c.key)
+        if (Array.isArray(parts)) out.push({ parts, rolloutID: r.id })
+      }
+    }
+  } catch {
+    return []
+  }
+  return out
+}
+
 /** Runs a wave action; the rollout or the problem code. The reason is required for halt only. */
 export async function runRolloutAction(id: string, action: RolloutAction, reason = ''): Promise<ConfigRollout | string> {
   const params = { path: { id }, header: csrf }

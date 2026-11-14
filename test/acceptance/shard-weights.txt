@@ -161,3 +161,7 @@
 0 TestRestorePlan
 0 TestBackupLegacyKey
 40 TestBackupIsolation
+# Estimate, not yet measured (PDK-806): three devicesims, six bundle waits, three audit lookups after the settle time,
+# one worker check-in round; the Flatpak gate adds two step-ups, an API token and four bundle and warning waits.
+240 TestSoftwareSelfService
+200 TestSoftwareSelfServiceFlatpak

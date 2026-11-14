@@ -32,6 +32,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/selfservice"
 	"github.com/phischl/paddock-mdm/agent/internal/spool"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
@@ -54,6 +55,12 @@ type Deps struct {
 	// Software is the software reconciler of Applier; New gives it the server's reachability, and its status goes
 	// into the health report after every pass (plan M13a decisions 25 and 27). Nil: no software report.
 	Software *reconcile.Software
+	// Shield holds himmelblaud stopped around the package transactions of the reconcilers and of self-service
+	// (PDK-983); Run finishes a hold an earlier agent process left behind. Nil: no shield.
+	Shield *reconcile.NSSShield
+	// SelfService serves the self-service socket and runs the operations users ask for (plan M13b decisions 11–14);
+	// nil serves no self-service.
+	SelfService *selfservice.Service
 	// Commands executes the commands of check-ins; nil means the handlers of this build (commands.Handlers).
 	Commands *commands.Executor
 	// Events receives the device events of the reconcilers; New connects it to the spool.
@@ -200,13 +207,17 @@ func Load(l paths.Layout) (Deps, error) {
 	}
 	sys := reconcile.OS{Root: l.Root}
 	events := &reconcile.Events{}
-	inventory := &reconcile.Inventory{Sys: sys, Events: events, Download: c.Download, BundlesURL: BundlesURL(cfg.ServerURL)}
-	software := &reconcile.Software{Sys: sys, Events: events}
+	shield := &reconcile.NSSShield{Sys: sys, Events: events, LockFile: l.Join(reconcile.NSSShieldLock),
+		DpkgBusy: reconcile.FrontendLockBusy(l.Join(reconcile.DpkgFrontendLock))}
+	ApplyDevShieldDurations(shield)
+	pkgSys := reconcile.Shielded{System: sys, Shield: shield}
+	inventory := &reconcile.Inventory{Sys: pkgSys, Events: events, Download: c.Download, BundlesURL: BundlesURL(cfg.ServerURL)}
+	software := &reconcile.Software{Sys: pkgSys, Events: events}
 	d := Deps{
 		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Events: events, Sys: sys, Accounts: sys, Inventory: inventory,
-		Software: software,
-		Applier: apply.New(sys, managed, events).WithInventory(inventory).WithWatch(&reconcile.Watch{Sys: sys, Events: events}).
-			WithSoftware(software),
+		Software: software, Shield: shield,
+		Applier: apply.New(pkgSys, managed, events).WithInventory(inventory).
+			WithWatch(&reconcile.Watch{Sys: sys, Events: events}).WithSoftware(software).WithNSSShield(shield),
 	}
 	if l.Root == "" || l.Root == "/" {
 		d.FollowLogins = localadmin.FollowJournal
@@ -214,8 +225,24 @@ func Load(l paths.Layout) (Deps, error) {
 		d.Encrypt = encrypt.OS{}
 		d.EncryptModule = encrypt.Module()
 		d.Notify = func(ctx context.Context, msg string) { notifySessions(ctx, sys.Loginctl, runTool, msg) }
+		d.SelfService = selfservice.New(selfservice.Config{Sys: pkgSys, Packages: software, Version: buildinfo.Version})
 	}
 	return d, nil
+}
+
+// The shield's hold times in a development build: the safety timer fires after 5 minutes instead of 12.
+const (
+	DevNSSShieldMaxHold    = 4 * time.Minute
+	DevNSSShieldTimerGrace = time.Minute
+)
+
+// ApplyDevShieldDurations gives the shield of a development build the shorter hold and timer (plan M5a N3.4), for
+// the agent and `paddockd updates run` alike (N6.1); a release build keeps the defaults.
+func ApplyDevShieldDurations(s *reconcile.NSSShield) {
+	if buildinfo.Dev {
+		// The system gates kill the holder during a hold and wait for the safety timer (decisions §45).
+		s.MaxHold, s.TimerGrace = DevNSSShieldMaxHold, DevNSSShieldTimerGrace
+	}
 }
 
 // New creates the run loop. It writes nothing: `paddockd plan` uses it from a second process, so the start-time
@@ -317,6 +344,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	// and race its state writes (PDK-081).
 	a.sweepStaging()
 	a.sweepDiagnostics()
+	// Before any pass: a hold that an earlier process left (it died during a package transaction) is finished and
+	// reported first, so that himmelblaud runs again even if the safety timer has not fired yet (decisions §45).
+	a.d.Shield.Recover(ctx)
 	a.reportInterruptedInstalls()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -331,6 +361,17 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}()
 	defer wg.Wait()
+	if a.d.SelfService != nil {
+		a.refreshSelfService()
+		a.d.SelfService.Start(ctx)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := a.d.SelfService.Serve(ctx, a.d.Layout.SelfServiceSocket()); err != nil {
+				slog.ErrorContext(ctx, "self-service socket failed", "error", err)
+			}
+		}()
+	}
 	if err := a.waitActive(ctx); err != nil {
 		return err
 	}
@@ -372,12 +413,27 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 	dms := time.NewTicker(DMSTick)
 	defer dms.Stop()
 	nextAt := a.d.Now()
+	var selfService <-chan protocol.SoftwareSelfService
+	var requests <-chan protocol.SoftwareRequest
+	var withdrawals <-chan protocol.SoftwareRequestWithdrawn
+	if a.d.SelfService != nil {
+		selfService = a.d.SelfService.Events()
+		requests = a.d.SelfService.Requests()
+		withdrawals = a.d.SelfService.Withdrawals()
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case ev := <-selfService:
+			a.event(protocol.EventSoftwareSelfService, ev)
+		case ev := <-requests:
+			a.event(protocol.EventSoftwareRequest, ev)
+		case ev := <-withdrawals:
+			a.event(protocol.EventSoftwareRequestWithdrawn, ev)
 		case <-drift.C:
 			a.drift(ctx)
+			a.refreshSelfService()
 			a.tickLUKS(ctx, true)
 			a.tickConversion(ctx)
 			a.reportUpdateRuns(ctx)
@@ -390,6 +446,7 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 		case <-sessionPoll.C:
 			a.trackSessions(ctx)
 			a.tickConversionSessions(ctx)
+			a.softwareSessions(ctx)
 		case <-dms.C:
 			a.tickDMS(ctx)
 		case <-localAdmin.C:

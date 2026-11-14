@@ -9,14 +9,10 @@ import (
 	"path/filepath"
 )
 
-// WriteFile atomically replaces path with data. Missing parent directories are created with dirMode.
+// WriteFile atomically replaces path with data. Missing parent directories are created with dirMode. It writes
+// below the agent's own layout and does not check the parent directories; files an administrator manages go through
+// WriteFileOwned.
 func WriteFile(path string, data []byte, mode, dirMode fs.FileMode) error {
-	return WriteFileOwned(path, data, mode, dirMode, -1, -1)
-}
-
-// WriteFileOwned is WriteFile with ownership: uid and gid (-1 = unchanged) are set on the temporary file before the
-// rename, so the file never appears with the wrong owner or mode.
-func WriteFileOwned(path string, data []byte, mode, dirMode fs.FileMode, uid, gid int) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
@@ -26,7 +22,7 @@ func WriteFileOwned(path string, data []byte, mode, dirMode fs.FileMode, uid, gi
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after the rename
-	if err := writeSync(tmp, data, mode, uid, gid); err != nil {
+	if err := writeSync(tmp, data, mode, -1, -1); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write %s: %w", path, err)
 	}

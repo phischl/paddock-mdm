@@ -5,8 +5,10 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
@@ -67,6 +69,12 @@ type System interface {
 	AptMark(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	// Dpkg runs dpkg like AptGet, e.g. to finish an interrupted installation (--configure -a).
 	Dpkg(ctx context.Context, args ...string) (output string, exit int, err error)
+	// Flatpak runs flatpak like AptGet (plan M13b decision 10): in a process group of its own, killed at
+	// PackageTimeout, stdout and stderr combined.
+	Flatpak(ctx context.Context, args ...string) (output string, exit int, err error)
+	// SystemdRun runs systemd-run like Flatpak with stdin as its standard input: a command in a user's service
+	// manager (--machine=<uid>@.host --user --pipe, plan M13b decision 10 and Q14).
+	SystemdRun(ctx context.Context, stdin []byte, args ...string) (output string, exit int, err error)
 	// Loginctl runs loginctl.
 	Loginctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	// Getent looks key up in an NSS database (passwd, group); exit 2 means not found.
@@ -103,8 +111,27 @@ func (e *Events) emit(typ string, data any) {
 	}
 }
 
+// ErrParentNotTrusted refuses a write or delete below a parent directory that is a symlink or that someone other
+// than root can change (plan M12h decision 12); the resource fails with the message parent_not_trusted.
+var ErrParentNotTrusted = fsutil.ErrParentNotTrusted
+
+// ErrInvalidSpec refuses a resource whose spec fails the shared bundle contract (plan M12h decision 14); the resource
+// fails with the message invalid_spec and nothing is written.
+var ErrInvalidSpec = errors.New("invalid_spec")
+
+// Message is the status message of a failed resource: the stable code of a refusal, else the error text.
+func Message(err error) string {
+	switch {
+	case errors.Is(err, ErrParentNotTrusted):
+		return ErrParentNotTrusted.Error()
+	case errors.Is(err, ErrInvalidSpec):
+		return ErrInvalidSpec.Error()
+	}
+	return err.Error()
+}
+
 func errorResult(id string, err error) Result {
-	return Result{ID: id, Status: Error, Message: err.Error()}
+	return Result{ID: id, Status: Error, Message: Message(err)}
 }
 
 // apply is the common shape of Apply: plan, and if there are changes, carry them out.

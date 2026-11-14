@@ -336,6 +336,9 @@ upgrade_hosts() {
 upgraded_probes() {
   step "$1.1 $2: hosts"
   hosts_healthy
+  smoke_hardening
+  # The candidate's trust zones after the upgrade recreated every container (ADR 0051 decision 1).
+  "$here/assert-segmentation.sh" paddock-cp
   step "$1.2 $2: the seeded set"
   if ((${#reveal[@]} == 0)); then
     echo "upgrade: the escrow reveal is skipped (UPGRADE_SKIP_REVEAL=1); it must run before a release tag" >&2

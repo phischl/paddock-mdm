@@ -34,9 +34,9 @@ x-paddock-env: &paddock-env
   PADDOCK_ENV: ${PADDOCK_ENV:-production}
   PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
   PADDOCK_OPS_ADDR: ":9090"
-  # Peers that may name the client through X-Paddock-Client-IP (plan M7a decision 4): Caddy's address on the Compose
-  # network is not fixed, and the roles' ports are never published in production.
-  PADDOCK_TRUSTED_PROXY_CIDRS: ${PADDOCK_TRUSTED_PROXY_CIDRS:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 fc00::/7 ::1/128}
+  # Peers that may name the client through X-Paddock-Client-IP (plan M7a decision 4): Caddy's fixed address on network
+  # edge only (ADR 0051 decision 1), so that no other container can claim a client address.
+  PADDOCK_TRUSTED_PROXY_CIDRS: ${PADDOCK_TRUSTED_PROXY_CIDRS:-${PADDOCK_EDGE_CADDY_ADDRESS:-172.28.0.10}/32}
 
 # Container logs rotate at 50 MB x 10 files per service (ADR 0032, plan M10 decision 40); ./paddock check fails a
 # service without max-size.
@@ -80,8 +80,11 @@ services:
       - ./caddy/entrypoint.sh:/paddock/entrypoint.sh:ro
       - caddy-data:/data
       - caddy-config:/config
+    # On edge only (ADR 0051 decision 1): its upstreams are there, no datastore is. The fixed address is the roles'
+    # trusted proxy; PADDOCK_EDGE_CADDY_ADDRESS must lie in PADDOCK_EDGE_SUBNET and outside PADDOCK_EDGE_IP_RANGE.
     networks:
-      cp:
+      edge:
+        ipv4_address: ${PADDOCK_EDGE_CADDY_ADDRESS:-172.28.0.10}
         aliases:
           - admin.${PADDOCK_DOMAIN:-paddock.localhost}
           - auth.${PADDOCK_DOMAIN:-paddock.localhost}
@@ -114,7 +117,14 @@ services:
     logging: *paddock-logging
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
+    # The image's entrypoint starts as root, owns the data directory (chown/chmod of a volume an older release or a
+    # restore left behind) and drops to postgres via gosu (plan M12h §3.4, ADR 0051 decision 4).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_POSTGRES_MEM_LIMIT:-2g}
     environment:
       POSTGRES_DB: paddock
       POSTGRES_USER: postgres
@@ -135,7 +145,7 @@ services:
     volumes:
       - ./postgres/provision-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
       - postgres-data:/var/lib/postgresql
-    networks: [cp]
+    networks: [data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d paddock"]
       interval: 5s
@@ -176,7 +186,7 @@ services:
       - db_paddock_backup_password
     volumes:
       - ./postgres/provision-roles.sh:/provision-roles.sh:ro
-    networks: [cp]
+    networks: [data]
     depends_on:
       postgres:
         condition: service_healthy
@@ -185,8 +195,21 @@ services:
     logging: *paddock-logging
     image: ${RABBITMQ_IMAGE}
     restart: unless-stopped
+    # Runs as the image's rabbitmq user from the start, so the entrypoint skips its root chown and gosu and the broker
+    # needs no capability; the data volume is owned by that user already (fresh volumes copy the image's directory,
+    # older releases' entrypoints chowned it). The CLI calls (healthcheck, docker exec rabbitmqctl) read the Erlang
+    # cookie in its home. No read_only: the broker writes its cookie and node files and renders its configuration at
+    # start (plan M12h §3.4, ADR 0051 decision 4; hardening-exceptions.yaml).
+    user: "999:999"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: &rabbitmq-mem-limit ${PADDOCK_RABBITMQ_MEM_LIMIT:-1g}
     hostname: rabbitmq
+    environment:
+      # rabbitmq.conf sizes the memory alarm from it.
+      PADDOCK_RABBITMQ_MEM_LIMIT: *rabbitmq-mem-limit
     volumes:
       - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
@@ -194,7 +217,7 @@ services:
     secrets:
       - source: rabbitmq_definitions
         target: /etc/rabbitmq/definitions.json
-    networks: [cp]
+    networks: [data]
     # One CLI call (check_local_alarms fails on a node whose app is not running, as check_running did) in a CLI VM with
     # one scheduler: each rabbitmq-diagnostics starts an Erlang VM with a scheduler per host core, and the two calls
     # every 10 s cost about 0.7 to 1 core on a 22-core host (PDK-884; about 0.09 cores now). The interval stays, so
@@ -211,15 +234,37 @@ services:
     logging: *paddock-logging
     image: ${VALKEY_IMAGE}
     restart: unless-stopped
+    # The entrypoints start as root: they render the ACL file onto the tmpfs and chown it (valkey only), chown /data
+    # and drop to valkey via setpriv (plan M12h §3.4, ADR 0051 decision 4). The chown walks /data/appendonlydir (mode
+    # 0700, owned by valkey), which root may only enter with DAC_READ_SEARCH; without it every restart fails.
+    # Writable: /data and the tmpfs mounts.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
     pids_limit: 256
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_VALKEY_MEM_LIMIT:-512m}
+    # One ACL user per role (plan M12h §14): the entrypoint renders /run/valkey/users.acl with hashed passwords.
+    entrypoint: ["/usr/local/bin/paddock-entrypoint.sh"]
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
     volumes:
+      - ./valkey/entrypoint.sh:/usr/local/bin/paddock-entrypoint.sh:ro
       - ./valkey/valkey.conf:/etc/valkey/valkey.conf:ro
+      - ./valkey/users.acl.tmpl:/etc/valkey/users.acl.tmpl:ro
       - valkey-data:/data
-    secrets: [valkey_auth_conf, valkey_password]
-    networks: [cp]
+    tmpfs: [/run/valkey, /tmp]
+    secrets:
+      - valkey_api_password
+      - valkey_gateway_password
+      - valkey_worker_password
+      - valkey_compiler_password
+      - valkey_escrow_reader_password
+      - valkey_revocation_issuer_password
+      - valkey_healthcheck_password
+    networks: [data]
     healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/valkey_password)\" valkey-cli ping | grep -q PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/valkey_healthcheck_password)\" valkey-cli --no-auth-warning --user healthcheck ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -229,7 +274,15 @@ services:
     logging: *paddock-logging
     image: ${RUSTFS_IMAGE}
     restart: unless-stopped
+    # The image runs as its rustfs user (10001) and its entrypoint only creates missing data directories it already
+    # owns, so it needs no capability; it writes nothing outside /data and /tmp (plan M12h §3.4, PDK-823).
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_RUSTFS_MEM_LIMIT:-2g}
     environment:
       RUSTFS_ACCESS_KEY_FILE: /run/secrets/rustfs_root_user
       RUSTFS_SECRET_KEY_FILE: /run/secrets/rustfs_root_password
@@ -239,7 +292,8 @@ services:
     secrets: [rustfs_root_user, rustfs_root_password]
     volumes:
       - rustfs-data:/data
-    networks: [cp]
+    # edge: Caddy serves the bundle and package reads from it.
+    networks: [data, edge]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9000/health >/dev/null"]
       interval: 5s
@@ -250,13 +304,21 @@ services:
     logging: *paddock-logging
     image: ${OPENBAO_IMAGE}
     restart: unless-stopped
-    pids_limit: 256
-    command: ["bao", "server", "-config=/openbao/config/config.hcl"]
+    # The image's own openbao user (decision Q10, plan M12h §3.4): the entrypoint only chowns paths not owned by it,
+    # which the image's directories and the data volume it populates never are, so it needs no CHOWN, SETUID or
+    # SETGID. Pinned here so that an image whose default user changes cannot run OpenBao as root unnoticed.
+    user: "100:1000"
+    cap_drop: [ALL]
     cap_add: [IPC_LOCK]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_OPENBAO_MEM_LIMIT:-1g}
+    command: ["bao", "server", "-config=/openbao/config/config.hcl"]
     volumes:
       - ./openbao/config.hcl:/openbao/config/config.hcl:ro
       - openbao-data:/openbao/file
-    networks: [cp]
+    networks: [data]
     healthcheck:
       # Healthy = the server answers. Sealed or uninitialized states are handled by `make bao-bootstrap` /
       # `make bao-unseal`; Paddock roles report not ready while OpenBao is sealed.
@@ -269,7 +331,14 @@ services:
     logging: *paddock-logging
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
+    # The image's entrypoint starts as root, owns the data directory (chown/chmod of a volume an older release or a
+    # restore left behind) and drops to postgres via gosu (plan M12h §3.4, ADR 0051 decision 4).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_AUTHENTIK_POSTGRES_MEM_LIMIT:-1g}
     environment:
       POSTGRES_DB: authentik
       POSTGRES_USER: authentik
@@ -277,7 +346,7 @@ services:
     secrets: [authentik_postgres_password]
     volumes:
       - authentik-postgres-data:/var/lib/postgresql
-    networks: [cp]
+    networks: [authentik]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U authentik -d authentik"]
       interval: 5s
@@ -290,7 +359,15 @@ services:
     logging: *paddock-logging
     image: ${AUTHENTIK_IMAGE}
     restart: unless-stopped
+    # Runs as the image's authentik user from the start and needs no capability; dropping NET_RAW also keeps the
+    # internet-facing server from crafting packets on edge (plan M12h amendment A10-1). No read_only: Authentik writes
+    # media, generated templates and blueprint state below /data and its own directories (plan M12h §3.4, ADR 0051
+    # decision 4; hardening-exceptions.yaml).
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits"); about 250 MiB per web worker.
+    mem_limit: ${PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT:-2g}
     entrypoint: ["/bin/sh", "/paddock/entrypoint.sh"]
     command: ["server"]
     environment: &authentik-env
@@ -327,7 +404,7 @@ services:
       - ./authentik/entrypoint.sh:/paddock/entrypoint.sh:ro
       - ./authentik/blueprints:/blueprints/paddock:ro
       - authentik-data:/data
-    networks: [cp]
+    networks: [edge, authentik]
     depends_on:
       authentik-postgres:
         condition: service_healthy
@@ -337,6 +414,9 @@ services:
     <<: *authentik
     command: ["worker"]
     pids_limit: 1024
+    mem_limit: ${PADDOCK_AUTHENTIK_WORKER_MEM_LIMIT:-1g}
+    # Its database only: the internal network authentik has no route out and no Paddock service.
+    networks: [authentik]
     depends_on:
       authentik-postgres:
         condition: service_healthy
@@ -345,13 +425,20 @@ services:
         condition: service_started
 
   # Inventory and vulnerabilities (plan M5a decision 1, architecture §15). Fleet's UI and admin API are reachable on
-  # network cp only (paddock-worker); Caddy publishes the device paths alone under fleet.<domain>. MySQL and Redis
-  # are on the internal network fleet.
+  # network edge only (Caddy, paddock-worker); Caddy publishes the device paths alone under fleet.<domain>. MySQL and
+  # Redis are on the internal network fleet; Fleet is never on data (ADR 0051 decision 1).
   fleet-mysql:
     logging: *paddock-logging
     image: ${FLEET_MYSQL_IMAGE}
     restart: unless-stopped
+    # The image's entrypoint starts as root, chowns the data directory (a volume an older release or a restore left
+    # behind) and drops to mysql via gosu (plan M12h §3.4, ADR 0051 decision 4).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_FLEET_MYSQL_MEM_LIMIT:-2g}
     environment:
       MYSQL_ROOT_PASSWORD_FILE: /run/secrets/fleet_mysql_root_password
       MYSQL_DATABASE: fleet
@@ -373,11 +460,22 @@ services:
     logging: *paddock-logging
     image: ${VALKEY_IMAGE}
     restart: unless-stopped
+    # The entrypoints start as root: they render the ACL file onto the tmpfs and chown it (valkey only), chown /data
+    # and drop to valkey via setpriv (plan M12h §3.4, ADR 0051 decision 4). The chown walks /data/appendonlydir (mode
+    # 0700, owned by valkey), which root may only enter with DAC_READ_SEARCH; without it every restart fails.
+    # Writable: /data and the tmpfs mounts.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
     pids_limit: 256
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_FLEET_REDIS_MEM_LIMIT:-512m}
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
     volumes:
-      - ./valkey/valkey.conf:/etc/valkey/valkey.conf:ro
+      - ./valkey/fleet-redis.conf:/etc/valkey/valkey.conf:ro
       - fleet-redis-data:/data
+    tmpfs: [/tmp]
     secrets:
       - source: fleet_redis_auth_conf
         target: valkey_auth_conf
@@ -393,7 +491,14 @@ services:
     logging: *paddock-logging
     image: ${FLEET_IMAGE}
     restart: unless-stopped
+    # Runs as the image's fleet user (plan M12h §3.4, ADR 0051 decision 4). Writable: the vulnerability volume and /tmp.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
     pids_limit: 512
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits"); the vulnerability run is the peak.
+    mem_limit: ${PADDOCK_FLEET_MEM_LIMIT:-3g}
     entrypoint: ["/bin/sh", "/paddock/entrypoint.sh"]
     environment:
       FLEET_MYSQL_ADDRESS: fleet-mysql:3306
@@ -422,7 +527,7 @@ services:
     volumes:
       - ./fleet/entrypoint.sh:/paddock/entrypoint.sh:ro
       - fleet-vulndb:/home/fleet
-    networks: [cp, fleet]
+    networks: [edge, fleet]
     depends_on:
       fleet-mysql:
         condition: service_healthy
@@ -449,7 +554,7 @@ services:
       PADDOCK_AMQP_USER: provisioner
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_provisioner_password
     secrets: [db_paddock_owner_url, rabbitmq_provisioner_password]
-    networks: [cp]
+    networks: [data]
     depends_on:
       postgres:
         condition: service_healthy
@@ -497,12 +602,27 @@ services:
       PADDOCK_ESCROW_S3_BUCKET: paddock-escrow
       PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_api_access_key
       PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_api_secret_key
+      # Packages stored in Paddock (plan M13c decision 12): written below apt/ of the bundles bucket, served through
+      # presigned GETs on the bundles host.
+      PADDOCK_BUNDLES_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
+      PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_api_access_key
+      PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_api_secret_key
       # Publishes new and revoked enrollment tokens to the gateway's cache at once.
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: api
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_api_password
       # Break-glass of a locked-out platform (plan M7a decision 22): true ignores the application IP allow list;
       # prod-check fails while it is set.
       PADDOCK_IP_ALLOWLIST_BYPASS: ${PADDOCK_IP_ALLOWLIST_BYPASS:-false}
+      # Application rate limits per minute (ADR 0051 decision 3): /api/auth/* per client address, reads, writes and
+      # agent uploads per session or API token, the bundles host's /apt/* per address (route added with M13c); 0
+      # switches a class off, which prod-check refuses in production. Raise PADDOCK_RATELIMIT_AUTH for many administrators behind one NAT.
+      PADDOCK_RATELIMIT_AUTH: ${PADDOCK_RATELIMIT_AUTH:-20}
+      PADDOCK_RATELIMIT_ADMIN_READ: ${PADDOCK_RATELIMIT_ADMIN_READ:-600}
+      PADDOCK_RATELIMIT_ADMIN_WRITE: ${PADDOCK_RATELIMIT_ADMIN_WRITE:-120}
+      PADDOCK_RATELIMIT_PLATFORM_UPLOAD: ${PADDOCK_RATELIMIT_PLATFORM_UPLOAD:-10}
+      PADDOCK_RATELIMIT_BUNDLES_APT: ${PADDOCK_RATELIMIT_BUNDLES_APT:-60}
       # Whether paddock-notifier has an SMTP relay (plan M9 decision 27): e-mail destinations are offered only then.
       # A non-secret presence flag set in .env next to PADDOCK_SMTP_HOST; ./paddock check fails when the two disagree.
       PADDOCK_SMTP_ENABLED: ${PADDOCK_SMTP_ENABLED:-false}
@@ -515,13 +635,15 @@ services:
       NO_PROXY: ${NO_PROXY:-}
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
-      - valkey_password
+      - valkey_api_password
       - release_public_key
       - revoke_release_public_key
       - rustfs_artifacts_api_access_key
       - rustfs_artifacts_api_secret_key
       - rustfs_escrow_api_access_key
       - rustfs_escrow_api_secret_key
+      - rustfs_bundles_api_access_key
+      - rustfs_bundles_api_secret_key
       - db_paddock_api_url
       - db_paddock_platform_url
       - db_paddock_audit_reader_url
@@ -531,7 +653,7 @@ services:
       - oidc_client_secret
       - authentik_service_token
       - caddy_root_crt
-    networks: [cp, audit-index, escrow]
+    networks: [edge, data, audit-index, escrow]
     depends_on:
       paddock-migrate:
         condition: service_completed_successfully
@@ -553,13 +675,17 @@ services:
     environment:
       <<: *paddock-env
       PADDOCK_HTTP_ADDR: escrow-reader:8080
+      # The ops listener on the address of the alias escrow-reader-ops, which exists on network data only: Prometheus
+      # reaches it, Caddy, Authentik and Fleet on edge do not (decisions-alpha10 A10-1).
+      PADDOCK_OPS_ADDR: escrow-reader-ops:9090
       PADDOCK_ESCROW_READER_TOKEN_FILE: /run/secrets/escrow_reader_token
       PADDOCK_DB_URL_FILE: /run/secrets/db_paddock_escrow_reader_url
       PADDOCK_OPENBAO_ADDR: http://openbao:8200
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_escrow_reader_role_id
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_escrow_reader_secret_id
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: escrow_reader
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_escrow_reader_password
       PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal-stepup/
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
@@ -567,10 +693,13 @@ services:
       - db_paddock_escrow_reader_url
       - approle_escrow_reader_role_id
       - approle_escrow_reader_secret_id
-      - valkey_password
+      - valkey_escrow_reader_password
       - caddy_root_crt
+    # edge: the step-up issuer's discovery through Caddy's alias auth.<domain>.
     networks:
-      cp: {}
+      data:
+        aliases: [escrow-reader-ops]
+      edge: {}
       escrow:
         aliases: [escrow-reader]
     depends_on:
@@ -600,7 +729,8 @@ services:
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_revocation_issuer_role_id
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_revocation_issuer_secret_id
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: revocation_issuer
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_revocation_issuer_password
       PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal-stepup/
       # Deletes every header version of a destroyed device (plan M4c decision 9).
       PADDOCK_ESCROW_S3_ENDPOINT: http://rustfs:9000
@@ -608,17 +738,23 @@ services:
       PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_revocation_access_key
       PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_revocation_secret_key
       PADDOCK_REVOCATION_ENABLED: ${PADDOCK_REVOCATION_ENABLED:-false}
+      # The ops listener on network data only, as the escrow-reader's (decisions-alpha10 A10-1).
+      PADDOCK_OPS_ADDR: revocation-issuer-ops:9090
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
       - db_paddock_revocation_url
       - rabbitmq_revocation_issuer_password
       - approle_revocation_issuer_role_id
       - approle_revocation_issuer_secret_id
-      - valkey_password
+      - valkey_revocation_issuer_password
       - rustfs_escrow_revocation_access_key
       - rustfs_escrow_revocation_secret_key
       - caddy_root_crt
-    networks: [cp]
+    # edge: the step-up issuer's discovery through Caddy's alias auth.<domain>.
+    networks:
+      data:
+        aliases: [revocation-issuer-ops]
+      edge: {}
     depends_on:
       paddock-migrate:
         condition: service_completed_successfully
@@ -640,7 +776,7 @@ services:
       PADDOCK_AMQP_USER: relay
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_relay_password
     secrets: [db_paddock_relay_url, rabbitmq_relay_password]
-    networks: [cp]
+    networks: [data]
     depends_on:
       paddock-migrate:
         condition: service_completed_successfully
@@ -653,11 +789,15 @@ services:
     environment:
       <<: *paddock-env
       PADDOCK_HTTP_ADDR: ":8081"
+      # Device requests per client address and minute; IPv6 clients are keyed by this prefix (ADR 0051 decision 3).
+      PADDOCK_DEVICE_PER_IP_LIMIT: ${PADDOCK_DEVICE_PER_IP_LIMIT:-300}
+      PADDOCK_DEVICE_PER_IP_V6_PREFIX: ${PADDOCK_DEVICE_PER_IP_V6_PREFIX:-64}
       PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
       PADDOCK_AMQP_USER: gateway
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_gateway_password
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: gateway
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_gateway_password
       PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
       PADDOCK_ARTIFACTS_S3_BUCKET: paddock-agent-artifacts
@@ -667,10 +807,10 @@ services:
       PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_gateway_secret_key
     secrets:
       - rabbitmq_gateway_password
-      - valkey_password
+      - valkey_gateway_password
       - rustfs_bundles_gateway_access_key
       - rustfs_bundles_gateway_secret_key
-    networks: [cp]
+    networks: [edge, data]
     depends_on:
       paddock-migrate:
         condition: service_completed_successfully
@@ -692,7 +832,8 @@ services:
       PADDOCK_AMQP_USER: compiler
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_compiler_password
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: compiler
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_compiler_password
       PADDOCK_OPENBAO_ADDR: http://openbao:8200
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_compiler_role_id
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_compiler_secret_id
@@ -709,12 +850,12 @@ services:
       - db_paddock_compiler_url
       - fleet_enroll_secret
       - rabbitmq_compiler_password
-      - valkey_password
+      - valkey_compiler_password
       - approle_compiler_role_id
       - approle_compiler_secret_id
       - rustfs_bundles_compiler_access_key
       - rustfs_bundles_compiler_secret_key
-    networks: [cp]
+    networks: [data]
     depends_on:
       paddock-migrate:
         condition: service_completed_successfully
@@ -737,7 +878,8 @@ services:
       PADDOCK_AMQP_USER: worker
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_worker_password
       PADDOCK_VALKEY_ADDR: valkey:6379
-      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_VALKEY_USER: worker
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_worker_password
       # Signs device commands with command-signing (plan M4a decision 2).
       PADDOCK_OPENBAO_ADDR: http://openbao:8200
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_worker_role_id
@@ -750,6 +892,13 @@ services:
       PADDOCK_ESCROW_S3_BUCKET: paddock-escrow
       PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_worker_access_key
       PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_worker_secret_key
+      # Builds and signs the organizations' Paddock repositories below apt/*/dists/ of the bundles bucket (plan M13c
+      # decision 13); their system source names the repository on the bundles host.
+      PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
+      PADDOCK_BUNDLES_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
+      PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_worker_access_key
+      PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_worker_secret_key
       # Fleet settings, inventory sync and policies (plan M5a decisions 2, 6 and 8).
       PADDOCK_FLEET_URL: http://fleet:8080
       PADDOCK_FLEET_PUBLIC_URL: https://fleet.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
@@ -762,20 +911,28 @@ services:
       # ./paddock command of an installation whose .env predates the variable.
       PADDOCK_AUDIT_RETENTION_DAYS: ${PADDOCK_AUDIT_RETENTION_DAYS:-400}
       PADDOCK_AUDIT_INDEX_RETENTION_DAYS: ${PADDOCK_AUDIT_INDEX_RETENTION_DAYS:-}
+      # The ops listener on network data only, as the escrow-reader's (decisions-alpha10 A10-1).
+      PADDOCK_OPS_ADDR: worker-ops:9090
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
       - fleet_api_token
       - rustfs_escrow_worker_access_key
       - rustfs_escrow_worker_secret_key
+      - rustfs_bundles_worker_access_key
+      - rustfs_bundles_worker_secret_key
       - db_paddock_worker_url
       - db_paddock_platform_url
       - rabbitmq_worker_password
-      - valkey_password
+      - valkey_worker_password
       - approle_worker_role_id
       - approle_worker_secret_id
       - authentik_service_token
       - caddy_root_crt
-    networks: [cp]
+    # edge: Authentik's API and the certificate probe through Caddy's aliases, and Fleet's API (fleet:8080).
+    networks:
+      data:
+        aliases: [worker-ops]
+      edge: {}
     depends_on:
       paddock-migrate:
         condition: service_completed_successfully
@@ -812,7 +969,7 @@ services:
       - approle_notifier_secret_id
       - smtp_password
       - caddy_root_crt
-    networks: [cp, audit-index]
+    networks: [data, audit-index]
     depends_on:
       paddock-migrate:
         condition: service_completed_successfully
@@ -828,7 +985,13 @@ services:
     image: ${PROMETHEUS_IMAGE}
     profiles: [observability]
     restart: unless-stopped
+    # Runs as the image's nobody user (plan M12h §3.4, ADR 0051 decision 4). Writable: the data volume only.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
     pids_limit: 256
+    # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
+    mem_limit: ${PADDOCK_PROMETHEUS_MEM_LIMIT:-1g}
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -838,15 +1001,27 @@ services:
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - ./prometheus/scrape/controlplane.yml:/etc/prometheus/scrape/controlplane.yml:ro
       - prometheus-data:/prometheus
-    networks: [cp]
+    networks: [data]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 12
 
+# Trust zones (ADR 0051 decision 1, architecture §4.1): edge is what Caddy reaches (the roles it proxies to and the
+# roles that call the public names through its aliases); data holds the datastores and the Paddock roles, never Caddy,
+# Authentik or Fleet; authentik is Authentik's own database. A compromised edge container reaches no datastore.
 networks:
-  cp: {}
+  edge:
+    ipam:
+      config:
+        - subnet: ${PADDOCK_EDGE_SUBNET:-172.28.0.0/24}
+          # The dynamic pool, without Caddy's address: no other container (a one-off `compose run`, a load generator)
+          # can take it while Caddy is stopped and become the trusted proxy.
+          ip_range: ${PADDOCK_EDGE_IP_RANGE:-172.28.0.128/25}
+  data: {}
+  authentik:
+    internal: true
   audit-index: {}
   # api ↔ escrow-reader only (plan M4b.1 decision 5).
   escrow:
@@ -907,6 +1082,10 @@ secrets:
   approle_worker_secret_id: { file: ./.secrets/approle/paddock-worker/secret_id }
   rustfs_bundles_gateway_access_key: { file: ./.secrets/rustfs_bundles_gateway_access_key }
   rustfs_bundles_gateway_secret_key: { file: ./.secrets/rustfs_bundles_gateway_secret_key }
+  rustfs_bundles_api_access_key: { file: ./.secrets/rustfs_bundles_api_access_key }
+  rustfs_bundles_api_secret_key: { file: ./.secrets/rustfs_bundles_api_secret_key }
+  rustfs_bundles_worker_access_key: { file: ./.secrets/rustfs_bundles_worker_access_key }
+  rustfs_bundles_worker_secret_key: { file: ./.secrets/rustfs_bundles_worker_secret_key }
   rustfs_artifacts_api_access_key: { file: ./.secrets/rustfs_artifacts_api_access_key }
   rustfs_artifacts_api_secret_key: { file: ./.secrets/rustfs_artifacts_api_secret_key }
   rustfs_escrow_worker_access_key: { file: ./.secrets/rustfs_escrow_worker_access_key }
@@ -923,8 +1102,13 @@ secrets:
   authentik_bootstrap_token: { file: ./.secrets/authentik_bootstrap_token }
   authentik_service_token: { file: ./.secrets/authentik_service_token }
   oidc_client_secret: { file: ./.secrets/oidc_client_secret }
-  valkey_auth_conf: { file: ./.secrets/valkey/auth.conf }
-  valkey_password: { file: ./.secrets/valkey_password }
+  valkey_api_password: { file: ./.secrets/valkey_api_password }
+  valkey_gateway_password: { file: ./.secrets/valkey_gateway_password }
+  valkey_worker_password: { file: ./.secrets/valkey_worker_password }
+  valkey_compiler_password: { file: ./.secrets/valkey_compiler_password }
+  valkey_escrow_reader_password: { file: ./.secrets/valkey_escrow_reader_password }
+  valkey_revocation_issuer_password: { file: ./.secrets/valkey_revocation_issuer_password }
+  valkey_healthcheck_password: { file: ./.secrets/valkey_healthcheck_password }
   rustfs_root_user: { file: ./.secrets/rustfs_root_user }
   rustfs_root_password: { file: ./.secrets/rustfs_root_password }
   approle_api_role_id: { file: ./.secrets/approle/paddock-api/role_id }

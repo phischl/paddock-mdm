@@ -46,33 +46,14 @@ func (o OS) ReadFile(path string) ([]byte, fs.FileInfo, error) {
 	return data, info, nil
 }
 
-// WriteFileAtomic implements System.
+// WriteFileAtomic implements System. Missing parents are created 0755, owned by root:root when running as root (plan
+// M2b decision 10); a parent that fails the parent rule refuses the write with ErrParentNotTrusted.
 func (o OS) WriteFileAtomic(path string, data []byte, mode fs.FileMode, uid, gid int) error {
-	if err := o.mkdirs(filepath.Dir(path)); err != nil {
-		return err
-	}
 	return fsutil.WriteFileOwned(o.path(path), data, mode, 0o755, uid, gid)
 }
 
-// mkdirs creates missing parent directories 0755, owned by root:root when running as root.
-func (o OS) mkdirs(dir string) error {
-	if _, err := os.Stat(o.path(dir)); err == nil || dir == "/" {
-		return nil
-	}
-	if err := o.mkdirs(filepath.Dir(dir)); err != nil {
-		return err
-	}
-	if err := os.Mkdir(o.path(dir), 0o755); err != nil && !errors.Is(err, fs.ErrExist) { //nolint:gosec // plan M2b decision 10: parents 0755 root:root
-		return err
-	}
-	if os.Geteuid() == 0 {
-		return os.Chown(o.path(dir), 0, 0)
-	}
-	return nil
-}
-
 // Remove implements System.
-func (o OS) Remove(path string) error { return os.Remove(o.path(path)) }
+func (o OS) Remove(path string) error { return fsutil.Remove(o.path(path)) }
 
 // LookupUser implements System from /etc/passwd, never through NSS: Himmelblau's NSS module answers for any user
 // name with a synthetic entry (plan M5a step 0a), and os/user would ask NSS in a cgo build.
@@ -214,7 +195,7 @@ func (o OS) AptGet(ctx context.Context, args ...string) (string, int, error) {
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return packageCommand(ctx, PackageTimeout, "apt-get", args...)
+	return packageCommand(ctx, PackageTimeout, nil, "apt-get", args...)
 }
 
 // AptGetWithin runs apt-get like AptGet with another timeout (`paddockd updates run`, plan M5b decision 6).
@@ -222,7 +203,7 @@ func (o OS) AptGetWithin(ctx context.Context, timeout time.Duration, args ...str
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return packageCommand(ctx, timeout, "apt-get", args...)
+	return packageCommand(ctx, timeout, nil, "apt-get", args...)
 }
 
 // DpkgWithin runs dpkg like Dpkg with another timeout (`paddockd updates run`).
@@ -230,7 +211,7 @@ func (o OS) DpkgWithin(ctx context.Context, timeout time.Duration, args ...strin
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return packageCommand(ctx, timeout, "dpkg", args...)
+	return packageCommand(ctx, timeout, nil, "dpkg", args...)
 }
 
 // AptCache implements System.
@@ -254,13 +235,29 @@ func (o OS) Dpkg(ctx context.Context, args ...string) (string, int, error) {
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return packageCommand(ctx, PackageTimeout, "dpkg", args...)
+	return packageCommand(ctx, PackageTimeout, nil, "dpkg", args...)
+}
+
+// Flatpak implements System.
+func (o OS) Flatpak(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return packageCommand(ctx, PackageTimeout, nil, "flatpak", args...)
+}
+
+// SystemdRun implements System.
+func (o OS) SystemdRun(ctx context.Context, stdin []byte, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return packageCommand(ctx, PackageTimeout, stdin, "systemd-run", args...)
 }
 
 // packageCommand runs a package tool non-interactively in a process group of its own and kills the whole group at
 // timeout: maintainer scripts must not outlive a run the agent gave up on. A timeout is an error that wraps
 // context.DeadlineExceeded.
-func packageCommand(ctx context.Context, timeout time.Duration, name string, args ...string) (string, int, error) {
+func packageCommand(ctx context.Context, timeout time.Duration, stdin []byte, name string, args ...string) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed package tools and arguments
@@ -273,6 +270,9 @@ func packageCommand(ctx context.Context, timeout time.Duration, name string, arg
 	cmd.WaitDelay = 10 * time.Second // children that inherited the output pipes are gone with the group
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		return out.String(), -1, fmt.Errorf("%s: %w", name, ctx.Err())
@@ -382,10 +382,7 @@ func (o OS) Chpasswd(ctx context.Context, input []byte) (string, int, error) {
 
 // Rename implements System.
 func (o OS) Rename(oldPath, newPath string) error {
-	if err := os.Rename(o.path(oldPath), o.path(newPath)); err != nil {
-		return err
-	}
-	return fsutil.SyncDir(o.path(filepath.Dir(newPath)))
+	return fsutil.Rename(o.path(oldPath), o.path(newPath))
 }
 
 // ReadDir implements System.

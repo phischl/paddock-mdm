@@ -22,6 +22,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // DeviceReports turn heartbeats and events from devices into status, quarantine and audit events (worker, plan
@@ -403,6 +404,7 @@ var eventCodes = map[string]audit.Code{
 
 	protocol.EventLoginApplied:               audit.CodeDeviceLoginApplied,
 	protocol.EventLoginApplyFailed:           audit.CodeDeviceLoginApplyFailed,
+	protocol.EventLoginNSSShield:             audit.CodeDeviceLoginNSSShield,
 	protocol.EventUserLockApplied:            audit.CodeDeviceUserLockApplied,
 	protocol.EventLoginsSuspensionApplied:    audit.CodeDeviceLoginsSuspensionApplied,
 	protocol.EventSudoApplyFailed:            audit.CodeDeviceSudoApplyFailed,
@@ -439,6 +441,11 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventSoftwareReinstalled: audit.CodeDeviceSoftwareReinstalled,
 	protocol.EventSoftwareRemoved:     audit.CodeDeviceSoftwareRemoved,
 	protocol.EventSoftwareApplyFailed: audit.CodeDeviceSoftwareApplyFailed,
+	protocol.EventSoftwareSelfService: audit.CodeDeviceSoftwareSelfService,
+	// The worker opens the request in the event's claim (plan M13c decision 9, softwareRequestEntry).
+	protocol.EventSoftwareRequest: audit.CodeDeviceSoftwareRequested,
+	// The worker closes the open request in the event's claim (PDK-811b, softwareRequestEntry).
+	protocol.EventSoftwareRequestWithdrawn: audit.CodeDeviceSoftwareRequestWithdrawn,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -447,36 +454,89 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 	if ev.Type == protocol.EventSessionLogin {
 		return true, d.recordSessionLogin(ctx, deviceID, ev)
 	}
-	entry, ok := eventEntry(deviceID, ev, d.now())
+	now := d.now()
+	entry, ok := eventEntry(deviceID, ev, now)
+	entry = d.softwareRequestEntry(entry, deviceID, ev, now)
 	if !ok {
 		return false, nil // the gateway admits only known types; anything else is ignored
 	}
-	return d.runner.RecordOnce(ctx, entry.Spec, entry.Claim, entry.After)
+	return d.runner.recordOnceEntry(ctx, entry)
 }
 
 // RecordEvents is RecordEvent for the events of one ingest message, session logins included, in one transaction
 // (ActionRunner.RecordOnceBatch); receivedAt is when the gateway received the message (zero: unknown, now is used).
-// An error means that some event could not be recorded; the others are, and a redelivery skips them by
-// (device_id, event_seq).
+// An event of a type outside the closed set, from a newer agent, only claims its number so that gap detection does not
+// report it as lost (PDK-995). An error means that some event could not be recorded; the others are, and a redelivery
+// skips them by (device_id, event_seq).
 func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, receivedAt time.Time, events []protocol.Event) error {
+	_, err := d.RecordEventBatch(ctx, deviceID, receivedAt, events)
+	return err
+}
+
+// RecordEventBatch is RecordEvents that also lists the types, cleaned for a log line, of the unknown events whose
+// numbers this call claimed, so the caller reports each one once even when the message is redelivered.
+func (d *DeviceReports) RecordEventBatch(ctx context.Context, deviceID uuid.UUID, receivedAt time.Time, events []protocol.Event) (unknown []string, err error) {
 	if receivedAt.IsZero() {
 		receivedAt = d.now()
 	}
 	entries := make([]OnceEntry, 0, len(events))
+	var claims []*unknownClaim
 	for _, ev := range events {
 		entry, ok := eventEntry(deviceID, ev, receivedAt)
+		entry = d.softwareRequestEntry(entry, deviceID, ev, receivedAt)
 		if ev.Type == protocol.EventSessionLogin {
 			entry, ok = sessionLoginEntry(deviceID, ev, receivedAt, d.now()), true
+		}
+		if !slices.Contains(protocol.EventTypes, ev.Type) {
+			c := &unknownClaim{eventType: ev.Type}
+			claims = append(claims, c)
+			entry, ok = unknownEventEntry(deviceID, ev, receivedAt, c), true
 		}
 		if ok {
 			entries = append(entries, entry)
 		}
 	}
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
-	_, err := d.runner.RecordOnceBatch(ctx, entries)
-	return err
+	_, err = d.runner.RecordOnceBatch(ctx, entries)
+	for _, c := range claims {
+		if c.fresh {
+			unknown = append(unknown, cleanEventType(c.eventType))
+		}
+	}
+	return unknown, err
+}
+
+// unknownClaim is whether the claim of an unknown event's number was new in its last (committed or fallback) attempt.
+type unknownClaim struct {
+	eventType string
+	fresh     bool
+}
+
+// unknownEventEntry is the unaudited batch entry of an event of an unknown type: the claim of its (device, event_seq)
+// only, because the closed audit registry has no code for a type this server does not know.
+func unknownEventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time, c *unknownClaim) OnceEntry {
+	return OnceEntry{Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+		c.fresh = false
+		n, err := q.InsertDeviceEventSeen(ctx, pgstore.InsertDeviceEventSeenParams{
+			DeviceID: deviceID, EventSeq: ev.EventSeq, OrganizationID: mustOrg(ctx), ReceivedAt: &receivedAt,
+		})
+		if err != nil {
+			return false, err
+		}
+		c.fresh = n == 1
+		return false, nil
+	}}
+}
+
+// cleanEventType bounds a device-chosen event type for a log line.
+func cleanEventType(t string) string {
+	t = stripControls(t)
+	if len(t) > maxEventTypeLog {
+		t = strings.ToValidUTF8(t[:maxEventTypeLog], "")
+	}
+	return t
 }
 
 // eventEntry is the audited action of a device event and the claim of its (device, event_seq), received by the gateway
@@ -505,7 +565,7 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) (On
 		Target: &audit.Target{Type: "device", ID: deviceID.String()},
 		Params: params,
 	}
-	return OnceEntry{Spec: spec, After: tamperFindingAfter(deviceID, code, ev.Data, receivedAt), Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+	return OnceEntry{Spec: spec, Refusal: selfServiceRefusal(ev.Type, params), After: tamperFindingAfter(deviceID, code, ev.Data, receivedAt), Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
 		org, err := orgOf(ctx)
 		if err != nil {
 			return false, err
@@ -557,6 +617,22 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event, receivedAt time.Time) (On
 		}
 		return true, err
 	}}, true
+}
+
+// selfServiceRefusal is the audit outcome of a software.self_service event (plan M13b decision 18): nil for a succeeded
+// operation, otherwise a failure with the device's outcome as error code; an outcome that is missing or unknown is a
+// failure too. Every other type is nil.
+func selfServiceRefusal(eventType string, params map[string]any) error {
+	if eventType != protocol.EventSoftwareSelfService {
+		return nil
+	}
+	switch params["outcome"] {
+	case protocol.SelfServiceSucceeded:
+		return nil
+	case protocol.SelfServiceRefused:
+		return problem.SelfServiceRefused
+	}
+	return problem.SelfServiceFailed
 }
 
 // droppedRange is the range of event numbers an agent.events_dropped event with number eventSeq declares (plan M8b
@@ -748,7 +824,9 @@ func updateOutcome(eventType string, params map[string]any) (string, bool) {
 // Bounds of the device-reported values copied into audit params.
 const (
 	maxParamString = 256
-	maxParamList   = 50
+	// maxEventTypeLog bounds the unknown event type in a log line; known types are at most 40 bytes.
+	maxEventTypeLog = 64
+	maxParamList    = 50
 )
 
 // eventParams copies the documented fields of an event (audit.deviceEventParams) with bounded sizes; other data a
@@ -768,7 +846,8 @@ func eventParams(ev protocol.Event) map[string]any {
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
 		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit",
 		"kind", "started_at", "finished_at", "result", "error", "volume", "command_id", "mode", "local_admin", "tpm",
-		"conversion_id", "layout", "init_result", "by", "state", "package", "intent", "catalog_entry_id", "source"} {
+		"conversion_id", "layout", "init_result", "by", "state", "package", "intent", "catalog_entry_id", "source",
+		"user", "entry_id", "flatpak_ref", "scope", "action"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}

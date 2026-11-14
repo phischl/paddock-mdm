@@ -12,9 +12,11 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/dsse"
 )
 
-// secretBundleFields are the bundle fields that never leave the device in clear: the Fleet enroll secret and the
-// content of a managed file, which an administrator may fill with anything.
-var secretBundleFields = []string{"inventory.enroll_secret", "resources.spec:file.content"}
+// secretBundleFields are the bundle fields that never leave the device in clear: the Fleet enroll secret, the read
+// credential of the organization's Paddock repository and the content of a managed file, which an administrator may
+// fill with anything.
+var secretBundleFields = []string{"inventory.enroll_secret", "software.repository.password", "resources.spec:file.content",
+	"software.packages.denied.reason"}
 
 // resourceSpecs are the spec types of the resource types the server puts into bundle.Resources.
 var resourceSpecs = map[string]reflect.Type{
@@ -135,6 +137,24 @@ func TestRedactBundleKnownFields(t *testing.T) {
 	}
 	if strings.Contains(got, `\u003c`) || !strings.Contains(got, `"`+Redacted+`"`) {
 		t.Fatalf("redaction marker is not literal:\n%s", got)
+	}
+}
+
+// TestRedactBundleRepositoryPassword: the organization's repository read credential in a real bundle does not appear
+// in the redacted rendering, while the host and the user name stay.
+func TestRedactBundleRepositoryPassword(t *testing.T) {
+	const password = "planted-repo-password-aaaa"
+	payload, err := json.Marshal(bundle.Bundle{SchemaVersion: 2, DeviceID: "dev-1", Software: &bundle.SoftwareSpec{
+		Repository: &bundle.SoftwareRepositoryAuth{Host: "bundles.example/apt/acme/", Username: "paddock", Password: password}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(redactBundle(envelope(t, payload)))
+	if strings.Contains(got, password) {
+		t.Fatalf("repository password survives:\n%s", got)
+	}
+	if !strings.Contains(got, "bundles.example/apt/acme/") || !strings.Contains(got, `"paddock"`) {
+		t.Fatalf("repository host or user name is lost:\n%s", got)
 	}
 }
 

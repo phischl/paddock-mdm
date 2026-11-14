@@ -1,6 +1,6 @@
 {
 	# Caddy listens on the public port inside the container too, so containers reach Authentik and the
-	# portal through the same URLs as the browser (network aliases on network cp).
+	# portal through the same URLs as the browser (network aliases on network edge).
 	https_port {$PADDOCK_HTTPS_PORT}
 	auto_https disable_redirects
 	admin 127.0.0.1:2019
@@ -11,6 +11,7 @@
 import /etc/caddy/guards.caddy
 
 admin.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	tls internal
 	import admin_site
 }
@@ -18,20 +19,24 @@ admin.{$PADDOCK_DOMAIN} {
 # The untrusted listener of the acceptance gates (plan M7a decision 9): the servers block above is bound to the main
 # listener only, so here every client address header is ignored and the peer is the client.
 https://admin.{$PADDOCK_DOMAIN}:{$PADDOCK_HTTPS_UNTRUSTED_PORT} {
+	import hardening_headers
 	tls internal
 	import admin_site
 }
 
 auth.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	tls internal
 	import authentik_site
 }
 
 device.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	tls internal
-	import body_limit 2MiB 2097152
+	import body_limit 1MiB 1048576
 	reverse_proxy paddock-gateway:8081 {
 		header_up X-Paddock-Client-IP {client_ip}
+		import close_unread_body
 	}
 }
 
@@ -39,6 +44,7 @@ device.{$PADDOCK_DOMAIN} {
 # Agent packages are public (plan M4b decision 1): /packages/… maps to the anonymously readable packages/ prefix of
 # paddock-agent-artifacts.
 bundles.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	tls internal
 	@packages {
 		method GET HEAD
@@ -56,6 +62,19 @@ bundles.{$PADDOCK_DOMAIN} {
 	handle @read {
 		import body_limit 1MiB 1048576
 		reverse_proxy rustfs:9000
+	}
+	# The Paddock repositories of the organizations (plan M13c decision 14, ADR 0050): the api checks the basic-auth
+	# credential and redirects apt to a presigned GET of paddock-bundles (served by @read above).
+	@apt {
+		method GET HEAD
+		path /apt/*
+	}
+	handle @apt {
+		import body_limit 1MiB 1048576
+		reverse_proxy paddock-api:8080 {
+			header_up X-Paddock-Client-IP {client_ip}
+			import close_unread_body
+		}
 	}
 	# Devices upload escrowed LUKS headers with presigned PUTs (plan M4b decision 10); the signature fixes the key.
 	@escrow {
@@ -76,6 +95,7 @@ bundles.{$PADDOCK_DOMAIN} {
 # osquery calls as `/api/v1/osquery/*`) and of fleetd (`/api/fleet/orbit/*`) are published. Fleet's UI, admin API and
 # file carving (`…/osquery/carve/*`, which Paddock never uses) answer 404 at the edge.
 fleet.{$PADDOCK_DOMAIN} {
+	import hardening_headers
 	tls internal
 	@carve path /api/osquery/carve/* /api/v1/osquery/carve/*
 	handle @carve {

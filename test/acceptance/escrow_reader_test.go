@@ -69,16 +69,18 @@ func TestEscrowReaderIsolation(t *testing.T) {
 		}
 	})
 
-	t.Run("not reachable from the control-plane network", func(t *testing.T) {
+	t.Run("not reachable from the control-plane networks", func(t *testing.T) {
 		image, err := stack.Image("GO_BUILD_IMAGE")
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The service name resolves on cp, but the escrow-reader listens on its escrow address only.
-		out, err := stack.Docker(ctx, nil, "run", "--rm", "--network", stack.Network("cp"), image, "sh", "-c",
-			"curl -sS -m 5 -o /dev/null -X POST http://paddock-escrow-reader:8080/internal/v1/decrypt; echo exit=$?")
-		if err != nil || !strings.Contains(out, "exit=7") {
-			t.Fatalf("from network cp: %q %v, want connection refused (curl exit 7)", out, err)
+		// The service name resolves on data and edge, but the escrow-reader listens on its escrow address only.
+		for _, network := range []string{"data", "edge"} {
+			out, err := stack.Docker(ctx, nil, "run", "--rm", "--network", stack.Network(network), image, "sh", "-c",
+				"curl -sS -m 5 -o /dev/null -X POST http://paddock-escrow-reader:8080/internal/v1/decrypt; echo exit=$?")
+			if err != nil || !strings.Contains(out, "exit=7") {
+				t.Fatalf("from network %s: %q %v, want connection refused (curl exit 7)", network, out, err)
+			}
 		}
 	})
 
@@ -163,17 +165,11 @@ func callEscrowReader(t *testing.T, secret string, req map[string]any) (int, []b
 	return status, []byte(rest)
 }
 
-// latestStepUpToken returns the newest step-up ID token of alice that the api keeps in Valkey (stepup:<jti>).
+// latestStepUpToken returns the newest step-up ID token of alice that the api keeps in Valkey (stepup:<jti>). It
+// enumerates keys (SCAN), which only the development and CI user acceptance may (plan M12h §14.6.4).
 func latestStepUpToken(t *testing.T) string {
 	t.Helper()
-	valkey := func(args string) string {
-		out, err := stack.Compose(testContext(t, time.Minute), nil, "exec", "-T", "valkey", "sh", "-c",
-			`REDISCLI_AUTH="$(cat /run/secrets/valkey_password)" valkey-cli --no-auth-warning `+args)
-		if err != nil {
-			t.Fatalf("valkey-cli: %v", err)
-		}
-		return out
-	}
+	valkey := func(args string) string { return valkeyCLI(t, "acceptance", args) }
 	var newest string
 	var newestAt time.Time
 	for _, key := range strings.Fields(valkey(`--scan --pattern 'stepup:*'`)) {

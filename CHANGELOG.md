@@ -9,6 +9,423 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Entries of merged changes that are not released yet are in `changelog.d/`.
 
+## [0.1.0-alpha.10] - 2026-11-13
+
+An installation of 0.1.0-alpha.9 upgrades with `./paddock upgrade <old dir>` and goes back with
+`./paddock rollback <old dir>` (ADR 0047; `docs/operations/upgrade.md`, "0.1.0-alpha.10, from 0.1.0-alpha.9").
+Before the upgrade, remove an explicit `PADDOCK_TRUSTED_PROXY_CIDRS` or `PADDOCK_INTERNAL_CIDRS` from `.env`
+(`./paddock upgrade-check` names them; a lab sets them again with `PADDOCK_EDGE_TRUSTED_PROXIES`). Run the upgrade
+with `BAO_TOKEN` set, so that it creates the new Transit keys of the organization repositories and the changed
+policies, then `./paddock bootstrap buckets` and `./paddock up` once more. The containers move to networks by trust
+zone and Valkey gets one user per role; `./paddock up` creates the new secrets. No stateful image changes; Fleet
+moves to v4.94.1 and Caddy to 2.11.9. Upgrade the server first, then roll out this release's agent; agents of
+0.1.0-alpha.8 and 0.1.0-alpha.9 keep working in the meantime. Installations of 0.1.0-alpha.8 upgrade to 0.1.0-alpha.9 first.
+
+Self-service (plan M13b, ADR 0049): the desktop app *Paddock Self-Service* lets users install, update and remove the
+applications their organization offers them, including Flatpak applications and applications assigned to users and
+groups. Software waves, approvals and an own repository (plan M13c): software changes roll out in waves and maintenance
+windows, users request applications that need an administrator's approval, and organizations without an APT
+repository upload their packages to a repository that Paddock builds and signs for them (ADR 0050). Hardening (plan M12h, ADR
+0051): networks by trust zone, Valkey users per role, request rate limits, edge body limits and security headers, and
+every container with only the capabilities it needs and a memory limit.
+
+Agents: the agent changes in this release (self-service, approvals and withdrawals, maintenance windows, Flatpak); the
+supervisor does not. Every release now also publishes the self-service app as the signed package
+`paddock-self-service_<version>_all.deb`, which the platform's agent releases carry and the GitHub import requires from
+this release on. Every package of an agent release is bound to its release by its signature's trusted comment
+`paddock-agent version=<release version> arch=<arch>`; this now includes fleetd and `paddock-revoke`. The holders of
+the revocation release key therefore sign `paddock-revoke` offline with
+`-t "paddock-agent version=<release version> arch=<arch>"`, and fleetd is signed with the release's comment, not the
+fleetd version's (`docs/operations/agent-releases.md`, *Signing in the release workflow*). On devices with directory
+logins, the agent pauses the login service while it installs or removes packages, so that packages which create a
+system account install: new directory logins and screen unlocks wait during an installation, for at most 10 minutes,
+while running sessions continue (residual risk RR-133, `docs/operations/device-login.md`). `paddock-revoke` changes
+(it signs out only real user entries); revocation (Lock, Destroy, dead man's switch) stays disabled behind `PADDOCK_REVOCATION_ENABLED`.
+
+Schema: migrations 00113–00125 (control-plane database; new tables, columns, constraints, policies and grants, 00115 fills its new column); audit unchanged.
+Upgrade: from 0.1.0-alpha.9: steps: remove an explicit PADDOCK_TRUSTED_PROXY_CIDRS or PADDOCK_INTERNAL_CIDRS from .env (a lab sets them again), BAO_TOKEN for ./paddock upgrade, then ./paddock bootstrap buckets and ./paddock up
+Agents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10
+
+### Added
+
+- Software catalog: applications can be assigned to individual users and user groups, offered with the new intent
+  `available` for users to install themselves, and come from Flatpak remotes (a new source kind that needs a step-up
+  like every source). The admin API lists the applications that target a user directly or through a group. Devices
+  receive these assignments with a later update of this release.
+- Software: device policies now carry assignments to users and user groups. They reach the devices their users own;
+  an application offered with `available` names who may install it — everyone for organization and device-group
+  assignments, otherwise the owning users (at most 200 per application; a larger audience is cut and logged as
+  `audience_truncated`). Changing a device's owners updates its policy. Flatpak applications that are required or
+  available are delivered with their remote, and devices that need them also get the `flatpak` package; a Flatpak
+  forbid or uninstall never installs Flatpak. Agents older than 0.1.0-alpha.10 receive neither offered applications
+  nor Flatpak, and keep enforcing their required, forbidden and removed packages; a device whose agent is upgraded
+  past that version, or rolled back below it, gets an updated policy automatically.
+- Software: the agent now manages Flatpak applications. It adds an organization's Flatpak source as a system remote
+  named `paddock-<source>` with the source's pinned key (a key that does not match its fingerprint is never written),
+  installs required applications for the whole system or, for user-scope applications, in the session of each
+  targeted user who is signed in (a targeted user without a session gets them at the next sign-in; they are never
+  installed system-wide instead, and other users of the device get nothing), uninstalls forbidden and removed
+  applications and blocks forbidden and held ones from installing and updating. A user-scope application assigned to
+  the whole device acts system-wide: forbidding or removing it leaves copies users installed for themselves alone.
+  Paddock's remotes are protected: a changed, disabled or unverified Paddock remote is restored and a
+  `paddock-*` remote Paddock did not add is removed, both reported as tampering; other remotes are not touched.
+  Without the `flatpak` package, required applications report `flatpak_missing`. Removing Paddock from a device
+  removes its system remotes and keeps the installed applications.
+- Software: the agent serves the self-service channel on `/run/paddock/selfservice.sock` for the coming desktop app.
+  Every local user can connect; the agent identifies the caller by the operating system's peer credentials, never by
+  anything the caller sends. A user sees the applications offered to everyone and to them by name, plus the
+  organization's managed applications as read-only, and nothing offered only to other users. A user may install an
+  offered application and remove or update one that self-service installed; managed applications cannot be changed.
+  Operations run one at a time through the same safety checks as the policy (an installation that would remove
+  another package is refused), at most five queued per user and 60 requests a minute; each one is reported to the
+  server as `software.self_service` with the user name and told to the user in their desktop session (at most five
+  notices an hour). An application the user removed by hand is not reinstalled, and policy always wins over a
+  self-service installation. Until a policy has been applied the channel answers `no_bundle`.
+- Software: the desktop app *Paddock Self-Service* lists the applications the organization offers the user, installs,
+  updates and removes them with one click, follows each operation to its end and says why a managed application cannot
+  be changed. It shows the organization's transparency notice once, tells the user when Paddock is not running, and
+  speaks English and German. The app runs as the user, talks only to the agent on the device and holds no credential.
+  `make deb` builds it as `paddock-self-service_<version>_all.deb`; it needs only Ubuntu's own packages (24.04 and
+  26.04). Organizations offer it as a required catalog entry (`docs/operations/software.md`, *Self-service app*).
+- Software: every self-service operation a device reports is recorded in the audit log as
+  `device.software_self_service`, with the user who asked for it, the application, the action, the scope, the outcome,
+  the reason and the version. A succeeded operation is recorded as a success; a failed or refused one as a failure with
+  the error code `self_service_failed` or `self_service_refused`.
+- Software: the software status keeps one row per application and scope, so an application installed for the system
+  and for a user of the device shows both. The device's managed software and the devices of a catalog entry show the
+  scope and filter by it (`scope=system|user`), and applications offered for self-service (`available`) appear in both
+  lists once the device reports them.
+- Portal, software: an assignment can now target every device, a device group, a single user or a user group, with
+  searchable pickers for users and groups, and the intent *Available* offers an application for self-service. Package
+  sources can be Flatpak remotes (one https URL and the remote's key), and catalog entries of a Flatpak source name
+  Flatpak application IDs with their scope (system or user). The devices of a catalog entry and a device's managed
+  software show the scope of each row and filter by it. A catalog entry and a device's managed software list the
+  compile warnings of their devices (too many users offered or targeted, Flatpak forbidden on the device), localized.
+  A user's page lists the software assigned to them directly or through a user group.
+- Software: software sources, the software catalog and software assignments are part of the declarative
+  configuration (`GET`/`PUT /api/v1/config`, `paddockctl apply -f`). A change to software sources needs an
+  administrator with a fresh step-up, so an API token's apply that changes them is refused and the dry run names the
+  section under `requires_step_up`. Every change to software is recorded as a change set and can be reverted. With
+  staged rollouts enabled, a change to software assignments rolls out in waves and stops itself when devices of the
+  wave report the application as failed; catalog entries and sources still apply at once.
+- Software: a device group can have a maintenance window (weekdays, start time, duration and timezone; through the
+  API or the device group's item in the declarative configuration). Its devices install and remove the software of
+  their policy only inside the union of the windows of their groups and report `pending`, `outside_window` until
+  then; a user's own self-service installs never wait. An assignment marked `urgent`, with a reason and a fresh
+  step-up, is applied outside the windows too, for urgent security fixes.
+- Software: a catalog entry can require approval. Users of an available application then ask for it on their device,
+  and an organization administrator approves or denies the request with a reason under
+  `/api/v1/software-requests`. An approval reaches the device with its next bundle. A request with no decision expires
+  after 30 days. A device can only request an application that is offered to it and to the requesting user; open and
+  approved requests expire once the entry no longer requires approval, its approval setting changes, or no available
+  assignment offers it to that device and user any longer. An application that requires approval reaches no agent
+  before the agent release with the approval flow, so no device can install it without approval. Open requests appear
+  in the attention list as `software_requests_open`. A new request emits the notification code
+  `software_request.opened`; it is not in the security preset. The declarative `software_catalog` section carries
+  `approval`. The user's request and the approval flow on the device follow with the agent and the portal.
+- Self-service: for an application that requires approval, the desktop app shows *Request* instead of *Install*. The
+  user can add an optional justification of up to 500 characters and withdraw a pending request. The app shows the
+  request as *Requested* until a decision arrives with the device's next bundle: an approved user can then install
+  the application, and a denied user sees *Denied* with the administrator's reason, shown only to that user. A
+  request without a decision ends on the device after 30 days, as on the server. A user can send at most 10 requests
+  an hour. Approval-required applications reach devices only once the server enables the approval gate for this
+  agent release. The server stores the justification and delivers denials in a follow-up change.
+- Software: organizations without an APT repository of their own upload their `.deb` packages to Paddock
+  (`POST /api/v1/software-packages`, `org_admin` with a step-up, at most 256 MiB, audited with the file's SHA-256 as
+  `software_package.uploaded`) and assign them like any other package through the system source `paddock`. The api
+  checks the archive and the control file and never runs anything from the package; a control archive in xz is refused
+  with 415 `unsupported_compression` (build with `dpkg-deb -Zgzip` or `-Zzstd`). Each organization has one repository
+  at `https://bundles.<domain>/apt/<slug>/`, read by apt with a per-organization credential (HTTP basic
+  authentication) that the devices receive in their bundles and keep in the protected file
+  `/etc/apt/auth.conf.d/paddock-repo.conf`; `POST /api/v1/software-repository/rotate-credential` replaces it with a
+  24-hour overlap. Uploads wait until the repository's signing key exists (409 `repository_not_ready`). Upgrade: run
+  `./paddock upgrade` with `BAO_TOKEN` set (the new Transit key `software-repo-credential` and its policies), then
+  `./paddock bootstrap buckets` (the api's new bundles credential `rustfs_bundles_api_*`, which `./paddock secrets`
+  creates) and `./paddock up`. The edge accepts package uploads of up to 256.5 MiB (multipart framing included).
+- Software: the worker now builds and signs each organization's Paddock repository within a minute of an upload or a
+  delete. The first build generates the organization's Ed25519 OpenPGP signing key `Paddock <slug>` and creates the
+  system source `paddock` with it, after which uploads are accepted. Every build publishes `Packages`, `Packages.gz`,
+  `Release`, `Release.gpg` and `InRelease` (written last, so a failed build leaves the previous one readable) and is
+  audited as `software_repository.built`; a failed build is shown as `last_error` and audited once per distinct error
+  as `software_repository.build_failed`. `POST /api/v1/software-repository/rotate-key` (`org_admin`, step-up, audited
+  as `software_repository.key_rotated`) replaces the signing key: the repository is signed with the new key before the
+  devices receive it, and for 30 days it is signed with the previous key as well, so devices that have not received
+  the new key keep updating. The lists are also published by hash, so a build that fails halfway leaves the previous
+  one readable. The private key is kept encrypted with the
+  new Transit key `software-repo-wrap`, which only the worker can use. New Go dependency
+  `github.com/ProtonMail/go-crypto` (BSD-3-Clause). Upgrade: run `./paddock upgrade` with `BAO_TOKEN` set (the Transit
+  key `software-repo-wrap` and the worker's policy), then `./paddock secrets` and `./paddock bootstrap buckets` (the
+  worker's new bundles credential `rustfs_bundles_worker_*`) and `./paddock up`.
+- Portal: a *Software requests* page lists the users' requests for applications that need approval; an organization
+  administrator approves a request, optionally with a reason, or denies it with a reason the user sees. A catalog
+  entry has a *Users need approval* switch, a device group page shows and edits its maintenance window, an
+  assignment can be marked urgent with a reason (confirmed by a fresh sign-in), and the assignment list marks urgent
+  assignments and those an open rollout stages.
+- Software: when the compiler has to shorten or drop something an administrator assigned, it now records a warning
+  for the device and the assignment instead of only logging it. The warnings of each device's latest policy are
+  available through the admin API (`GET /api/v1/compile-warnings`, filterable by device, assignment, catalog entry and
+  code). Two warnings exist so far: `audience_truncated` (an offered application names more than 200 users) and
+  `flatpak_forbidden`. An organization that forbids or uninstalls the `flatpak` package now gets no Flatpak
+  applications, remotes or runtime on the affected devices; the rest of their software policy is delivered as before.
+- Software: a Flatpak application installed per user, forbidden or removed for specific users or user groups now
+  reaches only those users on a shared device. The policy names them for each application (at most 200 per
+  application; a longer list records the warning `flatpak_users_truncated`). An application assigned to the whole
+  organization or a device group applies system-wide, never to every user individually. Devices with agents before
+  0.1.0-alpha.10 keep receiving no Flatpak applications.
+- Software: the self-service app on a device shows the icons uploaded for catalog entries. Devices fetch each icon
+  from the same object storage as their configuration, through a short-lived link, and only for the applications
+  their own configuration names; an entry without an icon, or an icon that cannot be fetched, keeps the category
+  symbol.
+- Every release publishes the self-service app package `paddock-self-service_<version>_all.deb`, signed with the agent
+  release key like the agent packages. The platform's agent releases carry it (package `paddock-self-service`,
+  architecture `all`), `make agent-release` uploads it, and the GitHub import requires it from 0.1.0-alpha.10 on, so
+  operators take a verified package from `bundles.<domain>/packages/<version>/` instead of building it themselves.
+- `./paddock check` warns about leftover `.bundle-seq.replaced.*` directories that an upgrade again after a rollback
+  keeps in the bundle directory (item `upgrade: no leftover bundle-seq directories`, control plane and lab with
+  backups). The warning lists each path and the `sudo rm -rf` command; it never fails the check.
+- Software approvals: the server now stores the user's justification with a software request, and the portal's
+  *Software requests* page shows it as plain text. A denial now reaches the user's device with the administrator's
+  reason and stays there for 24 hours, the time in which the user cannot ask again. Approval-required applications
+  now reach agents from 0.1.0-alpha.10 on; older agents still never receive them. The reason of an approval or a
+  denial may no longer contain tab characters.
+- Software requests: when a user withdraws a pending request in the desktop app, the server now closes the request as
+  *Withdrawn*, so administrators no longer see it as waiting and cannot approve a request the user no longer wants.
+  The audit log records the withdrawal as `device.software_request_withdrawn` (syslog MSGID
+  `device.sw_request_withdrawn`). Agents report a withdrawal only to a server that announces support for it in the
+  device's bundle; with an older server the withdrawal stays on the device as before.
+
+### Changed
+
+- The worker's identity rounds send fewer requests to the identity provider: the administrator-accounts round reads an
+  organization's three role groups in one listing instead of three, and the reconcile round reads all per-device login
+  groups of an organization in one listing instead of two to three requests per device. Large installations leave
+  more of the identity provider's capacity to portal and device logins.
+- Software: an application in the software catalog that still has assignments can no longer be removed, in the portal,
+  through the API or in a declarative document. The refusal names the assignments; remove them first (with staged
+  rollouts enabled, that removal rolls out in waves), then remove the application, which changes nothing on the
+  devices.
+- Configuration rollouts: a wave advances only once its devices have applied the change, and its minimum duration now
+  counts from the first device of the wave that applied. A wave whose devices are all offline therefore no longer
+  advances on time. Devices that wait for their maintenance window hold the wave (they appear as
+  `waiting_for_window` in the rollout's device list) until the share set by the new rollout setting
+  `wave_success_threshold_percent` (default 90) has applied. A wave without progress for `stall_warning_hours`
+  (default 24) is reported once with the new audit event `config_rollout.stalled`.
+- Configuration rollouts: resuming a halted rollout restarts the current wave's minimum duration, and only reports
+  received after the resume count toward `wave_success_threshold_percent`. A device of any wave whose failure the
+  resume discarded, and after a resume every device that fails again, holds the rollout until it has applied
+  successfully, and a wave whose new devices have only failed never advances by itself. The rollout counts gain
+  `waiting` and `awaiting_retry`, and the rollout's device list gains the field and filter `awaiting_retry`. The stall
+  warning `config_rollout.stalled` now also fires while devices await a retry; its params `waiting` and
+  `awaiting_retry` replace `wave_waiting`.
+- Documentation: the software guide explains how changes to software assignments roll out in waves, when a catalog
+  entry can be deleted, and how software requests are approved, denied and expire; the privacy notice lists what a
+  software request records.
+- Updated the pinned third-party images: Fleet and fleetctl 4.94.1, Fleet vulnerability data 202611090045, Caddy 2.11.9,
+  Prometheus 3.16.0, AWS CLI 2.39.6, rc 0.1.37, Playwright 1.65.0, BuildKit 0.34.2, Syft 1.57.0 and Trivy 0.76.2.
+
+### Fixed
+
+- After a backup key rotation, the first full database backup in the new key's repository starts at once instead of
+  waiting up to PostgreSQL's checkpoint timeout. Scheduled full backups are unchanged.
+- The agent no longer misreads user, group, session or sudo version lookups when a name-service module writes log
+  lines into their output, for example while himmelblaud is still starting. Such output now fails the lookup for that
+  round instead of being used: privileged group members are never removed and no sudoers file is written from it, and
+  a sudo-rs device is never taken for classic sudo.
+- `backup now` and a backup requested in the portal are no longer answered by a full database backup that was
+  already running when the request came; a new full starts after it. Before, such a request could look done while
+  the backup targets never showed a backup from after the request.
+- `backup now` and a backup requested in the portal are no longer answered by a Fleet dump that was written before
+  the request and was still waiting to be sealed; such a dump is still sealed, and a new Fleet dump is taken for the
+  request. Before, `backup now --wait` could report success with a Fleet backup older than the request.
+- A mounted SMB or NFS backup target whose server stops answering is now shown as unreachable, as documented, instead
+  of as not mounted.
+- The copy to a mounted SMB or NFS backup target whose server stopped answering is now reported as an I/O error, in
+  line with the target being unreachable, instead of "not mounted".
+- A point-in-time restore of an installation that is still in place no longer stops in the PostgreSQL step with
+  "volume is in use".
+- A point-in-time restore after an earlier restore no longer fails with "could not locate required checkpoint
+  record": the restore now stages the database log of the backup it actually restored, on that backup's timeline.
+- The databases' health checks now wait until PostgreSQL accepts network connections. On a fresh installation or a
+  restore onto empty volumes, a busy host could otherwise start the one-time database provisioning while PostgreSQL
+  was still initializing, and it failed with "connection refused".
+- The managed local administrator is hidden from the login screen on Ubuntu 26.04 again. The agent's check of parent
+  directories now accepts root-owned directories that only the root group may write to.
+- A request body sent very slowly to the device, admin or apt repository endpoints is cut off after 60 s again, as
+  documented. The edge held such a connection for about two minutes; it now passes the server's answer on at once and
+  closes that HTTP/1.x connection, for error answers and for any answer to a GET or HEAD that carries a body. Other
+  successful answers and HTTP/2 connections are unchanged.
+- A backup mirror to an S3 target no longer fails as "stalled" while the target takes minutes to return the first page
+  of its listing, as an S3 server does on a versioned bucket that holds many deleted objects. While the mirror waits for
+  a page, it checks that the endpoint still answers; an endpoint that answers nothing still counts as stalled after two
+  minutes, and a listing page that does not arrive within 20 minutes ends the mirror.
+- A pgBackRest repository path on a backup target that no backup key names no longer stops every deletion on that
+  target. The mirror keeps that path and still fails the target run as `unknown_path`, but it removes what retention
+  allows everywhere else, including retired keys' repositories. `./paddock backup status` points to the target, and
+  the role's log names the path.
+- `./paddock upgrade` can run again from the same bundle directory after `./paddock rollback`. It no longer fails in
+  `migrate-from` because the new release's `bundle-seq/` belongs to the backup role; the directory it replaces is kept
+  as `.bundle-seq.replaced.<random>` and can be removed as root.
+- On devices with directory logins, packages whose installation creates a local system account (for example Flatpak,
+  which self-service needs for Flatpak applications, and many server packages) failed with "already exists, but is not
+  a system user". Paddock now pauses the login service while it installs or removes software, including the regular
+  updates and the dracut installation of in-place encryption, and starts it again afterwards. The pause waits until no
+  other package operation runs and ends after 10 minutes at the latest, with a systemd timer as a fallback if the
+  agent stops. New directory logins and screen unlocks wait during an installation; running sessions continue. Every
+  pause is recorded as `device.login_nss_shield`, and a stop of the login service by anyone else is reported as
+  `device.tamper_service_stopped`. Installations that a local administrator starts with apt are not covered; the
+  device login guide describes the workaround.
+- A slow or hanging backup target no longer holds up the backup role. Each target is now mirrored in its own lane,
+  which the role's round starts but never waits for: scheduled OpenBao snapshots and Fleet dumps, `backup now`, key
+  confirmations and target connection tests are served every round while a target takes minutes or hours to list,
+  and the other targets are mirrored on time. A run's mirror results and audit event follow when its mirrors ended;
+  a newer run that a target's mirror in progress does not carry waits for that target's next mirror. Disabling or
+  deleting a target stops its running mirror at the next round, and the new gauge
+  `paddock_backup_target_mirror_started_timestamp_seconds` shows since when a target's mirror runs.
+- The backup role now holds its leader lock for as long as the process runs, so its mirrors never run outside the
+  lock. When the lock's database connection drops, the role stops its rounds and mirrors before writing anything
+  more, logs the loss, counts it in `paddock_backup_leader_lost_total` and leads again once the lock is free. The new
+  gauge `paddock_backup_leader` shows which process leads.
+- When the lock file of the login-service pause cannot be opened, the agent no longer starts the login service in the
+  middle of another Paddock process's package installation and no longer reports that pause twice. The installation
+  runs without a pause and is reported once as `hold_failed`.
+- The dead man's switch warning now reaches the desktop of users whose account name is a full sign-in name
+  (`alice@example.com`). Before, these users saw the warning only on the login screen.
+- The server no longer rejects a device's whole event batch because one event has a type it does not know, for
+  example from a newer agent. It skips only that event, logs it once and counts it in
+  `paddock_device_events_unknown_total`, and stores the rest of the batch.
+- User-scope Flatpak applications now install into the signed-in user's own installation, both when an
+  administrator requires them and through self-service. Adding the source's remote there failed before.
+- A user-scope Flatpak application whose target user's installation the agent cannot read no longer stays "pending"
+  for good after the user signs in. The device now reports it as failed with the cause, and the agent retries it.
+- The device list of a software catalog entry now includes the devices that get the entry through their owners, for
+  example self-service software assigned to a user or a user group. Before, such devices only showed the entry on
+  their own software page, and the list of the entry stayed empty.
+- A device that gets a catalog application through its owners (an assignment to a user or a user group) is now listed
+  as `unknown` on the application's device list and on the device's software page before it first reports the
+  application. Before, such a device appeared only after its first report.
+- On devices with directory logins, a restart of the login service that applies a changed login configuration (for
+  example a changed list of groups allowed to log in) and waits because another process keeps the lock file of
+  Paddock's login-service pause taken is now logged as a warning, at most once an hour, with how long the lock has
+  been held. The restart still waits and runs once the lock is free.
+- The backup role no longer clears its per-target metrics (`paddock_backup_target_reachable`,
+  `paddock_backup_target_held_files`, `paddock_backup_last_success_timestamp_seconds`) before setting them again, so a
+  Prometheus scrape at that moment can no longer miss those series.
+- `./paddock rollback` no longer refuses every rollback after a release that changed the schema: the upgrade now
+  records the schema versions of the pre-upgrade backup before its first `up`, and the rollback restores that point
+  with them instead of the schema the new release's backups report; a rollback point without them is refused with a
+  pointer to `./paddock restore`.
+- The worker no longer stays unhealthy when many of its periodic rounds run long, for example the identity reconcile
+  round with hundreds of organizations: the rounds' leader locks now use connections of their own instead of taking
+  the connections their work and the readiness check need, so `./paddock up` and upgrades no longer time out waiting
+  for the worker, and rollouts, role sync and session ends no longer stall. The worker may now open up to 14 more
+  PostgreSQL connections than before (PDK-1010).
+- The api now opens at most 8 connections to the control-plane database and 8 to the audit database instead of one per
+  logical CPU, so that all Paddock roles together stay within PostgreSQL's default of 100 connections on hosts of any
+  size; `docs/operations/capacity.md`, "PostgreSQL connection budget", lists what each role needs (PDK-1010).
+
+### Security
+
+- The control plane's containers are separated by trust zone: Caddy, Authentik and Fleet can no longer reach
+  PostgreSQL, OpenBao, Valkey or RabbitMQ, and only Caddy may name a client's address to the Paddock roles.
+  RabbitMQ's management interface is reachable inside its container only, and the health and metrics ports of the
+  roles that call the public names answer on the internal network only. `./paddock check` fails a configuration
+  that undoes this and warns while the admin allow list admits every address or another Docker network of the host
+  overlaps the new fixed subnet (`PADDOCK_EDGE_SUBNET`). Existing installations: an explicit
+  `PADDOCK_TRUSTED_PROXY_CIDRS` or `PADDOCK_INTERNAL_CIDRS` in `.env` must be removed before the upgrade (on a lab: set again,
+  with `PADDOCK_EDGE_TRUSTED_PROXIES`; `./paddock upgrade-check` names them); see the upgrade notes of this release.
+- Valkey has one ACL user per role instead of one shared password: each role may touch only the keys it needs, and the
+  internet-facing gateway can no longer write device keys, bundle pointers or signed commands. `./paddock up` creates
+  the new secrets `.secrets/valkey_<user>_password` (`api`, `gateway`, `worker`, `compiler`, `escrow_reader`,
+  `revocation_issuer`, `healthcheck`); the secrets `valkey_password` and `valkey_auth_conf` are no longer used. Valkey
+  stores only hashes of the passwords. `./paddock check` verifies the users, the default user being off and that Fleet's
+  Redis uses its own configuration file.
+- The control plane now limits request rates: sign-ins to 20 per minute per client address, admin API reads to 600,
+  writes to 120 and agent uploads to 10 per minute per session or API token, answered with 429 and `Retry-After`
+  above the limit. The device per-address limit is configurable and counts an IPv6 client by its /64. The limits are
+  `PADDOCK_RATELIMIT_*`, `PADDOCK_DEVICE_PER_IP_LIMIT` and `PADDOCK_DEVICE_PER_IP_V6_PREFIX`; `./paddock check` fails
+  when a limit is switched off. Installations with many administrators behind one NAT should raise
+  `PADDOCK_RATELIMIT_AUTH` (see the installation guide). The new alert `PaddockRateLimitStorm` reports sustained
+  refusals.
+- The PostgreSQL databases and both Valkey instances run with only the Linux capabilities their entrypoints need, can
+  no longer gain privileges, and have a memory limit (PostgreSQL 2 GiB for Paddock, 1 GiB for Authentik and the audit
+  index, Valkey 512 MiB), so that a runaway or attacked service cannot starve the host. Valkey's root file system is
+  read-only. The limits can be raised in `.env` (`PADDOCK_POSTGRES_MEM_LIMIT`, `PADDOCK_AUTHENTIK_POSTGRES_MEM_LIMIT`,
+  `PADDOCK_AUDIT_POSTGRES_MEM_LIMIT`, `PADDOCK_VALKEY_MEM_LIMIT`, `PADDOCK_FLEET_REDIS_MEM_LIMIT`); see
+  `docs/operations/capacity.md`, "Memory limits". The bundle ships `hardening-exceptions.yaml`, the list of every
+  remaining deviation from the container hardening with its reason.
+- OpenBao and both RustFS object stores drop every Linux capability (OpenBao keeps only `IPC_LOCK`), can no longer
+  gain privileges and have a memory limit (OpenBao 1 GiB, RustFS 2 GiB, the audit RustFS 4 GiB). OpenBao runs as its
+  image's non-root `openbao` user (100:1000), now pinned in the Compose file; existing data volumes need no change.
+  The RustFS root file systems are read-only. The limits can be raised in `.env` (`PADDOCK_OPENBAO_MEM_LIMIT`,
+  `PADDOCK_RUSTFS_MEM_LIMIT`, `PADDOCK_AUDIT_RUSTFS_MEM_LIMIT`); see `docs/operations/capacity.md`, "Memory limits".
+- Fleet's MySQL, RabbitMQ, Fleet and Prometheus run with only the Linux capabilities they need (RabbitMQ, Fleet and
+  Prometheus with none), can no longer gain privileges, and have a memory limit (Fleet's MySQL 2 GiB, RabbitMQ 1 GiB,
+  Fleet 3 GiB, Prometheus 1 GiB). Fleet's and Prometheus' root file systems are read-only. RabbitMQ now runs as its own
+  user from the start and sizes its memory alarm from its limit, so it blocks publishers before it would be killed. The
+  limits can be raised in `.env` (`PADDOCK_FLEET_MYSQL_MEM_LIMIT`, `PADDOCK_RABBITMQ_MEM_LIMIT`,
+  `PADDOCK_FLEET_MEM_LIMIT`, `PADDOCK_PROMETHEUS_MEM_LIMIT`); see `docs/operations/capacity.md`, "Memory limits".
+- Authentik's server and worker drop every Linux capability, can no longer gain privileges and have a memory limit
+  (server 2 GiB, worker 1 GiB; `PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT`, `PADDOCK_AUTHENTIK_WORKER_MEM_LIMIT` in `.env`,
+  see `docs/operations/capacity.md`, "Memory limits"). Raise the server's limit by about 256 MiB for every web worker
+  you add with `PADDOCK_AUTHENTIK_WEB_WORKERS`.
+- `./paddock check --online` gains the item `containers: capabilities and security options match the matrix`: every
+  running container of the host's project is compared with the hardening matrix of `hardening-exceptions.yaml`, so a
+  container recreated by hand or with an edited Compose file that adds a capability, keeps the default ones, may gain
+  privileges or runs unconfined is named.
+- The agent refuses to write, rename or delete a managed file when a parent directory is a symbolic link or can be
+  changed by someone other than root, so a local service account can no longer redirect a managed file into a
+  protected area. The resource reports `parent_not_trusted`.
+- The supervisor and the first-boot disk setup run in a systemd sandbox (no personality changes, no realtime
+  scheduling, no kernel log access, no obsolete system calls, a private `/tmp`).
+- The agent checks the login settings it receives against the server's own rules before it writes the Himmelblau
+  configuration and reports `invalid_spec` instead of writing a malformed one; the server no longer signs such a
+  login section.
+- Every public host of the control plane (`admin.`, `auth.`, `device.`, `bundles.`, `fleet.`) now answers with
+  `Strict-Transport-Security` including subdomains, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and a
+  `Referrer-Policy`, also for Authentik and Fleet. The edge refuses smaller request bodies: 1 MiB on `auth.` (was
+  16 MiB) and `device.` (was 2 MiB); the admin platform uploads may be up to 256 MiB. Agent release uploads may now
+  take up to 30 minutes (was 10 minutes). A reverse proxy in front of Caddy must pass bodies of up to 256 MiB to
+  `admin.` (see the upgrade notes).
+- When a device's data access is revoked, the step that signs out every user now accepts only real user entries in
+  the list of signed-in users. Any other text in that list (for example error messages of an identity module) is
+  skipped and recorded in the revocation log with its line, and is never mistaken for a user; every real user is
+  still signed out. If the list holds no user at all, the revocation log shows an error. The erasure and the restart
+  of the device run as before.
+- `./paddock migrate-from` (part of `./paddock upgrade`), when run as root, no longer writes inside a `bundle-seq/`
+  directory that the backup role owns. Before this fix, a link planted there could redirect root's write to any file
+  on the host.
+- On devices with directory logins, a stop of the login service is now reported as `device.tamper_service_stopped`
+  even when a local administrator keeps the lock file of Paddock's login-service pause taken. Only a pause that
+  Paddock started within the last 12 minutes suppresses the report. While another process keeps that lock file, the
+  agent logs a warning at most once an hour.
+- Go toolchain 1.27.4 (was 1.27.3; build image `golang:1.27.4-trixie`, CI, every module): fixes GO-2026-6859
+  (CVE-2026-97054), a data race in `net/http` that can crash an HTTP/1 server whose handler reads a size-limited request
+  body concurrently with writing the response header. Released servers and agents are not exposed: every Paddock
+  handler that limits a request body reads it to the end before it writes any response header, in the same goroutine.
+- A Debian package of an agent release is accepted only when its signature's trusted comment names that release and
+  the package's architecture: `paddock-agent version=<version> arch=<arch>`, with `arch=all` for
+  `paddock-self-service`. The package upload, `./paddock agent-release` and the import from GitHub refuse any other
+  comment with 422 `release_signature_mismatch` and store nothing of the package, so a validly signed package of an
+  older release can no longer be stored under a newer one. The release workflow already signs every package this
+  way. Packages signed by hand without this comment must be signed
+  again (`docs/operations/agent-releases.md`).
+- The fleetd package `fleet-osquery` of an agent release is accepted only when its signature's trusted comment names
+  the release it is stored under and the package's architecture: `paddock-agent version=<release version>
+  arch=<arch>` — the release version, not the fleetd version. The package upload, `./paddock agent-release` and the
+  import from GitHub refuse any other comment with 422 `release_signature_mismatch` and store nothing of the package,
+  so a validly signed older fleetd can no longer be stored under a newer release. Sign fleetd offline with
+  `-t "paddock-agent version=<release version> arch=<arch>"` (`docs/operations/agent-releases.md`); releases already
+  stored are not verified again.
+- The revocation package `paddock-revoke` of an agent release is now bound to its release the same way: its signature,
+  made with the revocation release key, must carry the trusted comment `paddock-agent version=<release version>
+  arch=<arch>`. The package upload and `./paddock agent-release` refuse any other comment with 422
+  `release_signature_mismatch`, and a `paddock-revoke` signed with the agent release key stays refused. The holders of
+  the revocation release key sign it offline with `-t "paddock-agent version=<release version> arch=<arch>"`
+  (`docs/operations/agent-releases.md`); releases already stored are not verified again.
+- When the agent cannot report a directory user's sign-in because the user's name does not resolve to the session's
+  user ID, its log warning now names only that user ID, no longer the user's name or the account entry the lookup
+  returned.
+
 ## [0.1.0-alpha.9] - 2026-11-07
 
 This is the first release under the upgrade guarantee (ADR 0047): an installation of 0.1.0-alpha.8 upgrades with

@@ -42,7 +42,7 @@ func backupHost() prodcheck.Config {
 			Secrets: secrets("backup_encryption_key")},
 		"paddock-worker": {Environment: map[string]*string{}, Secrets: secrets("db_paddock_worker_url")},
 		"backup-restore-escrow": {Environment: map[string]*string{}, Volumes: []prodcheck.Volume{repo},
-			Networks: map[string]prodcheck.ServiceNetwork{"cp": {}, "audit-index": {}},
+			Networks: map[string]prodcheck.ServiceNetwork{"data": {}, "audit-index": {}},
 			Secrets: secrets("db_paddock_audit_reader_url", "rustfs_escrow_backup_access_key",
 				"rustfs_escrow_backup_secret_key", "rustfs_bundles_gateway_access_key", "rustfs_bundles_gateway_secret_key",
 				"internal_ca_bundle")},
@@ -127,7 +127,7 @@ func TestBackupSecretsConfined(t *testing.T) {
 		},
 		"backup role on the audit index network": func(c prodcheck.Config) string {
 			b := c.Services["paddock-backup"]
-			b.Networks = map[string]prodcheck.ServiceNetwork{"cp": {}, "audit-index": {}}
+			b.Networks = map[string]prodcheck.ServiceNetwork{"data": {}, "audit-index": {}}
 			c.Services["paddock-backup"] = b
 			return "paddock-backup: joins the network audit-index"
 		},

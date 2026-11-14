@@ -35,7 +35,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getConfigRollout` | read | no | A rollout with its counts, its change set and the bundle resource IDs it stages; 404 not_found for an unknown rollout or one of another organization. |
 | `haltConfigRollout` | write | yes | POST /api/v1/config-rollouts/{id}/halt |
 | `listChangeSets` | read | no | Every configuration write that changed something: an apply of PUT /api/v1/config and every change of a single resource. |
-| `listConfigRolloutDevices` | read | no | The active devices of the organization as the rollout sees them: whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged resources. |
+| `listConfigRolloutDevices` | read | no | The active devices of the organization as the rollout sees them: whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged resources, and whether the device holds the rollout until it applies successfully (awaiting_retry). |
 | `listConfigRollouts` | read | no | The staged configuration rollouts of the organization (plan M11 decision 34), each with its counts, which are also what the worker evaluates: eligible are the active devices inside the wave the rollout reached (every device once it completed). |
 | `resumeConfigRollout` | write | no | POST /api/v1/config-rollouts/{id}/resume |
 | `revertChangeSet` | write | yes | Applies the inverse of a change set in one transaction (plan M11 decision 21): an item it created is deleted, an item it updated or deleted is restored from its stored before-state; items created since are kept, and an item whose deleted key was created again since is set back to the before-state. |
@@ -46,9 +46,12 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | --- | --- | --- | --- |
 | `createDeviceGroup` | write | no | POST /api/v1/device-groups |
 | `deleteDeviceGroup` | write | yes | While a configuration rollout is open, a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict; the items of a deleted group are removed from every device at once (plan M11 amendment R6.13). |
+| `deleteDeviceGroupMaintenanceWindow` | write | yes | Removes the group's window: its devices apply their software policy at the next pass unless another group of theirs has a window. |
 | `getDeviceGroup` | read | no | GET /api/v1/device-groups/{id} |
+| `getDeviceGroupMaintenanceWindow` | read | no | GET /api/v1/device-groups/{id}/maintenance-window |
 | `listDeviceGroupDevices` | read | no | The members of a device group. |
 | `listDeviceGroups` | read | no | GET /api/v1/device-groups |
+| `setDeviceGroupMaintenanceWindow` | write | no | Sets or replaces the group's maintenance window (plan M13c decision 4): the group's devices install and remove the software of their policy only inside the union of the windows of their groups; urgent assignments, the users' own self-service operations and source files do not wait. |
 | `updateDeviceGroup` | write | no | While a configuration rollout is open, renaming a group that scopes one of its staged items or is its canary group is refused with 409 rollout_conflict (plan M11 amendment R6.13). |
 
 ## devices
@@ -224,26 +227,33 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `updateDMSSettings` | write | no | Replaces the dead man's switch settings (plan M4c decision 15): period_days 7–365 (the portal warns below 30), distinct warn_days below the period. |
 | `updateLoginSettings` | write | no | Replaces the login settings; every device is recompiled. |
 | `updatePrivacySettings` | write | no | Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator, hour and set of filters) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). |
-| `updateRolloutSettings` | write | no | Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first. |
+| `updateRolloutSettings` | write | no | Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0), the optional canary device group, whose devices always go first, and the optional wave_success_threshold_percent (1–100) and stall_warning_hours (1–720), which keep their stored values when absent. |
 | `updateUpdateSettings` | write | no | Replaces the update settings: security_daily_at (HH:MM, local device time), regular_schedule (a subset of systemd OnCalendar: optional comma-separated weekdays Mon…Sun, then HH:MM; anything else is 422 invalid_schedule), regular_updates_enabled, max_random_delay_min (0–720), staleness_warning_h (1–720) and staleness_critical_h (above the warning, at most 2160; 400 invalid_request otherwise). |
 
 ## software
 
 | Tool | Class | Destructive | Summary |
 | --- | --- | --- | --- |
-| `createSoftwareAssignment` | write | no | Assigns a catalog entry to every device of the organization (no device_group_id) or to a device group with an intent. |
+| `approveSoftwareRequest` | write | no | Approves an open request, optionally with a reason; no step-up of its own (the entry's source needed one). |
+| `createSoftwareAssignment` | write | no | Assigns a catalog entry with an intent to one target: every device of the organization (no target ID), a device group (device_group_id), a user (user_id) or a user group (user_group_id); more than one target ID is 400 invalid_request. |
 | `createSoftwareCatalogEntry` | write | no | Adds an application with its package names per distribution, release and architecture (1 to 20 references; release and architecture may be "*"; the tuple is unique within the entry). |
 | `deleteSoftwareAssignment` | write | yes | The devices stop enforcing the assignment with their next bundle; installed software stays. |
-| `deleteSoftwareCatalogEntry` | write | yes | Removes the entry together with its assignments (never 409); the devices stop managing the application, installed software stays. |
+| `deleteSoftwareCatalogEntry` | write | yes | Removes an entry that has no assignments; it changes nothing on any device. |
+| `denySoftwareRequest` | write | no | Denies an open request with a reason, which the user sees; no step-up of its own. |
 | `getSoftwareAssignment` | read | no | GET /api/v1/software-assignments/{id} |
 | `getSoftwareCatalogEntry` | read | no | GET /api/v1/software-catalog/{id} |
+| `getSoftwareRepository` | read | no | The organization's Paddock repository (ADR 0050): its state, the system source and the signing key's fingerprint once the key exists, the build and the stored packages. |
+| `getSoftwareRequest` | read | no | GET /api/v1/software-requests/{id} |
 | `getSoftwareSource` | read | no | One source with its signing key (a public key); 404 not_found for another organization's. |
-| `listDeviceManagedSoftware` | read | no | The catalog applications the device manages (plan M13a §3.4): what the device reported for each, and for an application assigned to it that it has not reported on the derived state not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package applies, no report yet). |
-| `listSoftwareAssignments` | read | no | The assignments of catalog entries to the organization or device groups; the search matches the entry's name. |
+| `listCompileWarnings` | read | no | What the compiler shortened or dropped from a device's bundle against what an administrator assigned (architect decisions A10-9 and A10-10), from the device's latest compile: each compile of a device replaces its warnings, and a device whose bundle was blocked keeps those of its current bundle. |
+| `listDeviceManagedSoftware` | read | no | The catalog applications the device manages (plan M13a §3.4): what the device reported for each, and for an application assigned to it (through the organization, one of its groups or one of its owners, a user or a user group with a member who owns the device) that it has not reported on the derived state not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package applies, no report yet). |
+| `listSoftwareAssignments` | read | no | The assignments of catalog entries to the organization, device groups, users or user groups; the search matches the entry's name. |
 | `listSoftwareCatalog` | read | no | The applications of the organization's software catalog (plan M13a decision 7); the list never contains the icons, has_icon says whether there is one. |
-| `listSoftwareCatalogDevices` | read | no | The active devices the entry is assigned to, through an assignment of the organization or of one of their groups, with what they reported or the derived state not_applicable or unknown (see the device's managed software). |
+| `listSoftwareCatalogDevices` | read | no | The active devices the entry is assigned to, through an assignment of the organization, of one of their groups or of one of their owners (a user, or a user group with a member who owns the device), and the active devices that reported it, with what they reported or the derived state not_applicable or unknown (see the device's managed software). |
+| `listSoftwarePackages` | read | no | The Debian packages stored in the organization's Paddock repository (plan M13c decision 12, ADR 0050). |
+| `listSoftwareRequests` | read | no | The users' requests for available applications whose catalog entry requires approval (plan M13c decision 10), with their state: requested (waiting for a decision), approved, denied, expired (30 days without a decision, or the entry no longer requires approval) or withdrawn. |
 | `listSoftwareSources` | read | no | The organization's APT package sources (plan M13a decision 1); the list never contains the signing key. |
-| `updateSoftwareAssignment` | write | no | Replaces intent, update_rule, version and reason with the submitted values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the same rules as on creation apply. |
+| `updateSoftwareAssignment` | write | no | Replaces intent, update_rule, version, reason and urgent with the submitted values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty, an absent urgent is false); the same rules as on creation apply, so keeping or setting urgent needs a reason and a step-up again. |
 | `updateSoftwareCatalogEntry` | write | no | Replaces the entry's name, description, category, source and package references with the submitted values (an absent description or category becomes empty, an absent or null source_id selects the distribution's own repositories); the icon is changed with its own operation. |
 
 ## updates
@@ -274,6 +284,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `listUserDevices` | read | no | The devices the user owns (plan M8d decision 4). |
 | `listUserGroupMembers` | read | no | The members of a user group. |
 | `listUserGroups` | read | no | Local groups and imported upstream groups. |
+| `listUserSoftware` | read | no | The software assignments that target the user (plan M13b decision 6): directly (user_group_id null) or through a user group the user is a member of, with the intent. |
 | `listUsers` | read | no | Local and synced users of the organization. |
 | `lockUser` | write | yes | Locks the user: the affected devices get the lock in their next bundle (priority lane), and in Authentik the user joins paddock.<slug>.locked and loses its refresh tokens, access tokens and sessions. |
 | `removeUserGroupMember` | write | yes | Removes a user from a local group (imported groups: 409 attribute_owned_upstream). |
@@ -302,11 +313,12 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `createIpAllowlistEntry` | platform | Adds a range. |
 | `createNotificationDestination` | notifications | Creates a destination. |
 | `createPlatformNotificationDestination` | platform | Creates a destination. |
-| `createSoftwareSource` | software | Adds an APT package source with its signing key. |
+| `createSoftwareSource` | software | Adds a package source with its signing key: an APT repository (kind apt, the default) or a Flatpak remote (kind flatpak: exactly one URI, the remote's URL, and no suites, components or architectures, else 400 invalid_request; the signing key is the remote's GPG key). |
 | `deleteBackupTarget` | platform | Deletes the target; the backup sets already on it stay. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
 | `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |
 | `deletePlatformNotificationDestination` | platform | Deletes the destination with its delivery state and history. |
+| `deleteSoftwarePackage` | software | Removes a stored package from the repository, which is rebuilt without it. |
 | `deleteSoftwareSource` | software | Removes the source; the devices remove its source file and keyring with their next bundle. |
 | `destroyDevice` | revocation | POST /api/v1/devices/{id}/destroy |
 | `disableAutoUnseal` | platform | Disables the setting: the unsealer stops unsealing at once; the shares stay on the host until the operator runs ./paddock auto-unseal disable. |
@@ -332,6 +344,8 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `revealDeviceRecoveryKey` | devices | Returns the newest stored recovery key of the device; confirm_hostname must equal the device's hostname. |
 | `rotateNotificationDestinationSecret` | notifications | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
 | `rotatePlatformNotificationDestinationSecret` | platform | Replaces the signing secret of a webhook destination and returns the new one once; deliveries are signed with it from the notifier's next round. |
+| `rotateSoftwareRepositoryCredential` | software | Replaces the repository's read credential (HTTP basic authentication, user paddock) with a new random secret and returns it once; it is never shown again and never recorded. |
+| `rotateSoftwareRepositoryKey` | software | Replaces the repository's OpenPGP signing key (ADR 0050 decision 3). |
 | `testBackupTarget` | platform | Requests a connection test. |
 | `testNotificationDestination` | notifications | Requests a test delivery. |
 | `testPlatformNotificationDestination` | platform | Requests a test delivery. |
@@ -345,6 +359,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `updatePlatformNotificationDestination` | platform | Replaces every setting except the type (400 invalid_request when it differs) and the signing secret. |
 | `updateSoftwareSource` | software | Changes the given fields; absent fields keep their value. |
 | `updateWatchedUnits` | settings | Replaces the watched units: at most 32 services (names ending in .service), a duplicate is 400 invalid_request, a reserved unit (paddock, himmelblau, fleet, orbit, ssh, gdm, systemd- prefixes) or a name that is not a service is 422 unit_not_allowed naming it. |
+| `uploadSoftwarePackage` | software | Uploads a binary Debian package (at most 256 MiB) into the organization's Paddock repository. |
 
 ## Other operations the MCP does not offer
 

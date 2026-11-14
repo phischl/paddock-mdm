@@ -39,6 +39,7 @@ const formKey = ref(0)
 
 const columns: ListColumn[] = [
   { key: 'name', title: 'software.sources.name', sortable: true, role: 'primary' },
+  { key: 'kind', title: 'software.sources.kind', role: 'meta' },
   { key: 'slug', title: 'software.sources.slug', role: 'meta' },
   { key: 'uris', title: 'software.sources.uris', role: 'meta', hideBelow: 'md' },
   { key: 'suites', title: 'software.sources.suites', role: 'meta', hideBelow: 'md' },
@@ -165,6 +166,9 @@ async function remove(item: SoftwareSourceSummary): Promise<void> {
       empty-description="software.sources.empty.description"
       data-testid="source-list"
     >
+      <template #[`item.kind`]="{ item }: { item: SoftwareSourceSummary }">
+        {{ t('software.sources.kinds.' + item.kind) }}
+      </template>
       <template #[`item.slug`]="{ item }: { item: SoftwareSourceSummary }">
         <span class="src-slug mono">{{ item.slug }}</span>
       </template>

@@ -26,8 +26,9 @@ var (
 	SpecSoftwareSourceDelete = ActionSpec{Code: audit.CodeSoftwareSourceDeleted, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 )
 
-// SoftwareSources are the use cases of the organization's APT package sources (plan M13a decisions 1–6). The server
-// never contacts a source.
+// SoftwareSources are the use cases of the organization's package sources: APT repositories (plan M13a decisions 1–6)
+// and Flatpak remotes (plan M13b decision 5). The server never contacts a source. Every write records a change set
+// (plan M13c decision 3); a source change is never staged.
 type SoftwareSources struct {
 	runner *ActionRunner
 	org    *db.OrgPool
@@ -89,19 +90,24 @@ func (s *SoftwareSources) Get(ctx context.Context, id uuid.UUID) (SoftwareSource
 }
 
 // Create adds a source (audited: software_source.created). The typed fingerprint must equal the signing key's; the
-// key policy is checked before the comparison, so a refused key answers invalid_request whatever was typed.
+// key policy is checked before the comparison, so a refused key answers invalid_request whatever was typed. A source
+// without a kind is an APT repository.
 func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (SoftwareSourceView, error) {
 	var out SoftwareSourceView
 	in.Name = software.NormalizeName(in.Name)
+	if in.Kind == "" {
+		in.Kind = software.SourceKindAPT
+	}
 	in.URIs, in.Suites, in.Components, in.Architectures = nonNil(in.URIs), nonNil(in.Suites), nonNil(in.Components), nonNil(in.Architectures)
 	spec := SpecSoftwareSourceCreate
 	spec.Params = map[string]any{
+		"kind": software.DisplayParam(in.Kind, maxKindParam),
 		"name": software.DisplayParam(in.Name, software.MaxNameLength), "slug": software.DisplayParam(in.Slug, maxSlugParam),
 		"uris": displayParams(in.URIs, software.MaxURIs, software.MaxURILength), "suites": displayParams(in.Suites, software.MaxSuites, maxSuiteParam),
 		"components":  displayParams(in.Components, software.MaxComponents, maxComponentParam),
 		"fingerprint": software.DisplayParam(software.NormalizeFingerprint(in.Fingerprint), maxFingerprintParam),
 	}
-	err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := s.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		key, err := software.ValidateSource(in)
 		if err != nil {
 			return softwareSourceProblem(err)
@@ -114,7 +120,7 @@ func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (
 		}
 		p, _ := principal.From(ctx)
 		out.SoftwareSource, err = q.InsertSoftwareSource(ctx, pgstore.InsertSoftwareSourceParams{
-			ID: uuid.Must(uuid.NewV7()), OrganizationID: org, Slug: in.Slug, Name: in.Name, Uris: in.URIs,
+			ID: uuid.Must(uuid.NewV7()), OrganizationID: org, Kind: in.Kind, Slug: in.Slug, Name: in.Name, Uris: in.URIs,
 			Suites: in.Suites, Components: in.Components, Architectures: in.Architectures, SigningKey: key.SigningKey,
 			Fingerprint: key.Fingerprint, WeakKey: key.WeakKey, CreatedBy: uuid.NullUUID{UUID: p.ID, Valid: p.ID != uuid.Nil},
 		})
@@ -127,14 +133,14 @@ func (s *SoftwareSources) Create(ctx context.Context, in software.SourceInput) (
 		rec.SetTarget(sourceTarget(out.SoftwareSource))
 		rec.StateChanged(statechange.ScopeOrg, org)
 		return nil
-	})
+	}))
 	return out, err
 }
 
-// SourceUpdate are the changes of a source; nil keeps the stored value. Slug is immutable and refused when given;
-// SigningKey and Fingerprint only come together.
+// SourceUpdate are the changes of a source; nil keeps the stored value. Slug is immutable and refused when given, Kind
+// is immutable and refused when it differs from the stored kind; SigningKey and Fingerprint only come together.
 type SourceUpdate struct {
-	Slug, Name                              *string
+	Kind, Slug, Name                        *string
 	URIs, Suites, Components, Architectures *[]string
 	SigningKey, Fingerprint                 *string
 }
@@ -146,15 +152,19 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 	var out SoftwareSourceView
 	spec := SpecSoftwareSourceUpdate
 	spec.Target = &audit.Target{Type: "software_source", ID: id.String()}
-	err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	err := s.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetSoftwareSourceForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
 		}
 		rec.SetTarget(sourceTarget(old))
+		if old.Kind == software.SourceKindPaddock {
+			return errSystemSource
+		}
 		merged, fields := mergeSource(old, in)
 		rec.SetParam("name", software.DisplayParam(merged.Name, software.MaxNameLength))
 		rec.SetParam("slug", old.Slug)
+		rec.SetParam("kind", old.Kind)
 		// A submitted key counts as a change until validation shows it is the stored key in other armor, so a refused
 		// key change still names signing_key.
 		if in.SigningKey != nil && *in.SigningKey != old.SigningKey {
@@ -167,6 +177,8 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 		switch {
 		case in.Slug != nil:
 			return problem.InvalidRequest.WithDetail("slug cannot be changed")
+		case in.Kind != nil && *in.Kind != old.Kind:
+			return problem.InvalidRequest.WithDetail("kind cannot be changed")
 		case (in.SigningKey == nil) != (in.Fingerprint == nil):
 			return problem.InvalidRequest.WithDetail("signing_key and fingerprint must be given together")
 		}
@@ -197,7 +209,7 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 		rec.SetTarget(sourceTarget(out.SoftwareSource))
 		rec.StateChanged(statechange.ScopeOrg, out.OrganizationID)
 		return nil
-	})
+	}))
 	return out, err
 }
 
@@ -205,7 +217,7 @@ func (s *SoftwareSources) Update(ctx context.Context, id uuid.UUID, in SourceUpd
 func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 	spec := SpecSoftwareSourceDelete
 	spec.Target = &audit.Target{Type: "software_source", ID: id.String()}
-	return s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return s.runner.RunTx(ctx, ScopeOrg, spec, withChangeSet(func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		old, err := q.GetSoftwareSourceForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -213,8 +225,12 @@ func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 		rec.SetTarget(sourceTarget(old))
 		rec.SetParam("name", old.Name)
 		rec.SetParam("slug", old.Slug)
+		rec.SetParam("kind", old.Kind)
 		rec.SetParam("fingerprint", old.Fingerprint)
 		rec.SetParam("weak_key", old.WeakKey)
+		if old.Kind == software.SourceKindPaddock {
+			return errSystemSource
+		}
 		// The source is locked, so no entry can start using it between the count and the delete.
 		used, err := q.CountSoftwareCatalogEntriesBySource(ctx, uuid.NullUUID{UUID: id, Valid: true})
 		if err != nil {
@@ -232,15 +248,19 @@ func (s *SoftwareSources) Delete(ctx context.Context, id uuid.UUID) error {
 		}
 		rec.StateChanged(statechange.ScopeOrg, old.OrganizationID)
 		return nil
-	})
+	}))
 }
+
+// errSystemSource refuses a change of the system source of the Paddock repository, which the worker maintains (plan
+// M13c decision 11).
+var errSystemSource = problem.InvalidState.WithDetail("the source of the Paddock repository is maintained by Paddock and cannot be changed or deleted")
 
 // mergeSource applies a change to a stored source and returns the result with the names of the fields whose value
 // changed, except the signing key, which counts as changed only when its canonical form differs after validation.
 // The stored fingerprint stands for the typed one when the key stays.
 func mergeSource(old pgstore.SoftwareSource, in SourceUpdate) (software.SourceInput, []string) {
 	m := software.SourceInput{
-		Slug: old.Slug, Name: old.Name, URIs: old.Uris, Suites: old.Suites, Components: old.Components,
+		Kind: old.Kind, Slug: old.Slug, Name: old.Name, URIs: old.Uris, Suites: old.Suites, Components: old.Components,
 		Architectures: old.Architectures, SigningKey: old.SigningKey, Fingerprint: old.Fingerprint,
 	}
 	fields := []string{}
@@ -267,9 +287,10 @@ func mergeSource(old pgstore.SoftwareSource, in SourceUpdate) (software.SourceIn
 	return m, fields
 }
 
-// Bounds of request text in the audit params beyond the domain's limits: the slug and suite patterns' maximum, a
-// component's, and a typed fingerprint with its group separators.
+// Bounds of request text in the audit params beyond the domain's limits: a kind, the slug and suite patterns'
+// maximum, a component's, and a typed fingerprint with its group separators.
 const (
+	maxKindParam        = 16
 	maxSlugParam        = 41
 	maxSuiteParam       = 64
 	maxComponentParam   = 32

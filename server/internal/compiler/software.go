@@ -2,17 +2,26 @@ package compiler
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/server/internal/domain/devicegroup"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 )
 
 // orgSoftware are the organization's package sources, catalog entries and software assignments, loaded once per
@@ -26,6 +35,42 @@ type orgSoftware struct {
 	assignments []pgstore.SoftwareAssignment
 	// invalidAssignments are the assignments that fail the assignment rules, with the reason.
 	invalidAssignments map[uuid.UUID]error
+	// owners are the owners of the organization's devices by device, members the users of each user group: a user or
+	// user-group assignment applies to a device through its owners (plan M13b decision 8).
+	owners  map[uuid.UUID][]deviceOwner
+	members map[uuid.UUID][]uuid.UUID
+	// icons are the entries' icons that pass software.ValidateIcon, by entry ID (architect decision A10-14).
+	icons map[uuid.UUID]catalogIcon
+	// approved are the users an administrator approved, by device and catalog entry, sorted (plan M13c decision 9).
+	approved map[uuid.UUID]map[uuid.UUID][]string
+	// denied are the users whose request was denied inside the re-request lock, by device and catalog entry (architect
+	// decision A10-27).
+	denied map[uuid.UUID]map[uuid.UUID][]bundle.SoftwareDenial
+	// approvalGate is the compiler's approvalAgent, the gate withheldForApproval applies.
+	approvalGate string
+	// windows are the maintenance windows by device group (plan M13c decision 4) that pass the bundle rules.
+	windows map[uuid.UUID]bundle.SoftwareWindow
+	// repository is the read credential of the organization's Paddock repository with the slug of its source (plan
+	// M13c decision 15); nil without that source.
+	repository *repositoryAuth
+}
+
+// repositoryAuth is the credential a section carries while it names the source slug.
+type repositoryAuth struct {
+	slug string
+	auth bundle.SoftwareRepositoryAuth
+}
+
+// catalogIcon is a validated catalog icon with the hex SHA-256 that names it in bundles and object storage.
+type catalogIcon struct {
+	sha256 string
+	data   []byte
+}
+
+// deviceOwner is an owner of a device with the user name (lower-case UPN) an audience names.
+type deviceOwner struct {
+	user     uuid.UUID
+	username string
 }
 
 // softwareEntry is a catalog entry as the compiler needs it: its name, source and package references, and invalid,
@@ -34,6 +79,7 @@ type softwareEntry struct {
 	name     string
 	source   uuid.NullUUID
 	packages []software.PackageRef
+	approval string
 	invalid  error
 }
 
@@ -43,8 +89,8 @@ type softwareEntry struct {
 // an unchecked package name into a signed bundle, nor stop the organization's round. A failing source is left out (a
 // required package from it is then not installed, which is safe); a failing entry or assignment is kept with its
 // reason, and section fails every device it applies to (architect decision 2026-11-02, PDK-697): skipping it could
-// lift a forbid or let a competing intent win.
-func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error) {
+// lift a forbid or let a competing intent win. now starts the re-request lock of the denials the bundles name.
+func loadSoftware(ctx context.Context, q *pgstore.Queries, org uuid.UUID, creds CredentialDecrypter, now time.Time) (*orgSoftware, error) {
 	sources, err := q.ListAllSoftwareSources(ctx)
 	if err != nil {
 		return nil, err
@@ -57,11 +103,92 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	if err != nil {
 		return nil, err
 	}
+	owners, err := q.ListDeviceOwnersWithUsernames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	members, err := q.ListAllUserGroupMembers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	icons, err := q.ListSoftwareCatalogIcons(ctx)
+	if err != nil {
+		return nil, err
+	}
+	approvals, err := q.ListApprovedSoftwareRequests(ctx)
+	if err != nil {
+		return nil, err
+	}
+	denials, err := q.ListSoftwareRequestDenials(ctx, now.Add(-software.RerequestAfterDenial))
+	if err != nil {
+		return nil, err
+	}
+	windows, err := q.ListAllMaintenanceWindows(ctx)
+	if err != nil {
+		return nil, err
+	}
 	s := &orgSoftware{sources: map[uuid.UUID]bundle.SoftwareSource{}, bySlug: map[string]bundle.SoftwareSource{},
 		entries: make(map[uuid.UUID]softwareEntry, len(entries)), assignments: assignments,
-		invalidAssignments: map[uuid.UUID]error{}}
+		invalidAssignments: map[uuid.UUID]error{}, owners: map[uuid.UUID][]deviceOwner{}, members: map[uuid.UUID][]uuid.UUID{},
+		icons:    make(map[uuid.UUID]catalogIcon, len(icons)),
+		approved: map[uuid.UUID]map[uuid.UUID][]string{},
+		denied:   map[uuid.UUID]map[uuid.UUID][]bundle.SoftwareDenial{},
+		windows:  make(map[uuid.UUID]bundle.SoftwareWindow, len(windows))}
+	for _, ic := range icons {
+		// The api checked the icon on upload; a row changed outside it must not reach object storage, so the entry then
+		// shows the category glyph.
+		if err := software.ValidateIcon(ic.Icon); err != nil {
+			slog.ErrorContext(ctx, "catalog icon left out of bundles: it fails the icon rules", "catalog_entry_id", ic.ID, "error", err)
+			continue
+		}
+		sum := sha256.Sum256(ic.Icon)
+		s.icons[ic.ID] = catalogIcon{sha256: hex.EncodeToString(sum[:]), data: ic.Icon}
+	}
+	for _, a := range approvals {
+		if s.approved[a.DeviceID] == nil {
+			s.approved[a.DeviceID] = map[uuid.UUID][]string{}
+		}
+		s.approved[a.DeviceID][a.CatalogEntryID] = append(s.approved[a.DeviceID][a.CatalogEntryID], a.Username)
+	}
+	for _, d := range denials {
+		if s.denied[d.DeviceID] == nil {
+			s.denied[d.DeviceID] = map[uuid.UUID][]bundle.SoftwareDenial{}
+		}
+		s.denied[d.DeviceID][d.CatalogEntryID] = append(s.denied[d.DeviceID][d.CatalogEntryID],
+			bundle.SoftwareDenial{User: d.Username, Reason: denialReason(ctx, d)})
+	}
+	for _, row := range windows {
+		w := maintenanceWindow(row)
+		// Left out, the group's devices apply at any time: a window never keeps a device from its policy for good.
+		if err := bundle.ValidateSoftwareWindow(w); err != nil {
+			slog.ErrorContext(ctx, "maintenance window left out of bundles: it fails the bundle rules",
+				"device_group_id", row.DeviceGroupID, "error", err)
+			continue
+		}
+		s.windows[row.DeviceGroupID] = w
+	}
+	for _, o := range owners {
+		s.owners[o.DeviceID] = append(s.owners[o.DeviceID], deviceOwner{user: o.UserID, username: o.Username})
+	}
+	for _, m := range members {
+		s.members[m.GroupID] = append(s.members[m.GroupID], m.UserID)
+	}
+	sourceKinds := make(map[uuid.UUID]string, len(sources))
 	for _, src := range sources {
-		key, err := software.ValidateSource(software.SourceInput{Slug: src.Slug, Name: src.Name, URIs: src.Uris,
+		sourceKinds[src.ID] = src.Kind
+		validateAs := src.Kind
+		if src.Kind == software.SourceKindPaddock {
+			// The Paddock repository is an APT repository; without its credential apt cannot read it, so the source is
+			// left out (a required package from it is then not installed, which is safe).
+			repo, err := repositoryCredential(ctx, q, org, src, creds)
+			if err != nil {
+				slog.ErrorContext(ctx, "paddock software source left out of bundles: its credential is not available",
+					"source_id", src.ID, "error", err)
+				continue
+			}
+			s.repository, validateAs = repo, software.SourceKindAPT
+		}
+		key, err := software.ValidateSource(software.SourceInput{Kind: validateAs, Slug: src.Slug, Name: src.Name, URIs: src.Uris,
 			Suites: src.Suites, Components: src.Components, Architectures: src.Architectures,
 			SigningKey: src.SigningKey, Fingerprint: src.Fingerprint})
 		if err != nil {
@@ -69,22 +196,37 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 				"source_id", src.ID, "slug", src.Slug, "error", err)
 			continue
 		}
-		b := bundle.SoftwareSource{Slug: src.Slug, URIs: src.Uris, Suites: src.Suites,
+		kind := ""
+		if src.Kind == software.SourceKindFlatpak {
+			kind = bundle.SoftwareSourceFlatpak
+		}
+		b := bundle.SoftwareSource{Slug: src.Slug, Kind: kind, URIs: src.Uris, Suites: src.Suites,
 			Components: src.Components, Architectures: src.Architectures,
 			Keyring: base64.StdEncoding.EncodeToString(key.Keyring), Fingerprint: key.Fingerprint}
-		if err := bundle.ValidateSoftware(bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{b}}); err != nil {
+		check := bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{b}}
+		if src.Kind == software.SourceKindPaddock {
+			check.Repository = &s.repository.auth
+		}
+		if err := bundle.ValidateSoftware(check); err != nil {
 			slog.ErrorContext(ctx, "software source left out of bundles: it fails the bundle contract",
 				"source_id", src.ID, "slug", src.Slug, "error", err)
+			if src.Kind == software.SourceKindPaddock {
+				s.repository = nil
+			}
 			continue
 		}
 		s.sources[src.ID], s.bySlug[src.Slug] = b, b
 	}
 	for _, e := range entries {
 		refs, err := software.DecodePackages(e.Packages)
-		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: refs}
-		if err == nil {
-			err = software.ValidatePackageRefs(refs)
+		kind := software.SourceKindAPT
+		if e.SourceID.Valid {
+			kind = sourceKinds[e.SourceID.UUID]
 		}
+		if err == nil {
+			err = software.ValidatePackages(kind, refs)
+		}
+		entry := softwareEntry{name: e.Name, source: e.SourceID, packages: software.NormalizePackages(refs), approval: e.Approval}
 		if err != nil {
 			slog.ErrorContext(ctx, "catalog entry fails the catalog rules; the devices it applies to keep their previous bundle",
 				"catalog_entry_id", e.ID, "error", err)
@@ -102,17 +244,57 @@ func loadSoftware(ctx context.Context, q *pgstore.Queries) (*orgSoftware, error)
 	return s, nil
 }
 
-// section returns the software section of a device in groups with the given os-release ID, VERSION_ID and
-// architecture, the package holds its assignments add to the updates section, and the packages whose assignments
-// name different versions. Assignments of the organization and of the device's groups apply; each resolves through
-// its entry to the device's package and the results merge per package (software.MergeIntents). Only required packages
-// name their source, and Sources lists exactly those. The section is nil when no package resolves. err names an entry
-// that fails the current rules and has an assignment whose scope covers the device, or such an assignment whose entry
-// resolves on the device; the device's bundle must then not be published.
-func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) (*bundle.SoftwareSpec, []bundle.Hold, []software.Conflict, error) {
+// repositoryCredential returns the read credential of the organization's Paddock repository for its source: the
+// machine of apt's auth.conf is the source's first URI without the scheme. The secret is decrypted with the compiler's
+// Transit policy and never logged.
+func repositoryCredential(ctx context.Context, q *pgstore.Queries, org uuid.UUID, src pgstore.SoftwareSource,
+	creds CredentialDecrypter) (*repositoryAuth, error) {
+	if creds == nil {
+		return nil, errors.New("no Transit decrypter configured")
+	}
+	if len(src.Uris) != 1 || !strings.HasPrefix(src.Uris[0], "https://") {
+		return nil, errors.New("the paddock source must have exactly one https URI")
+	}
+	repo, err := q.GetSoftwareRepository(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("software repository: %w", err)
+	}
+	secret, err := creds.DecryptContext(ctx, app.SoftwareRepoCredentialKey, org, bao.FieldRepositoryCredential, repo.CredentialCiphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt the repository credential: %w", err)
+	}
+	return &repositoryAuth{slug: src.Slug, auth: bundle.SoftwareRepositoryAuth{
+		Host: strings.TrimPrefix(src.Uris[0], "https://"), Username: app.RepositoryUsername, Password: string(secret)}}, nil
+}
+
+// section returns the software section of the device with the given ID, in groups, with the given os-release ID,
+// VERSION_ID, architecture and agent version, the package holds its assignments add to the updates section, and the
+// packages whose assignments name different versions. Assignments of the organization and of the device's groups
+// apply, and those of a user or user group that owns the device (plan M13b decision 8); each resolves through its
+// entry to the device's package and the results merge per package (software.MergeIntents). An available package
+// carries its audience: everyone for an organization or device-group target, otherwise the user names of the targeted
+// owners, capped at bundle.MaxSoftwareAudience. A user-scope Flatpak application with intent required, forbid or
+// uninstall carries the same user names as its Users when every assignment of the winning intent targets users or
+// user groups, and none (system scope) when one targets the organization or a device group, or when a system-scope entry
+// of the same application contributes the winning intent (architect decision A10-11, PDK-925); a truncated list returns a flatpak_users_truncated warning. Required and available packages name their source, and Sources lists
+// exactly those; a section with a Flatpak source also requires the flatpak runtime package (plan M13b decision 9), so
+// a Flatpak forbid, uninstall or hold alone never installs Flatpak (architect decision A10-7). For an agent release
+// before selfServiceAgent, available packages and Flatpak applications are left out (A10-6), and for an agent before
+// the approval gate each available assignment whose entry requires approval, before the merge (A10-17). When the flatpak package
+// itself resolves to forbid or uninstall, every Flatpak application is left out with its remote and the runtime, and
+// each required or available one returns a flatpak_forbidden warning (A10-9); a truncated audience returns an
+// audience_truncated warning (A10-10). Both warnings name every assignment the package came from. The section is nil
+// when no package resolves. err names an entry that fails the current rules and has an assignment whose scope covers the
+// device, or such an assignment whose entry resolves on the device; the device's bundle must then not be published.
+func (s *orgSoftware) section(ctx context.Context, device uuid.UUID, groups []uuid.UUID, osID, versionID, arch, agent string) (*bundle.SoftwareSpec, []bundle.Hold, []software.Conflict, []compileWarning, error) {
 	var effective []software.Effective
+	// contributors are the assignments each package came from, by packageKey, for the warnings.
+	contributors := map[string][]pgstore.SoftwareAssignment{}
+	// approvals are the approval inputs of each available package, by packageKey (plan M13c decision 9).
+	approvals := map[string]*packageApproval{}
 	for _, a := range s.assignments {
-		if a.DeviceGroupID.Valid && !slices.Contains(groups, a.DeviceGroupID.UUID) {
+		owners, applies := s.targets(a, device, groups)
+		if !applies {
 			continue
 		}
 		e, ok := s.entries[a.CatalogEntryID]
@@ -122,54 +304,386 @@ func (s *orgSoftware) section(groups []uuid.UUID, osID, versionID, arch string) 
 		// An invalid entry fails every device of the assignment's scope, whether or not its references resolve there:
 		// which reference would apply cannot be trusted once the list fails the rules (an empty list resolves nowhere).
 		if e.invalid != nil {
-			return nil, nil, nil, fmt.Errorf("catalog entry %s (%s) fails the catalog rules: %w", a.CatalogEntryID,
+			return nil, nil, nil, nil, fmt.Errorf("catalog entry %s (%s) fails the catalog rules: %w", a.CatalogEntryID,
 				software.DisplayParam(e.name, 100), e.invalid)
 		}
-		pkg, ok := software.Resolve(e.packages, osID, versionID, arch)
+		ref, ok := software.ResolveRef(e.packages, osID, versionID, arch)
 		if !ok {
 			continue
 		}
 		if err := s.invalidAssignments[a.ID]; err != nil {
-			return nil, nil, nil, fmt.Errorf("software assignment %s of catalog entry %s (%s) fails the assignment rules: %w",
+			return nil, nil, nil, nil, fmt.Errorf("software assignment %s of catalog entry %s (%s) fails the assignment rules: %w",
 				a.ID, a.CatalogEntryID, software.DisplayParam(e.name, 100), err)
+		}
+		// Per assignment, before the merge: another entry of the same package must neither carry this entry's audience
+		// to the device nor lift it by supplying the merged package (A10-17).
+		if withheldForApproval(a.Intent, e.approval, agent, s.approvalGate) {
+			continue
 		}
 		slug := ""
 		if e.source.Valid {
 			src, ok := s.sources[e.source.UUID]
-			if !ok && a.Intent == software.IntentRequired {
+			if !ok && (a.Intent == software.IntentRequired || a.Intent == software.IntentAvailable) {
+				// Safe to leave out: the package is then just not installed (plan M13a decision 14).
 				continue
 			}
+			// A forbid, uninstall or hold needs no source, also for a Flatpak application (architect decision A10-7),
+			// so a failed source never lifts it.
 			slug = src.Slug
 		}
-		effective = append(effective, software.Effective{CatalogEntryID: a.CatalogEntryID, Package: pkg, Source: slug,
-			Intent: a.Intent, UpdateRule: a.UpdateRule, Version: a.Version})
+		audience, users, ok := targetedUsers(ctx, a, ref, owners, device)
+		if !ok {
+			continue
+		}
+		effective = append(effective, software.Effective{CatalogEntryID: a.CatalogEntryID, Package: ref.Package,
+			FlatpakRef: ref.FlatpakRef, Scope: ref.Scope, Source: slug, Intent: a.Intent, UpdateRule: a.UpdateRule,
+			Version: a.Version, Audience: audience, Users: users})
+		key := packageKey(bundle.SoftwarePackage{Package: ref.Package, FlatpakRef: ref.FlatpakRef})
+		contributors[key] = append(contributors[key], a)
+		if a.Intent == software.IntentAvailable {
+			pa := approvals[key]
+			if pa == nil {
+				pa = &packageApproval{}
+				approvals[key] = pa
+			}
+			pa.add(a.CatalogEntryID, e.approval == software.ApprovalRequired, audience)
+		}
 	}
 	resolved, mergeHolds, conflicts := software.MergeIntents(effective)
 	if len(resolved) == 0 {
-		return nil, nil, conflicts, nil
+		return nil, nil, conflicts, nil, nil
 	}
-	spec := &bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{}, Packages: make([]bundle.SoftwarePackage, 0, len(resolved))}
+	selfService := !buildinfo.OlderRelease(agent, selfServiceAgent)
+	flatpakForbidden := slices.ContainsFunc(resolved, func(r software.Resolved) bool {
+		return r.FlatpakRef == "" && r.Package == flatpakRuntime &&
+			(r.Intent == software.IntentForbid || r.Intent == software.IntentUninstall)
+	})
+	var warnings []compileWarning
+	spec := &bundle.SoftwareSpec{Sources: []bundle.SoftwareSource{}, Packages: make([]bundle.SoftwarePackage, 0, len(resolved)+1)}
 	var holds []bundle.Hold
 	for _, r := range resolved {
-		p := bundle.SoftwarePackage{Package: r.Package, Intent: r.Intent, Version: r.Version,
-			CatalogEntryID: r.CatalogEntryID.String()}
-		if r.Intent == software.IntentRequired && r.Source != "" {
+		if !selfService && (r.FlatpakRef != "" || r.Intent == software.IntentAvailable) {
+			continue
+		}
+		if flatpakForbidden && r.FlatpakRef != "" {
+			if r.Intent == software.IntentRequired || r.Intent == software.IntentAvailable {
+				slog.WarnContext(ctx, "flatpak_forbidden: an entry forbids or uninstalls flatpak, so a Flatpak application is left out",
+					"device_id", device, "catalog_entry_id", r.CatalogEntryID)
+				warnings = append(warnings, assignmentWarnings(contributors[packageKey(bundle.SoftwarePackage{FlatpakRef: r.FlatpakRef})],
+					WarningFlatpakForbidden, map[string]any{"flatpak_ref": r.FlatpakRef})...)
+			}
+			continue
+		}
+		p := bundle.SoftwarePackage{Package: r.Package, FlatpakRef: r.FlatpakRef, Scope: r.Scope, Intent: r.Intent,
+			Version: r.Version, CatalogEntryID: r.CatalogEntryID.String(), Audience: r.Audience,
+			Urgent: urgent(contributors[packageKey(bundle.SoftwarePackage{Package: r.Package, FlatpakRef: r.FlatpakRef})], r.Intent)}
+		// Only the self-service app shows icons, and an agent before the gate refuses a field it does not know.
+		if ic, ok := s.icons[r.CatalogEntryID]; ok && selfService {
+			p.IconSHA256 = ic.sha256
+		}
+		// The supplier's scope decides: a system-scope result never carries the users of another entry's user scope.
+		if r.Scope == bundle.SoftwareScopeUser && r.Users != nil {
+			p.Users = &r.Users
+		}
+		if r.Source != "" && (r.Intent == software.IntentRequired || r.Intent == software.IntentAvailable) {
 			p.Source = r.Source
 			if !slices.ContainsFunc(spec.Sources, func(x bundle.SoftwareSource) bool { return x.Slug == r.Source }) {
 				spec.Sources = append(spec.Sources, s.bySlug[r.Source])
 			}
 		}
+		if a := p.Audience; a != nil && len(a.Users) > bundle.MaxSoftwareAudience {
+			slog.WarnContext(ctx, "audience_truncated: the audience of an available package names more users than a bundle carries; "+
+				"the first ones by user name keep it", "device_id", device, "catalog_entry_id", r.CatalogEntryID,
+				"users", len(a.Users), "kept", bundle.MaxSoftwareAudience)
+			warnings = append(warnings, assignmentWarnings(contributors[packageKey(p)], WarningAudienceTruncated,
+				map[string]any{"users": len(a.Users), "kept": bundle.MaxSoftwareAudience})...)
+			a.Users = a.Users[:bundle.MaxSoftwareAudience]
+		}
+		if u := p.Users; u != nil && len(*u) > bundle.MaxSoftwareAudience {
+			slog.WarnContext(ctx, "flatpak_users_truncated: a user-scope Flatpak application targets more users than a bundle "+
+				"carries; the first ones by user name keep it", "device_id", device, "catalog_entry_id", r.CatalogEntryID,
+				"users", len(*u), "kept", bundle.MaxSoftwareAudience)
+			// Only the winning intent's user-targeted assignments put users into the list; the others lost the merge.
+			listed := slices.DeleteFunc(slices.Clone(contributors[packageKey(p)]), func(a pgstore.SoftwareAssignment) bool {
+				return a.Intent != r.Intent || (!a.UserID.Valid && !a.UserGroupID.Valid)
+			})
+			warnings = append(warnings, assignmentWarnings(listed, WarningFlatpakUsersTruncated,
+				map[string]any{"users": len(*u), "kept": bundle.MaxSoftwareAudience, "flatpak_ref": p.FlatpakRef})...)
+			*u = (*u)[:bundle.MaxSoftwareAudience]
+		}
+		s.applyApproval(&p, device, approvals[packageKey(p)])
 		spec.Packages = append(spec.Packages, p)
 		// ADR 0042 decision 3: a hold and a required pinned package are held by the updates reconciler, the single
 		// owner of apt-mark and the pin file.
 		pinned := r.Intent == software.IntentRequired &&
 			(r.Version != nil || slices.ContainsFunc(mergeHolds, func(h bundle.Hold) bool { return h.Package == r.Package }))
-		if r.Intent == software.IntentHold || pinned {
+		if r.FlatpakRef == "" && (r.Intent == software.IntentHold || pinned) {
 			holds = append(holds, bundle.Hold{Package: r.Package, Version: r.Version})
 		}
 	}
+	if len(spec.Packages) == 0 {
+		return nil, nil, conflicts, warnings, nil
+	}
+	addFlatpakRuntime(spec)
+	// Only an agent past the approval gate gets a package requiring approval, so the flag never reaches an agent that
+	// does not know it (decisions §54).
+	spec.RequestWithdraw = slices.ContainsFunc(spec.Packages, func(p bundle.SoftwarePackage) bool {
+		return p.Approval == bundle.SoftwareApprovalRequired
+	})
+	spec.Windows = s.deviceWindows(ctx, device, groups)
+	if r := s.repository; r != nil && slices.ContainsFunc(spec.Sources, func(x bundle.SoftwareSource) bool { return x.Slug == r.slug }) {
+		auth := r.auth
+		spec.Repository = &auth
+	}
 	slices.SortFunc(spec.Sources, func(a, b bundle.SoftwareSource) int { return strings.Compare(a.Slug, b.Slug) })
-	return spec, holds, conflicts, nil
+	return spec, holds, conflicts, warnings, nil
+}
+
+// packageApproval collects, for one available package, the entries of its available assignments that require approval
+// and the merged audience of those whose entry does not, since several catalog entries can name the same package.
+type packageApproval struct {
+	gated []uuid.UUID
+	free  bundle.SoftwareAudience
+}
+
+// add records an available assignment of entry with the given audience.
+func (pa *packageApproval) add(entry uuid.UUID, gated bool, audience *bundle.SoftwareAudience) {
+	switch {
+	case gated:
+		if !slices.Contains(pa.gated, entry) {
+			pa.gated = append(pa.gated, entry)
+		}
+	case audience == nil:
+	case audience.All:
+		pa.free.All = true
+	default:
+		pa.free.Users = append(pa.free.Users, audience.Users...)
+	}
+}
+
+// applyApproval marks an available package that an entry requiring approval offers (plan M13c decision 9): Approval
+// required, Approved the users of its audience an administrator approved on this device, and Denied the users of its
+// audience whose request on this device was denied inside the re-request lock, with the reason (architect decision
+// A10-27); an approved user is never listed as denied. Whichever entry supplies
+// the merged package, an entry requiring approval keeps it, and a user another entry offers the package to without
+// approval counts as approved; when that entry offers it to everyone, no approval is left. When every user of a listed
+// audience is approved, nothing is left to ask for and both are omitted. The approved users come only from the requests
+// of the device, after the rollout overlay chose the package, so an approval reaches no device the package does not.
+func (s *orgSoftware) applyApproval(p *bundle.SoftwarePackage, device uuid.UUID, pa *packageApproval) {
+	if p.Intent != software.IntentAvailable || p.Audience == nil || pa == nil || len(pa.gated) == 0 || pa.free.All {
+		return
+	}
+	var approved []string
+	candidates := slices.Clone(pa.free.Users)
+	for _, entry := range pa.gated {
+		candidates = append(candidates, s.approved[device][entry]...)
+	}
+	for _, u := range candidates {
+		if bundle.ValidAudienceUser(u) && (p.Audience.All || slices.Contains(p.Audience.Users, u)) && !slices.Contains(approved, u) {
+			approved = append(approved, u)
+		}
+	}
+	slices.Sort(approved)
+	if !p.Audience.All && len(approved) == len(p.Audience.Users) {
+		return
+	}
+	p.Approval = bundle.SoftwareApprovalRequired
+	if len(approved) > 0 {
+		approved = approved[:min(len(approved), bundle.MaxSoftwareAudience)]
+		p.Approved = &approved
+	}
+	var denied []bundle.SoftwareDenial
+	for _, entry := range pa.gated {
+		for _, d := range s.denied[device][entry] {
+			// An approved user, through another entry or a later decision, may install: a denial would contradict it.
+			if bundle.ValidAudienceUser(d.User) && (p.Audience.All || slices.Contains(p.Audience.Users, d.User)) &&
+				!slices.Contains(approved, d.User) && !slices.ContainsFunc(denied, func(x bundle.SoftwareDenial) bool { return x.User == d.User }) {
+				denied = append(denied, d)
+			}
+		}
+	}
+	if len(denied) > 0 {
+		slices.SortFunc(denied, func(a, b bundle.SoftwareDenial) int { return strings.Compare(a.User, b.User) })
+		denied = denied[:min(len(denied), bundle.MaxSoftwareAudience)]
+		p.Denied = &denied
+	}
+}
+
+// denialReason is the reason of a denial as a bundle carries it: untrusted text the api checked when the
+// administrator denied (maintainer answer Q7, architect decision A10-27). A row changed outside the api that fails
+// that check is rendered without its reason, so the device still learns of the denial and never shows the text.
+func denialReason(ctx context.Context, d pgstore.ListSoftwareRequestDenialsRow) string {
+	if err := software.ValidateDecisionReason(d.Reason, false); err != nil ||
+		utf8.RuneCountInString(d.Reason) > bundle.MaxSoftwareDenialReason {
+		// Warn, not Error: the row stays until an administrator acts, so every compile of the organization repeats it.
+		slog.WarnContext(ctx, "denial reason left out of the bundle: it fails the reason rules", "device_id", d.DeviceID,
+			"catalog_entry_id", d.CatalogEntryID, "error", err)
+		return ""
+	}
+	return d.Reason
+}
+
+// approvalAgent is the first agent release that honours SoftwarePackage.Approval, the first with PDK-811 (architect
+// decision A10-17). An older agent would offer Install to every user of the audience, so it never gets a package whose
+// entry requires approval. It is its own gate, not selfServiceAgent, so it follows PDK-811's release alone.
+//
+// PDK-811 ships in 0.1.0-alpha.10 (PDK-811a). A development build counts as current under A10-6, since it is built
+// from a tree with PDK-811, so development stacks and the device simulator get the packages and the approval flow stays
+// testable there. An empty gate would withhold the packages from every agent, development builds included.
+const approvalAgent = "0.1.0-alpha.10"
+
+// withheldForApproval reports whether an available package whose entry has approval is left out for agent: it requires
+// approval and agent is a release before gate (A10-17, with the A10-6 gating mechanism), or gate is empty (no agent
+// release honours approval yet).
+func withheldForApproval(intent, approval, agent, gate string) bool {
+	if intent != software.IntentAvailable || approval != software.ApprovalRequired {
+		return false
+	}
+	return gate == "" || buildinfo.OlderRelease(agent, gate)
+}
+
+// selfServiceAgent is the first agent release that reads what plan M13b added to the software section: available
+// packages with their audience, Flatpak sources and applications, and so the flatpak runtime package. It is the first
+// alpha.10 release, the first that contains PDK-800 (architect decisions A10-6 and 18). Releases before it validate
+// the whole section with their own bundle.ValidateSoftware and refuse it for any of these, so the compiler leaves
+// them out for an older agent and keeps its required, forbid, uninstall and hold APT packages (plan M13b C5).
+const selfServiceAgent = "0.1.0-alpha.10"
+
+// flatpakRuntime is the distribution package that provides the flatpak command.
+const flatpakRuntime = "flatpak"
+
+// urgent reports whether an assignment that contributed the winning intent of a package is urgent (plan M13c decision
+// 7): the package then ignores the maintenance windows.
+func urgent(contributors []pgstore.SoftwareAssignment, intent string) bool {
+	return slices.ContainsFunc(contributors, func(a pgstore.SoftwareAssignment) bool { return a.Urgent && a.Intent == intent })
+}
+
+// maintenanceWindow is the bundle form of a stored window, its days sorted.
+func maintenanceWindow(row pgstore.DeviceGroupMaintenanceWindow) bundle.SoftwareWindow {
+	days := make([]int, len(row.Days))
+	for i, d := range row.Days {
+		days[i] = int(d)
+	}
+	return devicegroup.NormalizeWindow(bundle.SoftwareWindow{Days: days, StartMinute: int(row.StartMinute),
+		DurationMinutes: int(row.DurationMinutes), Timezone: row.Timezone})
+}
+
+// deviceWindows are the maintenance windows of a device: the union of its groups' windows (architect-lead decision
+// Q17), nil when none of its groups has one. A union beyond bundle.MaxSoftwareWindows keeps the first ones in their
+// stable order: fewer windows defer longer but never for good.
+func (s *orgSoftware) deviceWindows(ctx context.Context, device uuid.UUID, groups []uuid.UUID) []bundle.SoftwareWindow {
+	var all []bundle.SoftwareWindow
+	for _, g := range groups {
+		if w, ok := s.windows[g]; ok {
+			all = append(all, w)
+		}
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	out := devicegroup.UnionWindows(all)
+	if len(out) > bundle.MaxSoftwareWindows {
+		slog.WarnContext(ctx, "the device's groups have more maintenance windows than a bundle carries; the first ones keep it",
+			"device_id", device, "windows", len(out), "kept", bundle.MaxSoftwareWindows)
+		out = out[:bundle.MaxSoftwareWindows]
+	}
+	return out
+}
+
+// addFlatpakRuntime requires the flatpak package from the distribution's repositories when the section has a Flatpak
+// source and no entry names the package itself (plan M13b decision 9, architect-lead decision Q12). It carries the nil
+// entry ID: it is not an entry of the organization, and the agent reports it as system-managed. It is urgent when an
+// urgent Flatpak application needs it, which could not install outside a window otherwise.
+func addFlatpakRuntime(spec *bundle.SoftwareSpec) {
+	if !slices.ContainsFunc(spec.Sources, func(x bundle.SoftwareSource) bool { return x.Kind == bundle.SoftwareSourceFlatpak }) ||
+		slices.ContainsFunc(spec.Packages, func(p bundle.SoftwarePackage) bool { return p.Package == flatpakRuntime }) {
+		return
+	}
+	i, _ := slices.BinarySearchFunc(spec.Packages, flatpakRuntime, func(p bundle.SoftwarePackage, name string) int {
+		return strings.Compare(packageKey(p), name)
+	})
+	needed := slices.ContainsFunc(spec.Packages, func(p bundle.SoftwarePackage) bool {
+		return p.FlatpakRef != "" && p.Urgent && (p.Intent == bundle.SoftwareRequired || p.Intent == bundle.SoftwareAvailable)
+	})
+	spec.Packages = slices.Insert(spec.Packages, i, bundle.SoftwarePackage{Package: flatpakRuntime,
+		Intent: bundle.SoftwareRequired, CatalogEntryID: bundle.SoftwareRuntimeEntryID, Urgent: needed})
+}
+
+// packageKey is the order of the section's packages, the one software.MergeIntents returns them in.
+func packageKey(p bundle.SoftwarePackage) string {
+	if p.FlatpakRef != "" {
+		return "flatpak:" + p.FlatpakRef
+	}
+	return p.Package
+}
+
+// targets reports whether assignment a applies to the device in groups and, for a user or user-group target, the
+// owners it targets on the device (plan M13b decision 8): an organization target or a device group of the device
+// applies with no owners named; a user target applies when the user owns the device, a user-group target with the
+// owners who are members. A user or user-group assignment applies only when it names at least one owner, so a device
+// without owners gets none of them.
+func (s *orgSoftware) targets(a pgstore.SoftwareAssignment, device uuid.UUID, groups []uuid.UUID) ([]deviceOwner, bool) {
+	var owners []deviceOwner
+	switch {
+	case a.DeviceGroupID.Valid && !slices.Contains(groups, a.DeviceGroupID.UUID):
+		return nil, false
+	case a.UserID.Valid:
+		for _, o := range s.owners[device] {
+			if o.user == a.UserID.UUID {
+				owners = append(owners, o)
+			}
+		}
+	case a.UserGroupID.Valid:
+		for _, o := range s.owners[device] {
+			if slices.Contains(s.members[a.UserGroupID.UUID], o.user) {
+				owners = append(owners, o)
+			}
+		}
+	default:
+		return nil, true
+	}
+	return owners, len(owners) > 0
+}
+
+// targetedUsers returns what assignment a, applying to the device with the targeted owners (none for the whole
+// device), carries for package ref: the audience of an available assignment, everyone for the whole device; the user
+// names of a user-scope Flatpak application with intent required, forbid or uninstall, none for the whole device
+// (architect decision A10-11). A user name a bundle cannot carry (bundle.ValidAudienceUser) is left out; ok is false
+// when that leaves a user-targeted audience or user list with nobody, so the assignment does not apply, and is never
+// widened to everyone or to system scope.
+func targetedUsers(ctx context.Context, a pgstore.SoftwareAssignment, ref software.PackageRef, owners []deviceOwner,
+	device uuid.UUID) (audience *bundle.SoftwareAudience, users []string, ok bool) {
+	userScope := ref.FlatpakRef != "" && ref.Scope == bundle.SoftwareScopeUser &&
+		(a.Intent == software.IntentRequired || a.Intent == software.IntentForbid || a.Intent == software.IntentUninstall)
+	switch {
+	case a.Intent != software.IntentAvailable && !userScope:
+		return nil, nil, true
+	case owners == nil && a.Intent == software.IntentAvailable:
+		return &bundle.SoftwareAudience{All: true}, nil, true
+	case owners == nil:
+		return nil, nil, true
+	}
+	users = make([]string, 0, len(owners))
+	for _, o := range owners {
+		// app_user allows names a bundle cannot carry (white space, a lower case Go and PostgreSQL disagree on): one
+		// such owner must not fail the device's bundle (PDK-799 review 1).
+		if !bundle.ValidAudienceUser(o.username) {
+			slog.WarnContext(ctx, "audience_user_dropped: an owner's user name cannot be carried in a bundle; the "+
+				"package is not offered to or targeted at the owner", "device_id", device, "user_id", o.user,
+				"catalog_entry_id", a.CatalogEntryID, "intent", a.Intent)
+			continue
+		}
+		users = append(users, o.username)
+	}
+	if len(users) == 0 {
+		return nil, nil, false
+	}
+	slices.Sort(users)
+	users = slices.Compact(users)
+	if a.Intent == software.IntentAvailable {
+		return &bundle.SoftwareAudience{Users: users}, nil, true
+	}
+	return nil, users, true
 }
 
 // alignWithHolds makes the software section and the device's merged holds (updates section) agree, as ADR 0042
@@ -219,4 +733,40 @@ func softwareFailure(device uuid.UUID, spec *bundle.SoftwareSpec) *renderFailure
 			"); the device keeps its previous bundle until the catalog is fixed"}
 	}
 	return nil
+}
+
+// bundleIcons returns the icons the software section names, by catalog entry ID.
+func (s *orgSoftware) bundleIcons(spec *bundle.SoftwareSpec) map[string]catalogIcon {
+	if spec == nil {
+		return nil
+	}
+	var icons map[string]catalogIcon
+	for _, p := range spec.Packages {
+		if p.IconSHA256 == "" {
+			continue
+		}
+		id, err := uuid.Parse(p.CatalogEntryID)
+		if err != nil {
+			continue
+		}
+		if ic, ok := s.icons[id]; ok {
+			if icons == nil {
+				icons = map[string]catalogIcon{}
+			}
+			icons[p.CatalogEntryID] = ic
+		}
+	}
+	return icons
+}
+
+// iconKeys maps the icon digests of a bundle, by catalog entry ID, to their object keys for the bundle pointer.
+func iconKeys(org uuid.UUID, digests map[string]string) map[string]string {
+	if len(digests) == 0 {
+		return nil
+	}
+	keys := make(map[string]string, len(digests))
+	for entry, sum := range digests {
+		keys[entry] = IconObjectKey(org, sum)
+	}
+	return keys
 }

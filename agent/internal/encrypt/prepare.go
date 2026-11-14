@@ -112,9 +112,12 @@ type Preparer struct {
 	// failed preparation (fail); nil reports a failure itself.
 	ReportNeutralize NeutralizeReport
 	// Hold returns once no supervisor upgrade runs (plan M8e decision 37); nil holds nothing.
-	Hold  func(ctx context.Context) error
-	Now   func() time.Time
-	Sleep func(ctx context.Context, d time.Duration) error
+	Hold func(ctx context.Context) error
+	// Shield runs the dracut installation with himmelblaud held stopped (reconcile.NSSShield.Run, PDK-983): its
+	// dependencies may create system accounts. Nil runs it as it is.
+	Shield func(ctx context.Context, action string, run func() (string, int, error)) (string, int, error)
+	Now    func() time.Time
+	Sleep  func(ctx context.Context, d time.Duration) error
 	// layout is the preflight of step 1, used by step 2 in the same run.
 	layout *Layout
 }
@@ -555,8 +558,25 @@ func (p *Preparer) installDracut(ctx context.Context) error {
 	if err != nil {
 		return &transient{err}
 	}
-	out, stderr, exit, err := p.Sys.CommandWithin(ctx, LongTimeout, []string{"DEBIAN_FRONTEND=noninteractive"}, "apt-get",
-		"install", "-y", "dracut")
+	var stderr string
+	install := func() (string, int, error) {
+		out, serr, exit, err := p.Sys.CommandWithin(ctx, LongTimeout, []string{"DEBIAN_FRONTEND=noninteractive"}, "apt-get",
+			"install", "-y", "dracut")
+		stderr = serr
+		return out, exit, err
+	}
+	var out string
+	var exit int
+	if p.Shield != nil {
+		out, exit, err = p.Shield(ctx, "apt-get install", install)
+	} else {
+		out, exit, err = install()
+	}
+	// The shield does not stop himmelblaud behind another package run and answers with apt's lock message: the step
+	// waits for the next pass like any other wait for dpkg's locks.
+	if exit != 0 && strings.HasPrefix(out, "E: Could not get lock") {
+		return errBusy
+	}
 	if err != nil || exit != 0 {
 		slog.WarnContext(ctx, "installing dracut failed", "exit", exit, "error", err, "stderr", firstLine(stderr),
 			"output", lastLine(out))

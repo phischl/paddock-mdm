@@ -78,9 +78,10 @@ func aptPatternMatches(pkg string) bool {
 	return slices.ContainsFunc(slices.Concat(fullyProtected, removalProtected, conflictingResult), re.MatchString)
 }
 
-// RefusedIntent reports whether an assignment with intent (required, uninstall, hold or forbid) must be refused for
-// pkg: every intent for a fully protected package, forbid and uninstall for a removal-protected one, required and
-// hold for a conflicting one.
+// RefusedIntent reports whether an assignment with intent (required, uninstall, hold, forbid or available) must be
+// refused for pkg: every intent for a fully protected package, forbid and uninstall for a removal-protected one,
+// required, hold and available for a conflicting one (a user's install of an available package puts it on the device
+// like a required one, as software.ValidateAssignmentTarget counts it).
 func RefusedIntent(pkg, intent string) bool {
 	switch {
 	case EntryRefused(pkg):
@@ -88,7 +89,7 @@ func RefusedIntent(pkg, intent string) bool {
 	case slices.Contains(removalProtected, pkg):
 		return intent == SoftwareForbid || intent == SoftwareUninstall
 	case slices.Contains(conflictingResult, pkg):
-		return intent == SoftwareRequired || intent == SoftwareHold
+		return intent == SoftwareRequired || intent == SoftwareHold || intent == SoftwareAvailable
 	}
 	return false
 }

@@ -1,18 +1,19 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { SoftwareArchitecture, SoftwareSource } from '../api/client'
+import type { SoftwareArchitecture, SoftwareSource, SoftwareSourceKind } from '../api/client'
 import { stepUpRequired } from '../lib/stepUp'
 import { useProblemText } from '../lib/problems'
 import {
-  groupFingerprint, normalizeFingerprint, saveSoftwareSource, splitTokens, splitUris, validateSource, type SourceInput,
+  groupFingerprint, normalizeFingerprint, saveSoftwareSource, softwareSourceKinds, splitTokens, splitUris, validateSource, type SourceInput,
 } from '../lib/software'
 import { hasErrors } from '../lib/validation'
 
 /**
  * Create and edit form of a package source. It sends the write itself: a refusal with step_up_required is not an
  * error but asks the page to run the step-up and repeat the write (emit step-up with the input), because adding or
- * changing a source is a root-equivalent change (plan M13a decision 30).
+ * changing a source is a root-equivalent change (plan M13a decision 30). A Flatpak remote (plan M13b decision 5) has one
+ * https URL and a key; the form hides the suites, components and architectures of an APT repository for it.
  */
 const props = withDefaults(
   defineProps<{ initial?: SoftwareSource | null; draft?: SourceInput | null; initialProblem?: string }>(),
@@ -25,6 +26,8 @@ const problemText = useProblemText()
 // A draft is what the administrator typed before a step-up round trip; it wins over the stored source so a refusal
 // after the resume does not cost the input.
 const draft = props.draft
+const kind = ref<SoftwareSourceKind>(draft?.kind ?? props.initial?.kind ?? 'apt')
+const flatpak = computed(() => kind.value === 'flatpak')
 const slug = ref(draft?.slug ?? props.initial?.slug ?? '')
 const name = ref(draft?.name ?? props.initial?.name ?? '')
 const uris = ref((draft?.uris ?? props.initial?.uris ?? []).join('\n'))
@@ -38,6 +41,7 @@ const pending = ref(false)
 const problem = ref(props.initialProblem)
 
 const input = computed<SourceInput>(() => ({
+  kind: kind.value,
   slug: slug.value.trim(),
   name: name.value,
   uris: splitUris(uris.value),
@@ -83,6 +87,16 @@ async function submit(): Promise<void> {
     novalidate
     @submit.prevent="submit"
   >
+    <v-select
+      id="source-kind"
+      v-model="kind"
+      :label="t('software.sources.kind')"
+      :hint="t('software.sources.kindHint')"
+      persistent-hint
+      :items="softwareSourceKinds.map((value) => ({ value, title: t('software.sources.kinds.' + value) }))"
+      :disabled="initial !== null"
+      data-testid="source-kind"
+    />
     <v-text-field
       id="source-name"
       v-model="name"
@@ -107,7 +121,7 @@ async function submit(): Promise<void> {
       id="source-uris"
       v-model="uris"
       :label="t('software.sources.uris')"
-      :hint="t('software.sources.urisHint')"
+      :hint="t(flatpak ? 'software.sources.flatpakUriHint' : 'software.sources.urisHint')"
       persistent-hint
       rows="2"
       auto-grow
@@ -115,44 +129,46 @@ async function submit(): Promise<void> {
       :error-messages="fieldErrors(errors.uris)"
       data-testid="source-uris"
     />
-    <v-text-field
-      id="source-suites"
-      v-model="suites"
-      :label="t('software.sources.suites')"
-      :hint="t('software.sources.suitesHint')"
-      persistent-hint
-      autocomplete="off"
-      spellcheck="false"
-      :error-messages="fieldErrors(errors.suites)"
-      data-testid="source-suites"
-    />
-    <v-text-field
-      id="source-components"
-      v-model="components"
-      :label="t('software.sources.components')"
-      :hint="t('software.sources.componentsHint')"
-      persistent-hint
-      autocomplete="off"
-      spellcheck="false"
-      :error-messages="fieldErrors(errors.components)"
-      data-testid="source-components"
-    />
-    <fieldset class="source-architectures">
-      <legend>{{ t('software.sources.architectures') }}</legend>
-      <v-checkbox
-        v-for="arch in ['amd64', 'arm64']"
-        :key="arch"
-        v-model="architectures"
-        :value="arch"
-        :label="arch"
-        density="compact"
-        hide-details
-        :data-testid="'source-arch-' + arch"
+    <template v-if="!flatpak">
+      <v-text-field
+        id="source-suites"
+        v-model="suites"
+        :label="t('software.sources.suites')"
+        :hint="t('software.sources.suitesHint')"
+        persistent-hint
+        autocomplete="off"
+        spellcheck="false"
+        :error-messages="fieldErrors(errors.suites)"
+        data-testid="source-suites"
       />
-      <p class="summary">
-        {{ t('software.sources.architecturesHint') }}
-      </p>
-    </fieldset>
+      <v-text-field
+        id="source-components"
+        v-model="components"
+        :label="t('software.sources.components')"
+        :hint="t('software.sources.componentsHint')"
+        persistent-hint
+        autocomplete="off"
+        spellcheck="false"
+        :error-messages="fieldErrors(errors.components)"
+        data-testid="source-components"
+      />
+      <fieldset class="source-architectures">
+        <legend>{{ t('software.sources.architectures') }}</legend>
+        <v-checkbox
+          v-for="arch in ['amd64', 'arm64']"
+          :key="arch"
+          v-model="architectures"
+          :value="arch"
+          :label="arch"
+          density="compact"
+          hide-details
+          :data-testid="'source-arch-' + arch"
+        />
+        <p class="summary">
+          {{ t('software.sources.architecturesHint') }}
+        </p>
+      </fieldset>
+    </template>
     <v-textarea
       id="source-key"
       v-model="signingKey"

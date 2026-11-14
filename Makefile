@@ -80,7 +80,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run gen'; fi
 
 .PHONY: lint
-lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose lint-selfservice ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
@@ -97,6 +97,13 @@ lint-supervisor-budget:
 lint-migrations-frozen:
 	go run ./tools/migrationsfrozen
 
+# Container hardening of every host's Compose file set (ADR 0051 decision 4, plan M12h decision 10): every service
+# drops all capabilities, sets no-new-privileges, a pids and a memory limit and adds no capability, unless
+# deploy/compose/hardening-exceptions.yaml lists it with the setting and a reason. Renders with docker compose.
+.PHONY: lint-compose
+lint-compose:
+	go run ./tools/composelint --compose-dir $(COMPOSE_DIR)
+
 # Regenerates pkg/compat/testdata/<RELEASE>/ (bundles, check-in, events, commands, the audit insert) from the current
 # tree and removes the directories older than two releases (plan M16 decision 2). Run at release time on the release
 # candidate; the release checklist is in docs/operations/testing-strategy.md.
@@ -105,12 +112,26 @@ compat-fixtures:
 	@if [ -z "$(RELEASE)" ]; then echo 'usage: make compat-fixtures RELEASE=<version without v>' >&2; exit 2; fi
 	go run ./pkg/compat/cmd/compatfixtures --release '$(RELEASE)'
 
+# The self-service desktop app (ADR 0049, plan M13b decision 15) needs nothing beyond the runner's python3: every file
+# must compile, and the tests run with the standard library's unittest against a fake socket (the GTK window test is
+# skipped without a display). Neither writes bytecode into the tree.
+SELFSERVICE_PY = $(shell find selfservice -name '*.py' -not -path '*/__pycache__/*' | LC_ALL=C sort) selfservice/paddock-self-service
+
+.PHONY: lint-selfservice
+lint-selfservice: ## Compile-check every Python file of the self-service app
+	@python3 -c 'import sys; [compile(open(f, encoding="utf-8").read(), f, "exec") for f in sys.argv[1:]]; print(f"lint-selfservice: {len(sys.argv) - 1} files compile")' $(SELFSERVICE_PY)
+
+.PHONY: test-selfservice
+test-selfservice: ## Unit tests of the self-service app (python3 -m unittest, no display needed)
+	cd selfservice && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
+
 # The dracut module of the in-place encryption (plan M8e PDK-244): the init script runs in the initrd under whatever
 # /bin/sh dracut installs, so it is checked as POSIX sh; module-setup.sh is sourced by dracut's bash. shellcheck comes
 # with the CI runner image; a missing shellcheck fails the target instead of skipping it (plan M8e stop condition S4).
 .PHONY: lint-shell
 lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
+	shellcheck -s sh deploy/compose/valkey/entrypoint.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
 	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
 	shellcheck -s bash test/stack-preflight.sh test/stack-preflight_test.sh
@@ -180,10 +201,12 @@ lint-prometheus:
 			promtool test rules alerts_test.yml'
 
 # Edge entrypoint (plan M7a step 1): validation messages, the rendered servers block and `caddy validate` of both
-# Caddyfiles with that block, in the pinned Caddy image.
+# Caddyfiles with that block, in the pinned Caddy image; then the slow-body regression test of the
+# device, admin and bundles sites (PDK-970).
 .PHONY: lint-caddy
 lint-caddy:
 	docker run --rm -v $(CURDIR)/$(COMPOSE_DIR)/caddy:/test:ro --entrypoint sh $(CADDY_IMAGE) /test/entrypoint_test.sh
+	docker run --rm -v $(CURDIR)/$(COMPOSE_DIR)/caddy:/test:ro --entrypoint sh $(CADDY_IMAGE) /test/slowbody_test.sh
 
 .PHONY: lint-go
 lint-go:
@@ -253,12 +276,14 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/dev-instance_test.sh
 	bash test/vms/virtualbox/lib_test.sh
 	bash packaging/release_test.sh
+	bash packaging/maintainer-scripts_test.sh
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/upgrade-check_test.sh
 	bash deploy/bundle/upgrade_test.sh
 	bash deploy/bundle/rollback_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
 	bash deploy/bundle/ci/assert-hardening_test.sh
+	bash deploy/bundle/ci/assert-segmentation_test.sh
 	bash deploy/bundle/ci/upgrade_test.sh
 	bash deploy/bundle/ci/fetch-previous_test.sh
 	bash test/scan-secrets_test.sh
@@ -269,6 +294,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash scripts/changelog-assemble_test.sh
 	bash scripts/release-notes-check_test.sh
 	bash scripts/acceptance-scope_test.sh
+	$(MAKE) --no-print-directory test-selfservice
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
@@ -374,6 +400,20 @@ deb: agent ## Build the paddock-supervisor, paddock-agent and paddock-revoke Deb
 		test -f bin/deb/$${pkg}_$(DEB_VERSION)_amd64.deb || { echo "nfpm did not build bin/deb/$${pkg}_$(DEB_VERSION)_amd64.deb"; exit 1; }; \
 	done
 	@ls -1 bin/deb/*.deb
+	$(MAKE) --no-print-directory selfservice-deb VERSION=$(VERSION)
+
+# The self-service desktop app (ADR 0049 decision 1) is architecture-independent and goes to bin/selfservice/, not
+# bin/deb/: the system tests install every package of bin/deb/ on server VMs without a graphical session.
+.PHONY: selfservice-deb
+selfservice-deb: ## Build the paddock-self-service Debian package (architecture all) into bin/selfservice/ (VERSION)
+	rm -rf bin/selfservice bin/deb/stage/selfservice-locale && mkdir -p bin/selfservice bin/deb/stage
+	python3 selfservice/tools/msgfmt.py selfservice/po/de.po bin/deb/stage/selfservice-locale/de/LC_MESSAGES/paddock-self-service.mo
+	printf '%s (%s) unstable; urgency=medium\n\n  * Release %s; see CHANGELOG.md.\n\n -- Paddock <paddock@paddock-mdm.invalid>  %s\n' \
+		paddock-self-service $(DEB_VERSION) $(VERSION) "$$(date -R -u)" | gzip -9n >bin/deb/stage/paddock-self-service.changelog.gz
+	docker run --rm -u $(UID):$(GID) -v $(CURDIR):/src -w /src -e VERSION=$(VERSION) $(NFPM_IMAGE) \
+		package --config packaging/nfpm/paddock-self-service.yaml --packager deb --target bin/selfservice/
+	test -f bin/selfservice/paddock-self-service_$(DEB_VERSION)_all.deb || { echo "nfpm did not build bin/selfservice/paddock-self-service_$(DEB_VERSION)_all.deb"; exit 1; }
+	@ls -1 bin/selfservice/*.deb
 
 # fleetd (plan M5a decision 3): fleetctl packages orbit and osquery from Fleet's update server (needs outbound HTTPS)
 # without enroll secret, scripts, Fleet Desktop or auto-updates. fleetctl accepts a Fleet URL only together with an
@@ -387,7 +427,7 @@ fleetd-deb: ## Build the fleetd Debian package fleet-osquery (amd64) with fleetc
 	@ls -1 bin/fleetd/fleet-osquery_*_amd64.deb
 
 .PHONY: agent-release
-agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd, sign them with the development release key and upload and publish them
+agent-release: ## Build paddockd, the Debian packages VERSION (TAGS), the self-service app and fleetd, sign them with the development release key and upload and publish them
 	@test -n "$(filter-out 0.0.0-dev,$(VERSION))" || { echo "usage: make agent-release VERSION=x.y.z [TAGS=...]"; exit 1; }
 	@test -z "$(REVOKE_TAGS)" || { echo "agent-release never builds paddock-revoke with REVOKE_TAGS ($(REVOKE_TAGS))"; exit 1; }
 	@test -z "$(filter paddock_testbroken_supervisor,$(subst $(comma), ,$(TAGS)))" || { echo "agent-release never builds a broken supervisor (TAGS=$(TAGS))"; exit 1; }
@@ -396,7 +436,7 @@ agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd,
 	$(MAKE) --no-print-directory fleetd-deb
 	go run ./test/acceptance/cmd/agentrelease --version $(VERSION) --publish \
 		--artifact amd64=bin/agent/amd64/paddockd --artifact arm64=bin/agent/arm64/paddockd \
-		$$(for f in bin/deb/*.deb bin/fleetd/*.deb; do printf -- '--deb %s ' "$$f"; done)
+		$$(for f in bin/deb/*.deb bin/selfservice/*.deb bin/fleetd/*.deb; do printf -- '--deb %s ' "$$f"; done)
 
 .PHONY: up
 # dev-secrets first: it only creates missing files, so a stack started before a new secret existed gets it on upgrade.
@@ -526,12 +566,18 @@ e2e-check-playwright:
 # Only the checkout is mounted at /src, so a .secrets symlink to another worktree would dangle in the container
 # (ENOENT on every login); its resolved path is mounted at /secrets instead, for the specs (PADDOCK_E2E_SECRETS) and
 # the Go helpers they run, bin/devicesim and bin/agentrelease (PADDOCK_SECRETS_DIR, stack.SecretsDir) (PDK-353).
+# Neither glibc nor Node resolves *.localhost by itself: with --network host the container only got the names from the
+# host's systemd-resolved stub, which intermittently answered ENOTFOUND on CI runners (PDK-998). Explicit hosts entries
+# for every public name of a *.localhost stack take the host resolver out of the path.
+E2E_DOMAIN    = $(call dev_setting,PADDOCK_DOMAIN,paddock.localhost)
+E2E_ADD_HOSTS = $(if $(filter %.localhost,$(E2E_DOMAIN)),$(foreach name,admin auth bundles device fleet,--add-host $(name).$(E2E_DOMAIN):127.0.0.1))
+unexport E2E_DOMAIN E2E_ADD_HOSTS
 .PHONY: e2e
 e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running stack (optional SPEC=<spec file or filter>; PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
 	$(STACK_PREFLIGHT)
 	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
-	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
+	docker run --rm --network host $(E2E_ADD_HOSTS) -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
 		-e PADDOCK_E2E_SECRETS=/secrets -e PADDOCK_SECRETS_DIR=/secrets -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
 		-e PADDOCK_PROJECT=$(DEV_PROJECT) \
 		-e PADDOCK_E2E_BASE_URL=$(or $(PADDOCK_E2E_BASE_URL),$(subst %,admin,$(DEV_HTTPS))) \
@@ -540,7 +586,7 @@ e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running
 		-v $(CURDIR):/src -v "$$(realpath -e $(SECRETS_DIR))":/secrets -w /src/$(WEB_DIR) \
 		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test $(SPEC)'
 
-# Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network <project>_cp and talk to
+# Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network <project>_edge and talk to
 # one gateway replica directly (http://paddock-gateway:8081), each device with its own X-Paddock-Client-IP address.
 LOAD_DIR := bin/load
 COUNT    ?= 10000
@@ -560,15 +606,16 @@ load-identities: ## Enroll COUNT load test devices with the enrollment configura
 	@test -n "$(CONFIGS)" || { echo "usage: make load-identities CONFIGS='token-1.json token-2.json …' [COUNT=10000]"; exit 2; }
 	@$(LOAD_GUARD)
 	CGO_ENABLED=0 go build -trimpath -o $(LOAD_DIR)/identities ./test/load/cmd/identities
-	docker run --rm --network $(DEV_PROJECT)_cp -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
+	docker run --rm --network $(DEV_PROJECT)_edge -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
 		/src/$(LOAD_DIR)/identities $(foreach c,$(CONFIGS),--config $(c)) --count $(COUNT) \
 		--server http://paddock-gateway:8081 --client-ip --out $(LOAD_DIR)/identities.json
 
+# k6 joins edge for the gateway and data for the ingest scenario's Prometheus, which stays off edge (PDK-819).
 .PHONY: load-test
 load-test: ## Run the k6 scenario SCENARIO=checkin|ingest against the running stack (RATE, VUS, WARMUP, DURATION, EVENTS_PER_S, BATCH, DRAIN, SCRAPE_INTERVAL_S)
 	@test -s $(LOAD_DIR)/identities.json || { echo "missing $(LOAD_DIR)/identities.json: run make load-identities"; exit 2; }
 	@$(LOAD_GUARD)
-	docker run --rm --network $(DEV_PROJECT)_cp -u $(UID):$(GID) -v $(CURDIR)/test/load/k6:/scripts:ro -v $(CURDIR)/$(LOAD_DIR):/data \
+	docker run --rm --network $(DEV_PROJECT)_edge --network $(DEV_PROJECT)_data -u $(UID):$(GID) -v $(CURDIR)/test/load/k6:/scripts:ro -v $(CURDIR)/$(LOAD_DIR):/data \
 		-e IDENTITIES=/data/identities.json \
 		$(foreach v,RATE VUS WARMUP DURATION EVENTS_PER_S BATCH DRAIN GATEWAY_URL PROMETHEUS_URL SCRAPE_INTERVAL_S,$(if $($(v)),-e $(v)='$($(v))',)) \
 		$(K6_IMAGE) run --summary-export /data/$(SCENARIO)-summary.json /scripts/$(SCENARIO).js
@@ -725,11 +772,12 @@ release-images: release-check ## Build and push the three images for RELEASE_PLA
 	[ -n "$(DRY_RUN)" ] || cat $(RELEASE_DIR)/images.txt
 
 # Agent binaries and Debian packages, unsigned; the sign job of the release workflow signs paddockd and the
-# paddock-agent and paddock-supervisor packages (packaging/sign-release.sh, ADR 0006 amendment 2026-10-11), and
-# paddock-revoke stays unsigned (revocation release key offline). GitHub renames release assets with characters such
+# paddock-agent, paddock-supervisor and paddock-self-service packages (packaging/sign-release.sh, ADR 0006 amendment
+# 2026-10-11, plan M13b amendment 2026-11-11), and paddock-revoke stays unsigned (revocation release key offline). GitHub renames release assets with characters such
 # as ~, so a pre-release's packages (Debian version x.y.z~alpha.N inside) are named
 # <name>_<release version>_<arch>-unsigned.deb.
 RELEASE_DEB_DIR ?= bin/deb
+RELEASE_SELFSERVICE_DIR ?= bin/selfservice
 
 .PHONY: release-packages
 release-packages: release-key-check ## Build the unsigned agent binaries and Debian packages of RELEASE_VERSION into dist/release/<version>/
@@ -740,7 +788,7 @@ release-packages: release-key-check ## Build the unsigned agent binaries and Deb
 
 .PHONY: release-debs
 release-debs: release-check
-	@for f in $(RELEASE_DEB_DIR)/*.deb; do b=$$(basename "$$f" .deb); \
+	@for f in $(RELEASE_DEB_DIR)/*.deb $(RELEASE_SELFSERVICE_DIR)/*.deb; do b=$$(basename "$$f" .deb); \
 		cp "$$f" "$(RELEASE_DIR)/$${b%%_*}_$(RELEASE_VERSION)_$${b##*_}-unsigned.deb" || exit 1; done
 
 .PHONY: release-names-check
@@ -749,8 +797,8 @@ release-names-check:
 		test -z "$$bad" || { echo "release file names GitHub would rename: $$bad"; exit 2; }
 
 # The publish job replaces each -unsigned agent file with its signed file and .minisig from RELEASE_SIGNED_DIR (the
-# sign job's output) before release-sums, so SHA256SUMS names the published files. No paddockd, paddock-agent or
-# paddock-supervisor file may stay unsigned; paddock-revoke is never in RELEASE_SIGNED_DIR.
+# sign job's output) before release-sums, so SHA256SUMS names the published files. No paddockd, paddock-agent,
+# paddock-supervisor or paddock-self-service file may stay unsigned; paddock-revoke is never in RELEASE_SIGNED_DIR.
 RELEASE_SIGNED_DIR ?=
 
 .PHONY: release-merge-signed
@@ -764,7 +812,7 @@ release-merge-signed: release-check
 			*) test -f "$$f.minisig" || { echo "$$b without $$b.minisig"; exit 2; }; rm -f "$(RELEASE_DIR)/$$b-unsigned" ;; \
 		esac; cp "$$f" "$(RELEASE_DIR)/$$b"; done
 	@left=$$(find $(RELEASE_DIR) -maxdepth 1 -type f \( -name 'paddockd_*-unsigned' -o -name 'paddock-agent_*-unsigned.deb' \
-		-o -name 'paddock-supervisor_*-unsigned.deb' \) -printf '%f\n'); \
+		-o -name 'paddock-supervisor_*-unsigned.deb' -o -name 'paddock-self-service_*-unsigned.deb' \) -printf '%f\n'); \
 		test -z "$$left" || { echo "agent files without a signed counterpart: $$left"; exit 2; }
 
 # One SPDX SBOM per image and platform, read by syft from the registry (decision 7).

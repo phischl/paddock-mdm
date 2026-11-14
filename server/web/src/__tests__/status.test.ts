@@ -20,6 +20,7 @@ const kinds = [
   'stale_warning', 'stale_critical', 'presumed_lost', 'quarantined', 'disk_not_compliant', 'agent_outdated', 'login_apply_failed',
   'sudo_apply_failed', 'revocation_pending', 'revocation_expired', 'agent_rollback_pending',
   'agent_not_running', 'uninstall_pending', 'config_behind', 'disk_conversion_failed', 'clock_drift', 'event_gap', 'report_only',
+  'software_requests_open',
 ] as const satisfies readonly AttentionKind[]
 const commands = ['pending', 'delivered', 'succeeded', 'failed', 'expired', 'cancelled'] as const satisfies readonly DeviceCommandStatus[]
 const revocations = ['requested', 'approved', 'issued', 'delivered', 'confirmed', 'failed', 'rejected', 'cancelled', 'expired'] as const satisfies readonly RevocationStatus[]
@@ -71,7 +72,7 @@ describe('status mappings (plan M7c decision 19)', () => {
       stale_warning: 'warn', disk_not_compliant: 'warn', agent_outdated: 'warn', login_apply_failed: 'warn', sudo_apply_failed: 'warn',
       agent_rollback_pending: 'warn', agent_not_running: 'warn', uninstall_pending: 'warn', config_behind: 'warn',
       disk_conversion_failed: 'warn', clock_drift: 'warn', event_gap: 'warn', revocation_pending: 'info',
-      report_only: 'info',
+      report_only: 'info', software_requests_open: 'info',
     }
     for (const kind of kinds) {
       expect(attentionStatus(kind), kind).toEqual({ status: kindStatus[kind], label: 'attention.kinds.' + kind })

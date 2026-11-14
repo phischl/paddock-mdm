@@ -316,10 +316,67 @@ case "$cmd" in
       [[ "$rev_db" =~ ^(none|[0-9a-f=\ -]+)$ ]] || rev_db=""
       revisions=(--backup-revisions-file "${rev_file:-none}" --backup-revisions-db "$rev_db")
     fi
+    # The host's Docker networks, so that an edge subnet another network already holds warns before up fails with
+    # "Pool overlaps" (decisions-alpha10 A10-1); the check container has no Docker socket.
+    # A failed listing must not read as "no network overlaps": the item is then reported as not checked.
+    docker_networks=()
+    if listing="$(
+      docker network ls -q | xargs -r docker network inspect \
+        --format '{{.Name}}={{range $i, $c := .IPAM.Config}}{{if $i}},{{end}}{{$c.Subnet}}{{end}}'
+    )"; then
+      docker_networks=(--docker-networks)
+      while IFS= read -r n; do
+        [[ -z "$n" ]] || docker_networks+=(--docker-network "$n")
+      done <<<"$listing"
+    else
+      echo "WARN  networks: edge subnet free on this host"
+      echo "      - not checked: listing the host's Docker networks failed"
+    fi
+    # An upgrade again after a rollback keeps the replaced bundle-seq/ aside (PDK-980), owned by uid 999, so only root
+    # can remove it. Its high-water is lower than the live one and must not be picked by hand after a disaster restore
+    # (decisions-alpha10 §44, plan M16 note 2026-11-11). A warning only: the directories are inert, and the check never
+    # touches them or bundle-seq/ itself.
+    if backup_host; then
+      leftovers=()
+      for d in "$BUNDLE_DIR"/.bundle-seq.replaced.*; do
+        [[ ! -e "$d" && ! -L "$d" ]] || leftovers+=("$d")
+      done
+      if ((${#leftovers[@]} == 0)); then
+        echo "PASS  upgrade: no leftover bundle-seq directories"
+      else
+        echo "WARN  upgrade: no leftover bundle-seq directories"
+        for d in "${leftovers[@]}"; do
+          echo "      - $d: a bundle-seq/ replaced by an upgrade after a rollback; nothing reads it, its high-water is outdated"
+        done
+        echo "      - remove them (root, they belong to uid 999): sudo rm -rf$(printf ' %q' "${leftovers[@]}")"
+      fi
+    fi
+    # Online, the project's running containers against the hardening matrix of hardening-exceptions.yaml (plan M12h
+    # decision 10): their `docker inspect` goes in as a file, because stdin carries the configuration. As above, a
+    # failed listing is reported as not checked, never as a pass.
+    # PADDOCK_CHECK_SKIP_CONTAINERS: set by ./paddock upgrade before up; the running containers are the old release's,
+    # which the matrix does not describe. The post-checks after up check them.
+    containers=() containers_mount=()
+    if [[ -n "$online" && -n "${PADDOCK_CHECK_SKIP_CONTAINERS:-}" ]]; then
+      echo "WARN  containers: capabilities and security options match the matrix"
+      echo "      - not checked: the old release still runs; the checks after up compare the new containers"
+    elif [[ -n "$online" ]]; then
+      containers_file="$(mktemp)"
+      trap 'rm -f "$containers_file"' EXIT
+      if ids="$(docker ps -q --filter "label=com.docker.compose.project=$PADDOCK_PROJECT")" &&
+        if [[ -n "$ids" ]]; then xargs docker inspect <<<"$ids"; else echo '[]'; fi >"$containers_file"; then
+        containers_mount=(-v "$containers_file:/run/paddock-check/containers.json:ro")
+        containers=(--containers /run/paddock-check/containers.json --hardening-exceptions "$BUNDLE_DIR/hardening-exceptions.yaml")
+      else
+        echo "WARN  containers: capabilities and security options match the matrix"
+        echo "      - not checked: listing the project's containers failed"
+      fi
+    fi
     PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
-      docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" \
+      docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" "${containers_mount[@]}" \
         -v "$BUNDLE_DIR:$BUNDLE_DIR:ro" -w "$BUNDLE_DIR" "$PADDOCK_IMAGE" \
-        prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online} "${revisions[@]}"
+        prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online} "${revisions[@]}" \
+        "${docker_networks[@]}" "${containers[@]}"
     ;;
   up)
     profiles=(--profile paddock --profile observability)

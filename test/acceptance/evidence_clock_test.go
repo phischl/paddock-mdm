@@ -29,7 +29,7 @@ func TestClockDrift(t *testing.T) {
 		if err := db.QueryRow(ctx, "SELECT max(last_contact_at) FROM device_status WHERE device_id = $1", d.DeviceID).Scan(&before); err != nil {
 			t.Fatal(err)
 		}
-		valkeyCLI(t, "DEL hb:"+d.DeviceID)
+		valkeyCLI(t, "worker", "DEL hb:"+d.DeviceID)
 		d.ClockOffset = offset
 		if _, res, err := d.Checkin(ctx); err != nil || res.Status != http.StatusOK {
 			t.Fatalf("check-in with offset %s: %v %d %s", offset, err, res.Status, res.Body)

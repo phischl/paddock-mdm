@@ -40,6 +40,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/valkeytest"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/device"
 )
@@ -125,7 +126,7 @@ func newEnvTrusting(t *testing.T, perKey, perIP int, trusted []netip.Prefix, opt
 		now: time.Now().Truncate(time.Second), org: uuid.New()}
 	deps := device.Deps{
 		Cache: e.cache, Publisher: e.pub, Presigner: fakePresigner{}, Artifacts: fakePresigner{}, Escrow: fakePresigner{},
-		PerKeyLimit: perKey, PerIPLimit: perIP,
+		RateLimits: ratelimit.NewValkeyStore(vc), PerKeyLimit: perKey, PerIPLimit: perIP,
 		Now: func() time.Time { return e.now }, CheckinDelay: func() int { return 300 }, TrustedProxies: trusted,
 	}
 	for _, opt := range opts {
@@ -1084,7 +1085,36 @@ func TestEvents(t *testing.T) {
 	if msg.RoutingKey != "ingest.event."+e.org.String() || len(batch.Events) != 2 || batch.DeviceID != id {
 		t.Fatalf("published %s %+v", msg.RoutingKey, batch)
 	}
-	e.expectProblem(post([]protocol.Event{ev("bundle.applied"), ev("rm -rf")}, true), http.StatusBadRequest, "unknown_event_type")
+	// The gateway admits software.request (plan M13c decision 9); its worker path opens the request.
+	if r := post([]protocol.Event{ev(protocol.EventSoftwareRequest)}, false); r.status != http.StatusAccepted {
+		t.Fatalf("software.request: %d %s", r.status, r.body)
+	}
+	// The contract and the gateway know software.request_withdrawn (PDK-811b): it is forwarded with its data.
+	if r := post([]protocol.Event{ev(protocol.EventSoftwareRequestWithdrawn)}, false); r.status != http.StatusAccepted {
+		t.Fatalf("software.request_withdrawn: %d %s", r.status, r.body)
+	}
+	batch = ingest.Events{}
+	_ = json.Unmarshal(e.pub.last(t).Body, &batch)
+	if len(batch.Events) != 1 || batch.Events[0].Type != protocol.EventSoftwareRequestWithdrawn || batch.Events[0].Data == nil {
+		t.Fatalf("software.request_withdrawn: published %+v", batch)
+	}
+	// An unknown type from a newer agent is forwarded without its data and the rest of the batch is accepted, so the
+	// device does not resend it forever (PDK-995); the worker claims its number.
+	for _, events := range [][]protocol.Event{{ev("bundle.applied"), ev("rm -rf")}, {ev("future.event")}} {
+		if r := post(events, true); r.status != http.StatusAccepted {
+			t.Fatalf("unknown type: %d %s", r.status, r.body)
+		}
+		batch = ingest.Events{}
+		_ = json.Unmarshal(e.pub.last(t).Body, &batch)
+		last := batch.Events[len(batch.Events)-1]
+		if len(batch.Events) != len(events) || last.Type != events[len(events)-1].Type || last.Data != nil ||
+			(len(events) > 1 && batch.Events[0].Data == nil) {
+			t.Fatalf("unknown type: published %+v", batch)
+		}
+	}
+	unknownSeq := ev("future.event")
+	unknownSeq.EventSeq = -1
+	e.expectProblem(post([]protocol.Event{unknownSeq}, true), http.StatusBadRequest, "invalid_request")
 	many := make([]protocol.Event, 501)
 	for i := range many {
 		many[i] = ev("bundle.applied")
@@ -1175,6 +1205,25 @@ func TestRateLimitClientAddress(t *testing.T) {
 	}
 	for _, h := range []string{"X-Paddock-Client-IP", "X-Forwarded-For", "CF-Connecting-IP"} {
 		untrusted.expectProblem(checkin(untrusted, map[string]string{h: "198.51.100.9"}), http.StatusTooManyRequests, "rate_limited")
+	}
+}
+
+// TestRateLimitIPv6Prefix: IPv6 clients are keyed by their /64 (plan M12h decision 7): a second address of the same
+// /64 shares the budget, an address of another /64 does not.
+func TestRateLimitIPv6Prefix(t *testing.T) {
+	e := newEnvTrusting(t, 10, 1, []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
+	checkin := func(ip string) result {
+		c := newClient(t)
+		id := e.enrolled(c, "active")
+		return e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0),
+			mutate: func(r *http.Request, _ *[]byte) { r.Header.Set("X-Paddock-Client-IP", ip) }})
+	}
+	if r := checkin("2001:db8:1:2::1"); r.status != http.StatusOK {
+		t.Fatalf("first: %d %s", r.status, r.body)
+	}
+	e.expectProblem(checkin("2001:db8:1:2:ffff::9"), http.StatusTooManyRequests, "rate_limited")
+	if r := checkin("2001:db8:1:3::1"); r.status != http.StatusOK {
+		t.Fatalf("other /64: %d %s", r.status, r.body)
 	}
 }
 

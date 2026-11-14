@@ -412,6 +412,20 @@ func gateL1(t *testing.T, w *identityWorld) {
 		w.ID, w.erin.name, w.gus.name)); n != "0" {
 		t.Errorf("refused users recorded as seen: %s", n)
 	}
+	nssWhileStopped(t, w)
+}
+
+// nssWhileStopped records whether a signed-in directory user still resolves through NSS while himmelblaud is stopped,
+// as during the agent's holds around package transactions (PDK-983 review M6). The operator documentation does not
+// promise that it does; the gate records what the device answers, by name and by UID, and starts the daemon again.
+func nssWhileStopped(t *testing.T, w *identityWorld) {
+	uid := w.Must("id -u " + w.dave.name)
+	w.Must("sudo systemctl stop himmelblaud.service")
+	defer w.Must("sudo systemctl start himmelblaud.service himmelblaud-tasks.service")
+	byName := w.MustRoot("getent passwd " + w.dave.name + " >/dev/null && echo resolves || echo unresolved")
+	byUID := w.MustRoot("getent passwd " + uid + " >/dev/null && echo resolves || echo unresolved")
+	t.Logf("%s: PDK-983 M6: with himmelblaud stopped, signed-in directory user %s (UID %s): by name %s, by UID %s",
+		w.Name, w.dave.name, uid, byName, byUID)
 }
 
 // sudoList returns the commands `sudo -l -U user` lists for the user ("" for "not allowed").
@@ -488,7 +502,7 @@ func gateP3(t *testing.T, w *identityWorld) {
 // administrator's membership.
 func gateL6(t *testing.T, w *identityWorld) {
 	t0 := time.Now().UTC()
-	conf := strings.Split(w.Must("sudo cat /etc/himmelblau/himmelblau.conf"), "\n")
+	conf := strings.Split(w.MustRoot("cat /etc/himmelblau/himmelblau.conf"), "\n")
 	for _, line := range []string{"cache_timeout = 2592000", "local_sudo_group = paddock-no-sudo", "local_groups_reconcile_interval = 0"} {
 		if !slices.Contains(conf, line) {
 			t.Fatalf("himmelblau.conf lacks the line %s (PDK-292, PDK-294)", line)

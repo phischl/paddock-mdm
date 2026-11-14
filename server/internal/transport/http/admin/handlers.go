@@ -76,12 +76,18 @@ type handlers struct {
 	notifications *app.Notifications
 	// softwareSources are the APT package sources (plan M13a decisions 1–6).
 	softwareSources *app.SoftwareSources
+	// softwarePackages are the packages stored in Paddock and the organization's repository (plan M13c decision 12).
+	softwarePackages *app.SoftwarePackages
 	// softwareCatalog are the catalog entries and their assignments (plan M13a decisions 7–11).
 	softwareCatalog *app.SoftwareCatalog
+	// softwareRequests are the users' requests for entries that require approval (plan M13c decisions 9 and 10).
+	softwareRequests *app.SoftwareRequests
 	// softwareStatus lists what devices report about the catalog's applications (plan M13a §3.4).
 	softwareStatus *app.SoftwareStatus
-	ipAllowlist    *app.IPAllowlist
-	overview       *app.Overview
+	// compileWarnings are the compile warnings of the organization's devices (PDK-918).
+	compileWarnings *app.CompileWarnings
+	ipAllowlist     *app.IPAllowlist
+	overview        *app.Overview
 	// securityReview is the review of existing data (ADR 0034 decision 7).
 	securityReview *app.SecurityReview
 	// accessReview is the access review report (plan M12 decisions 25 and 26).

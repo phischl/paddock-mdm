@@ -135,7 +135,7 @@ func gateDESC(t *testing.T, w *diskWorld) string {
 	}
 	w.MustIn(header, "sudo sh -c 'umask 077 && cat > /run/paddock-gate-header.img'")
 	copyImg := "/run/paddock-gate-copy.img"
-	loop := w.Must("sudo sh -c 'truncate -s 64M " + copyImg + " && losetup --find --show " + copyImg + "'")
+	loop := w.MustDevice("truncate -s 64M " + copyImg + " && losetup --find --show " + copyImg)
 	cleanup := "sudo sh -c 'losetup -d " + loop + "; rm -f " + copyImg + " /run/paddock-gate-header.img'"
 	// Best effort: a failing cleanup must not add a second failure to the gate's own.
 	defer func() { _, _ = w.SSH(context.Background(), nil, cleanup) }()

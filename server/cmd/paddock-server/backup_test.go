@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/backuprole"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 )
 
@@ -58,5 +59,34 @@ func TestPrintBackupStatus(t *testing.T) {
 	out.Reset()
 	if err := printBackupStatus(&out, nil, nil, nil, nil); err != nil || !strings.Contains(out.String(), "no backup runs") {
 		t.Errorf("without a key: %s %v", out.String(), err)
+	}
+}
+
+// TestPrintBackupStatusNamesUnknownPathTarget: a target whose mirror found a repository path no backup key names gets a
+// note under the table that the path is kept, deletions go on, and the log names the path (decisions-alpha10 A10-25);
+// a target without that error gets none.
+func TestPrintBackupStatusNamesUnknownPathTarget(t *testing.T) {
+	unknown, dial := backuprole.ClassUnknownPath, "dial"
+	nas, s3 := uuid.New(), uuid.New()
+	var out bytes.Buffer
+	err := printBackupStatus(&out, nil, nil,
+		[]pgstore.AllBackupTargetsRow{{ID: nas, Name: "nas", Type: "smb", Enabled: true, HostState: "mounted"},
+			{ID: s3, Name: "offsite", Type: "s3", Enabled: true, HostState: "n/a"}},
+		[]pgstore.BackupTargetStatus{{TargetID: s3, Kind: "postgres", LastError: &unknown},
+			{TargetID: s3, Kind: "openbao", LastError: &unknown}, {TargetID: nas, Kind: "postgres", LastError: &dial}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if n := strings.Count(got, "offsite holds a pgBackRest repository path no backup key names"); n != 1 {
+		t.Errorf("%d notes for offsite, want 1:\n%s", n, got)
+	}
+	if strings.Contains(got, "nas holds") {
+		t.Errorf("a note for a target without an unknown path:\n%s", got)
+	}
+	for _, want := range []string{"goes on deleting", "paddock-backup log names the path"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the note lacks %q:\n%s", want, got)
+		}
 	}
 }

@@ -213,13 +213,13 @@ func healthSoftwareItem(report, pkg string) (item softwareItem, ok bool, err err
 // torn down with the VM snapshot.
 func (d *Device) setupGateRepo() gateRepo {
 	d.t.Helper()
-	return d.gateKey(d.MustIn([]byte(gateRepoScript), "sudo bash -s"))
+	return d.gateKey(d.MustRootIn([]byte(gateRepoScript), "bash -s"))
 }
 
 // rotateGateRepo gives the repository a new signing key (gate SW7) and returns it.
 func (d *Device) rotateGateRepo() gateRepo {
 	d.t.Helper()
-	return d.gateKey(d.MustIn([]byte(gateRotateScript), "sudo bash -s"))
+	return d.gateKey(d.MustRootIn([]byte(gateRotateScript), "bash -s"))
 }
 
 func (d *Device) gateKey(colons string) gateRepo {
@@ -228,15 +228,15 @@ func (d *Device) gateKey(colons string) gateRepo {
 	if len(fp) != 40 {
 		d.t.Fatalf("%s: no fingerprint of the gate key in %q", d.Name, colons)
 	}
-	key := d.Must("sudo env GNUPGHOME=" + gateRepoDir + "/gnupg gpg --armor --export " + fp)
+	key := d.MustRoot("env GNUPGHOME=" + gateRepoDir + "/gnupg gpg --armor --export " + fp)
 	return gateRepo{Key: key + "\n", Fingerprint: fp}
 }
 
 // keyringFingerprint is the fingerprint of the keyring file at path on the VM ("" when it holds none).
 func (d *Device) keyringFingerprint(path string) string {
 	d.t.Helper()
-	return colonFingerprint(d.Must("sudo sh -c 'h=$(mktemp -d); GNUPGHOME=$h gpg --show-keys --with-colons " + path +
-		" 2>/dev/null; rm -rf \"$h\"; true'"))
+	return colonFingerprint(d.MustRoot("h=$(mktemp -d); GNUPGHOME=$h gpg --show-keys --with-colons " + path +
+		" 2>/dev/null; rm -rf \"$h\"; true"))
 }
 
 // scopedUpdate runs apt-get update for the source slug alone, as the agent does, and returns its output and error.
@@ -356,7 +356,8 @@ func (d *Device) softwareSource(repo gateRepo) (id, slug string) {
 }
 
 // catalogEntry creates a catalog entry of pkg from source for the VM's distribution (every release and
-// architecture) with the run's suffix and deletes it, with its assignments, when the test ends.
+// architecture) with the run's suffix and deletes it when the test ends, after its assignments (an entry with
+// assignments cannot be deleted, plan M13c amendment 2026-11-09).
 func (d *Device) catalogEntry(source, pkg string) string {
 	d.t.Helper()
 	distribution := d.Must(". /etc/os-release && echo \"$ID\"")
@@ -378,12 +379,15 @@ func assignmentBody(intent, version string) map[string]any {
 }
 
 // assign assigns the entry to the device's group with intent and version ("" for none) and returns the
-// assignment's ID; it goes with the entry.
-func (d *Device) assign(entry, intent, version string) string {
+// assignment's ID; it is deleted when keep ends, before its entry (cleanups run last in, first out). keep is the
+// VM's test for an assignment later gates use: d.t is the bound subtest, whose cleanup would delete it too early.
+func (d *Device) assign(keep *testing.T, entry, intent, version string) string {
 	d.t.Helper()
 	body := assignmentBody(intent, version)
 	body["catalog_entry_id"], body["device_group_id"], body["reason"] = entry, d.Group, "system test "+d.run
-	return d.s.ID(d.t, d.s.Call(d.t, http.MethodPost, "/api/v1/software-assignments", body, http.StatusCreated))
+	id := d.s.ID(d.t, d.s.Call(d.t, http.MethodPost, "/api/v1/software-assignments", body, http.StatusCreated))
+	d.s.DeleteOnCleanup(keep, "/api/v1/software-assignments/"+id)
+	return id
 }
 
 // reassign changes the intent and version of an assignment.

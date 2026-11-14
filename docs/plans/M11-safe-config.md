@@ -1312,3 +1312,245 @@ without a migration merge as soon as their dependencies are on the branch. The V
     configuration object. The portal card loads the counts afterwards from `GET /config-rollouts/{id}`, the one counting
     rule (R6.14), shows a skeleton while loading and an inline error with a retry on failure. No second counting rule in
     SQL and no cache.
+
+## Amendment 2026-11-09 (architect, A10-19): rollout accounting state table
+
+Amends decisions 27, 28, 32 and 33 and the architect answer R6.14 (b)–(d), (f) of this plan, as decided by the architect lead (A10-19) after review 4 of PDK-809 stopped on the scoping of discarded failures. The same text is appended to plan M13c; both copies are binding and identical.
+
+### 1. Scope and the binding invariant
+
+This table is the one accounting rule of configuration rollouts (`app.ConfigRollouts`: `classify`, `countRollout`,
+`Evaluate`; `configrollout.Decide`, `WaveDone`, `Observed`, `Stalled`). It replaces the scoping of the A10-16 and
+A10-18 amendments where they differ; the halt rule, the maintenance windows, the union and the stall warning as such
+stay. Where this table and the code differ, the table wins (PDK-809 fix round 5). The invariant, binding:
+
+- **I1** A rollout never advances a wave and never completes without an observed success: at least one device that
+  joined in the current wave applied the change without failure. The only exception is a wave that no device joined
+  (nothing to observe).
+- **I2** Every device whose failure a resume discarded, in any reached wave, must re-apply successfully before the
+  rollout advances or completes. A retry that fails again does not satisfy I2.
+- **I3** The halt check counts failures over every reached wave; advance and complete block on the same device set
+  (every eligible device), while the observation of progress (first apply, share) is taken from the devices that
+  joined in the current wave only.
+- **I4** A device waiting for its maintenance window is pending: never failed, never a success.
+- **I5** Time never stands in for an observed apply.
+
+### 2. Definitions
+
+- **E (eligible)**: the active devices (`device.state = 'active'`) with stored `config_mode = enforce` that are inside
+  the reached percentage (`configrollout.Eligible` on the device's bucket, or a canary member). Report-only devices,
+  retired, revoked and deleted devices are never in E.
+- **J (joined) ⊆ E**: `configrollout.JoinedIn`: every device of E in wave 0; in wave n > 0 a device of E that wave
+  n − 1 did not reach. Canary members are in J only in wave 0. Devices of E \ J belong to an **earlier wave**.
+- **Counting report**: the device's newest `device_bundle_report` on a bundle whose `config_rollout_id` is this
+  rollout (`ListConfigRolloutReports`), plus the current `device_software_status` rows of the staged entries.
+- **recent**: recorded by the server at or after `evaluation_since` (bundle report: `recorded_at`; staged software
+  entry: `device_software_status.reported_at`, PDK-944). Before the first resume `evaluation_since = started_at`, so
+  every report is recent.
+- **resumed**: `evaluation_since > started_at` (both default to the same `now()` at insert).
+- **Device states** (exactly one per device of E; `classify`):
+  - **NR** not reached: not in E (bucket outside the reached percentage and not canary).
+  - **RP** reached, pending: in E, no counting report (no bundle of the rollout exists for the device yet, the device
+    is offline or has not reported the bundle), or a report-only report of an enforce device.
+  - **WW** waiting_for_window: enforced apply without a failed staged resource, and a staged software entry
+    `pending/outside_window`.
+  - **OK** applied: enforced apply, no failed staged resource, no staged entry waiting. **OK-pre** when the report is
+    not recent (applied before the latest resume), **OK-post** when recent (applied, or retried, after it).
+  - **FL** failed: a rejection, or an enforced apply with a failed staged resource (resource row of that version, or a
+    staged software entry `failed`), and the report is recent. **FL-0** when the rollout was never resumed; **FL-r**
+    when `resumed` (a retry that failed again, or a new failure after the resume; the data cannot tell them apart and
+    the rule does not need to).
+  - **DC** discarded: as FL but not recent, and no newer counting report since. The device has not retried since the
+    resume that discarded its failure.
+- **Counts** (all over E unless stated): `Eligible = |E|`; `Failed = |FL|`; `Waiting = |WW|`;
+  `AwaitingRetry = |DC| + (resumed ? |FL| : 0)`. Over J: `Wave.Eligible = |J|`; `Wave.Applied = |J ∩ (OK ∪ FL)|`
+  (success or failure, any time); `Wave.Recent = |J ∩ (OK-post ∪ FL)|`; `Wave.Succeeded = |J ∩ OK|` (any time).
+
+### 3. The rule (`configrollout.Decide`, evaluated by the worker every round at `now`)
+
+```
+Halt      := Failed > 0 ∧ Failed ≥ Threshold(Eligible, failure_threshold_percent, failure_threshold_min)
+Observed  := AwaitingRetry = 0
+          ∧ ( Wave.Eligible = 0
+            ∨ ( first_applied_at ≠ nil ∧ Wave.Succeeded ≥ 1
+              ∧ ( Wave.Recent × 100 ≥ wave_success_threshold_percent × Wave.Eligible ∨ Waiting = 0 ) ) )
+Clock     := Wave.Eligible = 0 ? wave_started_at : first_applied_at
+WaveDone  := Observed ∧ now − Clock ≥ min_wave_minutes
+Decision  := ¬running → Keep; Halt → Halt; ¬WaveDone → Keep; current wave is last → Complete; else Advance
+Progress  := Wave.Applied grew since the last round ∨ (Waiting + AwaitingRetry) shrank since the last round
+Stalled   := running ∧ ¬Observed ∧ ¬warned ∧ now − wave_progress_at ≥ stall_warning_hours
+```
+
+- `first_applied_at` is set by the worker in the first round that sees `Wave.Applied > 0` (success or failure, any
+  time), dated with the round's time; an advance and a resume clear it (A10-18). `wave_progress_at` is set to the
+  round's time on `Progress`; an advance and a resume set it to now and clear `stall_warned_at`.
+- The `AwaitingRetry = 0` term is unconditional: it holds the wave also when `Wave.Eligible = 0` and also when the
+  share is reached. This closes the hole that `Wave.Eligible = 0` made the share vacuously true.
+- A wave that only waits for `min_wave_minutes` (Observed holds) is never stalled.
+- Manual `Advance` and manual `Complete` do not run this rule (plan M11 decision 32): they are the administrator's
+  override and are audited as such. Manual `Complete` from `halted` stays allowed.
+
+### 4. State table
+
+Columns: (1) counts in `Eligible` / `Failed` for the halt; (2a) counts in `Wave.Applied` (dates the clock) /
+`Wave.Succeeded` (gate I1); (2b) counts in `Wave.Recent` (share) / `Waiting` (escape) / `AwaitingRetry` (blocks);
+(3) complete = identical to advance in every row (I3), not repeated; (4) counts as stall progress when it appears or
+changes; (5) counts bucket of `GET /config-rollouts/{id}` and the device-list fields `report_outcome` /
+`waiting_for_window` / `awaiting_retry`. "–" = not counted. "Current" = device in J, "earlier" = device in E \ J.
+
+| # | State | Wave | Time of report | (1) Eligible / Failed | (2a) Applied / Succeeded | (2b) Recent / Waiting / AwaitingRetry | (4) Progress | (5) Counts / list |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| S1 | NR not reached | – | – | – / – | – / – | – / – / – | – | not in counts; list `in_wave=false`, `none`, false, false |
+| S2 | RP pending | current | – | yes / – | – / – | – / – / – | – | pending; `none`, false, false |
+| S3 | RP pending | earlier | – | yes / – | – / – | – / – / – | – | pending; `none`, false, false |
+| S4 | WW waiting | current | any | yes / – | – / – | – / yes / – | leaving WW (shrink) | pending; `applied`, true, false |
+| S5 | WW waiting | earlier | any | yes / – | – / – | – / yes / – | leaving WW (shrink) | pending; `applied`, true, false |
+| S6 | OK-pre | current | before resume | yes / – | yes / yes | – / – / – | – (already counted) | applied; `applied`, false, false |
+| S7 | OK-pre | earlier | before resume | yes / – | – / – | – / – / – | – | applied; `applied`, false, false |
+| S8 | OK-post (incl. retried ok) | current | after resume | yes / – | yes / yes | yes / – / – | Applied grows | applied; `applied`, false, false |
+| S9 | OK-post (incl. retried ok) | earlier | after resume | yes / – | – / – | – / – / – | leaving DC or FL-r (shrink) | applied; `applied`, false, false |
+| S10 | FL-0 (never resumed) | current | since start | yes / yes | yes / – | yes / – / – | Applied grows | failed; `rejected` or `applied`+failed ids, false, false |
+| S11 | FL-0 (never resumed) | earlier | since start | yes / yes | – / – | – / – / – | – | failed; as S10, false, false |
+| S12 | FL-r (retried failed, or new failure) | current | after resume | yes / yes | yes / – | yes / – / yes | Applied grows | failed; as S10, false, **true** |
+| S13 | FL-r (retried failed, or new failure) | earlier | after resume | yes / yes | – / – | – / – / yes | – | failed; as S10, false, **true** |
+| S14 | DC discarded | current | before resume | yes / – | – / – | – / – / yes | – | pending; `none`, false, **true** |
+| S15 | DC discarded | earlier | before resume | yes / – | – / – | – / – / yes | – | pending; `none`, false, **true** |
+
+**Correction 2026-11-09 (A10-20)** to row S1 (architect lead, after review 5 of PDK-809; the row above is kept as
+written, this note is binding where they differ):
+
+- S1 means "does not count for this rollout", not "shows nothing". The `none` in column (5) is withdrawn: the device
+  list keeps showing the stored outcome of a not-reached device — `report_only` for a report-only device, or the
+  earlier outcome (`applied`, `rejected`) of a device that left E (C3, C4, C6) — and marks the device as not counted
+  (`in_wave=false`; `waiting_for_window` and `awaiting_retry` stay `false`). The display behaviour of PDK-809 stays as
+  it is; at most a "not counted" hint is added in PDK-804's follow-up.
+- Point 1 of A10-20, recorded here because it touches the DC rows: a staged software entry `failed` whose
+  `reported_at` lies before `started_at` is not recent and is therefore DC (S14/S15), which holds the wave and never
+  advances it. This is accepted for now as the safe side and handled by PDK-944, which re-dates the software statuses
+  so the failure counts as FL-0 and the halt is not up to 24 h late; PDK-944 gets the acceptance criterion that a
+  failure reported before the rollout start halts the wave on the first evaluation after the rollout starts.
+
+Reading aids:
+- S10 is A10-16 unchanged: a sub-threshold failure before any resume counts as "applied (with failure)" for the share
+  and does not hold the wave; the threshold decides.
+- S12/S13 are stricter than the data can distinguish (I2): after a resume every failed device holds the rollout until
+  it applies successfully. A resume is the administrator's statement that the cause is fixed; a failure after it
+  contradicts the statement, so the rollout waits (stall warning) instead of widening. Halt still fires first when the
+  threshold is reached.
+- S14/S15 are the Review 4 blocker: `AwaitingRetry` is counted over E, not over J.
+- S6: the pre-resume success satisfies I1 (`Wave.Succeeded`) and dates the clock in the first round after the
+  resume, but it never counts toward the share (A10-18). A manual halt and resume of a wave that had fully applied
+  therefore advances after a fresh `min_wave_minutes`, through the `Waiting = 0` escape, with no device awaiting a
+  retry.
+- S4/S5: `Waiting` is counted over E (I3). It only matters while the current wave's share is below the threshold.
+
+### 5. Special cases (binding)
+
+| # | Case | Behaviour |
+| --- | --- | --- |
+| C1 | No device joined the current wave (`Wave.Eligible = 0`) | Clock from `wave_started_at`; `Wave.Succeeded` and the share are not required (nothing to observe, I1 exception); `AwaitingRetry = 0` is still required. |
+| C2 | No eligible device at all (`Eligible = 0`) | C1 in every wave: the rollout completes after `waves × min_wave_minutes` with nothing observed; nothing was changed anywhere. |
+| C3 | Device deleted, retired or revoked (`state ≠ active`) | Leaves E in the next round: its failure, success, waiting and awaiting-retry no longer count; a halt already recorded stays. `first_applied_at` is not revisited. |
+| C4 | Device moved between groups | Its bucket does not change, so E and J do not change — except the canary group: leaving it drops a device whose bucket is outside the reached percentage to NR (S1); joining it adds the device to E (and to J only in wave 0). If the move changes the device's rendered content it gets a new bundle of the rollout and is counted by its report as any other device. |
+| C5 | Device enrolled during the rollout | In E when its bucket is inside the reached percentage; in J only when wave n − 1 would not have reached it. Counted by its report like any other device. |
+| C6 | Device switched to report-only during the rollout | Leaves E (the compiler renders the overlay for it, plan M11 decision 30). Switching back to enforce re-enters E. |
+| C7 | Device offline for days | RP (S2/S3): pending, never failed, no effect on the share or the escape. It holds the wave only when it is the sole device of J (no first apply, I1) — then the stall warning fires after `stall_warning_hours`. When it returns, its report counts from then on, also after later waves advanced (halt check over E). |
+| C8 | Device not concerned by the change (content-equal rendering, no bundle of the rollout) | RP (S2/S3) in this release: it dilutes the share and, if all of J are such devices, holds the wave until the administrator advances. Follow-up (architect, outside PDK-809, see §9): the compiler publishes a bundle whenever the bundle's rollout tag changes, so every device of E reports an apply. |
+| C9 | Urgent change set (plan M11 decision 26, `rollout = urgent`) | Not staged, no `config_rollout` row, no accounting. While a rollout is open, urgent writes overlapping staged keys are refused (R6.13 (a)). |
+| C10 | Urgent software assignment (plan M13c decision 7) | Bypasses the maintenance window only: its device is never WW for that entry; a staged urgent assignment follows the waves and this table unchanged. |
+| C11 | Halt by the administrator (no failures), then resume | S6/S7 for every applied device; `AwaitingRetry = 0`; the wave advances after a fresh `min_wave_minutes` from the first round after the resume. |
+| C12 | Halt on failures, resume, no retry | S14/S15: `AwaitingRetry > 0` holds the rollout for ever; stall warning after `stall_warning_hours` with `awaiting_retry` in its params; the administrator advances, completes, halts or reverts. |
+| C13 | Halt on failures, resume, every discarded device retried successfully | `AwaitingRetry = 0`; advance or complete once the clock and (share or `Waiting = 0`) hold. |
+| C14 | Two worker replicas, or an administrator acting between read and write | Unchanged: the write is guarded by status, wave index, `evaluation_since` and `wave_started_at` (`ignoreStale`). |
+
+### 6. Contract and bookkeeping changes (additive, ADR 0013; all in PDK-809, migration `00120` is uncommitted)
+
+- `config_rollout` gains `wave_outstanding int NOT NULL DEFAULT 0 CHECK (wave_outstanding >= 0)`: the last
+  `Waiting + AwaitingRetry` the worker saw; an advance and a resume reset it to 0. `RecordConfigRolloutWaveProgress`
+  writes `wave_applied` and `wave_outstanding` and sets `wave_progress_at = now`, `stall_warned_at = NULL` on
+  `Progress` (§3), with the same guards as today.
+- `configrollout.Rollout` carries `Waiting` and `AwaitingRetry` (over E) next to `Eligible` and `Failed`;
+  `configrollout.WaveCounts` carries `Eligible, Applied, Recent, Succeeded` (over J). The J-scoped `Waiting` and
+  `Discarded` are removed.
+- `RolloutCounts` (`counts` of `ConfigRollout` in `admin.yaml`) gains the required integers `waiting` and
+  `awaiting_retry` next to `eligible, applied, failed, pending`; both are subsets of `pending` except that
+  `awaiting_retry` also counts S12/S13 (which are in `failed`).
+- `ConfigRolloutDevice` (`GET /config-rollouts/{id}/devices`) gains the required boolean `awaiting_retry` (true in
+  S12–S15); `report_outcome` keeps R6.14 (c): `none` for S14/S15. New filter `awaiting_retry` (boolean), documented
+  in `x-paddock-list`.
+- `config_rollout.stalled` params: `rollout_id`, `change_set_id`, `wave`, `stalled_since`, `stall_warning_hours`,
+  `wave_eligible`, `wave_applied`, `waiting`, `awaiting_retry` (replaces `wave_waiting`; the code is unreleased).
+- The portal does not show the new fields yet (PDK-942 follow-up, unchanged).
+
+### 7. Test rows (PDK-809 fix round 5; one subtest per row, named by its ID)
+
+Unit, `server/internal/domain/configrollout/waves_test.go`, `TestDecideAccounting` (table-driven over
+`configrollout.Rollout` → `Decision` and `Observed`), `min_wave_minutes = 30`, `wave_success_threshold_percent = 90`,
+`failure_threshold_min = 1` unless stated:
+
+| ID | Input (counts over E / J, clock) | Expected |
+| --- | --- | --- |
+| U1 | J: Eligible 3, Applied 3, Succeeded 0, Recent 3; Failed 3 ≥ threshold | Halt (halt before anything else) |
+| U2 | as U1 but `failure_threshold_min = 5` (no halt); clock +31 min | Keep (I1: no success); Observed false |
+| U3 | J: Eligible 10, Applied 9, Succeeded 9, Recent 9; Waiting 1; clock +31 min | Advance (share 90 %) |
+| U4 | J: Eligible 10, Applied 8, Succeeded 8, Recent 8; Waiting 1 (over E, an earlier-wave device); clock +31 min | Keep; Observed false (share 80 %, a device waits) |
+| U5 | as U4 with Waiting 0 | Advance (escape, I3 over E) |
+| U6 | J: Eligible 10, Applied 10, Succeeded 10, Recent 10; AwaitingRetry 1 (earlier wave); clock +31 min | Keep; Observed false (S15) |
+| U7 | J: Eligible 0; AwaitingRetry 1; wave_started_at −31 min | Keep (C1 still requires AwaitingRetry 0) |
+| U8 | J: Eligible 0; AwaitingRetry 0; wave_started_at −29 min / −30 min | Keep / Advance |
+| U9 | J: Eligible 5, Applied 5, Succeeded 5 (pre-resume: Recent 0); Waiting 0; AwaitingRetry 0; first_applied_at −30 min | Advance (C11) |
+| U10 | as U9 with first_applied_at nil | Keep (clock not started) |
+| U11 | U3 with Observed true and clock +29 min | Keep, and `Stalled` false whatever `wave_progress_at` is |
+| U12 | U6 with `wave_progress_at` −24 h, not warned / warned | Stalled true / false |
+| U13 | last wave, U3 inputs | Complete |
+
+Integration, new file `server/internal/app/rolloutaccounting_integration_test.go`, `TestRolloutAccountingTable`,
+waves `50/100`, `min_wave_minutes = 30`, `failure_threshold_min = 1`, `wave_success_threshold_percent = 90`, one staged
+software entry and one staged managed file, fixtures as in `rolloutwindows_integration_test.go`. Each row asserts the
+rollout status and `current_wave_index` after `Evaluate` at the stated times, and the counts and device-list fields of
+§4 column (5):
+
+| ID | Setup → steps | Expected |
+| --- | --- | --- |
+| A1 (the probe "wave-0 failure, halt, resume, +32 min → not completed") | rollout at `current_wave_index = 1` (fixture or manual `Advance`); device a (bucket < 50, earlier wave) whose newest report is an enforced apply with a failed staged resource; device b (bucket ≥ 50, J) applied ok and installed; evaluate → halted; `Resume` at T; evaluate at T+1 min and T+32 min | T+1: running, wave 1; T+32: **running, wave 1, not completed**; counts `applied 1, failed 0, pending 1, awaiting_retry 1`; a listed `report_outcome none`, `awaiting_retry true`, b `applied` |
+| A2 | A1, then device a reports an enforced apply without failure at T+40 min; evaluate at T+41 min | **completed** (S9 clears `awaiting_retry`; the clock was dated T+1 by b's pre-resume apply, S6; `Wave.Succeeded = 1`; share 0 % but `Waiting = 0`) |
+| A3 | A1, then device a reports a failed staged resource again at T+40 min; evaluate at T+41 min and T+71 min | halted again at T+41 (`Failed 1 ≥ threshold 1`). Variant with `failure_threshold_min = 2`: running, wave 1 at T+71 (S13 holds); counts `failed 1, awaiting_retry 1`; a listed `applied` with the failed id, `awaiting_retry true` |
+| A4 | wave 0 with three devices, all fail the staged file, `failure_threshold_min = 5`; evaluate at +31 min | running, wave 0 (I1, S10 without a success); `failed = 3`, `awaiting_retry = 0`; stall warning at +24 h |
+| A5 | wave 0: device a applied ok before a manual `Halt`; `Resume`; evaluate at +1 min, +29 min, +31 min | running / running / wave 1 (C11) |
+| A6 | wave 1: device a (earlier wave) `pending/outside_window` on the staged entry (S5); J = {b, c}: b applied ok, c without report; evaluate at T+31 min; then a's window opens, a installs; evaluate again | T+31: running, wave 1 (share 50 % < 90 % and `Waiting = 1` over E); after a installed: completed (`Waiting = 0`, escape). Variant A6' with J = {b} only: completed at T+31 although a still waits (share 100 % wins) |
+| A7 | `Eligible = 0` (no active enforce device); evaluate at +31 min and +62 min | wave 1 at +31 min, completed at +62 min (C2) |
+| A8 | wave 1, J = ∅ (every device joined in wave 0), one wave-0 device DC after resume; evaluate at +31 min | running, wave 1 (C1 + U7) |
+| A9 | A1 at +1 min, then device a is retired (`state ≠ active`); evaluate at +32 min | completed (C3), `awaiting_retry = 0` |
+| A10 | wave 0: device a applied ok, device b offline (no report); evaluate at +31 min | wave 1 (C7: offline does not hold); A10' with a also offline: running, stall warning at +24 h |
+| A11 | staged urgent assignment, device outside its window applies and installs; a non-urgent staged entry on another device stays `outside_window` | the urgent device is OK (S8), the other WW (S4); `waiting = 1` (C10) |
+| A12 | A1 state; device list filters `awaiting_retry=true` / `report_outcome=none` | both return device a; `in_wave true`, `waiting_for_window false` |
+| A13 | stall progress on a shrink: A1 with two earlier-wave devices a1, a2 both DC after the resume at T; evaluate at T+1 min; a1 retries ok at T+10 h; evaluate at T+10 h, T+25 h and T+35 h | T+10 h: running (a2 still holds), `awaiting_retry 2 → 1` resets `wave_progress_at`; T+25 h: no `config_rollout.stalled`; T+35 h: one `config_rollout.stalled` with params `awaiting_retry = 1`, `waiting = 0`, `wave_applied = 1` |
+
+Rows that are trivially implied and need no own test: S3, S7, S11 (earlier-wave counterparts whose only effect is the
+halt count, already covered by `TestConfigRolloutCountingRule`), S1 (covered by `TestConfigRolloutCountsAndDevices`).
+The software-dated rows after a resume (a staged entry that fails or installs after the resume, dated by
+`device_software_status.reported_at`) are PDK-944's tests; until PDK-944 such a failure is DC instead of FL-r, which
+holds the rollout the same way (S14 vs S12) but does not count toward the halt. The review of PDK-809 accepts that
+difference only in those rows.
+
+### 8. Documentation updates in the same fix round
+
+- Plan M13c amendment A10-18, bullet "Discarded failures stay outstanding": add "— of any reached wave, not only of
+  the current one; after a resume also every failed device (§4 S12/S13 of the A10-19 amendment)".
+- `docs/operations/configuration-rollouts.md`: section 4's table gains the `waiting` and `awaiting_retry` counts and
+  the list field `awaiting_retry`; the A10-18 paragraph reads "A device of any wave whose failure the resume discarded,
+  and after a resume every device whose newest report is a failure, is shown with `awaiting_retry: true` and holds the
+  rollout until it has applied successfully"; the troubleshooting row "A rollout does not move on" names
+  `awaiting_retry` and that a wave with no successful apply never advances by itself.
+- `docs/compliance/audit-codes.md`: params of `config_rollout.stalled` as §6.
+- `changelog.d/PDK-809.*`: mention the two new counts, the list field and the filter.
+
+### 9. Out of PDK-809 (the lead creates the stubs)
+
+- **Compiler: a changed rollout tag is a new bundle (C8).** `compiler.render` treats a bundle whose
+  `config_rollout_id` differs from the latest bundle's as changed, so every eligible device gets a bundle of the
+  rollout and reports an apply (a no-op apply for a device the change does not touch). Without it, group-scoped changes
+  with small first waves need a manual advance under I1. Architect decision recorded here; implementation in its own
+  ticket, with a test that an unchanged device inside the wave gets a tagged bundle and one outside the wave does not.
+- **PDK-944** dates staged software applies and failures by `device_software_status.reported_at` (§2 "recent").
+- **PDK-937** (other pending software reasons) is unchanged by this table: only `outside_window` is WW.

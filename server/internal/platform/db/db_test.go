@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -753,6 +755,235 @@ func TestWithLeaderLocks(t *testing.T) {
 	ok, err = other.WithLeaderLock(ctx, first, func(context.Context) error { return nil })
 	if err != nil || !ok {
 		t.Fatalf("first key not released after the failed attempt: ok %v, err %v", ok, err)
+	}
+}
+
+// TestLeaderLocksDoNotStarveThePool (PDK-1010): with a lock pool, more rounds than the query pool has connections hold
+// their leader locks at once, and still each round's own query, a further query and readiness get a connection;
+// readiness also gets one while queries hold every connection of the query pool.
+func TestLeaderLocksDoNotStarveThePool(t *testing.T) {
+	env := sharedPaddock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	const queryConns, rounds = 2, 6
+	p, err := db.NewPlatformPool(ctx, env.Platform, db.Options{MaxConns: queryConns, LockConns: rounds, HealthConn: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	release := make(chan struct{})
+	// Close waits for every acquired connection, so a failing test must let the rounds go first.
+	free := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(free)
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem})
+	query := func(ctx context.Context) error {
+		_, err := p.FleetHostInUse(ctx, uuid.Must(uuid.NewV7()), "starvation-test")
+		return err
+	}
+
+	holding := make(chan error, rounds)
+	done := make(chan error, rounds)
+	for i := range rounds {
+		go func() {
+			ok, err := p.WithLeaderLock(sys, int64(0x7465737440)+int64(i), func(ctx context.Context) error {
+				holding <- query(ctx)
+				<-release
+				return nil
+			})
+			if !ok && err == nil {
+				err = errors.New("lock not taken")
+			}
+			done <- err
+		}()
+	}
+	for range rounds {
+		select {
+		case err := <-holding:
+			if err != nil {
+				t.Fatalf("query of a round holding its lock: %v", err)
+			}
+		case err := <-done:
+			t.Fatalf("round ended before the others held their locks: %v", err)
+		case <-ctx.Done():
+			t.Fatal("not every round got its lock and ran its query")
+		}
+	}
+	probe := func(what string, fn func(ctx context.Context) error) {
+		t.Helper()
+		pctx, done := context.WithTimeout(sys, 3*time.Second)
+		defer done()
+		if err := fn(pctx); err != nil {
+			t.Errorf("%s while %d rounds hold their locks: %v", what, rounds, err)
+		}
+	}
+	probe("readiness", p.Ping)
+	probe("query", query)
+
+	busy := make(chan struct{}, queryConns)
+	queriesDone := make(chan error, queryConns)
+	for range queryConns {
+		go func() {
+			queriesDone <- p.InPlatform(sys, func(context.Context, *pgstore.Queries) error {
+				busy <- struct{}{}
+				<-release
+				return nil
+			})
+		}()
+	}
+	for range queryConns {
+		<-busy
+	}
+	probe("readiness with the query pool exhausted", p.Ping)
+
+	free()
+	for range rounds {
+		if err := <-done; err != nil {
+			t.Errorf("round: %v", err)
+		}
+	}
+	for range queryConns {
+		if err := <-queriesDone; err != nil {
+			t.Errorf("query: %v", err)
+		}
+	}
+}
+
+// TestLeaderLocksWaitForALockConnection (PDK-1010, connection budget): with fewer lock connections than rounds, the
+// rounds beyond the lock pool wait for a lock connection while queries and readiness still get theirs, and run once
+// a round ends.
+func TestLeaderLocksWaitForALockConnection(t *testing.T) {
+	env := sharedPaddock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	const lockConns, rounds = 2, 5
+	p, err := db.NewPlatformPool(ctx, env.Platform, db.Options{MaxConns: 2, LockConns: lockConns, HealthConn: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	release := make(chan struct{})
+	free := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(free)
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem})
+
+	var running atomic.Int32
+	holding := make(chan struct{}, rounds)
+	done := make(chan error, rounds)
+	for i := range rounds {
+		go func() {
+			ok, err := p.WithLeaderLock(sys, int64(0x7761697440)+int64(i), func(ctx context.Context) error {
+				running.Add(1)
+				holding <- struct{}{}
+				<-release
+				return nil
+			})
+			if !ok && err == nil {
+				err = errors.New("lock not taken")
+			}
+			done <- err
+		}()
+	}
+	for range lockConns {
+		select {
+		case <-holding:
+		case <-ctx.Done():
+			t.Fatal("the rounds did not get the lock connections")
+		}
+	}
+	// The other rounds wait in Acquire; give them the chance to (wrongly) start.
+	time.Sleep(500 * time.Millisecond)
+	if n := running.Load(); n != lockConns {
+		t.Fatalf("%d rounds run with %d lock connections", n, lockConns)
+	}
+	probe := func(what string, fn func(ctx context.Context) error) {
+		t.Helper()
+		pctx, done := context.WithTimeout(sys, 3*time.Second)
+		defer done()
+		if err := fn(pctx); err != nil {
+			t.Errorf("%s while rounds wait for a lock connection: %v", what, err)
+		}
+	}
+	probe("readiness", p.Ping)
+	probe("query", func(ctx context.Context) error {
+		_, err := p.FleetHostInUse(ctx, uuid.Must(uuid.NewV7()), "lock-wait-test")
+		return err
+	})
+
+	free()
+	for range rounds {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("round: %v", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("a waiting round never got a lock connection")
+		}
+	}
+	if n := running.Load(); n != rounds {
+		t.Errorf("%d of %d rounds ran", n, rounds)
+	}
+}
+
+// TestLead (decisions-alpha10 §50): Lead holds the lock for as long as fn runs, so a second process does not lead;
+// when the holding session dies, fn's context ends with ErrLeadershipLost, Lead returns it, and the other process
+// leads next.
+func TestLead(t *testing.T) {
+	env := sharedPaddock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	first, err := db.NewPlatformPool(ctx, env.Platform, db.Options{MaxConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(first.Close)
+	second, err := db.NewPlatformPool(ctx, env.Platform, db.Options{MaxConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(second.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(context.Background()) })
+	const key = int64(0x7465737433)
+
+	leading := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		ok, err := first.Lead(ctx, key, 50*time.Millisecond, func(ctx context.Context) error {
+			close(leading)
+			<-ctx.Done()
+			if !errors.Is(context.Cause(ctx), db.ErrLeadershipLost) {
+				return fmt.Errorf("fn ended with cause %v", context.Cause(ctx))
+			}
+			return nil
+		})
+		if !ok {
+			err = errors.Join(errors.New("first did not lead"), err)
+		}
+		result <- err
+	}()
+	<-leading
+	ok, err := second.Lead(ctx, key, time.Second, func(context.Context) error { return nil })
+	if ok || err != nil {
+		t.Fatalf("second process while the first leads: ok %v, err %v", ok, err)
+	}
+	if _, err := super.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
+		WHERE locktype = 'advisory' AND ((classid::bigint << 32) | objid::bigint) = $1`, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; !errors.Is(err, db.ErrLeadershipLost) {
+		t.Fatalf("first after its session died: %v, want ErrLeadershipLost", err)
+	}
+	ran := false
+	ok, err = second.Lead(ctx, key, time.Second, func(context.Context) error {
+		ran = true
+		return nil
+	})
+	if !ok || !ran || err != nil {
+		t.Fatalf("second after the first lost the lock: ok %v, ran %v, err %v", ok, ran, err)
 	}
 }
 

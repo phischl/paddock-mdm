@@ -4,14 +4,19 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/compat"
 	"github.com/phischl/paddock-mdm/pkg/openpgpkey"
+	"github.com/phischl/paddock-mdm/server/internal/compiler"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 )
 
@@ -504,4 +509,1352 @@ func mismatchingFingerprint(fp string) string {
 		last = '1'
 	}
 	return fp[:len(fp)-1] + string(last)
+}
+
+// userGroup inserts a user group with the given members.
+func (w *world) userGroup(slug string, members ...uuid.UUID) uuid.UUID {
+	w.t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO user_group (id, organization_id, slug, name, source) VALUES ($1, $2, $3, $3, 'local')", id, w.org, slug)
+	for _, m := range members {
+		w.exec("INSERT INTO user_group_member (organization_id, group_id, user_id) VALUES ($1, $2, $3)", w.org, id, m)
+	}
+	return id
+}
+
+// own makes users owners of dev.
+func (w *world) own(dev uuid.UUID, users ...uuid.UUID) {
+	w.t.Helper()
+	for _, u := range users {
+		w.exec("INSERT INTO device_owner (organization_id, device_id, user_id) VALUES ($1, $2, $3)", w.org, dev, u)
+	}
+}
+
+// assignTo inserts an assignment of entry to a user (column user_id) or a user group (column user_group_id).
+func (w *world) assignTo(entry uuid.UUID, column string, target uuid.UUID, intent string) {
+	w.t.Helper()
+	w.exec(`INSERT INTO software_assignment (id, organization_id, catalog_entry_id, `+column+`, intent) VALUES ($1, $2, $3, $4, $5)`,
+		uuid.Must(uuid.NewV7()), w.org, entry, target, intent)
+}
+
+// flathub inserts a Flatpak source with key k.
+func (w *world) flathub(k softwareKey) uuid.UUID {
+	w.t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	w.exec(`INSERT INTO software_source (id, organization_id, kind, slug, name, uris, suites, components, signing_key, fingerprint)
+		VALUES ($1, $2, 'flatpak', 'flathub', 'Flathub', '{https://dl.flathub.org/repo/}', '{}', '{}', $3, $4)`,
+		id, w.org, k.armored, k.fingerprint)
+	return id
+}
+
+// pkgOf returns the package or Flatpak application name of dev's software section, nil when absent.
+func pkgOf(s *bundle.SoftwareSpec, name string) *bundle.SoftwarePackage {
+	if s == nil {
+		return nil
+	}
+	for i, p := range s.Packages {
+		if p.Package == name || p.FlatpakRef == name {
+			return &s.Packages[i]
+		}
+	}
+	return nil
+}
+
+// audienceString renders an audience for comparison: "all", the sorted user names joined by ",", or "-" for none.
+func audienceString(a *bundle.SoftwareAudience) string {
+	switch {
+	case a == nil:
+		return "-"
+	case a.All:
+		return "all"
+	}
+	return strings.Join(a.Users, ",")
+}
+
+// TestSoftwareTargets (plan M13b decision 8, PDK-799): an organization or device-group target applies to the device
+// with the audience everyone; a user target applies when the user owns the device, a user-group target when an owner
+// is a member, with the audience of those owners only; a device without owners gets no user-targeted package; two
+// assignments of one entry merge into the union or everyone; a required package through a user target applies to the
+// device; an available package that loses against another intent carries no audience.
+func TestSoftwareTargets(t *testing.T) {
+	type assignment struct {
+		target string // organization, g1, g2, alice, bob, carol, devs
+		intent string
+	}
+	cases := []struct {
+		name    string
+		assign  []assignment
+		owned   string // the owned device's intent and audience, "" when the package is absent
+		unowned string // the same for the device without owners
+	}{
+		{"organization available", []assignment{{"organization", "available"}}, "available all", "available all"},
+		{"device group available", []assignment{{"g1", "available"}}, "available all", "available all"},
+		{"other device group available", []assignment{{"g2", "available"}}, "", ""},
+		{"owner available", []assignment{{"alice", "available"}}, "available alice", ""},
+		{"non-owner available", []assignment{{"bob", "available"}}, "", ""},
+		{"user group available", []assignment{{"devs", "available"}}, "available alice", ""},
+		{"user and group union", []assignment{{"carol", "available"}, {"devs", "available"}}, "available alice,carol", ""},
+		{"organization wins the union", []assignment{{"alice", "available"}, {"organization", "available"}}, "available all", "available all"},
+		{"owner required", []assignment{{"alice", "required"}}, "required -", ""},
+		{"user group forbid", []assignment{{"devs", "forbid"}}, "forbid -", ""},
+		{"forbid beats available", []assignment{{"alice", "available"}, {"g1", "forbid"}}, "forbid -", "forbid -"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			alice, bob, carol := w.user("alice", false), w.user("bob", false), w.user("carol", false)
+			devs := w.userGroup("devs", alice, bob)
+			names := map[string]string{w.username(alice): "alice", w.username(carol): "carol", w.username(bob): "bob"}
+			e := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+			for _, a := range c.assign {
+				switch a.target {
+				case "organization":
+					w.assign(e, nil, a.intent, "latest", nil)
+				case "g1":
+					w.assign(e, w.g1, a.intent, "latest", nil)
+				case "g2":
+					w.assign(e, w.g2, a.intent, "latest", nil)
+				case "devs":
+					w.assignTo(e, "user_group_id", devs, a.intent)
+				default:
+					w.assignTo(e, "user_id", map[string]uuid.UUID{"alice": alice, "bob": bob, "carol": carol}[a.target], a.intent)
+				}
+			}
+			owned, unowned := w.v2Device("{1,2}", w.g1), w.v2Device("{1,2}", w.g1)
+			w.ubuntu(owned, "amd64")
+			w.ubuntu(unowned, "amd64")
+			w.own(owned, alice, carol)
+			w.mustCompile(statechange.ScopeOrg, w.org)
+			for _, d := range []struct {
+				id   uuid.UUID
+				want string
+			}{{owned, c.owned}, {unowned, c.unowned}} {
+				got := ""
+				if p := pkgOf(w.fetch(d.id).Software, "nano"); p != nil {
+					var users []string
+					if p.Audience != nil {
+						for _, u := range p.Audience.Users {
+							users = append(users, names[u])
+						}
+					}
+					aud := audienceString(p.Audience)
+					if len(users) > 0 {
+						aud = strings.Join(users, ",")
+					}
+					got = p.Intent + " " + aud
+				}
+				if got != d.want {
+					t.Errorf("device %s: %q, want %q", d.id, got, d.want)
+				}
+			}
+		})
+	}
+}
+
+// TestSoftwareAudienceChangePublishes (plan M13b decision 7): a new owner changes the audience of an available
+// package, so the recompiled bundle is a new version; a recompile without a change is not.
+func TestSoftwareAudienceChangePublishes(t *testing.T) {
+	w := newWorld(t)
+	alice, bob := w.user("alice", false), w.user("bob", false)
+	devs := w.userGroup("devs", alice, bob)
+	w.assignTo(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), "user_group_id", devs, "available")
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	before := w.version(d)
+	w.mustCompile(statechange.ScopeDevice, d)
+	if w.version(d) != before {
+		t.Fatal("a recompile without a change published a new bundle")
+	}
+	w.own(d, bob)
+	w.mustCompile(statechange.ScopeDevice, d)
+	if w.version(d) == before {
+		t.Fatal("a changed audience did not publish a new bundle")
+	}
+	if p := pkgOf(w.fetch(d).Software, "nano"); p == nil || audienceString(p.Audience) != w.username(alice)+","+w.username(bob) {
+		t.Fatalf("package %+v", p)
+	}
+}
+
+// TestSoftwareAudienceTruncated (plan M13b R2, decision Q13): an audience over bundle.MaxSoftwareAudience users keeps
+// the first ones by user name, and the bundle is still published.
+func TestSoftwareAudienceTruncated(t *testing.T) {
+	w := newWorld(t)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	users := make([]uuid.UUID, bundle.MaxSoftwareAudience+1)
+	for i := range users {
+		users[i] = w.user(fmt.Sprintf("u%03d", i), false)
+	}
+	w.own(d, users...)
+	w.assignTo(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), "user_group_id", w.userGroup("all", users...), "available")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	p := pkgOf(w.fetch(d).Software, "nano")
+	if p == nil || p.Audience == nil || len(p.Audience.Users) != bundle.MaxSoftwareAudience ||
+		p.Audience.Users[0] != w.username(users[0]) || slices.Contains(p.Audience.Users, w.username(users[bundle.MaxSoftwareAudience])) {
+		t.Fatalf("package %+v", p)
+	}
+}
+
+// TestSoftwareFlatpak (plan M13b decisions 8 and 9, decision Q12): a Flatpak application renders flatpak_ref, scope
+// and its remote; the section then requires the flatpak package once from the distribution's repositories with the
+// nil entry ID, unless an entry names the package itself.
+func TestSoftwareFlatpak(t *testing.T) {
+	w := newWorld(t)
+	key := loadSoftwareKey(t, "ed25519.asc")
+	flathub := w.flathub(key)
+	gimp := uuid.Must(uuid.NewV7())
+	w.exec(`INSERT INTO software_catalog_entry (id, organization_id, name, source_id, packages) VALUES ($1, $2, 'GIMP', $3,
+		'[{"distribution":"ubuntu","release":"*","architecture":"*","flatpak_ref":"org.gimp.GIMP","scope":"user"}]')`,
+		gimp, w.org, flathub)
+	inkscape := uuid.Must(uuid.NewV7())
+	w.exec(`INSERT INTO software_catalog_entry (id, organization_id, name, source_id, packages) VALUES ($1, $2, 'Inkscape', $3,
+		'[{"distribution":"ubuntu","release":"*","architecture":"*","flatpak_ref":"org.inkscape.Inkscape"}]')`,
+		inkscape, w.org, flathub)
+	w.assign(gimp, nil, "available", "latest", nil)
+	w.assign(inkscape, w.g1, "required", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+
+	s := w.fetch(d).Software
+	if s == nil || len(s.Sources) != 1 || s.Sources[0].Slug != "flathub" || s.Sources[0].Kind != bundle.SoftwareSourceFlatpak ||
+		len(s.Sources[0].URIs) != 1 || len(s.Sources[0].Suites) != 0 || s.Sources[0].Fingerprint != key.fingerprint {
+		t.Fatalf("sources %+v", s)
+	}
+	if p := pkgOf(s, "org.gimp.GIMP"); p == nil || p.Package != "" || p.Scope != "user" || p.Source != "flathub" ||
+		p.Intent != bundle.SoftwareAvailable || audienceString(p.Audience) != "all" || p.CatalogEntryID != gimp.String() {
+		t.Fatalf("gimp %+v", p)
+	}
+	if p := pkgOf(s, "org.inkscape.Inkscape"); p == nil || p.Scope != "system" || p.Source != "flathub" || p.Intent != bundle.SoftwareRequired {
+		t.Fatalf("inkscape %+v", p)
+	}
+	runtimes := 0
+	for _, p := range s.Packages {
+		if p.Package == "flatpak" {
+			runtimes++
+			if p.Intent != bundle.SoftwareRequired || p.Source != "" || p.CatalogEntryID != bundle.SoftwareRuntimeEntryID || p.Version != nil {
+				t.Fatalf("runtime %+v", p)
+			}
+		}
+	}
+	if runtimes != 1 || len(s.Packages) != 3 {
+		t.Fatalf("%d flatpak runtime packages in %+v, want 1 of 3 packages", runtimes, s.Packages)
+	}
+	if hb := holdsOf(w.fetch(d)); len(hb) != 0 {
+		t.Fatalf("holds %v", hb)
+	}
+
+	own := w.entry("Flatpak", nil, [4]string{"ubuntu", "*", "*", "flatpak"})
+	w.assign(own, nil, "required", "latest", nil)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := pkgOf(w.fetch(d).Software, "flatpak"); p == nil || p.CatalogEntryID != own.String() || len(w.fetch(d).Software.Packages) != 3 {
+		t.Fatalf("an entry naming flatpak: %+v", p)
+	}
+}
+
+// TestSoftwareNoFlatpakRuntimeWithoutFlatpak: a section without a Flatpak source does not get the flatpak package,
+// even when the organization has a Flatpak source that no package of the device needs.
+func TestSoftwareNoFlatpakRuntimeWithoutFlatpak(t *testing.T) {
+	w := newWorld(t)
+	w.flathub(loadSoftwareKey(t, "ed25519.asc"))
+	w.assign(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if s := w.fetch(d).Software; s == nil || len(s.Packages) != 1 || len(s.Sources) != 0 {
+		t.Fatalf("software section %+v", s)
+	}
+}
+
+// TestSoftwareStrayFlatpakRefFailsClosed (PDK-798 review 1, PDK-697): only a valid entry of a Flatpak source stays out
+// of the bundle until PDK-799. A flatpak_ref stored outside the API on an entry of an APT source or of the
+// distribution's repositories, or a Flatpak entry whose references fail the catalog rules, is invalid: the forbid it
+// carries is not lifted by skipping it, the device keeps its previous bundle and the render failure names the entry.
+func TestSoftwareStrayFlatpakRefFailsClosed(t *testing.T) {
+	cases := []struct {
+		name     string
+		source   func(w *world, key softwareKey) any
+		packages string
+	}{
+		{"distribution repositories", func(*world, softwareKey) any { return nil },
+			`[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano","flatpak_ref":"a.b.C"}]`},
+		{"apt source", func(w *world, key softwareKey) any { return w.source("vendor", key, key.fingerprint) },
+			`[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano","flatpak_ref":"a.b.C"}]`},
+		{"flatpak source without flatpak_ref", func(w *world, key softwareKey) any {
+			id := uuid.Must(uuid.NewV7())
+			w.exec(`INSERT INTO software_source (id, organization_id, kind, slug, name, uris, suites, components, signing_key, fingerprint)
+				VALUES ($1, $2, 'flatpak', 'flathub', 'Flathub', '{https://dl.flathub.org/repo/}', '{}', '{}', $3, $4)`,
+				id, w.org, key.armored, key.fingerprint)
+			return id
+		}, `[{"distribution":"ubuntu","release":"*","architecture":"*","package":"nano"}]`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			key := loadSoftwareKey(t, "ed25519.asc")
+			forbidden := w.entry("Nano forbidden", nil, [4]string{"ubuntu", "*", "*", "nano"})
+			w.assign(forbidden, w.g1, "forbid", "latest", nil)
+			w.assign(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+			d := w.v2Device("{1,2}", w.g1)
+			w.ubuntu(d, "amd64")
+			w.mustCompile(statechange.ScopeOrg, w.org)
+			if s := w.fetch(d).Software; s == nil || len(s.Packages) != 1 || s.Packages[0].Intent != bundle.SoftwareForbid {
+				t.Fatalf("before: %+v", s)
+			}
+			before := w.version(d)
+
+			w.exec("UPDATE software_catalog_entry SET source_id = $2, packages = $3::jsonb WHERE id = $1",
+				forbidden, c.source(w, key), c.packages)
+			w.mustCompile(statechange.ScopeOrg, w.org)
+			if w.version(d) != before {
+				t.Fatal("a bundle was published although the entry with a stray flatpak_ref applies to the device")
+			}
+			if s := w.fetch(d).Software; s == nil || len(s.Packages) != 1 || s.Packages[0].Intent != bundle.SoftwareForbid {
+				t.Fatalf("the forbid was lifted: %+v", s)
+			}
+			if n := w.renderFailures(d, forbidden.String()); n != 1 {
+				t.Fatalf("%d render failures naming the entry, want 1", n)
+			}
+		})
+	}
+}
+
+// flatpakEntry inserts a catalog entry of the Flatpak source src with application ref in the system scope.
+func (w *world) flatpakEntry(name string, src uuid.UUID, ref string) uuid.UUID {
+	w.t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	w.exec(`INSERT INTO software_catalog_entry (id, organization_id, name, source_id, packages) VALUES ($1, $2, $3, $4,
+		jsonb_build_array(jsonb_build_object('distribution', 'ubuntu', 'release', '*', 'architecture', '*', 'flatpak_ref', $5::text)))`,
+		id, w.org, name, src, ref)
+	return id
+}
+
+// agentAt makes dev report agent version v.
+func (w *world) agentAt(dev uuid.UUID, v string) {
+	w.t.Helper()
+	w.exec("UPDATE device_status SET agent_version = $2 WHERE device_id = $1", dev, v)
+}
+
+// alpha9Software is the software section as the alpha.9 agent decodes it (pkg/bundle at v0.1.0-alpha.9), frozen
+// here: a field outside it is one the alpha.9 agent does not know.
+type alpha9Software struct {
+	Sources []struct {
+		Slug          string   `json:"slug"`
+		URIs          []string `json:"uris"`
+		Suites        []string `json:"suites"`
+		Components    []string `json:"components"`
+		Architectures []string `json:"architectures"`
+		Keyring       string   `json:"keyring"`
+		Fingerprint   string   `json:"fingerprint"`
+	} `json:"sources"`
+	Packages []struct {
+		Package        string  `json:"package"`
+		Intent         string  `json:"intent"`
+		Version        *string `json:"version"`
+		Source         string  `json:"source"`
+		CatalogEntryID string  `json:"catalog_entry_id"`
+		SupersededHold bool    `json:"superseded_hold,omitempty"`
+	} `json:"packages"`
+}
+
+// alpha9Accepts reports why the alpha.9 agent would refuse a software section, nil when it accepts it. The section
+// must carry only the fields of alpha9Software, and those must pass a9ValidateSoftware, the alpha.9
+// bundle.ValidateSoftware frozen in alpha9_software_test.go.
+func alpha9Accepts(raw []byte) error {
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	var old alpha9Software
+	if err := dec.Decode(&old); err != nil {
+		return fmt.Errorf("decode as alpha.9: %w", err)
+	}
+	return a9ValidateSoftware(old)
+}
+
+// alpha9FixtureSoftware is the software section of the alpha.9 compat fixture's schema-2 bundle (pkg/compat), what
+// the alpha.9 server put on the wire.
+func alpha9FixtureSoftware(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile("../../../pkg/compat/testdata/0.1.0-alpha.9/" + compat.BundleFile(bundle.SchemaVersion2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env struct {
+		Payload []byte `json:"payload"`
+	}
+	var b struct {
+		Software json.RawMessage `json:"software"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(env.Payload, &b); err != nil || len(b.Software) == 0 {
+		t.Fatalf("fixture software section: %v", err)
+	}
+	return b.Software
+}
+
+// TestSoftwareOlderAgentGated (architect decision A10-6, plan M13b C5): an agent release before the first one that
+// reads available packages and Flatpak gets neither, nor a Flatpak remote or the flatpak runtime, and keeps its
+// required, forbid and uninstall APT packages, in a section the frozen alpha.9 bundle.ValidateSoftware accepts (checked
+// against the alpha.9 compat fixture); the newer agent gets everything, which alpha.9 would refuse.
+func TestSoftwareOlderAgentGated(t *testing.T) {
+	fixture := alpha9FixtureSoftware(t)
+	if err := alpha9Accepts(fixture); err != nil {
+		t.Fatalf("the alpha.9 check refuses the alpha.9 fixture: %v", err)
+	}
+
+	w := newWorld(t)
+	key := loadSoftwareKey(t, "ed25519.asc")
+	vendor := w.source("vendor", key, key.fingerprint)
+	flathub := w.flathub(key)
+	w.assign(w.entry("Nano", vendor, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	w.assign(w.entry("Telnet", nil, [4]string{"ubuntu", "*", "*", "telnet"}), nil, "forbid", "latest", nil)
+	w.assign(w.entry("Ftp", nil, [4]string{"ubuntu", "*", "*", "ftp"}), nil, "uninstall", "latest", nil)
+	w.assign(w.entry("Htop", vendor, [4]string{"ubuntu", "*", "*", "htop"}), nil, "available", "latest", nil)
+	w.assign(w.flatpakEntry("GIMP", flathub, "org.gimp.GIMP"), nil, "required", "latest", nil)
+	w.assign(w.flatpakEntry("Inkscape", flathub, "org.inkscape.Inkscape"), nil, "available", "latest", nil)
+	w.assign(w.flatpakEntry("Steam", flathub, "com.valvesoftware.Steam"), nil, "forbid", "latest", nil)
+	devices := map[string]uuid.UUID{}
+	for _, v := range []string{"0.1.0-alpha.8", "0.1.0-alpha.9", "0.1.0-alpha.9+build.1", "0.1.0-alpha.10", "0.1.0-alpha.11"} {
+		d := w.v2Device("{1,2}", w.g1)
+		w.ubuntu(d, "amd64")
+		w.agentAt(d, v)
+		devices[v] = d
+	}
+	w.mustCompile(statechange.ScopeOrg, w.org)
+
+	names := func(s *bundle.SoftwareSpec) (string, string) {
+		var pkgs, srcs []string
+		for _, p := range s.Packages {
+			pkgs = append(pkgs, p.Package+p.FlatpakRef+"="+p.Intent)
+		}
+		for _, src := range s.Sources {
+			srcs = append(srcs, src.Slug)
+		}
+		return strings.Join(pkgs, " "), strings.Join(srcs, " ")
+	}
+	const (
+		oldPackages = "ftp=uninstall nano=required telnet=forbid"
+		newPackages = "flatpak=required com.valvesoftware.Steam=forbid org.gimp.GIMP=required org.inkscape.Inkscape=available " +
+			"ftp=uninstall htop=available nano=required telnet=forbid"
+	)
+	for v, d := range devices {
+		s := w.fetch(d).Software
+		if s == nil {
+			t.Fatalf("%s: no software section", v)
+		}
+		raw, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pkgs, srcs := names(s)
+		if v == "0.1.0-alpha.10" || v == "0.1.0-alpha.11" {
+			if pkgs != newPackages || srcs != "flathub vendor" {
+				t.Errorf("%s: packages %q sources %q, want everything", v, pkgs, srcs)
+			}
+			if alpha9Accepts(raw) == nil {
+				t.Errorf("%s: the alpha.9 check accepts the full section; it no longer proves the gate", v)
+			}
+			continue
+		}
+		if pkgs != oldPackages || srcs != "vendor" {
+			t.Errorf("%s: packages %q sources %q, want %q from vendor", v, pkgs, srcs, oldPackages)
+		}
+		if err := alpha9Accepts(raw); err != nil {
+			t.Errorf("%s: the alpha.9 agent refuses the section: %v", v, err)
+		}
+	}
+}
+
+// TestSoftwareReconcileFollowsAgentGate (A10-6, review 2 of PDK-799): the reconcile loop recompiles a device whose
+// agent version changed since its latest compile, so an upgrade past the gate gains the available and Flatpak content
+// and a rollback below it drops them again, in a section the frozen alpha.9 rules accept. An unchanged version
+// recompiles nothing.
+func TestSoftwareReconcileFollowsAgentGate(t *testing.T) {
+	w := newWorld(t)
+	key := loadSoftwareKey(t, "ed25519.asc")
+	vendor := w.source("vendor", key, key.fingerprint)
+	flathub := w.flathub(key)
+	w.assign(w.entry("Nano", vendor, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	w.assign(w.entry("Htop", vendor, [4]string{"ubuntu", "*", "*", "htop"}), nil, "available", "latest", nil)
+	w.assign(w.flatpakEntry("GIMP", flathub, "org.gimp.GIMP"), nil, "required", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.agentAt(d, "0.1.0-alpha.9")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+
+	reconcile := func() {
+		t.Helper()
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(when string, full bool) {
+		t.Helper()
+		s := w.fetch(d).Software
+		if s == nil {
+			t.Fatalf("%s: no software section", when)
+		}
+		raw, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gained := pkgOf(s, "htop") != nil && pkgOf(s, "org.gimp.GIMP") != nil && pkgOf(s, "flatpak") != nil
+		if full != gained || pkgOf(s, "nano") == nil {
+			t.Fatalf("%s: packages %+v, want self-service content %v", when, s.Packages, full)
+		}
+		if accepted := alpha9Accepts(raw) == nil; accepted == full {
+			t.Fatalf("%s: the alpha.9 agent accepts the section: %v, want %v", when, accepted, !full)
+		}
+	}
+	check("compiled at alpha.9", false)
+	version := w.version(d)
+	reconcile()
+	if w.version(d) != version {
+		t.Fatal("a reconcile without an agent change published a bundle")
+	}
+
+	w.agentAt(d, "0.1.0-alpha.10")
+	reconcile()
+	check("upgraded to alpha.10", true)
+	if w.version(d) != version+1 {
+		t.Fatalf("upgrade: version %d, want %d", w.version(d), version+1)
+	}
+	reconcile()
+	if w.version(d) != version+1 {
+		t.Fatal("the upgrade is recompiled again")
+	}
+
+	w.agentAt(d, "0.1.0-alpha.9")
+	reconcile()
+	check("rolled back to alpha.9", false)
+	if w.version(d) != version+2 {
+		t.Fatalf("rollback: version %d, want %d", w.version(d), version+2)
+	}
+}
+
+// TestSoftwareFlatpakRemovalBringsNoRemote (architect decision A10-7): a Flatpak forbid or uninstall acts only where
+// Flatpak is present: it names no source, and the section has neither the remote nor the flatpak runtime. A Flatpak
+// source that fails the source rules does not lift the forbid.
+func TestSoftwareFlatpakRemovalBringsNoRemote(t *testing.T) {
+	w := newWorld(t)
+	key := loadSoftwareKey(t, "ed25519.asc")
+	flathub := w.flathub(key)
+	steam := w.flatpakEntry("Steam", flathub, "com.valvesoftware.Steam")
+	w.assign(steam, nil, "forbid", "latest", nil)
+	w.assign(w.flatpakEntry("GIMP", flathub, "org.gimp.GIMP"), w.g1, "uninstall", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	check := func(when string) {
+		t.Helper()
+		s := w.fetch(d).Software
+		if s == nil || len(s.Sources) != 0 || len(s.Packages) != 2 || pkgOf(s, "flatpak") != nil {
+			t.Fatalf("%s: software section %+v", when, s)
+		}
+		for ref, intent := range map[string]string{"com.valvesoftware.Steam": bundle.SoftwareForbid, "org.gimp.GIMP": bundle.SoftwareUninstall} {
+			if p := pkgOf(s, ref); p == nil || p.Intent != intent || p.Source != "" {
+				t.Fatalf("%s: %s %+v", when, ref, p)
+			}
+		}
+	}
+	check("valid source")
+
+	before := w.version(d)
+	w.exec("UPDATE software_source SET fingerprint = $2 WHERE id = $1", flathub, mismatchingFingerprint(key.fingerprint))
+	w.assign(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if w.version(d) == before {
+		t.Fatal("a failed Flatpak source blocked the bundle of a device with a Flatpak forbid")
+	}
+	if p := pkgOf(w.fetch(d).Software, "nano"); p == nil {
+		t.Fatal("the recompiled bundle lacks nano")
+	}
+	if p := pkgOf(w.fetch(d).Software, "com.valvesoftware.Steam"); p == nil || p.Intent != bundle.SoftwareForbid {
+		t.Fatalf("the failed source lifted the forbid: %+v", p)
+	}
+}
+
+// namedUser inserts a user with user name username.
+func (w *world) namedUser(username string) uuid.UUID {
+	w.t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO app_user (id, organization_id, authentik_pk, username, source) VALUES ($1, $2, $3, $4, 'local')",
+		id, w.org, "pk-"+id.String(), username)
+	return id
+}
+
+// TestSoftwareAudienceUserNames (PDK-799 review 1): an owner with a 256-character UPN, the longest app_user allows,
+// is in the audience; an owner whose stored name an audience cannot carry is left out instead of failing the bundle,
+// and an available package whose audience is left with nobody is not offered. The device's bundle is published.
+func TestSoftwareAudienceUserNames(t *testing.T) {
+	w := newWorld(t)
+	long := strings.Repeat("a", 256-len("@c.test")) + "@c.test"
+	alice, spaced, bob := w.namedUser(long), w.namedUser("bad user@c.test"), w.namedUser("bob@c.test")
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.assignTo(nano, "user_group_id", w.userGroup("devs", alice, spaced), "available")
+	w.assignTo(w.entry("Htop", nil, [4]string{"ubuntu", "*", "*", "htop"}), "user_id", spaced, "available")
+	w.assignTo(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), "user_id", spaced, "required")
+	w.assign(w.entry("Tree", nil, [4]string{"ubuntu", "*", "*", "tree"}), nil, "required", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice, spaced, bob)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if w.version(d) == 0 {
+		t.Fatal("no bundle was published")
+	}
+	s := w.fetch(d).Software
+	if p := pkgOf(s, "nano"); p == nil || audienceString(p.Audience) != long {
+		t.Fatalf("nano %+v", p)
+	}
+	if p := pkgOf(s, "htop"); p != nil {
+		t.Fatalf("htop is offered to nobody but rendered: %+v", p)
+	}
+	if p := pkgOf(s, "vim"); p == nil || p.Intent != bundle.SoftwareRequired {
+		t.Fatalf("a required package of the owner with the uncarried name: %+v", p)
+	}
+}
+
+// approveRequest records a decided software request of user for entry on dev in state.
+func (w *world) approveRequest(entry, dev, user uuid.UUID, state string) {
+	w.t.Helper()
+	w.exec(`INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state,
+		requested_at, expires_at, decided_at, approval_epoch) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now() + interval '30 days',
+		now(), (SELECT approval_epoch FROM software_catalog_entry WHERE id = $3))`,
+		uuid.Must(uuid.NewV7()), w.org, entry, dev, user, w.username(user), state)
+}
+
+// approvalOf is how a test reads a package's approval: "" or "required" with the approved users after a colon.
+func approvalOf(p *bundle.SoftwarePackage) string {
+	if p == nil {
+		return "missing"
+	}
+	if p.Approved == nil {
+		return p.Approval
+	}
+	return p.Approval + ":" + strings.Join(*p.Approved, ",")
+}
+
+// TestSoftwareApproval (plan M13c decision 9): an available package whose entry requires approval carries approval
+// required and the audience's users approved on that device; approvals of another device, of a user outside the
+// audience or not (yet) approved stay out; once every audience member is approved, both are omitted; an entry without
+// approval carries neither; an audience of everyone keeps the approval with the approved users.
+func TestSoftwareApproval(t *testing.T) {
+	w := newWorld(t)
+	w.comp.SetApprovalAgent(approvalRelease)
+	alice, bob, carol := w.user("alice", false), w.user("bob", false), w.user("carol", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	vim := w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_group_id", w.userGroup("devs", alice, bob), "available")
+	w.assignTo(vim, "user_group_id", w.userGroup("all", alice, bob), "available")
+	d, other := w.v2Device("{1,2}", w.g1), w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.ubuntu(other, "amd64")
+	w.own(d, alice, bob)
+	w.own(other, alice, bob)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := approvalOf(pkgOf(w.fetch(d).Software, "nano")); got != "required" {
+		t.Fatalf("before any approval: %q", got)
+	}
+	if got := approvalOf(pkgOf(w.fetch(d).Software, "vim")); got != "" {
+		t.Fatalf("an entry without approval: %q", got)
+	}
+
+	w.approveRequest(nano, d, alice, "approved")
+	w.approveRequest(nano, d, carol, "approved")
+	w.approveRequest(nano, d, bob, "denied")
+	w.approveRequest(nano, other, bob, "approved")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got, want := approvalOf(pkgOf(w.fetch(d).Software, "nano")), "required:"+w.username(alice); got != want {
+		t.Fatalf("approved alice: %q, want %q", got, want)
+	}
+	if got, want := approvalOf(pkgOf(w.fetch(other).Software, "nano")), "required:"+w.username(bob); got != want {
+		t.Fatalf("the other device: %q, want %q", got, want)
+	}
+
+	w.approveRequest(nano, d, bob, "approved")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := approvalOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("every audience member approved: %q", got)
+	}
+
+	w.exec("DELETE FROM software_assignment WHERE catalog_entry_id = $1", nano)
+	w.assign(nano, nil, "available", "latest", nil)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got, want := approvalOf(pkgOf(w.fetch(d).Software, "nano")), "required:"+w.username(alice)+","+w.username(bob)+","+w.username(carol); got != want {
+		t.Fatalf("an audience of everyone: %q, want %q", got, want)
+	}
+
+	w.exec("UPDATE software_catalog_entry SET approval = 'none' WHERE id = $1", nano)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := approvalOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("the entry no longer requires approval: %q", got)
+	}
+}
+
+// approvalRelease stands in for the release PDK-811 ships in: the tests of the approval flow compile with it as the
+// gate, as the compiler will once PDK-811 sets compiler.ApprovalAgent.
+const approvalRelease = "0.1.0-alpha.10"
+
+// TestWithheldForApproval (architect decision A10-17): only an available package whose entry requires approval is left
+// out, for a release before the gate, and for every agent while the gate is empty; a development build is never older
+// than a set gate. The gate is checked against a later release than approvalRelease too, so the rule holds when
+// PDK-811 ships after the self-service app.
+func TestWithheldForApproval(t *testing.T) {
+	cases := []struct {
+		intent, approval, agent, gate string
+		want                          bool
+	}{
+		{"available", "required", "0.1.0-alpha.9", approvalRelease, true},
+		{"available", "required", approvalRelease, approvalRelease, false},
+		{"available", "required", "0.1.0-alpha.11", approvalRelease, false},
+		{"available", "required", "0.1.0-alpha.10", "0.1.0-alpha.11", true},
+		{"available", "required", "0.1.0-alpha.10+build.7", "0.1.0-alpha.11", true},
+		{"available", "required", "0.0.0-dev", "0.1.0-alpha.11", false},
+		{"available", "required", "0.1.0-alpha.11", "", true},
+		{"available", "required", "1.0.0", "", true},
+		{"available", "required", "0.0.0-dev", "", true},
+		{"available", "required", "0.0.0-devicesim", "", true},
+		{"available", "required", "", "", true},
+		{"available", "none", "0.1.0-alpha.9", approvalRelease, false},
+		{"available", "none", "0.0.0-dev", "", false},
+		{"required", "required", "0.1.0-alpha.9", approvalRelease, false},
+		{"required", "required", "0.0.0-dev", "", false},
+		{"forbid", "required", "0.1.0-alpha.9", approvalRelease, false},
+		{"forbid", "required", "0.0.0-dev", "", false},
+	}
+	for _, c := range cases {
+		if got := compiler.WithheldForApproval(c.intent, c.approval, c.agent, c.gate); got != c.want {
+			t.Errorf("%+v: %v", c, got)
+		}
+	}
+}
+
+// approvalWorld is a world with an available entry "gated" that requires approval, a required "nano", and an entry
+// "blocked" that requires approval but is forbidden for w.g1.
+func approvalWorld(t *testing.T) *world {
+	t.Helper()
+	w := newWorld(t)
+	gated := w.entry("Gated", nil, [4]string{"ubuntu", "*", "*", "gated"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", gated)
+	w.assign(gated, nil, "available", "latest", nil)
+	w.assign(w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"}), nil, "required", "latest", nil)
+	blocked := w.entry("Blocked", nil, [4]string{"ubuntu", "*", "*", "blocked"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", blocked)
+	w.assign(blocked, nil, "available", "latest", nil)
+	w.assign(blocked, w.g1, "forbid", "latest", nil)
+	return w
+}
+
+// devicesAt adds an Ubuntu device in w.g1 for each agent version.
+func (w *world) devicesAt(versions ...string) map[string]uuid.UUID {
+	w.t.Helper()
+	devices := map[string]uuid.UUID{}
+	for _, v := range versions {
+		d := w.v2Device("{1,2}", w.g1)
+		w.ubuntu(d, "amd64")
+		w.agentAt(d, v)
+		devices[v] = d
+	}
+	return devices
+}
+
+// TestSoftwareApprovalGated (architect decision A10-17 with A10-6): an agent before the gate never gets a package whose
+// entry requires approval, and an alpha.9 agent gets a section the frozen alpha.9 rules accept (checked against the
+// alpha.9 compat fixture); the first agent with the approval flow gets it with approval required. A forbid of the same
+// package wins over the available assignment, so no approval is rendered for it.
+func TestSoftwareApprovalGated(t *testing.T) {
+	if err := alpha9Accepts(alpha9FixtureSoftware(t)); err != nil {
+		t.Fatalf("the alpha.9 check refuses the alpha.9 fixture: %v", err)
+	}
+	const later = "0.1.0-alpha.11"
+	w := approvalWorld(t)
+	w.comp.SetApprovalAgent(later)
+	devices := w.devicesAt("0.1.0-alpha.9", "0.1.0-alpha.10", later)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+
+	old := w.fetch(devices["0.1.0-alpha.9"]).Software
+	raw, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkgOf(old, "gated") != nil || pkgOf(old, "nano") == nil {
+		t.Errorf("alpha.9 section %s", raw)
+	}
+	if err := alpha9Accepts(raw); err != nil {
+		t.Errorf("the alpha.9 agent refuses the section: %v", err)
+	}
+	if s := w.fetch(devices["0.1.0-alpha.10"]).Software; pkgOf(s, "gated") != nil || pkgOf(s, "nano") == nil {
+		t.Errorf("alpha.10 below the gate %s: %+v", later, s.Packages)
+	}
+	s := w.fetch(devices[later]).Software
+	if got := approvalOf(pkgOf(s, "gated")); got != "required" {
+		t.Errorf("%s: gated %q", later, got)
+	}
+	if p := pkgOf(s, "blocked"); p == nil || p.Intent != bundle.SoftwareForbid || p.Approval != "" || p.Approved != nil {
+		t.Errorf("%s: forbid did not win: %+v", later, p)
+	}
+}
+
+// TestSoftwareApprovalAgentGate (architect decision A10-17, PDK-811a): the compiler's own gate is the release that ships
+// PDK-811. An agent before it never gets a package whose entry requires approval, and an alpha.9 agent's section passes
+// the frozen alpha.9 rules; the gate's release, later releases, development builds and the device simulator get it with
+// approval required. A forbid of the same package wins for every agent.
+func TestSoftwareApprovalAgentGate(t *testing.T) {
+	if compiler.ApprovalAgent != approvalRelease {
+		t.Fatalf("the gate is %q, want %s, the release with PDK-811", compiler.ApprovalAgent, approvalRelease)
+	}
+	w := approvalWorld(t)
+	devices := w.devicesAt("0.1.0-alpha.9", approvalRelease, "0.1.0-alpha.11", "0.0.0-dev", "0.0.0-devicesim")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for v, d := range devices {
+		s := w.fetch(d).Software
+		if v == "0.1.0-alpha.9" {
+			raw, err := json.Marshal(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pkgOf(s, "gated") != nil || pkgOf(s, "nano") == nil {
+				t.Errorf("agent %s: section %s", v, raw)
+			}
+			if err := alpha9Accepts(raw); err != nil {
+				t.Errorf("the alpha.9 agent refuses the section: %v", err)
+			}
+			continue
+		}
+		if got := approvalOf(pkgOf(s, "gated")); got != "required" || pkgOf(s, "nano") == nil {
+			t.Errorf("agent %s: gated %q, section %+v", v, got, s)
+		}
+		if p := pkgOf(s, "blocked"); p == nil || p.Intent != bundle.SoftwareForbid || p.Approval != "" {
+			t.Errorf("agent %s: forbid did not win: %+v", v, p)
+		}
+	}
+}
+
+// TestSoftwareRequestWithdrawFlag (PDK-811b, decisions §54, compat): a section with a package that requires approval
+// carries the server's request_withdraw flag; an agent before the approval gate never gets it, and its section still
+// passes the frozen alpha.9 rules; without a package that requires approval the flag is absent.
+func TestSoftwareRequestWithdrawFlag(t *testing.T) {
+	w := approvalWorld(t)
+	devices := w.devicesAt("0.1.0-alpha.9", approvalRelease, "0.0.0-dev")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for v, d := range devices {
+		s := w.fetch(d).Software
+		if want := v != "0.1.0-alpha.9"; s.RequestWithdraw != want {
+			t.Errorf("agent %s: request_withdraw %v, want %v", v, s.RequestWithdraw, want)
+		}
+	}
+	raw, err := json.Marshal(w.fetch(devices["0.1.0-alpha.9"]).Software)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := alpha9Accepts(raw); err != nil {
+		t.Errorf("the alpha.9 agent refuses the section: %v", err)
+	}
+
+	w.exec("UPDATE software_catalog_entry SET approval = 'none' WHERE organization_id = $1", w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if s := w.fetch(devices[approvalRelease]).Software; s.RequestWithdraw || pkgOf(s, "gated") == nil {
+		t.Errorf("a section without a package requiring approval: %+v", s)
+	}
+}
+
+// denyRequest records a denial of user's request for entry on dev, decided at decidedAgo before now, with reason.
+func (w *world) denyRequest(entry, dev, user uuid.UUID, decidedAgo time.Duration, reason string) {
+	w.t.Helper()
+	w.exec(`INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state,
+		requested_at, expires_at, decided_at, decision_reason, approval_epoch) VALUES ($1, $2, $3, $4, $5, $6, 'denied',
+		now() - $7::interval, now() + interval '30 days', now() - $7::interval, $8,
+		(SELECT approval_epoch FROM software_catalog_entry WHERE id = $3))`,
+		uuid.Must(uuid.NewV7()), w.org, entry, dev, user, w.username(user), fmt.Sprintf("%d seconds", int(decidedAgo.Seconds())), reason)
+}
+
+// deniedOf is how a test reads a package's denials: "user=reason" pairs in bundle order.
+func deniedOf(p *bundle.SoftwarePackage) string {
+	if p == nil {
+		return "missing"
+	}
+	if p.Denied == nil {
+		return ""
+	}
+	var out []string
+	for _, d := range *p.Denied {
+		out = append(out, d.User+"="+d.Reason)
+	}
+	return strings.Join(out, ";")
+}
+
+// TestSoftwareDenials (architect decision A10-27): a package whose entry requires approval names the users of its
+// audience whose request on the device was denied inside the 24-hour re-request lock, with the reason as the
+// administrator wrote it, an HTML payload included, sorted by user, the latest denial of a user only. Denials older than
+// the lock, of another device, of a user outside the audience or of an approved user stay out; a reason that fails the
+// reason rules (written outside the api) is left out while the denial stays; an entry without approval names none.
+func TestSoftwareDenials(t *testing.T) {
+	w := newWorld(t)
+	alice, bob, carol, dave, erin := w.user("alice", false), w.user("bob", false), w.user("carol", false),
+		w.user("dave", false), w.user("erin", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_group_id", w.userGroup("devs", alice, bob, carol, erin), "available")
+	d, other := w.v2Device("{1,2}", w.g1), w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.ubuntu(other, "amd64")
+	w.own(d, alice, bob, carol, dave, erin)
+	w.own(other, alice, bob, carol, dave, erin)
+
+	html := `<script>alert("x")</script> not <b>licensed</b>`
+	w.denyRequest(nano, d, bob, time.Hour, html)
+	w.denyRequest(nano, d, alice, 30*time.Hour, "an old denial")
+	w.denyRequest(nano, d, alice, 2*time.Hour, "line one\nline two")
+	w.denyRequest(nano, d, carol, 25*time.Hour, "outside the lock")
+	w.denyRequest(nano, d, dave, time.Hour, "not in the audience")
+	w.denyRequest(nano, d, erin, time.Hour, "tab\tin the reason")
+	w.denyRequest(nano, other, carol, time.Hour, "on the other device")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	want := w.username(alice) + "=line one\nline two;" + w.username(bob) + "=" + html + ";" + w.username(erin) + "="
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != want {
+		t.Fatalf("denials %q, want %q", got, want)
+	}
+	if got, want := deniedOf(pkgOf(w.fetch(other).Software, "nano")), w.username(carol)+"=on the other device"; got != want {
+		t.Fatalf("the other device: %q, want %q", got, want)
+	}
+
+	// A later approval of the user, here through an entry that offers the package to bob without approval, wins.
+	w.assignTo(w.entry("Nano for bob", nil, [4]string{"ubuntu", "*", "*", "nano"}), "user_id", bob, "available")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	p := pkgOf(w.fetch(d).Software, "nano")
+	if got, want := deniedOf(p), w.username(alice)+"=line one\nline two;"+w.username(erin)+"="; got != want {
+		t.Fatalf("denials beside bob's approval %q, want %q", got, want)
+	}
+	if got, want := approvalOf(p), "required:"+w.username(bob); got != want {
+		t.Fatalf("approval %q, want %q", got, want)
+	}
+
+	w.exec("UPDATE software_catalog_entry SET approval = 'none' WHERE id = $1", nano)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := pkgOf(w.fetch(d).Software, "nano"); p == nil || p.Denied != nil || p.Approval != "" {
+		t.Fatalf("an entry without approval names denials: %+v", p)
+	}
+}
+
+// TestSoftwareDenialsGated (architect decision A10-27 with A10-6, compat): an agent before the approval gate never
+// receives denials, because the package that would carry them is withheld, and its section passes the frozen alpha.9
+// rules; an agent at the gate receives the field, and only the agent filters it down to the requesting user (PDK-811).
+func TestSoftwareDenialsGated(t *testing.T) {
+	w := approvalWorld(t)
+	alice := w.user("alice", false)
+	devices := w.devicesAt("0.1.0-alpha.9", approvalRelease)
+	var gated uuid.UUID
+	if err := w.super.QueryRow(context.Background(), "SELECT id FROM software_catalog_entry WHERE organization_id = $1 AND name = 'Gated'",
+		w.org).Scan(&gated); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range devices {
+		w.own(d, alice)
+		w.denyRequest(gated, d, alice, time.Hour, "not licensed")
+	}
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	old := w.fetch(devices["0.1.0-alpha.9"]).Software
+	raw, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "denied") || pkgOf(old, "gated") != nil {
+		t.Errorf("alpha.9 section %s", raw)
+	}
+	if err := alpha9Accepts(raw); err != nil {
+		t.Errorf("the alpha.9 agent refuses the section: %v", err)
+	}
+	if got, want := deniedOf(pkgOf(w.fetch(devices[approvalRelease]).Software, "gated")), w.username(alice)+"=not licensed"; got != want {
+		t.Errorf("%s: denials %q, want %q", approvalRelease, got, want)
+	}
+}
+
+// TestSoftwareReconcileDenialLockConverges (architect decision A10-27, PDK-993 review 1): a denial whose lock ended but
+// that the bundle never named (its entry no longer requires approval) makes the reconcile recompile the device once;
+// the unchanged recompile writes no bundle, and the next rounds select the device no more.
+func TestSoftwareReconcileDenialLockConverges(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.assignTo(nano, "user_id", alice, "available")
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	w.denyRequest(nano, d, alice, 25*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	reconcile := func() {
+		t.Helper()
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcile()
+	// The last compile rendered before the lock ended.
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", d)
+	before := w.version(d)
+	checked := func() *time.Time {
+		t.Helper()
+		var at *time.Time
+		if err := w.super.QueryRow(context.Background(), "SELECT denial_lock_checked_at FROM device WHERE id = $1", d).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	reconcile()
+	first := checked()
+	if first == nil {
+		t.Fatal("the reconcile did not record the recompile for the ended lock")
+	}
+	for range 3 {
+		reconcile()
+	}
+	if at := checked(); at == nil || !at.Equal(*first) {
+		t.Fatalf("a later round recompiled the device again: checked at %v, first %v", at, first)
+	}
+	if v := w.version(d); v != before {
+		t.Fatalf("an unchanged recompile wrote a bundle: version %d, want %d", v, before)
+	}
+}
+
+// TestSoftwareReconcileDenialLockRenderTime (architect decision A10-27, PDK-993 review 2): a compile that rendered
+// before a denial's lock ended and published after it names the denial in a bundle newer than the lock end. The
+// reconcile goes by the render time, so it selects the device once the lock has ended and the recompile drops the
+// denial.
+func TestSoftwareReconcileDenialLockRenderTime(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The lock ends an hour ago; the compile renders two hours ago and publishes now.
+	w.denyRequest(nano, d, alice, 25*time.Hour, "not licensed")
+	w.comp.SetNow(func() time.Time { return time.Now().Add(-2 * time.Hour) })
+	w.mustCompile(statechange.ScopeDevice, d)
+	w.comp.SetNow(time.Now)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != w.username(alice)+"=not licensed" {
+		t.Fatalf("rendered before the lock end: %q", got)
+	}
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the reconcile: %q", got)
+	}
+}
+
+// denialLockChecked reads device.denial_lock_checked_at.
+func (w *world) denialLockChecked(t *testing.T, dev uuid.UUID) *time.Time {
+	t.Helper()
+	var at *time.Time
+	if err := w.super.QueryRow(context.Background(), "SELECT denial_lock_checked_at FROM device WHERE id = $1", dev).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+// TestSoftwareDenialLockNotRecordedOnPublishFailure (architect decision A10-27, PDK-993 review 3): a bundle that was
+// rendered but not committed does not record its render time, so the next round selects the device again and the
+// retried bundle drops the denial.
+func TestSoftwareDenialLockNotRecordedOnPublishFailure(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.denyRequest(nano, d, alice, 23*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got == "" {
+		t.Fatal("the denial is not named in the bundle")
+	}
+	// The lock has ended and the last recorded render time lies before its end.
+	w.exec("UPDATE software_request SET decided_at = decided_at - interval '2 hours' WHERE device_id = $1", d)
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", d)
+	stamp := w.denialLockChecked(t, d)
+	w.store.broken.Store(true)
+	if err := w.comp.Reconcile(context.Background()); err == nil {
+		t.Fatal("reconcile succeeded although the upload failed")
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.Equal(*stamp) {
+		t.Fatalf("the failed publish recorded a render time: %v -> %v", stamp, got)
+	}
+	w.store.broken.Store(false)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the retry: %q", got)
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.After(time.Now().Add(-time.Minute)) {
+		t.Fatalf("the retry did not record its render time: %v", got)
+	}
+}
+
+// TestSoftwareDenialLockRecordedOnRenderFailure (architect decision A10-27, PDK-993 review 3): a device whose render is
+// blocked keeps its bundle, and the compile records its render time like the platform it saw, so a denial lock that
+// ended does not select the device every round: one round recompiles it, records one failure, and later rounds leave
+// it alone.
+func TestSoftwareDenialLockRecordedOnRenderFailure(t *testing.T) {
+	w := newWorld(t)
+	dev := w.v2Device("{1,2}")
+	dave := w.user("dave", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	profile := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO permission_profile (id, organization_id, name, class) VALUES ($1, $2, 'root', 'full')", profile, w.org)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	before := w.version(dev)
+
+	w.validator.reject = "NOPASSWD"
+	w.exec("UPDATE permission_profile SET require_password = false WHERE id = $1", profile)
+	w.exec("INSERT INTO profile_assignment (id, organization_id, profile_id, subject_type, subject_id) VALUES ($1, $2, $3, 'user', $4)",
+		uuid.Must(uuid.NewV7()), w.org, profile, dave)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	if w.version(dev) != before {
+		t.Fatal("a bundle with an invalid sudo entry was published")
+	}
+	if got := w.denialLockChecked(t, dev); got == nil || got.Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("the blocked render did not record its render time: %v", got)
+	}
+
+	// A denial whose lock ended after the last recorded render time selects the device once.
+	w.denyRequest(nano, dev, dave, 25*time.Hour, "not licensed")
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", dev)
+	failures := func() int {
+		t.Helper()
+		var n int
+		if err := w.super.QueryRow(context.Background(), `SELECT count(*) FROM action WHERE organization_id = $1
+			AND code = 'device.bundle_render_failed' AND target->>'id' = $2`, w.org, dev.String()).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first, stamp := failures(), w.denialLockChecked(t, dev)
+	if stamp == nil || stamp.Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("the reconcile's blocked render did not record its render time: %v", stamp)
+	}
+	for range 3 {
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := w.denialLockChecked(t, dev); got == nil || !got.Equal(*stamp) {
+		t.Fatalf("a later round recompiled the blocked device again: %v -> %v", stamp, got)
+	}
+	if n := failures(); n != first {
+		t.Fatalf("device.bundle_render_failed %d after three more rounds, %d after the first", n, first)
+	}
+	if w.version(dev) != before {
+		t.Fatal("a blocked device's bundle was published")
+	}
+}
+
+// TestSoftwareDenialLockConcurrentCompile (architect decision A10-27, PDK-993 review 3): a slower compile that rendered
+// after a denial's lock ended, without the denial and unchanged at bundle seq n, records its render time only while the
+// device is still at n. When a concurrent compile that rendered before the lock end has meanwhile published n+1 naming
+// the denial, the slower compile's later render time is not recorded, so the reconcile still selects the device and
+// drops the denial.
+func TestSoftwareDenialLockConcurrentCompile(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.denyRequest(nano, d, alice, 25*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeDevice, d)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("rendered after the lock end: %q", got)
+	}
+	slower := w.version(d)
+
+	// The concurrent compile renders two hours ago, before the lock end, and publishes slower+1 with the denial.
+	w.comp.SetNow(func() time.Time { return time.Now().Add(-2 * time.Hour) })
+	w.mustCompile(statechange.ScopeDevice, d)
+	w.comp.SetNow(time.Now)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != w.username(alice)+"=not licensed" || w.version(d) != slower+1 {
+		t.Fatalf("the concurrent compile: %q at version %d", got, w.version(d))
+	}
+	stamp := w.denialLockChecked(t, d)
+
+	// The slower compile's write arrives last.
+	if err := w.comp.RecordDenialLockAt(context.Background(), w.org, d, slower, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.Equal(*stamp) {
+		t.Fatalf("the slower compile recorded its render time on a newer bundle: %v -> %v", stamp, got)
+	}
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the reconcile: %q", got)
+	}
+	// A write for the bundle the device still has is recorded.
+	at := time.Now().Add(time.Minute).Truncate(time.Microsecond)
+	if err := w.comp.RecordDenialLockAt(context.Background(), w.org, d, w.version(d), at); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.denialLockChecked(t, d); got == nil || !got.Equal(at) {
+		t.Fatalf("a write for the current bundle: %v, want %v", got, at)
+	}
+}
+
+// TestSoftwareReconcileEndsDenialLock (architect decision A10-27): once the re-request lock of a denial ends, the
+// reconcile loop recompiles the device, so its bundle no longer names the denial and the user may ask again; a device
+// whose bundle was compiled after the lock ended is left alone.
+func TestSoftwareReconcileEndsDenialLock(t *testing.T) {
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	nano := w.entry("Nano", nil, [4]string{"ubuntu", "*", "*", "nano"})
+	w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", nano)
+	w.assignTo(nano, "user_id", alice, "available")
+	w.assign(w.entry("Vim", nil, [4]string{"ubuntu", "*", "*", "vim"}), nil, "available", "latest", nil)
+	d := w.v2Device("{1,2}", w.g1)
+	w.ubuntu(d, "amd64")
+	w.own(d, alice)
+	w.denyRequest(nano, d, alice, 23*time.Hour, "not licensed")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != w.username(alice)+"=not licensed" {
+		t.Fatalf("inside the lock: %q", got)
+	}
+	reconcile := func() {
+		t.Helper()
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcile()
+	before := w.version(d)
+
+	// The lock ends: the denial is 25 hours old, and the last compile rendered before its end.
+	w.exec("UPDATE software_request SET decided_at = now() - interval '25 hours' WHERE device_id = $1", d)
+	w.exec("UPDATE device SET denial_lock_checked_at = now() - interval '2 hours' WHERE id = $1", d)
+	reconcile()
+	if got := deniedOf(pkgOf(w.fetch(d).Software, "nano")); got != "" {
+		t.Fatalf("after the lock: %q", got)
+	}
+	after := w.version(d)
+	if after <= before {
+		t.Fatalf("bundle version %d after the lock, before %d", after, before)
+	}
+	reconcile()
+	if v := w.version(d); v != after {
+		t.Fatalf("a second round recompiled the device: version %d, want %d", v, after)
+	}
+}
+
+// TestSoftwareApprovalAcrossEntries (A10-17, plan M13c decision 9): two catalog entries name one package, a free one
+// offered to alice and one requiring approval offered to everyone. In both creation orders, so either entry supplies
+// the merged package: an agent before the gate gets alice's
+// free offer only; an agent at or past the gate gets the package for everyone with approval required and alice, who
+// may install it without approval, approved. Under the production gate (0.1.0-alpha.10) every agent of the test is at
+// or past it.
+func TestSoftwareApprovalAcrossEntries(t *testing.T) {
+	const later = "0.1.0-alpha.11"
+	w := newWorld(t)
+	alice := w.user("alice", false)
+	free := func(name, pkg string) {
+		w.assignTo(w.entry(name, nil, [4]string{"ubuntu", "*", "*", pkg}), "user_id", alice, "available")
+	}
+	gated := func(name, pkg string) {
+		e := w.entry(name, nil, [4]string{"ubuntu", "*", "*", pkg})
+		w.exec("UPDATE software_catalog_entry SET approval = 'required' WHERE id = $1", e)
+		w.assign(e, nil, "available", "latest", nil)
+	}
+	free("Free first", "first")
+	gated("Gated first", "first")
+	gated("Gated second", "second")
+	free("Free second", "second")
+	devices := w.devicesAt("0.0.0-dev", "0.1.0-alpha.10", later)
+	for _, d := range devices {
+		w.own(d, alice)
+	}
+	check := func(stage, agent, want string) {
+		t.Helper()
+		s := w.fetch(devices[agent]).Software
+		for _, pkg := range []string{"first", "second"} {
+			p := pkgOf(s, pkg)
+			if p == nil {
+				t.Errorf("%s, agent %s: %s missing", stage, agent, pkg)
+				continue
+			}
+			if got := audienceString(p.Audience) + " " + approvalOf(p); got != want {
+				t.Errorf("%s, agent %s: %s %q, want %q", stage, agent, pkg, got, want)
+			}
+		}
+	}
+	freeOnly := audienceString(&bundle.SoftwareAudience{Users: []string{w.username(alice)}}) + " "
+
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for v := range devices {
+		check("production gate", v, audienceString(&bundle.SoftwareAudience{All: true})+" required:"+w.username(alice))
+	}
+
+	w.comp.SetApprovalAgent(later)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	check("set gate", "0.0.0-dev", audienceString(&bundle.SoftwareAudience{All: true})+" required:"+w.username(alice))
+	check("set gate", "0.1.0-alpha.10", freeOnly)
+	check("set gate", later, audienceString(&bundle.SoftwareAudience{All: true})+" required:"+w.username(alice))
+}
+
+// TestSoftwareReconcileFollowsApprovalGate (A10-17 with the A10-6 mechanism of PDK-799): the reconcile loop recompiles
+// a device whose agent version crossed the approval gate, so an upgrade past it gains the package with approval
+// required and a rollback below it drops the package again.
+func TestSoftwareReconcileFollowsApprovalGate(t *testing.T) {
+	const gate = "0.1.0-alpha.11"
+	w := approvalWorld(t)
+	w.comp.SetApprovalAgent(gate)
+	d := w.devicesAt("0.1.0-alpha.10")["0.1.0-alpha.10"]
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	check := func(when, want string) {
+		t.Helper()
+		s := w.fetch(d).Software
+		if pkgOf(s, "nano") == nil {
+			t.Fatalf("%s: nano missing: %+v", when, s)
+		}
+		if got := approvalOf(pkgOf(s, "gated")); got != want {
+			t.Fatalf("%s: gated %q, want %q", when, got, want)
+		}
+	}
+	reconcile := func() {
+		t.Helper()
+		if err := w.comp.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("compiled below the gate", "missing")
+
+	w.agentAt(d, gate)
+	reconcile()
+	check("upgraded to the gate", "required")
+
+	w.agentAt(d, "0.1.0-alpha.10")
+	reconcile()
+	check("rolled back below the gate", "missing")
 }

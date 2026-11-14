@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/getent"
 	"github.com/phischl/paddock-mdm/agent/internal/sessions"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
@@ -52,7 +52,8 @@ func (a *Agent) trackSessions(ctx context.Context) {
 	for _, s := range logins {
 		upn, err := a.upn(ctx, s, domain)
 		if err != nil {
-			slog.WarnContext(ctx, "session.login not reported: no UPN for the session's user", "error", err)
+			// The error names the user and carries getent's passwd output, which stays out of the log.
+			slog.WarnContext(ctx, "session.login not reported: no UPN for the session's user", "uid", s.UID)
 			continue
 		}
 		at := now
@@ -79,9 +80,15 @@ func (a *Agent) upn(ctx context.Context, s sessions.Session, domain string) (str
 	if err != nil {
 		return "", fmt.Errorf("getent passwd %s: %w", candidate, err)
 	}
-	f := strings.Split(strings.TrimSpace(out), ":")
-	if exit != 0 || len(f) < 3 || f[2] != strconv.Itoa(s.UID) {
+	if exit != 0 {
 		return "", fmt.Errorf("%s does not resolve to UID %d (getent exit %d)", candidate, s.UID, exit)
+	}
+	pw, err := getent.ParsePasswd(out)
+	if err != nil {
+		return "", fmt.Errorf("getent passwd %s: %w", candidate, err)
+	}
+	if int64(pw.UID) != int64(s.UID) {
+		return "", fmt.Errorf("%s does not resolve to UID %d (getent UID %d)", candidate, s.UID, pw.UID)
 	}
 	return candidate, nil
 }

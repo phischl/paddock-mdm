@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/png"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
@@ -47,6 +48,18 @@ func sourceBody(prefix string) map[string]any {
 		"slug": slug, "name": slug, "uris": []string{"https://apt.gates.example/"}, "suites": []string{"stable"},
 		"components": []string{"main"}, "signing_key": gateSourceKey, "fingerprint": gateSourceFP,
 	}
+}
+
+// flatpakSourceBody is a valid Flatpak source (plan M13b decision 5): one https remote and no suites or components.
+func flatpakSourceBody(prefix string) map[string]any {
+	body := sourceBody(prefix)
+	body["kind"], body["uris"], body["suites"], body["components"] = "flatpak", []string{"https://flatpak.gates.example/repo/"}, []string{}, []string{}
+	return body
+}
+
+// flatpakRef is one Flatpak application of a catalog entry, in scope system or user.
+func flatpakRef(ref, scope string) map[string]any {
+	return map[string]any{"distribution": "ubuntu", "release": "*", "architecture": "*", "flatpak_ref": ref, "scope": scope}
 }
 
 // deleteSourceOnCleanup deletes a software source when the test ends; renew steps p up again when its step-up window
@@ -96,4 +109,38 @@ func listSoftwareEntry(t *testing.T, p *env.Portal, group string) string {
 		"catalog_entry_id": entry, "device_group_id": group, "intent": "hold",
 	}), http.StatusCreated, "")
 	return entry
+}
+
+// deleteEntryOnCleanup deletes a catalog entry when the test ends, after the assignments that still reference it: an
+// entry with assignments is refused with 409 in_use (A10-12), and an assignment left behind by a failed or
+// assignment-creating test would otherwise leak into the organization and into later gates.
+func deleteEntryOnCleanup(t *testing.T, p *env.Portal, entry string) {
+	t.Helper()
+	t.Cleanup(func() {
+		deleteEntryAssignments(t, p, entry)
+		path := softwareCatalog + "/" + entry
+		if res := call(t, p, http.MethodDelete, path, nil); res.Status != http.StatusNoContent && res.Status != http.StatusNotFound {
+			t.Errorf("cleanup: DELETE %s: HTTP %d %s", path, res.Status, res.Body)
+		}
+	})
+}
+
+// deleteEntryAssignments deletes every assignment of a catalog entry; an entry or assignment already gone is fine.
+func deleteEntryAssignments(t *testing.T, p *env.Portal, entry string) {
+	t.Helper()
+	res := call(t, p, http.MethodGet, softwareAssignments+"?"+url.Values{"catalog_entry_id": {entry}, "page_size": {"100"}}.Encode(), nil)
+	var page struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if res.Status != http.StatusOK || res.JSON(&page) != nil {
+		t.Errorf("cleanup: assignments of entry %s: HTTP %d %s", entry, res.Status, res.Body)
+		return
+	}
+	for _, a := range page.Items {
+		if res := call(t, p, http.MethodDelete, softwareAssignments+"/"+a.ID, nil); res.Status != http.StatusNoContent && res.Status != http.StatusNotFound {
+			t.Errorf("cleanup: DELETE assignment %s: HTTP %d %s", a.ID, res.Status, res.Body)
+		}
+	}
 }

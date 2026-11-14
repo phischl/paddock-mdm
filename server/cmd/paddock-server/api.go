@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/migrate"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/revocationsign"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
@@ -39,6 +41,12 @@ import (
 
 // sessionKeyPath is the KV v2 secret holding the session cookie keys (fields current and previous).
 const sessionKeyPath = "secret/data/paddock/session"
+
+// The api's pools of organization data and of the audit database.
+const (
+	apiOrgConns   = 8
+	apiAuditConns = 8
+)
 
 func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error {
 	httpAddr := l.String("PADDOCK_HTTP_ADDR", ":8080")
@@ -87,6 +95,12 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	// Escrowed LUKS headers, read for a recovery only (plan M4b decision 14).
 	escrowObjects := objectstore.New(l.Required("PADDOCK_ESCROW_S3_ENDPOINT"), l.SecretFile("PADDOCK_ESCROW_S3_ACCESS_KEY_FILE"),
 		l.SecretFile("PADDOCK_ESCROW_S3_SECRET_KEY_FILE"), l.String("PADDOCK_ESCROW_S3_BUCKET", "paddock-escrow"))
+	// The packages stored in Paddock (plan M13c decision 12, ADR 0050): the api writes and deletes them below apt/ of the
+	// bundles bucket and presigns the GET apt is redirected to, with a user of its own that may do nothing else.
+	bundlesAccessKey := l.SecretFile("PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE")
+	bundlesSecretKey := l.SecretFile("PADDOCK_BUNDLES_S3_SECRET_KEY_FILE")
+	bundlesBucket := l.String("PADDOCK_BUNDLES_S3_BUCKET", "paddock-bundles")
+	packageStore := objectstore.New(l.Required("PADDOCK_BUNDLES_S3_ENDPOINT"), bundlesAccessKey, bundlesSecretKey, bundlesBucket)
 	var runnerOpts []app.RunnerOption
 	if common.Development() {
 		// Development-only test hook for the reaper acceptance test (plan M0 §8, A3).
@@ -107,6 +121,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		denialWindow = l.Duration("PADDOCK_TEST_IP_ALLOWLIST_WINDOW", ipDenialWindow)
 	}
 	allowlistBypass := l.Bool("PADDOCK_IP_ALLOWLIST_BYPASS", false)
+	rateLimits := config.LoadRateLimits(l, common)
 	// Notification destinations (plan M9 decisions 9 and 28): e-mail only with an SMTP relay; webhook URLs on private
 	// addresses only on the development stack, whose acceptance sinks run on the host.
 	smtpEnabled := l.Bool("PADDOCK_SMTP_ENABLED", false)
@@ -118,6 +133,12 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		if _, err := backup.ParseKey(legacyBackupKey); legacyBackupKey != "" && err != nil {
 			l.Invalid("PADDOCK_BACKUP_LEGACY_KEY_FILE", err.Error())
 		}
+	}
+	var bundlesHost string
+	if u, err := url.Parse(bundlesURL); err != nil || u.Host == "" {
+		l.Invalid("PADDOCK_BUNDLES_PUBLIC_URL", "not an absolute URL")
+	} else {
+		bundlesHost = u.Host
 	}
 	if err := l.Err(); err != nil {
 		return err
@@ -133,7 +154,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	}
 	verifyRevokeRelease := app.NewReleaseVerifier(revokeReleasePub)
 
-	orgPool, err := db.NewOrgPool(ctx, orgDSN, db.Options{ApplicationName: "paddock-api"})
+	// Fixed sizes instead of the driver's default of one connection per CPU: the roles' pools together must stay within
+	// PostgreSQL's default of 100 connections on any host (docs/operations/capacity.md, "PostgreSQL connection budget").
+	orgPool, err := db.NewOrgPool(ctx, orgDSN, db.Options{ApplicationName: "paddock-api", MaxConns: apiOrgConns})
 	if err != nil {
 		return err
 	}
@@ -143,7 +166,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		return err
 	}
 	defer platformPool.Close()
-	auditReader, err := db.NewAuditReader(ctx, auditDSN, db.Options{ApplicationName: "paddock-api-audit"})
+	auditReader, err := db.NewAuditReader(ctx, auditDSN, db.Options{ApplicationName: "paddock-api-audit", MaxConns: apiAuditConns})
 	if err != nil {
 		return err
 	}
@@ -152,7 +175,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	if err != nil {
 		return err
 	}
-	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password})
+	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Username: vkCfg.Username, Password: vkCfg.Password})
 	if err != nil {
 		return err
 	}
@@ -209,70 +232,77 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	})
 	// The api never verifies or stores a bundle, so it needs neither the worker's object reader nor its retention unit.
 	diagnostics := app.NewDiagnostics(runner, orgPool, nil, 24*time.Hour).WithDownload(escrowAccess, escrowObjects)
+	softwarePackages := app.NewSoftwarePackages(runner, orgPool, baoClient, packageStore,
+		objectstore.NewPresigner(bundlesURL, bundlesAccessKey, bundlesSecretKey, bundlesBucket), bundlesURL)
 	handler := admin.NewHandler(admin.Deps{
-		DeviceGroups:    app.NewDeviceGroups(runner, orgPool),
-		Tokens:          app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, devicecache.New(vk), deviceURL),
-		APITokens:       app.NewAPITokens(runner, orgPool),
-		Declarative:     app.NewDeclarative(runner, orgPool),
-		Devices:         app.NewDevices(runner, orgPool, devicecache.New(vk)),
-		Managed:         app.NewManagedConfig(runner, orgPool),
-		Organizations:   app.NewOrganizations(runner, platformPool, ak),
-		Users:           app.NewUsers(runner, orgPool, ak),
-		UserGroups:      app.NewUserGroups(runner, orgPool, ak),
-		Logins:          app.NewLogins(runner, orgPool, ak),
-		LoginSettings:   app.NewLoginSettings(runner, orgPool),
-		WatchedUnits:    app.NewWatchedUnits(runner, orgPool),
-		LoginHistory:    app.NewLoginHistory(runner, orgPool, 24*time.Hour),
-		Privileges:      app.NewPrivileges(runner, orgPool),
-		Commands:        app.NewDeviceCommands(runner, orgPool),
-		LocalAdmin:      app.NewLocalAdmin(runner, orgPool, escrowAccess),
-		Autoinstall:     app.NewAutoinstall(runner, orgPool, bundlesURL),
-		Disk:            app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
-		Revocations:     app.NewRevocations(runner, orgPool, stepUpTokens, devicecache.New(vk), revocationEnabled),
-		DMS:             app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
-		RolloutSettings: app.NewRolloutSettings(runner, orgPool, common.Development()),
-		ConfigRollouts:  app.NewConfigRollouts(runner, orgPool),
-		Updates:         app.NewUpdates(runner, orgPool),
-		Privacy:         app.NewPrivacy(runner, orgPool),
-		ReadAudit:       app.NewReadAudit(runner),
-		Attention:       app.NewAttention(orgPool),
-		Findings:        app.NewFindings(runner, orgPool),
-		Notifications:   app.NewNotifications(runner, orgPool, platformPool, baoClient, outboundPolicy, smtpEnabled),
-		SoftwareSources: app.NewSoftwareSources(runner, orgPool),
-		SoftwareCatalog: app.NewSoftwareCatalog(runner, orgPool),
-		SoftwareStatus:  app.NewSoftwareStatus(orgPool),
-		AccountList:     app.NewAccountList(orgPool),
-		Overview:        app.NewOverview(orgPool),
-		SecurityReview:  app.NewSecurityReview(orgPool),
-		AccessReview:    app.NewAccessReview(runner, orgPool, auditReader),
-		Diagnostics:     diagnostics,
-		MCPSettings:     app.NewMCPSettings(runner, orgPool, platformPool),
-		MCPAccess:       app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
-		Inventory:       app.NewInventory(orgPool),
-		ConfigStatus:    app.NewConfigStatus(orgPool),
-		Accounts:        accounts,
-		Releases:        releases,
-		ReleaseImports:  imports,
-		AgentUpdates:    app.NewAgentUpdates(runner, orgPool, devicecache.New(vk)),
-		Uninstalls:      app.NewUninstalls(runner, orgPool, devicecache.New(vk)),
-		Conversions:     app.NewDiskConversions(runner, orgPool, devicecache.New(vk)),
-		AuditLog:        app.NewAuditLog(auditReader, orgPool),
-		AuditIntegrity:  app.NewAuditIntegrity(auditReader),
-		AuditExports:    app.NewAuditExports(runner, auditReader),
-		ServerVersion:   buildinfo.Version,
-		IPAllowlist:     ipAllowlist,
-		IPGuard:         ipGuard,
-		Runner:          runner,
-		Keys:            keys,
-		OIDC:            oidc,
-		StepUp:          stepUp,
-		StepUpTokens:    stepUpTokens,
-		Sessions:        sessionStore,
-		MCPAuth:         mcpAuth,
-		StepUpAccounts:  accounts,
-		EndSessions:     app.NewSessions(runner, sessionStore, app.NewPortalUsers(platformPool, ak), ak),
-		AutoUnseal:      app.NewAutoUnseal(runner, platformPool, baoClient),
-		BackupKeys:      backupKeys,
+		DeviceGroups:     app.NewDeviceGroups(runner, orgPool),
+		Tokens:           app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, devicecache.New(vk), deviceURL),
+		APITokens:        app.NewAPITokens(runner, orgPool),
+		Declarative:      app.NewDeclarative(runner, orgPool),
+		Devices:          app.NewDevices(runner, orgPool, devicecache.New(vk)),
+		Managed:          app.NewManagedConfig(runner, orgPool),
+		Organizations:    app.NewOrganizations(runner, platformPool, ak),
+		Users:            app.NewUsers(runner, orgPool, ak),
+		UserGroups:       app.NewUserGroups(runner, orgPool, ak),
+		Logins:           app.NewLogins(runner, orgPool, ak),
+		LoginSettings:    app.NewLoginSettings(runner, orgPool),
+		WatchedUnits:     app.NewWatchedUnits(runner, orgPool),
+		LoginHistory:     app.NewLoginHistory(runner, orgPool, 24*time.Hour),
+		Privileges:       app.NewPrivileges(runner, orgPool),
+		Commands:         app.NewDeviceCommands(runner, orgPool),
+		LocalAdmin:       app.NewLocalAdmin(runner, orgPool, escrowAccess),
+		Autoinstall:      app.NewAutoinstall(runner, orgPool, bundlesURL),
+		Disk:             app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
+		Revocations:      app.NewRevocations(runner, orgPool, stepUpTokens, devicecache.New(vk), revocationEnabled),
+		DMS:              app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
+		RolloutSettings:  app.NewRolloutSettings(runner, orgPool, common.Development()),
+		ConfigRollouts:   app.NewConfigRollouts(runner, orgPool),
+		Updates:          app.NewUpdates(runner, orgPool),
+		Privacy:          app.NewPrivacy(runner, orgPool),
+		ReadAudit:        app.NewReadAudit(runner),
+		Attention:        app.NewAttention(orgPool),
+		Findings:         app.NewFindings(runner, orgPool),
+		Notifications:    app.NewNotifications(runner, orgPool, platformPool, baoClient, outboundPolicy, smtpEnabled),
+		SoftwareSources:  app.NewSoftwareSources(runner, orgPool),
+		SoftwareCatalog:  app.NewSoftwareCatalog(runner, orgPool),
+		SoftwareRequests: app.NewSoftwareRequests(runner, orgPool),
+		SoftwarePackages: softwarePackages,
+		BundlesHost:      bundlesHost,
+		Repositories:     softwarePackages,
+		SoftwareStatus:   app.NewSoftwareStatus(orgPool),
+		CompileWarnings:  app.NewCompileWarnings(orgPool),
+		AccountList:      app.NewAccountList(orgPool),
+		Overview:         app.NewOverview(orgPool),
+		SecurityReview:   app.NewSecurityReview(orgPool),
+		AccessReview:     app.NewAccessReview(runner, orgPool, auditReader),
+		Diagnostics:      diagnostics,
+		MCPSettings:      app.NewMCPSettings(runner, orgPool, platformPool),
+		MCPAccess:        app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),
+		Inventory:        app.NewInventory(orgPool),
+		ConfigStatus:     app.NewConfigStatus(orgPool),
+		Accounts:         accounts,
+		Releases:         releases,
+		ReleaseImports:   imports,
+		AgentUpdates:     app.NewAgentUpdates(runner, orgPool, devicecache.New(vk)),
+		Uninstalls:       app.NewUninstalls(runner, orgPool, devicecache.New(vk)),
+		Conversions:      app.NewDiskConversions(runner, orgPool, devicecache.New(vk)),
+		AuditLog:         app.NewAuditLog(auditReader, orgPool),
+		AuditIntegrity:   app.NewAuditIntegrity(auditReader),
+		AuditExports:     app.NewAuditExports(runner, auditReader),
+		ServerVersion:    buildinfo.Version,
+		IPAllowlist:      ipAllowlist,
+		IPGuard:          ipGuard,
+		Runner:           runner,
+		Keys:             keys,
+		OIDC:             oidc,
+		StepUp:           stepUp,
+		StepUpTokens:     stepUpTokens,
+		Sessions:         sessionStore,
+		MCPAuth:          mcpAuth,
+		StepUpAccounts:   accounts,
+		EndSessions:      app.NewSessions(runner, sessionStore, app.NewPortalUsers(platformPool, ak), ak),
+		AutoUnseal:       app.NewAutoUnseal(runner, platformPool, baoClient),
+		BackupKeys:       backupKeys,
 		// Backup targets follow the outbound policy: S3 endpoints on private addresses only on the development stack.
 		BackupTargets:      app.NewBackupTargets(runner, platformPool, baoClient, backupset.Policy{AllowPrivate: outboundPolicy.AllowPrivate}),
 		BackupSchedule:     app.NewBackupSchedule(runner, platformPool),
@@ -287,6 +317,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		ExposeStepUp:     common.Development(),
 		LoginMFAOptional: loginMFAOptional,
 		TrustedProxies:   common.TrustedProxies,
+		RateLimiter:      ratelimit.New(ratelimit.NewValkeyStore(vk), nil, rateLimits.Limits),
+		RateLimitExempt:  rateLimits.Exempt,
 	})
 	srv := newHTTPServer(httpAddr, handler)
 	slog.InfoContext(ctx, "api starting", "addr", httpAddr, "public_url", publicURL)

@@ -22,8 +22,9 @@ services:
     environment:
       PADDOCK_ACME_EMAIL: ${PADDOCK_ACME_EMAIL:-}
       PADDOCK_ADMIN_ALLOWED_CIDRS: ${PADDOCK_ADMIN_ALLOWED_CIDRS:-0.0.0.0/0 ::/0}
-      # Edge allow list and client address (plan M7a decisions 1 and 8; docs/operations/ip-allowlist.md).
-      PADDOCK_INTERNAL_CIDRS: ${PADDOCK_INTERNAL_CIDRS:-private_ranges}
+      # Edge allow list and client address (plan M7a decisions 1 and 8; docs/operations/ip-allowlist.md). Internal
+      # callers are the roles on network edge (ADR 0051 decision 1), not every private address.
+      PADDOCK_INTERNAL_CIDRS: ${PADDOCK_INTERNAL_CIDRS:-${PADDOCK_EDGE_SUBNET:-172.28.0.0/24}}
       PADDOCK_EDGE_TRUSTED_PROXIES: ${PADDOCK_EDGE_TRUSTED_PROXIES:-}
       PADDOCK_EDGE_CLIENT_IP_HEADER: ${PADDOCK_EDGE_CLIENT_IP_HEADER:-none}
       # The servers block applies to every listener; the development value names the trusted listener only.
@@ -53,6 +54,7 @@ services:
   rabbitmq:
     volumes:
       - ./rabbitmq/tls.conf:/etc/rabbitmq/conf.d/20-tls.conf:ro
+      - ./rabbitmq/management-loopback.conf:/etc/rabbitmq/conf.d/30-management-loopback.conf:ro
     secrets: [rabbitmq_tls_crt, rabbitmq_tls_key, internal_ca_bundle]
     ports:
       # amqps for the audit writer on the audit host; plaintext 5672 stays on the internal network.
@@ -84,13 +86,15 @@ services:
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
       PADDOCK_IP_ALLOWLIST_BYPASS: ${PADDOCK_IP_ALLOWLIST_BYPASS:-false}
     secrets: !override
-      - valkey_password
+      - valkey_api_password
       - release_public_key
       - revoke_release_public_key
       - rustfs_artifacts_api_access_key
       - rustfs_artifacts_api_secret_key
       - rustfs_escrow_api_access_key
       - rustfs_escrow_api_secret_key
+      - rustfs_bundles_api_access_key
+      - rustfs_bundles_api_secret_key
       - db_paddock_api_url
       - db_paddock_platform_url
       # postgres://…@<audit host>:5432/paddock_audit?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca_bundle
@@ -114,7 +118,7 @@ services:
       - db_paddock_escrow_reader_url
       - approle_escrow_reader_role_id
       - approle_escrow_reader_secret_id
-      - valkey_password
+      - valkey_escrow_reader_password
       - internal_ca_bundle
 
   paddock-revocation-issuer:
@@ -129,7 +133,7 @@ services:
       - rabbitmq_revocation_issuer_password
       - approle_revocation_issuer_role_id
       - approle_revocation_issuer_secret_id
-      - valkey_password
+      - valkey_revocation_issuer_password
       - rustfs_escrow_revocation_access_key
       - rustfs_escrow_revocation_secret_key
       - internal_ca_bundle
@@ -159,6 +163,7 @@ services:
       PADDOCK_TLS_PROBE_HOSTS: admin.${PADDOCK_DOMAIN},auth.${PADDOCK_DOMAIN},device.${PADDOCK_DOMAIN},bundles.${PADDOCK_DOMAIN},fleet.${PADDOCK_DOMAIN}
       PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN}
       PADDOCK_FLEET_PUBLIC_URL: https://fleet.${PADDOCK_DOMAIN}
+      PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN}
       PADDOCK_OPENBAO_ADDR: https://openbao:8200
       BAO_CACERT: /run/secrets/internal_ca_bundle
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
@@ -166,10 +171,12 @@ services:
       - fleet_api_token
       - rustfs_escrow_worker_access_key
       - rustfs_escrow_worker_secret_key
+      - rustfs_bundles_worker_access_key
+      - rustfs_bundles_worker_secret_key
       - db_paddock_worker_url
       - db_paddock_platform_url
       - rabbitmq_worker_password
-      - valkey_password
+      - valkey_worker_password
       - approle_worker_role_id
       - approle_worker_secret_id
       - authentik_service_token

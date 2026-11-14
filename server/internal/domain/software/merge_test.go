@@ -17,6 +17,35 @@ func eff(n byte, pkg, intent, rule string, version *string) Effective {
 	return Effective{CatalogEntryID: id(n), Package: pkg, Source: "src" + string(rune('0'+n)), Intent: intent, UpdateRule: rule, Version: version}
 }
 
+func offer(e Effective, users ...string) Effective {
+	e.Audience = &bundle.SoftwareAudience{Users: users}
+	return e
+}
+
+func everyone(e Effective) Effective {
+	e.Audience = &bundle.SoftwareAudience{All: true}
+	return e
+}
+
+func flatpakEff(e Effective, ref, scope string) Effective {
+	e.FlatpakRef, e.Scope = ref, scope
+	return e
+}
+
+func audience(r Resolved, users ...string) Resolved {
+	r.Audience = &bundle.SoftwareAudience{Users: users}
+	return r
+}
+
+func everyoneRes(r Resolved) Resolved {
+	r.Audience = &bundle.SoftwareAudience{All: true}
+	return r
+}
+
+func res(entry uuid.UUID, pkg, source, intent string, version *string) Resolved {
+	return Resolved{CatalogEntryID: entry, Package: pkg, Source: source, Intent: intent, Version: version}
+}
+
 func TestMergeIntents(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -28,59 +57,102 @@ func TestMergeIntents(t *testing.T) {
 		{
 			name: "required latest and hold with version",
 			in:   []Effective{eff(1, "nano", IntentRequired, UpdateLatest, nil), eff(2, "nano", IntentHold, UpdateLatest, ver("1.0"))},
-			want: []Resolved{{id(1), "nano", "src1", IntentRequired, ver("1.0")}}, holds: []bundle.Hold{{Package: "nano", Version: ver("1.0")}},
+			want: []Resolved{res(id(1), "nano", "src1", IntentRequired, ver("1.0"))}, holds: []bundle.Hold{{Package: "nano", Version: ver("1.0")}},
 		},
 		{
 			name:      "two pinned versions",
 			in:        []Effective{eff(1, "nano", IntentRequired, UpdatePinned, ver("2.0")), eff(2, "nano", IntentRequired, UpdatePinned, ver("1.0"))},
-			want:      []Resolved{{id(1), "nano", "src1", IntentRequired, ver("1.0")}},
+			want:      []Resolved{res(id(1), "nano", "src1", IntentRequired, ver("1.0"))},
 			conflicts: []Conflict{{Package: "nano", Versions: []*string{ver("1.0"), ver("2.0")}, Chosen: ver("1.0")}},
+		},
+		{
+			name: "available alone",
+			in: []Effective{offer(eff(1, "gimp", IntentAvailable, UpdateLatest, nil), "bob@example.org"),
+				offer(eff(2, "gimp", IntentAvailable, UpdateLatest, nil), "alice@example.org", "bob@example.org")},
+			want: []Resolved{audience(res(id(1), "gimp", "src1", IntentAvailable, nil), "alice@example.org", "bob@example.org")},
+		},
+		{
+			name: "available to all wins the union",
+			in: []Effective{offer(eff(1, "gimp", IntentAvailable, UpdateLatest, nil), "bob@example.org"),
+				everyone(eff(2, "gimp", IntentAvailable, UpdateLatest, nil))},
+			want: []Resolved{everyoneRes(res(id(1), "gimp", "src1", IntentAvailable, nil))},
+		},
+		{
+			name: "flatpak and apt of one name stay apart",
+			in: []Effective{flatpakEff(eff(1, "", IntentRequired, UpdatePinned, ver("1.0")), "org.gimp.GIMP", "user"),
+				eff(2, "org.gimp.gimp", IntentHold, UpdateLatest, ver("2.0")),
+				flatpakEff(eff(3, "", IntentHold, UpdateLatest, ver("3.0")), "org.gimp.GIMP", "system")},
+			want: []Resolved{
+				{CatalogEntryID: id(1), FlatpakRef: "org.gimp.GIMP", Scope: "user", Source: "src1", Intent: IntentRequired},
+				res(id(2), "org.gimp.gimp", "src2", IntentHold, ver("2.0")),
+			},
+			holds: []bundle.Hold{{Package: "org.gimp.gimp", Version: ver("2.0")}},
+		},
+		{
+			name: "hold beats available",
+			in:   []Effective{eff(1, "gimp", IntentAvailable, UpdateLatest, nil), eff(2, "gimp", IntentHold, UpdateLatest, ver("2.10"))},
+			want: []Resolved{res(id(2), "gimp", "src2", IntentHold, ver("2.10"))}, holds: []bundle.Hold{{Package: "gimp", Version: ver("2.10")}},
+		},
+		{
+			name: "required beats available",
+			in:   []Effective{eff(1, "gimp", IntentAvailable, UpdateLatest, nil), eff(2, "gimp", IntentRequired, UpdateLatest, nil)},
+			want: []Resolved{res(id(2), "gimp", "src2", IntentRequired, nil)},
+		},
+		{
+			name: "uninstall beats available",
+			in:   []Effective{eff(1, "gimp", IntentUninstall, UpdateLatest, nil), eff(2, "gimp", IntentAvailable, UpdateLatest, nil)},
+			want: []Resolved{res(id(1), "gimp", "src1", IntentUninstall, nil)},
+		},
+		{
+			name: "forbid beats available",
+			in:   []Effective{eff(1, "gimp", IntentAvailable, UpdateLatest, nil), eff(2, "gimp", IntentForbid, UpdateLatest, nil)},
+			want: []Resolved{res(id(2), "gimp", "src2", IntentForbid, nil)},
 		},
 		{
 			name: "forbid beats required",
 			in:   []Effective{eff(1, "nano", IntentRequired, UpdatePinned, ver("1.0")), eff(2, "nano", IntentForbid, UpdateLatest, nil)},
-			want: []Resolved{{id(2), "nano", "src2", IntentForbid, nil}},
+			want: []Resolved{res(id(2), "nano", "src2", IntentForbid, nil)},
 		},
 		{
 			name: "forbid beats uninstall",
 			in:   []Effective{eff(1, "nano", IntentUninstall, UpdateLatest, nil), eff(2, "nano", IntentForbid, UpdateLatest, nil)},
-			want: []Resolved{{id(2), "nano", "src2", IntentForbid, nil}},
+			want: []Resolved{res(id(2), "nano", "src2", IntentForbid, nil)},
 		},
 		{
 			name: "uninstall beats hold",
 			in:   []Effective{eff(1, "nano", IntentHold, UpdateLatest, ver("1.0")), eff(2, "nano", IntentUninstall, UpdateLatest, nil)},
-			want: []Resolved{{id(2), "nano", "src2", IntentUninstall, nil}},
+			want: []Resolved{res(id(2), "nano", "src2", IntentUninstall, nil)},
 		},
 		{
 			name: "uninstall beats required",
 			in:   []Effective{eff(1, "nano", IntentRequired, UpdateLatest, nil), eff(2, "nano", IntentUninstall, UpdateLatest, nil)},
-			want: []Resolved{{id(2), "nano", "src2", IntentUninstall, nil}},
+			want: []Resolved{res(id(2), "nano", "src2", IntentUninstall, nil)},
 		},
 		{
 			name: "hold and hold with version",
 			in:   []Effective{eff(1, "nano", IntentHold, UpdateLatest, nil), eff(2, "nano", IntentHold, UpdateLatest, ver("1.0"))},
-			want: []Resolved{{id(1), "nano", "src1", IntentHold, ver("1.0")}}, holds: []bundle.Hold{{Package: "nano", Version: ver("1.0")}},
+			want: []Resolved{res(id(1), "nano", "src1", IntentHold, ver("1.0"))}, holds: []bundle.Hold{{Package: "nano", Version: ver("1.0")}},
 		},
 		{
 			name: "hold without version",
 			in:   []Effective{eff(1, "nano", IntentHold, UpdateLatest, nil)},
-			want: []Resolved{{id(1), "nano", "src1", IntentHold, nil}}, holds: []bundle.Hold{{Package: "nano"}},
+			want: []Resolved{res(id(1), "nano", "src1", IntentHold, nil)}, holds: []bundle.Hold{{Package: "nano"}},
 		},
 		{
 			name: "two holds, smallest version",
 			in:   []Effective{eff(1, "nano", IntentHold, UpdateLatest, ver("2.0")), eff(2, "nano", IntentHold, UpdateLatest, ver("1.0"))},
-			want: []Resolved{{id(1), "nano", "src1", IntentHold, ver("1.0")}}, holds: []bundle.Hold{{Package: "nano", Version: ver("1.0")}},
+			want: []Resolved{res(id(1), "nano", "src1", IntentHold, ver("1.0"))}, holds: []bundle.Hold{{Package: "nano", Version: ver("1.0")}},
 			conflicts: []Conflict{{Package: "nano", Versions: []*string{ver("1.0"), ver("2.0")}, Chosen: ver("1.0")}},
 		},
 		{
 			name: "required pinned and the same version twice",
 			in:   []Effective{eff(1, "nano", IntentRequired, UpdatePinned, ver("1.0")), eff(2, "nano", IntentRequired, UpdatePinned, ver("1.0"))},
-			want: []Resolved{{id(1), "nano", "src1", IntentRequired, ver("1.0")}},
+			want: []Resolved{res(id(1), "nano", "src1", IntentRequired, ver("1.0"))},
 		},
 		{
 			name: "required latest only",
 			in:   []Effective{eff(1, "nano", IntentRequired, UpdateLatest, nil)},
-			want: []Resolved{{id(1), "nano", "src1", IntentRequired, nil}},
+			want: []Resolved{res(id(1), "nano", "src1", IntentRequired, nil)},
 		},
 		{
 			name: "sorted by package, one result each",
@@ -89,8 +161,8 @@ func TestMergeIntents(t *testing.T) {
 				eff(2, "nano", IntentHold, UpdateLatest, nil),
 			},
 			want: []Resolved{
-				{id(1), "emacs", "src1", IntentUninstall, nil}, {id(2), "nano", "src2", IntentHold, nil},
-				{id(3), "vim", "src3", IntentRequired, nil},
+				res(id(1), "emacs", "src1", IntentUninstall, nil), res(id(2), "nano", "src2", IntentHold, nil),
+				res(id(3), "vim", "src3", IntentRequired, nil),
 			},
 			holds: []bundle.Hold{{Package: "nano"}},
 		},
@@ -117,5 +189,40 @@ func TestMergeIntentsSupplierIsOrderIndependent(t *testing.T) {
 	two, _, _ := MergeIntents([]Effective{b, a})
 	if !reflect.DeepEqual(one, two) || one[0].CatalogEntryID != id(1) {
 		t.Fatalf("%+v vs %+v", one, two)
+	}
+}
+
+// TestMergeIntentsFlatpakUsers (architect decision A10-11): the targeted users of a user-scope Flatpak application
+// merge over the assignments with the winning intent into a sorted union; one of them without users (the whole
+// device) leaves the result without users, so it applies in system scope; a losing intent's users are dropped.
+func TestMergeIntentsFlatpakUsers(t *testing.T) {
+	targetedEff := func(n byte, intent string, users ...string) Effective {
+		e := flatpakEff(eff(n, "", intent, UpdateLatest, nil), "org.gimp.GIMP", "user")
+		e.Users = users
+		return e
+	}
+	for _, tc := range []struct {
+		name string
+		in   []Effective
+		want []string
+	}{
+		{"one user", []Effective{targetedEff(1, IntentRequired, "alice@example.org")}, []string{"alice@example.org"}},
+		{"union", []Effective{targetedEff(2, IntentRequired, "carol@example.org", "bob@example.org"),
+			targetedEff(1, IntentRequired, "alice@example.org", "bob@example.org")},
+			[]string{"alice@example.org", "bob@example.org", "carol@example.org"}},
+		{"whole device wins", []Effective{targetedEff(1, IntentRequired, "alice@example.org"), targetedEff(2, IntentRequired)}, nil},
+		{"forbid users only", []Effective{targetedEff(1, IntentRequired, "alice@example.org"),
+			targetedEff(2, IntentForbid, "bob@example.org")}, []string{"bob@example.org"}},
+		{"system-scope entry of the same application", []Effective{targetedEff(1, IntentForbid, "alice@example.org"),
+			flatpakEff(eff(2, "", IntentForbid, UpdateLatest, nil), "org.gimp.GIMP", "system")}, nil},
+		{"uninstall", []Effective{targetedEff(1, IntentUninstall, "bob@example.org")}, []string{"bob@example.org"}},
+		{"hold carries none", []Effective{targetedEff(1, IntentHold, "bob@example.org")}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _, _ := MergeIntents(tc.in)
+			if len(got) != 1 || !reflect.DeepEqual(got[0].Users, tc.want) {
+				t.Fatalf("resolved = %+v, want users %v", got, tc.want)
+			}
+		})
 	}
 }

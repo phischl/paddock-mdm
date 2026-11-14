@@ -288,7 +288,7 @@ func (f *fakeS3) ListSizesPaged(ctx context.Context, prefix string, page func())
 	}
 	return out, err
 }
-func (f *fakeS3) Newest(context.Context, string) (time.Time, bool, error) {
+func (f *fakeS3) NewestPaged(context.Context, string, func()) (time.Time, bool, error) {
 	return time.Time{}, false, nil
 }
 func (f *fakeS3) Open(_ context.Context, key string) (io.ReadCloser, error) {
@@ -336,16 +336,29 @@ func (b *blockingTarget) Put(ctx context.Context, p string, r io.Reader, size in
 func TestStalledTargetDoesNotBlockTheRound(t *testing.T) {
 	f := newFixture(t)
 	f.confirmKey()
-	f.engine.stall = 50 * time.Millisecond
+	// The stall deadline also applies to the reachable target, whose mirror must tick within it even on a starved
+	// host; 50 ms was shorter than a scheduling delay under load and failed the good target instead of the stuck one.
+	f.engine.stall = time.Second
 	stuck := &blockingTarget{memTarget: newMemTarget(), release: make(chan struct{})}
+	releaseOnce := sync.OnceFunc(func() { close(stuck.release) })
+	t.Cleanup(releaseOnce)
 	good := newMemTarget()
 	stuckRec := f.addTarget(t, backupset.TypeNFS, stuck)
 	f.addTarget(t, backupset.TypeS3, good)
-	start := time.Now()
-	f.round(t)
-	if time.Since(start) > 5*time.Second {
-		t.Errorf("the round took %s", time.Since(start))
+	// The stuck target stays blocked until the end of the test, so a round that returns at all was not held by it; a
+	// wall-clock bound on the round only measured host load.
+	roundDone := make(chan error, 1)
+	go func() { roundDone <- f.engine.Round(context.Background()) }()
+	select {
+	case err := <-roundDone:
+		if err != nil {
+			t.Fatalf("round: %v", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("the round stayed blocked by the stalled target")
 	}
+	// The round returned at once; the lanes end at the stall deadline or the page limit.
+	f.engine.waitLanes()
 	if _, ok := good.files[backupset.ManifestPath]; !ok {
 		t.Error("the reachable target got no manifest")
 	}
@@ -365,8 +378,8 @@ func TestStalledTargetDoesNotBlockTheRound(t *testing.T) {
 	if puts != 1 {
 		t.Errorf("puts to the stalled target %d, want 1", puts)
 	}
-	close(stuck.release)
-	deadline := time.Now().Add(5 * time.Second)
+	releaseOnce()
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		f.engine.busyMu.Lock()
 		busy := f.engine.busy[stuckRec.ID]

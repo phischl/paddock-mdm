@@ -1,0 +1,17 @@
+Package: acme-docs
+Version: 1:3.1
+Architecture: all
+Filename: pool/main/a/acme-docs/acme-docs_3.1_all.deb
+Size: 900
+SHA256: 99cdad5dc57b27896cf5ea63b4f68a7c3ff63d10f988d1ffc36bc061a8299971
+Description: Acme documentation
+
+Package: zeta-tool
+Version: 2.0-1
+Architecture: arm64
+Maintainer: Ops <ops@example.com>
+Filename: pool/main/z/zeta-tool/zeta-tool_2.0-1_arm64.deb
+Size: 900
+SHA256: e2b892d649fc66430262ea41aa32723f2e751646a88b30d10eee418c5172580e
+Description: zeta
+ line one

@@ -541,3 +541,66 @@ func TestSudoRSRefusesTenDigitUIDs(t *testing.T) {
 		t.Fatal("wrong files written")
 	}
 }
+
+// nssNoise is the line Himmelblau's NSS module printed while himmelblaud was down (PDK-892).
+const nssNoise = "2026-11-08T05:01:13.152453Z ERROR Unix socket stream setup error while connecting to " +
+	"/var/run/himmelblaud/socket -> Os { code: 111, kind: ConnectionRefused, message: \"Connection refused\" }\n"
+
+// TestSudoFlavorRejectsForeignVersionOutput: a log line before "sudo-rs …" used to be read as classic sudo, which
+// renders sudoers files for the wrong implementation.
+func TestSudoFlavorRejectsForeignVersionOutput(t *testing.T) {
+	ctx := context.Background()
+	sys, _, _ := sudoFixture(t)
+	sys.Links = map[string]string{"/usr/bin/sudo": "/usr/lib/cargo/bin/sudo"}
+	for _, out := range []string{nssNoise + "sudo-rs 0.2.13-0ubuntu1.2\n", nssNoise + "Sudo version 1.9.15p5\n", "", "sudo-rsx 1\n"} {
+		sys.SudoVersions = map[string]string{"/usr/lib/cargo/bin/sudo": out}
+		if flavor, _, err := reconcile.SudoFlavor(ctx, sys); err == nil {
+			t.Errorf("SudoFlavor(%q) = %s, want an error", out, flavor)
+		}
+	}
+	sys.SudoVersions = map[string]string{"/usr/lib/cargo/bin/sudo": "sudo-rs 0.2.13-0ubuntu1.2\n" + nssNoise}
+	if flavor, _, err := reconcile.SudoFlavor(ctx, sys); err != nil || flavor != sudoers.SudoRS {
+		t.Fatalf("noise after the version line: %s %v", flavor, err)
+	}
+}
+
+// TestSudoRejectsForeignGetentOutput: a log line on getent's stdout fails the apply and changes nothing: no sudoers
+// file from a misread UID, no member removed from a misread privileged group.
+func TestSudoRejectsForeignGetentOutput(t *testing.T) {
+	ctx := context.Background()
+	sys, s, events := sudoFixture(t)
+	sys.Members["sudo"] = []string{"paddock", "eve"}
+	sys.GetentNoise = nssNoise
+	res := s.Apply(ctx, sudoResource(t, restricted("dave@acme.test", "/usr/bin/true")))
+	if res.Status != reconcile.Error || !strings.Contains(res.Message, "unexpected getent output") {
+		t.Fatalf("apply %+v", res)
+	}
+	if sys.Files["/etc/sudoers.d/"+sudoers.FileName("dave@acme.test")] != nil {
+		t.Fatal("sudoers file written from foreign getent output")
+	}
+	if !slices.Equal(sys.Members["sudo"], []string{"paddock", "eve"}) || slices.ContainsFunc(sys.TakeCalls(), func(c string) bool { return strings.HasPrefix(c, "gpasswd") }) {
+		t.Fatalf("sudo members %v", sys.Members["sudo"])
+	}
+	if got := takeEvents(events); len(got) != 0 {
+		t.Fatalf("events %v", got)
+	}
+
+	sys.GetentNoise = ""
+	if res := s.Apply(ctx, sudoResource(t, restricted("dave@acme.test", "/usr/bin/true"))); res.Status != reconcile.Changed {
+		t.Fatalf("apply without the noise %+v", res)
+	}
+}
+
+// TestPrivilegedGroupsRejectForeignGetentOutput: the group check alone (no sudoers entries) fails on a log line too.
+func TestPrivilegedGroupsRejectForeignGetentOutput(t *testing.T) {
+	ctx := context.Background()
+	sys, s, _ := sudoFixture(t)
+	sys.Members["sudo"] = []string{"paddock", "eve"}
+	sys.GetentNoise = nssNoise
+	if _, err := s.Plan(ctx, sudoResource(t)); err == nil || !strings.Contains(err.Error(), "getent group sudo") {
+		t.Fatalf("plan error %v", err)
+	}
+	if res := s.Apply(ctx, sudoResource(t)); res.Status != reconcile.Error || !slices.Equal(sys.Members["sudo"], []string{"paddock", "eve"}) {
+		t.Fatalf("apply %+v, members %v", res, sys.Members["sudo"])
+	}
+}

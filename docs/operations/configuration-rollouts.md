@@ -45,6 +45,8 @@ started with.
 | Failure rate that stops a rollout | `failure_threshold_percent` | 2 | 0 to 100 |
 | Minimum number of failed devices | `failure_threshold_min` | 3 | at least 0 |
 | Canary group | `canary_device_group_id` | none | a device group of the organization; its devices always receive a change first |
+| Share of a wave's new devices that must have applied while others wait for their maintenance window | `wave_success_threshold_percent` | 90 | 1 to 100; absent in a write keeps the stored value |
+| Hours without a new apply before the stall warning | `stall_warning_hours` | 24 | 1 to 720; absent in a write keeps the stored value |
 
 A rollout halts when the failed devices reach the larger of `failure_threshold_min` and `failure_threshold_percent`
 of the devices in the waves reached so far, rounded up, and at least one device failed. An invalid value is 400
@@ -99,7 +101,8 @@ curl -sS -H "Authorization: Bearer $PADDOCK_TOKEN" "$PADDOCK_URL/api/v1/config-r
 On a device, *Apply status* shows each resource and the *Bundle history* names the rollout that rendered a version.
 
 **4. Let it run, or act.** The worker checks every rollout every 60 seconds (section 5). Without failures the rollout
-advances after each wave's minimum duration and completes after the last wave; with failures it halts. You can
+advances once the devices of a wave have applied the change and the wave's minimum duration has passed since the first
+of them did, and completes after the last wave; with failures it halts. You can
 advance, halt, resume or complete it yourself (section 5), or revert the change set (section 7).
 
 ```sh
@@ -135,13 +138,23 @@ worker decides on:
 | `eligible` | active, enforced devices inside the wave the rollout reached (every such device once it completed) |
 | `failed` | devices whose **newest** report on a bundle of the rollout is a rejection (`device.bundle_rejected`), or an apply with a failed staged resource, received since the rollout started or was last resumed |
 | `applied` | devices whose newest report on a bundle of the rollout applied every staged resource (enforced apply) |
-| `pending` | every other eligible device: no bundle of the rollout, no report yet, or a report that no longer counts |
+| `pending` | every other eligible device: no bundle of the rollout, no report yet, a report that no longer counts, or a staged software change that waits for the device's maintenance window |
+| `waiting` | the pending devices whose staged software change waits for their maintenance window (`waiting_for_window` in the device list) |
+| `awaiting_retry` | devices that hold the rollout until they apply successfully (`awaiting_retry` in the device list): a failure the last resume discarded (counted in `pending`) and, after a resume, a failure since (counted in `failed`) |
 
 Rules that are easy to miss:
 
-- **Devices that never report never count.** A laptop that is closed or offline is `pending`, neither failed nor
-  applied; a silent device does not stop a rollout. The rollout advances on time whether or not the devices of the
-  wave have reported. Use *Configuration status* and the attention list for silent devices.
+- **Devices that never report never count as failed.** A laptop that is closed or offline is `pending`, neither failed
+  nor applied; a silent device does not halt a rollout. But time never stands in for applies (section 5): a wave
+  whose new devices have not applied anything does not advance, however old it is, and gets the stall warning. Use
+  *Configuration status* and the attention list for silent devices, and *Advance wave* when you decide to go on
+  without them.
+- **Devices waiting for their maintenance window are pending**, never failed. The device list shows them with
+  `waiting_for_window: true`: the bundle was applied (`report_outcome` *applied*), but a staged software change waits
+  for the window ([software](software.md), *Maintenance windows*).
+- **Devices awaiting a retry hold the whole rollout.** The device list shows them with `awaiting_retry: true` (filter
+  `awaiting_retry=true`); while `awaiting_retry` is above zero no wave advances and the rollout does not complete by
+  itself, whatever wave the device belongs to (section 5).
 - **The server's receive time counts**, not the device's clock: a device clock that runs behind cannot date a failure
   before the start of the rollout.
 - **Only staged resources count.** A failure of another resource of the same bundle does not count against the rollout;
@@ -167,9 +180,34 @@ Automatic behaviour of the worker (every 60 seconds, for running rollouts only):
 1. **Halt** (`config_rollout.halted`, actor *system*) when the failed devices reach the threshold of section 2. The
    audit event carries `reason` (`<n> failed devices reached the threshold of <m>`), `wave`, `eligible`, `failed` and
    `threshold`.
-2. **Advance** (`config_rollout.advanced`, `manual: false`) when the current wave is older than `min_wave_minutes`
-   and a next wave exists.
-3. **Complete** (`config_rollout.completed`, `manual: false`) when the last wave is older than `min_wave_minutes`.
+2. **Advance** (`config_rollout.advanced`, `manual: false`) when the current wave is done and a next wave exists.
+3. **Complete** (`config_rollout.completed`, `manual: false`) when the last wave is done.
+4. **Stall warning** (`config_rollout.stalled`, actor *system*) once when the current wave cannot move on and went
+   `stall_warning_hours` without progress: no new apply of its new devices and no device that stopped waiting for its
+   window or awaiting a retry. A wave for which only the minimum duration is outstanding is never stalled. It only
+   informs: the wave keeps its rules, nothing is forced and nothing is applied outside a maintenance window. Progress,
+   the next wave or a resume starts a new stall period.
+
+A wave is **done** (architect decisions A10-16 and A10-19, agent contract 6) when all of these hold:
+
+- no device of the rollout awaits a retry (`awaiting_retry` is 0, any wave);
+- at least one device that joined in this wave applied **successfully**: a wave whose new devices only failed never
+  advances by itself;
+- `min_wave_minutes` have passed since the worker first saw a device that joined in this wave applied (with success or
+  failure); the devices of earlier waves do not count, and the time before the first apply does not count either;
+- the share of the wave's new devices that have applied reaches `wave_success_threshold_percent`, **or** no eligible
+  device of the rollout (any wave) still waits for its maintenance window.
+
+After a resume (architect decision A10-18) the wave starts over: the minimum duration counts again from the first apply
+the worker sees after the resume, and only reports received after the resume count toward
+`wave_success_threshold_percent`. A device of any wave whose failure the resume discarded, and after a resume every
+device whose newest report is a failure, is shown with `awaiting_retry: true` and holds the rollout until it has
+applied successfully; if it never does, the wave gets the stall warning and waits for you (*Advance wave*, *Complete*,
+or revert the change set).
+
+The threshold alone never advances a wave. A wave that no device joined (for example the 1 % wave of a small fleet)
+has nothing to observe; its minimum duration counts from its start, but devices awaiting a retry still hold it. `GET /api/v1/config-rollouts/{id}` shows
+`wave_first_applied_at` and, while a stall was warned about, `stalled_since`.
 
 A halted rollout is not evaluated: it waits for you. After resolving the cause, resume it, complete it (the change
 then reaches everyone) or revert its change set. There is no automatic resume and no automatic revert.
@@ -250,7 +288,7 @@ All codes are in the closed registry ([audit codes](../compliance/audit-codes.md
 
 | Code | When | Actor | Parameters |
 | --- | --- | --- | --- |
-| `settings.rollout_changed` | the settings changed | administrator | `enabled`, `waves`, `min_wave_minutes`, `failure_threshold_percent`, `failure_threshold_min`, `canary_device_group_id` |
+| `settings.rollout_changed` | the settings changed | administrator | `enabled`, `waves`, `min_wave_minutes`, `failure_threshold_percent`, `failure_threshold_min`, `canary_device_group_id`, `wave_success_threshold_percent`, `stall_warning_hours` |
 | `config.applied` | a declarative apply; staged or urgent changes carry the rollout parameters | administrator or token | `change_set_id`, `created`, `updated`, `deleted`, `sections`, `rollout`, `rollout_id`, `urgent_reason` |
 | `managed_file.*`, `managed_unit.*`, `package_hold.*`, `settings.updates_changed` | a portal write of a rollout-able section | administrator | the usual parameters plus `change_set_id`, `rollout`, `rollout_id`, `urgent_reason` |
 | `config.reverted` | a revert | administrator | `change_set_id`, `reverts_change_set_id`, `plan_sha256`, `created`, `updated`, `deleted`, `sections`, `rollout`, `rollout_id`, `rollout_status`, `urgent_reason` |
@@ -259,6 +297,7 @@ All codes are in the closed registry ([audit codes](../compliance/audit-codes.md
 | `config_rollout.resumed` | resumed | administrator or operator | `rollout_id`, `change_set_id`, `wave` |
 | `device.enforcement_enabled` | an adopted device leaves report-only mode ([enroll-existing](enroll-existing.md), section 7) | administrator or operator | `hostname`, `enrollment_method`, `report_only_since` |
 | `config_rollout.completed` | completed by the worker or an administrator | system, administrator or operator | `rollout_id`, `change_set_id`, `wave`, `manual` |
+| `config_rollout.stalled` | the current wave cannot move on and went `stall_warning_hours` without progress | system | `rollout_id`, `change_set_id`, `wave`, `stalled_since`, `stall_warning_hours`, `wave_eligible`, `wave_applied`, `waiting`, `awaiting_retry` |
 
 Every attempt, also a refused one, records exactly one event with outcome success, failure or denied. The start of a
 rollout is carried by the event of the change that started it. `config_rollout.halted` is a preset event of the
@@ -271,7 +310,7 @@ gauge `paddock_config_rollouts{status}` (rollouts by status, never labelled with
 | --- | --- |
 | 409 `rollout_conflict` or `rollout_running` on a change | A rollout is open. Open *Configuration rollouts*, complete it or revert its change set (section 6). |
 | A rollout halted | Read *Halt reason* and the devices list (`report_outcome` *Rejected*, failed resources). Fix the cause, resume, or revert the change set. |
-| A rollout does not move on | It is halted, or the wave's minimum duration has not passed. *Advance wave* skips the wait. |
+| A rollout does not move on | It is halted, no device of the current wave has applied yet (offline, or waiting for its maintenance window: `waiting_for_window` in the device list), no device of the current wave has applied successfully (a wave with no successful apply never advances by itself), too few have applied while others still wait, a device of any wave awaits a retry (`awaiting_retry` count above zero; filter the device list with `awaiting_retry=true`), or the minimum duration since the first apply has not passed (section 5). *Advance wave* skips the wait. |
 | Counts stay at `pending` | The devices are offline, do not carry the change (not concerned), or are report-only. Section 4. |
 | 409 `invalid_state` on an action | The rollout is not in the status the action needs (section 5). |
 | 409 `in_use` on a revert | Section 7. |

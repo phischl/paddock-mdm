@@ -159,3 +159,31 @@ func (w ownersWorld) otherOrg(t *testing.T) uuid.UUID {
 	}
 	return id
 }
+
+// TestDeviceOwnersRecompile (plan M13b decision 8, PDK-799): software assignments to users and user groups apply
+// through the owners, so a change of the owners recompiles the device; setting the same owners again does not.
+func TestDeviceOwnersRecompile(t *testing.T) {
+	w := newOwnersWorld(t)
+	ctx := principal.With(context.Background(), w.account(t, principal.RoleOrgOperator, false))
+	a := w.user(t, w.org, "alice")
+	recompiles := func() int {
+		t.Helper()
+		var n int
+		if err := w.super.QueryRow(context.Background(), `SELECT count(*) FROM outbox WHERE payload ->> 'scope' = 'device'
+			AND payload ->> 'id' = $1`, w.device.String()).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	for i, step := range []struct {
+		owners []uuid.UUID
+		want   int
+	}{{[]uuid.UUID{a}, 1}, {[]uuid.UUID{a}, 1}, {nil, 2}} {
+		if _, err := w.devices.SetOwners(ctx, w.device, step.owners); err != nil {
+			t.Fatal(err)
+		}
+		if n := recompiles(); n != step.want {
+			t.Fatalf("step %d: %d device state changes, want %d", i, n, step.want)
+		}
+	}
+}

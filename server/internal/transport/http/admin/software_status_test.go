@@ -140,6 +140,32 @@ func TestSoftwareStatusEndpoints(t *testing.T) {
 			t.Errorf("%s: %d %s, want 404 not_found", c.name, r.status, r.body)
 		}
 	}
+	// PDK-803: a user-scope row is listed next to the system row of the entry and selected by the scope filter.
+	exec(`INSERT INTO device_software_status (device_id, organization_id, catalog_entry_id, package, intent, state, scope, reported_at)
+		VALUES ($1, $2, $3, 'nano', 'available', 'installed', 'user', now())`, dev, e.acme, editor)
+	e.get(t, auditor, "/api/v1/devices/"+dev.String()+"/managed-software?scope=user", &managed)
+	if managed.Total != 1 || managed.Items[0].CatalogEntryId != editor || managed.Items[0].Scope != adminapi.SoftwareScopeUser ||
+		managed.Items[0].Intent != adminapi.SoftwareIntentAvailable {
+		t.Fatalf("scope=user %+v", managed)
+	}
+	e.get(t, auditor, "/api/v1/devices/"+dev.String()+"/managed-software?scope=system", &managed)
+	if managed.Total != 3 || slices.ContainsFunc(managed.Items, func(m adminapi.DeviceManagedSoftware) bool { return m.Scope != adminapi.SoftwareScopeSystem }) {
+		t.Fatalf("scope=system %+v", managed)
+	}
+	e.get(t, auditor, "/api/v1/software-catalog/"+editor.String()+"/devices", &devices)
+	if devices.Total != 2 || devices.Items[0].Scope != adminapi.SoftwareScopeSystem || devices.Items[1].Scope != adminapi.SoftwareScopeUser {
+		t.Fatalf("devices of an entry with two scopes %+v", devices)
+	}
+	e.get(t, auditor, "/api/v1/software-catalog/"+editor.String()+"/devices?scope=user", &devices)
+	if devices.Total != 1 || devices.Items[0].Scope != adminapi.SoftwareScopeUser || devices.Items[0].DeviceId != dev {
+		t.Fatalf("devices scope=user %+v", devices)
+	}
+	r = e.do(call{method: "GET", path: "/api/v1/devices/" + globexDev.String() + "/managed-software?scope=user", cookie: auditor})
+	if r.status != http.StatusNotFound {
+		t.Fatalf("foreign device with a scope filter: %d", r.status)
+	}
+	e.expectRejected(auditor, "/api/v1/devices/"+dev.String()+"/managed-software?scope=group", "invalid_request")
+	e.expectRejected(auditor, "/api/v1/software-catalog/"+editor.String()+"/devices?scope=group", "invalid_request")
 	e.expectRejected(auditor, "/api/v1/devices/"+dev.String()+"/managed-software?state=bogus", "invalid_request")
 	e.expectRejected(auditor, "/api/v1/devices/"+dev.String()+"/managed-software?sort=hostname", "invalid_request")
 	e.expectRejected(auditor, "/api/v1/software-catalog/"+editor.String()+"/devices?sort=name", "invalid_request")

@@ -92,10 +92,10 @@ func (d *Declarative) Plan(ctx context.Context, raw []byte, opts ...WriteOptions
 		}
 		inheritOmitted(&desired, st.doc)
 		plan = declarative.Diff(st.doc, desired)
-		if _, err := w.stage(st, plan, uuid.Nil, nil); err != nil {
+		if _, err := w.stage(st, plan, uuid.Nil, renames{}); err != nil {
 			return err
 		}
-		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: func() error { return d.runner.checkStepUp(p) }}
+		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: func() error { return d.runner.checkStepUp(p) }, planOnly: true}
 		if err := ex.run(ctx, plan); err != nil {
 			return err
 		}
@@ -155,7 +155,7 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 		rec.SetParam("sections", sections)
 		// Staged before the run: configExec updates st as it writes, and the rules read the configuration before the
 		// write (a deleted canary group). A declarative apply never renames a group by identity.
-		staged, err := w.stage(st, plan, uuid.Nil, nil)
+		staged, err := w.stage(st, plan, uuid.Nil, renames{})
 		if err != nil {
 			return err
 		}
@@ -244,11 +244,11 @@ func (d *Declarative) Revert(ctx context.Context, id uuid.UUID, expectedPlan str
 		rec.SetParam("updated", plan.Updated)
 		rec.SetParam("deleted", plan.Deleted)
 		rec.SetParam("sections", sections)
-		staged, err := w.stage(st, plan, id, nil) // before the run, as in Apply
+		staged, err := w.stage(st, plan, id, renames{}) // before the run, as in Apply
 		if err != nil {
 			return err
 		}
-		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: rec.RequireStepUp}
+		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: rec.RequireStepUp, endsRollout: staged.ends != nil}
 		if err := ex.run(ctx, plan); err != nil {
 			return err
 		}
@@ -293,12 +293,14 @@ func (d *Declarative) revertDryRun(ctx context.Context, id uuid.UUID, opts Rever
 			return err
 		}
 		plan = declarative.Diff(st.doc, desired)
+		var staged staging
 		if len(plan.Changes) > 0 {
-			if _, err := w.stage(st, plan, id, nil); err != nil {
+			if staged, err = w.stage(st, plan, id, renames{}); err != nil {
 				return err
 			}
 		}
-		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: func() error { return d.runner.checkStepUp(p) }}
+		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: func() error { return d.runner.checkStepUp(p) }, planOnly: true,
+			endsRollout: staged.ends != nil}
 		if err := ex.run(ctx, plan); err != nil {
 			return err
 		}
@@ -542,7 +544,12 @@ func inheritOmitted(desired *declarative.Document, current declarative.Document)
 func normalize(doc *declarative.Document) {
 	if doc.DeviceGroups != nil {
 		for i, g := range *doc.DeviceGroups {
-			(*doc.DeviceGroups)[i] = declarative.DeviceGroup{Name: devicegroup.NormalizeName(g.Name), Description: strings.TrimSpace(g.Description)}
+			item := declarative.DeviceGroup{Name: devicegroup.NormalizeName(g.Name), Description: strings.TrimSpace(g.Description)}
+			if g.MaintenanceWindow != nil {
+				w := devicegroup.NormalizeWindow(*g.MaintenanceWindow)
+				item.MaintenanceWindow = &w
+			}
+			(*doc.DeviceGroups)[i] = item
 		}
 	}
 	if doc.PermissionProfiles != nil {
@@ -567,6 +574,7 @@ func normalize(doc *declarative.Document) {
 		units := sortedUnits(*doc.Settings.WatchedUnits)
 		doc.Settings.WatchedUnits = &units
 	}
+	normalizeSoftware(doc)
 }
 
 // configState is the current configuration and the IDs behind its natural keys.
@@ -578,12 +586,15 @@ type configState struct {
 	profiles   map[string]pgstore.PermissionProfile
 	userGroups map[string]uuid.UUID // slug → ID
 	users      map[string]uuid.UUID // username → ID
+	sources    map[string]uuid.UUID // software source slug → ID
+	entries    map[string]uuid.UUID // catalog entry name → ID
 }
 
 // loadConfig reads the organization's configuration in document form.
 func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	st := configState{ids: map[string]map[string]uuid.UUID{}, names: map[string]string{}, groups: map[string]uuid.UUID{},
-		profiles: map[string]pgstore.PermissionProfile{}, userGroups: map[string]uuid.UUID{}, users: map[string]uuid.UUID{}}
+		profiles: map[string]pgstore.PermissionProfile{}, userGroups: map[string]uuid.UUID{}, users: map[string]uuid.UUID{},
+		sources: map[string]uuid.UUID{}, entries: map[string]uuid.UUID{}}
 	for _, s := range declarative.Sections() {
 		st.ids[s] = map[string]uuid.UUID{}
 	}
@@ -623,11 +634,22 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	if err != nil {
 		return st, fmt.Errorf("device groups: %w", err)
 	}
+	windowRows, err := q.ListAllMaintenanceWindows(ctx)
+	if err != nil {
+		return st, fmt.Errorf("maintenance windows: %w", err)
+	}
+	windows := make(map[uuid.UUID]devicegroup.Window, len(windowRows))
+	for _, w := range windowRows {
+		windows[w.DeviceGroupID] = WindowOf(w)
+	}
 	names := map[uuid.UUID]string{}
 	dgs := make([]declarative.DeviceGroup, 0, len(groups))
 	for _, g := range groups {
 		names[g.ID], st.groups[g.Name] = g.Name, g.ID
 		item := declarative.DeviceGroup{Name: g.Name, Description: g.Description}
+		if w, ok := windows[g.ID]; ok {
+			item.MaintenanceWindow = &w
+		}
 		st.ids[declarative.SectionDeviceGroups][item.Key().String()] = g.ID
 		st.names[item.Key().String()] = g.Name
 		dgs = append(dgs, item)
@@ -732,6 +754,9 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 		pas = append(pas, item)
 	}
 	doc.ProfileAssignments = &pas
+	if err := loadSoftwareConfig(ctx, q, &st, &doc, names, slugs, usernames); err != nil {
+		return st, err
+	}
 	st.doc = doc
 	return st, nil
 }

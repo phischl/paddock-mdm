@@ -1,0 +1,273 @@
+# German translation of Paddock Self-Service. Compiled by selfservice/tools/msgfmt.py at package build time;
+# selfservice/tests/test_i18n.py checks that every source string has a translation here.
+msgid ""
+msgstr ""
+"Project-Id-Version: paddock-self-service\n"
+"Language: de\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Your organization offers applications through Paddock. Installing, updating or removing an application here is recorded with your user name. Nothing else about how you use this device is collected."
+msgstr "Ihre Organisation bietet Anwendungen über Paddock an. Wenn Sie hier eine Anwendung installieren, aktualisieren oder entfernen, wird das mit Ihrem Benutzernamen aufgezeichnet. Darüber hinaus wird nichts darüber erfasst, wie Sie dieses Gerät nutzen."
+
+msgid "Waiting for your organization's policy"
+msgstr "Warten auf die Richtlinie Ihrer Organisation"
+
+msgid "Paddock is not running. Trying again…"
+msgstr "Paddock läuft nicht. Neuer Versuch …"
+
+msgid "Paddock reported an error ({code}). Trying again…"
+msgstr "Paddock hat einen Fehler gemeldet ({code}). Neuer Versuch …"
+
+msgid "{name}: {reason}"
+msgstr "{name}: {reason}"
+
+msgid "Paddock Self-Service does not run as root; start it as the logged-in user."
+msgstr "Paddock Self-Service läuft nicht als root; starten Sie es als angemeldeter Benutzer."
+
+msgid "Required by your organization"
+msgstr "Von Ihrer Organisation vorgeschrieben"
+
+msgid "Not offered to you"
+msgstr "Ihnen nicht angeboten"
+
+msgid "The device is offline"
+msgstr "Das Gerät ist offline"
+
+msgid "Too many operations are queued; try again later"
+msgstr "Zu viele Vorgänge in der Warteschlange; versuchen Sie es später erneut"
+
+msgid "This application is no longer offered"
+msgstr "Diese Anwendung wird nicht mehr angeboten"
+
+msgid "Too many requests; try again in a minute"
+msgstr "Zu viele Anfragen; versuchen Sie es in einer Minute erneut"
+
+msgid "Paddock could not identify you"
+msgstr "Paddock konnte Sie nicht identifizieren"
+
+msgid "Interrupted; try again"
+msgstr "Unterbrochen; versuchen Sie es erneut"
+
+msgid "Took too long and was stopped"
+msgstr "Hat zu lange gedauert und wurde abgebrochen"
+
+msgid "The package source cannot be reached"
+msgstr "Die Paketquelle ist nicht erreichbar"
+
+msgid "Another installation is running; try again"
+msgstr "Eine andere Installation läuft; versuchen Sie es erneut"
+
+msgid "The package is not available for this device"
+msgstr "Das Paket ist für dieses Gerät nicht verfügbar"
+
+msgid "The package source's key does not match"
+msgstr "Der Schlüssel der Paketquelle stimmt nicht überein"
+
+msgid "Removing it would remove other software"
+msgstr "Das Entfernen würde andere Software entfernen"
+
+msgid "It would change software Paddock protects"
+msgstr "Es würde von Paddock geschützte Software ändern"
+
+msgid "Another package source provides this package"
+msgstr "Eine andere Paketquelle stellt dieses Paket bereit"
+
+msgid "The package manager reported an error"
+msgstr "Die Paketverwaltung hat einen Fehler gemeldet"
+
+msgid "Flatpak is not installed yet"
+msgstr "Flatpak ist noch nicht installiert"
+
+msgid "Flatpak reported an error"
+msgstr "Flatpak hat einen Fehler gemeldet"
+
+msgid "Waits until the device is online"
+msgstr "Wartet, bis das Gerät online ist"
+
+msgid "Waits for the maintenance window"
+msgstr "Wartet auf das Wartungsfenster"
+
+msgid "Not applied yet"
+msgstr "Noch nicht angewendet"
+
+msgid "Installed"
+msgstr "Installiert"
+
+msgid "Not installed"
+msgstr "Nicht installiert"
+
+msgid "In progress"
+msgstr "In Arbeit"
+
+msgid "Failed"
+msgstr "Fehlgeschlagen"
+
+msgid "Installed (held)"
+msgstr "Installiert (gehalten)"
+
+msgid "Managed by your organization"
+msgstr "Von Ihrer Organisation verwaltet"
+
+msgid "Install"
+msgstr "Installieren"
+
+msgid "Remove"
+msgstr "Entfernen"
+
+msgid "Update"
+msgstr "Aktualisieren"
+
+msgid "Description"
+msgstr "Beschreibung"
+
+msgid "Version"
+msgstr "Version"
+
+msgid "Source"
+msgstr "Quelle"
+
+msgid "Installed for"
+msgstr "Installiert für"
+
+msgid "State"
+msgstr "Status"
+
+msgid "Queued"
+msgstr "In der Warteschlange"
+
+msgid "Running"
+msgstr "Läuft"
+
+msgid "Done"
+msgstr "Erledigt"
+
+msgid "Refused"
+msgstr "Abgelehnt"
+
+msgid "Install {name}"
+msgstr "{name} installieren"
+
+msgid "Remove {name}"
+msgstr "{name} entfernen"
+
+msgid "Update {name}"
+msgstr "{name} aktualisieren"
+
+msgid "Debian package"
+msgstr "Debian-Paket"
+
+msgid "Flatpak"
+msgstr "Flatpak"
+
+msgid "All users of this device"
+msgstr "Alle Benutzer dieses Geräts"
+
+msgid "Only you"
+msgstr "Nur Sie"
+
+msgid "Required on this device"
+msgstr "Auf diesem Gerät vorgeschrieben"
+
+msgid "Reason"
+msgstr "Grund"
+
+msgid "{state}: {reason}"
+msgstr "{state}: {reason}"
+
+msgid "Queued (position {position})"
+msgstr "In der Warteschlange (Position {position})"
+
+msgid "Apps"
+msgstr "Anwendungen"
+
+msgid "Activity"
+msgstr "Verlauf"
+
+msgid "Understood"
+msgstr "Verstanden"
+
+msgid "The application is removed from this device."
+msgstr "Die Anwendung wird von diesem Gerät entfernt."
+
+msgid "Cancel"
+msgstr "Abbrechen"
+
+msgid "Paddock Self-Service"
+msgstr "Paddock Self-Service"
+
+msgid "Refresh"
+msgstr "Aktualisieren"
+
+msgid "About Paddock Self-Service"
+msgstr "Über Paddock Self-Service"
+
+msgid "Details"
+msgstr "Details"
+
+msgid "No applications are offered to you"
+msgstr "Ihnen werden keine Anwendungen angeboten"
+
+msgid "Nothing yet"
+msgstr "Noch nichts"
+
+msgid "Operations you start appear here."
+msgstr "Vorgänge, die Sie starten, erscheinen hier."
+
+msgid "Remove {name}?"
+msgstr "{name} entfernen?"
+
+msgid "Needs your organization's approval"
+msgstr "Erfordert die Freigabe Ihrer Organisation"
+
+msgid "No approval is needed"
+msgstr "Keine Freigabe erforderlich"
+
+msgid "Already requested"
+msgstr "Bereits angefragt"
+
+msgid "Your request was denied"
+msgstr "Ihre Anfrage wurde abgelehnt"
+
+msgid "The justification is not plain text of at most 500 characters"
+msgstr "Die Begründung ist kein reiner Text mit höchstens 500 Zeichen"
+
+msgid "Request"
+msgstr "Anfragen"
+
+msgid "Withdraw request"
+msgstr "Anfrage zurückziehen"
+
+msgid "Requested"
+msgstr "Angefragt"
+
+msgid "Denied: {reason}"
+msgstr "Abgelehnt: {reason}"
+
+msgid "Denied"
+msgstr "Abgelehnt"
+
+msgid "Approval"
+msgstr "Freigabe"
+
+msgid "{count} of {limit} characters"
+msgstr "{count} von {limit} Zeichen"
+
+msgid "{name}: approval requested"
+msgstr "{name}: Freigabe angefragt"
+
+msgid "{name}: request withdrawn"
+msgstr "{name}: Anfrage zurückgezogen"
+
+msgid "Request {name}"
+msgstr "{name} anfragen"
+
+msgid "An administrator of your organization decides. You can add a justification; it is sent with your user name."
+msgstr "Eine Administratorin oder ein Administrator Ihrer Organisation entscheidet. Sie können eine Begründung angeben; sie wird mit Ihrem Benutzernamen gesendet."
+
+msgid "Justification (optional)"
+msgstr "Begründung (optional)"
+
+msgid "Send request"
+msgstr "Anfrage senden"

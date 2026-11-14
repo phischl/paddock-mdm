@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,6 +71,8 @@ type System struct {
 	// of a user who never signed in; Members the members of groups getent group lists.
 	Passwd  map[string]int
 	Members map[string][]string
+	// GetentNoise is prepended to the stdout of every getent that resolves: an NSS module's log line (PDK-892).
+	GetentNoise string
 	// VisudoReject makes visudo fail for a file (or, with -c alone, a configuration) that contains it. A visudo
 	// below /usr/lib/cargo (sudo-rs) also refuses lecture_file, like sudo-rs 0.2.
 	VisudoReject string
@@ -95,6 +99,16 @@ type System struct {
 	// OutputCalls records the command line of every Output call.
 	Outputs     map[string]OutputReply
 	OutputCalls []string
+	// FlatpakSystem is the system installation flatpak manages, FlatpakUsers the user installations by UID (reached
+	// through systemd-run --machine=<uid>@.host --user); flatpak is missing while Packages has no "flatpak".
+	// FlatpakScript answers flatpak and systemd-run calls by their command line ("flatpak install -y …"): the call
+	// returns the reply and changes nothing. FlatpakCalls records the command line of every call, FlatpakStdin the
+	// standard input of every systemd-run call.
+	FlatpakSystem *FlatpakInstallation
+	FlatpakUsers  map[int]*FlatpakInstallation
+	FlatpakScript map[string]OutputReply
+	FlatpakCalls  []string
+	FlatpakStdin  [][]byte
 }
 
 // OutputReply is a scripted Output answer: Data with Exit (non-zero: a *reconcile.ExitError), or Err.
@@ -604,18 +618,23 @@ func (s *System) Loginctl(_ context.Context, args ...string) (string, int, error
 	return "", 0, nil
 }
 
-// Getent implements reconcile.System for passwd (Passwd) and group (Members).
+// Getent implements reconcile.System for passwd (Passwd, by name or by UID) and group (Members).
 func (s *System) Getent(_ context.Context, database, key string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch database {
 	case "passwd":
 		if uid, ok := s.Passwd[key]; ok {
-			return fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash\n", key, uid, uid, key), 0, nil
+			return s.GetentNoise + fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash\n", key, uid, uid, key), 0, nil
+		}
+		names := slices.Sorted(maps.Keys(s.Passwd))
+		if i := slices.IndexFunc(names, func(n string) bool { return strconv.Itoa(s.Passwd[n]) == key }); i >= 0 {
+			name := names[i]
+			return s.GetentNoise + fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash\n", name, s.Passwd[name], s.Passwd[name], name), 0, nil
 		}
 	case "group":
 		if members, ok := s.Members[key]; ok {
-			return fmt.Sprintf("%s:x:27:%s\n", key, strings.Join(members, ",")), 0, nil
+			return s.GetentNoise + fmt.Sprintf("%s:x:27:%s\n", key, strings.Join(members, ",")), 0, nil
 		}
 	}
 	return "", 2, nil

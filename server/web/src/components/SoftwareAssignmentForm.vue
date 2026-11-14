@@ -1,38 +1,67 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { SoftwareAssignment, SoftwareIntent, SoftwareUpdateRule } from '../api/client'
+import type { SoftwareAssignment, SoftwareIntent, SoftwareTarget, SoftwareUpdateRule } from '../api/client'
 import { useProblemText } from '../lib/problems'
 import {
-  softwareIntents, updateRuleEnabled, validateAssignment, versionEnabled, type AssignmentInput,
+  assignmentTarget, softwareIntents, softwareTargets, updateRuleEnabled, validateAssignment, versionEnabled, type AssignmentInput,
 } from '../lib/software'
 import { hasErrors } from '../lib/validation'
 
 /**
- * Create and edit form of an assignment: scope, intent, update rule, version and reason. The update rule and the
- * version follow the rules of plan M13a decision 9; a field the intent does not allow is disabled and sent empty.
+ * Create and edit form of an assignment: target, intent, update rule, version and reason. The target is the whole
+ * organization, one device group, one user or one user group (plan M13b decision 1); the pickers search the names. The
+ * update rule and the version follow the rules of plan M13a decision 9; a field the intent does not allow is disabled
+ * and sent empty. The target of a stored assignment is fixed. Urgent (plan M13c decision 7) makes the devices apply the
+ * assignment outside their maintenance windows; it needs a reason, and the server asks for a step-up on every save
+ * that keeps or sets it.
  */
 const props = withDefaults(
-  defineProps<{ entryId: string; groups: { id: string; name: string }[]; initial?: SoftwareAssignment | null; problem?: string; pending?: boolean }>(),
+  defineProps<{
+    entryId: string
+    groups: { id: string; name: string }[]
+    users: { id: string; username: string }[]
+    userGroups: { id: string; name: string }[]
+    initial?: SoftwareAssignment | null
+    problem?: string
+    pending?: boolean
+  }>(),
   { initial: null, problem: '', pending: false },
 )
 const emit = defineEmits<{ submit: [input: AssignmentInput]; cancel: [] }>()
 
 const { t } = useI18n()
 const problemText = useProblemText()
-const groupID = ref<string | null>(props.initial?.device_group_id ?? null)
+const stored = props.initial ? assignmentTarget(props.initial) : { target: 'organization' as SoftwareTarget, targetID: null }
+const target = ref<SoftwareTarget>(stored.target)
+const targetID = ref<string | null>(stored.targetID)
 const intent = ref<SoftwareIntent>(props.initial?.intent ?? 'required')
 const updateRule = ref<SoftwareUpdateRule>(props.initial?.update_rule ?? 'latest')
 const version = ref(props.initial?.version ?? '')
 const reason = ref(props.initial?.reason ?? '')
+const urgent = ref(props.initial?.urgent ?? false)
 const touched = ref(false)
 
 const ruleEnabled = computed(() => updateRuleEnabled(intent.value))
 const versionOn = computed(() => versionEnabled(intent.value, ruleEnabled.value ? updateRule.value : 'latest'))
 const input = computed<AssignmentInput>(() => ({
-  entryID: props.entryId, groupID: groupID.value, intent: intent.value, updateRule: updateRule.value, version: version.value, reason: reason.value,
+  entryID: props.entryId, target: target.value, targetID: target.value === 'organization' ? null : targetID.value,
+  intent: intent.value, updateRule: updateRule.value, version: version.value, reason: reason.value,
+  urgent: urgent.value,
 }))
 const errors = computed(() => validateAssignment(input.value))
+const targetItems = computed(() => {
+  switch (target.value) {
+    case 'device_group':
+      return props.groups.map((g) => ({ value: g.id, title: g.name }))
+    case 'user':
+      return props.users.map((u) => ({ value: u.id, title: u.username }))
+    case 'user_group':
+      return props.userGroups.map((g) => ({ value: g.id, title: g.name }))
+    default:
+      return []
+  }
+})
 
 watch(versionOn, (on) => {
   if (!on) version.value = ''
@@ -51,13 +80,24 @@ function submit(): void {
     novalidate
     @submit.prevent="submit"
   >
-    <v-autocomplete
-      id="assignment-scope"
-      v-model="groupID"
-      :label="t('managed.scope')"
-      :items="[{ value: null, title: t('managed.allDevices') }, ...props.groups.map((g) => ({ value: g.id, title: g.name }))]"
+    <v-select
+      id="assignment-target"
+      v-model="target"
+      :label="t('software.assignments.target')"
+      :items="softwareTargets.map((value) => ({ value, title: t('software.target.' + value) }))"
       :disabled="initial !== null"
-      data-testid="assignment-scope"
+      data-testid="assignment-target"
+      @update:model-value="targetID = null"
+    />
+    <v-autocomplete
+      v-if="target !== 'organization'"
+      id="assignment-target-id"
+      v-model="targetID"
+      :label="t('software.target.' + target)"
+      :items="targetItems"
+      :disabled="initial !== null"
+      :error-messages="touched && errors.target ? [t(errors.target)] : []"
+      data-testid="assignment-target-id"
     />
     <v-select
       id="assignment-intent"
@@ -95,6 +135,15 @@ function submit(): void {
       counter="500"
       :error-messages="touched && errors.reason ? [t(errors.reason)] : []"
       data-testid="assignment-reason"
+    />
+    <v-checkbox
+      id="assignment-urgent"
+      v-model="urgent"
+      :label="t('software.assignments.urgent')"
+      :hint="t('software.assignments.urgentHint')"
+      persistent-hint
+      density="comfortable"
+      data-testid="assignment-urgent"
     />
     <p
       v-if="problem"

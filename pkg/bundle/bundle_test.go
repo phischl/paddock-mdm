@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -412,13 +413,69 @@ func validSoftware() SoftwareSpec {
 	}
 }
 
+// available makes the second package of a validSoftware section available to audience.
+func available(s *SoftwareSpec, audience *SoftwareAudience) {
+	s.Packages[1].Intent, s.Packages[1].Version, s.Packages[1].Audience = SoftwareAvailable, nil, audience
+}
+
+// flatpak adds the Flatpak remote flathub and makes the second package of a validSoftware section the application ref
+// from it in scope.
+func flatpak(s *SoftwareSpec, ref, scope string) {
+	s.Sources = append(s.Sources, SoftwareSource{Slug: "flathub", Kind: SoftwareSourceFlatpak, URIs: []string{"https://dl.flathub.org/repo/"},
+		Keyring: base64.StdEncoding.EncodeToString([]byte("key")), Fingerprint: strings.Repeat("CD", 20)})
+	s.Packages[1].Package, s.Packages[1].FlatpakRef, s.Packages[1].Scope, s.Packages[1].Source = "", ref, scope, "flathub"
+}
+
+// targeted makes the second package of a validSoftware section the user-scope Flatpak application org.gimp.GIMP with
+// intent and the targeted users.
+func targeted(s *SoftwareSpec, intent string, users ...string) {
+	flatpak(s, "org.gimp.GIMP", SoftwareScopeUser)
+	s.Packages[1].Intent, s.Packages[1].Version = intent, nil
+	if users != nil {
+		s.Packages[1].Users = &users
+	}
+}
+
+// audienceOf returns n sorted, distinct user names.
+func audienceOf(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("user%04d@example.org", i)
+	}
+	return out
+}
+
 func TestValidateSoftware(t *testing.T) {
 	v := "2.0"
 	cases := map[string]struct {
 		change func(*SoftwareSpec)
 		ok     bool
 	}{
-		"valid":                    {func(*SoftwareSpec) {}, true},
+		"valid": {func(*SoftwareSpec) {}, true},
+		// The credential of the Paddock repository (plan M13c decision 15) names a source's host and path.
+		"repository credential": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com:8443/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com:8443/apt/acme/", Username: "paddock", Password: strings.Repeat("aZ0_-", 9)}
+		}, true},
+		"repository credential for no source": {func(s *SoftwareSpec) {
+			s.Repository = &SoftwareRepositoryAuth{Host: "evil.example.com/apt/acme/", Username: "paddock", Password: strings.Repeat("a", 43)}
+		}, false},
+		"repository password with a newline": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock", Password: strings.Repeat("a", 40) + "\nmachine x"}
+		}, false},
+		"repository password with a space": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock", Password: strings.Repeat("a", 40) + " login x"}
+		}, false},
+		"repository short password": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock", Password: "short"}
+		}, false},
+		"repository user with a space": {func(s *SoftwareSpec) {
+			s.Sources[0].URIs = []string{"https://bundles.example.com/apt/acme/"}
+			s.Repository = &SoftwareRepositoryAuth{Host: "bundles.example.com/apt/acme/", Username: "paddock x", Password: strings.Repeat("a", 43)}
+		}, false},
 		"required without version": {func(s *SoftwareSpec) { s.Packages[0].Version = nil }, true},
 		"hold with version":        {func(s *SoftwareSpec) { s.Packages[1].Intent, s.Packages[1].Version = SoftwareHold, &v }, true},
 		"flat repository":          {func(s *SoftwareSpec) { s.Sources[0].Suites, s.Sources[0].Components = []string{"./"}, nil }, true},
@@ -453,7 +510,7 @@ func TestValidateSoftware(t *testing.T) {
 		}, false},
 		"uninstall with version":     {func(s *SoftwareSpec) { s.Packages[0].Intent = SoftwareUninstall }, false},
 		"forbid with version":        {func(s *SoftwareSpec) { s.Packages[0].Intent = SoftwareForbid }, false},
-		"unknown intent":             {func(s *SoftwareSpec) { s.Packages[1].Intent = "available" }, false},
+		"unknown intent":             {func(s *SoftwareSpec) { s.Packages[1].Intent = "suggested" }, false},
 		"option as package":          {func(s *SoftwareSpec) { s.Packages[1].Package = "-o" }, false},
 		"invalid version":            {func(s *SoftwareSpec) { bad := "1 0"; s.Packages[0].Version = &bad }, false},
 		"fingerprint of 39":          {func(s *SoftwareSpec) { s.Sources[0].Fingerprint = s.Sources[0].Fingerprint[:39] }, false},
@@ -467,6 +524,252 @@ func TestValidateSoftware(t *testing.T) {
 		"unknown architecture":       {func(s *SoftwareSpec) { s.Sources[0].Architectures = []string{"i386"} }, false},
 		"invalid catalog entry id":   {func(s *SoftwareSpec) { s.Packages[1].CatalogEntryID = "x" }, false},
 		"uppercase catalog entry id": {func(s *SoftwareSpec) { s.Packages[1].CatalogEntryID = strings.ToUpper(s.Packages[1].CatalogEntryID) }, false},
+		// Architect decision A10-14: the digest of the entry's icon.
+		"icon digest":           {func(s *SoftwareSpec) { s.Packages[1].IconSHA256 = strings.Repeat("ab", 32) }, true},
+		"short icon digest":     {func(s *SoftwareSpec) { s.Packages[1].IconSHA256 = strings.Repeat("ab", 31) }, false},
+		"uppercase icon digest": {func(s *SoftwareSpec) { s.Packages[1].IconSHA256 = strings.Repeat("AB", 32) }, false},
+		"runtime with icon digest": {func(s *SoftwareSpec) {
+			s.Packages[1].CatalogEntryID, s.Packages[1].IconSHA256 = SoftwareRuntimeEntryID, strings.Repeat("ab", 32)
+		}, false},
+		// Plan M13b decision 7: available, audiences and Flatpak.
+		"available to all": {func(s *SoftwareSpec) { available(s, &SoftwareAudience{All: true}) }, true},
+		"available to users": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{Users: []string{"alice@example.org", "bob@example.org"}})
+		}, true},
+		"available to 200":      {func(s *SoftwareSpec) { available(s, &SoftwareAudience{Users: audienceOf(MaxSoftwareAudience)}) }, true},
+		"available to 201":      {func(s *SoftwareSpec) { available(s, &SoftwareAudience{Users: audienceOf(MaxSoftwareAudience + 1)}) }, false},
+		"available no audience": {func(s *SoftwareSpec) { available(s, nil) }, false},
+		"available empty":       {func(s *SoftwareSpec) { available(s, &SoftwareAudience{}) }, false},
+		"available all and users": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true, Users: []string{"alice@example.org"}})
+		}, false},
+		"available unsorted": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{Users: []string{"bob@example.org", "alice@example.org"}})
+		}, false},
+		"available duplicate user": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{Users: []string{"alice@example.org", "alice@example.org"}})
+		}, false},
+		"available upper-case user": {func(s *SoftwareSpec) { available(s, &SoftwareAudience{Users: []string{"Alice@example.org"}}) }, false},
+		"available empty user":      {func(s *SoftwareSpec) { available(s, &SoftwareAudience{Users: []string{""}}) }, false},
+		// Review 1 finding 2: the limit is app_user.username's, 256 characters.
+		"available 256-character user": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{Users: []string{strings.Repeat("a", 244) + "@example.org"}})
+		}, true},
+		"available 256-character multibyte user": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{Users: []string{strings.Repeat("ä", 244) + "@example.org"}})
+		}, true},
+		"available 257-character user": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{Users: []string{strings.Repeat("a", 245) + "@example.org"}})
+		}, false},
+		"available user with space": {func(s *SoftwareSpec) { available(s, &SoftwareAudience{Users: []string{"a b@example.org"}}) }, false},
+		"available with version": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Version = &v
+		}, false},
+		"required with audience": {func(s *SoftwareSpec) { s.Packages[1].Audience = &SoftwareAudience{All: true} }, false},
+		"conflicting available": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Package = "initramfs-tools"
+		}, false},
+		"fully protected available": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Package = "paddock-agent"
+		}, false},
+		"flatpak system": {func(s *SoftwareSpec) { flatpak(s, "org.gimp.GIMP", "") }, true},
+		"flatpak user available": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", SoftwareScopeUser)
+			available(s, &SoftwareAudience{Users: []string{"alice@example.org"}})
+		}, true},
+		"flatpak invalid scope": {func(s *SoftwareSpec) { flatpak(s, "org.gimp.GIMP", "global") }, false},
+		"flatpak invalid ref":   {func(s *SoftwareSpec) { flatpak(s, "gimp", "") }, false},
+		"flatpak ref too long":  {func(s *SoftwareSpec) { flatpak(s, "org.example."+strings.Repeat("a", 250), "") }, false},
+		"package and flatpak_ref": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", "")
+			s.Packages[1].Package = "gimp"
+		}, false},
+		"flatpak_ref from apt source": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", "")
+			s.Packages[1].Source = "vendor"
+		}, false},
+		"flatpak_ref without source": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", "")
+			s.Packages[1].Source = ""
+		}, false},
+		"available flatpak_ref without source": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", "")
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Source = ""
+		}, false},
+		// Architect decision A10-7: forbid, uninstall and hold of an application never bring its remote.
+		"forbid flatpak_ref without source": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", "")
+			s.Packages[1].Intent, s.Packages[1].Source, s.Sources = SoftwareForbid, "", s.Sources[:1]
+		}, true},
+		"uninstall flatpak_ref without source": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", SoftwareScopeUser)
+			s.Packages[1].Intent, s.Packages[1].Source, s.Sources = SoftwareUninstall, "", s.Sources[:1]
+		}, true},
+		"hold flatpak_ref without source": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", "")
+			s.Packages[1].Intent, s.Packages[1].Source, s.Sources = SoftwareHold, "", s.Sources[:1]
+		}, true},
+		"forbid flatpak_ref from apt source": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", "")
+			s.Packages[1].Intent, s.Packages[1].Source = SoftwareForbid, "vendor"
+		}, false},
+		"apt package from flatpak source": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", "")
+			s.Packages[0].Source, s.Packages[0].Version = "flathub", nil
+		}, false},
+		"apt package with scope": {func(s *SoftwareSpec) { s.Packages[1].Scope = SoftwareScopeSystem }, false},
+		"flatpak source two uris": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", "")
+			s.Sources[1].URIs = append(s.Sources[1].URIs, "https://b.example/")
+		}, false},
+		"flatpak source suites": {func(s *SoftwareSpec) { flatpak(s, "org.gimp.GIMP", ""); s.Sources[1].Suites = []string{"stable"} }, false},
+		"flatpak source no key": {func(s *SoftwareSpec) { flatpak(s, "org.gimp.GIMP", ""); s.Sources[1].Keyring = "" }, false},
+		"unknown source kind":   {func(s *SoftwareSpec) { s.Sources[0].Kind = "snap" }, false},
+		"runtime nil entry id": {func(s *SoftwareSpec) {
+			s.Packages[1].Package, s.Packages[1].CatalogEntryID = "flatpak", SoftwareRuntimeEntryID
+		}, true},
+		"duplicate flatpak_ref": {func(s *SoftwareSpec) {
+			flatpak(s, "org.gimp.GIMP", "")
+			s.Packages = append(s.Packages, s.Packages[1])
+		}, false},
+		// Plan M13c decision 9: approval of an available package and its approved users.
+		"available requires approval": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+		}, true},
+		"available approved users": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{Users: audienceOf(3)})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{audienceOf(3)[0], audienceOf(3)[2]}
+		}, true},
+		"available 200 approved": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			approved := audienceOf(MaxSoftwareAudience)
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &approved
+		}, true},
+		"available 201 approved": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			approved := audienceOf(MaxSoftwareAudience + 1)
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &approved
+		}, false},
+		"approval unknown value": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = "none"
+		}, false},
+		"required with approval": {func(s *SoftwareSpec) { s.Packages[1].Approval = SoftwareApprovalRequired }, false},
+		"approved without approval": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approved = &[]string{"alice@example.org"}
+		}, false},
+		"approved empty": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{}
+		}, false},
+		"approved unsorted": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"bob@example.org", "alice@example.org"}
+		}, false},
+		"approved upper-case": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"Alice@example.org"}
+		}, false},
+		// Architect decision A10-27: the denied users of a package that requires approval, with their reasons.
+		"denied with reason": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"alice@example.org"}
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: "Use the licensed\nalternative"}, {User: "carol@example.org"}}
+		}, true},
+		"denied reason 500 characters": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: strings.Repeat("ä", MaxSoftwareDenialReason)}}
+		}, true},
+		"denied reason 501 characters": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: strings.Repeat("a", MaxSoftwareDenialReason+1)}}
+		}, false},
+		"denied reason invalid utf-8": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: "\xff"}}
+		}, false},
+		"denied without approval": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org", Reason: "no"}}
+		}, false},
+		"denied empty": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Denied = SoftwareApprovalRequired, &[]SoftwareDenial{}
+		}, false},
+		"denied unsorted": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org"}, {User: "alice@example.org"}}
+		}, false},
+		"denied invalid user": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "Bob@example.org"}}
+		}, false},
+		"denied and approved": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval, s.Packages[1].Approved = SoftwareApprovalRequired, &[]string{"bob@example.org"}
+			s.Packages[1].Denied = &[]SoftwareDenial{{User: "bob@example.org"}}
+		}, false},
+		"denied 201 users": {func(s *SoftwareSpec) {
+			available(s, &SoftwareAudience{All: true})
+			s.Packages[1].Approval = SoftwareApprovalRequired
+			denied := make([]SoftwareDenial, MaxSoftwareAudience+1)
+			for i, u := range audienceOf(MaxSoftwareAudience + 1) {
+				denied[i].User = u
+			}
+			s.Packages[1].Denied = &denied
+		}, false},
+		// Architect decision A10-11: the targeted users of a user-scope application, with the limits of an audience.
+		"flatpak user required for users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, "alice@example.org", "bob@example.org") }, true},
+		"flatpak user forbid for users":   {func(s *SoftwareSpec) { targeted(s, SoftwareForbid, "alice@example.org") }, true},
+		"flatpak user uninstall for users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareUninstall, "alice@example.org")
+			s.Packages[1].Source, s.Sources = "", s.Sources[:1]
+		}, true},
+		"flatpak user required without users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired) }, true},
+		"flatpak user empty users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired)
+			s.Packages[1].Users = &[]string{}
+		}, false},
+		"flatpak user 200 users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, audienceOf(MaxSoftwareAudience)...) }, true},
+		"flatpak user 201 users": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, audienceOf(MaxSoftwareAudience+1)...) }, false},
+		"flatpak user unsorted users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired, "bob@example.org", "alice@example.org")
+		}, false},
+		"flatpak user duplicate users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired, "alice@example.org", "alice@example.org")
+		}, false},
+		"flatpak user upper-case user": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, "Alice@example.org") }, false},
+		"flatpak user user with space": {func(s *SoftwareSpec) { targeted(s, SoftwareRequired, "a b@example.org") }, false},
+		"flatpak user 256 character user": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired, strings.Repeat("ä", 244)+"@example.org")
+		}, true},
+		"flatpak user 257 character user": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired, strings.Repeat("a", 245)+"@example.org")
+		}, false},
+		"flatpak system with users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareRequired, "alice@example.org")
+			s.Packages[1].Scope = SoftwareScopeSystem
+		}, false},
+		"flatpak user hold with users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareHold, "alice@example.org")
+			s.Packages[1].Source, s.Sources = "", s.Sources[:1]
+		}, false},
+		"flatpak user available with users": {func(s *SoftwareSpec) {
+			targeted(s, SoftwareAvailable, "alice@example.org")
+			s.Packages[1].Audience = &SoftwareAudience{All: true}
+		}, false},
+		"apt package with users": {func(s *SoftwareSpec) { s.Packages[1].Users = &[]string{"alice@example.org"} }, false},
 	}
 	for name, tc := range cases {
 		s := validSoftware()
@@ -508,5 +811,48 @@ func TestSoftwareResource(t *testing.T) {
 	enc, err = Encode(a)
 	if err != nil || strings.Contains(string(enc), `"software"`) {
 		t.Errorf("a bundle without software must carry no software section: %s (%v)", enc, err)
+	}
+}
+
+// TestSoftwareAudienceContentHash (plan M13b decision 7): the new fields are additive — absent from a section that does
+// not use them, so its payload is unchanged for every agent — and part of the content hash, so a changed audience is a
+// new bundle version.
+func TestSoftwareAudienceContentHash(t *testing.T) {
+	a := sample(t)
+	s := validSoftware()
+	a.Software = &s
+	enc, err := Encode(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"kind"`, `"flatpak_ref"`, `"scope"`, `"audience"`, `"users"`, `"approval"`, `"approved"`} {
+		if strings.Contains(string(enc), field) {
+			t.Errorf("%s encoded although unset: %s", field, enc)
+		}
+	}
+	hash := func(audience *SoftwareAudience) [32]byte {
+		t.Helper()
+		b := a
+		sp := validSoftware()
+		available(&sp, audience)
+		if err := ValidateSoftware(sp); err != nil {
+			t.Fatal(err)
+		}
+		b.Software = &sp
+		h, err := ContentSHA256(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	alice := hash(&SoftwareAudience{Users: []string{"alice@example.org"}})
+	if alice == hash(&SoftwareAudience{Users: []string{"alice@example.org", "bob@example.org"}}) {
+		t.Error("a changed audience keeps the content hash")
+	}
+	if alice == hash(&SoftwareAudience{All: true}) {
+		t.Error("an audience of everyone has the hash of one user")
+	}
+	if alice != hash(&SoftwareAudience{Users: []string{"alice@example.org"}}) {
+		t.Error("the same audience hashes differently")
 	}
 }

@@ -1,0 +1,12 @@
+services:
+  postgres:
+    cap_add:
+      value: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+      reason: entrypoint chown, then gosu
+  audit-postgres:
+    cap_add:
+      value: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+      reason: entrypoint chown, then gosu
+  pgbackrest:
+    mem_limit:
+      reason: pending

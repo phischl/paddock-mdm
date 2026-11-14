@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Tests of assert-hardening.sh (plan M8s decision 37, `make test`): hardened containers pass; a role or Caddy that keeps
-# capabilities or may gain privileges, and any container without a pids limit, fail naming the container.
+# Tests of assert-hardening.sh (plan M8s decision 37, plan M12h decision 11, `make test`): the containers of every named
+# project go, as `docker inspect`, to `check-containers` of the projects' own server image with the exceptions file;
+# its verdict is the script's. The matrix itself is tested in server/internal/prodcheck (containers_test.go).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,35 +15,50 @@ check() {
   fi
 }
 
-# A docker stub: `ps` lists one ID per line of $INSPECT, `inspect` prints $INSPECT.
+# A docker stub: `ps` lists the IDs of $IDS_<project>, `inspect --format` prints $SUMMARY, `inspect` the JSON
+# `[$*]`, and `run` logs its arguments and stdin, prints $RUN_OUT and exits $RUN_RC.
 mkdir -p "$work/bin"
 cat >"$work/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
-  ps) [[ -n "$INSPECT" ]] && awk '{ print NR }' <<<"$INSPECT" ;;
-  inspect) printf '%s\n' "$INSPECT" ;;
+  ps) project="${*: -1}"; project="${project#label=com.docker.compose.project=}"; var="IDS_${project//-/_}"
+    [[ -z "${!var:-}" ]] || printf '%s\n' ${!var} ;;
+  inspect) if [[ "$2" == --format ]]; then printf '%s\n' "$SUMMARY"; else printf '[%s]\n' "${*:2}"; fi ;;
+  run) printf '%s\n' "$*" >"$RUN_LOG.args"; cat >"$RUN_LOG.stdin"; printf '%s\n' "$RUN_OUT"; exit "${RUN_RC:-0}" ;;
 esac
 EOF
 chmod +x "$work/bin/docker"
-hardened='["no-new-privileges:true"]'
-api="/p-paddock-api-1 paddock-api [\"ALL\"] $hardened 256"
-caddy="/p-caddy-1 caddy [\"ALL\"] $hardened 256"
-postgres="/p-postgres-1 postgres null null 512"
+export RUN_LOG="$work/run"
+exceptions="$(cd "$here/../../compose" && pwd)/hardening-exceptions.yaml"
+api='/p-paddock-api-1 paddock-api ghcr.io/x/paddock-server:1.2.3 null ["ALL"] ["no-new-privileges:true"] 256 0'
+writer='/a-paddock-audit-writer-1 paddock-audit-writer ghcr.io/x/paddock-server:1.2.3 null ["ALL"] ["no-new-privileges:true"] 256 0'
+caddy='/p-caddy-1 caddy caddy:2 ["CAP_NET_BIND_SERVICE"] ["ALL"] ["no-new-privileges:true"] 256 0'
+pass='PASS  containers: capabilities and security options match the matrix'
 assert() {
   local rc=0
-  INSPECT="$1" PATH="$work/bin:$PATH" "$here/assert-hardening.sh" p >/dev/null 2>"$work/err" || rc=$?
+  rm -f "$RUN_LOG".*
+  PATH="$work/bin:$PATH" "$here/assert-hardening.sh" "$@" >"$work/out" 2>"$work/err" || rc=$?
   echo "$rc $(head -1 "$work/err")"
 }
 
-check "hardened project" "$(assert "$api"$'\n'"$caddy"$'\n'"$postgres")" "0 "
-check "role keeps capabilities" "$(assert "/p-paddock-api-1 paddock-api null $hardened 256")" \
-  "1 assert-hardening: /p-paddock-api-1 does not drop ALL capabilities"
-check "caddy may gain privileges" "$(assert '/p-caddy-1 caddy ["ALL"] null 256')" \
-  "1 assert-hardening: /p-caddy-1 lacks no-new-privileges:true"
-check "third party without pids limit" "$(assert "/p-postgres-1 postgres null null <nil>")" \
-  "1 assert-hardening: /p-postgres-1 has no pids limit (<nil>)"
-check "unlimited pids" "$(assert "/p-paddock-api-1 paddock-api [\"ALL\"] $hardened -1")" \
-  "1 assert-hardening: /p-paddock-api-1 has no pids limit (-1)"
-check "no container" "$(assert "")" "1 assert-hardening: no container in project(s) p"
+export IDS_p="a1 a2" IDS_a="b1" SUMMARY="$api"$'\n'"$caddy"$'\n'"$writer" RUN_OUT="$pass"
+check "hardened projects" "$(assert p a)" "0 "
+check "every container of both projects is inspected" "$(cat "$RUN_LOG.stdin")" "[a1 a2 b1]"
+check "the projects' server image checks them with the exceptions file" "$(cat "$RUN_LOG.args")" \
+  "run --rm -i --network none --cap-drop ALL --security-opt no-new-privileges:true --read-only -v $exceptions:/paddock/hardening-exceptions.yaml:ro ghcr.io/x/paddock-server:1.2.3 check-containers --exceptions /paddock/hardening-exceptions.yaml"
+check "the verdict is printed" "$(tail -1 "$work/out")" "$pass"
+
+check "a finding fails" "$(RUN_RC=1 assert p)" "1 "
+check "PADDOCK_IMAGE overrides the image" "$(PADDOCK_IMAGE=local/server:dev assert p >/dev/null; grep -o 'local/server:dev check-containers' "$RUN_LOG.args")" \
+  "local/server:dev check-containers"
+check "HARDENING_EXCEPTIONS names another file" \
+  "$(HARDENING_EXCEPTIONS="$here/assert-hardening_test.sh" assert p >/dev/null; grep -o -- "-v [^ ]*:/paddock" "$RUN_LOG.args")" \
+  "-v $here/assert-hardening_test.sh:/paddock"
+check "a missing exceptions file" "$(HARDENING_EXCEPTIONS="$work/none.yaml" assert p)" "2 assert-hardening: no exceptions file $work/none.yaml"
+check "no server container to take the image from" "$(SUMMARY="$caddy" assert p)" \
+  "1 assert-hardening: no paddock-api or paddock-audit-writer container in p; set PADDOCK_IMAGE"
+check "no container" "$(assert q)" "1 assert-hardening: no container in project(s) q"
+check "no project" "$(assert)" "2 usage: assert-hardening.sh <project>..."
+[[ ! -e "$RUN_LOG.args" ]] || check "nothing runs without a container" "ran" "not run"
 
 ((failures == 0)) || exit 1

@@ -54,6 +54,21 @@
       "description": "Key: profile, subject and device_group.",
       "type": "array",
       "items": { "$ref": "#/$defs/profileAssignment" }
+    },
+    "software_sources": {
+      "description": "Key: slug. A source is a trust anchor: any change of this section needs an organization administrator with a fresh step-up for the whole apply (ADR 0034 decision 3); an API token's apply that changes it is refused with 403 step_up_required, and the dry run names it in requires_step_up.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/softwareSource" }
+    },
+    "software_catalog": {
+      "description": "Key: name. Same rules as the catalog endpoints; the icon is not part of the document.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/softwareCatalogEntry" }
+    },
+    "software_assignments": {
+      "description": "Key: entry and target. Same rules as the assignment endpoints; a change rolls out in waves when the organization's rollouts are enabled.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/softwareAssignment" }
     }
   },
   "$defs": {
@@ -133,7 +148,20 @@
       "required": ["name"],
       "properties": {
         "name": { "type": "string", "minLength": 1, "maxLength": 100 },
-        "description": { "type": "string", "maxLength": 1000, "default": "" }
+        "description": { "type": "string", "maxLength": 1000, "default": "" },
+        "maintenance_window": { "$ref": "#/$defs/maintenanceWindow" }
+      }
+    },
+    "maintenanceWindow": {
+      "description": "The device group's maintenance window (plan M13c decision 4): its devices install and remove the software of their policy only inside the union of their groups' windows, except for urgent assignments. Omitted: the group has no window.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["days", "start_minute", "duration_minutes", "timezone"],
+      "properties": {
+        "days": { "description": "ISO weekdays, 1 = Monday.", "type": "array", "minItems": 1, "maxItems": 7, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 7 } },
+        "start_minute": { "description": "Minutes after local midnight.", "type": "integer", "minimum": 0, "maximum": 1439 },
+        "duration_minutes": { "type": "integer", "minimum": 30, "maximum": 1440 },
+        "timezone": { "description": "An IANA timezone name such as Europe/Berlin.", "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_+/-]{0,63}$" }
       }
     },
     "permissionProfile": {
@@ -219,6 +247,83 @@
           ]
         },
         "device_group": { "$ref": "#/$defs/deviceGroupRef", "default": null }
+      }
+    },
+    "softwareSource": {
+      "description": "Same constraints as POST /api/v1/software-sources; fingerprint must be the signing key's (422 fingerprint_mismatch otherwise).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slug", "name", "uris", "signing_key", "fingerprint"],
+      "properties": {
+        "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,40}$" },
+        "kind": { "enum": ["apt", "flatpak"], "default": "apt" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "uris": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "type": "string", "maxLength": 512 } },
+        "suites": { "type": "array", "maxItems": 8, "items": { "type": "string" }, "default": [] },
+        "components": { "type": "array", "maxItems": 8, "items": { "type": "string" }, "default": [] },
+        "architectures": { "type": "array", "maxItems": 2, "items": { "enum": ["amd64", "arm64"] }, "default": [] },
+        "signing_key": { "type": "string", "maxLength": 65536, "description": "One ASCII-armored OpenPGP v4 public key; exported in its stored form (re-armored without armor headers)." },
+        "fingerprint": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "softwarePackageRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["distribution", "release", "architecture"],
+      "properties": {
+        "distribution": { "type": "string", "maxLength": 32 },
+        "release": { "type": "string", "maxLength": 32 },
+        "architecture": { "enum": ["*", "amd64", "arm64"] },
+        "package": { "type": "string", "maxLength": 128 },
+        "flatpak_ref": { "type": "string", "maxLength": 255 },
+        "scope": { "enum": ["system", "user"] }
+      }
+    },
+    "softwareCatalogEntry": {
+      "description": "Same constraints as POST /api/v1/software-catalog.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "packages"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 1000, "default": "" },
+        "category": { "type": "string", "maxLength": 64, "default": "" },
+        "source": { "type": ["string", "null"], "description": "The slug of a software source; null for the distribution's own repositories.", "default": null },
+        "packages": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/$defs/softwarePackageRef" } },
+        "approval": { "enum": ["none", "required"], "default": "none", "description": "required: the users of an available assignment must ask an administrator before they install the application." }
+      }
+    },
+    "softwareAssignment": {
+      "description": "Same constraints as POST /api/v1/software-assignments; update_rule is derived from intent and version when omitted.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry", "target", "intent"],
+      "properties": {
+        "entry": { "type": "string", "minLength": 1, "maxLength": 100, "description": "The name of a catalog entry." },
+        "target": {
+          "oneOf": [
+            {
+              "type": "object", "additionalProperties": false, "required": ["type"],
+              "properties": { "type": { "const": "organization" } }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["type", "name"],
+              "properties": { "type": { "const": "device_group" }, "name": { "type": "string", "minLength": 1, "maxLength": 100 } }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["type", "username"],
+              "properties": { "type": { "const": "user" }, "username": { "type": "string", "minLength": 1, "maxLength": 256 } }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["type", "slug"],
+              "properties": { "type": { "const": "user_group" }, "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,40}[a-z0-9]$" } }
+            }
+          ]
+        },
+        "intent": { "enum": ["required", "uninstall", "hold", "forbid", "available"] },
+        "update_rule": { "enum": ["latest", "pinned"] },
+        "version": { "type": ["string", "null"], "maxLength": 128, "default": null },
+        "reason": { "type": "string", "maxLength": 500, "default": "" }
       }
     }
   }

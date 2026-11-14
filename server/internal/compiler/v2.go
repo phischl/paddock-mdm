@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/policy"
 	"github.com/phischl/paddock-mdm/pkg/sudoers"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
@@ -71,7 +72,7 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 	}
 	if domain := organization.PrimaryDomain(id.Org.Domains); domain != "" {
 		client := organization.DeviceLoginApp(id.Org.Slug)
-		login, err := bundle.LoginResource(bundle.LoginSpec{
+		spec := bundle.LoginSpec{
 			Provider: bundle.ProviderHimmelblau,
 			Himmelblau: bundle.HimmelblauSpec{
 				OIDCIssuerURL: c.cfg.AuthentikURL + "/application/o/" + client + "/", AppID: client, Domain: domain,
@@ -83,7 +84,13 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 			LocalAdmin:         &bundle.LocalAdminSpec{Username: s.LocalAdminUsername, RotationDays: int(s.LocalAdminRotationDays)},
 			Notice:             s.NoticeText,
 			ReportEverySession: s.LoginHistoryEnabled,
-		})
+		}
+		// The agent refuses a spec that fails the shared rules (plan M12h decision 14); the device keeps its
+		// previous bundle instead of receiving one it would refuse.
+		if err := policy.ValidateLoginSpec(spec); err != nil {
+			return nil, nil, &renderFailure{device: t.id, reason: err.Error() + "; the device keeps its previous bundle"}, nil
+		}
+		login, err := bundle.LoginResource(spec)
 		if err != nil {
 			return nil, nil, nil, err
 		}

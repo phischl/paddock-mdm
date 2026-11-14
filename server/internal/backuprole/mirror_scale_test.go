@@ -66,7 +66,7 @@ func TestGuardAndJudgeScaleLinearly(t *testing.T) {
 	ret.walOK[backupset.RepoPath(testKeyID)+"/authentik"] = true
 	start := time.Now()
 	facts := newIndexFacts(idx)
-	plan, err := guard(context.Background(), newMemTarget(), facts, have, ret)
+	plan, err := guard(context.Background(), newMemTarget(), facts, have, ret, func() {})
 	if err != nil {
 		t.Fatalf("guard: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestGuardAndJudgeStopWithTheirContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	facts := newIndexFacts(idx)
-	if _, err := guard(ctx, newMemTarget(), facts, have, ret); !errors.Is(err, context.Canceled) {
+	if _, err := guard(ctx, newMemTarget(), facts, have, ret, func() {}); !errors.Is(err, context.Canceled) {
 		t.Errorf("guard: %v, want context.Canceled", err)
 	}
 	plan := guardPlan{drop: map[string]bool{}, hold: map[string]bool{}}

@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { groupFingerprint, iconFileProblem, normalizeFingerprint, validateAssignment, validateEntry, validateSource, type SourceInput } from '../lib/software'
+import {
+  assignmentKeyParts, assignmentTarget, compileWarningMessage, groupFingerprint, iconFileProblem, normalizeAssignment, normalizeFingerprint, packagesForSource,
+  stagingRollout, validateAssignment, validateEntry, validateSource, type SourceInput,
+} from '../lib/software'
+import type { SoftwareAssignment } from '../api/client'
 
 const fp = 'ABCDEF0123456789ABCD'.repeat(2)
 const source: SourceInput = {
-  slug: 'vendor', name: 'Vendor', uris: ['https://repo.example.com/apt'], suites: ['stable'], components: ['main'], architectures: [],
+  kind: 'apt', slug: 'vendor', name: 'Vendor', uris: ['https://repo.example.com/apt'], suites: ['stable'], components: ['main'], architectures: [],
   signingKey: 'key', fingerprint: fp,
 }
 
@@ -51,8 +55,21 @@ describe('validateSource', () => {
   })
 })
 
+describe('a Flatpak remote (plan M13b decision 5)', () => {
+  const remote: SourceInput = { ...source, kind: 'flatpak', uris: ['https://dl.flathub.org/repo/'], suites: [], components: [] }
+
+  it('needs exactly one https URL and the key, and no suites or components', () => {
+    expect(validateSource(remote, true)).toEqual({})
+    expect(validateSource({ ...remote, uris: ['https://a.example.org/repo/', 'https://b.example.org/repo/'] }, true).uris).toBe('software.sources.flatpakUri')
+    expect(validateSource({ ...remote, uris: [] }, true).uris).toBe('software.sources.flatpakUri')
+    expect(validateSource({ ...remote, uris: ['http://dl.flathub.org/repo/'] }, true).uris).toBe('software.sources.httpsOnly')
+    expect(validateSource({ ...remote, signingKey: ' ' }, true).signingKey).toBe('software.sources.keyInvalid')
+    expect(validateSource({ ...remote, fingerprint: 'x' }, true).fingerprint).toBe('software.sources.fingerprintInvalid')
+  })
+})
+
 describe('validateEntry', () => {
-  const entry = { name: 'Editor', description: '', category: '', sourceID: null, packages: [{ distribution: 'ubuntu', release: '24.04', architecture: 'amd64' as const, package: 'nano' }] }
+  const entry = { name: 'Editor', description: '', category: '', sourceID: null, approval: 'none' as const, packages: [{ distribution: 'ubuntu', release: '24.04', architecture: 'amd64' as const, package: 'nano' }] }
 
   it('accepts a valid entry and reports duplicate tuples and bad rows', () => {
     expect(validateEntry(entry).packages).toBeUndefined()
@@ -61,19 +78,93 @@ describe('validateEntry', () => {
     expect(validateEntry({ ...entry, packages: [{ ...entry.packages[0], package: 'X' }] }).rows[0].package).toBe('software.catalog.packageInvalid')
     expect(validateEntry({ ...entry, packages: [] }).packages).toBe('software.catalog.packagesCount')
   })
+
+  it('checks Flatpak application IDs for a Flatpak source and keeps only the fields of the source kind', () => {
+    const row = { distribution: 'ubuntu', release: '*', architecture: '*' as const, flatpak_ref: 'org.gimp.GIMP', scope: 'user' as const, package: 'gimp' }
+    const flatpak = packagesForSource([row], true)
+    expect(flatpak).toEqual([{ distribution: 'ubuntu', release: '*', architecture: '*', flatpak_ref: 'org.gimp.GIMP', scope: 'user' }])
+    expect(packagesForSource([row], false)).toEqual([{ distribution: 'ubuntu', release: '*', architecture: '*', package: 'gimp' }])
+    expect(validateEntry({ ...entry, packages: flatpak }, true).rows[0]).toEqual({})
+    expect(validateEntry({ ...entry, packages: [{ ...flatpak[0], flatpak_ref: 'gimp' }] }, true).rows[0].flatpakRef).toBe('software.catalog.flatpakRefInvalid')
+    expect(validateEntry({ ...entry, packages: [{ ...flatpak[0], flatpak_ref: 'org.' + 'a'.repeat(252) + '.x' }] }, true).rows[0].flatpakRef)
+      .toBe('software.catalog.flatpakRefInvalid')
+  })
 })
 
 describe('validateAssignment and the icon', () => {
   it('requires a version for required pinned only', () => {
-    const a = { entryID: 'e', groupID: null, intent: 'required' as const, updateRule: 'pinned' as const, version: '', reason: '' }
+    const a = { entryID: 'e', target: 'organization' as const, targetID: null, intent: 'required' as const, updateRule: 'pinned' as const, version: '', reason: '', urgent: false }
     expect(validateAssignment(a).version).toBe('software.assignments.versionRequired')
     expect(validateAssignment({ ...a, updateRule: 'latest' })).toEqual({})
     expect(validateAssignment({ ...a, intent: 'forbid' })).toEqual({})
+  })
+
+  it('needs the target ID of a device group, user or user group target', () => {
+    const a = { entryID: 'e', target: 'user' as const, targetID: null, intent: 'available' as const, updateRule: 'latest' as const, version: '', reason: '', urgent: false }
+    expect(validateAssignment(a).target).toBe('software.assignments.targetRequired')
+    expect(validateAssignment({ ...a, targetID: 'u1' })).toEqual({})
+    expect(validateAssignment({ ...a, target: 'organization' })).toEqual({})
+  })
+
+  it('sends available without a version and with the rule latest', () => {
+    const a = { entryID: 'e', target: 'user_group' as const, targetID: 'g', intent: 'available' as const, updateRule: 'pinned' as const, version: '1.0', reason: '', urgent: false }
+    expect(normalizeAssignment(a)).toMatchObject({ updateRule: 'latest', version: '' })
+  })
+
+  it('reads the target kind of a stored assignment', () => {
+    const none = { device_group_id: null, user_id: null, user_group_id: null }
+    expect(assignmentTarget(none)).toEqual({ target: 'organization', targetID: null })
+    expect(assignmentTarget({ ...none, device_group_id: 'd' })).toEqual({ target: 'device_group', targetID: 'd' })
+    expect(assignmentTarget({ ...none, user_id: 'u' })).toEqual({ target: 'user', targetID: 'u' })
+    expect(assignmentTarget({ ...none, user_group_id: 'g' })).toEqual({ target: 'user_group', targetID: 'g' })
+  })
+
+  it('names known compile warnings and keeps an unknown code visible', () => {
+    expect(compileWarningMessage({ code: 'flatpak_forbidden', params: { flatpak_ref: 'org.gimp.GIMP' } }))
+      .toEqual({ key: 'software.compileWarnings.text.flatpak_forbidden', args: { code: 'flatpak_forbidden', flatpak_ref: 'org.gimp.GIMP' } })
+    expect(compileWarningMessage({ code: 'something_new', params: {} }).key).toBe('software.compileWarnings.text.unknown')
   })
 
   it('refuses anything but a PNG of at most 64 KiB', () => {
     expect(iconFileProblem({ type: 'image/png', size: 100 })).toBeNull()
     expect(iconFileProblem({ type: 'image/jpeg', size: 100 })).toBe('software.icon.notPng')
     expect(iconFileProblem({ type: 'image/png', size: 65537 })).toBe('software.icon.tooLarge')
+  })
+})
+
+describe('urgent assignments (plan M13c decision 7)', () => {
+  const a = { entryID: 'e', target: 'organization' as const, targetID: null, intent: 'forbid' as const, updateRule: 'latest' as const, version: '', reason: '', urgent: true }
+
+  it('needs a reason of at least two characters', () => {
+    expect(validateAssignment(a).reason).toBe('software.assignments.urgentReasonRequired')
+    expect(validateAssignment({ ...a, reason: ' x ' }).reason).toBe('software.assignments.urgentReasonRequired')
+    expect(validateAssignment({ ...a, reason: 'CVE' })).toEqual({})
+    expect(validateAssignment({ ...a, urgent: false })).toEqual({})
+    expect(validateAssignment({ ...a, reason: 'x'.repeat(501) }).reason).toBe('software.assignments.reasonInvalid')
+  })
+})
+
+describe('the rollout chip of an assignment (plan M13c decision 3)', () => {
+  const names = {
+    groups: [{ id: 'g1', name: 'laptops' }], users: [{ id: 'u1', username: 'alice@acme.test' }], userGroups: [{ id: 'ug1', slug: 'designers' }],
+  }
+  const row = (over: Partial<SoftwareAssignment>): SoftwareAssignment => ({
+    id: 'a1', app_name: 'Editor', catalog_entry_id: 'e1', device_group_id: null, user_id: null, user_group_id: null, intent: 'required',
+    update_rule: 'latest', version: null, reason: '', urgent: false, created_at: '', updated_at: '', ...over,
+  })
+
+  it('builds the natural key the plans name', () => {
+    expect(assignmentKeyParts(row({}), names)).toEqual([null, 'Editor', 'organization', null])
+    expect(assignmentKeyParts(row({ device_group_id: 'g1' }), names)).toEqual(['laptops', 'Editor', 'device_group', null])
+    expect(assignmentKeyParts(row({ user_id: 'u1' }), names)).toEqual([null, 'Editor', 'user', 'alice@acme.test'])
+    expect(assignmentKeyParts(row({ user_group_id: 'ug1' }), names)).toEqual([null, 'Editor', 'user_group', 'designers'])
+    expect(assignmentKeyParts(row({ user_group_id: 'unknown' }), names)).toBeNull()
+  })
+
+  it('names the open rollout that stages the assignment and nothing for another target', () => {
+    const staged = [{ parts: ['laptops', 'Editor', 'device_group', null], rolloutID: 'r1' }]
+    expect(stagingRollout(row({ device_group_id: 'g1' }), staged, names)).toBe('r1')
+    expect(stagingRollout(row({}), staged, names)).toBeNull()
+    expect(stagingRollout(row({ device_group_id: 'g1', app_name: 'Other' }), staged, names)).toBeNull()
   })
 })

@@ -21,7 +21,7 @@ function rollout(extra: Partial<ConfigRollout> = {}): ConfigRollout {
     id: 'r1', change_set_id: 'cs1', waves: [1, 10, 50, 100], current_wave_index: 0, wave_started_at: '2026-10-31T10:00:00Z',
     min_wave_minutes: 60, failure_threshold_percent: 5, failure_threshold_min: 2, canary_device_group_id: 'g1', status: 'running',
     halted_reason: null, started_by: 'alice', started_at: '2026-10-31T10:00:00Z', ended_at: null, ended_reason: null,
-    counts: { eligible: 4, applied: 2, failed: 1, pending: 1 }, ...extra,
+    counts: { eligible: 4, applied: 2, failed: 1, pending: 1, waiting: 0, awaiting_retry: 0 }, ...extra,
   }
 }
 

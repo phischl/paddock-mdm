@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/phischl/paddock-mdm/agent/internal/getent"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
@@ -33,23 +34,24 @@ func (s *Sudo) groupMembers(ctx context.Context, spec bundle.SudoSpec) (map[stri
 		if exit != 0 {
 			continue // the group does not exist here
 		}
+		group, err := getent.ParseGroup(line, g)
+		if err != nil {
+			return nil, fmt.Errorf("getent group %s: %w", g, err)
+		}
 		var pg privilegedGroup
-		f := strings.Split(strings.TrimSpace(line), ":")
-		if len(f) >= 4 && f[3] != "" {
-			for _, m := range strings.Split(f[3], ",") {
-				if !slices.Contains(spec.BreakGlassAccounts, m) {
-					pg.Foreign = append(pg.Foreign, m)
-					continue
-				}
-				ok, known := usable[m]
-				if !known {
-					if ok, err = s.usableAccount(ctx, m); err != nil {
-						return nil, err
-					}
-					usable[m] = ok
-				}
-				pg.HasBreakGlass = pg.HasBreakGlass || ok
+		for _, m := range group.Members {
+			if !slices.Contains(spec.BreakGlassAccounts, m) {
+				pg.Foreign = append(pg.Foreign, m)
+				continue
 			}
+			ok, known := usable[m]
+			if !known {
+				if ok, err = s.usableAccount(ctx, m); err != nil {
+					return nil, err
+				}
+				usable[m] = ok
+			}
+			pg.HasBreakGlass = pg.HasBreakGlass || ok
 		}
 		out[g] = pg
 	}

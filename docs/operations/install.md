@@ -24,10 +24,15 @@ A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST
   `sha256sum`. **The control-plane host must be amd64**: the Fleet image (`fleetdm/fleet`) is published for
   `linux/amd64` only, and `./paddock up` refuses another architecture there. The audit host may be amd64 or arm64
   (the Paddock images are published for both).
-- Keep Docker's default seccomp and AppArmor profiles enabled (do not run the daemon with them turned off). The
-  Paddock roles run without any Linux capability and without privilege gain (`cap_drop: [ALL]`,
-  `no-new-privileges:true`); Caddy keeps only `NET_BIND_SERVICE` for 80 and 443; every service has a `pids_limit`.
-  `./paddock check` fails the item `container hardening` when a Compose edit removes one of these settings.
+- Keep Docker's default seccomp and AppArmor profiles enabled (do not run the daemon with them turned off, and do not
+  set `seccomp=unconfined` or `apparmor=unconfined` for a service); `docker info` lists `seccomp` and, on hosts with
+  AppArmor, `apparmor` under *Security Options*. Every container runs without privilege gain
+  (`no-new-privileges:true`) and drops every Linux capability (`cap_drop: [ALL]`), unless `hardening-exceptions.yaml`
+  lists the service with the reason; the Paddock roles and Authentik add none, Caddy only `NET_BIND_SERVICE` for 80
+  and 443, and the few images whose entrypoints need more (PostgreSQL, Valkey, MySQL, OpenBao's `IPC_LOCK`) add
+  exactly the capabilities that file lists. Every service has a `pids_limit`. `./paddock check` fails the item `container hardening` when a Compose edit removes one of these
+  settings, and `./paddock check --online` fails the item `containers: capabilities and security options match the
+  matrix` when a running container differs from that file (section 8).
 - Control plane: 4 vCPU, 16 GB RAM, 100 GB disk for 100 devices. Audit domain: 2 vCPU, 4 GB RAM, disk for 400 days
   of audit evidence (about 1 GB per 100 devices and year) plus free space for one evidence export of up to
   `PADDOCK_AUDIT_EXPORT_MAX_BYTES` (default 4 GiB) on the audit writer's temp volume (`audit-bucket.md` section 4).
@@ -46,6 +51,9 @@ A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST
   `PADDOCK_EDGE_CLIENT_IP_HEADER` (`X-Forwarded-For` or `CF-Connecting-IP`), so that the allow lists, rate limits
   and audit log see the real client; without them Caddy treats its peer as the client and ignores every such header.
   Firewall the origin to the proxy's ranges. Details and the Cloudflare example: `docs/operations/ip-allowlist.md`.
+  Such a proxy must pass request bodies of up to 256 MiB to `admin.` (platform uploads) and must not strip or weaken
+  the security headers Caddy sets on every site (HSTS with `includeSubDomains`, `X-Frame-Options: DENY`, `nosniff`,
+  `Referrer-Policy`; architecture §4.1).
 - Outbound HTTPS from the control plane (allow it in the host's firewall): `ghcr.io` and Docker Hub (images), the ACME
   CA (Caddy), Ubuntu's OSV feed `https://osv-vulnerabilities.storage.googleapis.com` (`paddock-worker`, daily;
   without it the alert `PaddockOSVStale` fires after 3 days, and `docs/operations/vulnerability-data.md` describes the
@@ -126,6 +134,24 @@ Copy the production release public keys (`docs/operations/agent-releases.md`, "P
 `.secrets/release-production/minisign.pub` and `.secrets/release-production/revoke-minisign.pub` on the control
 plane and make them readable by the services (they run as uid 65532; `./paddock check` names a file they cannot
 read): `chmod 644 .secrets/release-production/*.pub`. Their secret keys never come to a server.
+
+### Rate limits and NAT sizing
+
+The api limits requests per minute (ADR 0051 decision 3; 429 `rate_limited` with `Retry-After` above the limit):
+`PADDOCK_RATELIMIT_AUTH` (default 20) sign-in requests under `/api/auth/*` per client address,
+`PADDOCK_RATELIMIT_ADMIN_READ` (600) reads and `PADDOCK_RATELIMIT_ADMIN_WRITE` (120) writes per portal session or API
+token, `PADDOCK_RATELIMIT_PLATFORM_UPLOAD` (10) agent artifact and package uploads per session or token, and
+`PADDOCK_RATELIMIT_BUNDLES_APT` (60) per address on the bundles host's package repository (once M13c adds it). The
+gateway limits devices to `PADDOCK_DEVICE_PER_IP_LIMIT` (300) requests per address; an IPv6 client counts as its
+`PADDOCK_DEVICE_PER_IP_V6_PREFIX` (64) prefix, the api's per-address classes always use the /64.
+
+The per-address limits count a NAT as one client. A sign-in takes two requests (start and callback, two more for a
+step-up), so the default lets about ten administrators behind one office address sign in within the same minute.
+For more, raise `PADDOCK_RATELIMIT_AUTH` in `.env` (for example 100 for fifty administrators); raise
+`PADDOCK_DEVICE_PER_IP_LIMIT` when many devices share one address (a device checks in every 5 minutes and sends
+events, so the default carries roughly 1000 devices per address). `0` switches a class off and
+`./paddock check` fails on it (item `rate limits are on`). The limiter never applies to `/healthz`, `/readyz` or
+`/metrics`; the alert `PaddockRateLimitStorm` (`docs/operations/monitoring.md`) reports sustained refusals.
 
 ### E-mail relay
 
@@ -208,7 +234,7 @@ tunnel.
 
 ```sh
 ./paddock check                       # control plane: every item PASS, else fix and repeat
-./paddock check --online              # audit host: also reads the audit bucket's Object Lock
+./paddock check --online              # after up: the running containers; audit host: the audit bucket's Object Lock
 ./paddock up                          # control plane first, then the audit host; starts the roles and Prometheus
 ./paddock ps
 ```
@@ -230,17 +256,29 @@ secret; 80/443 published by any service but Caddy, or another published port tha
 `caddy/guards.caddy` and `caddy/entrypoint.sh` not mounted next to the Caddyfile, or a Caddyfile that sets
 `trusted_proxies` itself; an edge client address configuration that is not consistent (a `/0` trusted proxy, a header
 without proxies or proxies without a header, an unknown header name, item `edge client address`); a `/0` in a role's
-`PADDOCK_TRUSTED_PROXY_CIDRS`; a Paddock role or Caddy that keeps capabilities (beyond Caddy's `NET_BIND_SERVICE`)
+`PADDOCK_TRUSTED_PROXY_CIDRS`, or one that trusts any peer but Caddy's address on network `edge` (item `trusted
+proxies: caddy's address only`); Caddy on another network than `edge` or without its fixed address, a datastore on
+`edge`, Fleet, Caddy or Authentik on `data` (items `networks: …`, ADR 0051); `private_ranges` in
+`PADDOCK_INTERNAL_CIDRS`; RabbitMQ's management API not bound to loopback or port 15672 published; a Paddock role or Caddy that keeps capabilities (beyond Caddy's `NET_BIND_SERVICE`)
 or may gain privileges, or a service without `pids_limit` (item `container hardening`);
 a service whose container log is not rotated (log driver other than `json-file` or no `max-size`, item
 `container logs are rotated`);
 `PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`);
+a `PADDOCK_RATELIMIT_*` of `0` or below (item `rate limits are on`);
 on the control plane, a `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` that is missing, not a number, below 400 days or below
 `PADDOCK_AUDIT_RETENTION_DAYS`, with which the worker does not start (item `audit index retention of the retention
 round`);
 a `PADDOCK_AUTHENTIK_WEB_WORKERS` that is not an integer of at least 1 (item `authentik web workers`);
-the development release key (its secret key next to the public key); and, on the audit host with `--online`, an
-audit bucket without Object Lock COMPLIANCE of at least 400 days.
+the development release key (its secret key next to the public key); on the audit host with `--online`, an
+audit bucket without Object Lock COMPLIANCE of at least 400 days; and, with `--online` on every host, a running
+container of the project whose capabilities (`CapAdd`, `CapDrop`), security options (`no-new-privileges`, an
+unconfined seccomp or AppArmor profile), privileged mode, host PID or IPC namespace, pids or memory limit differ from
+the matrix of `hardening-exceptions.yaml` (item `containers: capabilities and security options match the matrix`;
+it warns "not checked" while no container of the project runs).
+On a host with backups (control plane, lab with `PADDOCK_LAB_BACKUP=yes`) it also warns, without failing, while the
+bundle directory holds `.bundle-seq.replaced.*` directories that an upgrade again after a rollback kept aside (item
+`upgrade: no leftover bundle-seq directories`; it lists each path and the `sudo rm -rf` command,
+`docs/operations/upgrade.md`, *Bundle sequence after a rollback*).
 
 Portal sessions are kept in Valkey: while Valkey is unreachable the portal answers 503 `session_store_unavailable`
 (devices and API tokens are not affected), and after Valkey is back every session continues. Signing out ends the

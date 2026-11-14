@@ -1,0 +1,93 @@
+[
+  {
+    "type": "collect_status",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGMxIiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMDRUMDk6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnsicmVhc29uIjoiZml4dHVyZSIsInJlcXVlc3RfaWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMDAwYzEifSwidHlwZSI6ImNvbGxlY3Rfc3RhdHVzIn0=",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "OWv/uyZtLJ3fz1oh9TjFaJUiZCxFiQnUGnYgOw4LV+b+0XeWcgz8Xi02D7yPPRJ40M8BMtyrzHShMZ4gxRnfAg=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "delete_self_lock",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGMyIiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTItMDRUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnt9LCJ0eXBlIjoiZGVsZXRlX3NlbGZfbG9jayJ9",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "+TH1+RRI3gNZ3mM4jfeZHBj5m7LcyROJDQuqIuKkS1wVTHAndceQ0RH7PQ3kMszYGi1YoJq1K+f8HvNXjgOKCQ=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "encrypt_disk",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGMzIiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMTFUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnsiY29udmVyc2lvbl9pZCI6IjAxOTBmMDAwLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwYzBjMCJ9LCJ0eXBlIjoiZW5jcnlwdF9kaXNrIn0=",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "AxirAV+ZlSJBeNY0dlgLiPG6zA099IdzoyNHOS3LXG8Pcj/NjP130MsrQRUgrhFPq0xUsm3O5Pb+0eavDZJQBg=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "encrypt_disk_abort",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGM0IiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMTFUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnsiY29udmVyc2lvbl9pZCI6IjAxOTBmMDAwLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwYzBjMCJ9LCJ0eXBlIjoiZW5jcnlwdF9kaXNrX2Fib3J0In0=",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "dj53P7PqNOsNKqgBbIO2f9uBlw3VP8Yj0uBnsok6IhBmXxTeljRBjurq8uiHnZ+d/6kl1ns5i4Yp8fG4Ud0uCw=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "install_now",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGM1IiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMDVUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnsicGFja2FnZXMiOlsiaHRvcCJdfSwidHlwZSI6Imluc3RhbGxfbm93In0=",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "JOh8oGh89sG1bv2vwDxrYNU/zrNoUdowvAqqvgMX3Nn4mtA+iwi1JE8Ms2MwckqlSWBJ3hUqlu2V2tyOtZk3Aw=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "rotate_admin_password",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGM2IiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMTFUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnt9LCJ0eXBlIjoicm90YXRlX2FkbWluX3Bhc3N3b3JkIn0=",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "9vugmgRIJJI24nd0QrKuWWYAwCucspHJDCvdPs6XxdvotnwBbdTNt0xtGRyAwiaiAFNRYv35+dbLANcK2AfGCg=="
+        }
+      ]
+    }
+  },
+  {
+    "type": "uninstall",
+    "envelope": {
+      "payloadType": "application/vnd.paddock.command.v1+json",
+      "payload": "eyJjb21tYW5kX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMGM3IiwiZGV2aWNlX2lkIjoiMDE5MGYwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDBkMDAxIiwiZXhwaXJlc19hdCI6IjIwMjYtMTEtMTFUMDg6MDA6MDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNFQwODowMDowMFoiLCJvcmdhbml6YXRpb25faWQiOiIwMTkwZjAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGEwMDEiLCJwYXJhbXMiOnsibW9kZSI6ImxlYXZlIn0sInR5cGUiOiJ1bmluc3RhbGwifQ==",
+      "signatures": [
+        {
+          "keyid": "command-signing:fixture",
+          "sig": "rKzZO8bq4mZsRRZBW5c2L+m53fTxFecusGECJzA3qZrZI6Qgw3KC6V0QMg7j1jaj9+kZ9d7WycIvCxskTUZ9AQ=="
+        }
+      ]
+    }
+  }
+]

@@ -263,6 +263,7 @@ type Bundle struct {
 	CreatedAt       time.Time
 	SchemaVersion   int32
 	ConfigRolloutID uuid.NullUUID
+	Icons           json.RawMessage
 }
 
 type ChangeSet struct {
@@ -284,6 +285,17 @@ type ChangeSet struct {
 	Reason             *string
 }
 
+type CompileWarning struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	AssignmentID   uuid.NullUUID
+	CatalogEntryID uuid.NullUUID
+	Code           string
+	Params         json.RawMessage
+	CreatedAt      time.Time
+}
+
 type ComponentTarget struct {
 	Component string
 	Version   string
@@ -292,24 +304,32 @@ type ComponentTarget struct {
 }
 
 type ConfigRollout struct {
-	ID                      uuid.UUID
-	OrganizationID          uuid.UUID
-	ChangeSetID             uuid.UUID
-	Waves                   []int32
-	CurrentWaveIndex        int32
-	WaveStartedAt           time.Time
-	MinWaveMinutes          int32
-	FailureThresholdPercent int32
-	FailureThresholdMin     int32
-	CanaryDeviceGroupID     uuid.NullUUID
-	Status                  string
-	HaltedReason            *string
-	EvaluationSince         time.Time
-	StartedBy               string
-	StartedAt               time.Time
-	EndedAt                 *time.Time
-	EndedReason             *string
-	UpdatedAt               time.Time
+	ID                          uuid.UUID
+	OrganizationID              uuid.UUID
+	ChangeSetID                 uuid.UUID
+	Waves                       []int32
+	CurrentWaveIndex            int32
+	WaveStartedAt               time.Time
+	MinWaveMinutes              int32
+	FailureThresholdPercent     int32
+	FailureThresholdMin         int32
+	CanaryDeviceGroupID         uuid.NullUUID
+	Status                      string
+	HaltedReason                *string
+	EvaluationSince             time.Time
+	StartedBy                   string
+	StartedAt                   time.Time
+	EndedAt                     *time.Time
+	EndedReason                 *string
+	UpdatedAt                   time.Time
+	StagedAssignments           json.RawMessage
+	WaveSuccessThresholdPercent int32
+	StallWarningHours           int32
+	WaveFirstAppliedAt          *time.Time
+	WaveApplied                 int32
+	WaveProgressAt              time.Time
+	WaveOutstanding             int32
+	StallWarnedAt               *time.Time
 }
 
 type Device struct {
@@ -339,6 +359,8 @@ type Device struct {
 	CompiledArch                string
 	CompiledOsID                string
 	CompiledOsVersionID         string
+	CompiledAgentVersion        string
+	DenialLockCheckedAt         *time.Time
 }
 
 type DeviceAlert struct {
@@ -464,6 +486,17 @@ type DeviceGroup struct {
 	DiskUnlockMode     *string
 }
 
+type DeviceGroupMaintenanceWindow struct {
+	OrganizationID  uuid.UUID
+	DeviceGroupID   uuid.UUID
+	Days            []int32
+	StartMinute     int32
+	DurationMinutes int32
+	Timezone        string
+	UpdatedBy       uuid.NullUUID
+	UpdatedAt       time.Time
+}
+
 type DeviceGroupMember struct {
 	OrganizationID uuid.UUID
 	DeviceGroupID  uuid.UUID
@@ -542,6 +575,8 @@ type DeviceSoftwareStatus struct {
 	Reason         string
 	Error          string
 	ReportedAt     time.Time
+	Scope          string
+	Username       string
 }
 
 type DeviceStatus struct {
@@ -895,15 +930,17 @@ type OrganizationRoleSnapshot struct {
 }
 
 type OrganizationRolloutSetting struct {
-	OrganizationID          uuid.UUID
-	Enabled                 bool
-	Waves                   []int32
-	MinWaveMinutes          int32
-	FailureThresholdPercent int32
-	FailureThresholdMin     int32
-	CanaryDeviceGroupID     uuid.NullUUID
-	UpdatedAt               time.Time
-	UpdatedBy               uuid.NullUUID
+	OrganizationID              uuid.UUID
+	Enabled                     bool
+	Waves                       []int32
+	MinWaveMinutes              int32
+	FailureThresholdPercent     int32
+	FailureThresholdMin         int32
+	CanaryDeviceGroupID         uuid.NullUUID
+	UpdatedAt                   time.Time
+	UpdatedBy                   uuid.NullUUID
+	WaveSuccessThresholdPercent int32
+	StallWarningHours           int32
 }
 
 type OrganizationUpdateSetting struct {
@@ -1098,6 +1135,9 @@ type SoftwareAssignment struct {
 	CreatedBy      uuid.NullUUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	UserID         uuid.NullUUID
+	UserGroupID    uuid.NullUUID
+	Urgent         bool
 }
 
 type SoftwareCatalogEntry struct {
@@ -1112,6 +1152,62 @@ type SoftwareCatalogEntry struct {
 	CreatedBy      uuid.NullUUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Approval       string
+	ApprovalEpoch  int32
+}
+
+type SoftwarePackage struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Package        string
+	Version        string
+	Architecture   string
+	Size           int64
+	Sha256         string
+	ObjectKey      string
+	Control        json.RawMessage
+	UploadedBy     string
+	UploadedAt     time.Time
+}
+
+type SoftwareRepository struct {
+	OrganizationID              uuid.UUID
+	SigningPublicKey            *string
+	SigningFingerprint          *string
+	SigningPrivateCiphertext    *string
+	PreviousPublicKey           *string
+	PreviousFingerprint         *string
+	PreviousRetiredAt           *time.Time
+	CredentialCiphertext        string
+	CredentialSha256            []byte
+	PreviousCredentialSha256    []byte
+	PreviousCredentialExpiresAt *time.Time
+	CredentialRotatedAt         time.Time
+	Generation                  int64
+	RebuildRequestedAt          *time.Time
+	LastBuiltAt                 *time.Time
+	LastError                   *string
+	CreatedAt                   time.Time
+	UpdatedAt                   time.Time
+	KeyRotationRequestedAt      *time.Time
+	PreviousPrivateCiphertext   *string
+}
+
+type SoftwareRequest struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	CatalogEntryID uuid.UUID
+	DeviceID       uuid.UUID
+	UserID         uuid.NullUUID
+	Username       string
+	State          string
+	RequestedAt    time.Time
+	ExpiresAt      time.Time
+	ApprovalEpoch  int32
+	DecidedBy      *string
+	DecidedAt      *time.Time
+	DecisionReason *string
+	Justification  string
 }
 
 type SoftwareSource struct {
@@ -1129,6 +1225,7 @@ type SoftwareSource struct {
 	CreatedBy      uuid.NullUUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Kind           string
 }
 
 type UserGroup struct {

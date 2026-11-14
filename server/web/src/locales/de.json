@@ -164,7 +164,8 @@
     "softwareSources": "Paketquellen",
     "softwareCatalog": "Softwarekatalog",
     "accessReview": "Zugriffsprüfung",
-    "platformAccessReview": "Plattform-Zugriffsprüfung"
+    "platformAccessReview": "Plattform-Zugriffsprüfung",
+    "softwareRequests": "Softwareanfragen"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -281,6 +282,8 @@
     "invalid_state": "Diese Aktion ist im aktuellen Zustand nicht möglich.",
     "conflict": "Das steht im Konflikt mit einem vorhandenen Eintrag.",
     "already_exists": "Das wird für dieselben Geräte bereits verwaltet.",
+    "unsupported_compression": "Das Steuerarchiv des Pakets ist mit einem Verfahren komprimiert, das Paddock nicht liest. Bauen Sie es mit dpkg-deb -Zgzip oder -Zzstd.",
+    "repository_not_ready": "Der Signaturschlüssel des Repositorys wird noch erzeugt. Versuchen Sie es in einer Minute erneut.",
     "in_use": "Dieser Eintrag wird noch verwendet. Entfernen Sie zuerst, was ihn verwendet.",
     "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der gesperrten Pfade.",
     "unit_not_allowed": "Diese Unit ist nicht erlaubt. Units von Paddock, Himmelblau, Fleet, SSH, GDM und systemd selbst sind geschützt.",
@@ -384,7 +387,9 @@
     "device_group": {
       "created": "{actor} hat die Gerätegruppe {name} angelegt",
       "updated": "{actor} hat die Gerätegruppe {name} geändert",
-      "deleted": "{actor} hat die Gerätegruppe {name} gelöscht"
+      "deleted": "{actor} hat die Gerätegruppe {name} gelöscht",
+      "maintenance_window_changed": "{actor} hat das Wartungsfenster der Gerätegruppe {name} gesetzt",
+      "maintenance_window_removed": "{actor} hat das Wartungsfenster der Gerätegruppe {name} entfernt"
     },
     "enrollment_token": {
       "created": "{actor} hat das Registrierungstoken {name} angelegt",
@@ -431,6 +436,7 @@
       "bundle_entry_omitted": "Das Bundle für {target} lässt die sudo-Rechte von {username} aus: Ein Berechtigungsprofil enthält einen Befehl, der nicht mehr erlaubt ist",
       "login_applied": "Das Gerät {target} hat seine Anmeldekonfiguration angewendet",
       "login_apply_failed": "Das Gerät {target} konnte seine Anmeldekonfiguration nicht anwenden (Schritt {stage})",
+      "login_nss_shield": "Das Gerät {target} hat Verzeichnisanmeldungen für {duration_s, number} s pausiert, während der Agent Pakete installierte{outcome, select, restored {} max_hold { (maximale Pausendauer erreicht)} recovered { (nach einem Agent-Neustart beendet)} restore_failed { – der Anmeldedienst startete nicht wieder} hold_failed { – nicht pausiert, mit aktiven Anmeldungen installiert} other { ({outcome})}}",
       "user_lock_applied": "Das Gerät {target} hat den gesperrten Benutzer {username} blockiert",
       "logins_suspension_applied": "Das Gerät {target} hat Verzeichnisanmeldungen ausgesetzt und {sessions_terminated, number} Sitzungen beendet",
       "sudo_apply_failed": "Das Gerät {target} konnte die sudo-Rechte nicht anwenden",
@@ -442,7 +448,7 @@
       "tamper_local_admin_changed": "Das Gerät {target} hat eine Änderung an seinem lokalen Administratorkonto festgestellt ({field})",
       "tamper_keyslot_changed": "Das Gerät {target} hat eine Änderung an den Keyslots seiner Festplatte festgestellt",
       "header_escrow_refused": "Ein LUKS-Header von {target} wurde nicht hinterlegt: Das Gerät hinterlegt bereits 32 Volumes",
-      "tamper_service_stopped": "Das Gerät {target} hat den gestoppten Dienst {unit} festgestellt und neu gestartet",
+      "tamper_service_stopped": "Das Gerät {target} hat den Dienst {unit} gestoppt vorgefunden",
       "tamper_agent_not_running": "fleetd meldet, dass der Paddock-Agent auf {target} nicht läuft",
       "revocation_trust_pinned_tofu": "Das Gerät {target} hat die Widerrufsschlüssel seines ersten Bundles, das sie enthielt, festgeschrieben (Trust on First Use)",
       "escrow_destroyed": "Die in der Treuhand-Ablage hinterlegten Festplattenschlüssel von {hostname} wurden vernichtet und die Vernichtung des Geräts wurde ausgestellt",
@@ -460,6 +466,9 @@
       "software_reinstalled": "Das Gerät {target} hat festgestellt, dass {package} lokal entfernt wurde, und es erneut installiert ({version})",
       "software_removed": "Das Gerät {target} hat {package} {version} entfernt ({intent})",
       "software_apply_failed": "Das Gerät {target} konnte ein Softwarepaket oder eine Paketquelle nicht anwenden ({stage}: {reason})",
+      "software_self_service": "{outcome, select, succeeded {{user} hat über den Self-Service auf dem Gerät {target} eine Anwendung {action, select, install {installiert} update {aktualisiert} remove {entfernt} other {geändert}}} refused {Das Gerät {target} hat die Self-Service-Aktion {action} von {user} abgelehnt ({reason})} other {Die Self-Service-Aktion {action} von {user} ist auf dem Gerät {target} fehlgeschlagen ({reason})}}",
+      "software_requested": "{user} hat auf dem Gerät {target} eine Anwendung angefragt, die eine Freigabe braucht",
+      "software_request_withdrawn": "{user} hat auf dem Gerät {target} die Anfrage nach einer Anwendung zurückgezogen, die eine Freigabe braucht",
       "stale_warning": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert (Warnung)",
       "stale_critical": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert und gilt als vermutlich verloren",
       "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert",
@@ -552,7 +561,8 @@
       "advanced": "Das Konfigurations-Rollout hat {percent, number} % der Geräte erreicht",
       "halted": "Das Konfigurations-Rollout wurde angehalten: {reason}",
       "resumed": "{actor} hat das Konfigurations-Rollout fortgesetzt",
-      "completed": "Das Konfigurations-Rollout wurde abgeschlossen"
+      "completed": "Das Konfigurations-Rollout wurde abgeschlossen",
+      "stalled": "Die aktuelle Welle des Konfigurations-Rollouts kommt seit {stall_warning_hours, number} Stunden nicht voran: {waiting, number} Geräte warten auf ihr Wartungsfenster, {awaiting_retry, number} auf eine erfolgreiche Wiederholung"
     },
     "managed_file": {
       "created": "{actor} hat die verwaltete Datei {path} definiert",
@@ -595,6 +605,16 @@
       "updated": "{actor} hat das Zurückhalten des Pakets {package} geändert",
       "deleted": "{actor} hat das Paket {package} freigegeben"
     },
+    "software_package": {
+      "uploaded": "{actor} hat das Paket {package} {version} ({architecture}) in das Paddock-Repository hochgeladen",
+      "deleted": "{actor} hat das Paket {package} {version} ({architecture}) aus dem Paddock-Repository gelöscht"
+    },
+    "software_repository": {
+      "credential_rotated": "{actor} hat die Lesezugangsdaten des Paddock-Repositorys ersetzt",
+      "key_rotated": "{actor} hat den Signaturschlüssel des Paddock-Repositorys ersetzt",
+      "built": "{actor} hat Stand {generation} des Paddock-Repositorys veröffentlicht, signiert mit dem Schlüssel {fingerprint}",
+      "build_failed": "{actor} konnte das Paddock-Repository nicht erstellen: {error}"
+    },
     "software_source": {
       "created": "{actor} hat die Paketquelle {name} mit dem Schlüssel {fingerprint} hinzugefügt",
       "updated": "{actor} hat die Paketquelle {name} geändert",
@@ -604,6 +624,12 @@
       "created": "{actor} hat {name} zum Software-Katalog hinzugefügt",
       "updated": "{actor} hat {name} im Software-Katalog geändert",
       "deleted": "{actor} hat {name} mit {assignment_count, plural, one {# Zuweisung} other {# Zuweisungen}} aus dem Software-Katalog entfernt"
+    },
+    "software_request": {
+      "opened": "{user} hat {app} auf {hostname} angefragt; die Anfrage wartet auf eine Entscheidung",
+      "approved": "{actor} hat die Anfrage von {user} für {app} auf {hostname} freigegeben",
+      "denied": "{actor} hat die Anfrage von {user} für {app} auf {hostname} abgelehnt: {reason}",
+      "expired": "Die Anfrage von {user} ist ohne Entscheidung abgelaufen ({cause})"
     },
     "software_assignment": {
       "created": "{actor} hat {app} mit der Absicht {intent} zugewiesen",
@@ -2112,6 +2138,16 @@
     "empty": {
       "title": "Noch keine Benutzer",
       "description": "Benutzer werden aus dem Verzeichnis synchronisiert oder hier angelegt."
+    },
+    "software": {
+      "title": "Software",
+      "summary": "Anwendungen, die diesem Benutzer direkt oder über eine Benutzergruppe zugewiesen sind. Zuweisungen an alle Geräte oder an Gerätegruppen stehen nicht in dieser Liste.",
+      "via": "Zugewiesen über",
+      "direct": "Direkt",
+      "empty": {
+        "title": "Keine Software für diesen Benutzer",
+        "description": "Keine Zuweisung hat diesen Benutzer oder eine seiner Gruppen als Ziel."
+      }
     }
   },
   "userGroups": {
@@ -2547,7 +2583,8 @@
       "disk_conversion_failed": "Nachträgliche Verschlüsselung fehlgeschlagen",
       "clock_drift": "Zeitabweichung",
       "event_gap": "Ereignislücke",
-      "report_only": "Berichtsmodus, wartet auf Durchsetzung"
+      "report_only": "Berichtsmodus, wartet auf Durchsetzung",
+      "software_requests_open": "Softwareanfragen warten"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -2567,7 +2604,8 @@
       "disk_conversion_failed": "Gerät öffnen",
       "clock_drift": "Gerät öffnen",
       "event_gap": "Gerät öffnen",
-      "report_only": "Gerät öffnen"
+      "report_only": "Gerät öffnen",
+      "software_requests_open": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {
@@ -3374,7 +3412,7 @@
   "software": {
     "sources": {
       "title": "Paketquellen",
-      "summary": "APT-Repositories von Drittanbietern, aus denen Ihre Geräte installieren dürfen. Jede Quelle hat einen eigenen Signaturschlüssel; sie hinzuzufügen oder zu ändern ist eine Änderung mit Root-Wirkung und verlangt einen Sicherheitsschlüssel.",
+      "summary": "APT-Repositories und Flatpak-Remotes von Drittanbietern, aus denen Ihre Geräte installieren dürfen. Jede Quelle hat einen eigenen Signaturschlüssel; sie hinzuzufügen oder zu ändern ist eine Änderung mit Root-Wirkung und verlangt einen Sicherheitsschlüssel.",
       "create": "Quelle hinzufügen",
       "createTitle": "Paketquelle hinzufügen",
       "editTitle": "Paketquelle bearbeiten",
@@ -3412,7 +3450,15 @@
       },
       "entries": "Einträge",
       "repeated": "Jeder Eintrag darf nur einmal vorkommen.",
-      "inUse": "Diese Quelle wird von einem Katalogeintrag verwendet."
+      "inUse": "Diese Quelle wird von einem Katalogeintrag verwendet.",
+      "kind": "Art",
+      "kindHint": "Ein APT-Repository oder ein Flatpak-Remote; lässt sich später nicht ändern.",
+      "kinds": {
+        "apt": "APT-Repository",
+        "flatpak": "Flatpak-Remote"
+      },
+      "flatpakUri": "Geben Sie genau eine https-Adresse ein, die URL des Flatpak-Remotes.",
+      "flatpakUriHint": "Die https-URL des Flatpak-Remotes, zum Beispiel https://dl.flathub.org/repo/."
     },
     "catalog": {
       "title": "Softwarekatalog",
@@ -3448,7 +3494,7 @@
       "releaseInvalid": "Geben Sie * oder ein Release wie 24.04 ein.",
       "packageInvalid": "Geben Sie einen Debian-Paketnamen ein: Kleinbuchstaben, Ziffern, +, . und -.",
       "deleteTitle": "Anwendung entfernen",
-      "deleteConfirm": "{count, plural, one {Die Anwendung und ihre # Zuweisung werden entfernt.} other {Die Anwendung und ihre # Zuweisungen werden entfernt.}} Installierte Software bleibt auf den Geräten. Geben Sie zur Bestätigung den Namen ein.",
+      "deleteConfirm": "Die Anwendung wird aus dem Katalog entfernt; auf den Geräten ändert sich nichts. Eine Anwendung, die noch Zuweisungen hat, kann nicht entfernt werden: Entfernen Sie zuerst ihre Zuweisungen. Geben Sie zur Bestätigung den Namen ein.",
       "empty": {
         "title": "Noch keine Anwendungen",
         "description": "Beschreiben Sie eine Anwendung einmal und weisen Sie sie Gerätegruppen zu."
@@ -3456,7 +3502,18 @@
       "devicesEmpty": {
         "title": "Keine Geräte",
         "description": "Dieser Anwendung ist noch kein aktives Gerät zugewiesen."
-      }
+      },
+      "flatpakRef": "Flatpak-Anwendungs-ID",
+      "flatpakRefHint": "Zum Beispiel org.gimp.GIMP.",
+      "flatpakRefInvalid": "Geben Sie eine Flatpak-Anwendungs-ID aus mindestens drei Teilen ein, zum Beispiel org.gimp.GIMP.",
+      "flatpakRow": "{ref} ({scope})",
+      "approval": "Freigabe",
+      "approvals": {
+        "none": "Nicht erforderlich",
+        "required": "Erforderlich"
+      },
+      "approvalRequired": "Benutzer brauchen eine Freigabe",
+      "approvalHint": "Benutzer einer verfügbaren Zuweisung fragen eine Administratorin oder einen Administrator, bevor sie die Anwendung installieren."
     },
     "assignments": {
       "title": "Zuweisungen",
@@ -3476,15 +3533,23 @@
       "deleteConfirm": "Die Zuweisung von {app} für {scope} entfernen? Die Geräte behalten, was installiert ist.",
       "empty": {
         "title": "Noch keine Zuweisungen",
-        "description": "Eine Zuweisung wendet die Anwendung auf eine Gerätegruppe oder auf alle Geräte an."
-      }
+        "description": "Eine Zuweisung wendet die Anwendung auf alle Geräte, eine Gerätegruppe, einen Benutzer oder eine Benutzergruppe an."
+      },
+      "target": "Ziel",
+      "targetRequired": "Wählen Sie das Ziel.",
+      "urgent": "Dringend: auch außerhalb von Wartungsfenstern anwenden",
+      "urgentHint": "Geräte wenden diese Zuweisung sofort an, auch außerhalb ihrer Wartungsfenster. Verlangt eine Begründung und bei jedem Speichern eine erneute Anmeldebestätigung.",
+      "urgentReasonRequired": "Geben Sie für eine dringende Zuweisung eine Begründung mit 2 bis 500 Zeichen ein.",
+      "urgentChip": "Dringend",
+      "rollout": "Rollout"
     },
     "intent": {
       "label": "Absicht",
       "required": "Erforderlich",
       "uninstall": "Deinstallieren",
       "hold": "Version festhalten",
-      "forbid": "Verbieten"
+      "forbid": "Verbieten",
+      "available": "Verfügbar"
     },
     "updateRule": {
       "latest": "Neueste",
@@ -3503,6 +3568,7 @@
     "reason": {
       "dpkg_locked": "Ein anderer Paketvorgang läuft; das Gerät versucht es erneut.",
       "deferred_offline": "Das Gerät wartet auf eine Serververbindung, bevor es Software entfernt.",
+      "outside_window": "Das Gerät wartet auf sein Wartungsfenster, bevor es Software installiert oder entfernt.",
       "would_remove_dependents": "Der Vorgang würde andere Pakete entfernen; es wurde nichts geändert.",
       "no_candidate": "Das Paket oder die Version ist in den Quellen des Geräts nicht verfügbar.",
       "fingerprint_mismatch": "Der Quellenschlüssel passt nicht zu seinem Fingerabdruck; die Quelle wurde nicht geschrieben.",
@@ -3525,6 +3591,129 @@
         "title": "Keine verwaltete Software",
         "description": "Diesem Gerät ist keine Anwendung des Katalogs zugewiesen."
       }
+    },
+    "target": {
+      "organization": "Alle Geräte",
+      "device_group": "Gerätegruppe",
+      "user": "Benutzer",
+      "user_group": "Benutzergruppe",
+      "named": {
+        "user": "Benutzer {name}",
+        "user_group": "Benutzergruppe {name}"
+      }
+    },
+    "scope": {
+      "label": "Bereich",
+      "system": "System",
+      "user": "Benutzer"
+    },
+    "compileWarnings": {
+      "title": "Hinweise der Kompilierung",
+      "summary": "Was der Server gegenüber einer Zuweisung aus der Konfiguration eines Geräts weggelassen hat, aus der letzten Kompilierung des Geräts.",
+      "warning": "Hinweis",
+      "entry": "Anwendung",
+      "compiledAt": "Kompiliert",
+      "code": "Hinweis",
+      "openEntry": "Anwendung öffnen",
+      "codes": {
+        "audience_truncated": "Zu viele Benutzer angeboten",
+        "flatpak_forbidden": "Flatpak verboten",
+        "flatpak_users_truncated": "Zu viele Benutzer als Ziel"
+      },
+      "text": {
+        "audience_truncated": "Die Anwendung wird auf diesem Gerät {users} Benutzern angeboten; die Konfiguration enthält die ersten {kept} nach Benutzernamen, den übrigen wird sie nicht angeboten.",
+        "flatpak_forbidden": "{flatpak_ref} fehlt auf diesem Gerät, weil eine Zuweisung Flatpak dort verbietet oder deinstalliert.",
+        "flatpak_users_truncated": "{flatpak_ref} hat auf diesem Gerät {users} Benutzer als Ziel; die Konfiguration enthält die ersten {kept} nach Benutzernamen.",
+        "unknown": "Der Server hat die Konfiguration dieses Geräts gekürzt ({code})."
+      },
+      "empty": {
+        "title": "Keine Hinweise der Kompilierung",
+        "description": "Die letzte Kompilierung hat jede Zuweisung unverändert angewendet."
+      }
     }
+  },
+  "softwareRequests": {
+    "title": "Softwareanfragen",
+    "summary": "Benutzer fragen Anwendungen an, deren Katalogeintrag eine Freigabe verlangt. Eine Organisationsadministratorin oder ein Organisationsadministrator gibt jede Anfrage frei oder lehnt sie ab; eine Anfrage ohne Entscheidung verfällt nach 30 Tagen.",
+    "application": "Anwendung",
+    "user": "Benutzer",
+    "state": "Status",
+    "requestedAt": "Angefragt",
+    "expiresAt": "Verfällt",
+    "justification": "Begründung",
+    "decision": "Entscheidung",
+    "decidedBy": "von {name}",
+    "withdrawnByUser": "vom Benutzer auf dem Gerät",
+    "states": {
+      "requested": "Wartet",
+      "approved": "Freigegeben",
+      "denied": "Abgelehnt",
+      "expired": "Verfallen",
+      "withdrawn": "Zurückgezogen"
+    },
+    "empty": {
+      "title": "Keine Softwareanfragen",
+      "description": "Anfragen erscheinen hier, wenn Benutzer eine Anwendung anfragen, die eine Freigabe verlangt."
+    },
+    "approve": {
+      "title": "Anfrage freigeben",
+      "label": "Freigeben",
+      "confirm": "{user} darf {app} auf {hostname} installieren?",
+      "reason": "Begründung (optional)",
+      "reasonHint": "Wird mit der Entscheidung gespeichert.",
+      "done": "{app} ist für {user} freigegeben.",
+      "aria": "{app} für {user} freigeben"
+    },
+    "deny": {
+      "title": "Anfrage ablehnen",
+      "label": "Ablehnen",
+      "confirm": "Die Installation von {app} auf {hostname} für {user} ablehnen? Der Benutzer kann nach 24 Stunden erneut anfragen.",
+      "reason": "Begründung",
+      "reasonHint": "Der Benutzer sieht diese Begründung.",
+      "done": "Die Anfrage von {user} für {app} ist abgelehnt.",
+      "aria": "{app} für {user} ablehnen"
+    }
+  },
+  "maintenanceWindow": {
+    "title": "Wartungsfenster",
+    "set": "Fenster festlegen",
+    "edit": "Fenster bearbeiten",
+    "remove": "Fenster entfernen",
+    "formTitle": "Wartungsfenster",
+    "removeTitle": "Wartungsfenster entfernen",
+    "removeConfirm": "Das Wartungsfenster von {name} entfernen? Die Geräte wenden ihre Softwareänderungen beim nächsten Durchlauf an, sofern keine andere ihrer Gruppen ein Fenster hat.",
+    "none": "Kein Fenster: Die Geräte dieser Gruppe wenden Softwareänderungen jederzeit an, sofern keine andere ihrer Gruppen ein Fenster hat.",
+    "explain": "Geräte installieren und entfernen die Software ihrer Richtlinie nur innerhalb der Vereinigung der Fenster ihrer Gruppen. Dringende Zuweisungen, eigene Installationen der Benutzer und Quelldateien warten nicht.",
+    "summary": "{days}, ab {start} für {duration} ({timezone})",
+    "durationValue": "{hours, plural, =0 {} one {# Stunde} other {# Stunden}}{minutes, plural, =0 {} one { # Minute} other { # Minuten}}",
+    "days": "Tage",
+    "start": "Beginn (Ortszeit)",
+    "duration": "Dauer",
+    "durationHint": "30 bis 1440 Minuten; ein Fenster darf über Mitternacht reichen.",
+    "minutes": "Min.",
+    "timezone": "Zeitzone",
+    "timezoneHint": "Ein IANA-Name wie Europe/Berlin.",
+    "weekdays": {
+      "1": "Montag",
+      "2": "Dienstag",
+      "3": "Mittwoch",
+      "4": "Donnerstag",
+      "5": "Freitag",
+      "6": "Samstag",
+      "7": "Sonntag"
+    },
+    "weekdaysShort": {
+      "1": "Mo",
+      "2": "Di",
+      "3": "Mi",
+      "4": "Do",
+      "5": "Fr",
+      "6": "Sa",
+      "7": "So"
+    },
+    "daysRequired": "Wählen Sie mindestens einen Tag.",
+    "startInvalid": "Geben Sie eine Uhrzeit als HH:MM ein.",
+    "durationInvalid": "Geben Sie 30 bis 1440 Minuten ein.",
+    "timezoneInvalid": "Geben Sie einen Zeitzonennamen mit höchstens 64 Zeichen ein."
   }
 }

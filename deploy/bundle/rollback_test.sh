@@ -52,10 +52,27 @@ restore_trap_set() {
   FAKE_TRAP=1
 }
 restore_trap_reset() { FAKE_TRAP=""; }
-restore_set_opts() { echo "restore_set_opts source=$RESTORE_SOURCE dir=$COMPOSE_DIR" >>"$FIXTURE_CALLS"; }
+restore_set_opts() {
+  echo "restore_set_opts source=$RESTORE_SOURCE dir=$COMPOSE_DIR" >>"$FIXTURE_CALLS"
+  RESTORE_SET_MOUNT=() RESTORE_SET_DIR=/backup-repo
+}
+# The manifest names the schema of the newest backup: the new release's (decisions-alpha10 item 62), and a schema the
+# old release does not have.
 restore_read_set() {
-  declare -gA RESTORE_SET=([key_fingerprint]="$FIXTURE_SET_FP" [key_id]=bk-20261101-0a0b0c0d)
+  declare -gA RESTORE_SET=([key_fingerprint]="$FIXTURE_SET_FP" [key_id]=bk-20261101-0a0b0c0d
+    [schema.paddock]="${FIXTURE_MANIFEST_SCHEMA:-125}" [schema.newcomer]=3)
   echo "restore_read_set at=$RESTORE_AT" >>"$FIXTURE_CALLS"
+}
+# The old bundle's images: `migrate --version` answers its schema versions, `backup manifest` the manifest as above.
+restore_backup_run() {
+  echo "restore_backup_run $*" >>"$FIXTURE_CALLS"
+  case "$*" in
+    "-- migrate --version") echo "paddock ${FIXTURE_BUNDLE_SCHEMA:-112}" ;;
+    "-- backup manifest --at $RESTORE_AT /backup-repo")
+      printf 'key_fingerprint=%s\nkey_id=bk-20261101-0a0b0c0d\nschema.newcomer=3\nschema.paddock=%s\n' \
+        "$FIXTURE_SET_FP" "${FIXTURE_MANIFEST_SCHEMA:-125}"
+      ;;
+  esac
 }
 restore_key_fingerprint() {
   local n
@@ -71,9 +88,19 @@ restore_prompt_key() {
   RESTORE_KEY_WRITTEN="$1"
 }
 restore_normalize_at() { [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] && echo "$1"; }
+# As the real one: it reads the set again and refuses a schema newer than the old bundle's.
 restore_preflight() {
+  local name schema=""
   echo "restore_preflight at=$RESTORE_AT only=${RESTORE_ONLY[*]} key=${RESTORE_KEY_FILE#"$COMPOSE_DIR"/}" >>"$FIXTURE_CALLS"
   [[ -z "${FIXTURE_PREFLIGHT_FAIL:-}" ]] || restore_die "the backup set's paddock schema is version 106, this bundle knows up to 104"
+  restore_read_set
+  for name in $(printf '%s\n' "${!RESTORE_SET[@]}" | sort); do
+    [[ "$name" == schema.* ]] || continue
+    schema+=" $name=${RESTORE_SET[$name]}"
+    [[ "$name" == schema.paddock ]] && ((RESTORE_SET[$name] <= ${FIXTURE_BUNDLE_SCHEMA:-112})) ||
+      restore_die "the backup set's ${name#schema.} schema is version ${RESTORE_SET[$name]}, this bundle knows up to ${FIXTURE_BUNDLE_SCHEMA:-112}"
+  done
+  echo "restore_preflight_schema$schema" >>"$FIXTURE_CALLS"
 }
 restore_confirm() {
   local answer=""
@@ -88,6 +115,8 @@ restore_run() {
   IFS= read -r confirm || true
   restore_trap_set || true
   echo "restore_run $* key=${RESTORE_KEY_FILE#"$COMPOSE_DIR"/} confirm=$confirm" >>"$FIXTURE_CALLS"
+  # As the real one: its preflight again, after down.
+  restore_preflight
   echo "restore_high_water=${RESTORE_HIGH_WATER:-}" >>"$FIXTURE_CALLS"
   [[ "${FIXTURE_RESTORE_EXIT_EARLY:-0}" == 0 ]] || exit "$FIXTURE_RESTORE_EXIT_EARLY"
   restore_stop_writers
@@ -124,7 +153,7 @@ setup() {
   chmod 600 "$work/t/old/.secrets/backup_encryption_key"
   FIXTURE_SET_FP="$(base64 -d <"$work/t/old/.secrets/backup_encryption_key" | sha256sum | cut -c1-16)"
   export FIXTURE_SET_FP
-  printf 'old=%s\nfrom=0.1.0-alpha.9\nto=0.1.0-alpha.10\nbackup=yes\nlabel=pre-upgrade-0.1.0-alpha.10\nat=%s\nattempt=%s\n' \
+  printf 'old=%s\nfrom=0.1.0-alpha.9\nto=0.1.0-alpha.10\nbackup=yes\nlabel=pre-upgrade-0.1.0-alpha.10\nat=%s\nattempt=%s\nschema.paddock=112\n' \
     "$work/t/old" "$AT" "$ATTEMPT" >"$work/t/new/.upgrade-rollback"
   : >"$calls"
 }
@@ -183,6 +212,57 @@ if [[ -f "$work/t/old/.secrets/backup_encryption_key" ]]; then pass "the legacy 
 if grep -qx "rolled-back=$ATTEMPT" "$work/t/new/.upgrade-state" && ! grep -q '^done=' "$work/t/new/.upgrade-state"; then
   pass "a later upgrade starts again at the check and copies .env and .secrets/ again"
 else fail ".upgrade-state: $(cat "$work/t/new/.upgrade-state" 2>&1)"; fi
+
+# Across a schema change (decisions-alpha10 item 62): the manifest names the new release's schema, the restored point
+# has the one the upgrade recorded before its `up`. The old restore.sh sees the recorded schema in both of its reads.
+setup controlplane "Schema: migrations 00113–00125"
+run 0 "rollback while the manifest names the new release's schema" "$work/t/old" --yes
+called "the old bundle's schema versions are read" '^restore_backup_run -- migrate --version$'
+called "the preflight's own read sees the recorded schema only" '^restore_preflight_schema schema.paddock=112$'
+before "the schema is checked before down" '^restore_backup_run -- migrate --version$' "$DOWN"
+called "the restore runs" "^restore_run fresh repo --at $AT "
+if [[ "$(grep -c '^restore_preflight_schema schema.paddock=112$' "$calls")" == 2 ]]; then
+  pass "both preflights, before down and in restore_run, see the recorded schema"
+else fail "preflight schema lines: $(grep '^restore_preflight_schema' "$calls" | paste -sd'|' -)"; fi
+# The same with the real restore_read_set of this release's restore.sh (the old release of the next rollback;
+# 0.1.0-alpha.9's is the same function): the wrapper keeps its body and replaces what it read.
+setup controlplane "Schema: migrations 00113–00125"
+sed -n '/^restore_read_set() {/,/^}/p' "$scripts/restore.sh" >>"$work/t/old/scripts/restore.sh"
+run 0 "rollback with the real restore_read_set" "$work/t/old" --yes
+called "the real function reads the manifest at the point" "^restore_backup_run -- backup manifest --at $AT /backup-repo$"
+not_called "the fake function is replaced" '^restore_read_set '
+if [[ "$(grep -c '^restore_preflight_schema schema.paddock=112$' "$calls")" == 2 ]]; then
+  pass "both reads of the real function see the recorded schema"
+else fail "preflight schema lines: $(grep '^restore_preflight_schema' "$calls" | paste -sd'|' -)"; fi
+setup controlplane "Schema: migrations 00113–00125"
+FIXTURE_MANIFEST_SCHEMA=112 run 0 "rollback while the manifest still names the old schema" "$work/t/old" --yes
+called "the newer schema in the manifest is dropped as well" '^restore_preflight_schema schema.paddock=112$'
+setup controlplane "Schema: migrations 00113–00125"
+sed -i '/^schema\./d' "$work/t/new/.upgrade-rollback"
+run 1 "a record without a schema is refused" "$work/t/old" --yes
+has "the refusal names the missing schema and the manual restore" 'records no valid schema version of the pre-upgrade set.*restore by hand with ./paddock restore'
+not_called "no schema: it stops before down" "$DOWN"
+not_called "no schema: the old restore.sh is not asked" '^restore_'
+setup controlplane "Schema: migrations 00113–00125"
+sed -i 's/^schema\.paddock=.*/schema.paddock=11x/' "$work/t/new/.upgrade-rollback"
+run 1 "a record with an invalid schema is refused" "$work/t/old" --yes
+not_called "an invalid schema stops before down" "$DOWN"
+setup controlplane "Schema: migrations 00113–00125"
+sed -i 's/^schema\.paddock=.*/schema.paddock=125/' "$work/t/new/.upgrade-rollback"
+run 1 "a recorded schema newer than the old bundle is refused" "$work/t/old" --yes
+has "the refusal names both versions" "paddock schema is version 125 \(.upgrade-rollback\), 0.1.0-alpha.9's bundle knows up to 112.*restore by hand"
+not_called "a newer schema stops before the preflight" '^restore_preflight '
+setup controlplane "Schema: migrations 00113–00125"
+sed -i 's/^schema\.paddock=.*/schema.paddock=125/' "$work/t/new/.upgrade-rollback"
+rm "$work/t/old/.secrets/backup_encryption_key"
+input="$(head -c 32 /dev/urandom | base64)" run 1 "a newer schema is refused before the key is asked" "$work/t/old" --yes
+hasnt "no key prompt for a refused schema" 'The pre-upgrade set was made with backup key'
+not_called "a newer schema stops before down" "$DOWN"
+setup controlplane "Schema: migrations 00113–00125"
+echo "schema.audit=11" >>"$work/t/new/.upgrade-rollback"
+run 1 "a recorded schema the old bundle does not know is refused" "$work/t/old" --yes
+has "the unknown schema is named" "audit schema is version 11 \(.upgrade-rollback\), 0.1.0-alpha.9's bundle knows up to none"
+not_called "an unknown schema stops before down" "$DOWN"
 
 # The bundle sequence (decisions-alpha9 item 68): the highest is read and recorded before down with this release's
 # libraries and handed to the old restore.sh, which runs after down.

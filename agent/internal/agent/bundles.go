@@ -75,6 +75,7 @@ func (a *Agent) handleBundle(ctx context.Context, ref *protocol.BundleRef) {
 	a.current = b
 	a.st.AppliedBundleVersion = b.BundleVersion
 	a.saveState()
+	a.refreshSelfService()
 	a.refreshHealth()
 	slog.InfoContext(ctx, "bundle applied", "version", b.BundleVersion, "changed", rep.Changed, "errors", len(rep.Errors))
 	a.event(protocol.EventBundleApplied, rep)

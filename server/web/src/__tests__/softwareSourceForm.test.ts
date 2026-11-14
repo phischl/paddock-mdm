@@ -101,3 +101,58 @@ describe('SoftwareSourceForm', () => {
     expect(save).toHaveBeenCalledWith('s1', expect.objectContaining({ name: 'Vendor 2' }), false)
   })
 })
+
+describe('SoftwareSourceForm, Flatpak remote (plan M13b decision 5)', () => {
+  async function fillRemote(w: ReturnType<typeof mountForm>, uris: string): Promise<void> {
+    await w.findComponent({ name: 'VSelect' }).setValue('flatpak')
+    await w.find('#source-name').setValue('Flathub')
+    await w.find('#source-slug').setValue('flathub')
+    await w.find('#source-uris').setValue(uris)
+    await w.find('#source-key').setValue(key)
+    await w.find('#source-fingerprint').setValue(fingerprint)
+  }
+
+  it('shows suites, components and architectures for an APT repository only', async () => {
+    const w = mountForm()
+    expect(w.find('#source-suites').exists()).toBe(true)
+    expect(w.text()).toContain('Architectures')
+    await w.findComponent({ name: 'VSelect' }).setValue('flatpak')
+    expect(w.find('#source-suites').exists()).toBe(false)
+    expect(w.find('#source-components').exists()).toBe(false)
+    expect(w.text()).not.toContain('Architectures')
+    expect(w.text()).toContain('The https URL of the Flatpak remote')
+  })
+
+  it('requires exactly one https URL and the key before it sends anything', async () => {
+    const w = mountForm()
+    await fillRemote(w, 'https://a.example.org/repo/\nhttps://b.example.org/repo/')
+    await w.find('#source-key').setValue('')
+    await w.find('form').trigger('submit')
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
+    expect(w.text()).toContain('Enter exactly one https address, the URL of the Flatpak remote.')
+    expect(w.text()).toContain('Paste one OpenPGP public key of at most 64 KiB.')
+  })
+
+  it('sends a valid remote as kind flatpak', async () => {
+    save.mockResolvedValue(null)
+    const w = mountForm()
+    await fillRemote(w, 'https://dl.flathub.org/repo/')
+    await w.find('form').trigger('submit')
+    await flushPromises()
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0][1]).toMatchObject({ kind: 'flatpak', slug: 'flathub', uris: ['https://dl.flathub.org/repo/'] })
+    expect(w.emitted('saved')).toHaveLength(1)
+  })
+
+  it('keeps the kind of a stored source fixed', () => {
+    const w = mountForm({
+      initial: {
+        id: 's1', kind: 'flatpak', slug: 'flathub', name: 'Flathub', uris: ['https://dl.flathub.org/repo/'], suites: [], components: [],
+        architectures: [], fingerprint, weak_key: false, entry_count: 0, signing_key: key, created_at: '', updated_at: '',
+      },
+    })
+    expect((w.find('#source-kind').element as HTMLInputElement).disabled).toBe(true)
+    expect(w.find('#source-suites').exists()).toBe(false)
+  })
+})

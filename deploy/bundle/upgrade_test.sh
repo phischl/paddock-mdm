@@ -78,6 +78,11 @@ case "${1:-}" in
       *" fleet-backup-upload "*) exit "${FIXTURE_S3_EXIT:-0}" ;;
       *" stop pgbackrest pgbackrest-authentik") exit "${FIXTURE_STOP_EXIT:-0}" ;;
       *" pgbackrest-authentik flush") exit "${FIXTURE_FLUSH_EXIT:-0}" ;;
+      *" paddock-backup backup manifest /backup-repo")
+        printf 'key_id=bk-20261101-0a0b0c0d\nstanzas=authentik,paddock\n'
+        [[ -z "${FIXTURE_SET_SCHEMA-schema.paddock=104}" ]] || printf '%s\n' "${FIXTURE_SET_SCHEMA-schema.paddock=104}"
+        exit "${FIXTURE_MANIFEST_EXIT:-0}"
+        ;;
     esac
     ;;
   backup) exit "${FIXTURE_BACKUP_EXIT:-0}" ;;
@@ -185,6 +190,12 @@ if grep -qx "old=$work/t/old" "$rec" && grep -qx 'backup=yes' "$rec" && grep -qx
   fail ".upgrade-rollback: $(cat "$rec" 2>&1)"
 fi
 has "every step prints its command" '^\+ \./paddock pull$'
+MANIFEST='^old compose --profile paddock run --rm --no-deps -T -e PADDOCK_LOG_LEVEL=error paddock-backup backup manifest /backup-repo$'
+before "the pre-upgrade set's schema is read after the backup" "$BACKUP" "$MANIFEST"
+before "and before up" "$MANIFEST" "$UP"
+if [[ "$(grep -c '^schema\.' "$rec")" == 1 ]] && grep -qx 'schema.paddock=104' "$rec"; then
+  pass ".upgrade-rollback names the pre-upgrade set's schema (decisions-alpha10 item 62)"
+else fail ".upgrade-rollback schema: $(cat "$rec" 2>&1)"; fi
 has "the old directory is named as the rollback" "Keep $work/t/old until the next upgrade: it is the rollback"
 has "the plan names the versions" 'from 0.1.0-alpha.9 to 0.1.0-alpha.10'
 has "without BAO_TOKEN the OpenBao step is skipped" 'skipped: BAO_TOKEN is not set'
@@ -228,6 +239,39 @@ setup controlplane "Schema: unchanged"
 run 0 "--skip-backup with Schema: unchanged" "$work/t/old" --yes --skip-backup
 not_called "no backup with --skip-backup" '^old backup'
 if grep -qx 'backup=no' "$work/t/new/.upgrade-rollback"; then pass "the record says no backup"; else fail "record: $(cat "$work/t/new/.upgrade-rollback")"; fi
+not_called "no set, no schema read with --skip-backup" 'backup manifest'
+if ! grep -q '^schema\.' "$work/t/new/.upgrade-rollback"; then pass "no schema without a backup"; else fail "record: $(cat "$work/t/new/.upgrade-rollback")"; fi
+
+# The pre-upgrade set's schema: every schema.* line of its manifest; without one, or when the manifest cannot be read,
+# up does not run and no record is written.
+setup controlplane "Schema: migrations 00105–00106"
+FIXTURE_SET_SCHEMA=$'schema.audit=11\nschema.paddock=104' run 0 "upgrade with two schemas in the set" "$work/t/old" --yes
+if grep -qx 'schema.audit=11' "$work/t/new/.upgrade-rollback" && grep -qx 'schema.paddock=104' "$work/t/new/.upgrade-rollback"; then
+  pass "every schema of the set is recorded"
+else fail "record: $(cat "$work/t/new/.upgrade-rollback")"; fi
+setup controlplane "Schema: migrations 00105–00106"
+FIXTURE_MANIFEST_EXIT=1 run 1 "an unreadable manifest stops before up" "$work/t/old" --yes
+has "the unreadable manifest is named" 'cannot read the schema versions of the pre-upgrade set'
+not_called "no up without the set's schema" "$UP"
+if [[ ! -e "$work/t/new/.upgrade-rollback" ]] && ! grep -q '^up-started=' "$work/t/new/.upgrade-state"; then
+  pass "no record and no up-started without the set's schema"
+else fail "record or up-started without the set's schema"; fi
+has "an unreadable manifest says that up did not run" '\./paddock up did not run: 0\.1\.0-alpha\.9 still runs unchanged from'
+: >"$calls"
+run 0 "the run after an unreadable manifest" "$work/t/old" --yes
+not_called "it takes no second backup" '^old backup'
+if grep -qx 'schema.paddock=104' "$work/t/new/.upgrade-rollback"; then pass "it records the schema"; else fail "record: $(cat "$work/t/new/.upgrade-rollback")"; fi
+setup controlplane "Schema: migrations 00105–00106"
+FIXTURE_SET_SCHEMA="" run 1 "a manifest without a schema stops before up" "$work/t/old" --yes
+not_called "no up without a schema in the manifest" "$UP"
+has "the missing schema is named" 'cannot read the schema versions of the pre-upgrade set'
+if [[ ! -e "$work/t/new/.upgrade-rollback" ]] && ! grep -q '^up-started=' "$work/t/new/.upgrade-state"; then
+  pass "no record and no up-started without a schema in the manifest"
+else fail "record or up-started without a schema in the manifest"; fi
+setup controlplane "Schema: migrations 00105–00106"
+FIXTURE_SET_SCHEMA=$'schema.paddock=104\nschema.audit=x' run 1 "a manifest with an invalid schema stops before up" "$work/t/old" --yes
+not_called "no up with an invalid schema in the manifest" "$UP"
+if [[ ! -e "$work/t/new/.upgrade-rollback" ]]; then pass "no record with an invalid schema"; else fail "a record with an invalid schema"; fi
 
 # An old release other than 0.1.0-alpha.8 without the labelled backup: refused before anything runs.
 setup controlplane "Schema: migrations 00105–00106"
@@ -263,6 +307,7 @@ before "then Fleet's dump" '^old compose run --rm --no-deps -T fleet-backup once
 before "the snapshot is checked in the bucket" '^old compose run .* la8-s3 head openbao/20261106T100200Z\.snap\.enc$' "$UP"
 before "the dump's upload is awaited before up" "$LEGACY_FLEET_HEAD" "$UP"
 before "the check before the backup" '^docker run .*prod-check' "$LEGACY_PG"
+not_called "alpha.8's backup has no manifest to read" 'backup manifest'
 called "the bucket is read with the pgBackRest credential mounted as files" \
   "-v $work/t/old/\.secrets/backup_pgbackrest_access_key:/run/paddock-legacy/access_key:ro -v $work/t/old/\.secrets/backup_pgbackrest_secret_key:/run/paddock-legacy/secret_key:ro --entrypoint /bin/bash fleet-backup-upload"
 rec="$work/t/new/.upgrade-rollback"
@@ -707,6 +752,9 @@ before "the old audit writer stops before up" '^old compose stop paddock-audit-w
 called "the audit host runs the online check" '^docker run .*prod-check .*--online'
 before "the audit host checks online before up" '^docker run .*prod-check .*--online' "$UP"
 has "the audit host's plan names the online check" '^  check +\./paddock check --online '
+# Plan M12h decision 10: before up the old release still runs, so only the post-checks compare the containers.
+before "the audit host lists its containers only after up" "$UP" '^docker ps -q'
+before "the audit host checks the container matrix only after up" "$UP" '^docker run .*prod-check .*--containers '
 not_called "the audit host asks no server report" '^docker compose .*admin upgrade-check'
 setup audit "Schema: migrations 00105 (control-plane database); audit unchanged"
 run 0 "audit host without audit migrations" "$work/t/old" --yes

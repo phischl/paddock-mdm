@@ -1,0 +1,86 @@
+[
+  {
+    "Name": "/paddock-authentik-postgres-1",
+    "Config": {
+      "User": "",
+      "Labels": {
+        "com.docker.compose.project": "paddock",
+        "com.docker.compose.service": "authentik-postgres"
+      }
+    },
+    "HostConfig": {
+      "CapAdd": [
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_FOWNER",
+        "CAP_SETGID",
+        "CAP_SETUID"
+      ],
+      "CapDrop": [
+        "ALL"
+      ],
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "Privileged": false,
+      "PidMode": "",
+      "IpcMode": "private",
+      "PidsLimit": 512,
+      "Memory": 1073741824,
+      "ReadonlyRootfs": false,
+      "NetworkMode": "paddock_authentik"
+    }
+  },
+  {
+    "Name": "/paddock-authentik-server-1",
+    "Config": {
+      "User": "1000",
+      "Labels": {
+        "com.docker.compose.project": "paddock",
+        "com.docker.compose.service": "authentik-server"
+      }
+    },
+    "HostConfig": {
+      "CapAdd": null,
+      "CapDrop": [
+        "ALL"
+      ],
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "Privileged": false,
+      "PidMode": "",
+      "IpcMode": "private",
+      "PidsLimit": 512,
+      "Memory": 2147483648,
+      "ReadonlyRootfs": false,
+      "NetworkMode": "paddock_authentik"
+    }
+  },
+  {
+    "Name": "/paddock-authentik-worker-1",
+    "Config": {
+      "User": "1000",
+      "Labels": {
+        "com.docker.compose.project": "paddock",
+        "com.docker.compose.service": "authentik-worker"
+      }
+    },
+    "HostConfig": {
+      "CapAdd": null,
+      "CapDrop": [
+        "ALL"
+      ],
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "Privileged": false,
+      "PidMode": "",
+      "IpcMode": "private",
+      "PidsLimit": 1024,
+      "Memory": 1073741824,
+      "ReadonlyRootfs": false,
+      "NetworkMode": "paddock_authentik"
+    }
+  }
+]

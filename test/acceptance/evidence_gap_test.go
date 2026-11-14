@@ -67,7 +67,7 @@ func (g gapDevice) materialize() {
 	if err := g.db.QueryRow(ctx, "SELECT coalesce(max(last_seq), 0) FROM device_status WHERE device_id = $1", g.d.DeviceID).Scan(&before); err != nil {
 		g.t.Fatal(err)
 	}
-	valkeyCLI(g.t, "DEL hb:"+g.d.DeviceID)
+	valkeyCLI(g.t, "worker", "DEL hb:"+g.d.DeviceID)
 	if _, res, err := g.d.Checkin(ctx); err != nil || res.Status != http.StatusOK {
 		g.t.Fatalf("check-in: %v %d %s", err, res.Status, res.Body)
 	}

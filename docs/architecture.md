@@ -132,7 +132,7 @@ The concept's IDs are kept. Each criterion names the role that must be able to o
 | N2 | **Ingest:** at-least-once, idempotent consumers; sustains 5 000 events/s with 3 worker replicas (reference load test). |
 | N3 | **Availability:** control plane target 99.5 % monthly; devices are unaffected by outages (C2). |
 | N4 | **Security:** all external traffic TLS 1.3 (1.2 allowed for device gateway behind legacy proxies); no plaintext signing or escrow key on any application node. |
-| N5 | **Privacy:** the negative list of the concept (no commands, processes, network connections, …) is enforced by schema: ingest rejects unknown event types. |
+| N5 | **Privacy:** the negative list of the concept (no commands, processes, network connections, …) is enforced by schema: ingest rejects unknown event types (amendment 2026-11-11: from 0.1.0-alpha.10 an event of an unknown type is skipped with its data dropped at the gateway and the batch accepted, ADR 0024; nothing of an unknown type is stored). |
 | N6 | **Localization:** no user-visible string in the portal is hard-coded; CI fails on missing English keys. |
 
 ---
@@ -255,7 +255,7 @@ flowchart TB
 | Role | Responsibility | Scales by | Keys it may use |
 | --- | --- | --- | --- |
 | `api` | Portal BFF (OIDC session), admin REST API, `paddockctl` API; writes configuration and commands in one DB transaction with an outbox record; imports agent releases from the configured GitHub release source after verifying them with the release public key (ADR 0043, the api's only outbound request to a third party); MCP login (device grant against Authentik) and MCP guard for MCP sessions (ADR 0044) | replicas behind proxy | none (escrow reveal is delegated to the `escrow-reader` role) |
-| `gateway` | Device endpoints: enroll, check-in, events, results, escrow upload; verifies device signatures; reads only from Valkey; writes only to RabbitMQ (and nonces to Valkey) | replicas | none |
+| `gateway` | Device endpoints: enroll, check-in, events, results, escrow upload; verifies device signatures; reads only from Valkey; writes only to RabbitMQ (and nonces to Valkey) and its own coordination keys (`seq:`, `sd:`, `enr:`, `cres:`, `diag:`, `rl:`) | replicas | none |
 | `worker` | Consumes ingest queues, materializes device status and the Valkey cache, inventory sync with Fleet, staleness evaluation, Authentik sync | competing consumers on quorum queues | `command-signing` |
 | `compiler` | Recomputes effective state on input change, renders and signs bundles | consumer replicas, partitioned by organization | `bundle-signing`, `time-ticket` |
 | `revocation-issuer` | Validates approvals, enforces rate limits, signs revocation tokens | exactly 1 active replica (leader lease) | `revocation-signing` |
@@ -361,6 +361,48 @@ Public hostnames (each its own TLS certificate and rate limit profile):
 | `bundles.<domain>` | Object storage, presigned GET only | Internet |
 
 Fleet's own UI and admin API are **not** published; Paddock reaches them on the internal network.
+
+**Edge headers, body limits and server timeouts** *(ADR 0051 decision 6, plan M12h §3.6)*. Every site imports the
+Caddy snippet `hardening_headers` (`deploy/compose/caddy/guards.caddy`): `X-Content-Type-Options: nosniff`,
+`Strict-Transport-Security: max-age=31536000; includeSubDomains` and `X-Frame-Options: DENY` replace whatever an
+upstream sends (Authentik's flows and Fleet's endpoints are never framed), and `Referrer-Policy:
+strict-origin-when-cross-origin` is added where the upstream sends none (the admin API keeps its `no-referrer`). The
+edge refuses a body above the site's limit with 413 before it reaches the upstream:
+
+| Site | Request body limit |
+| --- | --- |
+| `admin.` | 2 MiB; 256 MiB for the platform uploads (`PUT`/`POST` on `/api/platform/v1/agent-releases/*` and `/api/v1/software-packages`) |
+| `auth.` | 1 MiB |
+| `device.` | 1 MiB (the gateway's own largest limit is `POST /v1/events` at 1 MiB) |
+| `bundles.` | 1 MiB; 33 MiB for the presigned escrow `PUT` of a LUKS header |
+| `fleet.` | 64 MiB (Fleet's documented maximum) |
+
+The api, the gateway and the escrow-reader bound a request with `ReadHeaderTimeout` 10 s, `ReadTimeout` 60 s,
+`WriteTimeout` 120 s and `IdleTimeout` 120 s, so a slow body cannot hold a goroutine; the agent release uploads extend
+their read and write deadlines to 30 minutes per request (`http.ResponseController`), and the audit export download
+sets its write deadline per chunk: 60 s per write, in total max(10 min, size at 64 KiB/s), at most 24 h. Rate limits
+per hostname: the api limits `/api/auth/*` per client address and the admin API per session or token, the gateway
+limits devices per address and per key (ADR 0051 decision 3, `PADDOCK_RATELIMIT_*`, `docs/operations/install.md`
+section 4); 429 `rate_limited` with `Retry-After`.
+
+**Networks by trust zone** *(ADR 0051 decision 1, plan M12h §3.1)*. The control-plane host has no flat network; a
+compromised container reaches only the zones it is a member of:
+
+| Network | Members | Why |
+| --- | --- | --- |
+| `edge` (fixed subnet `PADDOCK_EDGE_SUBNET`, default `172.28.0.0/24`) | Caddy (alone of its networks, fixed address `PADDOCK_EDGE_CADDY_ADDRESS`, default `172.28.0.10`, with the public names as aliases), `api`, `gateway`, `authentik-server`, `fleet`, the bundles' object storage, and the roles that call the public names through Caddy: `worker` (Authentik's API, the certificate probe, Fleet's API), `escrow-reader` and `revocation-issuer` (the step-up issuer's discovery) | What Caddy reaches; no datastore |
+| `data` | PostgreSQL, Valkey, RabbitMQ, OpenBao, the object storage, every Paddock role, `backup`, `unsealer`, Prometheus, the audit writer of a single-host stack | The datastores; never Caddy, Fleet or Authentik |
+| `authentik` (internal) | `authentik-server`, `authentik-worker`, Authentik's PostgreSQL | Authentik's own database, no route out |
+| `fleet` (internal) | Fleet, its MySQL and Redis, the Fleet dump job | Fleet's own datastores |
+| `escrow` (internal) | `api`, `escrow-reader` | The decrypt call only |
+| `audit-index`, `audit-store` | the audit domain and its readers | unchanged |
+
+The roles trust `X-Paddock-Client-IP` from Caddy's address alone (`PADDOCK_TRUSTED_PROXY_CIDRS`); in production the
+edge's internal ranges default to the edge subnet. RabbitMQ's management API listens on the container's loopback
+address only (`rabbitmqctl` works inside, port 15672 answers no container). `./paddock check` fails a datastore on
+`edge`, Caddy on any other network, Fleet, Caddy or Authentik on `data`, a trusted proxy other than Caddy,
+`private_ranges` as internal ranges and a management API that is not on loopback; it warns while the edge admin allow
+list admits every address. The development and lab stacks use the same networks.
 
 **Separation of duties for audit (concept, "Audit log"):** the audit domain runs on a separate host
 with separate credentials. The control-plane host holds only a RabbitMQ credential that can **publish**
@@ -719,6 +761,23 @@ flowchart LR
 > advance and complete record `StateChanged` for the organization, so the compiler renders again (halt and resume keep
 > the devices inside the wave). The rest of the flow is unchanged.
 
+> **Amendment 2026-11-09 (M13c, ADR 0033 amendment, plan M13c §3.1 and its amendments A10-12 to A10-19):** the
+> section `software_assignments` is rollout-able too. The rollout records, per staged assignment key, the assignment's
+> row, catalog entry and target IDs (`config_rollout.staged_assignments`), and the overlay renders a device outside the
+> wave from the before items matched by those IDs, so a renamed user or group does not move the overlay. Catalog
+> entries and sources are never staged (immediate); an entry that still has assignments is never deleted (409
+> `in_use`, also in a declarative document), and while a rollout is open an entry named by a staged assignment is
+> neither renamed nor deleted (409 `rollout_conflict`); the revert of the open rollout's change set removes the
+> assignments first and then the entry it created. A failed software status of a staged entry counts as a failed
+> resource `software:<entry id>`. The accounting of every configuration rollout follows one state table (plan M13c
+> amendment A10-19, identical in plan M11): a wave advances only after an observed success, after `min_wave_minutes`
+> from the first apply of a device that joined in the wave, and when the share of applied devices reaches
+> `wave_success_threshold_percent` or no device still waits for its maintenance window; a device waiting for its window
+> is pending, and after a resume every device whose failure was discarded holds the rollout until it has applied
+> successfully (`awaiting_retry`). A wave without progress for `stall_warning_hours` records `config_rollout.stalled`.
+> The approved users of an approval-required package (§12.5) are rendered after the overlay, so an approval never
+> reaches a device by another way.
+
 ### 7.2 Bundle format
 
 The envelope is **DSSE** (Dead Simple Signing Envelope, Apache-2.0 specification), payload type
@@ -847,18 +906,44 @@ except nonces can be rebuilt from PostgreSQL (`paddock-server admin rebuild-cach
 are used (strings, hashes, `SET NX EX/PX`, `MGET`, `EXPIRE`), no modules, so ElastiCache for Valkey
 is a drop-in target.
 
-| Key | Type | Written by | Read by | TTL |
-| --- | --- | --- | --- | --- |
-| `dk:<key_id>` | hash (device_id, org, status, public key) | worker | gateway | none |
-| `nonce:<device_id>:<nonce>` | string | gateway (`SET NX EX 600`) | gateway | 600 s |
-| `bp:<device_id>` | string (version, sha256, object key) | compiler | gateway | none |
-| `cmd:<device_id>` | hash command_id → signed envelope | worker, revocation-issuer | gateway | expired fields removed by a cleanup job |
-| `tt:<org>` | string (signed time ticket) | compiler | gateway | 30 min |
-| `ar:<org>` | string (rollout state) | worker | gateway | none |
-| `seq:<device_id>` | string counter | worker | gateway | none |
-| `sd:<device_id>` | string (last delivered seq) | gateway | gateway | none |
-| `et:<token_hash>` | hash (enrollment token: org, status, uses) | api (right after commit, best effort) + worker (NOTIFY/reconcile) | gateway | token expiry |
-| `lock:compile:<device_id>`, `lock:<job>` | string | compiler, scheduler | – | 30 s |
+| Key | Type | Written by | Read by | TTL | Users |
+| --- | --- | --- | --- | --- | --- |
+| `dk:<key_id>` | hash (device, org, status, public key) | worker | gateway | none | worker RW, gateway R |
+| `seq:<device_id>` | string counter | worker (restore), gateway (Lua) | gateway | none | worker RW, gateway RW |
+| `sd:<device_id>` | string (last delivered seq) | gateway, worker (Lua) | gateway | none | worker RW, gateway RW |
+| `nonce:<device_id>:<nonce>` | string | gateway (`SET NX EX`) | gateway | 600 s | gateway RW |
+| `rl:<class>:<key>:<window>` | string counter | api, gateway | api, gateway | two windows | api RW, gateway RW |
+| `bp:<device_id>` | hash (version, sha256, object key) | compiler | gateway | none | compiler RW, gateway R |
+| `tt:<org>` | string (signed time ticket) | compiler | gateway | none | compiler RW, gateway R |
+| `et:<token_hash>` | hash (enrollment token) | api (right after commit, best effort), worker (NOTIFY/reconcile) | gateway | token expiry | api RW, worker RW, gateway R |
+| `enr:<enrollment_id>` | hash (enrollment request) | gateway, worker | gateway | 7 days | worker RW, gateway RW |
+| `cmd:<device_id>` | hash command_id → signed envelope | worker, revocation-issuer; api and worker delete | gateway | expired fields removed on read | worker RW, revocation_issuer RW, api RW, gateway R |
+| `cres:<command_id>` | string (device, status) | gateway, api | gateway | 30 days | gateway RW, api RW |
+| `esc:<escrow_id>` | string (device, status) | worker | gateway | 24 h | worker RW, gateway R |
+| `diag:<command_id>` | string (claim) | gateway | gateway | 24 h | gateway RW |
+| `hb:<device_id>` | string (heartbeat claim) | worker | worker | 60 s | worker RW |
+| `au:<device_id>` | string (requested agent version) | worker | gateway | 24 h after the request | worker RW, gateway R |
+| `ar:current` | string (agent rollout offer) | worker | gateway, api | none | worker RW, gateway R, api R |
+| `stepup:<jti>` | string (raw step-up ID token) | api | api | step-up window | api RW |
+| `stepup-uses:<jti>` | string counter | escrow-reader | escrow-reader | token expiry | escrow_reader RW |
+| `revocation-jti:<jti>` | string (request) | revocation-issuer | revocation-issuer | 48 h | revocation_issuer RW |
+| `sess:<sid>` | string (session record) | api; api and worker revoke | api | session lifetime | api RW, worker RW |
+| `acct-sess:<account>` | set of sids | api; api and worker revoke | api, worker | longest session | api RW, worker RW |
+| `sess-gen` | string counter | api, `admin end-sessions` (worker) | api | none | api RW, worker RW |
+| `mcp-bind:<sha256>:<auth_time>` | string (MCP binding) | api; api and worker revoke | api | binding lifetime | api RW, worker RW |
+| `acct-mcp-bind:<account>` | set of bindings | api; api and worker revoke | api, worker | binding lifetime | api RW, worker RW |
+| `mcp-chain:<sha256>:<auth_time>` | set of sids | api; api and worker revoke | api | binding lifetime | api RW, worker RW |
+| `mcp-used:<sha256>` | string (login token marker) | api | api | token lifetime | api RW |
+| `ipal:ver` | string counter (IP allow list version) | api, `admin allowlist` (worker) | api | none | api RW, worker RW |
+
+**Users.** Valkey has one ACL user per role that opens a client — `api`, `gateway`, `worker` (also the host
+tooling `paddock-server admin …`, which runs in the worker container), `compiler`, `escrow_reader`,
+`revocation_issuer` — plus `healthcheck` for the container health check; `default` is off (ADR 0051, plan M12h §14).
+A user gets `~<pattern>` (RW) on the keys its code writes and `%R~<pattern>` (R) on the keys it only reads, and
+`-@all` plus exactly the commands its code issues, including those inside its Lua scripts; no user holds `~*`, a
+command category, or an administrative command. The entrypoint renders the ACL file from
+`deploy/compose/valkey/users.acl.tmpl` with the SHA-256 of each role's secret `valkey_<user>_password`, so no plaintext
+password is stored. The development and CI stack adds the user `acceptance` for the acceptance helpers.
 
 Deployment: one primary + one replica with Sentinel in production; AOF `everysec`. Loss of Valkey
 stops check-ins until it is back and rebuilt (devices keep working, C2); loss of nonces only reopens
@@ -1301,6 +1386,23 @@ flowchart TB
 
 Everything is Go, `CGO_ENABLED=0`, statically linked, `linux/amd64` and `linux/arm64`.
 
+**Sandboxed unit (ADR 0051 decision 5, plan M12h decision 13).** `paddock-supervisor.service` and
+`paddock-disk-setup.service` run with `LockPersonality`, `RestrictRealtime`, `ProtectKernelLogs`, `PrivateTmp` and
+`SystemCallFilter=~@obsolete @cpu-emulation` (ADR 0051 amendment 2026-11-08). The agent and every tool it starts
+(apt, dpkg, cryptsetup, visudo, `paddock-revoke`) inherit them; transient units started with `systemd-run`
+(supervisor upgrade, uninstall helper, desktop notifications) do not. `ProtectClock`, `RestrictSUIDSGID`,
+`ProtectHostname`, `NoNewPrivileges`, `~@mount`, `ProtectKernelTunables`, `SystemCallArchitectures=native` and
+`ProtectSystem` stay off; the unit file names why. None of the directives touches the A/B switch, the self-test or
+the rollback (§11.2).
+
+**Parent rule for managed paths (ADR 0051 AG-1, plan M12h decision 12).** Every write, rename and delete of a
+reconciler (files, software, login, sudoers quarantine) and of the uninstall resolves the parent directory component
+by component from `/` with `O_PATH|O_NOFOLLOW|O_DIRECTORY` and acts relative to the final directory descriptor
+(`openat`, `renameat`, `unlinkat`). A component that is a symlink or not a directory, not owned by root, writable by
+others (except the sticky root-owned `/tmp` and `/var/tmp`), writable by a group other than gid 0, or group-writable
+and carrying an access ACL (PDK-963) refuses the operation: the resource fails with `parent_not_trusted`, nothing is
+written. Writes into the agent's own layout (`/var/lib/paddock`, `/etc/paddock`) keep the plain atomic write.
+
 ### 11.2 Update with A/B, self-test, watchdog (design contract 1–6)
 
 ```mermaid
@@ -1397,6 +1499,15 @@ them; any change it made is reverted and reported as `config.playbook_touched_pr
 > compiler merges the catalog's `hold` and `required pinned` results into `updates.holds`. Removals need a check-in
 > within 15 minutes; a dpkg lock is retried at the next drift pass; every operation is simulated first and refused
 > when it would remove other packages.
+
+> **Amendment 2026-11-09 (M13c, plan M13c decisions 5 to 7):** the `software` section carries `windows`, the union of
+> the maintenance windows of the device's groups (only groups with a window count; none means no restriction).
+> Outside every window the software reconciler still writes sources, keyrings, pins, Flatpak remotes and masks, but
+> defers the installs, reinstalls, moves to a pinned version and removals of the policy, APT and Flatpak, and reports
+> them `pending/outside_window`; the first drift pass inside a window runs them. A package of an `urgent` assignment is
+> never deferred; a user's self-service operations are never deferred. A timezone the device does not know is
+> evaluated in UTC (`window_timezone_unknown` in the status message). The repository credential file
+> `/etc/apt/auth.conf.d/paddock-repo.conf` of plan M13c decision 15 is not written yet (PDK-812).
 
 > **Amendment 2026-11-02 (M11, ADR 0033):** a bundle with `mode: report_only` is **planned, not applied**. The applier runs
 > `Plan` for every resource of the bundle and for stale managed files, and never calls a reconciler's `Apply`, the deny
@@ -1698,6 +1809,41 @@ Software catalog (M13a, ADR 0042): catalog entries with package names per distri
 assigned per device group with the intents required, uninstall, hold and forbid; `required latest` is installed and
 moves with the update runs, `required pinned` is installed at and held to a version; a locally removed required
 package is reinstalled and reported (`device.software_reinstalled`).
+
+Software rollouts, maintenance windows and approvals (M13c, PDK-808 to PDK-810): an assignment change rolls out in
+waves and halts on software failures (§7.1); a device group's maintenance window defers the policy's installs and
+removals outside it, and an `urgent` assignment (reason and step-up) bypasses the window (§11.3, RR-118). A catalog
+entry with `approval: required` offers its available package only to users an administrator approved: the device
+reports a user's request as `software.request`, the worker opens a `software_request` (one per device, entry and user
+while open, valid 30 days), an organization administrator approves or denies it with a reason, and the worker's
+request round expires what is left open or no longer holds. Until the agent release with the request flow (PDK-811)
+the compiler gives no agent an approval-required package. Packages stored in Paddock, the patch compliance report and
+the shared catalog follow (plan M13c §3.4 to §3.6).
+
+> **Amendment 2026-11-11 (M13c, architect decision A10-27):** the request flow on the device ships with agent
+> `0.1.0-alpha.10`; from that release on an agent receives approval-required packages, an older agent receives
+> neither the package nor the fields below. The bundle's software package gains the additive field
+> `denied[]{user, reason}` (ADR 0013) next to `approval` and `approved[]`: the users of the audience whose latest
+> request for that device and entry an administrator denied less than 24 hours ago, each with the administrator's
+> reason. The reason is untrusted plain text of at most 500 characters; the agent shows a denial only to the user
+> it names (the caller's peer UID on the self-service socket) and refuses that user's new request with 409
+> `denied` while the bundle names them. The bundle carries no expiry: the compiler's reconcile loop recompiles a
+> device once a denial's 24 hours ended (lock ends of the last 7 days; `device.denial_lock_checked_at` holds the
+> render time of the device's last compile and is written only for the bundle sequence that compile left). A device
+> whose bundle is blocked keeps an expired denial until the compile that clears the block. The user's
+> justification (at most 500 characters of plain text) is stored with the request and shown to the organization's
+> administrators, operators and auditors as text only; it never enters audit params or logs. Plan M13c, amendment
+> 2026-11-11.
+
+> **Amendment 2026-11-11 b (M13c, PDK-811 and PDK-811b):** on the device a user asks through the self-service
+> socket (`POST`/`DELETE /v1/apps/{id}/request`, ADR 0049 amendment 2026-11-11); the agent keeps the pending request
+> (entry, user, time; no justification) in its root-only self-service state until the bundle reflects a decision
+> or 30 days passed. The bundle's software section gains the additive flag `request_withdraw`, rendered with every
+> approval-required package: only while the applied bundle carries it does the agent report a user's withdrawal
+> as the new device event `software.request_withdrawn` (ADR 0024 sender rule); without it the withdrawal stays on
+> the device. The server records the event as `device.software_request_withdrawn` and sets the device's open
+> request for that entry and user to `withdrawn`. Making that close independent of the order in which event
+> batches are processed is planned for 0.1.0-alpha.11 (plan M13c, amendment 2026-11-11 c; RR-135).
 
 ### 12.6 Dead man's switch (F14)
 
@@ -2174,6 +2320,17 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > **Amendment 2026-10-24 (M13a, ADR 0042):** new tables in the database `paddock`: `software_source`,
 > `software_catalog_entry`, `software_assignment`, `device_software_status`; new column `device_status.software_digest`.
 
+> **Amendment 2026-11-09 (M13c, plan M13c decisions 4, 7 and 8):** new organization-scoped tables
+> `device_group_maintenance_window` (one window per device group: ISO weekdays, start minute, duration, IANA timezone;
+> migration `00120`) and `software_request` (catalog entry, device, user name and user, state `requested`, `approved`,
+> `denied`, `expired` or `withdrawn`, requested and expiry times, the decision with its reason and the entry's
+> approval epoch; no justification text; migration `00119`), both with the tenant policy. New columns:
+> `software_catalog_entry.approval` and `approval_epoch`, `software_assignment.urgent`, `config_rollout`
+> `staged_assignments` (migration `00117`), `wave_success_threshold_percent`, `stall_warning_hours` and the wave
+> bookkeeping (`wave_first_applied_at`, `wave_applied`, `wave_outstanding`, `wave_progress_at`, `stall_warned_at`),
+> `organization_rollout_settings` `wave_success_threshold_percent` and `stall_warning_hours`. The attention view gains
+> the kind `software_requests_open`.
+
 > **Amendment 2026-11-06 (M12, ADR 0048, ADR 0031 amendment 2026-11-04, plan M12):** new organization-scoped table
 > `device_diagnostics` (RLS with the tenant policy; `paddock_api` selects, inserts and updates, `paddock_worker` selects,
 > updates and deletes; migration `00103`): one row per `collect_status` request, its ID the command ID, with the
@@ -2295,6 +2452,29 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > carries `rollout`, `rollout_id`, `urgent_reason`, `reverts_change_set_id`, `reverted_by` and `before_available`, and
 > `EffectiveConfig` carries `rollout`. Guide: `docs/operations/configuration-rollouts.md`.
 
+> **Amendment 2026-11-11 (M13c, architect decision A10-27):** `software_request` gains `justification` (plain text,
+> at most 500 characters, no control characters except newlines; migration `00123`), which replaces "no
+> justification text" of the amendment 2026-11-09; `device` gains `denial_lock_checked_at`, and `software_request`
+> the partial index `software_request_denied_idx` on denied requests (migration `00124`).
+
+> **Amendment 2026-11-09 (M13c, plan M13c §6):** `PUT`/`GET /api/v1/config` carry the sections `software_sources`
+> (a change needs a step-up; an API token's apply is refused with 403 `step_up_required`, the plan names it in
+> `requires_step_up`), `software_catalog` (with `approval`) and `software_assignments`, and a device group's
+> `maintenance_window`. New endpoints: `GET`/`PUT`/`DELETE /api/v1/device-groups/{id}/maintenance-window`
+> (`org_admin`, `org_operator`; audited as `device_group.maintenance_window_changed` and `_removed`), `GET
+> /api/v1/software-requests` (list contract; filters `state`, `catalog_entry_id`, `device_id`; search `username`), `GET
+> /api/v1/software-requests/{id}`, `POST /api/v1/software-requests/{id}/approve` (optional reason) and `…/deny` (reason
+> required), `org_admin`, no step-up of their own (Q15), audited as `software_request.approved` and `_denied`, 409
+> `invalid_state` unless the request is open and still holds. A software assignment takes `urgent` with a reason and a
+> step-up. `ConfigRollout` gains `wave_success_threshold_percent`, `stall_warning_hours`, `wave_first_applied_at`,
+> `stalled_since` and the counts `waiting` and `awaiting_retry`; the rollout device list gains `waiting_for_window` and
+> `awaiting_retry` (also a filter). Guide: `docs/operations/software.md`.
+
+> **Amendment 2026-11-11 (M13c, architect decision A10-27):** `SoftwareRequest` carries `justification` (untrusted
+> text, at most 500 characters; list and detail). The reason of `…/approve` and `…/deny` is refused with 400
+> `invalid_request` when it holds a control character other than a newline (a tab included); a denial's reason
+> reaches the requesting user's device in the bundle. A decision queues a compile of the request's device.
+
 > **Amendment 2026-11-06 (M12, ADR 0048, ADR 0031 amendment 2026-11-04, plan M12):** new endpoints
 > `POST`/`GET /api/v1/devices/{id}/diagnostics` (request with a reason, `org_admin` and `org_operator`; the device's list),
 > `GET /api/v1/diagnostics` and `GET /api/v1/diagnostics/{id}` (the organization's bundles, the same two roles, never
@@ -2339,6 +2519,11 @@ See §6.8; contract in `api/openapi/device.yaml`; Go types shared with the agent
 > `collect_status` command held for the device, 409 `already_uploaded` for a second announcement, 413 and 429. An absent
 > `key_version` means version 1 of the `escrow-wrap` key (additive change, ADR 0013). The gateway holds no database and
 > hands the announcement to the worker.
+
+> **Amendment 2026-11-09 (M13c, plan M13c decision 9, ADR 0013):** new event type `software.request` with `{user,
+> entry_id}`: a user of the device asks for an available application whose entry requires approval. The worker records
+> `device.software_requested` with these two fields only (any other field a device sends is dropped) and opens the
+> request. The bundles host's `/apt/*` route of plan M13c decision 14 is not served yet (PDK-812).
 
 ### 17.3 Git export *(not scheduled)*
 

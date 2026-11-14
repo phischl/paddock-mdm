@@ -58,6 +58,8 @@ type roleDirectory struct {
 	mu       sync.Mutex
 	members  map[string][]ports.IdentityUser
 	listings map[string]int
+	// calls counts the listings of role groups, each of which may read several groups.
+	calls int
 	// readable and usersVisible answer the directory probe (PDK-424); probes counts its reads.
 	readable     bool
 	usersVisible bool
@@ -86,11 +88,16 @@ func (d *roleDirectory) UsersVisible(context.Context) (bool, error) {
 	return d.usersVisible, nil
 }
 
-func (d *roleDirectory) RoleGroupUsers(_ context.Context, name string) ([]ports.IdentityUser, error) {
+func (d *roleDirectory) RoleGroupsMembers(_ context.Context, names []string) (map[string][]ports.IdentityUser, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.listings[name]++
-	return d.members[name], nil
+	d.calls++
+	out := map[string][]ports.IdentityUser{}
+	for _, name := range names {
+		d.listings[name]++
+		out[name] = d.members[name]
+	}
+	return out, nil
 }
 
 // TestAdminAccountsRoundSharesTheListings (PDK-111): the round admin-accounts lists each role group of an organization
@@ -117,6 +124,9 @@ func TestAdminAccountsRoundSharesTheListings(t *testing.T) {
 		if n := dir.listings[organization.RoleGroup(slug, g)]; n != 1 {
 			t.Errorf("%s listed %d times, want once", g, n)
 		}
+	}
+	if dir.calls != 1 {
+		t.Errorf("%d role group listings, want one for the three groups (PDK-570)", dir.calls)
 	}
 	var n int
 	if err := f.super.QueryRow(ctx, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'admin.role_granted'

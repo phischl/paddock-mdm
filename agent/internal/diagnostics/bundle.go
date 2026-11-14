@@ -16,7 +16,8 @@ const bundleNote = "Redacted rendering of the applied bundle.dsse: every field t
 // 2026-11-05): a path of JSON names from the payload root, array elements share the path of their array, ".*" stands
 // for every key of a map and "resources.spec:<type>" for the spec of a resource of that type. The server is ahead of
 // the agent during every staged rollout, so a field this agent does not know — a new secret among them — must fail
-// closed. inventory.enroll_secret and resources.spec:file.content are deliberately absent.
+// closed. inventory.enroll_secret, software.repository.password and resources.spec:file.content are deliberately
+// absent, and so is software.packages.denied.reason: an administrator's free text about a person (M13c decision 9).
 func publicBundleFields() map[string]bool {
 	fields := []string{
 		"schema_version", "bundle_version", "device_id", "organization_id", "issued_at", "mode",
@@ -35,9 +36,19 @@ func publicBundleFields() map[string]bool {
 		"hostname.name",
 		"watch.units",
 		"software.sources.slug", "software.sources.uris", "software.sources.suites", "software.sources.components",
-		"software.sources.architectures", "software.sources.keyring", "software.sources.fingerprint",
+		"software.sources.architectures", "software.sources.keyring", "software.sources.fingerprint", "software.sources.kind",
 		"software.packages.package", "software.packages.intent", "software.packages.version", "software.packages.source",
-		"software.packages.catalog_entry_id", "software.packages.superseded_hold",
+		"software.packages.catalog_entry_id", "software.packages.superseded_hold", "software.packages.icon_sha256",
+		// The audience, the users of a user-scope Flatpak application and the approved users name user names as
+		// resources.spec:sudo.entries.username and login.locked_users do (plan M13b decision 7, A10-11, M13c decision 9).
+		"software.packages.flatpak_ref", "software.packages.scope", "software.packages.audience.all",
+		"software.packages.audience.users", "software.packages.users", "software.packages.approval",
+		"software.packages.approved", "software.packages.denied.user",
+		"software.packages.urgent", "software.request_withdraw", "software.windows.days", "software.windows.start_minute",
+		"software.windows.duration_minutes", "software.windows.timezone",
+		// The repository user is the same constant for every organization (app.RepositoryUsername), so it reveals
+		// nothing; software.repository.password is the organization's read credential and is deliberately absent.
+		"software.repository.host", "software.repository.username",
 		"resources.spec:time.ntp",
 		"resources.spec:file.path", "resources.spec:file.mode", "resources.spec:file.owner", "resources.spec:file.group",
 		"resources.spec:file.content_sha256",

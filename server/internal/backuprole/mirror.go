@@ -69,8 +69,9 @@ type guardPlan struct {
 	drop map[string]bool
 	// hold holds the repositories (with a trailing slash) the target keeps although the local set lacks them.
 	hold map[string]bool
-	// unknown is true when the target holds a repository path no key names: nothing is deleted on it this round.
-	unknown bool
+	// unknown holds the repositories (with a trailing slash) no key names: they are held and the target run fails,
+	// but every other deletion goes on (decisions-alpha10 A10-25; before, one such path stopped all of them).
+	unknown []string
 }
 
 // mirrorSet makes dst follow the local set (plan M15, amendment 2026-11-05, A3; the order is binding). It refuses a
@@ -82,12 +83,13 @@ type guardPlan struct {
 // checks the sizes of what it copied (step 4), writes manifest.json when the target's differs (step 5) and only
 // then deletes what the local expire would have removed from the target's own copy (step 6). It returns the number
 // of objects the target keeps although the local set lacks them (held). Once hooks.stop reports true after a
-// copied file it ends with errBudget before the manifest; it stops as soon as ctx ends.
+// copied file it ends with errBudget before the manifest; it stops as soon as ctx ends. The set it mirrors is idx and
+// the manifest.json idx indexed; a newer manifest ends it with errSetMoved (decisions-alpha10 A10-26).
 func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pushed map[string]fileInfo,
 	ret retention, hooks mirrorHooks) (int, error) {
-	local, err := repo.ReadFile(backupset.ManifestPath)
+	local, err := indexedManifest(repo, idx)
 	if err != nil {
-		return 0, fmt.Errorf("backup set: %w", err)
+		return 0, err
 	}
 	own, err := backupset.Parse(local)
 	if err != nil {
@@ -115,7 +117,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 	}
 	hooks.tick()
 	facts := newIndexFacts(idx)
-	plan, err := guard(ctx, dst, facts, have, ret)
+	plan, err := guard(ctx, dst, facts, have, ret, hooks.tick)
 	if err != nil {
 		return 0, err
 	}
@@ -169,10 +171,7 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		return 0, err
 	}
 	if !ret.manifestOK {
-		if plan.unknown {
-			return held, errUnknownPath
-		}
-		return held, nil
+		return held, plan.unknownErr()
 	}
 	if !found || sha256.Sum256(remote) != sha256.Sum256(local) {
 		// A3: manifest.json follows a verified copy of a mirror still running; one the stall watchdog or the round
@@ -194,9 +193,6 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		}
 	}
 
-	if plan.unknown {
-		return held, errUnknownPath
-	}
 	hooks.phase(phaseDelete)
 	for _, p := range drop {
 		if err := ctx.Err(); err != nil {
@@ -207,12 +203,42 @@ func mirrorSet(ctx context.Context, repo *os.Root, idx repoIndex, dst Target, pu
 		}
 		hooks.tick()
 	}
-	return held, nil
+	return held, plan.unknownErr()
+}
+
+// indexedManifest reads the local manifest.json, which must still be the file idx indexed: a lane runs beside later
+// rounds, and their manifest may name files its index lacks.
+func indexedManifest(repo *os.Root, idx repoIndex) ([]byte, error) {
+	f, err := repo.Open(backupset.ManifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("backup set: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("backup set: %w", err)
+	}
+	if !sameFile(fileInfo{size: info.Size(), mod: info.ModTime()}, idx[backupset.ManifestPath]) {
+		return nil, errSetMoved
+	}
+	local, err := io.ReadAll(io.LimitReader(f, info.Size()+1))
+	if err != nil {
+		return nil, fmt.Errorf("backup set: %w", err)
+	}
+	return local, nil
+}
+
+// unknownErr is errUnknownPath naming the repositories no key names, or nil without one.
+func (g guardPlan) unknownErr() error {
+	if len(g.unknown) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", errUnknownPath, strings.Join(g.unknown, ", "))
 }
 
 // judge applies step 6's verdicts to every object of the step-1 listing (have) that the local set lacks and the
-// step-4 listing (after) still holds. It returns the number of held objects and the objects to delete; with an
-// unknown path every deletable object counts as held instead. It stops as soon as ctx ends.
+// step-4 listing (after) still holds. It returns the number of held objects and the objects to delete. It stops as
+// soon as ctx ends.
 func judge(ctx context.Context, facts *indexFacts, plan guardPlan, ret retention,
 	have, after map[string]int64) (int, []string, error) {
 	newest := newestKindFiles(have)
@@ -233,10 +259,6 @@ func judge(ctx context.Context, facts *indexFacts, plan guardPlan, ret retention
 		case keepHeld:
 			held++
 		case drop1:
-			if plan.unknown {
-				held++
-				continue
-			}
 			drop = append(drop, p)
 		}
 	}
@@ -310,9 +332,9 @@ func (f repoFile) segment() string {
 // its copy (G2); else the set is shrunk. A repository path the local set lacks entirely is the active key's (shrunk),
 // a retired key's (removed once the local expire rule holds on the target's own copy, else held), or one no key
 // names (held, unknown_path) (G3). OpenBao snapshots, Fleet dumps, escrowed headers and WAL never shrink the set (G4).
-// It stops as soon as ctx ends.
+// The walk of a retired repository for its newest file reports progress to tick. It stops as soon as ctx ends.
 func guard(ctx context.Context, dst Target, facts *indexFacts, have map[string]int64,
-	ret retention) (guardPlan, error) {
+	ret retention, tick func()) (guardPlan, error) {
 	idx := facts.idx
 	plan := guardPlan{drop: map[string]bool{}, hold: map[string]bool{}}
 	lacking := map[string]bool{}
@@ -357,7 +379,7 @@ func guard(ctx context.Context, dst Target, facts *indexFacts, have map[string]i
 				plan.hold[dir] = true
 				continue
 			}
-			newest, err := dst.Newest(ctx, dir)
+			newest, err := newestProgress(ctx, dst, dir, tick)
 			if err != nil {
 				return guardPlan{}, err
 			}
@@ -373,7 +395,7 @@ func guard(ctx context.Context, dst Target, facts *indexFacts, have map[string]i
 			plan.hold[dir] = true
 		default:
 			plan.hold[dir] = true
-			plan.unknown = true
+			plan.unknown = append(plan.unknown, dir)
 		}
 	}
 	return plan, nil

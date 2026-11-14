@@ -8,8 +8,10 @@ services:
     environment:
       PADDOCK_HTTPS_PORT: "443"
     volumes: !override
+      # The development Caddyfile imports snippets of guards.caddy, so both come from the same tree: the upgrade gate
+      # runs the previous release's bundle with this overlay, whose own guards.caddy lacks the newer snippets.
       - ${PADDOCK_CI_DIR}/../../compose/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./caddy/guards.caddy:/etc/caddy/guards.caddy:ro
+      - ${PADDOCK_CI_DIR}/../../compose/caddy/guards.caddy:/etc/caddy/guards.caddy:ro
       - ./caddy/entrypoint.sh:/paddock/entrypoint.sh:ro
       - caddy-data:/data
       - caddy-config:/config

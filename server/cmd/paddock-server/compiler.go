@@ -62,7 +62,7 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 		return err
 	}
 	defer pool.Close()
-	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password})
+	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Username: vkCfg.Username, Password: vkCfg.Password})
 	if err != nil {
 		return err
 	}
@@ -81,6 +81,8 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 		TicketInterval:    ticketInterval,
 		FleetURL:          fleetURL,
 		FleetEnrollSecret: fleetEnrollSecret,
+		// The read credentials of the Paddock repositories (plan M13c decision 15): decrypt on software-repo-credential.
+		Credentials: signer,
 	})
 
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}

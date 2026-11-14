@@ -112,6 +112,31 @@ func TestLiveAuthentik(t *testing.T) {
 	if members, err := c.RoleGroupsUsers(ctx, roleGroups); err != nil || len(members) != 1 || members[0].PK != pk {
 		t.Fatalf("RoleGroupsUsers: %+v, %v", members, err)
 	}
+	// The same listing keyed by group, with each user's groups (PDK-570).
+	byGroup, err := c.RoleGroupsMembers(ctx, roleGroups)
+	if _, missing := byGroup[roleGroups[1]]; err != nil || len(byGroup) != 3 || missing || len(byGroup[roleGroups[0]]) != 0 ||
+		len(byGroup[roleGroups[2]]) != 1 || byGroup[roleGroups[2]][0].PK != pk {
+		t.Fatalf("RoleGroupsMembers: %+v, %v", byGroup, err)
+	}
+	// The organization's device login groups with their members in one listing searched by the name prefix (PDK-570).
+	deviceGroup := organization.DeviceLoginGroup(slug, uuid.New())
+	dpk, err := c.EnsureGroup(ctx, slug, deviceGroup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AddMember(ctx, dpk, pk); err != nil {
+		t.Fatal(err)
+	}
+	if listed, err := c.DeviceLoginGroups(ctx, slug); err != nil || len(listed) != 1 || listed[deviceGroup].PK != dpk ||
+		!slices.Equal(listed[deviceGroup].Members, []string{pk}) {
+		t.Fatalf("DeviceLoginGroups: %+v, %v", listed, err)
+	}
+	if err := c.DeleteGroup(ctx, dpk); err != nil {
+		t.Fatal(err)
+	}
+	if listed, err := c.DeviceLoginGroups(ctx, slug); err != nil || len(listed) != 0 {
+		t.Fatalf("DeviceLoginGroups after the delete: %+v, %v", listed, err)
+	}
 	if err := c.RemoveMember(ctx, adminsPK, pk); err != nil {
 		t.Fatal(err)
 	}

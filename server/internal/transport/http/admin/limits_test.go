@@ -110,8 +110,8 @@ func (b *observedBody) Read(p []byte) (int, error) {
 	return b.Reader.Read(p)
 }
 
-// TestUploadDeadlines covers plan M8s decision 33: the agent release uploads extend the read and write deadlines to
-// ten minutes before they read the body; other requests keep the server's timeouts.
+// TestUploadDeadlines covers plan M8s decision 33 and plan M12h decision 15: the agent release uploads extend the read
+// and write deadlines to 30 minutes before they read the body; other requests keep the server's timeouts.
 func TestUploadDeadlines(t *testing.T) {
 	e := newEnv(t)
 	root := e.platformSession()
@@ -141,18 +141,18 @@ func TestUploadDeadlines(t *testing.T) {
 		sig  []byte
 	}{
 		"artifact": {base + "/artifacts/amd64", bin, minisign.SignWithComments(e.release, bin, releasesig.Comment(v, "amd64"), "")},
-		"package":  {base + "/packages/paddock-agent/amd64", deb, minisign.Sign(e.release, deb)},
+		"package":  {base + "/packages/paddock-agent/amd64", deb, minisign.SignWithComments(e.release, deb, releasesig.Comment(v, "amd64"), "")},
 	} {
 		start := time.Now()
 		rec, ob := send(c.path, c.body, c.sig)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s upload: %d %s", name, rec.Code, rec.Body)
 		}
-		if !ob.read || ob.deadline.Before(start.Add(9*time.Minute)) {
-			t.Fatalf("%s: read deadline %v when the body was first read, want about ten minutes after %v", name, ob.deadline, start)
+		if !ob.read || ob.deadline.Before(start.Add(29*time.Minute)) {
+			t.Fatalf("%s: read deadline %v when the body was first read, want about 30 minutes after %v", name, ob.deadline, start)
 		}
-		if rec.write.Sub(start) < 9*time.Minute || rec.write.Sub(start) > 11*time.Minute {
-			t.Fatalf("%s: write deadline %v, want about ten minutes after %v", name, rec.write, start)
+		if rec.write.Sub(start) < 29*time.Minute || rec.write.Sub(start) > 31*time.Minute {
+			t.Fatalf("%s: write deadline %v, want about 30 minutes after %v", name, rec.write, start)
 		}
 	}
 

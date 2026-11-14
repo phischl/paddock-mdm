@@ -57,6 +57,15 @@ instance_env() {
     AUDIT_S3=9001 FLEET=8412 PROMETHEUS=9091; do
     set_env "PADDOCK_DEV_${var%%=*}_PORT" $((${var#*=} + off))
   done
+  edge_env "$n"
+}
+
+# edge_env <n>: the fixed subnet of network edge, its dynamic pool and Caddy's address outside the pool for the n-th
+# stack (ADR 0051 decision 1); two stacks on one host cannot share a subnet.
+edge_env() {
+  set_env PADDOCK_EDGE_SUBNET "172.28.$(($1 - 1)).0/24"
+  set_env PADDOCK_EDGE_IP_RANGE "172.28.$(($1 - 1)).128/25"
+  set_env PADDOCK_EDGE_CADDY_ADDRESS "172.28.$(($1 - 1)).10"
 }
 
 if [[ -n "${PADDOCK_INSTANCE:-}" && ! "$PADDOCK_INSTANCE" =~ ^[1-9]$ ]]; then
@@ -70,6 +79,12 @@ if [[ ! -f "$COMPOSE_DIR/.env" ]]; then
     instance_env "$PADDOCK_INSTANCE"
     echo "deploy/compose/.env: development stack instance $PADDOCK_INSTANCE (project paddock$PADDOCK_INSTANCE)"
   fi
+fi
+# A further instance whose .env predates network edge (or its dynamic pool) would claim the first stack's subnet.
+instance="$(sed -n 's/^PADDOCK_INSTANCE=//p' "$COMPOSE_DIR/.env" | tail -1)"
+if [[ "$instance" =~ ^[2-9]$ ]] && ! grep -q '^PADDOCK_EDGE_IP_RANGE=' "$COMPOSE_DIR/.env"; then
+  edge_env "$instance"
+  echo "deploy/compose/.env: added PADDOCK_EDGE_SUBNET, PADDOCK_EDGE_IP_RANGE and PADDOCK_EDGE_CADDY_ADDRESS of instance $instance"
 fi
 # The worker does not start without the audit index retention (compose.yaml), which a .env copied from an older
 # .env.example lacks. Without it the audit writer uses its WORM retention, so the backfill takes that value and keeps
@@ -115,7 +130,7 @@ secret rustfs_audit_writer_secret_key
 # Control-plane object store (bundles)
 secret rustfs_root_user
 secret rustfs_root_password
-for role in compiler gateway; do
+for role in compiler gateway api worker; do
   secret "rustfs_bundles_${role}_access_key"
   secret "rustfs_bundles_${role}_secret_key"
 done
@@ -135,10 +150,11 @@ done
 # make dev-secrets up to rotate it.
 secret escrow_reader_token
 
-# Valkey: one password; the server reads it through an included config file.
-secret valkey_password
-mkdir -p "$SECRETS_DIR/valkey"
-secret valkey/auth.conf "requirepass $(read_secret valkey_password)"
+# Valkey: one ACL user per role (plan M12h §14.6.3); the container stores only the SHA-256 of each password. The
+# user acceptance exists in the development and CI stack only (compose.dev.yaml).
+for user in api gateway worker compiler escrow_reader revocation_issuer healthcheck acceptance; do
+  secret "valkey_${user}_password"
+done
 
 # RabbitMQ. The definitions file is derived from the passwords and the template, so it is rewritten whenever the
 # template gains users; RabbitMQ imports it again on the next start (definitions.skip_if_unchanged).

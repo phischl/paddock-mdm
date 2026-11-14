@@ -2,12 +2,12 @@
 # Smoke test of the lab profile of an operator bundle (plan M8a decision 18, ADR 0029): one bundle directory, one
 # Compose project paddock-lab with PADDOCK_HOST=lab, and the shipped Nginx reference configuration on the runner in
 # front of Caddy's plain-HTTP port (the same-host variant of decision 14) with a throwaway CA. The running stack adds
-# the CI overlay compose.ci-lab.yaml (pinned subnet of network cp, trust in the throwaway CA); `./paddock check`
+# the CI overlay compose.ci-lab.yaml (pinned subnets of networks edge and data, trust in the throwaway CA); `./paddock check`
 # renders the shipped files without it.
 #   smoke-lab.sh <tarball> [--work <dir>]
 # Exit 0: every step passed; 1: a step failed (named on stderr); 2: usage. Needs docker, docker compose >= 2.24, go
 # (throwaway minisign keys), openssl, curl and sha256sum; binds 80 and 443 on every address (Nginx) and 127.0.0.1:8080
-# (Caddy); network cp takes 172.30.0.0/24. Environment: WAIT_TIMEOUT (default 900 s per wait). The Compose logs and
+# (Caddy); networks edge and data take 172.28.0.0/24 and 172.30.0.0/24. Environment: WAIT_TIMEOUT (default 900 s per wait). The Compose logs and
 # Nginx's log end up in <work>/logs/.
 set -euo pipefail
 
@@ -113,10 +113,10 @@ setenv "$env_file" PADDOCK_LAB_HTTP_PORT 8080
 setenv "$env_file" PADDOCK_LAB_PROXY_ADDR "$addr"
 # The guide sets the two same-host values after `up --infra`, from the gateways Docker chose; the overlay pins the
 # subnets, so they are known now. Nginx on this host reaches Caddy's loopback port through Docker, which presents it
-# as the gateway of network cp. The api's default route is network audit-index, so its calls to Authentik's API
-# through Nginx come from that subnet.
-setenv "$env_file" PADDOCK_EDGE_TRUSTED_PROXIES 172.30.0.1
-setenv "$env_file" PADDOCK_ADMIN_ALLOWED_CIDRS "172.30.0.0/24 127.0.0.0/8 $addr/32"
+# as the gateway of network edge. The api's default route is network audit-index, the other roles' is data, so their
+# calls to Authentik's API through Nginx come from those subnets.
+setenv "$env_file" PADDOCK_EDGE_TRUSTED_PROXIES 172.28.0.1
+setenv "$env_file" PADDOCK_ADMIN_ALLOWED_CIDRS "172.28.0.0/24 172.30.0.0/24 127.0.0.0/8 $addr/32"
 setenv "$env_file" PADDOCK_INTERNAL_CIDRS "172.30.0.0/24 172.30.1.0/24 $addr/32"
 setenv "$env_file" PADDOCK_LAB_BACKUP no
 # CI only: the throwaway CA and the certificate of the five names, before anything starts.
@@ -210,10 +210,10 @@ direct() {
   curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: admin.$domain" "${@:2}" "http://127.0.0.1:8080$1" ||
     true
 }
-# peer <path> [wget arguments]: the HTTP status of Caddy for admin.<domain> from a container on network cp, a peer
+# peer <path> [wget arguments]: the HTTP status of Caddy for admin.<domain> from a container on network edge, a peer
 # that the edge allow list admits but that is not the trusted proxy.
 peer() {
-  { docker run --rm --network paddock-lab_cp --entrypoint wget "$caddy_image" -S -O /dev/null -T 10 \
+  { docker run --rm --network paddock-lab_edge --entrypoint wget "$caddy_image" -S -O /dev/null -T 10 \
     --header "Host: admin.$domain" "${@:2}" "http://caddy:80$1" 2>&1 || true; } |
     sed -n 's/^ *HTTP\/[0-9.]* \([0-9]*\).*/\1/p' | tail -1
 }
@@ -254,11 +254,12 @@ rm -f "$W/20MiB.bin"
 expect 200 "GET http://127.0.0.1:8080/ (Host admin.$domain)" direct /
 # Deviation from plan M8a decision 18, which sends the forged header to 127.0.0.1:8080: in the same-host topology a
 # loopback client is indistinguishable from the proxy, because Docker presents every loopback client of the published
-# port as the gateway of network cp, the trusted proxy. A peer on the network is not trusted: honoured, its
+# port as the gateway of network edge, the trusted proxy. A peer on the network is not trusted: honoured, its
 # 203.0.113.9 would be refused by the edge allow list (403).
 caddy_image="$(sed -n 's/^CADDY_IMAGE=//p' "$W/lab/versions.env")"
-expect 200 "GET http://caddy/ (Host admin.$domain) from a peer on network cp with a forged X-Forwarded-For" \
+expect 200 "GET http://caddy/ (Host admin.$domain) from a peer on network edge with a forged X-Forwarded-For" \
   peer / --header "X-Forwarded-For: 203.0.113.9"
+"$here/assert-segmentation.sh" paddock-lab
 # api_authentik: the status of Authentik's API for the api's service token, sent from the api container's network
 # namespace through Nginx, the path of the api's own calls. The token stays inside the container, off every
 # command line.

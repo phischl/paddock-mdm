@@ -9,11 +9,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,6 +62,8 @@ type Signer interface {
 // Store uploads bundle objects (objectstore.Store).
 type Store interface {
 	Put(ctx context.Context, key, contentType, cacheControl string, body []byte) error
+	// Size tells whether an object exists; the compiler only checks content-addressed catalog icons with it.
+	Size(ctx context.Context, key string) (size int64, found bool, err error)
 }
 
 // Config is the configuration of the schema v2 content (plan M3a decisions 15 and 16).
@@ -83,6 +87,14 @@ type Config struct {
 	// FleetURL (https://fleet.<domain>) and FleetEnrollSecret enroll fleetd (inventory.fleet_url and
 	// inventory.enroll_secret of v2 bundles, plan M5a decision 4); empty: no inventory section.
 	FleetURL, FleetEnrollSecret string
+	// Credentials decrypts the read credential of an organization's Paddock repository (Transit key
+	// software-repo-credential, plan M13c decision 15); nil leaves the Paddock source out of every bundle.
+	Credentials CredentialDecrypter
+}
+
+// CredentialDecrypter decrypts a ciphertext of a derived Transit key for an organization and field (bao.Client).
+type CredentialDecrypter interface {
+	DecryptContext(ctx context.Context, key string, org uuid.UUID, field bao.ContextField, ciphertext string) ([]byte, error)
 }
 
 // KeyReader reads public keys of Transit keys (bao.Client).
@@ -102,17 +114,30 @@ type Compiler struct {
 	// keysDigest is the digest of the keys object and the revocation section the last complete reconcile saw (owned
 	// by RunReconcile).
 	keysDigest [32]byte
+	// iconsMu guards iconsStored, the object keys of the catalog icons this process knows are in the bucket.
+	iconsMu     sync.Mutex
+	iconsStored map[string]bool
+	// approvalAgent is the constant approvalAgent; tests of the approval flow set the gate it will have once PDK-811
+	// ships.
+	approvalAgent string
 }
 
 // New creates a compiler.
 func New(pool *db.OrgPool, signer Signer, store Store, cache *devicecache.Cache, cfg Config) *Compiler {
 	cfg.AuthentikURL = strings.TrimRight(cfg.AuthentikURL, "/")
-	return &Compiler{pool: pool, signer: signer, store: store, cache: cache, cfg: cfg, now: time.Now}
+	return &Compiler{pool: pool, signer: signer, store: store, cache: cache, cfg: cfg, now: time.Now, iconsStored: map[string]bool{},
+		approvalAgent: approvalAgent}
 }
 
 // ObjectKey is the object of a bundle version (architecture §7.1).
 func ObjectKey(org, dev uuid.UUID, version int64) string {
 	return fmt.Sprintf("org/%s/devices/%s/bundles/%d.dsse", org, dev, version)
+}
+
+// IconObjectKey is the content-addressed key of a catalog icon in the bundles bucket, below its organization's prefix
+// (architect decision A10-14); sha256 is the icon's hex SHA-256.
+func IconObjectKey(org uuid.UUID, sha256 string) string {
+	return fmt.Sprintf("org/%s/icons/%s.png", org, sha256)
 }
 
 // Compile recompiles the active devices in the scopes of events, organization by organization.
@@ -150,6 +175,10 @@ type rendered struct {
 	forced bool
 	// rollout is the open configuration rollout whose wave the device is in (plan M11 decision 30).
 	rollout uuid.NullUUID
+	// warnings are the compile warnings of the device (PDK-918), also set when the content is unchanged.
+	warnings []compileWarning
+	// icons are the catalog icons the bundle names, by entry ID (architect decision A10-14).
+	icons map[string]catalogIcon
 }
 
 // compileTarget is a device to compile with what decides its schema.
@@ -189,6 +218,10 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 	var todo []rendered
 	var failures []renderFailure
 	var seen []pgstore.SetDeviceCompiledPlatformParams
+	// checked are the bundles each compiled device keeps, for the render time renderAt (architect decision A10-27).
+	var checked []pgstore.MarkDenialLockCheckedParams
+	renderAt := c.now()
+	warnings := map[uuid.UUID]deviceWarnings{}
 	keys, err := c.keys(ctx)
 	if err != nil {
 		return err
@@ -219,9 +252,10 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
 			return err
 		}
-		if keys.Software, err = loadSoftware(ctx, q); err != nil {
+		if keys.Software, err = loadSoftware(ctx, q, org, c.cfg.Credentials, renderAt); err != nil {
 			return err
 		}
+		keys.Software.approvalGate = c.approvalAgent
 		rows, err := q.ListCompileTargets(ctx, ids)
 		if err != nil {
 			return err
@@ -246,10 +280,15 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			}
 			if failure != nil {
 				failures = append(failures, *failure)
+			} else {
+				warnings[row.ID] = deviceWarnings{seq: row.BundleSeq, warnings: r.warnings}
 			}
 			// A blocked device is recorded too: its compile was attempted with these values, and the failure is
 			// recorded once, not on every reconcile round.
-			seen = append(seen, pgstore.SetDeviceCompiledPlatformParams{ID: row.ID, Arch: row.Arch, OsID: row.OsID, OsVersionID: row.OsVersionID})
+			seen = append(seen, pgstore.SetDeviceCompiledPlatformParams{ID: row.ID, Arch: row.Arch, OsID: row.OsID, OsVersionID: row.OsVersionID,
+				AgentVersion: row.AgentVersion})
+			// Like seen, a blocked device is recorded too: otherwise the reconcile would select it every round.
+			checked = append(checked, pgstore.MarkDenialLockCheckedParams{ID: row.ID, BundleSeq: row.BundleSeq, CheckedAt: renderAt})
 			if changed {
 				todo = append(todo, r)
 			}
@@ -268,12 +307,47 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		seen = slices.DeleteFunc(seen, func(p pgstore.SetDeviceCompiledPlatformParams) bool {
 			return slices.ContainsFunc(todo, func(r rendered) bool { return r.device == p.ID }) && !slices.Contains(committed, p.ID)
 		})
+		checked = slices.DeleteFunc(checked, func(p pgstore.MarkDenialLockCheckedParams) bool {
+			return slices.ContainsFunc(todo, func(r rendered) bool { return r.device == p.ID }) && !slices.Contains(committed, p.ID)
+		})
+		for i, p := range checked {
+			if slices.Contains(committed, p.ID) {
+				checked[i].BundleSeq++
+			}
+		}
+		for _, r := range todo {
+			if slices.Contains(committed, r.device) {
+				warnings[r.device] = deviceWarnings{seq: r.oldSeq + 1, warnings: r.warnings}
+			} else {
+				delete(warnings, r.device)
+			}
+		}
 	}
-	return errors.Join(publishErr, c.recordPlatform(ctx, seen))
+	return errors.Join(publishErr, c.recordPlatform(ctx, seen), c.recordDenialLocks(ctx, checked),
+		c.recordWarnings(ctx, org, warnings))
 }
 
-// recordPlatform stores the architecture and os-release the compile of each device read, after its bundle is
-// published, so that a failed publish is retried by the reconcile loop (PDK-695). They are the values of the
+// recordDenialLocks records the render time for each device whose bundle_seq is still the one this compile left:
+// the committed bundle, or the unchanged or blocked one it kept. Every denial lock that ended before the render time is
+// reflected in that bundle, so the reconcile selects only locks that end later (architect decision A10-27). The render
+// time counts, not the publish time: a render before a lock's end that commits after it still names the denial. A
+// device a concurrent compile moved on is skipped; that compile records its own render time.
+func (c *Compiler) recordDenialLocks(ctx context.Context, checked []pgstore.MarkDenialLockCheckedParams) error {
+	if len(checked) == 0 {
+		return nil
+	}
+	return c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		for _, p := range checked {
+			if _, err := q.MarkDenialLockChecked(ctx, p); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// recordPlatform stores the architecture, os-release and agent version the compile of each device read, after its
+// bundle is published, so that a failed publish is retried by the reconcile loop (PDK-695, PDK-799). They are the values of the
 // compile's snapshot, not the current ones: a change after the snapshot stays visible to the next reconcile.
 func (c *Compiler) recordPlatform(ctx context.Context, seen []pgstore.SetDeviceCompiledPlatformParams) error {
 	if len(seen) == 0 {
@@ -404,6 +478,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 				reason: "the before-state of configuration rollout " + overlay.id.String() + " is missing; the device keeps its previous bundle until the rollout is completed"}, nil
 		default:
 			defs, keys.Updates = overlay.apply(defs, keys.Updates)
+			keys.Software = overlay.applySoftware(keys.Software)
 		}
 	}
 	groups, err := q.ListDeviceGroupIDsOfDevice(ctx, t.id)
@@ -420,6 +495,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	var updatesSection *bundle.UpdatesSpec
 	var diskSection *bundle.DiskSpec
 	var softwareSection *bundle.SoftwareSpec
+	var warnings []compileWarning
 	agent := bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}
 	if t.v2 {
 		v2 = keys
@@ -437,9 +513,10 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		var softwareHolds []bundle.Hold
 		if keys.Software != nil {
 			// Conflicts are dropped as UpdatesSection drops those of the holds (plan M13a decision 10): the smallest
-			// version wins either way. The software holds stay outside the rollout overlay until M13c (plan M11 R2.10).
+			// version wins either way. A device outside the wave of a rollout that stages assignments already has their
+			// before-state in keys.Software, holds included (plan M13c decision 3).
 			var err error
-			if softwareSection, softwareHolds, _, err = keys.Software.section(groups, t.osID, t.versionID, t.arch); err != nil {
+			if softwareSection, softwareHolds, _, warnings, err = keys.Software.section(ctx, t.id, groups, t.osID, t.versionID, t.arch, t.agent); err != nil {
 				return rendered{}, false, &renderFailure{device: t.id, reason: err.Error() +
 					"; the device keeps its previous bundle until the catalog is fixed"}, nil
 			}
@@ -481,7 +558,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	switch {
 	case unchanged && !t.forced:
 		metricBundles.WithLabelValues("unchanged").Inc()
-		return rendered{}, false, nil, nil
+		return rendered{device: t.id, warnings: warnings}, false, nil, nil
 	case err != nil && !db.IsNoRows(err):
 		return rendered{}, false, nil, err
 	}
@@ -490,7 +567,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		return rendered{}, false, nil, err
 	}
 	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted,
-		forced: unchanged, rollout: rollout}, true, nil, nil
+		forced: unchanged, rollout: rollout, warnings: warnings, icons: keys.Software.bundleIcons(b.Software)}, true, nil, nil
 }
 
 // v2Trust are the key material, the revocation section, the organization's dead man's switch, the inventory section
@@ -561,10 +638,16 @@ func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) 
 	}
 	var errs []error
 	var committed []uuid.UUID
+	iconErrs := c.uploadIcons(ctx, org, todo)
 	for i, r := range todo {
 		env, err := dsse.New(bundle.PayloadType, r.payload, dsse.Signature{
 			KeyID: bundlesign.KeyID(sigs[i].KeyVersion), Sig: base64.StdEncoding.EncodeToString(sigs[i].Value),
 		}).Encode()
+		for _, ic := range r.icons {
+			if err == nil {
+				err = iconErrs[ic.sha256]
+			}
+		}
 		if err == nil {
 			err = c.commit(ctx, org, r, env)
 		}
@@ -584,12 +667,58 @@ func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) 
 	return committed, errors.Join(errs...)
 }
 
+// uploadIcons writes each catalog icon the bundles of todo name once to the bundles bucket, content-addressed, so that
+// a bundle's pointer only ever names uploaded icons (architect decision A10-14). It returns the upload errors by icon
+// digest; a bundle naming a failed icon is not committed and is retried like a failed bundle upload.
+func (c *Compiler) uploadIcons(ctx context.Context, org uuid.UUID, todo []rendered) map[string]error {
+	done := map[string]error{}
+	for _, r := range todo {
+		for _, ic := range r.icons {
+			if _, ok := done[ic.sha256]; ok {
+				continue
+			}
+			done[ic.sha256] = c.uploadIcon(ctx, IconObjectKey(org, ic.sha256), ic)
+		}
+	}
+	return done
+}
+
+// uploadIcon puts an icon unless its object exists: the key is content-addressed, so an existing object already holds
+// these bytes and every publish would otherwise upload every icon again.
+func (c *Compiler) uploadIcon(ctx context.Context, key string, ic catalogIcon) error {
+	c.iconsMu.Lock()
+	stored := c.iconsStored[key]
+	c.iconsMu.Unlock()
+	if stored {
+		return nil
+	}
+	_, found, err := c.store.Size(ctx, key)
+	if err == nil && !found {
+		err = c.store.Put(ctx, key, "image/png", "private, max-age=86400", ic.data)
+	}
+	if err != nil {
+		return fmt.Errorf("upload catalog icon %s: %w", ic.sha256, err)
+	}
+	c.iconsMu.Lock()
+	c.iconsStored[key] = true
+	c.iconsMu.Unlock()
+	return nil
+}
+
 // commit records and uploads one bundle and updates its pointer.
 func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelope []byte) error {
 	version := r.oldSeq + 1
 	key := ObjectKey(org, r.device, version)
 	sum := sha256.Sum256(envelope)
-	err := c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	digests := make(map[string]string, len(r.icons))
+	for entry, ic := range r.icons {
+		digests[entry] = ic.sha256
+	}
+	icons, err := json.Marshal(digests)
+	if err != nil {
+		return err
+	}
+	err = c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		n, err := q.SetDeviceBundleSeq(ctx, pgstore.SetDeviceBundleSeqParams{ID: r.device, OldSeq: r.oldSeq, NewSeq: version})
 		if err != nil {
 			return err
@@ -600,7 +729,7 @@ func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelo
 		if err := q.InsertBundle(ctx, pgstore.InsertBundleParams{
 			DeviceID: r.device, Version: version, OrganizationID: org, ContentSha256: r.content[:],
 			EnvelopeSha256: sum[:], ObjectKey: key, SchemaVersion: int32(r.schema), //nolint:gosec // 1 or 2
-			ConfigRolloutID: r.rollout,
+			ConfigRolloutID: r.rollout, Icons: icons,
 		}); err != nil {
 			return err
 		}
@@ -610,7 +739,7 @@ func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelo
 		return err
 	}
 	if err := c.cache.PutBundlePointer(ctx, r.device, devicecache.BundlePointer{
-		Version: version, SHA256: hex.EncodeToString(sum[:]), ObjectKey: key,
+		Version: version, SHA256: hex.EncodeToString(sum[:]), ObjectKey: key, Icons: iconKeys(org, digests),
 	}); err != nil {
 		// Committed and uploaded; the reconcile loop sets the pointer.
 		slog.WarnContext(ctx, "setting bundle pointer failed; the reconcile loop repairs it", "device_id", r.device, "error", err)

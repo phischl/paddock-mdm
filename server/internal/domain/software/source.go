@@ -47,9 +47,20 @@ var (
 	architectures    = []string{"amd64", "arm64"}
 )
 
-// SourceInput is a package source as an administrator submits it. SigningKey is the ASCII-armored OpenPGP public key
-// and Fingerprint the fingerprint the administrator typed from the vendor's publication.
+// The kinds of a source (plan M13b decision 5): an APT repository or a Flatpak remote. SourceKindPaddock is the system
+// source of the organization's Paddock repository (plan M13c decision 11): an APT repository that Paddock maintains,
+// which ValidateSource refuses as the kind of a source an administrator submits.
+const (
+	SourceKindAPT     = "apt"
+	SourceKindFlatpak = "flatpak"
+	SourceKindPaddock = "paddock"
+)
+
+// SourceInput is a package source as an administrator submits it. Kind is SourceKindAPT when empty. SigningKey is
+// the ASCII-armored OpenPGP public key and Fingerprint the fingerprint the administrator typed from the vendor's
+// publication.
 type SourceInput struct {
+	Kind                                    string
 	Slug, Name                              string
 	URIs, Suites, Components, Architectures []string
 	SigningKey, Fingerprint                 string
@@ -70,8 +81,9 @@ type SourceKey struct {
 	WeakKey bool
 }
 
-// ValidateSource checks a source against plan M13a decision 2 and the signing key policy (KeyPolicy) and returns the
-// checked key. Rule violations wrap ErrSource; a typed fingerprint that differs from the key's wraps ErrFingerprint
+// ValidateSource checks a source against plan M13a decision 2, plan M13b decision 5 and the signing key policy
+// (KeyPolicy) and returns the checked key. A Flatpak remote has exactly one URI and no suites, components or
+// architectures. Rule violations wrap ErrSource; a typed fingerprint that differs from the key's wraps ErrFingerprint
 // and names both values. No signature is verified.
 func ValidateSource(in SourceInput) (SourceKey, error) {
 	if !slugPattern.MatchString(in.Slug) {
@@ -83,8 +95,20 @@ func ValidateSource(in SourceInput) (SourceKey, error) {
 	if err := validateURIs(in.URIs); err != nil {
 		return SourceKey{}, err
 	}
-	if err := validateDistribution(in.Suites, in.Components, in.Architectures); err != nil {
-		return SourceKey{}, err
+	switch in.Kind {
+	case "", SourceKindAPT:
+		if err := validateDistribution(in.Suites, in.Components, in.Architectures); err != nil {
+			return SourceKey{}, err
+		}
+	case SourceKindFlatpak:
+		if len(in.URIs) != 1 {
+			return SourceKey{}, fmt.Errorf("%w: a flatpak source has exactly one entry in uris, the remote's URL", ErrSource)
+		}
+		if len(in.Suites) > 0 || len(in.Components) > 0 || len(in.Architectures) > 0 {
+			return SourceKey{}, fmt.Errorf("%w: a flatpak source has no suites, components or architectures", ErrSource)
+		}
+	default:
+		return SourceKey{}, fmt.Errorf("%w: kind must be apt or flatpak", ErrSource)
 	}
 	return validateSigningKey(in.SigningKey, in.Fingerprint)
 }
@@ -148,6 +172,19 @@ func NormalizeFingerprint(s string) string {
 		}
 		return r
 	}, s))
+}
+
+// CanonicalSigningKey returns signingKey in the form ValidateSource stores it (re-armored without armor headers) and
+// true, or signingKey unchanged and false when it is not one parseable OpenPGP key; the validation then refuses it.
+func CanonicalSigningKey(signingKey string) (string, bool) {
+	if len(signingKey) > MaxSigningKeyLength {
+		return signingKey, false
+	}
+	key, err := openpgpkey.ParseArmored([]byte(signingKey))
+	if err != nil {
+		return signingKey, false
+	}
+	return string(openpgpkey.Armor(key.Keyring)), true
 }
 
 func validateURIs(uris []string) error {

@@ -7,7 +7,7 @@ const MaxMsgIDLen = 32
 
 // msgIDAliases is the fixed MSGID of every registered code longer than MaxMsgIDLen (ADR 0031 amendment 2026-11-04,
 // MSGID aliases). The table is add-only: an alias never changes and is never reused, because SIEM rules match on it.
-var msgIDAliases = map[Code]string{
+var msgIDAliases = map[Code]string{ //nolint:gosec // audit code aliases, not credentials
 	CodeDeviceDiskConversionCompletedAfterCancel: "device.conversion_after_cancel",
 	CodeDeviceDiskConversionNeutralizeFailed:     "device.disk_neutralize_failed",
 	CodeDeviceDiskConversionUnlockRestoreFailed:  "device.unlock_restore_failed",
@@ -17,6 +17,10 @@ var msgIDAliases = map[Code]string{
 	CodePermissionProfileRootGrantConfirmed:      "permission_profile.root_grant_ok",
 	CodeOrganizationSecurityReviewRequired:       "organization.sec_review_required",
 	CodeNotificationDestinationSecretRotated:     "notification.dest_secret_rotated",
+	CodeDeviceGroupMaintenanceWindowChanged:      "device_group.window_changed",
+	CodeDeviceGroupMaintenanceWindowRemoved:      "device_group.window_removed",
+	CodeSoftwareRepositoryCredentialRotated:      "software_repository.cred_rotated",
+	CodeDeviceSoftwareRequestWithdrawn:           "device.sw_request_withdrawn",
 }
 
 // MsgID returns the RFC 5424 MSGID of c: the code itself when it fits MaxMsgIDLen, its alias otherwise.

@@ -105,18 +105,25 @@ const (
 	// PackageFleetd is fleetd, built with `fleetctl package` for the release (plan M5a decision 3); its file carries
 	// the fleetd version. The agent installs it from the bundle's inventory section, the autoinstall never.
 	PackageFleetd = "fleet-osquery"
+	// PackageSelfService is the self-service desktop app (plan M13b amendment 2026-11-11). It is architecture-
+	// independent (ArchAll) and signed with the agent release key; devices get it as a catalog entry from the
+	// organization's package source, never through the autoinstall or the agent update (ADR 0049).
+	PackageSelfService = "paddock-self-service"
+	// ArchAll is the architecture of PackageSelfService and of no other package; it is not one of Arches.
+	ArchAll = "all"
 )
 
 // Packages are the Debian packages a release can carry; the Paddock autoinstall needs RequiredPackages.
-var Packages = []string{PackageAgent, PackageSupervisor, PackageRevoke, PackageFleetd}
+var Packages = []string{PackageAgent, PackageSupervisor, PackageRevoke, PackageFleetd, PackageSelfService}
 
 // RequiredPackages are the packages without which the Paddock autoinstall does not install a release.
 var RequiredPackages = []string{PackageAgent, PackageSupervisor}
 
 // Package errors.
 var (
-	ErrInvalidPackage        = errors.New("name must be paddock-agent, paddock-supervisor, paddock-revoke or fleet-osquery")
-	ErrInvalidPackageVersion = errors.New("package_version is required for fleet-osquery only and must be a release number such as 1.48.0")
+	ErrInvalidPackage         = errors.New("name must be paddock-agent, paddock-supervisor, paddock-revoke, fleet-osquery or paddock-self-service")
+	ErrInvalidSelfServiceArch = errors.New("arch must be all for paddock-self-service")
+	ErrInvalidPackageVersion  = errors.New("package_version is required for fleet-osquery only and must be a release number such as 1.48.0")
 )
 
 // packageVersion is the version of a package that is not Paddock's own (fleetd), e.g. 1.48.0.
@@ -132,6 +139,18 @@ func ValidatePackage(name, version string) error {
 		return ErrInvalidPackageVersion
 	}
 	return nil
+}
+
+// ValidatePackageArch checks the architecture of a package: ArchAll for PackageSelfService and only for it, one of
+// Arches for every other package.
+func ValidatePackageArch(name, arch string) error {
+	if name == PackageSelfService {
+		if arch != ArchAll {
+			return ErrInvalidSelfServiceArch
+		}
+		return nil
+	}
+	return ValidateArch(arch)
 }
 
 // PackageObjectKey is the object of a Debian package in the bucket paddock-agent-artifacts; packageVersion is the
@@ -168,11 +187,15 @@ type SourceAsset struct {
 // requiredPackageArch is the only architecture make deb builds packages for today (ADR 0043 decision 4).
 const requiredPackageArch = "amd64"
 
+// SelfServiceFirstVersion is the first release that publishes PackageSelfService (ADR 0043 amendment 2026-11-11);
+// earlier releases never had it and stay importable without it.
+const SelfServiceFirstVersion = "0.1.0-alpha.10"
+
 // SourceAssets are the Paddock assets of version v the import looks for (ADR 0043 decision 4), in this order:
 // required paddockd_<v>_linux_amd64, paddockd_<v>_linux_arm64, paddock-agent_<v>_amd64.deb,
-// paddock-supervisor_<v>_amd64.deb (exactly what the release workflow ships, see packaging/release_test.sh); optional
-// paddock-agent_<v>_<arch>.deb and paddock-supervisor_<v>_<arch>.deb for every other arch of Arches. Each present
-// asset needs "<Name>.minisig".
+// paddock-supervisor_<v>_amd64.deb and, from SelfServiceFirstVersion on, paddock-self-service_<v>_all.deb (exactly
+// what the release workflow ships, see packaging/release_test.sh); optional paddock-agent_<v>_<arch>.deb and
+// paddock-supervisor_<v>_<arch>.deb for every other arch of Arches. Each present asset needs "<Name>.minisig".
 func SourceAssets(v string) []SourceAsset {
 	var out []SourceAsset
 	for _, arch := range Arches {
@@ -181,6 +204,10 @@ func SourceAssets(v string) []SourceAsset {
 	for _, name := range RequiredPackages {
 		out = append(out, SourceAsset{Name: fmt.Sprintf("%s_%s_%s.deb", name, v, requiredPackageArch), Arch: requiredPackageArch,
 			Package: name, Required: true})
+	}
+	if semver.Compare(v, SelfServiceFirstVersion) >= 0 {
+		out = append(out, SourceAsset{Name: fmt.Sprintf("%s_%s_%s.deb", PackageSelfService, v, ArchAll), Arch: ArchAll,
+			Package: PackageSelfService, Required: true})
 	}
 	for _, arch := range Arches {
 		if arch == requiredPackageArch {

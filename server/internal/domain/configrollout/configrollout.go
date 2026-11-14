@@ -26,6 +26,13 @@ const (
 	MinWaveMinutesDevelopment = 1
 	// MaxWaves bounds the number of waves.
 	MaxWaves = 10
+	// DefaultWaveSuccessThresholdPercent is the share of a wave's new devices that must have applied before the wave
+	// advances while some of them still wait for their maintenance window (architect decision A10-16).
+	DefaultWaveSuccessThresholdPercent = 90
+	// DefaultStallWarningHours is how long a wave may go without a new apply before the worker warns (A10-16).
+	DefaultStallWarningHours = 24
+	// MaxStallWarningHours bounds the stall warning to 30 days.
+	MaxStallWarningHours = 720
 )
 
 // DefaultWaves returns the default waves: 1 %, 10 %, 50 %, then everything.
@@ -36,6 +43,8 @@ var (
 	ErrInvalidWaves     = errors.New("waves must be 1 to 10 strictly increasing percentages between 1 and 100 ending with 100")
 	ErrInvalidMinWave   = errors.New("min_wave_minutes is below the minimum")
 	ErrInvalidThreshold = errors.New("failure_threshold_percent must be 0 to 100 and failure_threshold_min at least 0")
+	ErrInvalidSuccess   = errors.New("wave_success_threshold_percent must be 1 to 100")
+	ErrInvalidStall     = errors.New("stall_warning_hours must be 1 to 720")
 )
 
 // ValidateWaves checks the wave percentages of a rollout (the same rule as agentrelease.ValidateWaves).
@@ -59,6 +68,9 @@ type Settings struct {
 	MinWaveMinutes          int
 	FailureThresholdPercent int
 	FailureThresholdMin     int
+	// WaveSuccessThresholdPercent and StallWarningHours are the rules of waves against maintenance windows (A10-16).
+	WaveSuccessThresholdPercent int
+	StallWarningHours           int
 }
 
 // Defaults returns the settings of an organization that never changed them: rollouts off.
@@ -66,6 +78,7 @@ func Defaults() Settings {
 	return Settings{
 		Waves: DefaultWaves(), MinWaveMinutes: DefaultMinWaveMinutes,
 		FailureThresholdPercent: DefaultFailureThresholdPercent, FailureThresholdMin: DefaultFailureThresholdMin,
+		WaveSuccessThresholdPercent: DefaultWaveSuccessThresholdPercent, StallWarningHours: DefaultStallWarningHours,
 	}
 }
 
@@ -83,6 +96,12 @@ func (s Settings) Validate(development bool) error {
 	}
 	if s.FailureThresholdPercent < 0 || s.FailureThresholdPercent > 100 || s.FailureThresholdMin < 0 {
 		return ErrInvalidThreshold
+	}
+	if s.WaveSuccessThresholdPercent < 1 || s.WaveSuccessThresholdPercent > 100 {
+		return ErrInvalidSuccess
+	}
+	if s.StallWarningHours < 1 || s.StallWarningHours > MaxStallWarningHours {
+		return ErrInvalidStall
 	}
 	return nil
 }
@@ -110,6 +129,16 @@ func Bucket(device, rollout uuid.UUID) int {
 // device once the wave percentage exceeds its bucket.
 func Eligible(bucket, percent int, canary bool) bool { return canary || bucket < percent }
 
+// JoinedIn reports whether an eligible device joined the rollout in wave current: every eligible device in the first
+// wave, in a later one a device the previous wave did not reach. The wave's own rules (Decide) look at these devices
+// only, because the devices of the earlier waves applied before the wave started (A10-16).
+func JoinedIn(bucket int, waves []int, current int, canary bool) bool {
+	if current < 0 || current >= len(waves) || !Eligible(bucket, waves[current], canary) {
+		return false
+	}
+	return current == 0 || !Eligible(bucket, waves[current-1], canary) //nolint:gosec // the guard above bounds current to 1..len(waves)-1 here
+}
+
 // Percent is the share of devices a rollout has reached: the current wave while running, and the same while halted —
 // a halted rollout keeps the wave it reached, so devices inside keep the new state and devices outside the old one.
 // A completed rollout reached everything, a reverted one nothing.
@@ -133,16 +162,34 @@ func Threshold(eligible int64, percent, minimum int) int64 {
 	return max(int64(minimum), (eligible*int64(percent)+99)/100)
 }
 
-// Rollout is what the evaluation of a rollout reads.
+// Rollout is what the evaluation of a rollout reads. Eligible, Failed, Waiting and AwaitingRetry count every eligible
+// device of the reached waves (set E of the A10-19 accounting table): Waiting those that wait for their maintenance
+// window, AwaitingRetry those whose failure the last resume discarded and, after a resume, those whose newest report is
+// a failure. Wave counts the devices that joined in the current wave.
 type Rollout struct {
-	Status           string
-	Waves            []int
-	CurrentWave      int
-	WaveStartedAt    time.Time
-	MinWaveMinutes   int
-	FailurePercent   int
-	FailureMin       int
-	Eligible, Failed int64
+	Status                 string
+	Waves                  []int
+	CurrentWave            int
+	WaveStartedAt          time.Time
+	MinWaveMinutes         int
+	FailurePercent         int
+	FailureMin             int
+	Eligible, Failed       int64
+	Waiting, AwaitingRetry int64
+	SuccessPercent         int
+	FirstAppliedAt         *time.Time
+	Wave                   WaveCounts
+	WaveProgressAt         time.Time
+	StallWarningHours      int
+	StallWarned            bool
+}
+
+// WaveCounts are the eligible devices that joined in the current wave (JoinedIn, set J of the A10-19 accounting table):
+// how many there are, how many have applied with success or failure at any time (Applied, dates the wave's clock), how
+// many of those applied since the rollout's start or last resume (Recent, the share), and how many applied without
+// failure at any time (Succeeded, the observed success a wave needs).
+type WaveCounts struct {
+	Eligible, Applied, Recent, Succeeded int64
 }
 
 // Decision is what the worker does with a running rollout.
@@ -156,9 +203,9 @@ const (
 	Complete
 )
 
-// Decide evaluates a rollout at now (plan M11 decision 28): a running rollout halts when the failed devices reach the
-// threshold; otherwise it advances when the current wave is older than the minimum wave duration, and completes after
-// the last wave. Halted, completed and reverted rollouts are kept as they are.
+// Decide evaluates a rollout at now (plan M11 decision 28, the A10-19 accounting table): a running rollout halts when
+// the failed devices of every reached wave reach the threshold; otherwise it advances, or completes after the last
+// wave, once its current wave is done (WaveDone). Halted, completed and reverted rollouts are kept as they are.
 func Decide(r Rollout, now time.Time) Decision {
 	if r.Status != StatusRunning {
 		return Keep
@@ -166,13 +213,54 @@ func Decide(r Rollout, now time.Time) Decision {
 	if r.Failed > 0 && r.Failed >= Threshold(r.Eligible, r.FailurePercent, r.FailureMin) {
 		return Halt
 	}
-	if now.Sub(r.WaveStartedAt) < time.Duration(r.MinWaveMinutes)*time.Minute {
+	if !WaveDone(r, now) {
 		return Keep
 	}
 	if r.CurrentWave+1 < len(r.Waves) {
 		return Advance
 	}
 	return Complete
+}
+
+// WaveDone reports whether the current wave of r is done at now (A10-16, A10-19, agent contract 6): the wave is
+// Observed and the minimum wave duration has passed since the worker first saw a device that joined in the wave
+// applied. Time never stands in for an observed apply. Only a wave that no device joined has nothing to observe; its
+// duration counts from its start. A resume clears the first apply, so the wave gets its full observation period again
+// (plan M11 amendment R6.14 (d), A10-18).
+func WaveDone(r Rollout, now time.Time) bool {
+	if !Observed(r) {
+		return false
+	}
+	start := r.WaveStartedAt
+	if r.Wave.Eligible > 0 {
+		start = *r.FirstAppliedAt
+	}
+	return now.Sub(start) >= time.Duration(r.MinWaveMinutes)*time.Minute
+}
+
+// Observed reports whether everything but the minimum duration of WaveDone holds for r (A10-19 §3): no device of any
+// reached wave awaits a retry after a resume, and either no device joined the wave, or one of those that joined applied
+// without failure and the share of them that applied since the start or last resume reaches the success threshold or
+// no eligible device waits for its maintenance window. A rollout therefore never advances without an observed success
+// (I1) and never past a failure a resume discarded (I2).
+func Observed(r Rollout) bool {
+	if r.AwaitingRetry > 0 {
+		return false
+	}
+	if r.Wave.Eligible == 0 {
+		return true
+	}
+	return r.FirstAppliedAt != nil && r.Wave.Succeeded >= 1 &&
+		(r.Wave.Recent*100 >= int64(r.SuccessPercent)*r.Wave.Eligible || r.Waiting == 0)
+}
+
+// Stalled reports whether a running rollout's wave is not Observed and has gone StallWarningHours without progress since
+// WaveProgressAt (the wave's start, the last resume, the last growth of its applied devices or the last shrink of the
+// devices it waits for) and was not warned about yet (A10-16, A10-19). A wave that only waits for its minimum duration
+// is never stalled. The warning only informs: nothing advances and nothing is applied outside a window because of it.
+func Stalled(r Rollout, now time.Time) bool {
+	return r.Status == StatusRunning && !Observed(r) && !r.StallWarned &&
+		now.Sub(r.WaveProgressAt) >= time.Duration(r.StallWarningHours)*time.Hour
 }
 
 // rolloutSection reports whether section is one of declarative.RolloutSections.
@@ -192,7 +280,8 @@ func SectionGroup(section string) string {
 // StagedKeys returns the keys of plan's changes in rollout-able sections by section (settings.updates: the key ""),
 // without the changes cascaded from a device group the plan deletes: those are never staged (plan M11 amendment
 // R6.13), because an overlay could not restore an item whose group is gone. Items of a group the plan creates follow
-// the normal rules.
+// the normal rules. A catalog entry has no such cascade: its deletion is refused while it has assignments (plan M13c
+// amendment 2026-11-09, A10-12), so a deletion of an assignment is always staged.
 func StagedKeys(p declarative.Plan) map[string]map[string]bool { return StagedKeysExcept(p, nil) }
 
 // StagedKeysExcept is StagedKeys that also leaves out the item changes of renamed, the new names of device groups the
@@ -250,6 +339,41 @@ func DeletedGroups(p declarative.Plan) map[string]bool {
 		}
 	}
 	return out
+}
+
+// StagedEntries returns the names of the catalog entries whose assignments plan stages, sorted: a failed software
+// status of one of them on a device of the wave counts against the rollout as resource software:<entry id> (plan M13c
+// decision 3). The names resolve to IDs against the catalog: an open rollout keeps them, because a write that renames or
+// deletes such an entry is refused while the rollout is open (app requireEntriesNotStaged), staged assignment deletions
+// included.
+func StagedEntries(p declarative.Plan) []string {
+	var out []string
+	for key := range StagedKeys(p)[declarative.SectionSoftwareAssignments] {
+		out = append(out, KeyEntry(key))
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// StagedAssignment is the row a staged software assignment key named when its rollout started: the assignment's row ID
+// (the replaced row of an update or deletion, the new row of a creation), its catalog entry and the device group, user
+// or user group it targets (nil for the organization). The compiler matches live rows and before items by these IDs,
+// not by the names in the key: a username comes from identity sync and can change while the rollout runs (plan M13c
+// decision 3).
+type StagedAssignment struct {
+	ID     uuid.UUID  `json:"id"`
+	Entry  uuid.UUID  `json:"entry_id"`
+	Target *uuid.UUID `json:"target_id,omitempty"`
+}
+
+// KeyEntry is the entry of a software assignment key ([group, entry, target type, user or user group]); "" for any
+// other key.
+func KeyEntry(key string) string {
+	var parts []*string
+	if err := json.Unmarshal([]byte(key), &parts); err != nil || len(parts) != 4 || parts[1] == nil {
+		return ""
+	}
+	return *parts[1]
 }
 
 // KeyGroup returns the device group of a group-scoped key ([group, name]); false for an item of every device and for

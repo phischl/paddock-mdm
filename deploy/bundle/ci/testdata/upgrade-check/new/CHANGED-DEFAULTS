@@ -1,0 +1,3 @@
+# Fixture: one setting whose default this release changed, one an earlier release changed (not reported).
+0.1.0-alpha.9 PADDOCK_CHANGED_SETTING
+0.1.0-alpha.8 PADDOCK_LOG_LEVEL

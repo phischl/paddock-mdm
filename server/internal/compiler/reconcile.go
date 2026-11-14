@@ -14,6 +14,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
@@ -26,7 +27,8 @@ const ReconcileInterval = 60 * time.Second
 // than their latest bundle has (an agent update to schema 2, plan M3a decision 14a). When the keys object of v2
 // bundles changed (a key rotation, or the first round after start), it recompiles every organization once, so
 // devices receive the new keys (plan M4a decision 5), and likewise when the inventory section changed (a new fleetd
-// package, plan M5a decision 3); unchanged devices keep their bundle version.
+// package, plan M5a decision 3); unchanged devices keep their bundle version. It also recompiles a device whose bundle
+// still names a denial whose re-request lock ended, so the user may ask again (architect decision A10-27).
 func (c *Compiler) RunReconcile(ctx context.Context) {
 	for {
 		if err := c.Reconcile(ctx); err != nil && ctx.Err() == nil {
@@ -82,7 +84,7 @@ func (c *Compiler) Reconcile(ctx context.Context) error {
 
 func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 	var latest []pgstore.Bundle
-	var outdated, platform []uuid.UUID
+	var outdated, platform, denials []uuid.UUID
 	if err := c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
 		if latest, err = q.ListLatestBundles(ctx); err != nil {
@@ -91,13 +93,19 @@ func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 		if outdated, err = q.ListDevicesWithOutdatedSchema(ctx); err != nil {
 			return err
 		}
-		platform, err = q.ListDevicesWithOutdatedPlatform(ctx)
+		if platform, err = q.ListDevicesWithOutdatedPlatform(ctx); err != nil {
+			return err
+		}
+		now := c.now()
+		denials, err = q.ListDevicesWithEndedDenialLock(ctx, pgstore.ListDevicesWithEndedDenialLockParams{
+			LockStart: now.Add(-software.RerequestAfterDenial), Now: now,
+		})
 		return err
 	}); err != nil {
 		return err
 	}
 	for _, b := range latest {
-		if err := c.cache.PutBundlePointer(ctx, b.DeviceID, pointer(b)); err != nil {
+		if err := c.cache.PutBundlePointer(ctx, b.DeviceID, pointer(ctx, b)); err != nil {
 			return err
 		}
 	}
@@ -107,7 +115,7 @@ func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 			{OrganizationID: org.OrganizationID, Scope: statechange.ScopeOrg, ID: org.OrganizationID},
 		})
 	}
-	outdated = mergeIDs(outdated, platform)
+	outdated = mergeIDs(mergeIDs(outdated, platform), denials)
 	if len(outdated) == 0 {
 		return nil
 	}
@@ -115,7 +123,8 @@ func (c *Compiler) reconcileOrg(ctx context.Context, keysChanged bool) error {
 	for i, d := range outdated {
 		events[i] = statechange.Event{OrganizationID: org.OrganizationID, Scope: statechange.ScopeDevice, ID: d}
 	}
-	slog.InfoContext(ctx, "recompiling devices whose agent schema, architecture or os-release changed", "devices", len(outdated))
+	slog.InfoContext(ctx, "recompiling devices whose agent schema, agent version, architecture or os-release changed or whose "+
+		"bundle names a denial past its re-request lock", "devices", len(outdated))
 	return c.compileOrg(ctx, org.OrganizationID, events)
 }
 
@@ -129,6 +138,14 @@ func mergeIDs(a, b []uuid.UUID) []uuid.UUID {
 	return a
 }
 
-func pointer(b pgstore.Bundle) devicecache.BundlePointer {
-	return devicecache.BundlePointer{Version: b.Version, SHA256: hex.EncodeToString(b.EnvelopeSha256), ObjectKey: b.ObjectKey}
+// pointer is the bundle pointer of b, with the icons the bundle row recorded (architect decision A10-14).
+func pointer(ctx context.Context, b pgstore.Bundle) devicecache.BundlePointer {
+	var digests map[string]string
+	if err := json.Unmarshal(b.Icons, &digests); err != nil {
+		// The column is a JSON object of strings; anything else only costs the icons, never the bundle.
+		slog.WarnContext(ctx, "bundle icons unreadable; the device shows category glyphs", "device_id", b.DeviceID, "error", err)
+		digests = nil
+	}
+	return devicecache.BundlePointer{Version: b.Version, SHA256: hex.EncodeToString(b.EnvelopeSha256), ObjectKey: b.ObjectKey,
+		Icons: iconKeys(b.OrganizationID, digests)}
 }

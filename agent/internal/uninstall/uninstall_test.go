@@ -398,13 +398,14 @@ func TestPlanValidate(t *testing.T) {
 	}
 }
 
-// TestSoftwareSources (plan M13a decision 29): in both modes the software catalog's sources, keyrings and forbid pins
-// go and the package lists are refreshed; the Himmelblau source and keyring stay for the himmelblau step (reset) or
+// TestSoftwareSources (plan M13a decision 29, plan M13c decision 15): in both modes the software catalog's sources,
+// keyrings, forbid pins and the Paddock repository's credential go and the package lists are refreshed; the Himmelblau source and keyring stay for the himmelblau step (reset) or
 // the device (leave), the installed applications stay, and a failing refresh is reported without stopping the rest.
 func TestSoftwareSources(t *testing.T) {
 	software := []string{"/etc/apt/sources.list.d/paddock-vendor.sources", "/etc/apt/sources.list.d/paddock-other.sources",
-		"/etc/apt/keyrings/paddock-vendor.gpg", "/etc/apt/keyrings/paddock-other.gpg", "/etc/apt/preferences.d/51paddock-software"}
-	foreign := []string{"/etc/apt/sources.list.d/ubuntu.sources", "/etc/apt/keyrings/docker.gpg"}
+		"/etc/apt/keyrings/paddock-vendor.gpg", "/etc/apt/keyrings/paddock-other.gpg", "/etc/apt/preferences.d/51paddock-software",
+		"/etc/apt/auth.conf.d/paddock-repo.conf"}
+	foreign := []string{"/etc/apt/sources.list.d/ubuntu.sources", "/etc/apt/keyrings/docker.gpg", "/etc/apt/auth.conf.d/vendor.conf"}
 	for _, mode := range []string{"leave", "reset"} {
 		t.Run(mode, func(t *testing.T) {
 			w := newWorld(t)
@@ -444,6 +445,57 @@ func TestSoftwareSources(t *testing.T) {
 	s := w.helper().Execute(context.Background(), Plan{CommandID: "c7", Mode: "leave", DeviceID: "d1"})
 	if !strings.HasPrefix(s.Steps[StepSoftware], "failed:") || s.Steps[StepPackages] != "done" || w.exists(software[0]) {
 		t.Fatalf("failing refresh: %+v", s)
+	}
+}
+
+// TestSoftwareSourcesFlatpakRemotes (PDK-800): the step removes every paddock-* system remote with --force, so that the
+// applications installed from it stay, and leaves the device's own remotes; it releases the recorded masks that are
+// still in place and leaves the device's own; a failing removal fails the step.
+func TestSoftwareSourcesFlatpakRemotes(t *testing.T) {
+	const masks = "/var/lib/paddock/state/flatpak-masks"
+	w := newWorld(t)
+	w.write(masks, "org.gimp.GIMP\norg.mozilla.firefox\norg.example.Gone\n")
+	w.out = map[string]string{"flatpak remotes --system --show-disabled --columns=name": "flathub\npaddock-flathub\npaddock-rogue\n",
+		"flatpak mask --system": "  org.example.Own\n  org.gimp.GIMP\n  org.mozilla.firefox\n"}
+	s := w.helper().Execute(context.Background(), Plan{CommandID: "c9", Mode: "leave", DeviceID: "d1"})
+	if s.Steps[StepSoftware] != "done" {
+		t.Fatalf("step %s = %q", StepSoftware, s.Steps[StepSoftware])
+	}
+	var unmasks []string
+	for _, c := range w.calls {
+		if strings.HasPrefix(c, "flatpak mask --remove") {
+			unmasks = append(unmasks, c)
+		}
+	}
+	if !slices.Equal(unmasks, []string{"flatpak mask --remove --system org.gimp.GIMP", "flatpak mask --remove --system org.mozilla.firefox"}) {
+		t.Fatalf("unmasks %q", unmasks)
+	}
+	if w.exists(masks) {
+		t.Fatal("the mask record is left")
+	}
+	var deletes []string
+	for _, c := range w.calls {
+		if strings.HasPrefix(c, "flatpak remote-delete") {
+			deletes = append(deletes, c)
+		}
+	}
+	if !slices.Equal(deletes, []string{"flatpak remote-delete --system --force paddock-flathub", "flatpak remote-delete --system --force paddock-rogue"}) {
+		t.Fatalf("deletes %q", deletes)
+	}
+	w = newWorld(t)
+	w.out = map[string]string{"flatpak remotes --system --show-disabled --columns=name": "paddock-flathub\n"}
+	w.fail["flatpak remote-delete"] = 1
+	s = w.helper().Execute(context.Background(), Plan{CommandID: "c10", Mode: "leave", DeviceID: "d1"})
+	if !strings.HasPrefix(s.Steps[StepSoftware], "failed:") || !strings.Contains(s.Steps[StepSoftware], "remote-delete") {
+		t.Fatalf("failing remote-delete: %q", s.Steps[StepSoftware])
+	}
+	w = newWorld(t)
+	w.write(masks, "org.gimp.GIMP\n")
+	w.out = map[string]string{"flatpak mask --system": "  org.gimp.GIMP\n"}
+	w.fail["flatpak mask --remove"] = 1
+	s = w.helper().Execute(context.Background(), Plan{CommandID: "c11", Mode: "leave", DeviceID: "d1"})
+	if !strings.HasPrefix(s.Steps[StepSoftware], "failed:") || !strings.Contains(s.Steps[StepSoftware], "mask --remove") {
+		t.Fatalf("failing mask --remove: %q", s.Steps[StepSoftware])
 	}
 }
 

@@ -5,14 +5,36 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
+
+// offerWait bounds the wait for the worker's rollout round to publish the offer: several rounds of 60 s plus margin.
+const offerWait = 5 * time.Minute
 
 // requestUpdate asks the device to install the offered release now and waits for its report.
 func requestUpdate(t *testing.T, s *Stack, d *Device, version string) {
 	t.Helper()
-	s.Call(t, http.MethodPost, "/api/v1/devices/"+d.ID+"/update-agent", nil, http.StatusOK)
+	path := "/api/v1/devices/" + d.ID + "/update-agent"
+	// The offer reaches Valkey only through the worker's rollout round (60 s interval, which takes most of that on a
+	// long-lived stack, PDK-890), so the request may meet a 409 until the first round after the release was written.
+	var last portal.Response
+	Until(t, "an agent release is offered to "+d.ID, offerWait, 10*time.Second, nil, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		res, err := s.session().Do(ctx, http.MethodPost, path, nil)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		last = res
+		return res.Status != http.StatusConflict || !strings.Contains(string(res.Body), "no agent release is being offered")
+	})
+	if last.Status != http.StatusOK {
+		t.Fatalf("POST %s: HTTP %d (want %d) %s", path, last.Status, http.StatusOK, last.Body)
+	}
 	d.WaitEvent(t, "device.agent_updated", 10*time.Minute, func(p map[string]any) bool { return p["version"] == version })
 	if got := d.AgentVersion(); got != version {
 		t.Fatalf("paddockd version %q after the update, want %s", got, version)
@@ -83,8 +105,16 @@ func TestUpdateNow(t *testing.T) {
 			t.Fatalf("the device outside the wave installed %s", got)
 		}
 		requestUpdate(t, s, d, v)
-		if events := s.Events(t, "device.agent_update_requested", d.ID); len(events) != 1 {
-			t.Fatalf("%d device.agent_update_requested events", len(events))
+		// Each 409 retry of requestUpdate is audited as a failure under the same code (one event per attempt), so only
+		// the successful requests count: exactly one.
+		succeeded := 0
+		for _, e := range s.Events(t, "device.agent_update_requested", d.ID) {
+			if e.Outcome == "success" {
+				succeeded++
+			}
+		}
+		if succeeded != 1 {
+			t.Fatalf("%d successful device.agent_update_requested events, want 1", succeeded)
 		}
 	})
 }

@@ -765,7 +765,7 @@ func (a *Agent) refuseUnrunAbort() {
 // preparer builds the preparation from the applied bundle; it runs on the loop.
 func (a *Agent) preparer(ctx context.Context) *encrypt.Preparer {
 	store := a.loopStore(ctx)
-	p := &encrypt.Preparer{Sys: a.d.Encrypt, Layout: a.d.Layout, Escrow: loopEscrow{a: a, ctx: ctx}, Keys: a.bundleKeys(),
+	p := &encrypt.Preparer{Sys: a.d.Encrypt, Layout: a.d.Layout, Shield: a.d.Shield.Run, Escrow: loopEscrow{a: a, ctx: ctx}, Keys: a.bundleKeys(),
 		State: store, ReportNeutralize: a.neutralizeReport(store), Module: a.d.EncryptModule, TestHooks: buildinfo.Dev, Now: a.d.Now,
 		Hold:  func(context.Context) error { return a.holdForSupervisor(ctx) },
 		Sleep: func(_ context.Context, d time.Duration) error { return a.d.Sleep(ctx, d) }}

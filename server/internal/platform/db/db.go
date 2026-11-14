@@ -30,9 +30,40 @@ var (
 type Options struct {
 	MaxConns        int32
 	ApplicationName string
+	// HealthConn gives Ping a connection of its own, so readiness does not wait for a pool that busy rounds have
+	// taken (PDK-1010).
+	HealthConn bool
+	// LockConns, for a PlatformPool only, gives the leader locks a pool of their own with this many connections, so
+	// rounds that hold a lock connection for their whole duration cannot take the connections their own queries need
+	// (PDK-1010). Zero keeps the locks in the query pool.
+	LockConns int32
 }
 
-func newPool(ctx context.Context, dsn string, o Options) (*pgxpool.Pool, error) {
+// newPool opens the query pool and, with o.HealthConn, the health pool of one connection.
+func newPool(ctx context.Context, dsn string, o Options) (pool, error) {
+	p, err := openPool(ctx, dsn, o)
+	if err != nil {
+		return pool{}, err
+	}
+	if !o.HealthConn {
+		return pool{p: p}, nil
+	}
+	health, err := openPool(ctx, dsn, Options{MaxConns: 1, ApplicationName: suffixed(o.ApplicationName, "health")})
+	if err != nil {
+		p.Close()
+		return pool{}, err
+	}
+	return pool{p: p, health: health}, nil
+}
+
+func suffixed(name, suffix string) string {
+	if name == "" {
+		return ""
+	}
+	return name + "-" + suffix
+}
+
+func openPool(ctx context.Context, dsn string, o Options) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("db: parse dsn: %w", err)
@@ -47,14 +78,24 @@ func newPool(ctx context.Context, dsn string, o Options) (*pgxpool.Pool, error) 
 	return pgxpool.NewWithConfig(ctx, cfg)
 }
 
-// pool is the common part of all pools.
-type pool struct{ p *pgxpool.Pool }
+// pool is the common part of all pools; health is nil without Options.HealthConn.
+type pool struct{ p, health *pgxpool.Pool }
 
-// Ping checks connectivity (readiness).
-func (p pool) Ping(ctx context.Context) error { return p.p.Ping(ctx) }
+// Ping checks connectivity (readiness), on the health connection if the pool has one.
+func (p pool) Ping(ctx context.Context) error {
+	if p.health != nil {
+		return p.health.Ping(ctx)
+	}
+	return p.p.Ping(ctx)
+}
 
 // Close closes all connections.
-func (p pool) Close() { p.p.Close() }
+func (p pool) Close() {
+	p.p.Close()
+	if p.health != nil {
+		p.health.Close()
+	}
+}
 
 // inTx runs setup and fn in one transaction. fn's error is returned unchanged; the transaction is rolled back.
 func inTx(ctx context.Context, p *pgxpool.Pool, setup func(pgx.Tx) error, fn func(pgx.Tx) error) error {
@@ -101,7 +142,7 @@ func NewOrgPool(ctx context.Context, dsn string, o Options) (*OrgPool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &OrgPool{pool{p}}, nil
+	return &OrgPool{p}, nil
 }
 
 // InOrg opens a transaction, executes SELECT set_config('paddock.org_id', <principal.OrganizationID>, true) and
@@ -198,7 +239,10 @@ func listen(ctx context.Context, p *pgxpool.Pool, channel string, fn func(payloa
 }
 
 // PlatformPool is the pool of role paddock_platform (platform endpoints only).
-type PlatformPool struct{ pool }
+type PlatformPool struct {
+	pool
+	locks *pgxpool.Pool // nil without Options.LockConns: the locks share the query pool
+}
 
 // NewPlatformPool opens the paddock_platform pool.
 func NewPlatformPool(ctx context.Context, dsn string, o Options) (*PlatformPool, error) {
@@ -206,7 +250,30 @@ func NewPlatformPool(ctx context.Context, dsn string, o Options) (*PlatformPool,
 	if err != nil {
 		return nil, err
 	}
-	return &PlatformPool{pool{p}}, nil
+	if o.LockConns <= 0 {
+		return &PlatformPool{pool: p}, nil
+	}
+	locks, err := openPool(ctx, dsn, Options{MaxConns: o.LockConns, ApplicationName: suffixed(o.ApplicationName, "locks")})
+	if err != nil {
+		p.Close()
+		return nil, err
+	}
+	return &PlatformPool{pool: p, locks: locks}, nil
+}
+
+// Close closes all connections, the lock connections included.
+func (p *PlatformPool) Close() {
+	p.pool.Close()
+	if p.locks != nil {
+		p.locks.Close()
+	}
+}
+
+func (p *PlatformPool) lockPool() *pgxpool.Pool {
+	if p.locks != nil {
+		return p.locks
+	}
+	return p.p
 }
 
 // InPlatform requires principal.Kind == KindPlatformAdmin or KindSystem; otherwise it returns ErrForbiddenScope.
@@ -251,9 +318,9 @@ func (p *PlatformPool) FleetHostInUse(ctx context.Context, retiredDevice uuid.UU
 	return "", fmt.Errorf("check the Fleet host's other devices: unexpected answer %q", use)
 }
 
-// WithLeaderLock runs fn while holding the session advisory lock key on a dedicated connection, so that only one
-// replica of a role runs a periodic job at a time. It reports false (and does not call fn) when another session
-// holds the lock.
+// WithLeaderLock runs fn while holding the session advisory lock key on a dedicated connection (from the lock pool if
+// the pool has one, Options.LockConns), so that only one replica of a role runs a periodic job at a time. It reports
+// false (and does not call fn) when another session holds the lock.
 func (p *PlatformPool) WithLeaderLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (bool, error) {
 	return p.WithLeaderLocks(ctx, []int64{key}, fn)
 }
@@ -262,7 +329,7 @@ func (p *PlatformPool) WithLeaderLock(ctx context.Context, key int64, fn func(ct
 // second pool connection while it holds the first lock. It reports false (and does not call fn) when another session
 // holds any of the keys; the keys it got are released again.
 func (p *PlatformPool) WithLeaderLocks(ctx context.Context, keys []int64, fn func(ctx context.Context) error) (bool, error) {
-	conn, err := p.p.Acquire(ctx)
+	conn, err := p.lockPool().Acquire(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -286,6 +353,68 @@ func (p *PlatformPool) WithLeaderLocks(ctx context.Context, keys []int64, fn fun
 	return true, fn(ctx)
 }
 
+// ErrLeadershipLost is the cause with which Lead ends fn's context: the connection holding the lock stopped answering,
+// and with its session PostgreSQL released the lock, so another process may lead from then on.
+var ErrLeadershipLost = errors.New("db: leader lock lost with its connection")
+
+// Lead holds the advisory lock key on one dedicated connection for as long as fn runs, for a role that leads for its
+// whole process life rather than per round (the backup role, decisions-alpha10 §50). Every check it asks that
+// connection whether it still answers; when it does not, fn's context ends with the cause ErrLeadershipLost, Lead
+// waits for fn, discards the connection and returns ErrLeadershipLost. It reports false without calling fn when
+// another session holds the key.
+func (p *PlatformPool) Lead(ctx context.Context, key int64, check time.Duration, fn func(ctx context.Context) error) (bool, error) {
+	conn, err := p.lockPool().Acquire(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Release()
+	var locked bool
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&locked); err != nil || !locked {
+		return false, err
+	}
+	leadCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	watching := make(chan struct{})
+	go func() {
+		defer close(watching)
+		tick := time.NewTicker(check)
+		defer tick.Stop()
+		for {
+			select {
+			case <-leadCtx.Done():
+				return
+			case <-tick.C:
+			}
+			pingCtx, done := context.WithTimeout(leadCtx, check)
+			err := conn.Ping(pingCtx)
+			done()
+			if err != nil && leadCtx.Err() == nil {
+				cancel(ErrLeadershipLost)
+				return
+			}
+		}
+	}()
+	err = fn(leadCtx)
+	lost := errors.Is(context.Cause(leadCtx), ErrLeadershipLost)
+	cancel(nil)
+	<-watching
+	// A dead network path would hold an unlock or a close without a deadline for the TCP timeout.
+	endCtx, end := context.WithTimeout(context.WithoutCancel(ctx), check)
+	defer end()
+	if lost {
+		// The session may still be alive behind a broken network path; closing it is the only way to be sure the
+		// lock is not held on by a connection nobody watches.
+		_ = conn.Conn().Close(endCtx)
+		return true, errors.Join(ErrLeadershipLost, err)
+	}
+	if _, uerr := conn.Exec(endCtx, "SELECT pg_advisory_unlock($1)", key); uerr != nil {
+		closeCtx, done := context.WithTimeout(context.WithoutCancel(ctx), check)
+		_ = conn.Conn().Close(closeCtx) // closing the session releases the lock
+		done()
+	}
+	return true, err
+}
+
 // NotifierPool is the pool of role paddock_notifier (plan M9 decisions 21–23): InOrg for the organizations and
 // InPlatformScope for the platform destinations, which the notifier serves under its own role because
 // paddock_platform has no right on their delivery state (plan M9 amendment section E).
@@ -297,7 +426,7 @@ func NewNotifierPool(ctx context.Context, dsn string, o Options) (*NotifierPool,
 	if err != nil {
 		return nil, err
 	}
-	return &NotifierPool{OrgPool{pool{p}}}, nil
+	return &NotifierPool{OrgPool{p}}, nil
 }
 
 // InPlatformScope runs fn in a transaction scoped to the platform pseudo-organization (audit.PlatformOrganizationID),
@@ -318,7 +447,7 @@ func NewRelayPool(ctx context.Context, dsn string, o Options) (*RelayPool, error
 	if err != nil {
 		return nil, err
 	}
-	return &RelayPool{pool{p}}, nil
+	return &RelayPool{p}, nil
 }
 
 // InRelay runs fn in a transaction of role paddock_relay.
@@ -336,7 +465,7 @@ func NewUnsealerPool(ctx context.Context, dsn string, o Options) (*UnsealerPool,
 	if err != nil {
 		return nil, err
 	}
-	return &UnsealerPool{pool{p}}, nil
+	return &UnsealerPool{p}, nil
 }
 
 // InUnsealer runs fn in a transaction of role paddock_unsealer. There is no principal check: the unsealer is a
@@ -356,7 +485,7 @@ func NewBackupPool(ctx context.Context, dsn string, o Options) (*BackupPool, err
 	if err != nil {
 		return nil, err
 	}
-	return &BackupPool{pool{p}}, nil
+	return &BackupPool{p}, nil
 }
 
 // InBackup runs fn in a transaction of role paddock_backup scoped to the platform pseudo-organization
@@ -405,7 +534,7 @@ func NewAuditReader(ctx context.Context, dsn string, o Options) (*AuditReader, e
 	if err != nil {
 		return nil, err
 	}
-	return &AuditReader{pool{p}}, nil
+	return &AuditReader{p}, nil
 }
 
 // InOrg runs fn in a read-only transaction scoped to the principal's organization.
@@ -460,7 +589,7 @@ func NewAuditWriterPool(ctx context.Context, dsn string, o Options) (*AuditWrite
 	if err != nil {
 		return nil, err
 	}
-	return &AuditWriterPool{pool{p}}, nil
+	return &AuditWriterPool{p}, nil
 }
 
 // WriterTransactionTimeout bounds every paddock_audit_writer transaction. Objects are dated by the transaction's

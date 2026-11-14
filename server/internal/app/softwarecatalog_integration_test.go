@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -203,10 +204,11 @@ func TestSoftwareCatalog(t *testing.T) {
 		t.Fatalf("assignment event %+v", ev)
 	}
 	for name, in := range map[string]app.AssignmentInput{
-		"latest with version":   {CatalogEntryID: &entry.ID, Intent: software.IntentRequired, UpdateRule: software.UpdateLatest, Version: &pinned},
-		"forbid with version":   {CatalogEntryID: &entry.ID, Intent: software.IntentForbid, Version: &pinned},
-		"unknown intent":        {CatalogEntryID: &entry.ID, Intent: "available"},
-		"hold with bad version": {CatalogEntryID: &entry.ID, Intent: software.IntentHold, Version: new("1 0")},
+		"latest with version":    {CatalogEntryID: &entry.ID, Intent: software.IntentRequired, UpdateRule: software.UpdateLatest, Version: &pinned},
+		"forbid with version":    {CatalogEntryID: &entry.ID, Intent: software.IntentForbid, Version: &pinned},
+		"unknown intent":         {CatalogEntryID: &entry.ID, Intent: "install"},
+		"available with version": {CatalogEntryID: &entry.ID, Intent: software.IntentAvailable, Version: &pinned},
+		"hold with bad version":  {CatalogEntryID: &entry.ID, Intent: software.IntentHold, Version: new("1 0")},
 	} {
 		if _, err := catalog.CreateAssignment(ctx(operator), in); !errors.Is(err, problem.InvalidRequest) {
 			t.Errorf("%s = %v", name, err)
@@ -256,24 +258,34 @@ func TestSoftwareCatalog(t *testing.T) {
 		t.Fatalf("list entries = %+v, %v", entries, err)
 	}
 
-	// Delete: the assignments go with the entry and the event counts them.
+	// Delete: an entry with assignments is refused naming them (plan M13c amendment 2026-11-09, A10-12); once they are
+	// removed it goes and the event names it.
 	if err := catalog.Delete(ctx(auditor), entry.ID); !errors.Is(err, problem.Forbidden) {
 		t.Fatalf("auditor delete = %v", err)
+	}
+	err = catalog.Delete(ctx(operator), entry.ID)
+	if !errors.Is(err, problem.InUse) || !strings.Contains(problem.From(err).Detail, `"Editor" still has 2 assignments (device group "Laptops", organization)`) {
+		t.Fatalf("delete with assignments = %v", err)
+	}
+	if ev = h.lastEvent(t); ev.Outcome != audit.OutcomeFailure || ev.Params["assignment_count"] != float64(2) || ev.Params["name"] != "Editor" {
+		t.Fatalf("refused delete event %+v", ev)
+	}
+	if _, err := catalog.GetAssignment(ctx(auditor), created.ID); err != nil {
+		t.Fatalf("assignment after the refused delete = %v", err)
+	}
+	for _, id := range []uuid.UUID{created.ID, orgWide.ID} {
+		if err := catalog.DeleteAssignment(ctx(operator), id); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := catalog.Delete(ctx(operator), entry.ID); err != nil {
 		t.Fatal(err)
 	}
-	if ev = h.lastEvent(t); ev.Params["assignment_count"] != float64(2) || ev.Params["name"] != "Editor" {
+	if ev = h.lastEvent(t); ev.Outcome != audit.OutcomeSuccess || ev.Params["assignment_count"] != float64(0) || ev.Params["name"] != "Editor" {
 		t.Fatalf("deleted event %+v", ev)
-	}
-	if _, err := catalog.GetAssignment(ctx(auditor), created.ID); !errors.Is(err, problem.NotFound) {
-		t.Fatalf("assignment after delete = %v", err)
 	}
 	if err := catalog.Delete(ctx(operator), entry.ID); !errors.Is(err, problem.NotFound) {
 		t.Fatalf("second delete = %v", err)
-	}
-	if err := catalog.DeleteAssignment(ctx(operator), orgWide.ID); !errors.Is(err, problem.NotFound) {
-		t.Fatalf("delete assignment after the entry = %v", err)
 	}
 }
 
@@ -327,7 +339,8 @@ func TestSoftwareCatalogConstraints(t *testing.T) {
 		"forbid with version":             {"forbid", "latest", "1.0"},
 		"uninstall pinned":                {"uninstall", "pinned", nil},
 		"hold pinned":                     {"hold", "pinned", "1.0"},
-		"unknown intent":                  {"available", "latest", nil},
+		"unknown intent":                  {"install", "latest", nil},
+		"available with version":          {"available", "latest", "1.0"},
 	} {
 		if err := insertAssignment(h.org, nil, c.intent, c.rule, c.version); err == nil {
 			t.Errorf("%s was stored", name)
@@ -496,5 +509,45 @@ func TestSoftwareCatalogUpdateKeepsAssignmentsValid(t *testing.T) {
 		if wantPkg := map[bool]string{true: "vim", false: c.pkg}[c.refused]; packages[0].Package != wantPkg {
 			t.Fatalf("%s: stored package %s, want %s", c.intent, packages[0].Package, wantPkg)
 		}
+	}
+}
+
+// TestSoftwareCatalogApproval (plan M13c decision 8): an entry is created with approval none unless it asks for
+// required; an update without approval keeps it, one with approval changes it and names the field; an unknown value
+// is invalid_request.
+func TestSoftwareCatalogApproval(t *testing.T) {
+	h := newPrivilegesHarness(t)
+	pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	catalog := app.NewSoftwareCatalog(h.runner, pool)
+	ctx := principal.With(context.Background(), h.account(t, principal.RoleOrgOperator, false))
+	nano := []software.PackageRef{{Distribution: "ubuntu", Release: "*", Architecture: "*", Package: "nano"}}
+	required, none, bogus := software.ApprovalRequired, software.ApprovalNone, "maybe"
+
+	plain, err := catalog.Create(ctx, app.EntryInput{Name: "Plain", Packages: nano})
+	if err != nil || plain.Approval != none {
+		t.Fatalf("default approval %q, %v", plain.Approval, err)
+	}
+	if _, err := catalog.Create(ctx, app.EntryInput{Name: "Bogus", Packages: nano, Approval: &bogus}); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("unknown approval: %v", err)
+	}
+	e, err := catalog.Create(ctx, app.EntryInput{Name: "Gated", Packages: nano, Approval: &required})
+	if err != nil || e.Approval != required || h.lastEvent(t).Params["approval"] != required {
+		t.Fatalf("created %q, %v", e.Approval, err)
+	}
+	if e, err = catalog.Update(ctx, e.ID, app.EntryInput{Name: "Gated", Description: "kept", Packages: nano}); err != nil || e.Approval != required {
+		t.Fatalf("update without approval: %q, %v", e.Approval, err)
+	}
+	if e, err = catalog.Update(ctx, e.ID, app.EntryInput{Name: "Gated", Description: "kept", Packages: nano, Approval: &none}); err != nil || e.Approval != none {
+		t.Fatalf("update to none: %q, %v", e.Approval, err)
+	}
+	if fields := h.lastEvent(t).Params["fields"]; fmt.Sprint(fields) != "[approval]" {
+		t.Fatalf("fields %v", fields)
+	}
+	if _, err := catalog.Update(ctx, e.ID, app.EntryInput{Name: "Gated", Packages: nano, Approval: &bogus}); !errors.Is(err, problem.InvalidRequest) {
+		t.Fatalf("update to an unknown approval: %v", err)
 	}
 }

@@ -8,22 +8,39 @@ import { createPortalI18n } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
 import SoftwareCatalogDetail from '../views/SoftwareCatalogDetail.vue'
 import { useSessionStore } from '../stores/session'
-import type { SoftwareCatalogDevice, SoftwareCatalogEntry } from '../api/client'
+import type { CompileWarning, SoftwareAssignment, SoftwareCatalogDevice, SoftwareCatalogEntry } from '../api/client'
 
 const entry: SoftwareCatalogEntry = {
-  id: 'e1', name: 'Editor', description: 'Text editor', category: 'Tools', source_id: null, source_slug: '', has_icon: false,
+  id: 'e1', name: 'Editor', description: 'Text editor', category: 'Tools', source_id: null, source_slug: '', has_icon: false, approval: 'none',
   packages: [{ distribution: 'ubuntu', release: '*', architecture: '*', package: 'nano' }], assignment_count: 1,
   created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
 }
 const device = (over: Partial<SoftwareCatalogDevice>): SoftwareCatalogDevice => ({
   device_id: 'd1', hostname: 'lap-0421', name: '', device_group_ids: [], package: 'nano', intent: 'required', state: 'installed', version: '7.2',
-  reason: '', error: '', reported_at: '2026-10-02T00:00:00Z', ...over,
+  reason: '', error: '', scope: 'system', reported_at: '2026-10-02T00:00:00Z', ...over,
 })
 const setIcon = vi.hoisted(() => vi.fn())
 const saveAssignment = vi.hoisted(() => vi.fn())
 const deviceFetch = vi.hoisted(() => vi.fn())
 const saveEntry = vi.hoisted(() => vi.fn())
-const rows = [device({ name: 'Anna laptop' }), device({ device_id: 'd2', hostname: 'lap-0500' })]
+const rows = [
+  device({ name: 'Anna laptop' }), device({ device_id: 'd2', hostname: 'lap-0500' }), device({ device_id: 'd2', hostname: 'lap-0500', scope: 'user' }),
+].map((d) => ({ ...d, row_key: d.device_id + ':' + d.scope }))
+const assignment = (over: Partial<SoftwareAssignment>): SoftwareAssignment => ({
+  id: 'a1', app_name: 'Editor', catalog_entry_id: 'e1', device_group_id: null, user_id: null, user_group_id: null, intent: 'available',
+  update_rule: 'latest', version: null, reason: '', urgent: false, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', ...over,
+})
+const assignments = [
+  assignment({ id: 'a1', user_id: 'u1' }), assignment({ id: 'a2', user_group_id: 'ug1' }), assignment({ id: 'a3', device_group_id: 'g1', intent: 'required' }),
+  assignment({ id: 'a4', intent: 'forbid', urgent: true, reason: 'CVE fix' }),
+]
+const warnings: CompileWarning[] = [
+  { id: 'w1', device_id: 'd1', hostname: 'lap-0421', assignment_id: 'a2', catalog_entry_id: 'e1', code: 'audience_truncated', params: { users: 250, kept: 200 }, created_at: '2026-10-02T00:00:00Z' },
+  { id: 'w2', device_id: 'd2', hostname: 'lap-0500', assignment_id: 'a1', catalog_entry_id: 'e1', code: 'flatpak_forbidden', params: { flatpak_ref: 'org.gimp.GIMP' }, created_at: '2026-10-02T00:00:00Z' },
+]
+const page = <T>(items: T[], sort: string) => Promise.resolve({ items, page: 1, page_size: 25, total: items.length, total_capped: false, sort })
+const confirmed = vi.hoisted(() => ({ options: [] as { message: string }[] }))
+const stepUp = vi.hoisted(() => ({ started: [] as unknown[][], resumed: null as unknown }))
 
 vi.mock('../lib/software', async (original) => ({
   ...(await original<typeof import('../lib/software')>()),
@@ -31,11 +48,42 @@ vi.mock('../lib/software', async (original) => ({
   setCatalogIcon: setIcon,
   saveCatalogEntry: saveEntry,
   allSoftwareSources: () => Promise.resolve([]),
-  listSoftwareAssignments: () => () => Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_capped: false, sort: '-created_at' }),
+  listSoftwareAssignments: () => () => page(assignments, '-created_at'),
+  allSoftwareAssignments: () => Promise.resolve(assignments),
+  listCompileWarnings: () => () => page(warnings, '-created_at'),
   saveSoftwareAssignment: saveAssignment,
   listSoftwareCatalogDevices: () => () => {
     deviceFetch()
-    return Promise.resolve({ items: rows, page: 1, page_size: 25, total: 2, total_capped: false, sort: 'hostname' })
+    return page(rows, 'hostname')
+  },
+}))
+vi.mock('../lib/configRollouts', async (original) => ({
+  ...(await original<typeof import('../lib/configRollouts')>()),
+  openRolloutStagedKeys: () => Promise.resolve([{ parts: ['Laptops', 'Editor', 'device_group', null], rolloutID: 'r1' }]),
+}))
+vi.mock('../lib/stepUp', async (original) => ({
+  ...(await original<typeof import('../lib/stepUp')>()),
+  startStepUp: (...args: unknown[]) => stepUp.started.push(args),
+  withoutStepUpParam: () => '/software-catalog/e1',
+  resumeStepUp: () => {
+    const r = stepUp.resumed
+    stepUp.resumed = null
+    return r
+  },
+}))
+vi.mock('../lib/users', async (original) => ({
+  ...(await original<typeof import('../lib/users')>()),
+  allUsers: () => Promise.resolve([{ id: 'u1', username: 'alice@acme.test' }]),
+}))
+vi.mock('../lib/userGroups', async (original) => ({
+  ...(await original<typeof import('../lib/userGroups')>()),
+  allUserGroups: () => Promise.resolve([{ id: 'ug1', name: 'Designers' }]),
+}))
+vi.mock('../composables/useConfirm', async (original) => ({
+  ...(await original<typeof import('../composables/useConfirm')>()),
+  useConfirm: () => (options: { message: string }) => {
+    confirmed.options.push(options)
+    return Promise.resolve(false)
   },
 }))
 vi.mock('../lib/devices', async (original) => ({
@@ -59,6 +107,7 @@ async function mountDetail(role: string): Promise<void> {
       { path: '/software-catalog/:id', name: 'software-catalog-entry', component: { render: () => null } },
       { path: '/software-catalog', name: 'software-catalog', component: { render: () => null } },
       { path: '/devices/:id/managed-software', name: 'device-managed-software', component: { render: () => null } },
+      { path: '/config-rollouts/:id', name: 'config-rollout', component: { render: () => null } },
     ],
   })
   await router.push('/software-catalog/e1')
@@ -137,5 +186,95 @@ describe('SoftwareCatalogDetail devices list', () => {
     await flushPromises()
     expect(saveAssignment).toHaveBeenCalledTimes(1)
     expect(deviceFetch.mock.calls.length).toBeGreaterThan(before)
+  })
+
+  it('lists a device once per scope with the scope column and filter (plan M13b decision 17)', async () => {
+    await mountDetail('org_operator')
+    const list = document.body.querySelector('[data-testid="catalog-device-list"]')
+    expect(list?.querySelectorAll('tbody tr')).toHaveLength(3)
+    expect(list?.textContent).toContain('System')
+    expect(list?.textContent).toContain('User')
+    expect(list?.textContent).toContain('Scope')
+  })
+})
+
+describe('SoftwareCatalogDetail assignment targets (plan M13b decision 19)', () => {
+  it('names every kind of target in the list and in the action labels', async () => {
+    await mountDetail('org_operator')
+    const list = document.body.querySelector('[data-testid="assignment-list"]')
+    const text = list?.textContent ?? ''
+    for (const expected of ['User alice@acme.test', 'User group Designers', 'Laptops', 'All devices', 'Available']) expect(text).toContain(expected)
+    expect(list?.querySelector('[aria-label="Delete User group Designers"]')).not.toBeNull()
+    expect(list?.querySelector('[aria-label="Edit User alice@acme.test"]')).not.toBeNull()
+  })
+
+  it('names the user group in the delete confirmation', async () => {
+    confirmed.options.length = 0
+    await mountDetail('org_operator')
+    ;(document.body.querySelector('[aria-label="Delete User group Designers"]') as HTMLElement).click()
+    await flushPromises()
+    expect(confirmed.options[0].message).toContain('User group Designers')
+  })
+
+  it('shows the compile warnings of the entry localized, with the device and the assignment they concern', async () => {
+    await mountDetail('org_auditor')
+    const rowsShown = [...document.body.querySelectorAll('[data-testid="compile-warning-list"] tbody tr')].map((r) => r.textContent ?? '')
+    expect(rowsShown).toHaveLength(2)
+    expect(rowsShown[0]).toContain('lap-0421')
+    expect(rowsShown[0]).toContain('offered to 250 users on this device; the configuration carries the first 200')
+    expect(rowsShown[0]).toContain('User group Designers')
+    expect(rowsShown[1]).toContain('org.gimp.GIMP is left out on this device')
+    expect(rowsShown[1]).toContain('User alice@acme.test')
+  })
+})
+
+describe('SoftwareCatalogDetail approvals, urgent assignments and rollouts (plan M13c)', () => {
+  it('shows whether the entry needs approval', async () => {
+    await mountDetail('org_auditor')
+    expect(document.querySelector('[data-testid="entry-approval"]')?.textContent).toContain('Not required')
+  })
+
+  it('marks an urgent assignment and links an assignment the open rollout stages', async () => {
+    await mountDetail('org_auditor')
+    const rowsShown = [...document.body.querySelectorAll('[data-testid="assignment-list"] tbody tr')]
+    const laptops = rowsShown.find((r) => r.textContent?.includes('Laptops'))
+    expect(laptops?.querySelector('[data-testid="assignment-rollout"]')?.getAttribute('href')).toBe('/config-rollouts/r1')
+    expect(laptops?.textContent).toContain('Staged')
+    const forbid = rowsShown.find((r) => r.textContent?.includes('All devices'))
+    expect(forbid?.querySelector('[data-testid="assignment-urgent-chip"]')?.textContent).toContain('Urgent')
+    expect(forbid?.querySelector('[data-testid="assignment-rollout"]')).toBeNull()
+  })
+
+  it('starts the step-up when the server asks for it on an urgent save and repeats the save after it', async () => {
+    saveAssignment.mockReset()
+    saveAssignment.mockResolvedValue('step_up_required')
+    stepUp.started.length = 0
+    await mountDetail('org_operator')
+    ;(document.querySelector('[data-testid="create-assignment"]') as HTMLElement).click()
+    await flushPromises()
+    ;(document.querySelector('.v-dialog form') as HTMLFormElement).dispatchEvent(new Event('submit'))
+    await flushPromises()
+    expect(stepUp.started).toHaveLength(1)
+    expect(stepUp.started[0][0]).toBe('software-assignment')
+    expect(stepUp.started[0][1]).toBe('e1')
+    const pending = stepUp.started[0][2] as { id: string | null; input: { entryID: string } }
+    expect(pending.id).toBeNull()
+
+    wrapper?.unmount()
+    wrapper = null
+    saveAssignment.mockReset()
+    saveAssignment.mockResolvedValue(null)
+    stepUp.resumed = { failed: false, payload: pending }
+    await mountDetail('org_operator')
+    expect(saveAssignment).toHaveBeenCalledWith(null, pending.input)
+  })
+
+  it('shows the refusal of the save repeated after the step-up', async () => {
+    saveAssignment.mockReset()
+    saveAssignment.mockResolvedValue('rollout_conflict')
+    stepUp.resumed = { failed: false, payload: { id: 'a1', input: { entryID: 'e1' } } }
+    await mountDetail('org_operator')
+    expect(saveAssignment).toHaveBeenCalledWith('a1', { entryID: 'e1' })
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('A running or halted rollout stages this item.')
   })
 })

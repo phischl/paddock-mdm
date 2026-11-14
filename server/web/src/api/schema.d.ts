@@ -334,6 +334,33 @@ export interface paths {
         patch: operations["updateDeviceGroup"];
         trace?: never;
     };
+    "/api/v1/device-groups/{id}/maintenance-window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. 404 not_found when the group has no window, is unknown or is another organization's. */
+        get: operations["getDeviceGroupMaintenanceWindow"];
+        /**
+         * @description Roles: org_admin, org_operator. Sets or replaces the group's maintenance window (plan M13c decision 4): the
+         *     group's devices install and remove the software of their policy only inside the union of the windows of their
+         *     groups; urgent assignments, the users' own self-service operations and source files do not wait. A value out
+         *     of range or a timezone the server does not know is 400 invalid_request; an unknown group or another
+         *     organization's is 404 not_found.
+         */
+        put: operations["setDeviceGroupMaintenanceWindow"];
+        post?: never;
+        /** @description Roles: org_admin, org_operator. Removes the group's window: its devices apply their software policy at the next pass unless another group of theirs has a window. 404 not_found when the group has none. */
+        delete: operations["deleteDeviceGroupMaintenanceWindow"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit-events": {
         parameters: {
             query?: never;
@@ -683,6 +710,13 @@ export interface paths {
          *     too), any other change of a section it stages with 409 rollout_running (package holds and update settings are
          *     one section; a mixed apply is refused as a whole), and a change of only other sections is immediate. The same
          *     rules apply to every per-resource write and to reverts (ADR 0033 amendment 2026-11-01).
+         *     Software (plan M13c decisions 1-3): the sections software_sources, software_catalog and software_assignments
+         *     follow the rules of their endpoints. A plan that changes software_sources needs an organization administrator
+         *     with a fresh step-up for the whole apply (ADR 0034 decision 3): an API token's apply is refused with 403
+         *     step_up_required and nothing is applied, its dry run lists the section in plan.requires_step_up. A
+         *     software_sources item whose fingerprint differs from its signing key is 422 fingerprint_mismatch. A change of
+         *     software_assignments is rollout-able like managed files (ADR 0033 amendment 2026-11-05); sources and catalog
+         *     entries are always immediate.
          */
         put: operations["applyConfig"];
         post?: never;
@@ -818,8 +852,8 @@ export interface paths {
          * @description Roles: org_admin, org_operator, org_auditor. The active devices of the organization as the rollout sees them:
          *     whether each is inside the wave the rollout reached, its newest bundle and whether that bundle carries the
          *     rollout, and the newest report on a bundle of the rollout, the one the counts read, with its failed staged
-         *     resources. Equal sort keys are ordered by hostname. 404 not_found for an unknown rollout or one of another
-         *     organization.
+         *     resources, and whether the device holds the rollout until it applies successfully (awaiting_retry). Equal sort
+         *     keys are ordered by hostname. 404 not_found for an unknown rollout or one of another organization.
          */
         get: operations["listConfigRolloutDevices"];
         put?: never;
@@ -1579,6 +1613,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{id}/software": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The software assignments that target the user (plan M13b decision
+         *     6): directly (user_group_id null) or through a user group the user is a member of, with the intent. Assignments
+         *     of the organization or of device groups are not listed. 404 not_found for a missing user or another
+         *     organization's.
+         */
+        get: operations["listUserSoftware"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/{id}/lock": {
         parameters: {
             query?: never;
@@ -1911,8 +1969,9 @@ export interface paths {
         /**
          * @description Roles: org_admin. Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1
          *     and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent
-         *     (0–100), failure_threshold_min (at least 0) and the optional canary device group, whose devices always go first.
-         *     An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404
+         *     (0–100), failure_threshold_min (at least 0), the optional canary device group, whose devices always go first,
+         *     and the optional wave_success_threshold_percent (1–100) and stall_warning_hours (1–720), which keep their stored
+         *     values when absent. An invalid value is 400 invalid_request; an unknown device group, or one of another organization, is 404
          *     not_found. A rollout that is already running keeps the values it started with.
          */
         put: operations["updateRolloutSettings"];
@@ -2005,7 +2064,9 @@ export interface paths {
         get: operations["listSoftwareSources"];
         put?: never;
         /**
-         * @description Roles: org_admin. Adds an APT package source with its signing key. A source is root-equivalent: every package
+         * @description Roles: org_admin. Adds a package source with its signing key: an APT repository (kind apt, the default) or a
+         *     Flatpak remote (kind flatpak: exactly one URI, the remote's URL, and no suites, components or architectures,
+         *     else 400 invalid_request; the signing key is the remote's GPG key). A source is root-equivalent: every package
          *     it signs is installed as root. URIs must use https (400 invalid_request "uris must use https"); they may name
          *     internal hosts, because only the devices fetch from them, never the server. Suites are either all flat
          *     (ending in "/", then no components) or none (then at least one component). The signing key is one
@@ -2052,6 +2113,134 @@ export interface paths {
         patch: operations["updateSoftwareSource"];
         trace?: never;
     };
+    "/api/v1/software-packages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The Debian packages stored in the organization's Paddock
+         *     repository (plan M13c decision 12, ADR 0050).
+         */
+        get: operations["listSoftwarePackages"];
+        put?: never;
+        /**
+         * @description Roles: org_admin. Uploads a binary Debian package (at most 256 MiB) into the organization's Paddock
+         *     repository. Uploading a package is root-equivalent on every device it is assigned to: its maintainer scripts
+         *     run as root and Paddock scans nothing inside it (RR-114). The file must be an ar archive of exactly
+         *     debian-binary (2.0), control.tar[.gz|.zst] and data.tar.*, with a control file of one paragraph whose Package,
+         *     Version and Architecture (amd64, arm64 or all) pass the Debian rules and which sets none of the index fields
+         *     Filename, Size, MD5sum, SHA1, SHA256, SHA512 or Description-md5 (400 invalid_request otherwise). A control
+         *     archive in xz or another compression is 415 unsupported_compression: build with dpkg-deb -Zgzip or -Zzstd.
+         *     The optional fields package, version and architecture must equal the control file's (400 invalid_request).
+         *     The same name, version and architecture again is 409 already_exists. While the repository's signing key is
+         *     being generated (shortly after the first visit of the repository) the upload is 409 repository_not_ready.
+         *     Needs a step-up within the last 5 minutes (403 step_up_required; API tokens and MCP sessions cannot satisfy
+         *     it). The repository is rebuilt in the background.
+         */
+        post: operations["uploadSoftwarePackage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-packages/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * @description Roles: org_admin. Removes a stored package from the repository, which is rebuilt without it. While a catalog
+         *     entry of the Paddock source names the package (any version, any architecture), the delete is 409 in_use. 404 not_found for another organization's package. Needs a step-up within the last
+         *     5 minutes (403 step_up_required).
+         */
+        delete: operations["deleteSoftwarePackage"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-repository": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's Paddock repository (ADR 0050): its state, the
+         *     system source and the signing key's fingerprint once the key exists, the build and the stored packages. The
+         *     first call creates the repository with its read credential and queues the generation of its signing key;
+         *     until the key exists the state is disabled and source and fingerprint are null. The credential itself is shown
+         *     only by rotate-credential.
+         */
+        get: operations["getSoftwareRepository"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-repository/rotate-credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Replaces the repository's read credential (HTTP basic authentication, user paddock) with a
+         *     new random secret and returns it once; it is never shown again and never recorded. Every device receives the
+         *     new one with its next bundle; the previous one stays valid for 24 hours (previous_valid_until). Needs a
+         *     step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["rotateSoftwareRepositoryCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-repository/rotate-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Replaces the repository's OpenPGP signing key (ADR 0050 decision 3). The worker generates the
+         *     new key at its next round (within a minute), signs the repository with it and only then gives it to the devices
+         *     with their next bundle, so a device that received the new key always finds the repository signed with it; a
+         *     device that is offline meanwhile receives the new key before its next update. For 30 days the repository is
+         *     signed with the previous key (previous_fingerprint) as well, so a device that has not received the new key yet
+         *     keeps updating; then it is signed with the new key alone. The answer is the repository with key_rotation_requested_at set; fingerprint
+         *     changes once the worker has published. 409 repository_not_ready while the first key is being generated. Needs a
+         *     step-up within the last 5 minutes (403 step_up_required).
+         */
+        post: operations["rotateSoftwareRepositoryKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/software-catalog": {
         parameters: {
             query?: never;
@@ -2093,8 +2282,10 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * @description Roles: org_admin, org_operator. Removes the entry together with its assignments (never 409); the devices stop
-         *     managing the application, installed software stays.
+         * @description Roles: org_admin, org_operator. Removes an entry that has no assignments; it changes nothing on any device. An
+         *     entry that still has assignments is 409 in_use, and the detail names them (target type and device group,
+         *     username or user group slug): remove the assignments first, a removal that rolls out in waves like every
+         *     other assignment change. While a rollout stages assignments of the entry, the deletion is 409 rollout_conflict.
          */
         delete: operations["deleteSoftwareCatalogEntry"];
         options?: never;
@@ -2143,8 +2334,10 @@ export interface paths {
         };
         /**
          * @description Roles: org_admin, org_operator, org_auditor. The active devices the entry is assigned to, through an assignment
-         *     of the organization or of one of their groups, with what they reported or the derived state not_applicable or
-         *     unknown (see the device's managed software). The search matches the hostname. 404 not_found for another
+         *     of the organization, of one of their groups or of one of their owners (a user, or a user group with a member who
+         *     owns the device), and the active devices that reported it, with what they reported or the derived state
+         *     not_applicable or unknown (see the device's managed software). A device with a system and a user-scope row for the entry is
+         *     listed once per scope (plan M13b decision 17). The search matches the hostname. 404 not_found for another
          *     organization's entry.
          */
         get: operations["listSoftwareCatalogDevices"];
@@ -2163,17 +2356,22 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Roles: org_admin, org_operator, org_auditor. The assignments of catalog entries to the organization or device groups; the search matches the entry's name. */
+        /** @description Roles: org_admin, org_operator, org_auditor. The assignments of catalog entries to the organization, device groups, users or user groups; the search matches the entry's name. */
         get: operations["listSoftwareAssignments"];
         put?: never;
         /**
-         * @description Roles: org_admin, org_operator. Assigns a catalog entry to every device of the organization (no
-         *     device_group_id) or to a device group with an intent. required keeps the application installed (update_rule
-         *     latest without a version, or pinned with one; omitted, the rule is pinned for a required assignment with a
-         *     version and latest otherwise); uninstall removes it; hold keeps the installed version (with a version it is
-         *     pinned); forbid removes it and blocks it for apt. uninstall and forbid take no version. Violations are 400
-         *     invalid_request. An entry or device group of another organization or an unknown one is 404 not_found; a
-         *     second assignment of the entry in the same scope is 409 already_exists.
+         * @description Roles: org_admin, org_operator. Assigns a catalog entry with an intent to one target: every device of the
+         *     organization (no target ID), a device group (device_group_id), a user (user_id) or a user group
+         *     (user_group_id); more than one target ID is 400 invalid_request. required keeps the application installed
+         *     (update_rule latest without a version, or pinned with one; omitted, the rule is pinned for a required
+         *     assignment with a version and latest otherwise); uninstall removes it; hold keeps the installed version (with
+         *     a version it is pinned); forbid removes it and blocks it for apt; available offers it to the target's users
+         *     to install themselves and loses against every other intent on the same device. uninstall, forbid and
+         *     available take no version. Violations are 400 invalid_request. An entry, device group, user or user group of
+         *     another organization or an unknown one is 404 not_found; a second assignment of the entry to the same target
+         *     is 409 already_exists. urgent (plan M13c decision 7) makes the devices apply the assignment outside their
+         *     maintenance windows: it needs a reason of 2 to 500 characters (400 invalid_request otherwise) and a step-up
+         *     within the last 5 minutes (403 step_up_required otherwise; always for API tokens and MCP sessions).
          */
         post: operations["createSoftwareAssignment"];
         delete?: never;
@@ -2200,12 +2398,133 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * @description Roles: org_admin, org_operator. Replaces intent, update_rule, version and reason with the submitted values
-         *     (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty); the
-         *     same rules as on creation apply. The entry and the scope are fixed: giving a catalog_entry_id or a
-         *     device_group_id is 400 invalid_request.
+         * @description Roles: org_admin, org_operator. Replaces intent, update_rule, version, reason and urgent with the submitted
+         *     values (an absent version is none, an absent update_rule is derived as on creation, an absent reason is empty,
+         *     an absent urgent is false); the same rules as on creation apply, so keeping or setting urgent needs a reason
+         *     and a step-up again. The entry and the target are fixed: giving a catalog_entry_id,
+         *     device_group_id, user_id or user_group_id is 400 invalid_request.
          */
         patch: operations["updateSoftwareAssignment"];
+        trace?: never;
+    };
+    "/api/v1/software-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The users' requests for available applications whose catalog
+         *     entry requires approval (plan M13c decision 10), with their state: requested (waiting for a decision),
+         *     approved, denied, expired (30 days without a decision, or the entry no longer requires approval) or
+         *     withdrawn. The user's justification is not stored.
+         */
+        get: operations["listSoftwareRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. 404 not_found for another organization's request. */
+        get: operations["getSoftwareRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-requests/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Approves an open request, optionally with a reason; no step-up of its own (the entry's source
+         *     needed one). The device's next bundle lets the user install the application. The reason is plain text of at
+         *     most 500 characters without control, format or invisible characters except line breaks (no tabs). 400
+         *     invalid_request for a reason that breaks these rules, 409 invalid_state unless the request is open, 404
+         *     not_found for another organization's request.
+         */
+        post: operations["approveSoftwareRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software-requests/{id}/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Denies an open request with a reason, which the user sees; no step-up of its own. The user
+         *     may ask again after 24 hours; until then the device's bundle names the denial with its reason. The reason is
+         *     plain text of at most 500 characters without control, format or invisible characters except line breaks.
+         *     400 invalid_request without a reason or for a reason that breaks these rules, 409 invalid_state unless the
+         *     request is open, 404 not_found for another organization's request.
+         */
+        post: operations["denySoftwareRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/compile-warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. What the compiler shortened or dropped from a device's bundle
+         *     against what an administrator assigned (architect decisions A10-9 and A10-10), from the device's latest
+         *     compile: each compile of a device replaces its warnings, and a device whose bundle was blocked keeps those of its
+         *     current bundle. Codes are stable English identifiers the portal localizes: audience_truncated (the audience of
+         *     an available package named more users than a bundle carries; params users, kept) and flatpak_forbidden (an
+         *     entry forbids or uninstalls the flatpak package on the device, so its required or available Flatpak
+         *     application is left out; params flatpak_ref) and flatpak_users_truncated (a user-scope Flatpak application
+         *     targeted more users on the device than a bundle carries; params users, kept, flatpak_ref). A warning names the
+         *     assignment and catalog entry it concerns.
+         *     The search matches the hostname and the code. A device, assignment or entry of another organization matches
+         *     nothing.
+         */
+        get: operations["listCompileWarnings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/overview": {
@@ -3310,10 +3629,13 @@ export interface paths {
         };
         /**
          * @description Roles: org_admin, org_operator, org_auditor. The catalog applications the device manages (plan M13a §3.4): what
-         *     the device reported for each, and for an application assigned to it that it has not reported on the derived state
+         *     the device reported for each, and for an application assigned to it (through the organization, one of its groups
+         *     or one of its owners, a user or a user group with a member who owns the device) that it has not reported on the
+         *     derived state
          *     not_applicable (the entry names no package for the device's os-release and architecture) or unknown (a package
-         *     applies, no report yet). The state and intent filters apply to derived entries too; derived entries have no
-         *     reported_at. 404 not_found for another organization's device.
+         *     applies, no report yet). An application the device reports in system and in user scope is listed once per scope
+         *     (plan M13b decision 17). The state, intent and scope filters apply to derived entries too; derived entries have
+         *     no reported_at. 404 not_found for another organization's device.
          */
         get: operations["listDeviceManagedSoftware"];
         put?: never;
@@ -3832,8 +4154,8 @@ export interface paths {
             path: {
                 /** @description Semantic version of an agent release. */
                 version: components["parameters"]["Version"];
-                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
-                arch: "amd64" | "arm64";
+                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery" | "paddock-self-service";
+                arch: "amd64" | "arm64" | "all";
             };
             cookie?: never;
         };
@@ -3841,12 +4163,19 @@ export interface paths {
         /**
          * @description Roles: platform_admin. Uploads a Debian package of a draft release (at most 128 MiB), signed like the
          *     binary: the server verifies the minisign signature with the configured release public key, paddock-revoke with
-         *     the revocation release public key (400 otherwise).
+         *     the revocation release public key (400 otherwise). The signed trusted comment must be
+         *     `paddock-agent version=<version> arch=<arch>` for this release and architecture, for fleet-osquery and
+         *     paddock-revoke too (the release version, not fleet-osquery's package_version; 422 release_signature_mismatch
+         *     otherwise), so that a package
+         *     signed for another release cannot be stored under this one.
          *     Packages are stored below packages/ in the artifact bucket and served without authentication at
          *     https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb; the Paddock autoinstall pins their
          *     SHA-256 (plan M4b decision 1). fleet-osquery (fleetd, plan M5a decision 3) needs package_version, the fleetd
          *     version its file is named after (packages/<version>/fleet-osquery_<package_version>_<arch>.deb); the agent
-         *     installs it, the autoinstall never. Uploading again replaces the package while the release is a draft.
+         *     installs it, the autoinstall never. paddock-self-service (the self-service app, plan M13b amendment
+         *     2026-11-11) is architecture-independent: it is uploaded with arch all, the only architecture valid for it, and
+         *     all is valid for no other package (400 invalid_request otherwise); neither the autoinstall nor the agent update
+         *     installs it. Uploading again replaces the package while the release is a draft.
          *     Audited as an artifact upload with kind deb.
          */
         put: operations["uploadAgentPackage"];
@@ -4952,11 +5281,11 @@ export interface components {
         };
         AgentPackage: {
             /** @enum {string} */
-            name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
+            name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery" | "paddock-self-service";
             /** @description The fleetd version of fleet-osquery; absent for Paddock's packages. */
             package_version?: string;
             /** @enum {string} */
-            arch: "amd64" | "arm64";
+            arch: "amd64" | "arm64" | "all";
             /** @description Hex SHA-256 of the package. */
             sha256: string;
             /** Format: int64 */
@@ -5438,6 +5767,8 @@ export interface components {
             created: number;
             updated: number;
             deleted: number;
+            /** @description Sections the plan changes whose change needs an organization administrator with a fresh step-up for the whole apply (plan M13c decision 2; today software_sources). Omitted when empty. An API token's apply of such a plan is refused with 403 step_up_required; its dry run shows the plan with this list instead. */
+            requires_step_up?: string[];
         };
         ConfigChange: {
             /** @description A section of the document, settings as settings.login and settings.updates. */
@@ -5542,8 +5873,16 @@ export interface components {
             applied: number;
             /** @description Eligible devices the failure threshold counts (since the start or the last resume). */
             failed: number;
-            /** @description The other eligible devices. */
+            /** @description The other eligible devices, those waiting for their maintenance window included. */
             pending: number;
+            /** @description Pending eligible devices whose staged software change waits for their maintenance window (A10-16). */
+            waiting: number;
+            /**
+             * @description Eligible devices that hold the rollout until they apply successfully (A10-19): a failure the last resume
+             *     discarded (counted in pending) and, after a resume, a failure since (counted in failed). While it is above
+             *     zero no wave advances and the rollout does not complete by itself.
+             */
+            awaiting_retry: number;
         };
         ConfigRollout: {
             /** Format: uuid */
@@ -5567,6 +5906,21 @@ export interface components {
             /** Format: date-time */
             ended_at: string | null;
             ended_reason: string | null;
+            /** @description The wave success threshold the rollout started with (A10-16). */
+            wave_success_threshold_percent?: number;
+            /** @description The stall warning hours the rollout started with (A10-16). */
+            stall_warning_hours?: number;
+            /**
+             * Format: date-time
+             * @description When the worker first saw a device that joined in the current wave applied; min_wave_minutes counts from
+             *     here, not from wave_started_at (A10-16). Null while none has; a wave no device joined counts from its start.
+             */
+            wave_first_applied_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Set while the current wave is stalled and was warned about (config_rollout.stalled): the last time more of its devices applied, or its start or last resume.
+             */
+            stalled_since?: string | null;
             /** @description The counts of the rollout. After a wave action they are all zero when they could not be read once the action had been applied. */
             counts: components["schemas"]["ConfigRolloutCounts"];
         };
@@ -5613,6 +5967,19 @@ export interface components {
              *     the device is pending until it reports again.
              */
             failed_resource_ids: string[];
+            /**
+             * @description The device applied the bundle (report_outcome applied) but a staged software change still waits for its
+             *     maintenance window (pending/outside_window). It counts as pending, never as failed, and holds the wave
+             *     while the wave's applied share is below wave_success_threshold_percent (A10-16).
+             */
+            waiting_for_window: boolean;
+            /**
+             * @description The device is inside the wave and holds the rollout until it applies successfully (A10-19): its failure was
+             *     received before the rollout's last resume and it has not reported since (report_outcome none), or the
+             *     rollout was resumed and its newest report is a failure. No wave advances and the rollout does not complete
+             *     by itself while such a device exists.
+             */
+            awaiting_retry: boolean;
         };
         ConfigRolloutDevicePage: {
             items: components["schemas"]["ConfigRolloutDevice"][];
@@ -6442,6 +6809,14 @@ export interface components {
              * @description Devices of this group always go first; null = none.
              */
             canary_device_group_id: string | null;
+            /**
+             * @description Default 90 (architect decision A10-16). A wave advances only once min_wave_minutes passed since the first
+             *     device that joined in the wave applied, and once this share of those devices applied (with success or
+             *     failure) or none of them still waits for its maintenance window.
+             */
+            wave_success_threshold_percent?: number;
+            /** @description Default 24. A wave whose devices apply nothing for this long is warned about once (audit event config_rollout.stalled); the warning forces nothing. */
+            stall_warning_hours?: number;
             /** Format: date-time */
             updated_at?: string;
         };
@@ -6458,6 +6833,10 @@ export interface components {
              * @description Omit or null for none.
              */
             canary_device_group_id?: string | null;
+            /** @description 1 to 100; absent keeps the stored value (default 90). */
+            wave_success_threshold_percent?: number;
+            /** @description 1 to 720; absent keeps the stored value (default 24). */
+            stall_warning_hours?: number;
         };
         PrivacySettings: {
             retired_inventory_days: number;
@@ -6529,9 +6908,15 @@ export interface components {
         };
         /** @enum {string} */
         SoftwareArchitecture: "amd64" | "arm64";
+        /**
+         * @description apt: an APT repository; flatpak: a Flatpak remote with exactly one URI and no suites, components or architectures; paddock: the system source of the organization's Paddock repository (ADR 0050), maintained by Paddock, never created, changed or deleted through the API (409 invalid_state). Immutable.
+         * @enum {string}
+         */
+        SoftwareSourceKind: "apt" | "flatpak" | "paddock";
         SoftwareSourceSummary: {
             /** Format: uuid */
             id: string;
+            kind: components["schemas"]["SoftwareSourceKind"];
             /** @description Immutable; names the source file and keyring on the devices. */
             slug: string;
             name: string;
@@ -6556,14 +6941,15 @@ export interface components {
             signing_key: string;
         };
         SoftwareSourceCreate: {
-            /** @description ^[a-z0-9][a-z0-9-]{1,40}$ */
+            kind?: components["schemas"]["SoftwareSourceKind"];
+            /** @description ^[a-z0-9][a-z0-9-]{1,40}$; for a Flatpak remote the device names the remote paddock-<slug>. */
             slug: string;
             /** @description 1 to 100 characters after trimming. */
             name: string;
             /** @description https only, no query, fragment or user information. */
             uris: string[];
-            /** @description ^[A-Za-z0-9./_-]{1,64}$; a flat repository's suite ends in /. */
-            suites: string[];
+            /** @description ^[A-Za-z0-9./_-]{1,64}$; a flat repository's suite ends in /. An APT repository needs 1 to 8, a Flatpak remote none. */
+            suites?: string[];
             /** @description ^[a-z0-9-]{1,32}$; none for a flat repository, at least one otherwise. */
             components?: string[];
             architectures?: components["schemas"]["SoftwareArchitecture"][];
@@ -6573,6 +6959,7 @@ export interface components {
             fingerprint: string;
         };
         SoftwareSourceUpdate: {
+            kind?: components["schemas"]["SoftwareSourceKind"];
             /** @description Immutable; any value is refused with 400 invalid_request. */
             slug?: string;
             name?: string;
@@ -6597,9 +6984,109 @@ export interface components {
             sort: string;
         };
         /** @enum {string} */
-        SoftwareIntent: "required" | "uninstall" | "hold" | "forbid";
+        SoftwarePackageArchitecture: "amd64" | "arm64" | "all";
+        SoftwarePackage: {
+            /** Format: uuid */
+            id: string;
+            package: string;
+            version: string;
+            architecture: components["schemas"]["SoftwarePackageArchitecture"];
+            /**
+             * Format: int64
+             * @description Bytes of the file.
+             */
+            size: number;
+            /** @description SHA-256 of the file, 64 lowercase hexadecimal characters. */
+            sha256: string;
+            /** @description The file's path in the repository: pool/main/<p>/<package>/<package>_<version without epoch>_<architecture>.deb. */
+            filename: string;
+            /** @description The fields of the package's control file as uploaded; continuation lines of a value are joined by a newline. */
+            control: {
+                [key: string]: string;
+            };
+            /** @description The uploading administrator's display name. */
+            uploaded_by: string;
+            /** Format: date-time */
+            uploaded_at: string;
+        };
+        SoftwarePackagePage: {
+            items: components["schemas"]["SoftwarePackage"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        SoftwarePackageUpload: {
+            /**
+             * Format: binary
+             * @description The .deb file, at most 256 MiB.
+             */
+            file: string;
+            /** @description When given, must equal the control file's Package. */
+            package?: string;
+            /** @description When given, must equal the control file's Version. */
+            version?: string;
+            /** @description When given, must equal the control file's Architecture. */
+            architecture?: string;
+        };
+        SoftwareRepository: {
+            /**
+             * @description disabled: the signing key is being generated, uploads are refused and nothing is published; pending: a rebuild is queued; built: the published index is current; failed: the last build failed (last_error), the previous index stays published.
+             * @enum {string}
+             */
+            state: "disabled" | "pending" | "built" | "failed";
+            /** @description The repository's URL on the bundles host: https://bundles.<domain>/apt/<organization slug>/. */
+            url: string;
+            /** @description The system source (kind paddock) that catalog entries name; null until the signing key exists. */
+            source: components["schemas"]["SoftwareSourceSummary"] | null;
+            /** @description The signing key's fingerprint; null until it exists. */
+            fingerprint: string | null;
+            /** @description The previous signing key's fingerprint for 30 days after a key rotation. */
+            previous_fingerprint: string | null;
+            /**
+             * Format: date-time
+             * @description Set while a key rotation waits for the worker.
+             */
+            key_rotation_requested_at: string | null;
+            /**
+             * Format: int64
+             * @description The number of published builds.
+             */
+            generation: number;
+            /** Format: date-time */
+            last_built_at: string | null;
+            last_error: string | null;
+            package_count: number;
+            /** Format: date-time */
+            credential_rotated_at: string;
+            /**
+             * Format: date-time
+             * @description Until when the previous read credential is still accepted.
+             */
+            previous_credential_valid_until: string | null;
+        };
+        SoftwareRepositoryCredential: {
+            /** @description Always paddock. */
+            username: string;
+            /** @description The new secret; shown once. */
+            secret: string;
+            url: string;
+            /** Format: date-time */
+            previous_valid_until: string;
+        };
+        /** @enum {string} */
+        SoftwareIntent: "required" | "uninstall" | "hold" | "forbid" | "available";
+        /** @enum {string} */
+        SoftwareTarget: "organization" | "device_group" | "user" | "user_group";
+        /** @enum {string} */
+        SoftwareScope: "system" | "user";
         /** @enum {string} */
         SoftwareUpdateRule: "latest" | "pinned";
+        /** @description Names either an APT package (package) or a Flatpak application (flatpak_ref, with scope); an entry of a Flatpak source names Flatpak applications only, every other entry APT packages only. */
         PackageRef: {
             /** @description The ID of /etc/os-release, ^[a-z][a-z0-9-]{0,31}$, e.g. ubuntu or debian. */
             distribution: string;
@@ -6608,7 +7095,10 @@ export interface components {
             /** @enum {string} */
             architecture: "*" | "amd64" | "arm64";
             /** @description ^[a-z0-9][a-z0-9+.-]+$ */
-            package: string;
+            package?: string;
+            /** @description A Flatpak application ID, ^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*){2,}$, e.g. org.gimp.GIMP. */
+            flatpak_ref?: string;
+            scope?: components["schemas"]["SoftwareScope"];
         };
         SoftwareCatalogEntryCreate: {
             /** @description 1 to 100 characters after trimming; unique within the organization. */
@@ -6623,6 +7113,7 @@ export interface components {
             source_id?: string | null;
             /** @description Unique by distribution, release and architecture; the most specific reference wins on a device. */
             packages: components["schemas"]["PackageRef"][];
+            approval?: components["schemas"]["SoftwareApproval"];
         };
         SoftwareCatalogEntryUpdate: {
             name: string;
@@ -6634,6 +7125,8 @@ export interface components {
              */
             source_id?: string | null;
             packages: components["schemas"]["PackageRef"][];
+            /** @description Omit to keep the stored approval. */
+            approval?: components["schemas"]["SoftwareApproval"];
         };
         SoftwareCatalogEntry: {
             /** Format: uuid */
@@ -6646,12 +7139,75 @@ export interface components {
             /** @description Empty for the distribution's own repositories. */
             source_slug: string;
             packages: components["schemas"]["PackageRef"][];
+            approval: components["schemas"]["SoftwareApproval"];
             has_icon: boolean;
             assignment_count: number;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        /** @enum {string} */
+        SoftwareRequestState: "requested" | "approved" | "denied" | "expired" | "withdrawn";
+        /**
+         * @description required makes the users of an available assignment ask an administrator before they install the application.
+         * @enum {string}
+         */
+        SoftwareApproval: "none" | "required";
+        SoftwareRequest: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            catalog_entry_id: string;
+            entry_name: string;
+            entry_approval: components["schemas"]["SoftwareApproval"];
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            /**
+             * Format: uuid
+             * @description Null when no directory user has the user name.
+             */
+            user_id: string | null;
+            username: string;
+            state: components["schemas"]["SoftwareRequestState"];
+            /** Format: date-time */
+            requested_at: string;
+            /**
+             * Format: date-time
+             * @description When an open request expires without a decision.
+             */
+            expires_at: string;
+            /** @description The deciding administrator's display name. */
+            decided_by: string | null;
+            /**
+             * Format: date-time
+             * @description When it was decided or expired.
+             */
+            decided_at: string | null;
+            /** @description Untrusted plain text; render it as text only. A denial's reason reaches the user's device. */
+            decision_reason: string | null;
+            /** @description The user's justification as the device sent it; empty when the user gave none. Untrusted plain text of at most 500 characters without control characters except line breaks: render it as text only, never as HTML or markdown. It never appears in audit events, logs or notifications. */
+            justification: string;
+        };
+        SoftwareRequestPage: {
+            items: components["schemas"]["SoftwareRequest"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        SoftwareRequestDecision: {
+            /** @description Optional; trimmed. Plain text without control, format or invisible characters except line breaks (no tabs). */
+            reason?: string;
+        };
+        SoftwareRequestDenial: {
+            /** @description Required: the user sees it. Trimmed; must not be empty. Plain text without control, format or invisible characters except line breaks (no tabs). */
+            reason: string;
         };
         SoftwareCatalogEntryPage: {
             items: components["schemas"]["SoftwareCatalogEntry"][];
@@ -6669,14 +7225,26 @@ export interface components {
             catalog_entry_id: string;
             /**
              * Format: uuid
-             * @description Omit or null for every device of the organization.
+             * @description Omit or null, together with user_id and user_group_id, for every device of the organization.
              */
             device_group_id?: string | null;
+            /**
+             * Format: uuid
+             * @description The user the assignment targets.
+             */
+            user_id?: string | null;
+            /**
+             * Format: uuid
+             * @description The user group the assignment targets.
+             */
+            user_group_id?: string | null;
             intent: components["schemas"]["SoftwareIntent"];
             update_rule?: components["schemas"]["SoftwareUpdateRule"];
-            /** @description ^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall and forbid. */
+            /** @description ^[A-Za-z0-9.+:~-]+$; required with pinned, optional with hold, refused with latest on required and with uninstall, forbid and available. */
             version?: string | null;
             reason?: string;
+            /** @description The devices apply the assignment outside their maintenance windows. Needs a reason and a fresh step-up; absent is false. */
+            urgent?: boolean;
         };
         SoftwareAssignmentUpdate: {
             /**
@@ -6689,10 +7257,22 @@ export interface components {
              * @description Fixed; any value is refused with 400 invalid_request.
              */
             device_group_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Fixed; any value is refused with 400 invalid_request.
+             */
+            user_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Fixed; any value is refused with 400 invalid_request.
+             */
+            user_group_id?: string | null;
             intent: components["schemas"]["SoftwareIntent"];
             update_rule?: components["schemas"]["SoftwareUpdateRule"];
             version?: string | null;
             reason?: string;
+            /** @description The devices apply the assignment outside their maintenance windows. Needs a reason and a fresh step-up; absent is false. */
+            urgent?: boolean;
         };
         SoftwareAssignment: {
             /** Format: uuid */
@@ -6703,17 +7283,116 @@ export interface components {
             catalog_entry_id: string;
             /**
              * Format: uuid
-             * @description null = every device of the organization.
+             * @description The device group the assignment targets.
              */
             device_group_id: string | null;
+            /**
+             * Format: uuid
+             * @description The user the assignment targets.
+             */
+            user_id: string | null;
+            /**
+             * Format: uuid
+             * @description The user group the assignment targets; all three null = every device of the organization.
+             */
+            user_group_id: string | null;
             intent: components["schemas"]["SoftwareIntent"];
             update_rule: components["schemas"]["SoftwareUpdateRule"];
             version: string | null;
             reason: string;
+            /** @description The devices apply the assignment outside their maintenance windows. */
+            urgent: boolean;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        MaintenanceWindowInput: {
+            /** @description ISO weekdays, 1 = Monday to 7 = Sunday, each at most once; stored sorted. */
+            days: number[];
+            /** @description Minutes after local midnight in the timezone. */
+            start_minute: number;
+            /** @description Elapsed minutes; the window may run past midnight into the next day. */
+            duration_minutes: number;
+            /** @description An IANA timezone name such as Europe/Berlin. */
+            timezone: string;
+        };
+        MaintenanceWindow: {
+            /** Format: uuid */
+            device_group_id: string;
+            days: number[];
+            start_minute: number;
+            duration_minutes: number;
+            timezone: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        UserSoftware: {
+            /** Format: uuid */
+            assignment_id: string;
+            /** Format: uuid */
+            catalog_entry_id: string;
+            /** @description The catalog entry's name. */
+            name: string;
+            intent: components["schemas"]["SoftwareIntent"];
+            /**
+             * Format: uuid
+             * @description The user group the assignment targets; null when it targets the user directly.
+             */
+            user_group_id: string | null;
+            /** @description Empty when the assignment targets the user directly. */
+            user_group_name: string;
+            reason: string;
+        };
+        UserSoftwarePage: {
+            items: components["schemas"]["UserSoftware"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        CompileWarning: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            /**
+             * Format: uuid
+             * @description The software assignment the warning concerns; null when it concerns the device only.
+             */
+            assignment_id: string | null;
+            /**
+             * Format: uuid
+             * @description The catalog entry of that assignment.
+             */
+            catalog_entry_id: string | null;
+            /** @description audience_truncated, flatpak_forbidden or flatpak_users_truncated; the list of codes may grow. */
+            code: string;
+            /** @description The values of the code (audience_truncated users and kept, flatpak_forbidden flatpak_ref, flatpak_users_truncated users, kept and flatpak_ref); never user names. */
+            params: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: date-time
+             * @description The compile that recorded the warning.
+             */
+            created_at: string;
+        };
+        CompileWarningPage: {
+            items: components["schemas"]["CompileWarning"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
         };
         SoftwareAssignmentPage: {
             items: components["schemas"]["SoftwareAssignment"][];
@@ -6742,10 +7421,11 @@ export interface components {
             intent: components["schemas"]["SoftwareIntent"];
             state: components["schemas"]["DeviceSoftwareState"];
             version: string;
-            /** @description pending: dpkg_locked, deferred_offline or not_yet_applied; failed: the reason of software.apply_failed. */
+            /** @description pending: dpkg_locked, deferred_offline, outside_window or not_yet_applied; failed: the reason of software.apply_failed. */
             reason: string;
             /** @description At most 200 characters; may name paths. */
             error: string;
+            scope: components["schemas"]["SoftwareScope"];
             /**
              * Format: date-time
              * @description null for a derived state.
@@ -6781,6 +7461,7 @@ export interface components {
             reason: string;
             /** @description At most 200 characters; may name paths. */
             error: string;
+            scope: components["schemas"]["SoftwareScope"];
             /**
              * Format: date-time
              * @description null for a derived state.
@@ -6830,7 +7511,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap" | "report_only";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap" | "report_only" | "software_requests_open";
         Attention: {
             /** @description The live finding of the condition (plan M9 decision 34); null until the findings round created it. */
             finding: components["schemas"]["AttentionFinding"] | null;
@@ -6842,10 +7523,10 @@ export interface components {
             hostname: string;
             /**
              * Format: date-time
-             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled).
+             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled; for software_requests_open when the oldest open request was made).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; report_only: the enrollment method; otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; report_only: the enrollment method; software_requests_open: the number of the device's open software requests; otherwise empty. */
             detail: string;
         };
         /** @enum {string} */
@@ -8868,7 +9549,15 @@ export interface components {
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         SoftwareSourceSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwarePackageSort: "package" | "-package" | "size" | "-size" | "uploaded_at" | "-uploaded_at";
+        /** @description Only packages of this architecture. */
+        SoftwarePackageArchitectureFilter: components["schemas"]["SoftwarePackageArchitecture"];
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        SoftwareRequestSort: "requested_at" | "-requested_at" | "username" | "-username" | "state" | "-state" | "expires_at" | "-expires_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         SoftwareCatalogSort: "name" | "-name" | "category" | "-category" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        CompileWarningSort: "created_at" | "-created_at" | "hostname" | "-hostname" | "code" | "-code";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         SoftwareAssignmentSort: "created_at" | "-created_at" | "updated_at" | "-updated_at" | "intent" | "-intent";
         /** @description Only entries of this category. */
@@ -8877,6 +9566,14 @@ export interface components {
         SoftwareSourceFilter: string;
         /** @description Only assignments of this catalog entry. */
         SoftwareEntryFilter: string;
+        /** @description Only assignments that target this user directly. */
+        SoftwareUserFilter: string;
+        /** @description Only assignments that target this user group. */
+        SoftwareUserGroupFilter: string;
+        /** @description Only assignments with this kind of target. */
+        SoftwareTargetFilter: components["schemas"]["SoftwareTarget"];
+        /** @description Sort field; "-" prefix sorts descending. The assignment id is the tie-breaker. */
+        UserSoftwareSort: "name" | "-name" | "intent" | "-intent";
         /** @description Only assignments with this intent. */
         SoftwareIntentFilter: components["schemas"]["SoftwareIntent"];
         /** @description Sort field; "-" prefix sorts descending. The name, then the entry id, are the tie-breakers. */
@@ -8887,6 +9584,8 @@ export interface components {
         DeviceManagedSoftwareIntentFilter: components["schemas"]["SoftwareIntent"];
         /** @description Only entries in this state, reported or derived. */
         DeviceSoftwareStateFilter: components["schemas"]["DeviceSoftwareState"];
+        /** @description Only rows of this scope, reported or derived. */
+        DeviceSoftwareScopeFilter: components["schemas"]["SoftwareScope"];
         /** @description Sort field; "-" prefix sorts descending. The row id is the tie-breaker. */
         AttentionSort: "since" | "-since" | "kind" | "-kind" | "hostname" | "-hostname";
         /** @description Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers. */
@@ -9449,6 +10148,92 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DeviceGroup"];
                 };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getDeviceGroupMaintenanceWindow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device group's maintenance window. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceWindow"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    setDeviceGroupMaintenanceWindow: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaintenanceWindowInput"];
+            };
+        };
+        responses: {
+            /** @description The window as stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceWindow"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    deleteDeviceGroupMaintenanceWindow: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
@@ -10274,6 +11059,8 @@ export interface operations {
                  *     OpenAPI enum, as for the outcome filter of the device's bundles.
                  */
                 report_outcome?: string[];
+                /** @description Only the devices whose awaiting_retry is this value. */
+                awaiting_retry?: boolean;
             };
             header?: never;
             path: {
@@ -11593,6 +12380,42 @@ export interface operations {
             404: components["responses"]["Problem"];
         };
     };
+    listUserSoftware: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The assignment id is the tie-breaker. */
+                sort?: components["parameters"]["UserSoftwareSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only assignments with this intent. */
+                intent?: components["parameters"]["SoftwareIntentFilter"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the software assignments that target the user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSoftwarePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
     lockUser: {
         parameters: {
             query?: never;
@@ -12712,6 +13535,169 @@ export interface operations {
             422: components["responses"]["Problem"];
         };
     };
+    listSoftwarePackages: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwarePackageSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only packages of this architecture. */
+                architecture?: components["parameters"]["SoftwarePackageArchitectureFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of stored packages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwarePackagePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    uploadSoftwarePackage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["SoftwarePackageUpload"];
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwarePackage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            415: components["responses"]["Problem"];
+        };
+    };
+    deleteSoftwarePackage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareRepository: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The repository. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRepository"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    rotateSoftwareRepositoryCredential: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new credential. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRepositoryCredential"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    rotateSoftwareRepositoryKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rotation is queued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRepository"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
     listSoftwareCatalog: {
         parameters: {
             query?: {
@@ -12829,6 +13815,7 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     updateSoftwareCatalogEntry: {
@@ -12933,6 +13920,8 @@ export interface operations {
                 q?: components["parameters"]["Search"];
                 /** @description Only entries in this state, reported or derived. */
                 state?: components["parameters"]["DeviceSoftwareStateFilter"];
+                /** @description Only rows of this scope, reported or derived. */
+                scope?: components["parameters"]["DeviceSoftwareScopeFilter"];
                 /** @description Only members of this device group. */
                 device_group_id?: string;
             };
@@ -12973,6 +13962,12 @@ export interface operations {
                 catalog_entry_id?: components["parameters"]["SoftwareEntryFilter"];
                 /** @description Only definitions scoped to this device group. */
                 device_group_id?: components["parameters"]["DeviceGroupFilter"];
+                /** @description Only assignments that target this user directly. */
+                user_id?: components["parameters"]["SoftwareUserFilter"];
+                /** @description Only assignments that target this user group. */
+                user_group_id?: components["parameters"]["SoftwareUserGroupFilter"];
+                /** @description Only assignments with this kind of target. */
+                target?: components["parameters"]["SoftwareTargetFilter"];
                 /** @description Only assignments with this intent. */
                 intent?: components["parameters"]["SoftwareIntentFilter"];
             };
@@ -13110,6 +14105,172 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    listSoftwareRequests: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["SoftwareRequestSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                state?: components["schemas"]["SoftwareRequestState"][];
+                catalog_entry_id?: string;
+                device_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of software requests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRequestPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getSoftwareRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The software request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    approveSoftwareRequest: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SoftwareRequestDecision"];
+            };
+        };
+        responses: {
+            /** @description The approved request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    denySoftwareRequest: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoftwareRequestDenial"];
+            };
+        };
+        responses: {
+            /** @description The denied request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    listCompileWarnings: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["CompileWarningSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only warnings of this device. */
+                device_id?: string;
+                /** @description Only warnings of this software assignment. */
+                assignment_id?: string;
+                /** @description Only warnings of this catalog entry. */
+                catalog_entry_id?: string;
+                /** @description Only warnings with this code. */
+                code?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of compile warnings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompileWarningPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     getOverview: {
@@ -14694,6 +15855,8 @@ export interface operations {
                 state?: components["parameters"]["DeviceSoftwareStateFilter"];
                 /** @description Only entries with this intent, reported or assigned. */
                 intent?: components["parameters"]["DeviceManagedSoftwareIntentFilter"];
+                /** @description Only rows of this scope, reported or derived. */
+                scope?: components["parameters"]["DeviceSoftwareScopeFilter"];
             };
             header?: never;
             path: {
@@ -15816,8 +16979,8 @@ export interface operations {
             path: {
                 /** @description Semantic version of an agent release. */
                 version: components["parameters"]["Version"];
-                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
-                arch: "amd64" | "arm64";
+                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery" | "paddock-self-service";
+                arch: "amd64" | "arm64" | "all";
             };
             cookie?: never;
         };
@@ -15841,6 +17004,7 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
         };
     };

@@ -94,6 +94,13 @@ func (a *Applier) WithWatch(w *reconcile.Watch) *Applier {
 	return a
 }
 
+// WithNSSShield tells the login reconciler the agent's own hold of himmelblaud (PDK-983), so that it reports only a
+// stop by someone else.
+func (a *Applier) WithNSSShield(s *reconcile.NSSShield) *Applier {
+	a.login.Shield = s
+	return a
+}
+
 // New creates an applier for sys; managed is the record of files Paddock wrote, events receives the device events
 // of the reconcilers.
 func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Events) *Applier {
@@ -349,7 +356,7 @@ func (a *Applier) removeStale(b *bundle.Bundle, rep *Report) {
 	for _, path := range a.stale(b) {
 		id := "file:" + path
 		if err := a.file.Remove(path); err != nil { // reconcile.ErrModified: left in place and reported
-			rep.fail(id, err.Error())
+			rep.fail(id, reconcile.Message(err))
 			continue
 		}
 		rep.Changed++
@@ -386,7 +393,7 @@ func (a *Applier) Plan(ctx context.Context, b *bundle.Bundle) []Planned {
 		if rec, ok := a.reconciler(b, res.Type); !ok {
 			p.Error = "unsupported resource type " + res.Type
 		} else if changes, err := rec.Plan(ctx, res); err != nil {
-			p.Error = err.Error()
+			p.Error = reconcile.Message(err)
 		} else {
 			p.Changes = changes
 		}

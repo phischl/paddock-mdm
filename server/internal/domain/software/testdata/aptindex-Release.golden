@@ -1,0 +1,14 @@
+Origin: Paddock
+Label: Paddock
+Suite: paddock
+Codename: paddock
+Date: Mon, 09 Nov 2026 19:00:00 UTC
+Acquire-By-Hash: yes
+Architectures: amd64 arm64
+Components: main
+Description: Packages stored in Paddock
+SHA256:
+ 4a5c89fb994c7ba3ff3e0178e470e7b4b00da592e164d5b64da2f6fb3f221ea2 607 main/binary-amd64/Packages
+ b83ded78de51853a3a8e28ed2989a5a2884f0d2d674942e06326155cfe356dae 384 main/binary-amd64/Packages.gz
+ f8b3be7777bfb9d84c882c3cebe25023c17599abb90d1504c155bdc1a127fb20 479 main/binary-arm64/Packages
+ 6efa6a3b67395c51f280748bce4a3fac57359cf852d6e4e8fc608eedb6bcb1af 314 main/binary-arm64/Packages.gz

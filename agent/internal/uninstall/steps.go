@@ -6,12 +6,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/pkg/policy"
 )
@@ -74,12 +77,13 @@ func (h *Helper) updateConfiguration(ctx context.Context) string {
 	return stepDone
 }
 
-// softwareSources removes the APT sources, keyrings and forbid pins of the software catalog and refreshes the package
-// lists (plan M13a decision 29). The installed applications stay; the Himmelblau source and keyring are the himmelblau
-// step's.
+// softwareSources removes the APT sources, keyrings, forbid pins and the Paddock repository's credential (plan M13c
+// decision 15) of the software catalog and Paddock's system Flatpak remotes and masks, and refreshes the package lists
+// (plan M13a decision 29, plan M13b decision 10). The installed applications stay; the Himmelblau source and keyring
+// are the himmelblau step's.
 func (h *Helper) softwareSources(ctx context.Context) string {
 	var errs []string
-	files := []string{reconcile.SoftwareForbidFile}
+	files := []string{reconcile.SoftwareForbidFile, reconcile.SoftwareAuthFile}
 	for _, d := range []struct{ dir, suffix string }{{reconcile.SoftwareSourceDir, ".sources"}, {reconcile.SoftwareKeyringDir, ".gpg"}} {
 		entries, _ := os.ReadDir(h.path(d.dir)) // a missing directory has nothing to remove
 		for _, e := range entries {
@@ -93,6 +97,8 @@ func (h *Helper) softwareSources(ctx context.Context) string {
 			errs = append(errs, err.Error())
 		}
 	}
+	errs = append(errs, h.flatpakMasks(ctx)...)
+	errs = append(errs, h.flatpakRemotes(ctx)...)
 	if err := h.run(ctx, "apt-get", "update", "-q"); err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -100,6 +106,73 @@ func (h *Helper) softwareSources(ctx context.Context) string {
 		return failed("%s", strings.Join(errs, "; "))
 	}
 	return stepDone
+}
+
+// flatpakMasksRecord lists the system masks Paddock added for forbidden and held applications (reconcile.Software).
+const flatpakMasksRecord = "/var/lib/paddock/state/flatpak-masks"
+
+// flatpakMasks releases the recorded masks that are still in place, like the APT forbid pins and holds, so the
+// applications update again after the device left; a mask the device set itself is not in the record. The record
+// goes once every mask is released.
+func (h *Helper) flatpakMasks(ctx context.Context) []string {
+	data, err := os.ReadFile(h.path(flatpakMasksRecord))
+	if err != nil {
+		return nil
+	}
+	out, exit, err := h.Run(ctx, packageTimeout, "flatpak", "mask", "--system")
+	switch {
+	case errors.Is(err, exec.ErrNotFound):
+		return nil
+	case err != nil:
+		return []string{"flatpak mask: " + err.Error()}
+	case exit != 0:
+		return []string{fmt.Sprintf("flatpak mask: exit %d", exit)}
+	}
+	// flatpak mask --remove fails for a pattern that is not masked; the listing is one indented pattern per line.
+	masked := map[string]bool{}
+	for line := range strings.Lines(out) {
+		if f := strings.Fields(line); len(f) == 1 && !strings.HasSuffix(f[0], ":") {
+			masked[f[0]] = true
+		}
+	}
+	var errs []string
+	for _, ref := range strings.Fields(string(data)) {
+		if !masked[ref] {
+			continue
+		}
+		if err := h.run(ctx, "flatpak", "mask", "--remove", "--system", ref); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) == 0 {
+		if err := h.remove(flatpakMasksRecord); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	return errs
+}
+
+// flatpakRemotes removes every paddock-* system remote. --force keeps the applications installed from it; a device
+// without flatpak has no remotes.
+func (h *Helper) flatpakRemotes(ctx context.Context) []string {
+	out, exit, err := h.Run(ctx, packageTimeout, "flatpak", "remotes", "--system", "--show-disabled", "--columns=name")
+	switch {
+	case errors.Is(err, exec.ErrNotFound):
+		return nil
+	case err != nil:
+		return []string{"flatpak remotes: " + err.Error()}
+	case exit != 0:
+		return []string{fmt.Sprintf("flatpak remotes: exit %d", exit)}
+	}
+	var errs []string
+	for line := range strings.Lines(out) {
+		if f := strings.Fields(line); len(f) > 0 && strings.HasPrefix(f[0], reconcile.SoftwarePrefix) {
+			if err := h.run(ctx, "flatpak", "remote-delete", "--system", "--force", f[0]); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
+	}
+	return errs
 }
 
 // knownPackage reports whether apt has a real package of exactly this name: the held packages come from bundles, and
@@ -134,7 +207,7 @@ func (h *Helper) sudoersAndNotices(ctx context.Context) string {
 			errs = append(errs, file+": unreadable")
 			continue
 		}
-		if err := os.Remove(h.path(file)); err != nil {
+		if err := fsutil.Remove(h.path(file)); err != nil {
 			errs = append(errs, err.Error())
 			continue
 		}
@@ -217,7 +290,7 @@ func (h *Helper) managedFiles(ctx context.Context) string {
 		if sum := sha256.Sum256(content); hex.EncodeToString(sum[:]) != m.Files[p] {
 			continue
 		}
-		if err := os.Remove(h.path(p)); err != nil {
+		if err := fsutil.Remove(h.path(p)); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
@@ -297,9 +370,10 @@ func (h *Helper) remove(p string) error {
 	return err
 }
 
-// removed deletes a file and reports whether it existed.
+// removed deletes a file and reports whether it existed. Like every delete of a managed file, it refuses a parent
+// directory that fails the parent rule (fsutil.ErrParentNotTrusted).
 func (h *Helper) removed(p string) (bool, error) {
-	err := os.Remove(h.path(p))
+	err := fsutil.Remove(h.path(p))
 	switch {
 	case err == nil:
 		return true, nil

@@ -16,6 +16,13 @@ import (
 
 const interconnect = "10.0.0.1"
 
+// The edge subnet and Caddy's address in it (compose.yaml defaults).
+const (
+	edgeSubnet   = "172.28.0.0/24"
+	edgeIPRange  = "172.28.0.128/25"
+	caddyAddress = "172.28.0.10"
+)
+
 func ptr(s string) *string { return &s }
 
 // fixture is a passing control-plane configuration with its secret files in a private directory.
@@ -45,9 +52,17 @@ func newFixture(t *testing.T) *fixture {
 	if err := os.WriteFile(caddyfile, []byte("{\n\temail {$PADDOCK_ACME_EMAIL}\n}\nadmin.{$PADDOCK_DOMAIN} {\n}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	rabbitmqLoopback := filepath.Join(dir, "management-loopback.conf")
+	if err := os.WriteFile(rabbitmqLoopback, []byte("management.tcp.ip = 127.0.0.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	f := &fixture{dir: dir}
 	f.cfg = prodcheck.Config{
 		Prod: prodcheck.Prod{InterconnectAddr: interconnect, RevocationAccepted: "no"},
+		Networks: map[string]prodcheck.Network{
+			"edge": {Name: "paddock_edge", IPAM: prodcheck.IPAM{Config: []prodcheck.IPAMConfig{{Subnet: edgeSubnet, IPRange: edgeIPRange}}}},
+			"data": {},
+		},
 		Secrets: map[string]prodcheck.Secret{
 			"db_paddock_api_url":          {File: write("db_paddock_api_url", "postgres://api:pw@postgres:5432/paddock", 0o644)},
 			"db_paddock_audit_reader_url": {File: write("db_paddock_audit_reader_url", "postgres://r:pw@10.0.0.2:5432/paddock_audit?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca_bundle", 0o644)},
@@ -58,14 +73,21 @@ func newFixture(t *testing.T) *fixture {
 			"caddy": {
 				Environment: map[string]*string{"PADDOCK_ACME_EMAIL": ptr("ops@example.org")},
 				Ports:       []prodcheck.Port{{Target: 443, Published: "443"}, {Target: 80, Published: "80"}},
+				Networks:    map[string]prodcheck.ServiceNetwork{"edge": {IPv4Address: caddyAddress}},
 				Volumes: []prodcheck.Volume{
 					{Type: "bind", Source: caddyfile, Target: "/etc/caddy/Caddyfile"},
 					{Type: "bind", Source: filepath.Join(dir, "guards.caddy"), Target: "/etc/caddy/guards.caddy"},
 					{Type: "bind", Source: filepath.Join(dir, "entrypoint.sh"), Target: "/paddock/entrypoint.sh"},
 				},
 			},
-			"postgres": {},
-			"rabbitmq": {Ports: []prodcheck.Port{{HostIP: interconnect, Target: 5671, Published: "5671"}}},
+			"postgres": {Networks: map[string]prodcheck.ServiceNetwork{"data": {}}},
+			"rabbitmq": {
+				Ports:    []prodcheck.Port{{HostIP: interconnect, Target: 5671, Published: "5671"}},
+				Networks: map[string]prodcheck.ServiceNetwork{"data": {}},
+				Volumes: []prodcheck.Volume{
+					{Type: "bind", Source: rabbitmqLoopback, Target: "/etc/rabbitmq/conf.d/30-management-loopback.conf"},
+				},
+			},
 			"paddock-api": {
 				Environment: map[string]*string{
 					"PADDOCK_ENV":                      ptr("production"),
@@ -75,7 +97,7 @@ func newFixture(t *testing.T) *fixture {
 					"PADDOCK_RELEASE_PUBLIC_KEY_FILE":  ptr("/run/secrets/release_public_key"),
 					"PADDOCK_REVOCATION_ENABLED":       ptr("false"),
 					"PADDOCK_TEST_EXTERNAL_DELAY":      ptr(""),
-					"PADDOCK_TRUSTED_PROXY_CIDRS":      ptr("10.0.0.0/8 172.16.0.0/12 fc00::/7 ::1/128"),
+					"PADDOCK_TRUSTED_PROXY_CIDRS":      ptr(caddyAddress + "/32"),
 					"PADDOCK_IP_ALLOWLIST_BYPASS":      ptr("false"),
 				},
 				Secrets: []prodcheck.ServiceSecret{
@@ -143,8 +165,8 @@ func TestProductionConfigurationPasses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected all PASS:\n%s", out)
 	}
-	if strings.Count(out, "PASS") != 18 {
-		t.Fatalf("expected 18 items:\n%s", out)
+	if strings.Count(out, "PASS") != 28 {
+		t.Fatalf("expected 28 items:\n%s", out)
 	}
 }
 
@@ -456,6 +478,29 @@ func TestAllowlistBypass(t *testing.T) {
 	failLine(t, out, "PADDOCK_IP_ALLOWLIST_BYPASS is true")
 }
 
+// TestRateLimits: a rate limit class switched off fails prod-check (plan M12h decision 7); a raised limit passes.
+func TestRateLimits(t *testing.T) {
+	for _, c := range []struct{ name, value string }{
+		{"PADDOCK_RATELIMIT_AUTH", "0"},
+		{"PADDOCK_RATELIMIT_ADMIN_READ", "0"},
+		{"PADDOCK_RATELIMIT_PLATFORM_UPLOAD", "-5"},
+		{"PADDOCK_RATELIMIT_BUNDLES_APT", "off"},
+	} {
+		f := newFixture(t)
+		f.setEnv("paddock-api", c.name, c.value)
+		ok, out := run(t, f.cfg, prodcheck.Options{})
+		if ok {
+			t.Fatalf("%s=%s: expected FAIL:\n%s", c.name, c.value, out)
+		}
+		failLine(t, out, "paddock-api: "+c.name+"="+c.value+" switches the rate limit off")
+	}
+	f := newFixture(t)
+	f.setEnv("paddock-api", "PADDOCK_RATELIMIT_AUTH", "200")
+	if ok, out := run(t, f.cfg, prodcheck.Options{}); !ok {
+		t.Fatalf("raised limit: expected all PASS:\n%s", out)
+	}
+}
+
 // TestRetentionInterval: a retention round below one minute fails, an operator's longer interval passes (plan M10
 // amendment 2026-10-30).
 func TestRetentionInterval(t *testing.T) {
@@ -634,8 +679,17 @@ var labItems = []string{
 	"lab: edge admin allow list",
 	"lab: caddy has no hostname aliases",
 	"lab: roles resolve the public names to the proxy",
+	"networks: caddy on edge only",
+	"networks: no datastore on edge",
+	"networks: fleet, caddy and authentik not on data",
+	"networks: ops listeners off edge",
+	"trusted proxies: caddy's address only",
+	"edge: internal ranges are not private_ranges",
+	"rabbitmq: management bound to loopback",
+	"rabbitmq: memory limit readable by the memory alarm",
 	"role trusted proxies",
 	"ip allow list bypass is off",
+	"rate limits are on",
 	"backup: no S3 credentials or encryption key on the worker",
 	"audit index retention of the retention round",
 	"release public keys are production keys",
@@ -668,9 +722,8 @@ func newLabFixture(t *testing.T) *fixture {
 		"PADDOCK_ADMIN_ALLOWED_CIDRS":   ptr("192.0.2.0/24 private_ranges"),
 	}
 	caddy.Ports = []prodcheck.Port{{HostIP: interconnect, Target: 80, Published: "8080"}}
-	caddy.Networks = map[string]prodcheck.ServiceNetwork{"cp": {}}
 	f.cfg.Services["caddy"] = caddy
-	f.cfg.Services["rabbitmq"] = prodcheck.Service{}
+	f.cfg.Services["rabbitmq"] = prodcheck.Service{Networks: f.service("rabbitmq").Networks, Volumes: f.service("rabbitmq").Volumes}
 	api := f.service("paddock-api")
 	api.Environment["PADDOCK_PUBLIC_ADMIN_URL"] = ptr("https://admin." + labDomain)
 	api.ExtraHosts = labHosts()
@@ -836,9 +889,9 @@ func TestLabFindings(t *testing.T) {
 			admin, "PADDOCK_ADMIN_ALLOWED_CIDRS is empty"},
 		"alias": {func(_ *testing.T, f *fixture) {
 			s := f.service("caddy")
-			s.Networks = map[string]prodcheck.ServiceNetwork{"cp": {Aliases: []string{"admin." + labDomain}}}
+			s.Networks = map[string]prodcheck.ServiceNetwork{"edge": {IPv4Address: caddyAddress, Aliases: []string{"admin." + labDomain}}}
 			f.cfg.Services["caddy"] = s
-		}, aliases, "caddy: alias admin.paddock.example.org on network cp would short-circuit the proxy"},
+		}, aliases, "caddy: alias admin.paddock.example.org on network edge would short-circuit the proxy"},
 		"missing extra host": {setHosts("paddock-escrow-reader", labHosts()[:4]),
 			resolver, "paddock-escrow-reader: extra_hosts lacks fleet.paddock.example.org=192.0.2.5"},
 		"extra host to another address": {setHosts("paddock-revocation-issuer", []string{"auth." + labDomain + "=192.0.2.99"}),
@@ -1025,6 +1078,32 @@ func TestAuthentikWebWorkersItem(t *testing.T) {
 	})
 }
 
+// TestRabbitMQMemoryLimitItem: RabbitMQ ignores a limit that is not a whole number with an optional unit and sizes its
+// memory alarm from the host RAM, so the item rejects such a value although Docker accepts it (PDK-824).
+func TestRabbitMQMemoryLimitItem(t *testing.T) {
+	for _, c := range []struct {
+		value string
+		ok    bool
+	}{{"1g", true}, {"1536m", true}, {"2048", true}, {"1GiB", true}, {"512MB", true}, {"1.5g", false}, {"1,5g", false}, {"1 g", false}, {"g", false}, {"1t", false}} {
+		t.Run(c.value, func(t *testing.T) {
+			f := newFixture(t)
+			f.cfg.Services["rabbitmq"] = prodcheck.Service{Environment: map[string]*string{"PADDOCK_RABBITMQ_MEM_LIMIT": ptr(c.value)}}
+			var got *prodcheck.Result
+			for _, r := range prodcheck.Run(context.Background(), f.cfg, prodcheck.Options{Host: prodcheck.HostControlPlane}) {
+				if r.Item == "rabbitmq: memory limit readable by the memory alarm" {
+					got = &r
+				}
+			}
+			if got == nil {
+				t.Fatal("no memory limit item")
+			}
+			if got.OK != c.ok {
+				t.Fatalf("PADDOCK_RABBITMQ_MEM_LIMIT=%q: OK = %v, want %v (%s)", c.value, got.OK, c.ok, got.Detail)
+			}
+		})
+	}
+}
+
 // withNotifier adds paddock-notifier without a relay, its empty smtp_password and the api's presence flag false, as
 // the secret scripts and the templates leave them (plan M9 decision 41).
 func withNotifier(t *testing.T, f *fixture) {
@@ -1143,4 +1222,234 @@ func TestNotifierFindings(t *testing.T) {
 		_, out := run(t, f.cfg, prodcheck.Options{})
 		failLine(t, out, "db_paddock_api_url: empty")
 	})
+}
+
+// TestNetworkSegmentationFindings: each violation of the trust zones (ADR 0051 decision 1) fails its item naming the
+// service, on the control plane and on the lab.
+func TestNetworkSegmentationFindings(t *testing.T) {
+	setNetworks := func(service string, nets map[string]prodcheck.ServiceNetwork) func(*fixture) {
+		return func(f *fixture) {
+			s := f.service(service)
+			s.Networks = nets
+			f.cfg.Services[service] = s
+		}
+	}
+	edge := prodcheck.ServiceNetwork{IPv4Address: caddyAddress}
+	cases := map[string]struct {
+		change     func(*fixture)
+		item, want string
+	}{
+		"caddy also on data": {setNetworks("caddy", map[string]prodcheck.ServiceNetwork{"edge": edge, "data": {}}),
+			"networks: caddy on edge only", "caddy is on networks [data edge], want [edge]"},
+		"caddy without a fixed address": {setNetworks("caddy", map[string]prodcheck.ServiceNetwork{"edge": {}}),
+			"networks: caddy on edge only", "caddy has no fixed ipv4_address on network edge"},
+		"caddy outside the edge subnet": {setNetworks("caddy", map[string]prodcheck.ServiceNetwork{"edge": {IPv4Address: "10.1.2.3"}}),
+			"networks: caddy on edge only", "caddy's address 10.1.2.3 is outside the subnet of network edge"},
+		"edge without a subnet": {func(f *fixture) { f.cfg.Networks["edge"] = prodcheck.Network{} },
+			"networks: caddy on edge only", "network edge has no fixed subnet"},
+		"edge without a dynamic pool": {func(f *fixture) {
+			f.cfg.Networks["edge"] = prodcheck.Network{IPAM: prodcheck.IPAM{Config: []prodcheck.IPAMConfig{{Subnet: edgeSubnet}}}}
+		}, "networks: caddy on edge only", "network edge has no ip_range for dynamic addresses"},
+		"caddy in the dynamic pool": {func(f *fixture) {
+			f.cfg.Networks["edge"] = prodcheck.Network{IPAM: prodcheck.IPAM{Config: []prodcheck.IPAMConfig{
+				{Subnet: edgeSubnet, IPRange: "172.28.0.0/25"}}}}
+		}, "networks: caddy on edge only", "caddy's address 172.28.0.10 lies in the dynamic pool 172.28.0.0/25 of network edge"},
+		"worker ops on every address": {opsRole("paddock-worker", ":9090", map[string]prodcheck.ServiceNetwork{
+			"data": {Aliases: []string{"worker-ops"}}, "edge": {}}),
+			"networks: ops listeners off edge", `paddock-worker: PADDOCK_OPS_ADDR ":9090" listens on every network, edge included`},
+		"escrow-reader ops without the variable": {opsRole("paddock-escrow-reader", "", map[string]prodcheck.ServiceNetwork{
+			"data": {}, "edge": {}}),
+			"networks: ops listeners off edge", `paddock-escrow-reader: PADDOCK_OPS_ADDR "" listens on every network`},
+		"revocation-issuer ops on an edge alias": {opsRole("paddock-revocation-issuer", "revocation-issuer-ops:9090",
+			map[string]prodcheck.ServiceNetwork{"data": {}, "edge": {Aliases: []string{"revocation-issuer-ops"}}}),
+			"networks: ops listeners off edge", `paddock-revocation-issuer: PADDOCK_OPS_ADDR host "revocation-issuer-ops" is not an alias on a network other than edge (aliased on [edge])`},
+		"worker ops on an alias of data and edge": {opsRole("paddock-worker", "worker-ops:9090", map[string]prodcheck.ServiceNetwork{
+			"data": {Aliases: []string{"worker-ops"}}, "edge": {Aliases: []string{"worker-ops"}}}),
+			"networks: ops listeners off edge", "aliased on [data edge]"},
+		"worker ops on an unknown host": {opsRole("paddock-worker", "worker:9090", map[string]prodcheck.ServiceNetwork{
+			"data": {Aliases: []string{"worker-ops"}}, "edge": {}}),
+			"networks: ops listeners off edge", `host "worker" is not an alias on a network other than edge (aliased on [])`},
+		"postgres on edge": {setNetworks("postgres", map[string]prodcheck.ServiceNetwork{"data": {}, "edge": {}}),
+			"networks: no datastore on edge", "postgres is on network edge"},
+		"openbao on edge": {setNetworks("openbao", map[string]prodcheck.ServiceNetwork{"edge": {}}),
+			"networks: no datastore on edge", "openbao is on network edge"},
+		"fleet on data": {setNetworks("fleet", map[string]prodcheck.ServiceNetwork{"edge": {}, "fleet": {}, "data": {}}),
+			"networks: fleet, caddy and authentik not on data", "fleet is on network data"},
+		"authentik on data": {setNetworks("authentik-server", map[string]prodcheck.ServiceNetwork{"edge": {}, "data": {}}),
+			"networks: fleet, caddy and authentik not on data", "authentik-server is on network data"},
+		"private ranges trusted": {func(f *fixture) { f.setEnv("paddock-api", "PADDOCK_TRUSTED_PROXY_CIDRS", "172.16.0.0/12") },
+			"trusted proxies: caddy's address only", "paddock-api: PADDOCK_TRUSTED_PROXY_CIDRS trusts 172.16.0.0/12, not only Caddy's 172.28.0.10/32"},
+		"caddy and another peer trusted": {func(f *fixture) {
+			f.setEnv("paddock-api", "PADDOCK_TRUSTED_PROXY_CIDRS", caddyAddress+"/32 172.28.0.11/32")
+		}, "trusted proxies: caddy's address only", "trusts 172.28.0.11/32, not only Caddy's"},
+		"edge subnet trusted": {func(f *fixture) { f.setEnv("paddock-api", "PADDOCK_TRUSTED_PROXY_CIDRS", edgeSubnet) },
+			"trusted proxies: caddy's address only", "trusts 172.28.0.0/24, not only Caddy's"},
+		"internal private ranges": {func(f *fixture) { f.setEnv("caddy", "PADDOCK_INTERNAL_CIDRS", "private_ranges") },
+			"edge: internal ranges are not private_ranges", "PADDOCK_INTERNAL_CIDRS holds private_ranges"},
+		"management published": {func(f *fixture) {
+			s := f.service("rabbitmq")
+			s.Ports = append(s.Ports, prodcheck.Port{HostIP: interconnect, Target: 15672, Published: "15672"})
+			f.cfg.Services["rabbitmq"] = s
+		}, "rabbitmq: management bound to loopback", "rabbitmq: management port 15672 published on 10.0.0.1:15672"},
+		"management on every address": {func(f *fixture) {
+			s := f.service("rabbitmq")
+			s.Volumes = nil
+			f.cfg.Services["rabbitmq"] = s
+		}, "rabbitmq: management bound to loopback", `management.tcp.ip is "", want 127.0.0.1`},
+		"loopback overridden by a later file": {func(f *fixture) {
+			later := filepath.Join(f.dir, "zz.conf")
+			if err := os.WriteFile(later, []byte("# later\nmanagement.tcp.ip = 0.0.0.0\n"), 0o644); err != nil {
+				panic(err)
+			}
+			s := f.service("rabbitmq")
+			s.Volumes = append(s.Volumes, prodcheck.Volume{Type: "bind", Source: later, Target: "/etc/rabbitmq/conf.d/90-later.conf"})
+			f.cfg.Services["rabbitmq"] = s
+		}, "rabbitmq: management bound to loopback", `management.tcp.ip is "0.0.0.0"`},
+		"configuration unreadable": {func(f *fixture) {
+			s := f.service("rabbitmq")
+			s.Volumes = []prodcheck.Volume{{Type: "bind", Source: filepath.Join(f.dir, "missing.conf"), Target: "/etc/rabbitmq/conf.d/30-x.conf"}}
+			f.cfg.Services["rabbitmq"] = s
+		}, "rabbitmq: management bound to loopback", "rabbitmq: configuration unreadable"},
+	}
+	for name, tc := range cases {
+		for _, lab := range []bool{false, true} {
+			t.Run(name+map[bool]string{false: "/controlplane", true: "/lab"}[lab], func(t *testing.T) {
+				var f *fixture
+				if lab {
+					f = newLabFixture(t)
+				} else {
+					f = newFixture(t)
+				}
+				tc.change(f)
+				var out string
+				if lab {
+					_, out = runLab(t, f.cfg, nil)
+				} else {
+					_, out = run(t, f.cfg, prodcheck.Options{})
+				}
+				itemFails(t, out, tc.item, tc.want)
+			})
+		}
+	}
+}
+
+// opsRole puts the role on nets with the given PADDOCK_OPS_ADDR (empty: unset).
+func opsRole(name, addr string, nets map[string]prodcheck.ServiceNetwork) func(*fixture) {
+	return func(f *fixture) {
+		s := f.service(name)
+		s.Networks = nets
+		s.Environment = map[string]*string{}
+		if addr != "" {
+			s.Environment["PADDOCK_OPS_ADDR"] = ptr(addr)
+		}
+		f.cfg.Services[name] = s
+	}
+}
+
+// itemResult returns the result of item, failing the test when Run does not report it.
+func itemResult(t *testing.T, cfg prodcheck.Config, o prodcheck.Options, item string) prodcheck.Result {
+	t.Helper()
+	for _, r := range prodcheck.Run(context.Background(), cfg, o) {
+		if r.Item == item {
+			return r
+		}
+	}
+	t.Fatalf("no item %q", item)
+	return prodcheck.Result{}
+}
+
+// TestOpsListenersOffEdge: the three roles on edge pass with their ops listener on an alias of network data only, and
+// a role off edge is not checked (decisions-alpha10 A10-1).
+func TestOpsListenersOffEdge(t *testing.T) {
+	f := newFixture(t)
+	for role, alias := range map[string]string{"paddock-worker": "worker-ops", "paddock-escrow-reader": "escrow-reader-ops",
+		"paddock-revocation-issuer": "revocation-issuer-ops"} {
+		opsRole(role, alias+":9090", map[string]prodcheck.ServiceNetwork{"data": {Aliases: []string{alias}}, "edge": {}})(f)
+	}
+	opsRole("paddock-escrow-reader", "escrow-reader-ops:9090", map[string]prodcheck.ServiceNetwork{
+		"data": {Aliases: []string{"escrow-reader-ops"}}, "edge": {}, "escrow": {Aliases: []string{"escrow-reader"}}})(f)
+	if r := itemResult(t, f.cfg, prodcheck.Options{}, "networks: ops listeners off edge"); !r.OK || r.Warn {
+		t.Fatalf("aliases on data: %+v, want PASS", r)
+	}
+	opsRole("paddock-worker", ":9090", map[string]prodcheck.ServiceNetwork{"data": {}})(f)
+	if r := itemResult(t, f.cfg, prodcheck.Options{}, "networks: ops listeners off edge"); !r.OK {
+		t.Fatalf("worker off edge: %+v, want PASS", r)
+	}
+}
+
+// TestEdgeSubnetFree: an existing Docker network overlapping the edge subnet warns, naming it; the project's own edge,
+// disjoint networks and an unchecked host (no network list) do not (decisions-alpha10 A10-1).
+func TestEdgeSubnetFree(t *testing.T) {
+	const item = "networks: edge subnet free on this host"
+	f := newFixture(t)
+	for _, r := range prodcheck.Run(context.Background(), f.cfg, prodcheck.Options{}) {
+		if r.Item == item {
+			t.Fatalf("checked without a network list: %+v", r)
+		}
+	}
+	free := []prodcheck.DockerNetwork{{Name: "bridge", Subnets: []string{"172.17.0.0/16"}},
+		{Name: "paddock_edge", Subnets: []string{edgeSubnet}}, {Name: "none"}}
+	if r := itemResult(t, f.cfg, prodcheck.Options{DockerNetworks: free}, item); !r.OK || r.Warn {
+		t.Fatalf("free subnet: %+v, want PASS", r)
+	}
+	taken := append(append([]prodcheck.DockerNetwork{}, free...), prodcheck.DockerNetwork{Name: "paddock_cp", Subnets: []string{"172.28.0.0/16"}},
+		prodcheck.DockerNetwork{Name: "vpn", Subnets: []string{"fd00::/64", "172.28.0.64/26"}})
+	r := itemResult(t, f.cfg, prodcheck.Options{DockerNetworks: taken}, item)
+	if !r.OK || !r.Warn {
+		t.Fatalf("overlapping networks: %+v, want WARN", r)
+	}
+	for _, want := range []string{"Docker network paddock_cp (172.28.0.0/16) overlaps the edge subnet 172.28.0.0/24",
+		"Docker network vpn (172.28.0.64/26) overlaps"} {
+		if !strings.Contains(r.Detail, want) {
+			t.Errorf("detail %q lacks %q", r.Detail, want)
+		}
+	}
+	if strings.Contains(r.Detail, "paddock_edge") || strings.Contains(r.Detail, "bridge") {
+		t.Errorf("detail %q names the project's edge or a disjoint network", r.Detail)
+	}
+}
+
+// itemFails requires the item to FAIL with a finding containing want.
+func itemFails(t *testing.T, out, item, want string) {
+	t.Helper()
+	in := false
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "FAIL  "+item):
+			in = true
+		case !strings.HasPrefix(line, "      - "):
+			in = false
+		case in && strings.Contains(line, want):
+			return
+		}
+	}
+	t.Fatalf("item %q has no FAIL finding containing %q in\n%s", item, want, out)
+}
+
+// TestAdminAllowedEverywhere: an admin allow list of every address warns on the control plane while
+// AdminAllowedEverywhereFails is false (maintainer question 9 open); named ranges pass without a warning.
+func TestAdminAllowedEverywhere(t *testing.T) {
+	for value, warn := range map[string]bool{"0.0.0.0/0 ::/0": true, "::/0": true, "203.0.113.0/24 10.0.0.0/8": false, "": false} {
+		t.Run(value, func(t *testing.T) {
+			f := newFixture(t)
+			f.setEnv("caddy", "PADDOCK_ADMIN_ALLOWED_CIDRS", value)
+			for _, r := range prodcheck.Run(context.Background(), f.cfg, prodcheck.Options{Host: prodcheck.HostControlPlane}) {
+				if r.Item != "edge admin allow list" {
+					continue
+				}
+				if !warn {
+					if !r.OK || r.Warn {
+						t.Fatalf("named ranges: %+v, want a plain PASS", r)
+					}
+					return
+				}
+				if r.OK == prodcheck.AdminAllowedEverywhereFails || r.Warn == prodcheck.AdminAllowedEverywhereFails ||
+					!strings.Contains(r.Detail, "admits every address") {
+					t.Fatalf("every address: %+v, want WARN (or FAIL once AdminAllowedEverywhereFails is true)", r)
+				}
+				return
+			}
+			t.Fatal("no item edge admin allow list")
+		})
+	}
 }

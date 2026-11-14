@@ -118,7 +118,7 @@ uc_comment_of() {
 # uc_item_env <new dir> <old dir> <files>
 uc_item_env() {
   local new="$1" old="$2" files="$3" example env="$2/.env" f key compose_paths missing=() unknown=() retired=() known
-  local newv retiredset=""
+  local newv retiredset="" changedset="" changed=()
   if [[ ! -f "$env" ]]; then
     uc_add env FAIL "$old has no .env"
     return
@@ -151,6 +151,12 @@ uc_item_env() {
   if [[ -n "$newv" && -f "$new/RETIRED-SETTINGS" ]]; then
     retiredset="$(awk -v v="$newv" '$1 == v && NF == 2 { print $2 }' "$new/RETIRED-SETTINGS")"
   fi
+  if [[ -n "$newv" && -f "$new/CHANGED-DEFAULTS" ]]; then
+    changedset="$(awk -v v="$newv" '$1 == v && NF == 2 { print $2 }' "$new/CHANGED-DEFAULTS")"
+  fi
+  while read -r key; do
+    [[ -n "$key" ]] && grep -q "^$key=" "$env" && changed+=("$key")
+  done <<<"$changedset"
   while read -r key; do
     [[ -n "$key" ]] || continue
     grep -qx "$key" <<<"$known" && continue
@@ -165,7 +171,16 @@ uc_item_env() {
   if ((${#retired[@]} > 0)); then
     uc_add env INFO "retired by this release; kept for the rollback: ${retired[*]}"
   fi
-  if ((${#missing[@]} == 0 && ${#unknown[@]} == 0)); then
+  if ((${#changed[@]} > 0)) && [[ "$(uc_dotenv_value "$env" PADDOCK_HOST)" == lab ]]; then
+    # A lab sets these values for its proxy and its networks (.env.lab.example): there is no default to fall back to,
+    # and a stale trusted proxy shuts the administrators out with 403 after the upgrade.
+    grep -q '^PADDOCK_EDGE_TRUSTED_PROXIES=' "$env" && ! printf '%s\n' "${changed[@]}" | grep -qx PADDOCK_EDGE_TRUSTED_PROXIES &&
+      changed+=(PADDOCK_EDGE_TRUSTED_PROXIES)
+    uc_add env WARN "changed default on a lab: this release changed what ${changed[*]} must name; do not remove the lines, set each again as docs/operations/lab-install.md sections 4 and 5 describe (and the release's section of docs/operations/upgrade.md)"
+  elif ((${#changed[@]} > 0)); then
+    uc_add env WARN "changed default: this release changed the default of ${changed[*]}; the old .env overrides it (remove the line to take the new default, see the release's section of docs/operations/upgrade.md)"
+  fi
+  if ((${#missing[@]} == 0 && ${#unknown[@]} == 0 && ${#changed[@]} == 0)); then
     uc_add env PASS "every required setting of $(basename "$example") is in the old .env"
   fi
 }

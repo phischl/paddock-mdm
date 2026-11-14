@@ -7,7 +7,9 @@
 # with read on escrow and delete on diagnostics bundles (ADR 0048), a user for the gateway with read-only access to
 # bundles and artifacts and write access to escrowed headers and diagnostics bundles only (the gateway only computes
 # presigned URLs with it), and a user for the revocation-issuer that may list and delete header versions only (plan
-# M4c decision 9). Idempotent.
+# M4c decision 9), and a user for the api that writes, reads and deletes the packages stored in Paddock below apt/ of
+# bundles and presigns their GETs, nothing else (plan M13c decision 12, ADR 0050), and a user for the worker that writes
+# the repositories' signed index below apt/*/dists/ of bundles, nothing else (plan M13c decision 13). Idempotent.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +19,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUCKET="${PADDOCK_BUNDLES_S3_BUCKET:-paddock-bundles}"
 ARTIFACTS_BUCKET="${PADDOCK_ARTIFACTS_S3_BUCKET:-paddock-agent-artifacts}"
 ESCROW_BUCKET="${PADDOCK_ESCROW_S3_BUCKET:-paddock-escrow}"
-NETWORK="${NETWORK:-${PADDOCK_PROJECT}_cp}"
+NETWORK="${NETWORK:-${PADDOCK_PROJECT}_data}"
 ENDPOINT="${ENDPOINT:-http://rustfs:9000}"
 
 AWS_ACCESS_KEY_ID="$(cat "$SECRETS_DIR/rustfs_root_user")"
@@ -26,6 +28,10 @@ COMPILER_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_bundles_compiler_access_key")"
 COMPILER_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_bundles_compiler_secret_key")"
 GATEWAY_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_bundles_gateway_access_key")"
 GATEWAY_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_bundles_gateway_secret_key")"
+BUNDLES_API_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_bundles_api_access_key")"
+BUNDLES_API_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_bundles_api_secret_key")"
+BUNDLES_WORKER_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_bundles_worker_access_key")"
+BUNDLES_WORKER_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_bundles_worker_secret_key")"
 ARTIFACTS_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_artifacts_api_access_key")"
 ARTIFACTS_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_artifacts_api_secret_key")"
 ESCROW_WORKER_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_worker_access_key")"
@@ -37,6 +43,7 @@ ESCROW_REVOCATION_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_revocation_secre
 ESCROW_BACKUP_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_backup_access_key")"
 ESCROW_BACKUP_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_backup_secret_key")"
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY COMPILER_ACCESS_KEY COMPILER_SECRET_KEY GATEWAY_ACCESS_KEY GATEWAY_SECRET_KEY \
+  BUNDLES_API_ACCESS_KEY BUNDLES_API_SECRET_KEY BUNDLES_WORKER_ACCESS_KEY BUNDLES_WORKER_SECRET_KEY \
   ARTIFACTS_ACCESS_KEY ARTIFACTS_SECRET_KEY ESCROW_WORKER_ACCESS_KEY ESCROW_WORKER_SECRET_KEY ESCROW_API_ACCESS_KEY \
   ESCROW_API_SECRET_KEY ESCROW_REVOCATION_ACCESS_KEY ESCROW_REVOCATION_SECRET_KEY ESCROW_BACKUP_ACCESS_KEY \
   ESCROW_BACKUP_SECRET_KEY
@@ -50,6 +57,7 @@ aws() {
 rc() {
   docker run --rm -i --network "$NETWORK" -e HOME=/tmp -e RC_HOST_bundles \
     -e COMPILER_ACCESS_KEY -e COMPILER_SECRET_KEY -e GATEWAY_ACCESS_KEY -e GATEWAY_SECRET_KEY \
+    -e BUNDLES_API_ACCESS_KEY -e BUNDLES_API_SECRET_KEY -e BUNDLES_WORKER_ACCESS_KEY -e BUNDLES_WORKER_SECRET_KEY \
     -e ARTIFACTS_ACCESS_KEY -e ARTIFACTS_SECRET_KEY -e ESCROW_WORKER_ACCESS_KEY -e ESCROW_WORKER_SECRET_KEY \
     -e ESCROW_API_ACCESS_KEY -e ESCROW_API_SECRET_KEY -e ESCROW_REVOCATION_ACCESS_KEY -e ESCROW_REVOCATION_SECRET_KEY \
     -e ESCROW_BACKUP_ACCESS_KEY -e ESCROW_BACKUP_SECRET_KEY --entrypoint sh "$RC_IMAGE" -c "$1"
@@ -106,9 +114,19 @@ printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS
   "$ARTIFACTS_BUCKET" | aws s3api put-bucket-policy --bucket "$ARTIFACTS_BUCKET" --policy file:///dev/stdin
 echo "packages/ of $ARTIFACTS_BUCKET is public-read"
 
+# The packages stored in Paddock (plan M13c decision 12): the api uploads and deletes them and presigns the GET apt is
+# redirected to, below apt/ only; the worker's repository build (PDK-813) has its own grant.
+policy paddock-bundles-api "[
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\",\"s3:GetObject\",\"s3:DeleteObject\"],\"Resource\":[\"arn:aws:s3:::$BUCKET/apt/*\"]}]"
+# The worker's repository build (plan M13c decision 13) writes the signed index of every organization's repository and
+# nothing else: no package, no read, no delete.
+policy paddock-bundles-worker "[
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\"],\"Resource\":[\"arn:aws:s3:::$BUCKET/apt/*/dists/*\"]}]"
 user COMPILER_ACCESS_KEY paddock-bundles-compiler
 user GATEWAY_ACCESS_KEY paddock-bundles-gateway
 user ARTIFACTS_ACCESS_KEY paddock-artifacts-api
+user BUNDLES_API_ACCESS_KEY paddock-bundles-api
+user BUNDLES_WORKER_ACCESS_KEY paddock-bundles-worker
 # The worker verifies headers and diagnostics bundles and deletes every version of a diagnostics bundle whose retention
 # ended (ADR 0048 decision 5); it deletes nothing else.
 policy paddock-escrow-worker "[

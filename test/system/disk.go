@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -145,8 +146,43 @@ func (d *Device) AnswerDiskSetup(t *testing.T, pin string) {
 	})
 }
 
-// LUKSDevice is the LUKS partition of the guest.
-func (v *VM) LUKSDevice() string { return v.Must("sudo blkid -t TYPE=crypto_LUKS -o device | head -1") }
+// LUKSDevice is the LUKS partition of the guest: the first LUKS device blkid lists.
+func (v *VM) LUKSDevice() string { return v.MustDevice("blkid -t TYPE=crypto_LUKS -o device") }
+
+// MustDevice runs a command as root (without sudo, see MustRoot) that prints device paths, one per line, and returns
+// the first. Any other line, such as an NSS module's log line (PDK-892), fails the test instead of becoming the
+// device argument of the next command.
+func (v *VM) MustDevice(command string) string {
+	v.t.Helper()
+	out := v.MustRoot(command)
+	devices, err := devicePaths(out)
+	if err != nil {
+		v.t.Fatalf("%s: %s: %v", v.Name, command, err)
+	}
+	return devices[0]
+}
+
+// devicePath is the form of a device path the guest's tools print (/dev/sda3, /dev/loop0, /dev/mapper/vg-root).
+var devicePath = regexp.MustCompile(`^/dev/[A-Za-z0-9._/:+-]+$`)
+
+// devicePaths parses one device path per line; it fails on no path and on any line that is not one.
+func devicePaths(out string) ([]string, error) {
+	var devices []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !devicePath.MatchString(line) || strings.Contains(line, "..") {
+			return nil, fmt.Errorf("not a device path: %q in output:\n%s", line, out)
+		}
+		devices = append(devices, line)
+	}
+	if len(devices) == 0 {
+		return nil, errors.New("no device path in the output")
+	}
+	return devices, nil
+}
 
 // Keyslots are the keyslot kinds of the guest's LUKS volume, sorted, as the agent names them.
 func (v *VM) Keyslots(t *testing.T) []string {
@@ -159,7 +195,7 @@ func (v *VM) Keyslots(t *testing.T) []string {
 			PIN      bool     `json:"tpm2-pin"`
 		} `json:"tokens"`
 	}
-	if err := json.Unmarshal([]byte(v.Must("sudo cryptsetup luksDump --dump-json-metadata "+v.LUKSDevice())), &md); err != nil {
+	if err := json.Unmarshal([]byte(v.MustRoot("cryptsetup luksDump --dump-json-metadata "+v.LUKSDevice())), &md); err != nil {
 		t.Fatal(err)
 	}
 	var kinds []string
@@ -195,7 +231,7 @@ func (v *VM) Opens(t *testing.T, secret string) bool {
 // other failure than a rejected secret fails the test.
 func (v *VM) OpensDevice(t *testing.T, device, secret string) bool {
 	t.Helper()
-	slots, tokens, err := luksPassphraseSlots([]byte(v.Must("sudo cryptsetup luksDump --dump-json-metadata " + device)))
+	slots, tokens, err := luksPassphraseSlots([]byte(v.MustRoot("cryptsetup luksDump --dump-json-metadata " + device)))
 	if err != nil {
 		t.Fatal(err)
 	}

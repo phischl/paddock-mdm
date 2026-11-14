@@ -1,0 +1,152 @@
+# Container hardening exceptions (ADR 0051 decision 4, plan M12h decision 10). Every service of every host's Compose
+# file set drops all capabilities (cap_drop: [ALL]), sets no-new-privileges:true, a pids_limit and a memory limit, and
+# adds no capability, unless this file lists the service with the setting and the reason. `make lint-compose`
+# (tools/composelint) fails on a service that deviates without an entry, on a cap_add that differs from the listed
+# value, and on an entry that no file set needs any more. Shipped in the operator bundle.
+#
+# Settings: cap_drop, no_new_privileges, pids_limit, mem_limit (the setting may be absent) and cap_add (value: the
+# exact capabilities the service adds). Entries marked "pending" are removed by the named ticket. privileged: true,
+# pid: host, ipc: host and an unconfined seccomp or AppArmor profile always fail and cannot be listed here.
+services:
+  # PostgreSQL ×3: the image's entrypoint starts as root, chowns and chmods the data directory (a volume an older
+  # release or a restore left behind) and drops to postgres via gosu; the overlays' `install -o postgres` steps chown
+  # the spool, socket, bundle-sequence and TLS key paths. Verified on fresh and existing volumes (PDK-822).
+  postgres:
+    cap_add:
+      value: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+      reason: entrypoint chown/chmod of the data directory as root, then gosu to postgres
+  authentik-postgres:
+    cap_add:
+      value: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+      reason: entrypoint chown/chmod of the data directory as root, then gosu to postgres
+  audit-postgres:
+    cap_add:
+      value: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+      reason: entrypoint chown/chmod of the data directory as root, then gosu to postgres
+
+  # Valkey ×2: the entrypoint chowns /data as root and drops to valkey via setpriv; the chown walks
+  # /data/appendonlydir (mode 0700, owned by valkey), which root enters only with DAC_READ_SEARCH (without it every
+  # restart on an existing volume fails, measured in PDK-822). The control plane's entrypoint also chowns the rendered
+  # ACL file on its tmpfs.
+  valkey:
+    cap_add:
+      value: [CHOWN, SETUID, SETGID, DAC_READ_SEARCH]
+      reason: entrypoint chown of /data (and of the ACL file) as root, then setpriv to valkey
+  fleet-redis:
+    cap_add:
+      value: [CHOWN, SETUID, SETGID, DAC_READ_SEARCH]
+      reason: entrypoint chown of /data as root, then setpriv to valkey
+
+  caddy:
+    cap_add:
+      value: [NET_BIND_SERVICE]
+      reason: binds 80 and 443 inside the container
+    mem_limit:
+      reason: pending PDK-910 (memory limits of the Paddock roles and Caddy)
+
+  # OpenBao runs as the image's openbao user (100:1000, decision Q10). Q10 grants IPC_LOCK for mlock(2); measured in
+  # PDK-823, the non-root process holds it in the bounding set only (CapEff 0, VmLck 0) and OpenBao 2.7.2 locks no
+  # memory with or without it, so removing it is an open maintainer question, not a functional change.
+  openbao:
+    cap_add:
+      value: [IPC_LOCK]
+      reason: mlock of OpenBao's memory (decision Q10); the process runs as the non-root openbao user
+
+  # Fleet's MySQL: the image's entrypoint starts as root, chowns the data directory (find … ! -user mysql) and drops to
+  # mysql via gosu. Verified on fresh and existing volumes (PDK-824).
+  fleet-mysql:
+    cap_add:
+      value: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+      reason: entrypoint chown of the data directory as root, then gosu to mysql
+
+  # Not a composelint setting, recorded here so that the matrix is complete: rabbitmq has no read_only root filesystem
+  # (plan M12h §3.4), because the broker writes its Erlang cookie and node files and renders its configuration at start.
+  # It runs as the image's rabbitmq user with no capability. fleet and prometheus have read_only.
+  # Likewise authentik-server and authentik-worker have no read_only root filesystem (plan M12h §3.4): Authentik writes
+  # media, generated templates and its blueprint state at runtime. Both run as the image's authentik user with no
+  # capability (PDK-825).
+
+  # Helper containers and the Paddock roles: no ticket of plan M12h-1 covers them (PDK-910).
+  prometheus-audit:
+    cap_drop:
+      reason: pending PDK-910
+    no_new_privileges:
+      reason: pending PDK-910
+    mem_limit:
+      reason: pending PDK-910
+  db-provision:
+    cap_drop:
+      reason: pending PDK-910
+    mem_limit:
+      reason: pending PDK-910
+  audit-db-provision:
+    cap_drop:
+      reason: pending PDK-910
+    mem_limit:
+      reason: pending PDK-910
+  pgbackrest:
+    cap_drop:
+      reason: pending PDK-910
+    no_new_privileges:
+      reason: pending PDK-910
+    mem_limit:
+      reason: pending PDK-910
+  pgbackrest-authentik:
+    cap_drop:
+      reason: pending PDK-910
+    no_new_privileges:
+      reason: pending PDK-910
+    mem_limit:
+      reason: pending PDK-910
+  fleet-backup:
+    cap_drop:
+      reason: pending PDK-910
+    no_new_privileges:
+      reason: pending PDK-910
+    mem_limit:
+      reason: pending PDK-910
+  caddy-ca-export:
+    mem_limit:
+      reason: pending PDK-910
+  backup-restore-escrow:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-api:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-gateway:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-worker:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-compiler:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-escrow-reader:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-revocation-issuer:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-outbox-relay:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-notifier:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-unsealer:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-migrate:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-audit-migrate:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-audit-writer:
+    mem_limit:
+      reason: pending PDK-910
+  paddock-backup:
+    mem_limit:
+      reason: pending PDK-910

@@ -36,7 +36,7 @@ func TestSoftwareStatusFromCheckin(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		valkeyCLI(t, "DEL hb:"+reporting.DeviceID)
+		valkeyCLI(t, "worker", "DEL hb:"+reporting.DeviceID)
 		reporting.Health = raw
 		if _, res, err := reporting.Checkin(ctx); err != nil || res.Status != http.StatusOK {
 			t.Fatalf("check-in: %v %d %s", err, res.Status, res.Body)

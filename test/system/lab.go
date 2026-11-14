@@ -261,9 +261,10 @@ func (l *Lab) writeEnv(t *testing.T) {
 		{"PADDOCK_PUBLIC_ADMIN_URL", labAdminURL}, {"PADDOCK_PUBLIC_DEVICE_URL", "https://device." + labDomain},
 		{"PADDOCK_INTERCONNECT_ADDR", "127.0.0.1"}, {"PADDOCK_LAB_HTTP_PORT", "8080"},
 		{"PADDOCK_LAB_PROXY_ADDR", addr[0]},
-		// The subnets compose.ci-lab.yaml pins, as smoke-lab.sh sets them (the same-host proxy variant).
-		{"PADDOCK_EDGE_TRUSTED_PROXIES", "172.30.0.1"},
-		{"PADDOCK_ADMIN_ALLOWED_CIDRS", "172.30.0.0/24 127.0.0.0/8 " + addr[0] + "/32"},
+		// The subnets compose.ci-lab.yaml pins, as smoke-lab.sh sets them (the same-host proxy variant): Nginx on the
+		// host reaches Caddy through the gateway of network edge.
+		{"PADDOCK_EDGE_TRUSTED_PROXIES", "172.28.0.1"},
+		{"PADDOCK_ADMIN_ALLOWED_CIDRS", "172.28.0.0/24 172.30.0.0/24 127.0.0.0/8 " + addr[0] + "/32"},
 		{"PADDOCK_INTERNAL_CIDRS", "172.30.0.0/24 172.30.1.0/24 " + addr[0] + "/32"},
 		{"PADDOCK_LAB_BACKUP", "yes"}, {"PADDOCK_BACKUP_LOCAL_ROOT", l.localRoot},
 	} {

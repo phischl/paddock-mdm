@@ -20,6 +20,14 @@ inspection. Screenshots are kept in `bin/system-evidence/<vm>/`.
 regression sets it and runs them on their own, after the other gates (section
 [Backup and recovery](#backup-and-recovery-plan-m15) lists the prerequisites).
 
+## Users by name, never by number
+
+On an enrolled VM Himmelblau answers for every unknown name, a string of digits included: `208071` given where a
+tool accepts a user name can resolve to a synthetic directory user with another UID. Gates and fixtures therefore
+switch to and address a user **by name**: `setpriv --reuid <name>`, `id <name>`, `sudo -u <name>`, `chown <name>`,
+`install -o <name>`, `systemd-run --uid=<name>`. A UID read from the device is resolved to its name first
+(`/etc/passwd`, or the session's user), and compared as a number only (plan M5a, design note 2026-11-11).
+
 ## Worktrees
 
 `make system-test`, `make acceptance` and `make e2e` need the checkout's `deploy/compose/.env` and
@@ -111,6 +119,34 @@ The VMs still need the Ubuntu archive: the setup installs `apt-utils` when `apt-
 first one upgrades everything the snapshot lacks and takes as long as U3's, up to an hour on an old snapshot; without
 outbound HTTPS to the archive SW4 fails.
 
+## Self-service (plan M13b)
+
+`TestSelfServiceGates` builds on the software gate's repository: on each VM it adds `paddock-gate-offered`,
+`paddock-gate-private` and `paddock-gate-slow` (whose postinst waits for `/run/paddock-gate-slow.release`) and builds a
+signed **Flatpak repository** below it (`https://127.0.0.1:8443/flatpak/`: a runtime and the applications
+`org.paddock.GateApp` and `org.paddock.GateUserApp`, exported with `flatpak build-export` and signed with the gate's
+key), so no gate needs Flathub; `flatpak` is installed from the distribution to build it and purged afterwards, so that
+SV5 sees the agent install it (Q12). Two Paddock users `ss-owner-<run>@acme.test` and `ss-other-<run>@acme.test`
+become the device's owners and get local accounts with the
+UIDs 208071 and 208072, as Himmelblau maps directory users (`useradd --badname`). The socket is called as each
+account through `setpriv` and a python client (curl is not on every desktop), with the output read through `MustRoot`.
+The owner's graphical session is GDM's automatic login (`VM.Autologin`).
+
+| Gate | What it proves |
+| --- | --- |
+| SV1 | `/run/paddock/selfservice.sock` is `0666 root:root`; each caller is named by its peer credentials (UPN, `paddock`, `root`) |
+| SV2 | the owner sees the application offered to them; the other owner, `paddock` and root do not, and get 404 `unknown_entry` for it |
+| SV4 | removing or reinstalling a required application or one installed by hand is 403 `required_by_policy` |
+| SV5 | a required system-scope Flatpak application brings `paddock-<slug>` with the pinned key and installs; a planted `paddock-rogue` remote is removed with `device.tamper_protected_file_changed` |
+| SV7 | a user-scope application for the owner alone stays `pending/not_yet_applied` without a session and never lands in the system installation; after the automatic login it is in the owner's installation only, and the other owner never sees it |
+| SV3 | the owner's install succeeds with `device.software_self_service` and a notification on the session bus (screenshot); the other owner cannot read the operation; the removal succeeds |
+| SV6 | a supervisor restart during the install gives `failed/interrupted`; the retry leaves the package installed with a clean `dpkg --audit` |
+| SV8 | an uploaded catalog icon reaches the socket byte for byte; an entry without one has none (the app's glyph) |
+| SV9 | forbidding `flatpak` drops every Flatpak application with `flatpak_forbidden` and removes `flatpak`; the APT entries stay |
+
+They run in the order of the table: SV3 needs the session that SV7 starts only after its check without one. The
+desktop app (PDK-802) and user names in the status (PDK-805) are not part of these gates.
+
 ## Throwaway VMs
 
 Some gates install a VM of their own from an Ubuntu Desktop ISO and delete it when they end; they never run with
@@ -162,8 +198,9 @@ PADDOCK_SYSTEM_BACKUP=1 make system-test VM=all T='TestBackupGates'
 ```
 
 It needs passwordless `sudo` on the host (the local root is root-owned, and `./paddock restore` hands the staged set to
-uid 999), and 80, 443, 445, 2049 and 127.0.0.1:8080 free; the subnets 172.30.0.0/24 and 172.30.1.0/24 of
-`compose.ci-lab.yaml` must not be taken by another Compose network. Run it alone: it destroys the lab twice and must
+uid 999), and 80, 443, 445, 2049 and 127.0.0.1:8080 free; the subnets 172.28.0.0/24, 172.30.0.0/24 and
+172.30.1.0/24 of `compose.ci-lab.yaml` must not be taken by another Compose network (the development stack's edge
+network takes 172.28.0.0/24: `make down` first, without `V=1`). Run it alone: it destroys the lab twice and must
 never run beside acceptance, e2e or other system tests. It takes about two hours. `PADDOCK_SYSTEM_BUNDLE` names another
 bundle tarball. Before the port check it removes what a killed earlier run left behind under the gate's own fixed names
 (the Compose project `paddock-systest-lab` with its volumes, the proxy, the share relay, the S3 store).

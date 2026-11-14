@@ -185,30 +185,33 @@ func (v *VM) sshArgs() []string {
 	}
 }
 
-// SSH runs a shell command in the guest as user paddock (passwordless sudo) with optional stdin. It repeats the
-// command once when ssh failed before the command started; a command that cuts its own connection (reboot, poweroff,
-// an sshd restart) must use SSHNoRetry, because a drop that leaves no text is indistinguishable from a handshake
-// failure and the repeat would run the command twice (PDK-720).
+// SSH runs a shell command in the guest as user paddock (passwordless sudo) with optional stdin and returns its
+// standard output followed by its standard error. It repeats the command once when ssh failed before the command
+// started; a command that cuts its own connection (reboot, poweroff, an sshd restart) must use SSHNoRetry, because a
+// drop that leaves no text is indistinguishable from a handshake failure and the repeat would run the command twice
+// (PDK-720). A caller that parses the output uses Must, which returns the standard output alone.
 func (v *VM) SSH(ctx context.Context, stdin []byte, command string) (string, error) {
-	return v.sshRetrying(ctx, stdin, command, false)
+	stdout, stderr, err := v.sshRetrying(ctx, stdin, command, false)
+	return stdout + stderr, err
 }
 
 // SSHNoRetry runs the command exactly once. State-changing commands that end the session use it.
 func (v *VM) SSHNoRetry(ctx context.Context, stdin []byte, command string) (string, error) {
-	return v.sshRetrying(ctx, stdin, command, true)
+	stdout, stderr, err := v.sshRetrying(ctx, stdin, command, true)
+	return stdout + stderr, err
 }
 
-func (v *VM) sshRetrying(ctx context.Context, stdin []byte, command string, noRetry bool) (string, error) {
-	out, err := v.ssh(ctx, stdin, command)
+func (v *VM) sshRetrying(ctx context.Context, stdin []byte, command string, noRetry bool) (stdout, stderr string, err error) {
+	stdout, stderr, err = v.ssh(ctx, stdin, command)
 	// Transport resilience, not a test retry: package upgrades in a gate restart sshd and drop a connection that was
 	// being opened.
-	if shouldRetrySSH(noRetry, sshExitCode(err), out) && ctx.Err() == nil {
+	if shouldRetrySSH(noRetry, sshExitCode(err), stdout+stderr) && ctx.Err() == nil {
 		if v.t != nil {
-			v.t.Logf("%s: ssh exited 255 (%s); retrying once: %s", v.Name, strings.TrimSpace(out), command)
+			v.t.Logf("%s: ssh exited 255 (%s); retrying once: %s", v.Name, strings.TrimSpace(stdout+stderr), command)
 		}
-		out, err = v.ssh(ctx, stdin, command)
+		stdout, stderr, err = v.ssh(ctx, stdin, command)
 	}
-	return out, err
+	return stdout, stderr, err
 }
 
 // shouldRetrySSH decides whether a command is run again: never when the caller opted out, otherwise only for an ssh
@@ -240,16 +243,18 @@ func sshHandshakeFailed(out string) bool {
 	return true
 }
 
-func (v *VM) ssh(ctx context.Context, stdin []byte, command string) (string, error) {
+// ssh keeps the guest command's standard output apart from its standard error (and ssh's own messages): an NSS
+// module that logs while the guest resolves a user, e.g. in sudo, must never become command output (PDK-892).
+func (v *VM) ssh(ctx context.Context, stdin []byte, command string) (string, string, error) {
 	args := append(v.sshArgs(), "-p", v.port, "paddock@127.0.0.1", command)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
 	err := cmd.Run()
-	return out.String(), err
+	return stdout.String(), stderr.String(), err
 }
 
 // Bind makes the VM's helpers (Must, Copy, …) report to the subtest t until t ends; then they report to the test they
@@ -261,7 +266,8 @@ func (v *VM) Bind(t *testing.T) {
 	t.Cleanup(func() { v.t = prev })
 }
 
-// Must runs a command and fails the test on error.
+// Must runs a command and fails the test on error. It returns the command's standard output alone, trimmed; a
+// command whose result is on standard error redirects it (2>&1).
 func (v *VM) Must(command string) string {
 	v.t.Helper()
 	return v.MustIn(nil, command)
@@ -276,18 +282,41 @@ func (v *VM) MustIn(stdin []byte, command string) string {
 	defer cancel()
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
-		out, err := v.SSH(ctx, stdin, command)
+		stdout, stderr, err := v.sshRetrying(ctx, stdin, command, false)
 		if err == nil {
-			return strings.TrimSpace(out)
+			return strings.TrimSpace(stdout)
 		}
 		var exit *exec.ExitError
-		connection := errors.As(err, &exit) && exit.ExitCode() == 255 && strings.Contains(out, "Connection")
+		connection := errors.As(err, &exit) && exit.ExitCode() == 255 && strings.Contains(stderr, "Connection")
 		if !connection || time.Now().After(deadline) {
-			v.t.Fatalf("%s: %s: %v\n%s", v.Name, command, err, out)
+			v.t.Fatalf("%s: %s: %v\n%s%s", v.Name, command, err, stdout, stderr)
 		}
-		v.t.Logf("%s: SSH connection failed (%s), retrying", v.Name, strings.TrimSpace(out))
+		v.t.Logf("%s: SSH connection failed (%s), retrying", v.Name, strings.TrimSpace(stderr))
 		time.Sleep(5 * time.Second)
 	}
+}
+
+// MustRoot runs a command as root and returns its standard output alone, trimmed. Use it for every lookup whose output
+// is parsed. sudo itself resolves users through NSS while it starts, and a module that logs there (himmelblaud while
+// it is down) writes to sudo's standard output, which would be mixed into the result (PDK-926). The guest has no root
+// login, so the command writes into a file of the paddock user and sudo's own standard output is discarded; the file
+// holds the bytes of the target command and nothing else. The command is a plain shell command, without sudo.
+func (v *VM) MustRoot(command string) string {
+	v.t.Helper()
+	return v.MustRootIn(nil, command)
+}
+
+// MustRootIn is MustRoot with stdin for the command.
+func (v *VM) MustRootIn(stdin []byte, command string) string {
+	v.t.Helper()
+	return v.MustIn(stdin, rootCapture(command))
+}
+
+// rootCapture wraps command so that only its own standard output reaches the caller. The file lives in the home
+// directory, not in /tmp: root may not open another user's file in a sticky directory (fs.protected_regular).
+func rootCapture(command string) string {
+	return `f=$(mktemp -p "$HOME") || exit 1; sudo -n sh -c ` + shellQuote(`exec >"$0"; `+command) +
+		` "$f" >/dev/null; rc=$?; cat "$f"; rm -f "$f"; exit $rc`
 }
 
 // Copy copies a local file into the guest.
@@ -328,4 +357,40 @@ func (v *VM) AfterAll(t *testing.T, fn func(t *testing.T)) { v.group.AfterAll(t,
 func (v *VM) Together(t *testing.T, gate, step string, fn func() string) string {
 	t.Helper()
 	return v.group.Together(t, v.Name, gate, step, fn)
+}
+
+// autologinScript makes GDM log the account $1 in automatically and restarts GDM: the AutomaticLogin keys go into the
+// [daemon] section of /etc/gdm3/custom.conf (added when the file or the section is missing), replacing earlier ones.
+// It ends with autologinRestart.
+const autologinScript = `set -eu
+conf=/etc/gdm3/custom.conf
+[ -f "$conf" ] || : >"$conf"
+grep -q '^\[daemon\]' "$conf" || printf '\n[daemon]\n' >>"$conf"
+awk -v n="$1" '/^AutomaticLogin/ {next} {print} /^\[daemon\]$/ {print "AutomaticLoginEnable=true"; print "AutomaticLogin=" n}' "$conf" >"$conf.new"
+mv "$conf.new" "$conf"
+` + autologinRestart
+
+// autologinRestart restarts GDM so that it applies the automatic login. GDM logs in automatically only on its first
+// start per boot; its ran-once marker in /run would skip the autologin after the restart (as in DS1's ensureUserSession).
+const autologinRestart = `rm -f /run/gdm3/ran-once-marker /run/gdm/ran-once-marker
+systemctl restart display-manager.service
+`
+
+// Autologin gives the account name a graphical session through GDM's automatic login and waits until logind lists it
+// as an active Wayland or X11 session of class user, which it returns. Nobody may be logged in at the console: the
+// restart of GDM ends every graphical session. The session lasts until the VM returns to its snapshot.
+func (v *VM) Autologin(t *testing.T, name string) Session {
+	t.Helper()
+	v.MustRootIn([]byte(autologinScript), "bash -s -- "+shellQuote(name))
+	var found Session
+	Until(t, v.Name+": graphical session of "+name, 3*time.Minute, 5*time.Second, nil, func() bool {
+		for _, s := range v.UserSessions(name) {
+			if (s.Type == "wayland" || s.Type == "x11") && s.State == "active" {
+				found = s
+				return true
+			}
+		}
+		return false
+	})
+	return found
 }

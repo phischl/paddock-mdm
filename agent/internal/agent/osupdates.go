@@ -125,7 +125,7 @@ func (a *Agent) runInstalls(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case job := <-a.installJobs:
-			status, result := installPackages(context.WithoutCancel(ctx), a.d.Sys, job.packages,
+			status, result := installPackages(context.WithoutCancel(ctx), reconcile.Shielded{System: a.d.Sys, Shield: a.d.Shield}, job.packages,
 				func() bool { return osupdates.RebootRequired(a.d.Layout) })
 			select {
 			case a.installDone <- installDone{commandID: job.commandID, status: status, result: result}:

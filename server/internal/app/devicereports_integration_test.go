@@ -13,6 +13,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // TestLoginStateRecordsTheLatestReport: login.* and sudo.* events are audited and the latest one per area is kept in
@@ -235,6 +236,47 @@ func TestRecordEventsBatch(t *testing.T) {
 	}
 }
 
+// TestRecordEventBatchUnknownTypes (PDK-995): an event of an unknown type, from a newer agent, claims its number
+// without an audit event and is reported once, also when the message is redelivered; the known events of the batch are
+// audited, and a batch of unknown types only claims their numbers.
+func TestRecordEventBatchUnknownTypes(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	at := time.Now().UTC().Truncate(time.Second)
+	mixed := []protocol.Event{
+		{EventSeq: 1, Type: protocol.EventLoginApplied, OccurredAt: at, Data: json.RawMessage(`{"changed":["config"]}`)},
+		{EventSeq: 2, Type: "software.withdrawn", OccurredAt: at},
+		{EventSeq: 3, Type: protocol.EventTamperSudoersDFile, OccurredAt: at, Data: json.RawMessage(`{"file":"evil"}`)},
+	}
+	for round, want := range []string{"[software.withdrawn]", "[]"} {
+		unknown, err := h.reports.RecordEventBatch(systemCtx(org), device, time.Now(), mixed)
+		if err != nil || fmt.Sprint(unknown) != want {
+			t.Fatalf("mixed batch, round %d: unknown %v (%v), want %s", round, unknown, err, want)
+		}
+	}
+	only := []protocol.Event{
+		{EventSeq: 4, Type: "future.one\x00" + strings.Repeat("x", 100), OccurredAt: at},
+		{EventSeq: 5, Type: "future.two", OccurredAt: at},
+	}
+	unknown, err := h.reports.RecordEventBatch(systemCtx(org), device, time.Now(), only)
+	if err != nil || len(unknown) != 2 || unknown[0] != "future.one"+strings.Repeat("x", 54) || unknown[1] != "future.two" {
+		t.Fatalf("unknown-only batch: unknown %q (%v)", unknown, err)
+	}
+	ctx := context.Background()
+	var codes string
+	if err := h.super.QueryRow(ctx, "SELECT string_agg(code, ' ' ORDER BY code) FROM action WHERE organization_id = $1", org).Scan(&codes); err != nil {
+		t.Fatal(err)
+	}
+	if codes != "device.login_applied device.tamper_sudoers_d_file" {
+		t.Fatalf("audit codes %q", codes)
+	}
+	var seqs string
+	if err := h.super.QueryRow(ctx, "SELECT string_agg(event_seq::text, ' ' ORDER BY event_seq) FROM device_event_seen WHERE device_id = $1",
+		device).Scan(&seqs); err != nil || seqs != "1 2 3 4 5" {
+		t.Fatalf("claimed event_seq %q (%v), want 1 2 3 4 5 (no gap)", seqs, err)
+	}
+}
+
 // TestRecordOnceBatchFallback (N2 review): when the batch transaction fails because of one event (a NUL character,
 // which jsonb rejects), every other event is still audited exactly once; the bad one fails alone, also on redelivery,
 // and leaves no claimed key behind.
@@ -294,5 +336,73 @@ func TestRecordEventsStripsControls(t *testing.T) {
 	if err := h.super.QueryRow(context.Background(), "SELECT params->>'message' FROM action WHERE organization_id = $1 AND code = 'device.login_apply_failed'",
 		org).Scan(&msg); err != nil || msg != "dpkg lock" {
 		t.Fatalf("message %q (%v)", msg, err)
+	}
+}
+
+// TestRecordSelfServiceEvents (plan M13b decision 18, PDK-803): software.self_service is audited as
+// device.software_self_service with the user and every other field; succeeded is recorded as success, failed and
+// refused as failure with their error codes, in a batch, on its own and in the fallback of a failed batch.
+func TestRecordSelfServiceEvents(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	at := time.Now().UTC().Truncate(time.Second)
+	event := func(seq int64, outcome, reason string) protocol.Event {
+		data, err := json.Marshal(protocol.SoftwareSelfService{User: "alice@acme.test", EntryID: "0b9e2c4e-4b7a-4f43-9a51-1c2d3e4f5a6b",
+			FlatpakRef: "org.gimp.GIMP", Scope: "user", Action: protocol.SelfServiceInstall, Outcome: outcome, Reason: reason, Version: "2.10"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return protocol.Event{EventSeq: seq, Type: protocol.EventSoftwareSelfService, OccurredAt: at, Data: data}
+	}
+	batch := []protocol.Event{event(1, protocol.SelfServiceSucceeded, ""), event(2, protocol.SelfServiceFailed, protocol.SelfServiceTimeout),
+		event(3, protocol.SelfServiceRefused, protocol.SelfServiceNotInAudience)}
+	for range 2 {
+		if err := h.reports.RecordEvents(systemCtx(org), device, time.Now(), batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fresh, err := h.reports.RecordEvent(systemCtx(org), device, event(4, protocol.SelfServiceRefused, protocol.SelfServiceRequiredByPolicy)); err != nil || !fresh {
+		t.Fatalf("single event: fresh %v, %v", fresh, err)
+	}
+	// The fallback records each entry on its own when the batch fails because of another one.
+	bad := app.OnceEntry{
+		Spec: app.ActionSpec{Code: audit.CodeDeviceLoginApplyFailed, Actor: &audit.Actor{Type: audit.ActorDevice, ID: device.String()},
+			Target: &audit.Target{Type: "device", ID: device.String()}, Params: map[string]any{"reason": "bad\x00reason"}},
+		Claim: func(context.Context, *pgstore.Queries) (bool, error) { return true, nil },
+	}
+	failed := app.OnceEntry{
+		Spec: app.ActionSpec{Code: audit.CodeDeviceSoftwareSelfService, Actor: &audit.Actor{Type: audit.ActorDevice, ID: device.String()},
+			Target: &audit.Target{Type: "device", ID: device.String()}, Params: map[string]any{"event_seq": 5, "outcome": "failed"}},
+		Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+			n, err := q.InsertDeviceEventSeen(ctx, pgstore.InsertDeviceEventSeenParams{DeviceID: device, EventSeq: 5, OrganizationID: org})
+			return n == 1, err
+		},
+		Refusal: problem.SelfServiceFailed,
+	}
+	if recorded, err := h.runner.RecordOnceBatch(systemCtx(org), []app.OnceEntry{bad, failed}); err == nil || fmt.Sprint(recorded) != "[false true]" {
+		t.Fatalf("fallback: recorded %v, %v", recorded, err)
+	}
+
+	rows, err := h.super.Query(context.Background(), `SELECT params->>'event_seq', outcome, coalesce(error_code, ''), coalesce(params->>'user', ''),
+		coalesce(params->>'flatpak_ref', ''), coalesce(params->>'scope', ''), coalesce(params->>'action', ''), coalesce(params->>'entry_id', '')
+		FROM action WHERE organization_id = $1 AND code = 'device.software_self_service' ORDER BY params->>'event_seq'`, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var seq, outcome, code, user, ref, scope, action, entry string
+		if err := rows.Scan(&seq, &outcome, &code, &user, &ref, &scope, &action, &entry); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, seq+":"+outcome+":"+code)
+		if seq != "5" && (user != "alice@acme.test" || ref != "org.gimp.GIMP" || scope != "user" || action != "install" || entry == "") {
+			t.Errorf("event %s params: user %q ref %q scope %q action %q entry %q", seq, user, ref, scope, action, entry)
+		}
+	}
+	want := "1:success: 2:failure:self_service_failed 3:failure:self_service_refused 4:failure:self_service_refused 5:failure:self_service_failed"
+	if strings.Join(got, " ") != want {
+		t.Fatalf("audited %q\nwant    %q", strings.Join(got, " "), want)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/configrollout"
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
 	"github.com/phischl/paddock-mdm/server/internal/domain/managedconfig"
+	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
 
@@ -32,6 +33,14 @@ type rolloutOverlay struct {
 	// stagedFiles, stagedUnits and stagedHolds are the staged keys (declarative.Key.String) by section.
 	stagedFiles, stagedUnits, stagedHolds map[string]bool
 	stagedSettings                        bool
+	// assignments are the before items of the staged software assignments an update or deletion replaced;
+	// stagedAssignments their keys and stagedRows the rows of all staged keys, as the rollout recorded them when it
+	// started (plan M13c decision 3). Live rows and before items are matched by these IDs, not by the key's names.
+	assignments       []beforeAssignment
+	stagedAssignments map[string]bool
+	stagedRows        map[string]configrollout.StagedAssignment
+	// software is the result of software: computed once per round like overlaid.
+	software *orgSoftware
 	// groupNames maps the organization's device group IDs to their names, which the keys use.
 	groupNames map[uuid.UUID]string
 	// overlaid is the result of apply: it depends only on the round's definitions, so it is computed once per round.
@@ -39,6 +48,12 @@ type rolloutOverlay struct {
 	// beforeMissing: the staged plan updates or deletes items but the change set has no before-state (purged or never
 	// stored), so the overlay cannot render the state a device outside the wave must keep.
 	beforeMissing bool
+}
+
+// beforeAssignment is the before item of a staged software assignment with the row its rollout recorded.
+type beforeAssignment struct {
+	declarative.SoftwareAssignment
+	row configrollout.StagedAssignment
 }
 
 // overlaid are the definitions and updates of a device outside the wave.
@@ -102,6 +117,21 @@ func loadOverlay(ctx context.Context, q *pgstore.Queries) (*rolloutOverlay, erro
 	o.stagedFiles, o.stagedUnits, o.stagedHolds = staged[declarative.SectionManagedFiles], staged[declarative.SectionManagedUnits],
 		staged[declarative.SectionPackageHolds]
 	o.stagedSettings = staged[declarative.SectionSettingsUpdates][""]
+	o.stagedAssignments = staged[declarative.SectionSoftwareAssignments]
+	if len(o.stagedAssignments) > 0 {
+		if len(r.StagedAssignments) > 0 {
+			if err := json.Unmarshal(r.StagedAssignments, &o.stagedRows); err != nil {
+				return nil, fmt.Errorf("decode the staged software assignments of rollout %s: %w", r.ID, err)
+			}
+		}
+		// Without its row a staged key cannot be told apart from the live state; the rollout's devices outside the
+		// wave keep their bundle instead.
+		for key := range o.stagedAssignments {
+			if _, ok := o.stagedRows[key]; !ok {
+				o.beforeMissing = true
+			}
+		}
+	}
 	if err := o.loadBefore(before, groupIDs); err != nil {
 		return nil, fmt.Errorf("before-states of rollout %s: %w", r.ID, err)
 	}
@@ -163,6 +193,17 @@ func (o *rolloutOverlay) loadBefore(before map[string]map[string]json.RawMessage
 			}
 			o.holds = append(o.holds, hold)
 		}
+	}
+	for key, raw := range before[declarative.SectionSoftwareAssignments] {
+		row, ok := o.stagedRows[key]
+		if !o.stagedAssignments[key] || !ok {
+			continue
+		}
+		a := beforeAssignment{row: row}
+		if err := json.Unmarshal(raw, &a.SoftwareAssignment); err != nil {
+			return fmt.Errorf("software assignment %s: %w", key, err)
+		}
+		o.assignments = append(o.assignments, a)
 	}
 	if raw, ok := before[declarative.SectionSettingsUpdates][""]; ok && o.stagedSettings {
 		var s declarative.UpdateSettings
@@ -241,4 +282,67 @@ func (o *rolloutOverlay) groupName(id *uuid.UUID) *string {
 	}
 	name := o.groupNames[*id]
 	return &name
+}
+
+// applySoftware returns a copy of s in which every staged software assignment carries its before-state, like apply
+// does for the definitions (plan M13c decision 3): a staged creation is removed, a staged update or deletion is
+// replaced by (or restored as) its before item. A before item whose entry or device group no longer exists is left
+// out: it can reach no device; a removed user or user group matches no device by its ID either. s is not changed; the
+// result is computed once per round.
+func (o *rolloutOverlay) applySoftware(s *orgSoftware) *orgSoftware {
+	if s == nil || len(o.stagedAssignments) == 0 {
+		return s
+	}
+	if o.software == nil {
+		o.software = o.overlaySoftware(s)
+	}
+	return o.software
+}
+
+// overlaySoftware computes applySoftware's result.
+func (o *rolloutOverlay) overlaySoftware(s *orgSoftware) *orgSoftware {
+	staged := make(map[uuid.UUID]bool, len(o.stagedRows))
+	for _, row := range o.stagedRows {
+		staged[row.ID] = true
+	}
+	out := *s
+	out.assignments = make([]pgstore.SoftwareAssignment, 0, len(s.assignments)+len(o.assignments))
+	for _, a := range s.assignments {
+		if !staged[a.ID] {
+			out.assignments = append(out.assignments, a)
+		}
+	}
+	out.invalidAssignments = make(map[uuid.UUID]error, len(s.invalidAssignments))
+	for id, err := range s.invalidAssignments {
+		out.invalidAssignments[id] = err
+	}
+	for _, b := range o.assignments {
+		if _, ok := s.entries[b.row.Entry]; !ok {
+			continue
+		}
+		row := pgstore.SoftwareAssignment{ID: b.row.ID, CatalogEntryID: b.row.Entry, Intent: b.Intent, UpdateRule: b.UpdateRule,
+			Version: b.Version, Reason: b.Reason}
+		if b.Target.Type != software.TargetOrganization {
+			if b.row.Target == nil {
+				continue
+			}
+			target := uuid.NullUUID{UUID: *b.row.Target, Valid: true}
+			switch b.Target.Type {
+			case software.TargetDeviceGroup:
+				if _, ok := o.groupNames[target.UUID]; !ok {
+					continue
+				}
+				row.DeviceGroupID = target
+			case software.TargetUser:
+				row.UserID = target
+			case software.TargetUserGroup:
+				row.UserGroupID = target
+			}
+		}
+		if err := software.ValidateAssignment(row.Intent, row.UpdateRule, row.Version, ""); err != nil {
+			out.invalidAssignments[row.ID] = err
+		}
+		out.assignments = append(out.assignments, row)
+	}
+	return &out
 }

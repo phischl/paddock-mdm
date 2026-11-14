@@ -1,6 +1,6 @@
 // Package device is the device API of the gateway role (api/openapi/device.yaml, plan M2a §6.2): request signature
 // verification in the order of architecture §6.3, rate limits, and the enrollment, check-in, event, command result,
-// escrow and diagnostics endpoints.
+// escrow, diagnostics and catalog icon endpoints.
 // The gateway reads only Valkey and writes only to RabbitMQ (and nonces, sequence numbers and enrollment requests to
 // Valkey); it has no database credentials.
 package device
@@ -25,6 +25,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 )
 
 var (
@@ -43,12 +44,6 @@ const (
 	// is about 60 KiB on top of the rest of the health, and a report must never make the check-in fail (PDK-700).
 	maxCheckinBody = 96 << 10
 	maxEventsBody  = 1 << 20
-)
-
-// Default rate limits per minute (plan M2a §6.2).
-const (
-	DefaultPerKeyLimit = 30
-	DefaultPerIPLimit  = 300
 )
 
 // BundleURLTTL is the validity of presigned bundle URLs (architecture §7.3).
@@ -83,11 +78,15 @@ type Deps struct {
 	// Artifacts presigns agent artifacts in paddock-agent-artifacts; nil disables agent updates.
 	Artifacts Presigner
 	// Escrow presigns header uploads to paddock-escrow; nil refuses header escrows.
-	Escrow       UploadPresigner
-	PerKeyLimit  int
-	PerIPLimit   int
-	Now          func() time.Time
-	CheckinDelay func() int // seconds until the next check-in; default 300 × U(0.8, 1.2)
+	Escrow UploadPresigner
+	// RateLimits holds the per-address and per-key windows (ratelimit.Device, ratelimit.DeviceKey); PerKeyLimit and
+	// PerIPLimit default to the plan M2a §6.2 limits, PerIPV6Prefix to the /64 an IPv6 client is keyed by.
+	RateLimits    ratelimit.Store
+	PerKeyLimit   int
+	PerIPLimit    int
+	PerIPV6Prefix int
+	Now           func() time.Time
+	CheckinDelay  func() int // seconds until the next check-in; default 300 × U(0.8, 1.2)
 	// TrustedProxies may name the client through X-Paddock-Client-IP (plan M7a decision 5).
 	TrustedProxies []netip.Prefix
 	// AgentOutsideWindow reports whether an agent version is outside the server's support window (ADR 0013
@@ -95,7 +94,10 @@ type Deps struct {
 	AgentOutsideWindow func(agentVersion string) bool
 }
 
-type gateway struct{ d Deps }
+type gateway struct {
+	d       Deps
+	limiter *ratelimit.Limiter
+}
 
 // NewHandler builds the device API with the shared middleware.
 func NewHandler(d Deps) http.Handler {
@@ -103,15 +105,19 @@ func NewHandler(d Deps) http.Handler {
 		d.Now = time.Now
 	}
 	if d.PerKeyLimit == 0 {
-		d.PerKeyLimit = DefaultPerKeyLimit
+		d.PerKeyLimit = ratelimit.DefaultDeviceKey
 	}
 	if d.PerIPLimit == 0 {
-		d.PerIPLimit = DefaultPerIPLimit
+		d.PerIPLimit = ratelimit.DefaultDevice
+	}
+	if d.PerIPV6Prefix == 0 {
+		d.PerIPV6Prefix = ratelimit.DefaultV6Prefix
 	}
 	if d.CheckinDelay == nil {
 		d.CheckinDelay = func() int { return int(300 * (0.8 + 0.4*rand.Float64())) } //nolint:gosec // jitter, not a secret
 	}
-	g := &gateway{d: d}
+	g := &gateway{d: d, limiter: ratelimit.New(d.RateLimits, d.Now,
+		map[ratelimit.Class]int{ratelimit.Device: d.PerIPLimit, ratelimit.DeviceKey: d.PerKeyLimit})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/enroll", g.enroll)
 	mux.HandleFunc("GET /v1/enroll/{enrollment_id}", g.enrollStatus)
@@ -121,6 +127,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("POST /v1/escrow", g.escrowUpload)
 	mux.HandleFunc("GET /v1/escrow/{escrow_id}", g.escrowStatus)
 	mux.HandleFunc("POST /v1/diagnostics", g.diagnosticsUpload)
+	mux.HandleFunc("GET /v1/catalog/{entry_id}/icon", g.catalogIcon)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, errNotFound)
 	})
@@ -147,7 +154,6 @@ func (e *apiError) with(detail string) *apiError {
 
 var (
 	errInvalidRequest   = newError(http.StatusBadRequest, protocol.CodeInvalidRequest)
-	errUnknownEventType = newError(http.StatusBadRequest, protocol.CodeUnknownEventType)
 	errInvalidSignature = newError(http.StatusUnauthorized, protocol.CodeInvalidSignature)
 	errClockSkew        = newError(http.StatusUnauthorized, protocol.CodeClockSkew)
 	errReplay           = newError(http.StatusUnauthorized, protocol.CodeReplay)
@@ -242,9 +248,11 @@ func decodeJSON(body []byte, v any) error {
 	return nil
 }
 
-// limit applies the per-minute rate limit of scope.
-func (g *gateway) limit(ctx context.Context, scope string, n int) error {
-	ok, wait, err := g.d.Cache.Allow(ctx, scope, n, g.d.Now())
+// limit applies the per-minute rate limit of class to key. A store error is returned instead of failing open: the
+// request needs Valkey for its key and nonce right after, so the device gets the same 503 it got before the shared
+// limiter, without waiting for a second timeout.
+func (g *gateway) limit(ctx context.Context, class ratelimit.Class, key string) error {
+	ok, wait, err := g.limiter.Allow(ctx, class, key)
 	if err != nil {
 		return err
 	}

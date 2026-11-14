@@ -92,7 +92,7 @@ func TestIdentityAuthentikProvisioning(t *testing.T) {
 	}
 	ctx := testContext(t, 5*time.Minute)
 	org := newOrg()
-	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/organizations", org), http.StatusCreated, "")
+	expectStatus(t, createOrg(t, root, org), http.StatusCreated, "")
 	slug := org["slug"]
 	client := "paddock-device-" + slug
 

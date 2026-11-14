@@ -44,6 +44,12 @@ type NewIdentityUser struct{ Username, Name, Email string }
 // IdentityGroup is a group of the identity provider.
 type IdentityGroup struct{ PK, Name string }
 
+// IdentityGroupMembers is a group of the identity provider with the pks of its direct members.
+type IdentityGroupMembers struct {
+	PK      string
+	Members []string
+}
+
 // UserDirectory manages the users of organizations (plan M3a decisions 2 and 7).
 type UserDirectory interface {
 	// CreateUser creates a Paddock-managed user without password as member of the organization's root group; it
@@ -64,9 +70,10 @@ type UserDirectory interface {
 	UnlockUser(ctx context.Context, slug, pk string, activate bool) error
 	// OrganizationUsers lists the direct members of the organization's root group.
 	OrganizationUsers(ctx context.Context, slug string) ([]IdentityUser, error)
-	// RoleGroupUsers lists the direct members of a role group (organization.RoleGroup) in one paged listing (plan
-	// M8s decision 22); ErrGroupNotFound when the group does not exist.
-	RoleGroupUsers(ctx context.Context, groupName string) ([]IdentityUser, error)
+	// RoleGroupsMembers lists the direct members of the role groups groupNames (organization.RoleGroup) together in one
+	// settled paged listing, keyed by group (plan M8s decision 22, PDK-570); a group that does not exist has no key, a
+	// group without members an empty one.
+	RoleGroupsMembers(ctx context.Context, groupNames []string) (map[string][]IdentityUser, error)
 	// UserMembership reads one user directly: the user named username whose UID is uid, with the names of its direct
 	// groups; found is false when no such user exists (removed, or renamed meanwhile). The worker confirms with it
 	// what a listing suggests before it changes an account (plan M8s decision 22).
@@ -97,4 +104,7 @@ type GroupDirectory interface {
 	UpstreamGroups(ctx context.Context, slug string) ([]IdentityGroup, error)
 	// FindGroup returns the pk of the group name, or "" if there is none.
 	FindGroup(ctx context.Context, name string) (string, error)
+	// DeviceLoginGroups lists the organization's per-device login groups (organization.DeviceLoginGroup) with their
+	// direct members, keyed by name, in one settled paged listing (PDK-570); a group it does not list does not exist.
+	DeviceLoginGroups(ctx context.Context, slug string) (map[string]IdentityGroupMembers, error)
 }

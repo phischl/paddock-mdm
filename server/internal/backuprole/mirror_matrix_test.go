@@ -563,22 +563,32 @@ func TestMirrorRetiredPathAgeFromRetiredAt(t *testing.T) {
 	}
 }
 
-// TestMirrorUnknownPathHeld (L11): a repository path of no key the database knows is held, the copies run, nothing is
-// deleted anywhere on the target this round, and the target run fails with unknown_path.
+// TestMirrorUnknownPathHeld (L11, decisions-alpha10 A10-25): a repository path of no key the database knows is held
+// and the target run fails with unknown_path naming it, but the copies run and every other deletion goes on: the
+// expired snapshot and the retired key's repository past its retention leave the target. Before, one unknown path
+// stopped every deletion on the target, so an operator could never reclaim its space.
 func TestMirrorUnknownPathHeld(t *testing.T) {
 	unknown := "pgbackrest/bk-20000101-deadbeef/backup/paddock/backup.info"
+	r := defaultRules()
+	r.keep = 14 * day
+	r.retired[pathOld] = matrixNow.Add(-20 * day)
 	repo, idx := localSet(t, with(completeA(label1), set{snapAt(time.Hour): "new"}))
-	dst := targetOf(t, with(completeA(label1), set{unknown: "u", snapAt(40 * day): "old", snapAt(35 * day): "older"}),
-		matrixNow.Add(-day), false)
-	_, err := runMirror(repo, idx, dst, defaultRules())
-	if ErrorClass(err) != ClassUnknownPath {
-		t.Fatalf("error %v (%s), want %s", err, ErrorClass(err), ClassUnknownPath)
+	dst := targetOf(t, with(completeA(label1), oldRepo(), set{unknown: "u", snapAt(40 * day): "old",
+		snapAt(35 * day): "older"}), matrixNow.Add(-20*day), false)
+	_, err := runMirror(repo, idx, dst, r)
+	if ErrorClass(err) != ClassUnknownPath || !strings.Contains(err.Error(), "pgbackrest/bk-20000101-deadbeef/") {
+		t.Fatalf("error %v (%s), want %s naming the path", err, ErrorClass(err), ClassUnknownPath)
 	}
 	if !slices.Contains(opsOf(dst, "put"), snapAt(time.Hour)) {
 		t.Errorf("the copies did not run: %v", dst.ops)
 	}
-	if got := opsOf(dst, "delete"); len(got) != 0 {
-		t.Errorf("deleted %v", got)
+	// The 35-day snapshot stays: it is the newest of its kind the target listed (D4).
+	want := append(under(oldRepo(), ""), snapAt(40*day))
+	slices.Sort(want)
+	got := opsOf(dst, "delete")
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("deleted %v, want %v", got, want)
 	}
 	if _, ok := dst.files[unknown]; !ok {
 		t.Error("the unknown path was removed")
@@ -1120,7 +1130,7 @@ func TestMirrorInvariants(t *testing.T) {
 					fail("I4: deleted %s against its rule", p)
 				}
 			}
-			if !want.unknown && !c.r.noManifest {
+			if !c.r.noManifest {
 				for p := range want.deletable {
 					if !slices.Contains(got, p) {
 						fail("kept %s although the local expire would have removed it", p)

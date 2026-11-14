@@ -31,12 +31,8 @@ func githubFixture(t *testing.T, key minisign.PrivateKey, v string) *httptest.Se
 			continue
 		}
 		body := []byte("content of " + a.Name)
-		comment := a.Package + " " + v + " " + a.Arch
-		if a.Package == "" {
-			comment = releasesig.Comment(v, a.Arch)
-		}
 		files[a.Name] = body
-		files[a.Name+".minisig"] = minisign.SignWithComments(key, body, comment, "")
+		files[a.Name+".minisig"] = minisign.SignWithComments(key, body, releasesig.Comment(v, a.Arch), "")
 	}
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +141,7 @@ func TestReleaseImportAPI(t *testing.T) {
 	}
 	imp.decode(t, &d)
 	if imp.status != http.StatusCreated || imp.header.Get("Location") != "/api/platform/v1/agent-releases/"+v ||
-		d.Release.Status != "published" || len(d.Artifacts) != 2 || len(d.Packages) != 2 {
+		d.Release.Status != "published" || len(d.Artifacts) != 2 || len(d.Packages) != 3 {
 		t.Fatalf("import: %d %s %s", imp.status, imp.header.Get("Location"), imp.body)
 	}
 

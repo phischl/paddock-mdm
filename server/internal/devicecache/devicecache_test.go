@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -118,23 +119,27 @@ func TestGatewayKeys(t *testing.T) {
 	if p, _, _ := cache.BundlePointer(ctx, dev); p.Version != 2 {
 		t.Fatalf("pointer moved back to %d", p.Version)
 	}
-
-	now := time.Date(2026, 10, 4, 12, 0, 30, 0, time.UTC)
-	for i := range 3 {
-		if ok, _, err := cache.Allow(ctx, "key:x", 3, now); err != nil || !ok {
-			t.Fatalf("request %d limited: %v", i, err)
-		}
+	// Architect decision A10-14: the icons travel with the pointer, and a newer bundle replaces them all.
+	entry := uuid.NewString()
+	icons := map[string]string{entry: "org/o/icons/a.png", uuid.NewString(): "org/o/icons/b.png"}
+	if err := cache.PutBundlePointer(ctx, dev, devicecache.BundlePointer{Version: 3, SHA256: "s", ObjectKey: "k", Icons: icons}); err != nil {
+		t.Fatal(err)
 	}
-	ok, wait, err := cache.Allow(ctx, "key:x", 3, now)
-	if err != nil || ok || wait != 30*time.Second {
-		t.Fatalf("fourth request: %v %s %v", ok, wait, err)
+	if p, _, _ := cache.BundlePointer(ctx, dev); p.Version != 3 || p.ObjectKey != "k" || !maps.Equal(p.Icons, icons) {
+		t.Fatalf("pointer with icons %+v", p)
 	}
-	if ok, _, _ := cache.Allow(ctx, "key:other", 3, now); !ok {
-		t.Fatal("limits are not per scope")
+	if err := cache.PutBundlePointer(ctx, dev, devicecache.BundlePointer{Version: 4, SHA256: "s", ObjectKey: "k4",
+		Icons: map[string]string{entry: "org/o/icons/c.png"}}); err != nil {
+		t.Fatal(err)
 	}
-	// 45 s into the next minute only a quarter of the previous minute still counts.
-	if ok, _, _ := cache.Allow(ctx, "key:x", 3, now.Add(75*time.Second)); !ok {
-		t.Fatal("window does not slide")
+	if p, _, _ := cache.BundlePointer(ctx, dev); len(p.Icons) != 1 || p.Icons[entry] != "org/o/icons/c.png" {
+		t.Fatalf("icons of the newer bundle %+v", p.Icons)
+	}
+	if err := cache.PutBundlePointer(ctx, dev, devicecache.BundlePointer{Version: 5, SHA256: "s", ObjectKey: "k5"}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := cache.BundlePointer(ctx, dev); p.Icons != nil {
+		t.Fatalf("icons of a bundle without icons %+v", p.Icons)
 	}
 }
 

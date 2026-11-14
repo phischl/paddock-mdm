@@ -16,6 +16,9 @@ const (
 	CodeDeviceGroupDeleted     Code = "device_group.deleted"
 	CodeActionFinalizedUnknown Code = "action.finalized_unknown"
 
+	CodeDeviceGroupMaintenanceWindowChanged Code = "device_group.maintenance_window_changed"
+	CodeDeviceGroupMaintenanceWindowRemoved Code = "device_group.maintenance_window_removed"
+
 	CodeEnrollmentTokenCreated   Code = "enrollment_token.created"
 	CodeEnrollmentTokenRevoked   Code = "enrollment_token.revoked"
 	CodeDeviceEnrolled           Code = "device.enrolled"
@@ -111,6 +114,7 @@ const (
 	// Identity and privileges reported by devices (plan M3b decision 5).
 	CodeDeviceLoginApplied               Code = "device.login_applied"
 	CodeDeviceLoginApplyFailed           Code = "device.login_apply_failed"
+	CodeDeviceLoginNSSShield             Code = "device.login_nss_shield"
 	CodeDeviceUserLockApplied            Code = "device.user_lock_applied"
 	CodeDeviceLoginsSuspensionApplied    Code = "device.logins_suspension_applied"
 	CodeDeviceSudoApplyFailed            Code = "device.sudo_apply_failed"
@@ -258,6 +262,8 @@ const (
 	CodeConfigRolloutHalted    Code = "config_rollout.halted"
 	CodeConfigRolloutResumed   Code = "config_rollout.resumed"
 	CodeConfigRolloutCompleted Code = "config_rollout.completed"
+	// CodeConfigRolloutStalled is the worker's warning that a wave made no progress (architect decision A10-16).
+	CodeConfigRolloutStalled Code = "config_rollout.stalled"
 
 	// Read-access recording, coalesced per actor and window (ADR 0032 §4, plan M10 §6.4).
 	CodeAuditSearched         Code = "audit.searched"
@@ -289,6 +295,15 @@ const (
 	CodeSoftwareSourceUpdated Code = "software_source.updated"
 	CodeSoftwareSourceDeleted Code = "software_source.deleted"
 
+	// Packages stored in Paddock (plan M13c decision 12, ADR 0050).
+	CodeSoftwarePackageUploaded             Code = "software_package.uploaded"
+	CodeSoftwarePackageDeleted              Code = "software_package.deleted"
+	CodeSoftwareRepositoryCredentialRotated Code = "software_repository.credential_rotated"
+	// The worker's build and the signing key of the repository (plan M13c decision 13, ADR 0050 decision 3).
+	CodeSoftwareRepositoryKeyRotated  Code = "software_repository.key_rotated"
+	CodeSoftwareRepositoryBuilt       Code = "software_repository.built"
+	CodeSoftwareRepositoryBuildFailed Code = "software_repository.build_failed"
+
 	// Software catalog entries and assignments (plan M13a §6.3).
 	CodeSoftwareCatalogEntryCreated Code = "software_catalog_entry.created"
 	CodeSoftwareCatalogEntryUpdated Code = "software_catalog_entry.updated"
@@ -301,6 +316,17 @@ const (
 	CodeDeviceSoftwareReinstalled Code = "device.software_reinstalled"
 	CodeDeviceSoftwareRemoved     Code = "device.software_removed"
 	CodeDeviceSoftwareApplyFailed Code = "device.software_apply_failed"
+	// A user's self-service operation on a device (plan M13b decision 18, ADR 0049 decision 7).
+	CodeDeviceSoftwareSelfService Code = "device.software_self_service"
+	// Approvals for available entries (plan M13c decisions 9 and 10): a user's request reported by the device, the
+	// request the worker opened from it (a notification code), the administrator's decision and the worker's expiry.
+	CodeDeviceSoftwareRequested Code = "device.software_requested"
+	// A user withdrew a pending request on the device; the worker closed it (PDK-811b).
+	CodeDeviceSoftwareRequestWithdrawn Code = "device.software_request_withdrawn"
+	CodeSoftwareRequestOpened          Code = "software_request.opened"
+	CodeSoftwareRequestApproved        Code = "software_request.approved"
+	CodeSoftwareRequestDenied          Code = "software_request.denied"
+	CodeSoftwareRequestExpired         Code = "software_request.expired"
 
 	// The backup key (plan M15 §6.4).
 	CodePlatformBackupKeyGenerated Code = "platform.backup_key_generated"
@@ -390,6 +416,7 @@ var deviceEventParams = []string{
 	"command_id", "mode", "local_admin", "tpm", "steps",
 	"conversion_id", "layout", "data_bytes", "duration_s", "init_s", "init_result", "by", "state",
 	"package", "intent", "catalog_entry_id", "source",
+	"user", "entry_id", "flatpak_ref", "scope", "action",
 }
 
 var registry = map[Code]Definition{
@@ -424,6 +451,20 @@ var registry = map[Code]Definition{
 		Description: "A device group was deleted.",
 		Params:      withChangeSetParams([]string{"name"}),
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
+	},
+	CodeDeviceGroupMaintenanceWindowChanged: {
+		Code: CodeDeviceGroupMaintenanceWindowChanged, Emitted: true,
+		Description: "The maintenance window of a device group was set or changed: its devices install and remove the software of their policy only inside the union of their groups' windows, except for urgent assignments.",
+		Params:      withChangeSetParams([]string{"name", "days", "start_minute", "duration_minutes", "timezone", "old_days", "old_start_minute", "old_duration_minutes", "old_timezone"}),
+		Outcomes:    adminOutcomes,
+		Note:        "Days are ISO weekdays (1 = Monday); start_minute counts from local midnight in the timezone. The old_ params are null when the group had no window. Failure with invalid_request for a value out of range or an unknown timezone.",
+	},
+	CodeDeviceGroupMaintenanceWindowRemoved: {
+		Code: CodeDeviceGroupMaintenanceWindowRemoved, Emitted: true,
+		Description: "The maintenance window of a device group was removed: its devices apply their software policy at the next pass unless another group of the device has a window.",
+		Params:      withChangeSetParams([]string{"name", "days", "start_minute", "duration_minutes", "timezone"}),
+		Outcomes:    adminOutcomes,
+		Note:        "The params are the removed window. Failure with not_found when the group has no window.",
 	},
 	CodeEnrollmentTokenCreated: {
 		Code: CodeEnrollmentTokenCreated, Emitted: true,
@@ -678,6 +719,13 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "stage is apt, config, restart, deny_list, pam, sessions or notice; pam means the deny-list PAM profile is not in place (`dpkg-reconfigure paddock-agent` restores it); reason timeout marks an apt-get or dpkg run killed after 15 minutes.",
+	},
+	CodeDeviceLoginNSSShield: {
+		Code: CodeDeviceLoginNSSShield, Emitted: true,
+		Description: "A device held its login daemon (himmelblaud) stopped around one of the agent's package installations, so that packages can create local system users, and started it again; new logins and screen unlocks waited meanwhile (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "PDK-983: action is the package transaction (apt-get install, dpkg -i, …), duration_s how long the daemon was stopped, outcome restored, max_hold (started while the transaction still ran), recovered (the agent ended during the hold and finished it at its next start), restore_failed (a systemd timer retries) or hold_failed (the transaction ran with the daemon running); error says why.",
 	},
 	CodeDeviceUserLockApplied: {
 		Code: CodeDeviceUserLockApplied, Emitted: true,
@@ -1187,10 +1235,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperServiceStopped: {
 		Code: CodeDeviceTamperServiceStopped, Emitted: true,
-		Description: "A device found a service stopped outside Paddock: a service Paddock keeps running, which it started again, or a watched third-party service, which it only reports (actor: the device).",
+		Description: "A device found a service stopped outside Paddock: a service Paddock keeps running, which it started again, the login daemon himmelblaud, or a watched third-party service, both of which it only reports (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
+		Note:        "unit is orbit.service (fleetd, the mutual watch; started again by the agent), himmelblaud.service (the login daemon, stopped by someone other than Paddock's own package holds; reported only, never started again, state inactive or failed; PDK-983) or a watched third-party unit of the organization's presence policy (plan M9; reported only, state inactive, failed or missing).",
 	},
 	CodeVulnerabilityCriticalSummary: {
 		Code: CodeVulnerabilityCriticalSummary, Emitted: true,
@@ -1624,11 +1672,11 @@ var registry = map[Code]Definition{
 	},
 	CodeSettingsRolloutChanged: {
 		Code: CodeSettingsRolloutChanged, Emitted: true,
-		Description: "An organization administrator changed the settings of staged configuration rollouts: whether they are on, the waves, the minimum wave duration, the failure threshold and the canary device group. A running rollout keeps the values it started with.",
+		Description: "An organization administrator changed the settings of staged configuration rollouts: whether they are on, the waves, the minimum wave duration, the failure threshold, the canary device group, the wave success threshold and the stall warning hours (A10-16). A running rollout keeps the values it started with.",
 		Params: []string{"enabled", "waves", "min_wave_minutes", "failure_threshold_percent", "failure_threshold_min",
-			"canary_device_group_id"},
+			"canary_device_group_id", "wave_success_threshold_percent", "stall_warning_hours"},
 		Outcomes: adminOutcomes,
-		Note:     "failure with invalid_request for invalid waves, a minimum wave duration below the minimum or a threshold out of range, and with not_found for an unknown or foreign canary device group.",
+		Note:     "failure with invalid_request for invalid waves, a minimum wave duration below the minimum, a threshold out of range, a wave success threshold outside 1 to 100 or stall warning hours outside 1 to 720, and with not_found for an unknown or foreign canary device group.",
 	},
 	CodeConfigRolloutAdvanced: {
 		Code: CodeConfigRolloutAdvanced, Emitted: true,
@@ -1657,6 +1705,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"rollout_id", "change_set_id", "wave", "manual"},
 		Outcomes:    adminOutcomes,
 		Note:        "failure with invalid_state when the rollout already completed or was reverted, not_found for an unknown rollout or one of another organization.",
+	},
+	CodeConfigRolloutStalled: {
+		Code: CodeConfigRolloutStalled, Emitted: true,
+		Description: "The current wave of a running staged configuration rollout cannot move on and made no progress for the rollout's stall_warning_hours (default 24): since stalled_since none of the devices that joined in the wave applied the change and no device it waits for (waiting for its maintenance window, or awaiting a successful retry after a resume) stopped waiting, typically because devices wait for their window, are offline or keep failing after a resume (actor: system). A wave without a successful apply never moves on by itself. It only informs: the wave keeps its rules, nothing is forced and nothing is applied outside a window. Recorded once per stall; a new apply, a device that stops waiting, the next wave or a resume starts a new one.",
+		Params:      []string{"rollout_id", "change_set_id", "wave", "stalled_since", "stall_warning_hours", "wave_eligible", "wave_applied", "waiting", "awaiting_retry"},
+		Outcomes:    adminOutcomes,
+		Note:        "failure with invalid_state when an administrator changed the rollout between the worker's read and its warning; the next round decides again.",
 	},
 	CodeAuditSearched: {
 		Code: CodeAuditSearched, Emitted: true,
@@ -1769,29 +1824,69 @@ var registry = map[Code]Definition{
 	},
 	CodeSoftwareSourceCreated: {
 		Code: CodeSoftwareSourceCreated, Emitted: true,
-		Description: "An organization administrator added an APT package source with its signing key; the key's fingerprint is recorded. Adding a source is root-equivalent: every package it signs is installed as root.",
-		Params:      []string{"name", "slug", "uris", "suites", "components", "fingerprint", "weak_key"},
+		Description: "An organization administrator added a package source, an APT repository or a Flatpak remote (kind), with its signing key; the key's fingerprint is recorded. Adding a source is root-equivalent: every package it signs is installed as root.",
+		Params:      []string{"kind", "name", "slug", "uris", "suites", "components", "fingerprint", "weak_key"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with fingerprint_mismatch when the typed fingerprint differs from the key's, already_exists for a duplicate slug or name. weak_key is true for an accepted RSA key of 2048 to 3071 bits.",
 	},
 	CodeSoftwareSourceUpdated: {
 		Code: CodeSoftwareSourceUpdated, Emitted: true,
-		Description: "An organization administrator changed an APT package source: its name, URIs, suites, components, architectures or its signing key; a key change records the old and the new fingerprint.",
-		Params:      []string{"name", "slug", "fields", "fingerprint", "old_fingerprint", "weak_key"},
+		Description: "An organization administrator changed a package source: its name, URIs, suites, components, architectures or its signing key; a key change records the old and the new fingerprint. The kind cannot change.",
+		Params:      []string{"kind", "name", "slug", "fields", "fingerprint", "old_fingerprint", "weak_key"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with fingerprint_mismatch when the typed fingerprint differs from the key's, already_exists for a duplicate name.",
 	},
 	CodeSoftwareSourceDeleted: {
 		Code: CodeSoftwareSourceDeleted, Emitted: true,
-		Description: "An organization administrator removed an APT package source; devices remove its source file and keyring at their next check-in.",
-		Params:      []string{"name", "slug", "fingerprint", "weak_key"},
+		Description: "An organization administrator removed a package source; devices remove its source file and keyring at their next check-in.",
+		Params:      []string{"kind", "name", "slug", "fingerprint", "weak_key"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with in_use while a catalog entry references the source.",
+	},
+	CodeSoftwarePackageUploaded: {
+		Code: CodeSoftwarePackageUploaded, Emitted: true,
+		Description: "An organization administrator uploaded a Debian package into the organization's Paddock repository; the SHA-256 and size of the file are recorded. Uploading a package is root-equivalent on every device it is assigned to: its maintainer scripts run as root, and Paddock scans nothing inside it (RR-114).",
+		Params:      []string{"package", "version", "architecture", "sha256", "size"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role, repository_not_ready while the repository's signing key is being generated; failure with invalid_request for a file that is no Debian package or whose control fields fail the rules or differ from the request, unsupported_compression for a control archive in xz or another compression than gzip or zstd, already_exists for a package with the same name, version and architecture.",
+	},
+	CodeSoftwarePackageDeleted: {
+		Code: CodeSoftwarePackageDeleted, Emitted: true,
+		Description: "An organization administrator deleted a package from the organization's Paddock repository; the repository is rebuilt without it.",
+		Params:      []string{"package", "version", "architecture", "sha256"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role; failure with in_use while a catalog entry of the Paddock source names the package, not_found for another organization's package.",
+	},
+	CodeSoftwareRepositoryCredentialRotated: {
+		Code: CodeSoftwareRepositoryCredentialRotated, Emitted: true,
+		Description: "An organization administrator replaced the read credential of the organization's Paddock repository; every device receives the new one with its next bundle, and the previous one stays valid until previous_valid_until (24 hours). The secret is shown once in the answer and never recorded.",
+		Params:      []string{"previous_valid_until"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role.",
+	},
+	CodeSoftwareRepositoryKeyRotated: {
+		Code: CodeSoftwareRepositoryKeyRotated, Emitted: true,
+		Description: "An organization administrator rotated the signing key of the organization's Paddock repository: the worker generates a new key at its next round (within a minute), signs the repository with it and only then gives it to the devices with their next bundle, so a device that received the new key always finds the repository signed with it. For 30 days the repository is signed with the previous key (previous_fingerprint) as well, so a device that has not received the new key yet keeps updating; the software_repository.built event names the new fingerprint.",
+		Params:      []string{"previous_fingerprint"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up (API tokens never have one), forbidden for another role, repository_not_ready while the first signing key is being generated.",
+	},
+	CodeSoftwareRepositoryBuilt: {
+		Code: CodeSoftwareRepositoryBuilt, Emitted: true,
+		Description: "The worker published a new build of the organization's Paddock repository (actor: system): the package lists, the Release file and its signatures (InRelease, Release.gpg) made with the signing key named by fingerprint and, for 30 days after a rotation, also with the previous key. key_generated is true when the build generated that key, the first one or one an administrator's rotation requested.",
+		Params:      []string{"generation", "fingerprint", "package_count", "key_generated"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeSoftwareRepositoryBuildFailed: {
+		Code: CodeSoftwareRepositoryBuildFailed, Emitted: true,
+		Description: "A build of the organization's Paddock repository failed (actor: system), e.g. because OpenBao is sealed or the object store is unreachable; the previous build stays published and devices keep using it. The worker retries every minute; the event is recorded when the error first occurs or changes, not for every retry. The error is also shown as last_error of the repository; an error of OpenBao or the object store is recorded as its step and class (error code, HTTP status or network error), the full message is in the worker's log.",
+		Params:      []string{"error"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 	},
 	CodeSoftwareCatalogEntryCreated: {
 		Code: CodeSoftwareCatalogEntryCreated, Emitted: true,
 		Description: "An application was added to the software catalog with its package names per distribution, release and architecture.",
-		Params:      []string{"name", "category", "source_id", "source_slug", "package_count"},
+		Params:      []string{"name", "category", "source_id", "source_slug", "package_count", "approval"},
 		Outcomes:    adminOutcomes,
 		Note:        "Failure with invalid_request for a refused name, description, category or package reference, already_exists for a duplicate name, not_found for a source of another organization. Request text is clipped before it is recorded.",
 	},
@@ -1800,32 +1895,33 @@ var registry = map[Code]Definition{
 		Description: "A software catalog entry changed (name, description, category, source, package names or icon).",
 		Params:      []string{"name", "fields"},
 		Outcomes:    adminOutcomes,
-		Note:        "fields lists what changed; an icon change names icon. Request text is clipped before it is recorded.",
+		Note:        "fields lists what changed; an icon change names icon, a changed approval (none or required) names approval. Request text is clipped before it is recorded.",
 	},
 	CodeSoftwareCatalogEntryDeleted: {
 		Code: CodeSoftwareCatalogEntryDeleted, Emitted: true,
-		Description: "A software catalog entry was removed together with its assignments; devices stop managing the application.",
+		Description: "A software catalog entry without assignments was removed; no device changes.",
 		Params:      []string{"name", "assignment_count"},
 		Outcomes:    adminOutcomes,
+		Note:        "An entry that still has assignments is refused (failure, in_use); assignment_count is their number.",
 	},
 	CodeSoftwareAssignmentCreated: {
 		Code: CodeSoftwareAssignmentCreated, Emitted: true,
-		Description: "An application was assigned to the organization or a device group with an intent: required (installed and kept installed), uninstall (removed), hold (version kept) or forbid (removed and blocked for apt).",
-		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent", "update_rule", "version", "reason"},
+		Description: "An application was assigned to a target (target: the organization, a device group, a user or a user group) with an intent: required (installed and kept installed), uninstall (removed), hold (version kept), forbid (removed and blocked for apt) or available (offered for the users to install themselves).",
+		Params:      []string{"app", "catalog_entry_id", "target", "device_group_id", "user_id", "user_group_id", "intent", "update_rule", "version", "reason", "urgent"},
 		Outcomes:    adminOutcomes,
-		Note:        "Failure with invalid_request when the intent and version rules are violated, already_exists for a second assignment of the entry in the same scope, not_found for an unknown entry or device group. Request text is clipped before it is recorded.",
+		Note:        "Failure with invalid_request when the intent and version rules are violated or more than one target is given, or when urgent is set without a reason of 2 to 500 characters; already_exists for a second assignment of the entry to the same target, not_found for an unknown entry, device group, user or user group. urgent (the devices apply it outside their maintenance windows) needs a fresh step-up: denied with step_up_required otherwise, always for API tokens. Request text is clipped before it is recorded.",
 	},
 	CodeSoftwareAssignmentUpdated: {
 		Code: CodeSoftwareAssignmentUpdated, Emitted: true,
 		Description: "The intent, update rule, version or reason of a software assignment changed.",
-		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent", "update_rule", "version", "old_intent", "old_version", "reason"},
+		Params:      []string{"app", "catalog_entry_id", "target", "device_group_id", "user_id", "user_group_id", "intent", "update_rule", "version", "old_intent", "old_version", "reason", "urgent", "old_urgent"},
 		Outcomes:    adminOutcomes,
-		Note:        "Failure with invalid_request when the intent and version rules are violated. Request text is clipped before it is recorded.",
+		Note:        "Failure with invalid_request when the intent and version rules are violated, or when urgent is set without a reason of 2 to 500 characters. urgent (the devices apply it outside their maintenance windows) needs a fresh step-up: denied with step_up_required otherwise, always for API tokens. Request text is clipped before it is recorded.",
 	},
 	CodeSoftwareAssignmentDeleted: {
 		Code: CodeSoftwareAssignmentDeleted, Emitted: true,
 		Description: "A software assignment was removed; devices stop enforcing it (installed software stays).",
-		Params:      []string{"app", "catalog_entry_id", "device_group_id", "intent"},
+		Params:      []string{"app", "catalog_entry_id", "target", "device_group_id", "user_id", "user_group_id", "intent"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceSoftwareInstalled: {
@@ -1852,6 +1948,55 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "reason is fingerprint_mismatch, would_remove_dependents, protected_package_affected, no_candidate, source_unreachable, conflicting_source, dpkg_locked or apt_failed; dpkg_locked and deferred removals are reported in the status, not as this event.",
+	},
+	CodeDeviceSoftwareSelfService: {
+		Code: CodeDeviceSoftwareSelfService, Emitted: true,
+		Description: "A user installed, updated or removed an application through the self-service app of a device, or the device refused or failed that operation (actor: the device; user: the user name of the asking account).",
+		Params:      []string{"event_seq", "occurred_at", "user", "entry_id", "package", "flatpak_ref", "scope", "action", "outcome", "reason", "version"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "action is install, update or remove; outcome is the device's: succeeded is recorded as success, failed (error_code self_service_failed) and refused (error_code self_service_refused) as failure. reason is a refusal (required_by_policy, not_in_audience) or a failure reason (interrupted, timeout, or one of device.software_apply_failed). package or flatpak_ref names the application; version is the installed version after a succeeded install or update.",
+	},
+	CodeDeviceSoftwareRequested: {
+		Code: CodeDeviceSoftwareRequested, Emitted: true,
+		Description: "A user asked through the self-service app of a device for an application whose catalog entry requires an administrator's approval (actor: the device; user: the user name of the asking account).",
+		Params:      []string{"event_seq", "occurred_at", "user", "entry_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded for every report; software_request.opened follows when it opened a request. A repeat while the request is open, a request within 24 hours of a denial, or one for an entry that does not exist or does not require approval opens none. The user's justification text is not recorded.",
+	},
+	CodeDeviceSoftwareRequestWithdrawn: {
+		Code: CodeDeviceSoftwareRequestWithdrawn, Emitted: true,
+		Description: "A user withdrew a pending software request through the self-service app of a device (actor: the device; user: the user name of the withdrawing account); the worker closed the open request of that device, entry and user as withdrawn.",
+		Params:      []string{"event_seq", "occurred_at", "user", "entry_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per report; a redelivered report records nothing. A report without an open request (an administrator decided it or it expired first) changes no request. Only an agent whose bundle carries the server's request_withdraw flag sends it; an older agent keeps the withdrawal on the device.",
+	},
+	CodeSoftwareRequestOpened: {
+		Code: CodeSoftwareRequestOpened, Emitted: true,
+		Description: "A software request is waiting for an administrator's decision (actor: system; the worker opened it from a device's report). Use it as a notification for administrators.",
+		Params:      []string{"catalog_entry_id", "app", "device_id", "hostname", "user", "expires_at"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Target is the request (type software_request). Not part of the security preset; a destination with all or a custom list that names it receives it. The request expires at expires_at, 30 days after it was opened.",
+	},
+	CodeSoftwareRequestApproved: {
+		Code: CodeSoftwareRequestApproved, Emitted: true,
+		Description: "An organization administrator approved a user's software request; the user may install the application on that device once its next bundle arrives.",
+		Params:      []string{"catalog_entry_id", "app", "device_id", "hostname", "user", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "No step-up of its own: trusting the entry's source needed one (plan M13c Q15). Failure with invalid_state unless the request is open, invalid_request for a reason that is too long or contains control characters, not_found for another organization's request.",
+	},
+	CodeSoftwareRequestDenied: {
+		Code: CodeSoftwareRequestDenied, Emitted: true,
+		Description: "An organization administrator denied a user's software request with a reason; the user may ask again after 24 hours.",
+		Params:      []string{"catalog_entry_id", "app", "device_id", "hostname", "user", "reason"},
+		Outcomes:    adminOutcomes,
+		Note:        "No step-up of its own (plan M13c Q15). Failure with invalid_request without a reason or with one that is too long or contains control characters, invalid_state unless the request is open, not_found for another organization's request.",
+	},
+	CodeSoftwareRequestExpired: {
+		Code: CodeSoftwareRequestExpired, Emitted: true,
+		Description: "A software request expired (actor: system; the worker's request round): an open one without a decision, or an open or approved one whose application is no longer offered.",
+		Params:      []string{"catalog_entry_id", "device_id", "user", "cause"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "cause is validity_ended (30 days without a decision), approval_removed (the entry no longer requires approval, so the user may install without one) or assignment_removed (the entry has no available assignment left; an approval holds only while it exists).",
 	},
 	CodePlatformBackupKeyGenerated: {
 		Code: CodePlatformBackupKeyGenerated, Emitted: true,

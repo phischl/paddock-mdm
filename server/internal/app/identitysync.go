@@ -278,11 +278,37 @@ func (s *IdentitySync) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if len(targets) == 0 {
+		return nil
+	}
+	// One listing of every device login group replaces a lookup and a member listing per device (PDK-570). A listing
+	// that fails changes no group: a partial view must never read as members to remove.
+	listed, err := s.groups.DeviceLoginGroups(ctx, o.Slug)
+	if err != nil {
+		return fmt.Errorf("list the device login groups: %w", err)
+	}
 	var errs []error
 	for _, t := range targets {
-		errs = append(errs, SyncDeviceLoginGroup(ctx, s.groups, o.Slug, t.device, t.members))
+		errs = append(errs, syncListedDeviceLoginGroup(ctx, s.groups, o.Slug, t.device, t.members, listed))
 	}
 	return errors.Join(errs...)
+}
+
+// syncListedDeviceLoginGroup is SyncDeviceLoginGroup with the group as listed: a listed group is compared with its
+// listed members and deleted by its pk; a group the listing does not have does not exist, so it is created as before
+// when the device has members and left alone otherwise.
+func syncListedDeviceLoginGroup(ctx context.Context, dir ports.GroupDirectory, slug string, deviceID uuid.UUID, members []string,
+	listed map[string]ports.IdentityGroupMembers) error {
+	g, ok := listed[organization.DeviceLoginGroup(slug, deviceID)]
+	switch {
+	case !ok && len(members) == 0:
+		return nil
+	case !ok:
+		return SyncDeviceLoginGroup(ctx, dir, slug, deviceID, members)
+	case len(members) == 0:
+		return dir.DeleteGroup(ctx, g.PK)
+	}
+	return applyMembers(ctx, dir, g.PK, g.Members, members)
 }
 
 // allLoginDevices returns every device with a login assignment.

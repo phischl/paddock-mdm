@@ -131,11 +131,13 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		signer := priv
-		if name == "paddock-revoke" { // signed with the revocation release key (plan M4c decision 4)
+		signer, comment := priv, releasesig.Comment(*version, arch)
+		// paddock-revoke: the revocation release key (plan M4c decision 4), with the same release comment as every other
+		// package (ADR 0043 amendment 2026-11-11 c, PDK-1004).
+		if name == "paddock-revoke" {
 			signer = revokePriv
 		}
-		sig := minisign.SignWithComments(signer, deb, fmt.Sprintf("%s %s %s", name, *version, arch), "paddock agent package")
+		sig := minisign.SignWithComments(signer, deb, comment, "paddock agent package")
 		target := base + "/packages/" + name + "/" + arch
 		if packageVersion != "" {
 			target += "?package_version=" + packageVersion
@@ -180,7 +182,8 @@ func run(args []string) error {
 }
 
 // debName splits <name>_<version>_<arch>.deb and checks the version; nfpm writes a pre-release version such as
-// 1.2.0-rc.1 as 1.2.0~rc.1 (Debian ordering). fleet-osquery carries the fleetd version, returned as packageVersion.
+// 1.2.0-rc.1 as 1.2.0~rc.1 (Debian ordering). fleet-osquery carries the fleetd version, returned as packageVersion;
+// paddock-self-service carries the release version and the arch all, which the server accepts for it alone.
 func debName(file, version string) (name, packageVersion, arch string, err error) {
 	parts := strings.Split(strings.TrimSuffix(file, ".deb"), "_")
 	if len(parts) == 3 && strings.HasSuffix(file, ".deb") && parts[0] == "fleet-osquery" {

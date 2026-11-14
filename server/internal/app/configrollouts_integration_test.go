@@ -273,10 +273,20 @@ func TestConfigRolloutEvaluate(t *testing.T) {
 		t.Fatalf("%d events after evaluating a halted rollout", n)
 	}
 
-	// Resumed, the old failures no longer count: the wave advances after 30 minutes, then completes.
+	// Resumed, the old failures no longer count, but they hold the wave until the devices retried (A10-18): then the
+	// wave advances after 30 minutes, and completes.
 	if _, err := h.api.Resume(h.admin, r.id); err != nil {
 		t.Fatal(err)
 	}
+	if err := h.worker.Evaluate(h.system, time.Now().Add(31*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.rollout(t, r.changeSet); got.status != configrollout.StatusRunning || got.current != 0 {
+		t.Fatalf("advanced on failures the resume discarded: %+v", got)
+	}
+	h.report(t, a, r.id, 2, "applied", "enforce", "", time.Now())
+	h.report(t, b, r.id, 3, "applied", "enforce", "", time.Now())
+	h.report(t, c, r.id, 2, "applied", "enforce", "", time.Now())
 	if err := h.worker.Evaluate(h.system, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +561,7 @@ func TestConfigRolloutDiscardedFailureNotListed(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, err := h.api.Get(h.admin, r.id)
-	if err != nil || d.Counts != (app.RolloutCounts{Eligible: 2, Pending: 2}) {
+	if err != nil || d.Counts != (app.RolloutCounts{Eligible: 2, Pending: 2, AwaitingRetry: 2}) {
 		t.Fatalf("counts after the resume %+v, %v", d.Counts, err)
 	}
 	page := app.ListPage{Sort: "hostname", Limit: 10}
@@ -560,7 +570,7 @@ func TestConfigRolloutDiscardedFailureNotListed(t *testing.T) {
 		t.Fatalf("devices %+v, %v", all, err)
 	}
 	for _, dev := range all.Items {
-		if dev.ReportOutcome != app.RolloutReportNone || len(dev.FailedResourceIDs) != 0 {
+		if dev.ReportOutcome != app.RolloutReportNone || len(dev.FailedResourceIDs) != 0 || !dev.AwaitingRetry {
 			t.Errorf("discarded failure listed: %+v", dev)
 		}
 	}

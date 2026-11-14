@@ -43,6 +43,11 @@ else
 fi
 # Overwritten or deleted backups stay as noncurrent versions (docs/operations/restore.md, "Backup bucket").
 aws s3api put-bucket-versioning --bucket "$BUCKET" --versioning-configuration Status=Enabled
+# Without expiry every object the mirror deletes stays as a noncurrent version and a delete marker: no space is freed,
+# and RustFS walks them all before it returns a list page, which stalled the mirror (PDK-972). One day is the shortest
+# expiry S3 allows; docs/operations/backup.md asks operators for the same rule with 30 days.
+aws s3api put-bucket-lifecycle-configuration --bucket "$BUCKET" --lifecycle-configuration \
+  '{"Rules":[{"ID":"paddock-expire-noncurrent","Status":"Enabled","Filter":{"Prefix":""},"NoncurrentVersionExpiration":{"NoncurrentDays":1},"Expiration":{"ExpiredObjectDeleteMarker":true}}]}'
 
 LIST="{\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:GetBucketLocation\"],\"Resource\":[\"arn:aws:s3:::$BUCKET\"]}"
 # policy <name> <statement>...: creates or replaces the policy.

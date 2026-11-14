@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/getent"
 	"github.com/phischl/paddock-mdm/agent/internal/sessions"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
@@ -117,14 +118,14 @@ func notify(ctx context.Context, sys System, root, unlockMode string, notice Not
 	if err != nil {
 		return err
 	}
-	f := strings.Split(strings.TrimSpace(out), ":")
-	if len(f) < 4 {
-		return fmt.Errorf("getent passwd %s: no primary group", uid)
+	pw, err := getent.ParsePasswd(out)
+	if err != nil {
+		return fmt.Errorf("getent passwd %s: %w", uid, err)
 	}
 	summary, body := Texts(Language(sys, root), unlockMode, notice)
 	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
 	defer cancel()
-	_, stderr, exit, err := sys.Command(ctx, "systemd-run", "--quiet", "--wait", "--collect", "--uid="+uid, "--gid="+f[3],
+	_, stderr, exit, err := sys.Command(ctx, "systemd-run", "--quiet", "--wait", "--collect", "--uid="+uid, "--gid="+strconv.FormatUint(uint64(pw.GID), 10),
 		"--setenv=XDG_RUNTIME_DIR=/run/user/"+uid, "--unit=paddock-notify-"+s.ID+"-"+strconv.FormatInt(now.Unix(), 10), "--",
 		"busctl", "--user", "call", "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
 		"org.freedesktop.Notifications", "Notify", "susssasa{sv}i", "Paddock", "0", "drive-harddisk", summary, body, "0",

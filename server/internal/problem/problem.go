@@ -82,13 +82,18 @@ var (
 	// TooManyVolumes is the error code of a header escrow for a 33rd distinct volume of a device (PDK-009, review
 	// round 1); recorded by the worker, never sent over HTTP.
 	TooManyVolumes = &Error{Code: "too_many_volumes", Status: http.StatusConflict}
+	// SelfServiceFailed and SelfServiceRefused are the error codes of a device.software_self_service event whose
+	// operation the device reported as failed or refused (plan M13b decision 18); recorded by the worker, never sent
+	// over HTTP.
+	SelfServiceFailed  = &Error{Code: "self_service_failed", Status: http.StatusUnprocessableEntity}
+	SelfServiceRefused = &Error{Code: "self_service_refused", Status: http.StatusUnprocessableEntity}
 	// Identity and privileges (plan M3a).
 	UsernameTaken          = &Error{Code: "username_taken", Status: http.StatusConflict}
 	DomainTaken            = &Error{Code: "domain_taken", Status: http.StatusConflict}
 	AttributeOwnedUpstream = &Error{Code: "attribute_owned_upstream", Status: http.StatusConflict}
 	InvalidCommand         = &Error{Code: "invalid_command", Status: http.StatusUnprocessableEntity}
-	// ReleaseSignatureMismatch: the signed trusted comment of an agent binary names another version or architecture
-	// (plan M4b.1 decision 12).
+	// ReleaseSignatureMismatch: the signed trusted comment of an agent binary or package names another version or
+	// architecture (plan M4b.1 decision 12, ADR 0043 amendment 2026-11-11 b).
 	ReleaseSignatureMismatch = &Error{Code: "release_signature_mismatch", Status: http.StatusUnprocessableEntity}
 	// Agent release import (ADR 0043 decision 7): the source is switched off (recorded as denied), the source did not
 	// answer or answered outside its bounds, the version is not newer than the newest published release, or the release
@@ -139,6 +144,12 @@ var (
 	// FingerprintMismatch: the fingerprint an administrator typed for a software source's signing key differs from the
 	// key's (plan M13a decision 2); the detail names both.
 	FingerprintMismatch = &Error{Code: "fingerprint_mismatch", Status: http.StatusUnprocessableEntity}
+	// UnsupportedCompression: an uploaded package's control archive is compressed with a method the api does not read
+	// (plan M13c decision 12: gzip and zstd only). RepositoryNotReady: the organization's Paddock repository has no
+	// signing key yet, so an upload is refused until the worker generated it (architect decision A10-21); recorded as
+	// denied.
+	UnsupportedCompression = &Error{Code: "unsupported_compression", Status: http.StatusUnsupportedMediaType}
+	RepositoryNotReady     = &Error{Code: "repository_not_ready", Status: http.StatusConflict}
 	// BackupKeyMismatch: the characters typed to confirm a backup key differ from the key's at the challenge's
 	// positions (plan M15 decision 8); the detail names the attempts left. Recorded as failure.
 	BackupKeyMismatch = &Error{Code: "backup_key_mismatch", Status: http.StatusConflict}

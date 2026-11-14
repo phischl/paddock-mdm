@@ -11,6 +11,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/configrollout"
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
+	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -91,7 +92,7 @@ func recordChangeSet(ctx context.Context, q *pgstore.Queries, rec Recorder, befo
 	if !ok {
 		return fmt.Errorf("record change set: no principal")
 	}
-	st, err := w.stage(before, plan, uuid.Nil, renamedGroups(before, after))
+	st, err := w.stage(before, plan, uuid.Nil, renamesOf(before, after))
 	if err != nil {
 		return err
 	}
@@ -152,19 +153,40 @@ type staging struct {
 	mode string
 	// ends is the open rollout the write reverts the change set of; it ends with the write (plan M11 decision 21.3).
 	ends *pgstore.GetOpenConfigRolloutRow
+	// assignments are the staged software assignment keys of a staged write, with the rows the before-state resolves
+	// (updates and deletions); finish resolves the created ones.
+	assignments map[string]*configrollout.StagedAssignment
 }
 
 // stage applies the conflict rule (plan M11 decision 29) and the staging rule (decision 25) as amendment R6.13 states
 // them to plan, which turns before into the new configuration; before must not yet reflect the write. reverts is the
 // change set a revert undoes (uuid.Nil otherwise): the revert of the open rollout's change set is always immediate,
-// touches exactly the staged keys and ends the rollout. renamed are the new names of groups the write renamed by
-// identity, whose items are not staged.
-func (w rolloutWrite) stage(before configState, plan declarative.Plan, reverts uuid.UUID, renamed map[string]bool) (staging, error) {
+// touches exactly the staged keys and ends the rollout. renamed are the groups and catalog entries the write renamed
+// by identity, whose items are not staged.
+func (w rolloutWrite) stage(before configState, plan declarative.Plan, reverts uuid.UUID, renamed renames) (staging, error) {
 	open := w.open
-	stageable := configrollout.StagedKeysExcept(plan, renamed)
+	stageable := configrollout.StagedKeysExcept(plan, renamed.groups)
+	// The assignments of a renamed entry keep their rows; the rename only changes their keys (plan M13c decision 3), so
+	// neither the deletions of the old-name keys nor the creations of the new-name keys are staged.
+	for key := range stageable[declarative.SectionSoftwareAssignments] {
+		if entry := configrollout.KeyEntry(key); renamed.entries[entry] || renamed.oldEntries[entry] {
+			delete(stageable[declarative.SectionSoftwareAssignments], key)
+		}
+	}
+	if len(stageable[declarative.SectionSoftwareAssignments]) == 0 {
+		delete(stageable, declarative.SectionSoftwareAssignments)
+	}
 	switch {
 	case open == nil:
-		return staging{mode: rolloutModeFor(w.settings.Settings, stageable, w.opts.Urgent)}, nil
+		st := staging{mode: rolloutModeFor(w.settings.Settings, stageable, w.opts.Urgent)}
+		if st.mode == RolloutStaged && len(stageable[declarative.SectionSoftwareAssignments]) > 0 {
+			st.assignments = map[string]*configrollout.StagedAssignment{}
+			for key := range stageable[declarative.SectionSoftwareAssignments] {
+				st.assignments[key] = nil
+			}
+			resolveStagedAssignments(before, st.assignments)
+		}
+		return st, nil
 	case reverts != uuid.Nil && reverts == open.ChangeSetID:
 		return staging{mode: RolloutImmediate, ends: open}, nil
 	}
@@ -176,6 +198,9 @@ func (w rolloutWrite) stage(before configState, plan declarative.Plan, reverts u
 		return staging{}, err
 	}
 	if err := requireGroupsNotStaged(*open, staged, before, plan); err != nil {
+		return staging{}, err
+	}
+	if err := requireEntriesNotStaged(open.ID, staged, plan); err != nil {
 		return staging{}, err
 	}
 	if w.opts.Urgent {
@@ -227,10 +252,16 @@ func (w rolloutWrite) finish(ctx context.Context, q *pgstore.Queries, rec Record
 		if w.settings.CanaryDeviceGroupID != nil {
 			canary = uuid.NullUUID{UUID: *w.settings.CanaryDeviceGroupID, Valid: true}
 		}
+		assignments, err := stagedAssignmentsJSON(ctx, q, st.assignments)
+		if err != nil {
+			return err
+		}
 		r, err := q.InsertConfigRollout(ctx, pgstore.InsertConfigRolloutParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: p.OrganizationID, ChangeSetID: id, Waves: waves,
 			MinWaveMinutes: int32(w.settings.MinWaveMinutes), FailureThresholdPercent: int32(w.settings.FailureThresholdPercent), //nolint:gosec // validated settings
 			FailureThresholdMin: int32(w.settings.FailureThresholdMin), CanaryDeviceGroupID: canary, StartedBy: actorName(ctx), //nolint:gosec // validated settings
+			StagedAssignments:           assignments,
+			WaveSuccessThresholdPercent: int32(w.settings.WaveSuccessThresholdPercent), StallWarningHours: int32(w.settings.StallWarningHours), //nolint:gosec // validated settings
 		})
 		if db.IsUniqueViolation(err, "config_rollout_one_open_idx") {
 			return problem.RolloutRunning.WithDetail("another rollout started concurrently; complete or revert it first")
@@ -254,6 +285,61 @@ func (w rolloutWrite) finish(ctx context.Context, q *pgstore.Queries, rec Record
 	return nil
 }
 
+// stagedAssignmentsJSON returns the rows of the staged software assignment keys for the rollout (nil without any),
+// resolving the keys the write created against the configuration it wrote.
+func stagedAssignmentsJSON(ctx context.Context, q *pgstore.Queries, keys map[string]*configrollout.StagedAssignment) (json.RawMessage, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	for _, row := range keys {
+		if row != nil {
+			continue
+		}
+		after, err := loadConfig(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("read the staged software assignments: %w", err)
+		}
+		resolveStagedAssignments(after, keys)
+		break
+	}
+	out := make(map[string]configrollout.StagedAssignment, len(keys))
+	for key, row := range keys {
+		if row == nil {
+			return nil, fmt.Errorf("staged software assignment %s has no row", key)
+		}
+		out[key] = *row
+	}
+	return json.Marshal(out)
+}
+
+// resolveStagedAssignments fills the unresolved keys (nil rows) of keys that st has a software assignment row for.
+func resolveStagedAssignments(st configState, keys map[string]*configrollout.StagedAssignment) {
+	if st.doc.SoftwareAssignments == nil {
+		return
+	}
+	for _, a := range *st.doc.SoftwareAssignments {
+		key := a.Key().String()
+		id, ok := st.ids[declarative.SectionSoftwareAssignments][key]
+		if row, staged := keys[key]; !staged || row != nil || !ok {
+			continue
+		}
+		row := &configrollout.StagedAssignment{ID: id, Entry: st.entries[a.Entry]}
+		var target uuid.UUID
+		switch a.Target.Type {
+		case software.TargetDeviceGroup:
+			target = st.groups[a.Target.Name]
+		case software.TargetUser:
+			target = st.users[a.Target.Username]
+		case software.TargetUserGroup:
+			target = st.userGroups[a.Target.Slug]
+		}
+		if a.Target.Type != software.TargetOrganization {
+			row.Target = &target
+		}
+		keys[key] = row
+	}
+}
+
 // rolloutModeFor is the staging rule (plan M11 decision 25): staged when rollouts are enabled and the write has keys a
 // rollout stages (stageable, from configrollout.StagedKeysExcept), urgent when the caller opted out of that, else
 // immediate.
@@ -268,16 +354,28 @@ func rolloutModeFor(settings configrollout.Settings, stageable map[string]map[st
 	}
 }
 
-// renamedGroups returns the names of after's device groups that before had under another name: a rename keeps the
-// group's identity, which the plan's natural keys do not show.
-func renamedGroups(before, after configState) map[string]bool {
+// renames are the new names of the device groups and catalog entries a write renamed by identity, and the old names of
+// those entries.
+type renames struct {
+	groups, entries, oldEntries map[string]bool
+}
+
+// renamesOf returns the renames of a write that turned before into after.
+func renamesOf(before, after configState) renames {
+	return renames{groups: renamedIn(before.groups, after.groups), entries: renamedIn(before.entries, after.entries),
+		oldEntries: renamedIn(after.entries, before.entries)}
+}
+
+// renamedIn returns the names of after that before had under another name: a rename keeps the identity, which the
+// plan's natural keys do not show.
+func renamedIn(before, after map[string]uuid.UUID) map[string]bool {
 	ids := map[uuid.UUID]bool{}
-	for _, id := range before.groups {
+	for _, id := range before {
 		ids[id] = true
 	}
 	out := map[string]bool{}
-	for name, id := range after.groups {
-		if _, kept := before.groups[name]; !kept && ids[id] {
+	for name, id := range after {
+		if _, kept := before[name]; !kept && ids[id] {
 			out[name] = true
 		}
 	}
@@ -304,6 +402,27 @@ func requireGroupsNotStaged(open pgstore.GetOpenConfigRolloutRow, staged map[str
 		canary := open.CanaryDeviceGroupID.Valid && before.groups[name] == open.CanaryDeviceGroupID.UUID
 		if scoping[name] || canary {
 			return problem.RolloutConflict.WithDetail(fmt.Sprintf("device group %q scopes items of rollout %s or is its canary group; complete or revert the rollout first", name, open.ID))
+		}
+	}
+	return nil
+}
+
+// requireEntriesNotStaged refuses a rename or deletion of a catalog entry that a staged assignment key names, the
+// entry analogue of requireGroupsNotStaged: a staged assignment deletion has no live row whose key the write would
+// change, yet the overlay and the failure count find its entry by name, so the deletion would otherwise reach every
+// device at once and its failures would count against no entry or a recreated one. A rename shows in plan as the
+// deletion of the old name.
+func requireEntriesNotStaged(rollout uuid.UUID, staged map[string]map[string]bool, plan declarative.Plan) error {
+	entries := map[string]bool{}
+	for key := range staged[declarative.SectionSoftwareAssignments] {
+		entries[configrollout.KeyEntry(key)] = true
+	}
+	for _, c := range plan.Changes {
+		if c.Section != declarative.SectionSoftwareCatalog || c.Action != declarative.ActionDelete {
+			continue
+		}
+		if name := configrollout.KeyName(c.Key); entries[name] {
+			return problem.RolloutConflict.WithDetail(fmt.Sprintf("catalog entry %q has assignments staged by rollout %s; complete or revert the rollout first", name, rollout))
 		}
 	}
 	return nil

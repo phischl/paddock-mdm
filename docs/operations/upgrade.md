@@ -106,7 +106,7 @@ both roles and follows the control plane's steps.
    | `migrate-from` | Copies `.env`, `.secrets/` and `compose.backup-targets.yaml` (`cp -a`) from A. A partial copy of an earlier run of this command is removed and copied again. |
    | `secrets` | `./paddock secrets`: generates missing secrets only and prints their names. |
    | `pull` | `./paddock pull`. |
-   | `check` | `./paddock check` (`--online` on the audit host and a lab: the audit bucket's Object Lock, read over A's running stack; the backup targets' revisions are compared in the post-checks): every item PASS, else the run stops, and A still runs. |
+   | `check` | `./paddock check` (`--online` on the audit host and a lab: the audit bucket's Object Lock, read over A's running stack; the backup targets' revisions and the running containers against the hardening matrix are compared in the post-checks): every item PASS, else the run stops, and A still runs. |
    | `backup` | On the control plane and on a lab host with backups: `<old dir>/paddock backup now --label pre-upgrade-<B> --wait`. A release without `backup now` (other than 0.1.0-alpha.8, below) is refused before anything changes. |
    | `audit-writer-stop` | Audit host and lab, when B's `Schema:` line names audit migrations (or is missing): `<old dir>/paddock compose stop paddock-audit-writer`. B's writer starts only after the audit migrations, but A's writer would keep running while they hold their table locks; its writes fail and are redelivered until the queue dead-letters them. Stopped, new audit events wait in the queue and `./paddock up` starts B's writer, which writes them. A backfill can take minutes on a large index (`docs/operations/capacity.md`, *Audit index commit sequence backfill*). |
    | `up` | Records the rollback point (below), then `./paddock up`: Compose recreates the containers with B's images and `paddock-migrate` applies the schema migrations. |
@@ -137,8 +137,11 @@ Then the audit host, the same way (there is no `backup` step; the audit writer s
 migrations).
 
 **The rollback point.** Right before the first `./paddock up`, the upgrade writes `.upgrade-rollback` in B's directory:
-A's directory, both versions, whether a backup was taken, its label `pre-upgrade-<B>`, the time `at` and a random
-attempt ID that `.upgrade-state` carries too. A rollback uses the record only for the upgrade attempt that wrote it. A
+A's directory, both versions, whether a backup was taken, its label `pre-upgrade-<B>`, the time `at`, a random
+attempt ID that `.upgrade-state` carries too, and with a backup (not from 0.1.0-alpha.8) the schema versions of the
+pre-upgrade set (`schema.<name>=<version>`, read from its manifest through A's backup role; if they cannot be read,
+`up` does not run). B's backup role rewrites the manifest with B's schema soon after `up`, so the rollback takes the
+schema from this record, not from the manifest. A rollback uses the record only for the upgrade attempt that wrote it. A
 later upgrade from A's directory renames A's own record to `.upgrade-rollback.superseded-by-<version>`: a rollback from
 there would stop the newer release and restore a point before every change since.
 
@@ -167,13 +170,15 @@ confirmation is answered by it too); `<old dir>` is the directory the upgrade ra
 - **A lab host without backups** (`PADDOCK_LAB_BACKUP` not `yes`) refuses a rollback after a schema change: there is no
   set to restore.
 
-**Before anything stops**, the command checks, in this order: the rollback record belongs to this upgrade attempt and
-names a point (else it refuses and points at `./paddock restore`, `docs/operations/restore.md`); the running stack is
-B (the version label of its containers; a later upgrade from this directory supersedes the record). It then prints the
-steps and *every change after the point is lost* and asks for `yes` (unless `--yes`). Still before `./paddock down`, a
-restore checks that the key matches the set's manifest and that A's preflight passes (schema versions, stanzas, the
-oldest backup at or before the point, the OpenBao snapshot and the Fleet dump), and asks its own confirmation `restore`
-(`--yes` answers it). A failure before `down` leaves the running stack untouched.
+**Before anything stops**, the command checks, in this order: the rollback record belongs to this upgrade attempt; the
+running stack is B (the version label of its containers; a later upgrade from this directory supersedes the record);
+the record names a point, for a restore also the schema versions of the pre-upgrade set (else it refuses and points at
+`./paddock restore`, `docs/operations/restore.md`). It then prints the steps and *every change after the point is
+lost* and asks for `yes` (unless `--yes`). Still before `./paddock down`, a restore checks that A's bundle knows
+every recorded schema version (`migrate --version`), that the key matches the set's manifest and that A's preflight
+passes (the recorded schema versions, stanzas, the oldest backup at or before the point, the OpenBao snapshot and the
+Fleet dump), and asks its own confirmation `restore` (`--yes` answers it). A failure before `down` leaves the running
+stack untouched.
 
 **Bundle sequence after a rollback.** Before `./paddock down`, the rollback reads the highest bundle sequence of B's
 running stack and records it in B's high-water file (`bundle-seq/high-water`). The rollback to 0.1.0-alpha.8 reads it
@@ -185,7 +190,10 @@ repeated rollback), the value comes from B's high-water file. `./paddock upgrade
 directory (`migrate-from`), so the file never starts empty in a new release's directory. `docs/operations/restore.md`, *Bundle sequence*, has the
 rule. An upgrade again after a rollback runs in the same B directory, whose `bundle-seq/` B's release handed to uid
 999: when A's file is higher, `migrate-from` puts a new `bundle-seq/` with A's file in its place and keeps the old one
-as `.bundle-seq.replaced.<random>`, which only root can remove (`sudo rm -rf`) and nothing reads.
+as `.bundle-seq.replaced.<random>`, which only root can remove (`sudo rm -rf`) and nothing reads. Remove it: its
+high-water is lower than the live one and must never be taken for it. Until then `./paddock check` warns (item
+`upgrade: no leftover bundle-seq directories`) and names each path and the command; the warning never fails the check
+or the upgrade.
 
 **One rollback per upgrade attempt.** After a successful rollback `.upgrade-rollback` is renamed
 `.upgrade-rollback.rolled-back-<attempt>` and `.upgrade-state` gains `rolled-back=<time>`; a second rollback of the
@@ -200,6 +208,79 @@ Never edit the shipped files of a bundle to change behaviour: `./paddock verify`
 
 One subsection per release from 0.1.0-alpha.8 on, newest first. Each states what B changes for A's installation. The
 older notes are in the *Archive*.
+
+### 0.1.0-alpha.10, from 0.1.0-alpha.9
+
+The release notes of this release carry these lines (the lines of `CHANGELOG.md` are authoritative):
+
+```text
+Schema: migrations 00113–00125 (control-plane database; new tables, columns, constraints, policies and grants, 00115 fills its new column); audit unchanged.
+Upgrade: from 0.1.0-alpha.9: steps: remove an explicit PADDOCK_TRUSTED_PROXY_CIDRS or PADDOCK_INTERNAL_CIDRS from .env (a lab sets them again), BAO_TOKEN for ./paddock upgrade, then ./paddock bootstrap buckets and ./paddock up
+Agents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10
+```
+
+**Organization repositories (ADR 0050).** Run `./paddock upgrade` with `BAO_TOKEN` set: it creates the Transit keys
+`software-repo-wrap` and `software-repo-credential` and the changed policies through `./paddock bootstrap openbao`.
+Then run `./paddock bootstrap buckets`, which creates the bundles credentials of the api and the worker that
+`./paddock secrets` added during the upgrade, and `./paddock up` once more.
+
+**Networks by trust zone (ADR 0051 decision 1).** The flat network `cp` is replaced by `edge`, `data` and the internal
+`authentik` (architecture §4.1). `./paddock up` recreates every container on the new networks; nothing else is needed.
+The old network `cp` stays behind unused (it is what a rollback to 0.1.0-alpha.9 attaches to again) and may be removed
+with `docker network rm <project>_cp` once the release is accepted.
+
+- `edge` has the fixed subnet `PADDOCK_EDGE_SUBNET` (default `172.28.0.0/24`) with Caddy at
+  `PADDOCK_EDGE_CADDY_ADDRESS` (default `172.28.0.10`), outside the pool of dynamic addresses `PADDOCK_EDGE_IP_RANGE`
+  (default `172.28.0.128/25`). `./paddock check` warns when another Docker network of the host overlaps the subnet;
+  `./paddock up` would then fail with *Pool overlaps with other one on this address space*. Set all three settings in
+  `.env` to a free `/24`, a pool inside it and Caddy's address inside it but outside the pool. The check sees only
+  networks that already exist: the networks `./paddock up` creates in the same run (`data`, `authentik`, …) take
+  their subnets from Docker's default pools, so if `up` still reports the overlap, move the edge settings as above.
+- The worker, the escrow-reader and the revocation-issuer sit on `data` and `edge` (they call the public names
+  through Caddy); their health and metrics port listens on `data` only.
+- **Changed defaults.** `PADDOCK_TRUSTED_PROXY_CIDRS` now defaults to Caddy's address alone and, in production,
+  `PADDOCK_INTERNAL_CIDRS` to the edge subnet. `./paddock upgrade-check` lists either setting under `env` as *changed
+  default* when the old `.env` sets it: remove the line to take the new default. `./paddock check` fails a trusted
+  proxy other than Caddy and `private_ranges` as internal ranges, so the upgrade stops at its check step until then.
+  On a lab, `./paddock upgrade-check` reports these settings as *changed default on a lab* instead: keep the lines and
+  set them again. `PADDOCK_INTERNAL_CIDRS` names the subnets of `<project>_data` and `<project>_audit-index` instead of
+  `<project>_cp` (and, with the proxy on the same host, `PADDOCK_EDGE_TRUSTED_PROXIES` the gateway of
+  `<project>_edge`, `172.28.0.1` by default): `docs/operations/lab-install.md`.
+- RabbitMQ's management API listens on the container's loopback address only; `rabbitmqctl` inside the container
+  works as before.
+- `./paddock check` warns while `PADDOCK_ADMIN_ALLOWED_CIDRS` admits every address; name the office ranges
+  (`docs/operations/ip-allowlist.md`).
+
+**Valkey users (ADR 0051, plan M12h §14).** Valkey has one ACL user per role instead of one shared password.
+`./paddock up` creates the seven secrets `.secrets/valkey_<user>_password` (`api`, `gateway`, `worker`, `compiler`,
+`escrow_reader`, `revocation_issuer`, `healthcheck`) before it starts the stack; there is no operator step. Valkey keeps
+its data, so administrators stay signed in. The files `.secrets/valkey_password` and `.secrets/valkey/auth.conf` are
+no longer used; keep them while a rollback to 0.1.0-alpha.9 is possible, then they may be deleted. Fleet's Redis is
+unchanged (its configuration moved to `valkey/fleet-redis.conf` with the same content). The administration commands
+`paddock-server admin …` authenticate to Valkey as `worker`.
+
+**Rate limits, edge limits and headers (ADR 0051 decisions 3 and 6).** Nothing to do for a default installation; check
+these when something in front of or behind Caddy depends on the old behaviour:
+
+- The api and the gateway answer 429 `rate_limited` above the new per-minute limits (`PADDOCK_RATELIMIT_*`,
+  `PADDOCK_DEVICE_PER_IP_LIMIT`; `docs/operations/install.md` section 4). Many administrators behind one NAT: raise
+  `PADDOCK_RATELIMIT_AUTH` before the upgrade.
+- Caddy now refuses smaller bodies: `auth.` above 1 MiB (was 16 MiB) and `device.` above 1 MiB (was 2 MiB); the
+  admin platform uploads may be up to 256 MiB (was 130 MiB). Uploads in Authentik's administrative UI above 1 MiB, such
+  as application icons or flow backgrounds, are refused on `auth.`; keep such files smaller. A reverse proxy in front of Caddy needs a body limit of
+  at least 256 MiB for `admin.` (`deploy/compose/nginx/paddock.conf.example` sets `client_max_body_size`).
+- Every site sends `Strict-Transport-Security: max-age=31536000; includeSubDomains`, `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff` and a `Referrer-Policy`. `includeSubDomains` binds browsers to HTTPS for every name
+  below each Paddock host name (for example `*.admin.<domain>`) for a year; a page that framed Authentik or Fleet no
+  longer works.
+
+**Third-party images (2026-11-13).** Fleet moves to v4.94.1; because `FLEET_IMAGE` changed, a rollback restores the
+Fleet dump of the pre-upgrade backup of the step `backup`. The AWS CLI image of the bucket bootstrap scripts
+(`./paddock bootstrap buckets`, `./paddock bootstrap audit-bucket`, a restore onto a fresh installation) moves to
+2.39.6. `./paddock pull` does not fetch it, because it is no Compose service: on a host without registry access, load
+the image `AWS_CLI_IMAGE` of B's `versions.env` (`docker save` on a connected host, `docker load` here) before one of
+these commands runs. Caddy moves to 2.11.9, which validates its configuration more strictly; the shipped Caddyfiles
+validate, so only a locally modified Caddyfile needs checking (`caddy validate`) before the upgrade.
 
 ### 0.1.0-alpha.9, from 0.1.0-alpha.8
 

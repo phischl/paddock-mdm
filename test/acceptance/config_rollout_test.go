@@ -70,6 +70,7 @@ func TestRolloutSettings(t *testing.T) {
 	want := map[string]any{
 		"enabled": false, "waves": []any{1.0, 10.0, 50.0, 100.0}, "min_wave_minutes": 60.0,
 		"failure_threshold_percent": 2.0, "failure_threshold_min": 3.0, "canary_device_group_id": nil,
+		"wave_success_threshold_percent": 90.0, "stall_warning_hours": 24.0,
 	}
 	delete(got, "updated_at")
 	if !reflect.DeepEqual(got, want) {
@@ -88,6 +89,8 @@ func TestRolloutSettings(t *testing.T) {
 		"no waves":                  func(b map[string]any) { b["waves"] = []int{} },
 		"zero minutes":              func(b map[string]any) { b["min_wave_minutes"] = 0 },
 		"threshold above 100":       func(b map[string]any) { b["failure_threshold_percent"] = 101 },
+		"success threshold zero":    func(b map[string]any) { b["wave_success_threshold_percent"] = 0 },
+		"stall hours above 720":     func(b map[string]any) { b["stall_warning_hours"] = 721 },
 	}
 	for name, mutate := range invalid {
 		body := valid()
@@ -157,7 +160,8 @@ type configRollout struct {
 	EndedAt          *string `json:"ended_at"`
 	EndedReason      *string `json:"ended_reason"`
 	Counts           struct {
-		Eligible, Applied, Failed, Pending int
+		Eligible, Applied, Failed, Pending, Waiting int
+		AwaitingRetry                               int `json:"awaiting_retry"`
 	} `json:"counts"`
 }
 
@@ -301,6 +305,8 @@ type rolloutDevice struct {
 	CarriesRollout    bool     `json:"carries_rollout"`
 	ReportOutcome     string   `json:"report_outcome"`
 	FailedResourceIDs []string `json:"failed_resource_ids"`
+	WaitingForWindow  bool     `json:"waiting_for_window"`
+	AwaitingRetry     bool     `json:"awaiting_retry"`
 }
 
 func rolloutDevices(t *testing.T, p *env.Portal, id string) map[string]rolloutDevice {

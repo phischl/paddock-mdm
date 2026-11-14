@@ -63,9 +63,22 @@ func TestAgentReleasesAPI(t *testing.T) {
 		return e.do(call{method: "PUT", path: base + "/packages/" + name + "/amd64", rawBody: string(deb), contentType: "application/octet-stream",
 			headers: map[string]string{"X-Paddock-Minisig": sig}, cookie: root})
 	}
-	debSig := base64.StdEncoding.EncodeToString(minisign.Sign(e.release, deb))
+	debSig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(e.release, deb, releasesig.Comment(v, "amd64"), ""))
 	if r := uploadDeb("paddock-agent", sig); r.status != http.StatusBadRequest {
 		t.Fatalf("package with the binary's signature: %d %s", r.status, r.body)
+	}
+	// A valid package signature whose trusted comment names another release or arch, or no release at all (ADR 0043
+	// amendment 2026-11-11 b).
+	for _, comment := range []string{releasesig.Comment("1.0.0", "amd64"), releasesig.Comment(v, "arm64"), ""} {
+		other := minisign.Sign(e.release, deb)
+		if comment != "" {
+			other = minisign.SignWithComments(e.release, deb, comment, "")
+		}
+		r := uploadDeb("paddock-agent", base64.StdEncoding.EncodeToString(other))
+		if r.status != http.StatusUnprocessableEntity || r.problemCode(t) != "release_signature_mismatch" {
+			t.Fatalf("package signed comment %q: %d %s", comment, r.status, r.body)
+		}
+		e.expectEvent(r, "agent_release.artifact_uploaded:failure:release_signature_mismatch")
 	}
 	var pkg struct {
 		Name    string `json:"name"`
@@ -128,5 +141,40 @@ func TestAgentReleasesAPI(t *testing.T) {
 	}
 	if ev := e.events(denied.header.Get("X-Request-Id")); len(ev) != 1 {
 		t.Fatalf("denied resume recorded %v", ev)
+	}
+}
+
+// TestSelfServicePackageAPI holds plan M13b amendment 2026-11-11: paddock-self-service is uploaded with arch all and
+// served below packages/; every other combination of the two is 400 invalid_request.
+func TestSelfServicePackageAPI(t *testing.T) {
+	e := newEnv(t)
+	root := e.platformSession()
+	v := "2.0.0-ssp" + uuid.NewString()[:6]
+	base := "/api/platform/v1/agent-releases/" + v
+	if r := e.do(call{method: "POST", path: "/api/platform/v1/agent-releases", body: map[string]string{"version": v}, cookie: root}); r.status != http.StatusCreated {
+		t.Fatalf("create: %d %s", r.status, r.body)
+	}
+	deb := []byte("!<arch>\ndebian-binary self-service")
+	sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(e.release, deb, releasesig.Comment(v, "all"), ""))
+	upload := func(name, arch string) result {
+		return e.do(call{method: "PUT", path: base + "/packages/" + name + "/" + arch, rawBody: string(deb),
+			contentType: "application/octet-stream", headers: map[string]string{"X-Paddock-Minisig": sig}, cookie: root})
+	}
+	for _, c := range []struct{ name, arch string }{{"paddock-self-service", "amd64"}, {"paddock-agent", "all"},
+		{"paddock-supervisor", "all"}} {
+		if r := upload(c.name, c.arch); r.status != http.StatusBadRequest || r.problemCode(t) != "invalid_request" {
+			t.Errorf("%s %s: %d %s", c.name, c.arch, r.status, r.body)
+		}
+	}
+	var pkg struct {
+		Name    string `json:"name"`
+		Arch    string `json:"arch"`
+		URLPath string `json:"url_path"`
+	}
+	r := upload("paddock-self-service", "all")
+	r.decode(t, &pkg)
+	if r.status != http.StatusOK || pkg.Name != "paddock-self-service" || pkg.Arch != "all" ||
+		pkg.URLPath != "/packages/"+v+"/paddock-self-service_"+v+"_all.deb" {
+		t.Fatalf("self-service upload: %d %s", r.status, r.body)
 	}
 }
