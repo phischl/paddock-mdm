@@ -1862,7 +1862,9 @@ the shared catalog follow (plan M13c §3.4 to §3.6).
 > as the new device event `software.request_withdrawn` (ADR 0024 sender rule); without it the withdrawal stays on
 > the device. The server records the event as `device.software_request_withdrawn` and sets the device's open
 > request for that entry and user to `withdrawn`. Making that close independent of the order in which event
-> batches are processed is planned for 0.1.0-alpha.11 (plan M13c, amendment 2026-11-11 c; RR-135).
+> batches are processed is done in 0.1.0-alpha.11 by plan M19 D8 (PDK-811d): a withdrawal row per device, entry
+> and user with the device's event number, and the request's own event number decide which one came first; a reset
+> of the device's event counter clears both (D8.5). RR-135 closes with it.
 
 ### 12.6 Dead man's switch (F14)
 
