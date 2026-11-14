@@ -23,6 +23,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/backup"
 	"github.com/phischl/paddock-mdm/server/internal/domain/backupset"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 )
 
@@ -55,11 +56,43 @@ type fakeStore struct {
 	// highWater is the highest device.bundle_seq; highWaterErr fails its read.
 	highWater    int64
 	highWaterErr error
+	// fenceMu guards epochs, fenceErr and fenceCancel: Fence is called from the engine's leadership goroutine.
+	fenceMu sync.Mutex
+	// epochs counts the leader epochs taken; fenceErr fails Fence; fenceCancel ends the newest leadership's context.
+	epochs      int
+	fenceErr    error
+	fenceCancel context.CancelCauseFunc
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{schedule: backupset.DefaultSchedule(), history: map[string]KindHistory{},
 		status: map[string]KindStatus{}, hostState: map[uuid.UUID]string{}, tests: map[uuid.UUID]string{}}
+}
+
+func (s *fakeStore) Fence(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	s.fenceMu.Lock()
+	defer s.fenceMu.Unlock()
+	if s.fenceErr != nil {
+		return nil, nil, s.fenceErr
+	}
+	s.epochs++
+	fenced, cancel := context.WithCancelCause(ctx)
+	s.fenceCancel = cancel
+	return fenced, func() { cancel(nil) }, nil
+}
+
+// fence ends the newest leadership as db.BackupPool.InBackup does when a write finds that another process took a
+// newer leader epoch.
+func (s *fakeStore) fence() {
+	s.fenceMu.Lock()
+	defer s.fenceMu.Unlock()
+	s.fenceCancel(db.ErrFenced)
+}
+
+func (s *fakeStore) epochCount() int {
+	s.fenceMu.Lock()
+	defer s.fenceMu.Unlock()
+	return s.epochs
 }
 
 func (s *fakeStore) ActiveKey(context.Context) (ActiveKey, bool, error) {

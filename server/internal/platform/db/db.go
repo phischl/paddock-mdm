@@ -491,10 +491,72 @@ func NewBackupPool(ctx context.Context, dsn string, o Options) (*BackupPool, err
 // InBackup runs fn in a transaction of role paddock_backup scoped to the platform pseudo-organization
 // (audit.PlatformOrganizationID): the role's audit policies accept no other organization, and without the setting the
 // policy fails closed.
+// Under a context from TakeLeaderEpoch, the transaction first checks the leader epoch and fails with ErrFenced once
+// another process took a newer one.
 func (p *BackupPool) InBackup(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	return inTx(ctx, p.p,
-		func(tx pgx.Tx) error { return setOrg(ctx, tx, audit.PlatformOrganizationID) },
+		func(tx pgx.Tx) error {
+			if err := checkLeaderEpoch(ctx, tx); err != nil {
+				return err
+			}
+			return setOrg(ctx, tx, audit.PlatformOrganizationID)
+		},
 		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// ErrFenced is the error of an InBackup transaction whose leader epoch is no longer the newest (plan M19 D5, RR-134):
+// another process took the backup leadership after this one, so this one must write nothing further. The transaction
+// also ends the leadership's context with this cause.
+var ErrFenced = errors.New("db: backup leader epoch moved on; another process leads")
+
+// leaderFence is the epoch a leadership took and the cancel that ends its context once a transaction finds the epoch
+// moved on.
+type leaderFence struct {
+	epoch  int64
+	cancel context.CancelCauseFunc
+}
+
+type leaderFenceKey struct{}
+
+// TakeLeaderEpoch increments the backup leader epoch for holder and returns a context that carries it (plan M19 D5):
+// every InBackup transaction under that context first reads the epoch under FOR SHARE and, once another process took
+// a newer one, fails with ErrFenced and ends the context with that cause. The caller MUST hold the backup leader lock
+// (PlatformPool.Lead) and call stop when its leadership ends.
+func (p *BackupPool) TakeLeaderEpoch(ctx context.Context, holder string) (fenced context.Context, stop context.CancelFunc, err error) {
+	var epoch int64
+	if err := p.p.QueryRow(ctx,
+		"UPDATE backup_leader SET epoch = epoch + 1, holder = $1, acquired_at = now() RETURNING epoch",
+		holder).Scan(&epoch); err != nil {
+		return nil, nil, fmt.Errorf("take the backup leader epoch: %w", err)
+	}
+	fenced, cancel := context.WithCancelCause(ctx)
+	return context.WithValue(fenced, leaderFenceKey{}, leaderFence{epoch: epoch, cancel: cancel}),
+		func() { cancel(nil) }, nil
+}
+
+// LeaderEpoch returns the backup leader epoch ctx carries (TakeLeaderEpoch).
+func LeaderEpoch(ctx context.Context) (int64, bool) {
+	f, ok := ctx.Value(leaderFenceKey{}).(leaderFence)
+	return f.epoch, ok
+}
+
+// checkLeaderEpoch fails with ErrFenced when ctx carries a leader epoch that is no longer the stored one. FOR SHARE
+// holds the next leader's increment until this transaction ended, so a write that passed the check commits before
+// the next leader's first write.
+func checkLeaderEpoch(ctx context.Context, tx pgx.Tx) error {
+	f, ok := ctx.Value(leaderFenceKey{}).(leaderFence)
+	if !ok {
+		return nil
+	}
+	var epoch int64
+	if err := tx.QueryRow(ctx, "SELECT epoch FROM backup_leader FOR SHARE").Scan(&epoch); err != nil {
+		return fmt.Errorf("check the backup leader epoch: %w", err)
+	}
+	if epoch != f.epoch {
+		f.cancel(ErrFenced)
+		return ErrFenced
+	}
+	return nil
 }
 
 // SystemIdentifier returns the PostgreSQL cluster's system identifier: it is fixed at initdb and kept by a physical
