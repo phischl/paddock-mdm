@@ -51,6 +51,8 @@ func (e *Enrollment) process(ctx context.Context, messageID string, body []byte)
 	entry := devicecache.Enrollment{KeyID: req.KeyID, PublicKey: req.PublicKey, OrganizationID: req.OrganizationID}
 	res, err := e.enroller.Enroll(ctx, req)
 	switch {
+	case unavailable(ctx, err):
+		entry.Status, entry.Reason = protocol.EnrollRejected, devicecache.ReasonOrganizationUnavailable
 	case err != nil && permanent(err):
 		entry.Status, entry.Reason = protocol.EnrollRejected, problem.From(err).Code
 		slog.InfoContext(ctx, "enrollment rejected", "enrollment_id", req.EnrollmentID, "reason", entry.Reason)

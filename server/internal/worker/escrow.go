@@ -74,6 +74,9 @@ func (e *Escrow) process(ctx context.Context, messageID string, body []byte) out
 	}
 	ctx = systemContext(ctx, m.OrganizationID, messageID)
 	status, err := e.escrow.Store(ctx, m)
+	if unavailable(ctx, err) {
+		return ack
+	}
 	if err != nil {
 		slog.WarnContext(ctx, "storing escrow upload failed; retrying", "device_id", m.DeviceID, "escrow_id", m.EscrowID, "error", err)
 		return retry

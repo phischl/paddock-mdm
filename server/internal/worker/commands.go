@@ -65,6 +65,8 @@ func (c *Commands) issued(ctx context.Context, messageID string, body []byte) ou
 	ctx = systemContext(ctx, msg.OrganizationID, messageID)
 	cmd, err := c.commands.Get(ctx, msg.CommandID)
 	switch {
+	case unavailable(ctx, err):
+		return ack
 	case err != nil && permanent(err):
 		slog.WarnContext(ctx, "issued command not found", "command_id", msg.CommandID)
 		return ack
@@ -95,11 +97,15 @@ func (c *Commands) result(ctx context.Context, messageID string, body []byte) ou
 		return poison
 	}
 	ctx = systemContext(ctx, res.OrganizationID, messageID)
-	if err := c.commands.Finish(ctx, res); err != nil {
+	if err := c.commands.Finish(ctx, res); unavailable(ctx, err) {
+		return ack
+	} else if err != nil {
 		slog.WarnContext(ctx, "recording command result failed; retrying", "command_id", res.CommandID, "error", err)
 		return retry
 	}
-	if confirmed, err := c.revocations.Finish(ctx, res); err != nil {
+	if confirmed, err := c.revocations.Finish(ctx, res); unavailable(ctx, err) {
+		return ack
+	} else if err != nil {
 		slog.WarnContext(ctx, "recording revocation result failed; retrying", "command_id", res.CommandID, "error", err)
 		return retry
 	} else if confirmed {

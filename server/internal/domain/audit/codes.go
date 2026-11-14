@@ -366,6 +366,8 @@ const (
 	CodePlatformOffboardedDeviceUninstalled  Code = "platform.offboarded_device_uninstalled"
 	CodePlatformDeletedOrganizationAuditRead Code = "platform.deleted_organization_audit_read"
 	CodeAuditEventAfterRetirement            Code = "audit.event_after_retirement"
+	// An action refused because its organization is deleting or deleted (plan M17 amendment 2026-11-14 f point 1).
+	CodeOrganizationInactiveDenied Code = "organization.inactive_denied"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -2218,6 +2220,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"organization_id", "original_code", "original_event_id"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Platform pseudo-organization.",
+	},
+	CodeOrganizationInactiveDenied: {
+		Code: CodeOrganizationInactiveDenied, Emitted: true,
+		Description: "An action was refused because its organization is being deleted or was deleted (403 organization_inactive). Actor and target are those of the refused attempt.",
+		Params:      []string{"organization_id", "attempted_code", "status"},
+		Outcomes:    []Outcome{OutcomeDenied},
+		Note:        "Platform pseudo-organization: nothing is written into an organization that is being deleted. organization_id names the refused organization, attempted_code the action's own code (not recorded in addition), status is deleting or deleted.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

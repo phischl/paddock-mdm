@@ -347,6 +347,7 @@
     "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment.",
     "rollout_conflict": "A running or halted rollout stages this item. Complete the rollout or revert its change set first.",
     "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent.",
+    "organization_inactive": "This organization is being deleted. Its data can no longer be read or changed.",
     "backup_key_mismatch": "The characters do not match the key.",
     "backup_target_state_unchanged": "The target is already in this state.",
     "backup_key_discarded_after_mismatches": "The key was discarded after three wrong confirmations. Generate a new key."
@@ -410,7 +411,8 @@
       "deletion_cancelled": "{actor} cancelled the deletion of the organization {slug}",
       "deletion_step_completed": "Deletion of {slug}: step {step} completed",
       "deletion_step_failed": "Deletion of {slug}: step {step} failed",
-      "deleted": "The organization {slug} was deleted"
+      "deleted": "The organization {slug} was deleted",
+      "inactive_denied": "{actor} was refused: organization {organization_id} is {status, select, deleted {deleted} other {being deleted}} ({attempted_code})"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",

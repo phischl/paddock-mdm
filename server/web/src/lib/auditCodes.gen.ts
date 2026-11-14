@@ -170,6 +170,7 @@ export const auditCodes = [
   'organization.deletion_step_completed',
   'organization.deletion_step_failed',
   'organization.domains_changed',
+  'organization.inactive_denied',
   'organization.mcp_policy_changed',
   'organization.recompile_requested',
   'organization.security_review_required',
