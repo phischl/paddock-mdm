@@ -245,6 +245,17 @@ The databases are fine, but the `backup-repo` volume or the pgBackRest state vol
 `restore --only backup-repo` touches neither database, OpenBao nor Fleet and needs no restore plan; it refuses to run
 while a restore plan is `running`. It records `platform.restore_completed` with `components: [backup-repo]`.
 
+## Connection limit of the restored database
+
+Before the first start of the restored control-plane database, the restore reads `max_connections` from its restored
+control file (`pg_controldata`) and starts it with the larger of that value and `PADDOCK_PG_MAX_CONNECTIONS` (default
+100), so a backup written with a higher limit restores onto a host configured lower. It logs both values, for example
+`PostgreSQL: max_connections: configured 100, backup 150; starting with 150`. The restored stack keeps that value until
+the next `./paddock up`, which starts the recovered database with the configured value again; set
+`PADDOCK_PG_MAX_CONNECTIONS` in `.env` to the logged value to keep it (`docs/operations/capacity.md`, "PostgreSQL
+connection budget"). Authentik's database keeps PostgreSQL's default; the audit database is not restored. A limit
+raised only in the WAL after the backup is not in the control file: the recovery then pauses as below.
+
 ## A restore stops with "recovery paused"
 
 PostgreSQL pauses the recovery of a restored database when the server starts with a smaller setting than the one the

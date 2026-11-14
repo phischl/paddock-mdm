@@ -7,6 +7,8 @@
 
 # Paddock
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/phischl/paddock-mdm/badge)](https://scorecard.dev/viewer/?uri=github.com/phischl/paddock-mdm)
+
 Open-source management for Linux workstations that keeps local administrator rights with their users.
 
 Paddock distributes signed configuration to Linux laptops and desktops, manages identity and device login

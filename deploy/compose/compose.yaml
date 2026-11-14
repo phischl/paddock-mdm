@@ -125,6 +125,10 @@ services:
     pids_limit: 512
     # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
     mem_limit: ${PADDOCK_POSTGRES_MEM_LIMIT:-2g}
+    # The connection limit (plan M19 D1.2; docs/operations/capacity.md "PostgreSQL connection budget"). PostgreSQL
+    # writes it into the WAL and every backup, so restore.sh starts a restored cluster with at least the backup's value.
+    # compose.backup.yaml replaces this command and repeats the setting.
+    command: ["postgres", "-c", "max_connections=${PADDOCK_PG_MAX_CONNECTIONS:-100}"]
     environment:
       POSTGRES_DB: paddock
       POSTGRES_USER: postgres
@@ -944,15 +948,16 @@ services:
         condition: service_healthy
 
   # Further workers for the ingest load (architecture N2, plan M19 D1.1): only the queue consumers, with 11 instead of 30
-  # database connections, no rounds and none of the rounds' credentials. None run by default; scale with
-  # `--scale paddock-worker-ingest=2` once PostgreSQL's connection limit leaves room for them (docs/operations/capacity.md,
-  # "PostgreSQL connection budget"). Not scraped by Prometheus: the full worker exports the role's metrics.
+  # database connections, no rounds and none of the rounds' credentials. None run by default; their number is
+  # PADDOCK_WORKER_INGEST_REPLICAS in .env (plan M19 amendment b), so every up, upgrade and restore keeps it, once
+  # PostgreSQL's connection limit leaves room for them (docs/operations/capacity.md, "PostgreSQL connection budget").
+  # Not scraped by Prometheus: the full worker exports the role's metrics.
   paddock-worker-ingest:
     logging: *paddock-logging
     <<: *paddock
     command: ["serve", "worker"]
     deploy:
-      replicas: 0
+      replicas: ${PADDOCK_WORKER_INGEST_REPLICAS:-0}
     mem_limit: ${PADDOCK_WORKER_INGEST_MEM_LIMIT:-1g}
     environment:
       <<: *paddock-env
