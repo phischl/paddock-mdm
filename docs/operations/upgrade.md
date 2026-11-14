@@ -169,6 +169,11 @@ confirmation is answered by it too); `<old dir>` is the directory the upgrade ra
   so A's writer inserts into a superset schema.
 - **A lab host without backups** (`PADDOCK_LAB_BACKUP` not `yes`) refuses a rollback after a schema change: there is no
   set to restore.
+- **`PADDOCK_PG_MAX_CONNECTIONS` above 100**: a rollback to a release that starts PostgreSQL with 100 whatever `.env`
+  says (0.1.0-alpha.10 and older) is refused before anything stops, because its database cannot recover data written
+  with more: set it to 100 (or remove it) in `.env` and run `./paddock rollback` again. The pre-upgrade backup was
+  taken at the previous release's setting and restores as is (`docs/operations/capacity.md`, "PostgreSQL connection
+  budget").
 
 **Before anything stops**, the command checks, in this order: the rollback record belongs to this upgrade attempt; the
 running stack is B (the version label of its containers; a later upgrade from this directory supersedes the record);
