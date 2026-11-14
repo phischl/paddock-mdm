@@ -102,6 +102,7 @@ export function attentionStatus(kind: AttentionKind): StatusView {
     case 'event_gap':
     case 'login_apply_failed':
     case 'sudo_apply_failed':
+    case 'patch_sla_breached':
       return { status: 'warn', label }
     case 'revocation_pending':
     case 'report_only':

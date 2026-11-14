@@ -155,6 +155,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | Tool | Class | Destructive | Summary |
 | --- | --- | --- | --- |
 | `getOverview` | read | no | The numbers of the overview page, computed in one transaction; never cached. |
+| `getPatchCompliance` | read | no | The patch compliance report of the organization (plan M13c decision 18 and amendment 2026-11-14) against its patch SLA: the state at generated_at, with no period. |
 | `getSecurityReview` | read | no | The review of existing data (ADR 0034 decision 7): effectively Full permission profiles and managed files on sensitive paths that no organization administrator has confirmed with a step-up yet, and managed files on denied paths, which are not shipped to devices. |
 
 ## platform
@@ -221,12 +222,14 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `getDMSSettings` | read | no | The dead man's switch; off with the defaults until changed. |
 | `getLoginSettings` | read | no | GET /api/v1/settings/login |
 | `getManagedFileSettings` | read | no | The operator roots of the managed files (ADR 0034 amendment 2026-10-16); empty until changed. |
+| `getPatchSlaSettings` | read | no | The patch SLA (plan M13c decision 17): days a vulnerability with a fixed version may stay open per severity, 0 = no SLA; the defaults 7/30/90/0 until changed. |
 | `getPrivacySettings` | read | no | The privacy settings (ADR 0032 §2); the defaults until changed. |
 | `getRolloutSettings` | read | no | The settings of staged configuration rollouts (plan M11 decision 24); the defaults (rollouts off) until changed. |
 | `getUpdateSettings` | read | no | The update settings (plan M5b decisions 1 and 9); the defaults until changed. |
 | `getWatchedUnits` | read | no | The third-party systemd services of the presence policy: the agents report when one of them stops. |
 | `updateDMSSettings` | write | no | Replaces the dead man's switch settings (plan M4c decision 15): period_days 7–365 (the portal warns below 30), distinct warn_days below the period. |
 | `updateLoginSettings` | write | no | Replaces the login settings; every device is recompiled. |
+| `updatePatchSlaSettings` | write | no | Replaces the patch SLA: critical_days, high_days, medium_days and low_days, each 0 to 365 (0 = the severity has no SLA). |
 | `updatePrivacySettings` | write | no | Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches of the audit log are recorded as audit.searched, once per administrator, hour and set of filters) and inventory_view_recorded (views of a device's software and vulnerabilities are recorded as device.inventory_viewed, once per administrator, device and day). |
 | `updateRolloutSettings` | write | no | Replaces the rollout settings: enabled, waves (1 to 10 strictly increasing integers between 1 and 100, ending with 100), min_wave_minutes (at least 15; 1 in a development stack), failure_threshold_percent (0–100), failure_threshold_min (at least 0), the optional canary device group, whose devices always go first, and the optional wave_success_threshold_percent (1–100) and stall_warning_hours (1–720), which keep their stored values when absent. |
 | `updateUpdateSettings` | write | no | Replaces the update settings: security_daily_at (HH:MM, local device time), regular_schedule (a subset of systemd OnCalendar: optional comma-separated weekdays Mon…Sun, then HH:MM; anything else is 422 invalid_schedule), regular_updates_enabled, max_random_delay_min (0–720), staleness_warning_h (1–720) and staleness_critical_h (above the warning, at most 2160; 400 invalid_request otherwise). |
@@ -376,6 +379,7 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | `downloadAuditExport` | audit | Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. |
 | `enforceDevice` | devices | Ends the report-only mode of an adopted device (plan M11 decision 42): its next bundle quarantines foreign sudoers files, removes unexpected members of privileged groups (never the last administrator), installs the login component and applies every managed resource. |
 | `exportAccessReview` | overview | The access review as a download: format json (the same object as the view) or csv (one file for every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a leading apostrophe). |
+| `exportPatchCompliance` | overview | The patch compliance report as a download, with every device (no cap): format json (the report object) or csv (one file for every section, told apart by the section column: summary, severity, group, one breach row per breached finding, catalog; cells that a spreadsheet could run as a formula carry a leading apostrophe). |
 | `exportPlatformAccessReview` | platform | The access review as a download: format json (the same object as the view) or csv (one file for every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a leading apostrophe). |
 | `feedAuditEvents` | audit | Commit-ordered cursor feed of the organization's audit events for a SIEM pull (ADR 0031): repeat with after = next_after to read every event exactly once. |
 | `generateAutoinstall` | enrollment-tokens | Generates the Ubuntu autoinstall user-data that installs one device with Paddock (plan M4b decisions 2–4): LVM inside LUKS2 under a random temporary passphrase, the Debian packages of the newest published agent release that has both (pinned by SHA-256; 409 invalid_state if there is none), the enrollment configuration, and the first-boot disk setup with the organization's boot_pin_min_length. |

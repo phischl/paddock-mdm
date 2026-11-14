@@ -92,6 +92,9 @@ type Deps struct {
 	SecurityReview *app.SecurityReview
 	// AccessReview is the access review report (plan M12 decisions 25 and 26).
 	AccessReview *app.AccessReview
+	// PatchSLA and PatchCompliance are the patch SLA and the report against it (plan M13c decisions 17 and 18).
+	PatchSLA        *app.PatchSLA
+	PatchCompliance *app.PatchCompliance
 	// Diagnostics are the diagnostics bundles of devices (ADR 0048, plan M12 decisions 13 and 14).
 	Diagnostics *app.Diagnostics
 	// ServerVersion is the build version of paddock-server, answered as server_version of GET /api/v1/me (PDK-430).
@@ -249,6 +252,8 @@ var privileged = map[string]struct {
 	"PUT /api/v1/settings/watched-units":                                   {app.ScopeOrg, app.SpecWatchedUnitsChange},
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
 	"PUT /api/v1/settings/privacy":                                         {app.ScopeOrg, app.SpecPrivacySettings},
+	"PUT /api/v1/settings/patch-sla":                                       {app.ScopeOrg, app.SpecPatchSLASettings},
+	"GET /api/v1/patch-compliance/export":                                  {app.ScopeOrg, app.SpecPatchComplianceExported},
 	"PUT /api/v1/settings/rollout":                                         {app.ScopeOrg, app.SpecRolloutSettings},
 	"POST /api/v1/config-rollouts/{id}/halt":                               {app.ScopeOrg, app.SpecConfigRolloutHalt},
 	"POST /api/v1/config-rollouts/{id}/resume":                             {app.ScopeOrg, app.SpecConfigRolloutResume},
@@ -355,8 +360,9 @@ func NewHandler(d Deps) http.Handler {
 		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwarePackages: d.SoftwarePackages, softwareCatalog: d.SoftwareCatalog, softwareRequests: d.SoftwareRequests, softwareStatus: d.SoftwareStatus, compileWarnings: d.CompileWarnings, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns, backupRestorePlans: d.BackupRestorePlans,
 		securityReview: d.SecurityReview,
 		accessReview:   d.AccessReview,
-		diagnostics:    d.Diagnostics,
-		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
+		patchSLA:       d.PatchSLA, patchCompliance: d.PatchCompliance,
+		diagnostics: d.Diagnostics,
+		declarative: d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 		autoUnseal:   d.AutoUnseal,
 		backupKeys:   d.BackupKeys,
 		upgradeCheck: d.UpgradeCheck,

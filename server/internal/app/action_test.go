@@ -41,6 +41,8 @@ func TestOutcomeOf(t *testing.T) {
 		{"mcp write not enabled", problem.MCPWriteNotEnabled, audit.OutcomeDenied, "mcp_write_not_enabled"},
 		{"rate limited", problem.RateLimited, audit.OutcomeDenied, "rate_limited"},
 		{"mcp login required", problem.MCPLoginRequired, audit.OutcomeFailure, "mcp_login_required"},
+		{"organization deleting", fmt.Errorf("db: org: %w (%w)", problem.OrganizationInactive, errors.New("PD001")),
+			audit.OutcomeDenied, "organization_inactive"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

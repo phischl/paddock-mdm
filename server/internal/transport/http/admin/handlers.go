@@ -94,6 +94,9 @@ type handlers struct {
 	securityReview *app.SecurityReview
 	// accessReview is the access review report (plan M12 decisions 25 and 26).
 	accessReview *app.AccessReview
+	// patchSLA and patchCompliance are the patch SLA and the report against it (plan M13c decisions 17 and 18).
+	patchSLA        *app.PatchSLA
+	patchCompliance *app.PatchCompliance
 	// diagnostics are the diagnostics bundles of devices (ADR 0048).
 	diagnostics *app.Diagnostics
 	// mcpSettings are the MCP policies of the organizations and the platform (plan M14 §3.4 item 17).

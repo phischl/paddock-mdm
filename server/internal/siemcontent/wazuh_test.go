@@ -499,9 +499,12 @@ var informational = map[audit.Code]bool{
 	"notification.replayed":                         true,
 	"notification.test_requested":                   true,
 	"notification.test_sent":                        true,
+	"patch_compliance.exported":                     true,
+	"patch_compliance.viewed":                       true,
 	"retention.purged":                              true,
 	"vulnerability.critical_summary":                true,
 	"vulnerability.devices_viewed":                  true,
+	"vulnerability.sla_breached":                    true,
 }
 
 // mustBeHigh are the words that mark a code as security relevant: such a code must never end up below level 10.

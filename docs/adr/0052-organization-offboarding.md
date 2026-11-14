@@ -173,3 +173,33 @@ dependency (Q4, PDK-812); the escrow-reader stays the only role that decrypts es
 administrator passwords are lost **only if no export was taken**. An export is a full set of the organization's
 device secrets in the hands of its requester: its protection rests on the supplied key or passphrase (at least 16
 characters) and is audited.
+
+## Amendment 2026-11-14 e — who can withdraw an offboarding uninstall, and the last chance to issue one (architect; plan M17 amendment e)
+
+**Context.** Decision 2 lets the system issue the offboarding uninstall only once, at the request, and the request
+skips devices with an open uninstall or revocation. During the grace period that leave can disappear: an organization
+administrator could cancel it per device, a Lock or Destroy cancels it, the device refuses it while an in-place
+encryption runs, and devices enrolled during the grace period never got one. The step that keeps offboarded devices
+reachable needs a signed uninstall for every device (maintainer decision §3.1: every device leaves, offline devices at
+their next contact, no revocation).
+
+**Options.** (a) Refuse enrollment and every withdrawal during the grace period: still leaves Lock/Destroy (which must
+never be blocked) and device refusals uncovered. (b) A worker round that tops up uninstalls every minute during the
+grace period: covers everything but adds a recurring system action and audit noise in a live organization. (c) Refuse
+only the organization administrator's per-device withdrawal, and let step `devices` issue a fresh leave to every device
+without a usable uninstall: covers every case once, at the point where it is needed. **Chosen: (c).**
+
+**Decision.**
+10. Offboarding uninstalls are marked on the device (`device.uninstall_reason = 'organization_offboarding'`). An
+    organization administrator cannot cancel such an uninstall (409); only cancelling the deletion withdraws it. A Lock
+    or Destroy still cancels it.
+11. Step `devices` is the second and last path on which the system issues an uninstall: under the exclusive offboarding
+    lock it keeps a device's open uninstall whose command is pending, delivered or succeeded, and issues a fresh
+    `leave` (expiry `OffboardedDeviceRetention`) to every other device not yet uninstalled, including devices with an
+    open Lock or Destroy, which can no longer be served after the deletion. Decision 2's "this is the only path on which
+    the system issues an uninstall" is amended accordingly.
+
+**Consequences.** + Every device that reports again receives a leave, whatever happened during the grace period. − A
+device enrolled during the grace period works until the deletion runs and then leaves; a device with an unfinished
+in-place encryption or a just-started revocation refuses the leave and keeps an inert agent (residual risk recorded by
+PDK-1019).

@@ -328,6 +328,12 @@ const (
 	CodeSoftwareRequestApproved        Code = "software_request.approved"
 	CodeSoftwareRequestDenied          Code = "software_request.denied"
 	CodeSoftwareRequestExpired         Code = "software_request.expired"
+	// Patch SLA and the patch compliance report (plan M13c decisions 17 and 18): the settings, the report's view and
+	// export, and the worker's daily summary of findings open longer than the SLA (a notification code).
+	CodeSettingsPatchSLAChanged  Code = "settings.patch_sla_changed"
+	CodePatchComplianceViewed    Code = "patch_compliance.viewed"
+	CodePatchComplianceExported  Code = "patch_compliance.exported"
+	CodeVulnerabilitySLABreached Code = "vulnerability.sla_breached"
 
 	// The backup key (plan M15 §6.4).
 	CodePlatformBackupKeyGenerated Code = "platform.backup_key_generated"
@@ -363,6 +369,8 @@ const (
 	// The encrypted recovery export during the grace period (plan M17 amendment b decision 25): in the organization's
 	// own log.
 	CodeOrganizationRecoveryExported Code = "organization.recovery_exported"
+	// An action refused because its organization is deleting or deleted (plan M17 amendment 2026-11-14 f point 1).
+	CodeOrganizationInactiveDenied Code = "organization.inactive_denied"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -2012,6 +2020,34 @@ var registry = map[Code]Definition{
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "cause is validity_ended (30 days without a decision), approval_removed (the entry no longer requires approval, so the user may install without one) or assignment_removed (the entry has no available assignment left; an approval holds only while it exists).",
 	},
+	CodeSettingsPatchSLAChanged: {
+		Code: CodeSettingsPatchSLAChanged, Emitted: true,
+		Description: "An organization administrator changed the patch SLA: how many days a vulnerability with a fixed version may stay open per severity (0 = no SLA for that severity).",
+		Params:      withChangeSetParams([]string{"critical_days", "high_days", "medium_days", "low_days"}),
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request for a value outside 0 to 365. Target is the organization.",
+	},
+	CodePatchComplianceViewed: {
+		Code: CodePatchComplianceViewed, Emitted: true,
+		Description: "An administrator, operator, auditor or API token opened the patch compliance report of the organization (the state at the moment of the view); recorded once per actor and UTC day and only while inventory_view_recorded is on. device_group_id is the filter of the first view of the day, absent without one.",
+		Params:      []string{"device_group_id", "window_start"},
+		Outcomes:    adminOutcomes,
+		Note:        "While the setting is on, failure with the reason of a refused view (not_found for an unknown or foreign device group), or internal for a window that could not be claimed; the view is then refused. When the setting cannot be read, nothing is recorded and the view fails. Target is the organization.",
+	},
+	CodePatchComplianceExported: {
+		Code: CodePatchComplianceExported, Emitted: true,
+		Description: "An administrator, operator, auditor or API token exported the patch compliance report of the organization (the state at the moment of the export) as JSON or CSV; every export is recorded, whatever the privacy settings.",
+		Params:      []string{"format", "device_group_id"},
+		Outcomes:    adminOutcomes,
+		Note:        "Failure with invalid_request for an unknown format, not_found for an unknown or foreign device group. Target is the organization.",
+	},
+	CodeVulnerabilitySLABreached: {
+		Code: CodeVulnerabilitySLABreached, Emitted: true,
+		Description: "Vulnerabilities with a fixed version are open on the organization's devices longer than the organization's patch SLA (actor: system; the worker's inventory round). Use it as a notification for administrators.",
+		Params:      []string{"critical", "high", "medium", "low", "devices"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded at most once per UTC day and only while at least one finding breaches the SLA. critical to low count the breached findings per severity, devices the devices with at least one. Not part of the security preset; a destination with all or a custom list that names it receives it.",
+	},
 	CodePlatformBackupKeyGenerated: {
 		Code: CodePlatformBackupKeyGenerated, Emitted: true,
 		Description: "A platform administrator generated a new backup key after a step-up, or the api imported the host's key file of an older installation (legacy); the key is shown once and waits for its confirmation. The key text is never recorded.",
@@ -2194,6 +2230,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"organization_id", "original_code", "original_event_id"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Platform pseudo-organization.",
+	},
+	CodeOrganizationInactiveDenied: {
+		Code: CodeOrganizationInactiveDenied, Emitted: true,
+		Description: "An action was refused because its organization is being deleted or was deleted (403 organization_inactive). Actor and target are those of the refused attempt.",
+		Params:      []string{"organization_id", "attempted_code", "status"},
+		Outcomes:    []Outcome{OutcomeDenied},
+		Note:        "Platform pseudo-organization: nothing is written into an organization that is being deleted. organization_id names the refused organization, attempted_code the action's own code (not recorded in addition), status is deleting or deleted.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

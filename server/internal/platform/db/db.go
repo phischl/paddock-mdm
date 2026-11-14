@@ -4,6 +4,7 @@ package db
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 var (
@@ -128,6 +130,30 @@ func setOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
 	return err
 }
 
+// enterOrg sets the organization context and passes the gate paddock_org_enter (migration 00131). Both statements
+// go in one batch, so the gate costs no extra round trip. A refusal wraps problem.OrganizationInactive and the
+// PostgreSQL error (SQLSTATE PD001).
+func enterOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
+	b := &pgx.Batch{}
+	b.Queue("SELECT set_config('paddock.org_id', $1, true)", org.String())
+	b.Queue("SELECT paddock_org_enter()")
+	err := tx.SendBatch(ctx, b).Close()
+	if IsOrganizationUnavailable(err) {
+		return fmt.Errorf("db: organization %s is deleting or deleted: %w (%w)", org, problem.OrganizationInactive, err)
+	}
+	return err
+}
+
+// offboardingLockNamespace is "padd obd", the namespace of the offboarding lock keys.
+const offboardingLockNamespace = 0x70616464206f6264
+
+// OffboardingLockKey is the advisory lock key that paddock_org_enter holds shared and paddock_offboard_finalize
+// exclusively for org; the same derivation as the SQL function paddock_offboarding_lock_key (plan M17 amendment
+// 2026-11-14 d).
+func OffboardingLockKey(org uuid.UUID) int64 {
+	return int64(binary.BigEndian.Uint64(org[:8]) ^ binary.BigEndian.Uint64(org[8:]) ^ offboardingLockNamespace) //nolint:gosec // a bit pattern, wraps by design
+}
+
 func orgFromContext(ctx context.Context) (uuid.UUID, error) {
 	p, ok := principal.From(ctx)
 	if !ok || p.OrganizationID == uuid.Nil {
@@ -149,9 +175,24 @@ func NewOrgPool(ctx context.Context, dsn string, o Options) (*OrgPool, error) {
 }
 
 // InOrg opens a transaction, executes SELECT set_config('paddock.org_id', <principal.OrganizationID>, true) and
-// calls fn. It returns ErrNoOrganization if the principal is missing or has no organization. It commits if fn
-// returns nil, otherwise it rolls back and returns fn's error unchanged.
+// calls fn. It returns ErrNoOrganization if the principal is missing or has no organization, and an error matching
+// problem.OrganizationInactive (IsOrganizationUnavailable) if the organization is deleting or deleted; until the
+// transaction ends it holds the organization's offboarding lock shared (plan M17 amendment 2026-11-14 d). It commits
+// if fn returns nil, otherwise it rolls back and returns fn's error unchanged.
 func (p *OrgPool) InOrg(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	org, err := orgFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return inTx(ctx, p.p,
+		func(tx pgx.Tx) error { return enterOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// InOrgOffboarding is InOrg without the gate, for the offboarding job only (app.Offboarding; enforced by
+// TestInOrgOffboardingCallers): it reaches an organization that is deleting, to delete its rows and finalize it. The
+// organization comes from the principal, as for InOrg.
+func (p *OrgPool) InOrgOffboarding(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	org, err := orgFromContext(ctx)
 	if err != nil {
 		return err
@@ -170,7 +211,7 @@ func (p *OrgPool) InOrgSnapshot(ctx context.Context, fn func(ctx context.Context
 		return err
 	}
 	return inTxWith(ctx, p.p, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly},
-		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return enterOrg(ctx, tx, org) },
 		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }
 
@@ -759,6 +800,23 @@ func IsLockTimeout(err error) bool {
 func IsNoPartition(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == ""
+}
+
+// IsOrganizationUnavailable reports whether err is the refusal of paddock_org_enter: the organization is deleting or
+// deleted (SQLSTATE PD001, migration 00131).
+func IsOrganizationUnavailable(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "PD001"
+}
+
+// OrganizationUnavailableStatus is the status (deleting or deleted) of the organization that paddock_org_enter
+// refused in err, and "" when err is no such refusal.
+func OrganizationUnavailableStatus(err error) string {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "PD001" {
+		return ""
+	}
+	return pgErr.Detail
 }
 
 // IsCheckViolation reports whether err is a check constraint violation.

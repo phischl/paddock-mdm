@@ -38,6 +38,7 @@ report_fail="" # an outcome whose report fails
 check_rc=0   # exit code of backup restore-repo --check (1: a plan is running)
 plan_json="" # what backup plan prints
 recovery_state="f" # what the database's recovery poll answers (paused: recovery stopped on insufficient settings)
+controldata_max=100 # max_connections in the restored control file (pg_controldata); empty: no such line
 # The markers are paths of their own: the fake may run inside a step's function whose local work shadows the harness's.
 report_sleep="" # seconds a failed restore-report takes (touches $reporting first)
 reporting="$work/reporting"
@@ -144,6 +145,15 @@ compose() {
       sh -c "$BUNDLE_SEQ_RECORD_SCRIPT" bundle-seq "$COMPOSE_DIR/bundle-seq" "${*: -1}"
       ;;
     *" exec -T postgres psql "* | *" exec -T authentik-postgres psql "*) echo "$recovery_state" ;;
+    *" --entrypoint sh postgres -c exec pg_controldata")
+      printf '%s\n' "pg_control version number:            1800" "wal_level setting:                    replica"
+      [[ -z "$controldata_max" ]] || printf 'max_connections setting:              %s\n' "$controldata_max"
+      printf '%s\n' "max_worker_processes setting:         8"
+      ;;
+    *" up -d --no-deps postgres authentik-postgres")
+      # What the real Compose, a child process, would interpolate.
+      echo "max_connections environment: $(printenv PADDOCK_PG_MAX_CONNECTIONS || echo unset)" >>"$calls"
+      ;;
     *" openbao bao status "*)
       local n=0
       [[ ! -s "$sealed_polls" ]] || n="$(cat "$sealed_polls")"
@@ -578,6 +588,47 @@ else
   bad "paused recovery: rc $rc, polls $polls, sleeps $(cat "$sleeps"), out: $out"
 fi
 recovery_state=f
+
+# PDK-1032 (plan M19 D1.3): the restored cluster starts with the larger of PADDOCK_PG_MAX_CONNECTIONS and the value in
+# its restored control file, read before its first start; both are logged, and every later Compose call of the restore
+# sees the value (exported).
+# pg_max_case <configured> <control file> <want> <name>
+pg_max_case() {
+  host_env[PADDOCK_PG_MAX_CONNECTIONS]="$1" controldata_max="$2"
+  run_restore restore fresh "$set_dir" --only postgres
+  local read_at up_at
+  read_at="$(position "--entrypoint sh postgres -c exec pg_controldata")"
+  up_at="$(position "up -d --no-deps postgres authentik-postgres")"
+  if ((rc == 0)) && [[ -n "$read_at" && -n "$up_at" ]] && ((read_at < up_at)) &&
+    called "max_connections environment: $3" &&
+    called "compose run --rm --no-deps -T --user postgres -e LC_ALL=C --entrypoint sh postgres -c exec pg_controldata" &&
+    [[ "$out" == *"max_connections: configured ${1:-100}, $5; starting with $3"* ]]; then
+    ok "$4"
+  else
+    bad "$4: rc $rc, read at ${read_at:-never}, up at ${up_at:-never}, env: $(grep 'max_connections environment' "$calls"), out: $out"
+  fi
+}
+pg_max_case 100 150 150 "a backup written at 150 restored onto 100 starts with 150" "backup 150"
+[[ "$out" == *"the next ./paddock up starts it with the configured 100; set PADDOCK_PG_MAX_CONNECTIONS=150 in .env"* ]] &&
+  ok "a higher backup value names the configured value of the next up and how to keep it" ||
+  bad "higher backup value without the note: $out"
+pg_max_case 150 100 150 "a backup written at 100 restored onto 150 starts with the configured 150" "backup 100"
+[[ "$out" != *"the next ./paddock up starts it"* ]] && ok "a lower backup value needs no note" || bad "note on a lower value: $out"
+pg_max_case "" 120 120 "without PADDOCK_PG_MAX_CONNECTIONS the default 100 is compared" "backup 120"
+pg_max_case 130 "" 130 "a control file without the value starts with the configured value" \
+  "the restored control file not readable (pg_controldata)"
+host_env[PADDOCK_PG_MAX_CONNECTIONS]=lots
+run_restore restore fresh "$set_dir" --only postgres
+if ((rc != 0)) && [[ "$out" == *"PADDOCK_PG_MAX_CONNECTIONS is 'lots', not a whole number; nothing was changed"* ]] &&
+  ! called "compose --profile paddock stop"; then
+  ok "a PADDOCK_PG_MAX_CONNECTIONS that is no whole number is refused before anything stops"
+else
+  bad "invalid PADDOCK_PG_MAX_CONNECTIONS: rc $rc, out: $out"
+fi
+unset 'host_env[PADDOCK_PG_MAX_CONNECTIONS]'
+controldata_max=100
+run_restore restore fresh "$set_dir" --only openbao
+! called "pg_controldata" && ok "a restore without postgres reads no control file" || bad "control file read without postgres: $(cat "$calls")"
 
 # Review 2 (R2-M2): the postgres step stops OpenBao too, so a restore without openbao states the unseal path and waits.
 echo 1 >"$sealed_polls"

@@ -207,6 +207,40 @@ func TestDeclarativePrivacySettings(t *testing.T) {
 	}
 }
 
+// TestDeclarativePatchSLA: settings.patch_sla is exported with the defaults, planned and applied like
+// settings.privacy, and changed only by an organization administrator (plan M13c decision 17).
+func TestDeclarativePatchSLA(t *testing.T) {
+	h := newConfigHarness(t)
+	admin := h.account(t, principal.RoleOrgAdmin, false)
+	operator := h.account(t, principal.RoleOrgOperator, false)
+	doc := h.export(t, admin)
+	if p := doc.Settings.PatchSLA; p == nil || *p != (declarative.PatchSLASettings{CriticalDays: 7, HighDays: 30, MediumDays: 90}) {
+		t.Fatalf("exported patch sla %+v", p)
+	}
+	doc.Settings.PatchSLA.CriticalDays = 3
+	if _, _, err := h.config.Apply(principal.With(context.Background(), operator), raw(t, doc), ""); !errors.Is(err, problem.Forbidden) {
+		t.Fatalf("operator changing the patch sla = %v", err)
+	}
+	ctx := principal.With(context.Background(), admin)
+	plan, err := h.config.Plan(ctx, raw(t, doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Changes) != 1 || plan.Changes[0].Section != declarative.SectionSettingsPatchSLA || len(plan.Changes[0].Fields) != 1 ||
+		fmt.Sprint(plan.Changes[0].Fields[0]) != "{critical_days 7 3}" {
+		t.Fatalf("plan %+v", plan)
+	}
+	if _, _, err := h.config.Apply(ctx, raw(t, doc), ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.count(t, "SELECT count(*) FROM organization_patch_sla WHERE organization_id = $1 AND critical_days = 3 AND updated_by = $2", h.org, admin.ID); n != 1 {
+		t.Fatal("patch sla not changed")
+	}
+	if again := h.export(t, admin); again.Settings.PatchSLA.CriticalDays != 3 {
+		t.Fatalf("export after apply %+v", again.Settings.PatchSLA)
+	}
+}
+
 func TestDeclarativeApplyIsAtomic(t *testing.T) {
 	h := newConfigHarness(t)
 	admin := h.account(t, principal.RoleOrgAdmin, false)

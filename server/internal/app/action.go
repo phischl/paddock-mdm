@@ -349,7 +349,7 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 		errors.Is(err, problem.IPNotAllowed) ||
 		errors.Is(err, problem.MCPDisabled) || errors.Is(err, problem.MCPToolNotAllowed) ||
 		errors.Is(err, problem.MCPWriteNotEnabled) || errors.Is(err, problem.RateLimited) ||
-		errors.Is(err, problem.RepositoryNotReady) {
+		errors.Is(err, problem.RepositoryNotReady) || errors.Is(err, problem.OrganizationInactive) {
 		return audit.OutcomeDenied, p.Code
 	}
 	return audit.OutcomeFailure, p.Code
@@ -889,6 +889,10 @@ func (r *ActionRunner) inScope(ctx context.Context, p principal.Principal, scope
 func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, scope Scope, rec *recorder, cause error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
+	if scope == ScopeOrg && p.OrganizationID != uuid.Nil && errors.Is(cause, problem.OrganizationInactive) {
+		r.recordInactiveDenied(ctx, p, rec, cause)
+		return
+	}
 	// Denials of organization actions by principals without an organization go to the platform pseudo-organization.
 	if scope == ScopeOrg && p.OrganizationID == uuid.Nil {
 		rec.org = audit.PlatformOrganizationID
@@ -905,6 +909,32 @@ func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, s
 	if err != nil {
 		slog.ErrorContext(ctx, "audit: could not record failed action", "action_id", rec.id, "code", rec.code,
 			"cause", cause, "error", err)
+	}
+}
+
+// recordInactiveDenied records an organization action refused because its organization is deleting or deleted as
+// organization.inactive_denied in the platform pseudo-organization: the gate refuses every write into the
+// organization, and a row written after the delete loop would make the offboarding's finalize fail (plan M17
+// amendment 2026-11-14 f point 1). The attempt's actor and target are kept; its own code is a param only.
+func (r *ActionRunner) recordInactiveDenied(ctx context.Context, p principal.Principal, rec *recorder, cause error) {
+	if r.platformTx == nil && r.platform == nil {
+		slog.WarnContext(ctx, "audit: no platform scope to record the refusal of an inactive organization",
+			"action_id", rec.id, "code", rec.code, "organization_id", p.OrganizationID)
+		return
+	}
+	denied := *rec
+	denied.code = audit.CodeOrganizationInactiveDenied
+	denied.org = audit.PlatformOrganizationID
+	denied.params = map[string]any{"organization_id": p.OrganizationID.String(), "attempted_code": string(rec.code),
+		"status": db.OrganizationUnavailableStatus(cause)}
+	denied.changes, denied.commands, denied.approved = nil, nil, nil
+	// The platform scope needs a platform principal; the refused principal stays the event's actor.
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: p.Display})
+	err := r.inScope(sys, principal.Principal{Kind: principal.KindSystem}, ScopePlatform,
+		func(ctx context.Context, q *pgstore.Queries) error { return r.insertFinished(ctx, q, &denied, cause) })
+	if err != nil {
+		slog.ErrorContext(ctx, "audit: could not record the refusal of an inactive organization", "action_id", rec.id,
+			"code", rec.code, "organization_id", p.OrganizationID, "error", err)
 	}
 }
 
