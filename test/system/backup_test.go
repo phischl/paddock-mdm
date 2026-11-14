@@ -219,7 +219,7 @@ func gateBS4(t *testing.T, w *backupWorld, d *Device) {
 	first := createManagedFile(t, w.s, d, "pitr-1")
 	t1 := time.Now()
 	// Far enough past T1 + 30 s that the second file's commit lies after the plan's point even with the clocks' seconds.
-	time.Sleep(90 * time.Second)
+	WaitLogged(t, "the second managed file must commit well after the recovery point", 90*time.Second)
 	second := createManagedFile(t, w.s, d, "pitr-2")
 	at := t1.Add(30 * time.Second).UTC().Truncate(time.Second)
 	// Both stanzas' WAL must reach past the point, or the recovery would end before it.

@@ -7,7 +7,18 @@ scripts and never changed) and run the gates of the agent milestones against the
 make up dev-seed                           # the development stack
 make system-test VM=all                    # every gate on both VMs
 make system-test VM=paddock-u2604 T='TestDiskGates'
+make system-test VM=all SUITE=identity     # one suite of suites.txt
+make system-test VM=all SUITE=all          # every suite one after another, summary at the end
 ```
+
+The run streams: `go test -json` goes through filter `test/system/cmd/testlive`, which prints every
+`=== RUN`, log and `--- PASS/FAIL` line as it happens (lines of subtests carry the test name) and fails when no test
+ran. The raw JSON of each run is kept in `bin/system-test/<suite>-<UTC timestamp>.json`. `test/system/suites.txt`
+(`name|timeout|regex`) splits the tests into `identity`, `localadmin`, `software`, `disk`, `revoke`, `lifecycle` and
+`misc`; `TestSuitesComplete` fails when a top-level test is in no suite or in two, so a new test is added to
+`suites.txt`. `SUITE=all` gives every suite its own `-timeout`, continues after a failed suite and exits non-zero if
+any failed. `T` and `SUITE` exclude each other; without both, the whole package runs under one 8 h timeout. A
+deliberate wait of 60 s or more uses `WaitLogged(t, reason, d)`, which logs what it waits for and how long first.
 
 `VM` is `paddock-u2404`, `paddock-u2604`, both comma-separated, or `all`. `make system-test` builds the packages as
 version 0.1.0 with the `paddock_dev` tag into `bin/deb/` and fleetd into `bin/fleetd/` (`make fleetd-deb`, needs
