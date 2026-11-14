@@ -399,8 +399,8 @@ func NewHandler(d Deps) http.Handler {
 		// session, a token or a use case (plan M7a decision 17).
 		guarded = d.IPGuard.Middleware(guarded)
 	}
-	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(securityHeaders(
-		s.bundlesHost(guarded))))))
+	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(httpx.MarkUnreadBody(securityHeaders(
+		s.bundlesHost(guarded)))))))
 }
 
 type server struct {

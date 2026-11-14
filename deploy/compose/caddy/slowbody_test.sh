@@ -17,11 +17,13 @@ IFS= read -r request
 while IFS= read -r line; do
 	[ "$line" = "$(printf '\r')" ] && break
 done
+marker=''
 case $request in
 *"/ok "*) status='200 OK' ;;
+*"/unread "*) status='200 OK' marker='X-Paddock-Body-Unread: 1\r\n' ;;
 *) status='400 Bad Request' ;;
 esac
-printf 'HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}' "$status"
+printf 'HTTP/1.1 %s\r\nContent-Type: application/json\r\n%bContent-Length: 2\r\nConnection: close\r\n\r\n{}' "$status" "$marker"
 STUB
 chmod +x "$work/role.sh"
 echo "127.0.0.1 paddock-gateway paddock-api" >>/etc/hosts
@@ -110,6 +112,28 @@ for framing in length chunked; do
 done
 slow_body 1.0 GET device /ok length 200
 
+# A POST, PUT, PATCH or DELETE that the role answers 200 without reading its body and marks with X-Paddock-Body-Unread
+# (PDK-971): Caddy passes the answer on at once and closes the connection. The bundles site serves GET only.
+for method in POST PUT PATCH DELETE; do
+	slow_body 1.1 $method admin /unread length 200
+done
+for version in 1.1 1.0; do
+	slow_body $version POST device /unread length 200
+	slow_body $version POST admin /unread length 200
+done
+slow_body 1.1 POST device /unread chunked 200
+slow_body 1.1 POST admin /unread chunked 200
+
+# The marker is an internal signal: it never reaches the client.
+leak=$(curl -si --http1.1 -X POST -d x http://127.0.0.1/unread -H 'Host: admin.paddock.localhost')
+if echo "$leak" | grep -qi 'x-paddock-body-unread' || ! echo "$leak" | grep -qi '^connection: close'; then
+	echo "FAIL marked answer must close the connection and drop the marker:"
+	echo "$leak" | head -12
+	failed=1
+else
+	echo "slowbody marker: ok (Connection: close, header removed)"
+fi
+
 # Two error answers on one HTTP/2 connection: without the HTTP/1.x guard the first one ends the connection with GOAWAY.
 h2=$(curl -sv --http2-prior-knowledge -o /dev/null -o /dev/null \
 	http://127.0.0.1/v1/a http://127.0.0.1/v1/b -H 'Host: device.paddock.localhost' 2>&1)
@@ -119,6 +143,17 @@ if echo "$h2" | grep -qi goaway || ! echo "$h2" | grep -qiE 're-?using existing'
 	failed=1
 else
 	echo "slowbody h2: ok (connection kept after 400)"
+fi
+
+# A marked answer on HTTP/2 keeps the connection (GOAWAY) and still drops the marker.
+h2m=$(curl -sv --http2-prior-knowledge -o /dev/null -o /dev/null -X POST -d x \
+	http://127.0.0.1/unread http://127.0.0.1/unread -H 'Host: device.paddock.localhost' 2>&1)
+if echo "$h2m" | grep -qi goaway || echo "$h2m" | grep -qi 'x-paddock-body-unread' || ! echo "$h2m" | grep -qiE 're-?using existing'; then
+	echo "FAIL h2 marked answer:"
+	echo "$h2m" | grep -i -e goaway -e 'connection' -e '< HTTP' -e unread
+	failed=1
+else
+	echo "slowbody h2 marker: ok (connection kept, header removed)"
 fi
 
 # Two 2xx answers on one HTTP/1.1 connection keep their keep-alive.

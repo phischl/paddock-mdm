@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 )
 
@@ -410,5 +411,32 @@ func TestLoginGivesUpOnAnUnavailableTokenEndpoint(t *testing.T) {
 	// Four attempts for each of the two client authentication styles oauth2 tries when the endpoint's is unknown.
 	if n := len(w.idp.tokenCodes); n != 8 {
 		t.Fatalf("%d token requests, want 8", n)
+	}
+}
+
+// TestLogoutMarksAnUnreadBody (PDK-971): the anonymous logout answers 200 without reading its body, so the answer
+// carries the edge marker that closes the connection; a logout without a body does not.
+func TestLogoutMarksAnUnreadBody(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	post := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "https://admin.test/api/auth/logout", strings.NewReader(body))
+		req.Header.Set("X-Paddock-CSRF", "1")
+		rec := httptest.NewRecorder()
+		w.e.handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("logout: %d %s", rec.Code, rec.Body)
+		}
+		return rec
+	}
+	if got := post("{}").Header().Get(httpx.HeaderBodyUnread); got != "1" {
+		t.Errorf("%s with a body = %q, want 1", httpx.HeaderBodyUnread, got)
+	}
+	req := httptest.NewRequest(http.MethodPost, "https://admin.test/api/auth/logout", nil)
+	req.Header.Set("X-Paddock-CSRF", "1")
+	rec := httptest.NewRecorder()
+	w.e.handler.ServeHTTP(rec, req)
+	if got := rec.Header().Get(httpx.HeaderBodyUnread); got != "" {
+		t.Errorf("%s without a body = %q, want none", httpx.HeaderBodyUnread, got)
 	}
 }
