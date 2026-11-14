@@ -360,6 +360,9 @@ const (
 	CodePlatformOffboardedDeviceUninstalled  Code = "platform.offboarded_device_uninstalled"
 	CodePlatformDeletedOrganizationAuditRead Code = "platform.deleted_organization_audit_read"
 	CodeAuditEventAfterRetirement            Code = "audit.event_after_retirement"
+	// The encrypted recovery export during the grace period (plan M17 amendment b decision 25): in the organization's
+	// own log.
+	CodeOrganizationRecoveryExported Code = "organization.recovery_exported"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -2135,6 +2138,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"slug", "reason", "grace_days", "delete_after", "uninstalls_issued", "uninstalls_skipped"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
 		Note:        "Platform pseudo-organization; the devices' uninstalls record no device.uninstall_requested. grace_days is 7 to 90 (0 to 90 on a development stack); uninstalls_skipped counts active devices with an open uninstall or an open Lock or Destroy. Failure with invalid_request for a wrong confirm_slug, a reason outside 2 to 500 characters or grace_days outside the bounds, not_found, or invalid_state when a deletion is already requested or the organization is not active or provisioning_failed.",
+	},
+	CodeOrganizationRecoveryExported: {
+		Code: CodeOrganizationRecoveryExported, Emitted: true,
+		Description: "An organization administrator or a platform administrator exported every LUKS recovery key and the newest local administrator password of every non-retired device of an organization whose deletion is pending, after a step-up, as one OpenPGP message encrypted to a public key or a passphrase they supplied (ADR 0052 amendment b).",
+		Params:      []string{"recipient", "key_fingerprint", "devices", "secrets", "requester_scope"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "Recorded in the organization's own log, also for a platform administrator; an attempt for an unknown organization goes to the platform pseudo-organization. recipient is public_key or passphrase; key_fingerprint is the public key's fingerprint (public_key only); devices and secrets count the device lines and the decrypted secrets; requester_scope is organization or platform. Never a secret or the passphrase. Failure with invalid_request for an invalid recipient, not_found, invalid_state when no deletion is pending, export_limit after five successful exports in the grace period, or upstream_unavailable (also when the download broke off while streaming); denied with step_up_required.",
 	},
 	CodeOrganizationDeletionCancelled: {
 		Code: CodeOrganizationDeletionCancelled, Emitted: true,

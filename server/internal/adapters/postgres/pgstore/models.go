@@ -890,6 +890,8 @@ type Organization struct {
 	IdpEnsureRevision         *string
 	DeletionUninstallsIssued  *int32
 	DeletionUninstallsSkipped *int32
+	RecoveryExports           int32
+	RecoveryExportsSince      *time.Time
 }
 
 type OrganizationDmsSetting struct {

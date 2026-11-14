@@ -15,6 +15,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/escrowreader"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/stepupproof"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
@@ -26,6 +27,7 @@ const secret = "shared-secret"
 type proofs struct {
 	subjects map[string]string
 	uses     map[string]int64
+	groups   map[string][]string // the signed groups of a token, per raw token
 }
 
 func (p *proofs) Verify(_ context.Context, raw string) (stepupproof.Claims, error) {
@@ -33,7 +35,8 @@ func (p *proofs) Verify(_ context.Context, raw string) (stepupproof.Claims, erro
 	if !ok {
 		return stepupproof.Claims{}, stepupproof.ErrInvalid
 	}
-	return stepupproof.Claims{Subject: sub, JTI: "jti-" + raw, AuthTime: time.Now(), Expiry: time.Now().Add(time.Minute)}, nil
+	return stepupproof.Claims{Subject: sub, JTI: "jti-" + raw, AuthTime: time.Now(), Expiry: time.Now().Add(time.Minute),
+		Groups: p.groups[raw]}, nil
 }
 
 func (p *proofs) Use(_ context.Context, jti string, _ time.Time) (int64, error) {
@@ -41,8 +44,12 @@ func (p *proofs) Use(_ context.Context, jti string, _ time.Time) (int64, error) 
 	return p.uses[jti], nil
 }
 
-// plainKeys "decrypts" into "plain-" plus the ciphertext and records the escrow-wrap version of every decryption.
-type plainKeys struct{ versions *[]int }
+// plainKeys "decrypts" into "plain-" plus the ciphertext and records the escrow-wrap version of every decryption and
+// the size of every batch.
+type plainKeys struct {
+	versions *[]int
+	batches  *[]int
+}
 
 func (k plainKeys) Decrypt(_ context.Context, version int, ciphertext string) ([]byte, error) {
 	*k.versions = append(*k.versions, version)
@@ -50,11 +57,25 @@ func (k plainKeys) Decrypt(_ context.Context, version int, ciphertext string) ([
 	return append([]byte("plain-"), raw...), err
 }
 
+func (k plainKeys) DecryptBatch(ctx context.Context, items []bao.VersionedCiphertext) ([][]byte, error) {
+	*k.batches = append(*k.batches, len(items))
+	out := make([][]byte, len(items))
+	for i, it := range items {
+		b, err := k.Decrypt(ctx, it.Version, it.Ciphertext)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = b
+	}
+	return out, nil
+}
+
 type world struct {
 	t       *testing.T
 	super   *pgx.Conn
 	proofs  *proofs
 	used    []int // the escrow-wrap versions of the decryptions
+	batches []int // the sizes of the batch decryptions
 	srv     *httptest.Server
 	client  *escrowreader.Client
 	orgs    [2]uuid.UUID
@@ -77,8 +98,9 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	w := &world{t: t, super: super, proofs: &proofs{subjects: map[string]string{}, uses: map[string]int64{}}}
-	w.srv = httptest.NewServer(escrowreader.NewService(secret, pool, w.proofs, w.proofs, plainKeys{&w.used}).Handler())
+	w := &world{t: t, super: super, proofs: &proofs{subjects: map[string]string{}, uses: map[string]int64{},
+		groups: map[string][]string{}}}
+	w.srv = httptest.NewServer(escrowreader.NewService(secret, pool, w.proofs, w.proofs, plainKeys{&w.used, &w.batches}).Handler())
 	t.Cleanup(w.srv.Close)
 	w.client = escrowreader.NewClient(w.srv.URL, secret)
 	for i := range 2 {

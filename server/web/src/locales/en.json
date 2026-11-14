@@ -332,7 +332,8 @@
     "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent.",
     "backup_key_mismatch": "The characters do not match the key.",
     "backup_target_state_unchanged": "The target is already in this state.",
-    "backup_key_discarded_after_mismatches": "The key was discarded after three wrong confirmations. Generate a new key."
+    "backup_key_discarded_after_mismatches": "The key was discarded after three wrong confirmations. Generate a new key.",
+    "export_limit": "The recovery export was taken five times during this grace period already."
   },
   "audit": {
     "vulnerability": {
@@ -392,7 +393,8 @@
       "deletion_cancelled": "{actor} cancelled the deletion of the organization {slug}",
       "deletion_step_completed": "Deletion of {slug}: step {step} completed",
       "deletion_step_failed": "Deletion of {slug}: step {step} failed",
-      "deleted": "The organization {slug} was deleted"
+      "deleted": "The organization {slug} was deleted",
+      "recovery_exported": "{actor} exported the recovery keys and local administrator passwords of {devices, plural, one {# device} other {# devices}}, encrypted to a {recipient, select, public_key {public key} other {passphrase}}"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -3729,5 +3731,31 @@
     "startInvalid": "Enter a time as HH:MM.",
     "durationInvalid": "Enter 30 to 1440 minutes.",
     "timezoneInvalid": "Enter a timezone name of at most 64 characters."
+  },
+  "recoveryExport": {
+    "button": "Export recovery keys",
+    "title": "Export recovery keys and passwords",
+    "intro": "Downloads every disk recovery key and the newest local administrator password of every device of {slug} as one encrypted file. Open it later with gpg --decrypt.",
+    "lastCopy": "After the deletion this file is the only remaining copy. Paddock keeps no copy. Store it safely; without the key or passphrase nobody can open it.",
+    "recipient": "Encrypt to",
+    "recipientPublicKey": "My OpenPGP public key",
+    "recipientPassphrase": "A passphrase",
+    "publicKey": "OpenPGP public key (ASCII-armoured)",
+    "passphrase": "Passphrase",
+    "passphraseRepeat": "Repeat the passphrase",
+    "strength": {
+      "short": "Too short: at least 16 characters.",
+      "fair": "Acceptable. Longer, with mixed characters, is stronger.",
+      "strong": "Strong."
+    },
+    "submit": "Download encrypted file",
+    "done": "The encrypted file was downloaded.",
+    "limit": "At most five exports per grace period.",
+    "errors": {
+      "publicKey": "Paste an ASCII-armoured OpenPGP public key (-----BEGIN PGP PUBLIC KEY BLOCK-----).",
+      "length": "The passphrase needs 16 to 1024 characters.",
+      "mismatch": "The passphrases do not match."
+    },
+    "pending": "This organization will be deleted on {date}. Export its recovery keys and local administrator passwords before then."
   }
 }

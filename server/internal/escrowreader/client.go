@@ -16,17 +16,24 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 )
 
+// exportTimeout bounds one recovery export; Transit decrypts thousands of escrows per minute.
+const exportTimeout = 15 * time.Minute
+
 // Client is the api's client of the escrow-reader (app.EscrowDecrypter).
 type Client struct {
 	url    string
+	base   string
 	secret []byte
 	http   *http.Client
+	// stream serves the recovery export, whose body streams for as long as the organization's devices take.
+	stream *http.Client
 }
 
 // NewClient creates a client for the escrow-reader at baseURL (http://<host>:<port>) with the shared bearer secret.
 func NewClient(baseURL, secret string) *Client {
-	return &Client{url: strings.TrimRight(baseURL, "/") + DecryptPath, secret: []byte(secret),
-		http: &http.Client{Timeout: 30 * time.Second}}
+	base := strings.TrimRight(baseURL, "/")
+	return &Client{url: base + DecryptPath, base: base, secret: []byte(secret),
+		http: &http.Client{Timeout: 30 * time.Second}, stream: &http.Client{Timeout: exportTimeout}}
 }
 
 // Decrypt implements app.EscrowDecrypter; a refusal wraps app.ErrEscrowRefused with the escrow-reader's code.

@@ -90,6 +90,22 @@ func TestSecretParamsPanic(t *testing.T) {
 	}
 }
 
+// TestSecretCountParam: secrets, the count of organization.recovery_exported, is the one param that names a secret
+// word without carrying a secret; "secret" and "secret_value" still panic.
+func TestSecretCountParam(t *testing.T) {
+	r := testRunner()
+	p := principal.Principal{Kind: principal.KindAdmin, OrganizationID: uuid.Must(uuid.NewV7())}
+	rec := r.newRecorder(context.Background(), p, ScopeOrg, ActionSpec{Code: audit.CodeOrganizationRecoveryExported,
+		Params: map[string]any{"secrets": 2}})
+	rec.SetParam("secrets", 3)
+	for _, key := range []string{"secret", "secret_value"} {
+		t.Run(key, func(t *testing.T) {
+			defer expectPanic(t)
+			rec.SetParam(key, 1)
+		})
+	}
+}
+
 func TestUnregisteredCodePanics(t *testing.T) {
 	defer expectPanic(t)
 	testRunner().newRecorder(context.Background(), principal.Principal{}, ScopePlatform, ActionSpec{Code: "made.up"})

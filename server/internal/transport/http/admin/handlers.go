@@ -60,6 +60,7 @@ type handlers struct {
 	localAdmin      *app.LocalAdmin
 	autoinstall     *app.Autoinstall
 	disk            *app.Disk
+	recoveryExports *app.RecoveryExports
 	revocations     *app.Revocations
 	dms             *app.DMS
 	inventory       *app.Inventory

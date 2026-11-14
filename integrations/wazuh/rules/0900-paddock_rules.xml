@@ -65,7 +65,7 @@
 
   <rule id="100912" level="10">
     <if_sid>100900,100901</if_sid>
-    <field name="event.code" type="pcre2">^(?:disk\.recovery_key_revealed|disk\.header_downloaded|local_admin\.revealed)$</field>
+    <field name="event.code" type="pcre2">^(?:disk\.recovery_key_revealed|disk\.header_downloaded|local_admin\.revealed|organization\.recovery_exported)$</field>
     <description>Paddock: secret revealed ($(event.code)) by $(event.actor.display)</description>
   </rule>
 

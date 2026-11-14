@@ -95,6 +95,13 @@ func TestVerify(t *testing.T) {
 	if err != nil || c.Subject != "alice-sub" || c.JTI != "jti-1" || c.Expiry.Before(time.Now()) {
 		t.Fatalf("valid token: %+v, %v", c, err)
 	}
+	if c.Groups != nil {
+		t.Fatalf("groups of a token without groups: %v", c.Groups)
+	}
+	c, err = v.Verify(ctx, is.token(t, is.key, map[string]any{"groups": []string{"paddock-platform-admins"}}))
+	if err != nil || len(c.Groups) != 1 || c.Groups[0] != "paddock-platform-admins" {
+		t.Fatalf("groups: %+v, %v", c, err)
+	}
 
 	forger, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

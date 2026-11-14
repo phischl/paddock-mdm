@@ -24,6 +24,9 @@ var (
 	ErrNoOrganization = errors.New("db: no organization in context")
 	// ErrForbiddenScope is returned by InPlatform for principals other than platform admins and system.
 	ErrForbiddenScope = errors.New("db: principal may not use the platform scope")
+	// ErrNotPendingDeletion is returned by InPendingDeletionOrg when the organization is unknown or no deletion of it
+	// is pending.
+	ErrNotPendingDeletion = errors.New("db: no deletion of the organization is pending")
 )
 
 // Options tunes a pool.
@@ -167,6 +170,34 @@ func (p *OrgPool) InOrgSnapshot(ctx context.Context, fn func(ctx context.Context
 		return err
 	}
 	return inTxWith(ctx, p.p, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly},
+		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// InPendingDeletionOrg is InOrg for an organization named by its argument instead of the principal: the second narrow
+// exception to architecture §5 rule 4 (ADR 0052 amendment b decision 8), used only by the platform administrator's
+// encrypted recovery export (app.RecoveryExports). It returns ErrForbiddenScope unless the principal is a platform
+// administrator and ErrNotPendingDeletion unless platform confirms that the organization is active with a pending
+// deletion; otherwise it runs fn in the organization's context exactly like InOrg.
+func (p *OrgPool) InPendingDeletionOrg(ctx context.Context, platform *PlatformPool, org uuid.UUID,
+	fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	pr, ok := principal.From(ctx)
+	if !ok || pr.Kind != principal.KindPlatformAdmin || org == uuid.Nil {
+		return ErrForbiddenScope
+	}
+	var pending bool
+	err := platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		pending, err = q.OrganizationDeletionPending(ctx, org)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("db: check the pending deletion: %w", err)
+	}
+	if !pending {
+		return ErrNotPendingDeletion
+	}
+	return inTx(ctx, p.p,
 		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
 		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }

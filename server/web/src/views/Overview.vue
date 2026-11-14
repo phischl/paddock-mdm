@@ -6,6 +6,7 @@ import ActorChip from '../components/ActorChip.vue'
 import EmptyState from '../components/EmptyState.vue'
 import SetupChecklist from '../components/SetupChecklist.vue'
 import KpiStrip from '../components/KpiStrip.vue'
+import RecoveryExport from '../components/RecoveryExport.vue'
 import SeverityBar from '../components/SeverityBar.vue'
 import SeverityChip from '../components/SeverityChip.vue'
 import AttentionChips from '../components/AttentionChips.vue'
@@ -17,7 +18,7 @@ import { auditText } from '../lib/format'
 import { shortcutOf } from '../lib/navigation'
 import { getOverview, getRolloutCounts, kpiCells, overviewAttention, recentAuditEvents } from '../lib/overview'
 import { outcomeStatus } from '../lib/status'
-import { formatAbsolute } from '../lib/time'
+import { formatAbsolute, formatAbsoluteFull } from '../lib/time'
 import { useSessionStore } from '../stores/session'
 
 /**
@@ -105,6 +106,18 @@ const rollout = computed(() => configuration.value?.rollout ?? null)
       {{ problemText(problem) }}
     </p>
     <SetupChecklist />
+    <v-alert
+      v-if="session.canDelete && session.me?.organization_deletion && session.me.organization"
+      type="warning"
+      variant="tonal"
+      data-testid="recovery-export-banner"
+    >
+      <p>{{ t('recoveryExport.pending', { date: formatAbsoluteFull(session.me.organization_deletion.delete_after) }) }}</p>
+      <RecoveryExport
+        :organization-id="null"
+        :slug="session.me.organization.slug"
+      />
+    </v-alert>
     <div
       v-if="loading"
       class="pd-overview-placeholder"

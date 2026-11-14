@@ -595,6 +595,58 @@ func (q *Queries) ListPendingEscrowHeaders(ctx context.Context) ([]EscrowSecret,
 	return items, nil
 }
 
+const listRecoveryExportEscrows = `-- name: ListRecoveryExportEscrows :many
+SELECT DISTINCT ON (d.hostname, e.device_id, e.kind, e.volume)
+  e.id, e.device_id, d.hostname, e.kind, e.volume, e.key_version, e.ciphertext
+FROM escrow_secret e
+JOIN device d ON d.id = e.device_id
+WHERE d.state <> 'retired'
+  AND ((e.kind = 'luks_recovery_key' AND e.status = 'stored') OR
+       (e.kind = 'admin_password' AND e.status IN ('active', 'stored')))
+ORDER BY d.hostname, e.device_id, e.kind, e.volume, e.generation DESC
+`
+
+type ListRecoveryExportEscrowsRow struct {
+	ID         uuid.UUID
+	DeviceID   uuid.UUID
+	Hostname   string
+	Kind       string
+	Volume     uuid.NullUUID
+	KeyVersion int32
+	Ciphertext []byte
+}
+
+// The escrow-reader's input of an encrypted recovery export (plan M17 amendment b decision 24): per non-retired device
+// the newest stored recovery key of every volume (as a single reveal, LatestStoredEscrow) and the newest active or
+// stored local administrator password (the last one a reveal returns, ListLocalAdminSecrets), ordered by device.
+func (q *Queries) ListRecoveryExportEscrows(ctx context.Context) ([]ListRecoveryExportEscrowsRow, error) {
+	rows, err := q.db.Query(ctx, listRecoveryExportEscrows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecoveryExportEscrowsRow{}
+	for rows.Next() {
+		var i ListRecoveryExportEscrowsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeviceID,
+			&i.Hostname,
+			&i.Kind,
+			&i.Volume,
+			&i.KeyVersion,
+			&i.Ciphertext,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockDeviceHeaderVolumes = `-- name: LockDeviceHeaderVolumes :exec
 SELECT pg_advisory_xact_lock(hashtextextended('escrow_volumes:' || CAST($1::uuid AS text), 0))
 `

@@ -50,6 +50,9 @@ type ActionSpec struct {
 	// CorrelationID replaces the request ID of ctx; events aggregated outside a request (the IP allow list denials
 	// of one window, plan M7a decision 20) share one.
 	CorrelationID string
+	// organization records a ScopePlatform action in this organization's log from the start, its denial included
+	// (RunExternalInPendingDeletion).
+	organization uuid.UUID
 }
 
 // StepUpValidity is how long a step-up authentication satisfies RequiresStepUp (plan M4a decision 6).
@@ -184,10 +187,17 @@ func (r *recorder) ActionID() uuid.UUID { return r.id }
 
 var secretParamWords = []string{"password", "secret", "token"}
 
+// countParams name a secret word but only count secrets: secrets of organization.recovery_exported (plan M17
+// amendment b decision 25).
+var countParams = map[string]bool{"secrets": true}
+
 // mustBeSafeParam panics on parameter keys that look like secrets: audit events are immutable evidence and must
 // never carry secrets. This is a programming error, caught by tests.
 func mustBeSafeParam(key string) {
 	k := strings.ToLower(key)
+	if countParams[k] {
+		return
+	}
 	for _, w := range secretParamWords {
 		if strings.Contains(k, w) {
 			panic(fmt.Sprintf("app: audit param %q looks like a secret", key))
@@ -225,6 +235,9 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 		rec.org = p.OrganizationID
 	} else {
 		rec.org = audit.PlatformOrganizationID
+		if spec.organization != uuid.Nil {
+			rec.org = spec.organization
+		}
 	}
 	if spec.Actor != nil {
 		rec.actor = *spec.Actor
@@ -830,6 +843,35 @@ func (r *ActionRunner) RunExternal(ctx context.Context, scope Scope, spec Action
 		return err
 	}
 	return externalErr
+}
+
+// RunExternalInPendingDeletion is RunExternal for a platform administrator acting inside one organization whose
+// deletion is pending: the second narrow exception to architecture §5 rule 4 (ADR 0052 amendment b decision 8), used
+// only by the encrypted recovery export. Its transactions run in the organization through
+// OrgPool.InPendingDeletionOrg, and its event is recorded in the organization's own log, a denial included. When the
+// organization cannot be entered (no deletion pending), the transactions run in the platform scope instead, where
+// prepare finds the organization's state and refuses; the event still names the organization, or, for an unknown
+// organization (known false), the platform pseudo-organization.
+func (r *ActionRunner) RunExternalInPendingDeletion(ctx context.Context, org uuid.UUID, known bool, spec ActionSpec,
+	prepare func(ctx context.Context, q *pgstore.Queries, rec Recorder) error,
+	external func(ctx context.Context) error,
+	finalize func(ctx context.Context, q *pgstore.Queries, rec Recorder, externalErr error) error) error {
+	platform := r.platform.InPlatform
+	if r.platformTx != nil {
+		platform = r.platformTx
+	}
+	in := *r
+	in.platformTx = func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+		err := r.org.InPendingDeletionOrg(ctx, r.platform, org, fn)
+		if errors.Is(err, db.ErrNotPendingDeletion) {
+			return platform(ctx, fn)
+		}
+		return err
+	}
+	if known {
+		spec.organization = org
+	}
+	return in.RunExternal(ctx, ScopePlatform, spec, prepare, external, finalize)
 }
 
 func (r *ActionRunner) inScope(ctx context.Context, p principal.Principal, scope Scope,
