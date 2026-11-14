@@ -23,7 +23,7 @@ func installRelease(t *testing.T, root *env.Portal) string {
 	t.Helper()
 	v := gateRelease(t, root, true, false)
 	for _, name := range []string{"paddock-agent", "paddock-supervisor"} {
-		deb := []byte("!<arch>\n" + name + " " + v)
+		deb := releaseDeb(name, v, "amd64")
 		expectStatus(t, uploadPackage(t, root, v, name, deb, signPackage(t, deb, v)), http.StatusOK, "")
 	}
 	// paddock-revoke is installed by the autoinstall, signed with the revocation release key (plan M4c decision 4).
@@ -31,7 +31,7 @@ func installRelease(t *testing.T, root *env.Portal) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deb := []byte("!<arch>\npaddock-revoke " + v)
+	deb := releaseDeb("paddock-revoke", v, "amd64")
 	expectStatus(t, uploadPackage(t, root, v, "paddock-revoke", deb, signRevokePackage(t, revokeKey, deb, v)), http.StatusOK, "")
 	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/publish", nil), http.StatusOK, "")
 	return v

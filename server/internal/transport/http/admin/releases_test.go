@@ -11,6 +11,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/debtest"
 )
 
 func TestAgentReleasesAPI(t *testing.T) {
@@ -58,7 +59,7 @@ func TestAgentReleasesAPI(t *testing.T) {
 	if r.status != http.StatusOK || art.Arch != "amd64" || art.Size != int64(len(bin)) || len(art.Sha256) != 64 {
 		t.Fatalf("upload: %d %s", r.status, r.body)
 	}
-	deb := []byte("!<arch>\ndebian-binary")
+	deb := debtest.Deb(debtest.Control("paddock-agent", strings.Replace(v, "-", "~", 1), "amd64"))
 	uploadDeb := func(name, sig string) result {
 		return e.do(call{method: "PUT", path: base + "/packages/" + name + "/amd64", rawBody: string(deb), contentType: "application/octet-stream",
 			headers: map[string]string{"X-Paddock-Minisig": sig}, cookie: root})
@@ -79,6 +80,24 @@ func TestAgentReleasesAPI(t *testing.T) {
 			t.Fatalf("package signed comment %q: %d %s", comment, r.status, r.body)
 		}
 		e.expectEvent(r, "agent_release.artifact_uploaded:failure:release_signature_mismatch")
+	}
+	// Correctly signed, but the control file names another package, or the control archive is in xz (plan M19 D6).
+	for code, body := range map[string][]byte{
+		"package_name_mismatch": debtest.Deb(debtest.Control("paddock-supervisor", strings.Replace(v, "-", "~", 1), "amd64")),
+		"unsupported_control_compression": debtest.Ar(debtest.DebianBinary(), debtest.Member{Name: "control.tar.xz", Data: []byte("xz")},
+			debtest.Member{Name: "data.tar.xz", Data: []byte("xz")}),
+	} {
+		r := e.do(call{method: "PUT", path: base + "/packages/paddock-agent/amd64", rawBody: string(body), contentType: "application/octet-stream",
+			headers: map[string]string{"X-Paddock-Minisig": base64.StdEncoding.EncodeToString(
+				minisign.SignWithComments(e.release, body, releasesig.Comment(v, "amd64"), ""))}, cookie: root})
+		want := http.StatusUnprocessableEntity
+		if code == "unsupported_control_compression" {
+			want = http.StatusUnsupportedMediaType
+		}
+		if r.status != want || r.problemCode(t) != code {
+			t.Fatalf("%s: %d %s", code, r.status, r.body)
+		}
+		e.expectEvent(r, "agent_release.artifact_uploaded:failure:"+code)
 	}
 	var pkg struct {
 		Name    string `json:"name"`
@@ -154,7 +173,7 @@ func TestSelfServicePackageAPI(t *testing.T) {
 	if r := e.do(call{method: "POST", path: "/api/platform/v1/agent-releases", body: map[string]string{"version": v}, cookie: root}); r.status != http.StatusCreated {
 		t.Fatalf("create: %d %s", r.status, r.body)
 	}
-	deb := []byte("!<arch>\ndebian-binary self-service")
+	deb := debtest.Deb(debtest.Control("paddock-self-service", strings.Replace(v, "-", "~", 1), "all"))
 	sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(e.release, deb, releasesig.Comment(v, "all"), ""))
 	upload := func(name, arch string) result {
 		return e.do(call{method: "PUT", path: base + "/packages/" + name + "/" + arch, rawBody: string(deb),

@@ -241,3 +241,19 @@ func TestOfferForRequested(t *testing.T) {
 		t.Error("requested device offered without an artifact")
 	}
 }
+
+// TestDebianVersion holds plan M19 D6: the release version a package's control file must carry maps only the
+// pre-release separator to "~".
+func TestDebianVersion(t *testing.T) {
+	for v, want := range map[string]string{
+		"1.0.0":              "1.0.0",
+		"0.1.0-alpha.11":     "0.1.0~alpha.11",
+		"0.0.1-gate-x.1":     "0.0.1~gate-x.1",
+		"2.0.0+build-7":      "2.0.0+build-7",
+		"2.0.0-rc.1+build-7": "2.0.0~rc.1+build-7",
+	} {
+		if got := DebianVersion(v); got != want {
+			t.Errorf("DebianVersion(%q) = %q, want %q", v, got, want)
+		}
+	}
+}

@@ -67,7 +67,11 @@ that has no such comment (422 `release_signature_mismatch`), and store nothing o
 older release cannot be stored under a newer one (ADR 0043 amendments 2026-11-11 b and c). `paddock-revoke` carries the
 same comment, signed with the revocation release key (*Signing in the release workflow*, step 2, has the command);
 signed with the agent release key it is refused even with the right comment (400). Releases stored before this check are
-not verified again. The workflow and the offline fallback both sign with it:
+not verified again. From 0.1.0-alpha.11 on the upload, the host command and the import also read each package's
+`control` file and refuse a package whose `Package`, `Version` or `Architecture` differs from what it is stored as (422
+`package_name_mismatch`, `package_version_mismatch`, `package_arch_mismatch`): `Version` is the release version with `~`
+for the pre-release separator (`0.1.0~alpha.11`, as `make deb` writes it), for `fleet-osquery` its fleetd version. A
+control archive compressed with anything but gzip or zstd is refused with 415 `unsupported_control_compression`. The workflow and the offline fallback both sign with it:
 
 ```sh
 minisign -S -s paddock-release.key -m paddockd -t "paddock-agent version=<version> arch=<arch>"

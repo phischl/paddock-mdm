@@ -19,7 +19,7 @@ import (
 func TestAgentPackagesPublic(t *testing.T) {
 	root := login(t, env.PlatformAdmin)
 	v := gateRelease(t, root, false, false)
-	deb := []byte("!<arch>\ngate package " + v)
+	deb := releaseDeb("paddock-supervisor", v, "amd64")
 	expectStatus(t, uploadPackage(t, root, v, "paddock-supervisor", deb, signPackage(t, deb, v)), http.StatusOK, "")
 
 	client, err := env.NewHTTPClient()
@@ -49,7 +49,7 @@ func TestAgentPackagesPublic(t *testing.T) {
 	// paddock-revoke is signed with the revocation release key: the agent release key does not do (plan M4c
 	// decision 4), not even with the release comment. Its comment binds it to the release like every other package
 	// (ADR 0043 amendment 2026-11-11 c, PDK-1004).
-	revoke := []byte("!<arch>\ngate revoke " + v)
+	revoke := releaseDeb("paddock-revoke", v, "amd64")
 	expectStatus(t, uploadPackage(t, root, v, "paddock-revoke", revoke, signPackage(t, revoke, v)), http.StatusBadRequest, "invalid_request")
 	revokeKey, err := stack.RevokeReleaseKey("")
 	if err != nil {

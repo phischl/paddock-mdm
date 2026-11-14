@@ -24,11 +24,11 @@ func (h releaseHarness) withPackages(t *testing.T, names ...string) string {
 		t.Fatal(err)
 	}
 	for _, name := range names {
-		deb := []byte(name + " " + v)
-		var packageVersion string
+		packageVersion, controlVersion := "", v
 		if name == "fleet-osquery" {
-			packageVersion = "1.48.0"
+			packageVersion, controlVersion = "1.48.0", "1.48.0"
 		}
+		deb := releaseDeb(name, controlVersion, "amd64", name+" "+v)
 		if _, err := h.releases.UploadPackage(ctx, v, name, packageVersion, "amd64", deb, h.signPackage(deb, v, "amd64")); err != nil {
 			t.Fatal(err)
 		}

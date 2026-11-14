@@ -95,6 +95,13 @@ var (
 	// ReleaseSignatureMismatch: the signed trusted comment of an agent binary or package names another version or
 	// architecture (plan M4b.1 decision 12, ADR 0043 amendment 2026-11-11 b).
 	ReleaseSignatureMismatch = &Error{Code: "release_signature_mismatch", Status: http.StatusUnprocessableEntity}
+	// The control file of a release package names another package, version or architecture than the one it is stored
+	// as, or its control archive is compressed with a method the server does not read (plan M19 D6, ADR 0043 amendment
+	// 2026-11-11 b).
+	PackageNameMismatch           = &Error{Code: "package_name_mismatch", Status: http.StatusUnprocessableEntity}
+	PackageVersionMismatch        = &Error{Code: "package_version_mismatch", Status: http.StatusUnprocessableEntity}
+	PackageArchMismatch           = &Error{Code: "package_arch_mismatch", Status: http.StatusUnprocessableEntity}
+	UnsupportedControlCompression = &Error{Code: "unsupported_control_compression", Status: http.StatusUnsupportedMediaType}
 	// Agent release import (ADR 0043 decision 7): the source is switched off (recorded as denied), the source did not
 	// answer or answered outside its bounds, the version is not newer than the newest published release, or the release
 	// lacks a required asset or signature.
