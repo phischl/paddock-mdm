@@ -607,9 +607,10 @@ func (e *Engine) copyEscrow(ctx context.Context, repo *os.Root, key, local strin
 // fleetDump matches a complete plaintext dump of fleet-backup (backup.sh writes <ts>.sql.gz through a temporary name).
 var fleetDump = regexp.MustCompile(`^(\d{8}T\d{6}Z)\.sql\.gz$`)
 
-// fleet seals the dumps fleet-backup left (sealFleet). When a dump is due or requested and none waits, it asks
-// fleet-backup for one, or finds its earlier request still open; the next round seals the dump (the round no longer
-// waits for a mirror, so it is at most a round interval away; decisions-alpha10 A10-26). A request fleet-backup did
+// fleet seals the dumps fleet-backup left (sealFleet). It asks fleet-backup for a dump, or finds its earlier request
+// still open, when the kind is due and no dump waits, or when a requested run is newer than every waiting dump: a dump
+// written before the request does not answer it (decisions-alpha10 §64), and since the rounds no longer wait (A10-26)
+// a dump can wait a round while `backup now` arrives. The next round seals the new dump. A request fleet-backup did
 // not answer within requestTimeout fails and is withdrawn.
 func (e *Engine) fleet(ctx context.Context, repo *os.Root, key []byte, h KindHistory, interval time.Duration,
 	reqs []RequestedRun) ([]run, error) {
@@ -617,8 +618,13 @@ func (e *Engine) fleet(ctx context.Context, repo *os.Root, key []byte, h KindHis
 	if err != nil {
 		return nil, err
 	}
-	runs := e.sealFleet(repo, key, dumps, reqs)
-	if len(dumps) > 0 || (!e.due(h, interval) && len(reqs) == 0) {
+	runs, open := e.sealFleet(repo, key, dumps, reqs)
+	var newest time.Time
+	if len(dumps) > 0 {
+		newest = dumps[len(dumps)-1].at
+	}
+	unanswered := slices.ContainsFunc(open, func(q RequestedRun) bool { return q.CreatedAt.After(newest) })
+	if !unanswered && (len(dumps) > 0 || !e.due(h, interval)) {
 		return runs, nil
 	}
 	now := e.now()
@@ -631,7 +637,7 @@ func (e *Engine) fleet(ctx context.Context, repo *os.Root, key []byte, h KindHis
 		if err := os.Remove(req); err != nil {
 			return runs, fmt.Errorf("withdraw fleet dump request: %w", err)
 		}
-		answered := slices.DeleteFunc(slices.Clone(reqs), func(q RequestedRun) bool { return q.CreatedAt.After(at) })
+		answered := slices.DeleteFunc(slices.Clone(open), func(q RequestedRun) bool { return q.CreatedAt.After(at) })
 		slog.WarnContext(ctx, "fleet-backup did not answer the dump request", "requested_at", at)
 		return append(runs, run{Kind: KindFleet, Requests: answered, StartedAt: at, FinishedAt: now,
 			ErrorClass: runClassTimeout}), nil
@@ -643,16 +649,26 @@ func (e *Engine) fleet(ctx context.Context, repo *os.Root, key []byte, h KindHis
 	return runs, nil
 }
 
-// sealFleet seals the plaintext dumps into the repository and deletes them; the first run answers reqs. A dump whose
-// sealing failed is tried again after retryAfter (one failed run per attempt), and deleted with a failed run once it
-// is older than fleetPlainMaxAge.
-func (e *Engine) sealFleet(repo *os.Root, key []byte, dumps []fleetDumpFile, reqs []RequestedRun) []run {
+// sealFleet seals the plaintext dumps into the repository, oldest first, and deletes them. A dump's run answers the
+// open requests made at or before the dump's own time, never a later one (decisions-alpha10 §64, the PDK-893 rule for
+// Fleet); it returns the runs and the requests no run answered. A dump whose sealing failed is tried again after
+// retryAfter (one failed run per attempt), and deleted with a failed run once it is older than fleetPlainMaxAge.
+func (e *Engine) sealFleet(repo *os.Root, key []byte, dumps []fleetDumpFile, reqs []RequestedRun) ([]run,
+	[]RequestedRun) {
 	var runs []run
 	now := e.now()
+	open := slices.Clone(reqs)
+	take := func(d fleetDumpFile) []RequestedRun {
+		// Unlike pgbackrest's rule, the request is not truncated to seconds: the dump's name holds only its start second,
+		// so a request within that second may be newer than the dump, and it waits for the next one instead.
+		later := func(q RequestedRun) bool { return q.CreatedAt.After(d.at) }
+		answered := slices.DeleteFunc(slices.Clone(open), later)
+		open = slices.DeleteFunc(open, func(q RequestedRun) bool { return !later(q) })
+		return answered
+	}
 	for _, d := range dumps {
 		if now.Sub(d.at) > fleetPlainMaxAge {
-			r := newRun(KindFleet, reqs, now)
-			reqs = nil
+			r := newRun(KindFleet, take(d), now)
 			err := os.Remove(d.path)
 			if err == nil {
 				err = fmt.Errorf("fleet dump %s could not be sealed within %s; deleted", d.name, fleetPlainMaxAge)
@@ -664,8 +680,7 @@ func (e *Engine) sealFleet(repo *os.Root, key []byte, dumps []fleetDumpFile, req
 		if last, ok := e.fleetFailed[d.name]; ok && now.Sub(last) < retryAfter {
 			continue
 		}
-		r := newRun(KindFleet, reqs, now)
-		reqs = nil
+		r := newRun(KindFleet, take(d), now)
 		plain, err := os.ReadFile(d.path)
 		var sealed []byte
 		if err == nil {
@@ -684,7 +699,7 @@ func (e *Engine) sealFleet(repo *os.Root, key []byte, dumps []fleetDumpFile, req
 		}
 		runs = append(runs, e.finish(r, int64(len(sealed)), err, runClassFleet))
 	}
-	return runs
+	return runs, open
 }
 
 // fleetDumpFile is a complete plaintext dump in the dumps volume.

@@ -234,6 +234,9 @@ Agents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10
 - `backup now` and a backup requested in the portal are no longer answered by a full database backup that was
   already running when the request came; a new full starts after it. Before, such a request could look done while
   the backup targets never showed a backup from after the request.
+- `backup now` and a backup requested in the portal are no longer answered by a Fleet dump that was written before
+  the request and was still waiting to be sealed; such a dump is still sealed, and a new Fleet dump is taken for the
+  request. Before, `backup now --wait` could report success with a Fleet backup older than the request.
 - A mounted SMB or NFS backup target whose server stops answering is now shown as unreachable, as documented, instead
   of as not mounted.
 - The copy to a mounted SMB or NFS backup target whose server stopped answering is now reported as an I/O error, in
