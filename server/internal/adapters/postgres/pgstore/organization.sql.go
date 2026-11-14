@@ -514,18 +514,22 @@ func (q *Queries) LockOrganizationDomains(ctx context.Context) error {
 
 const markOrganizationIdentityEnsured = `-- name: MarkOrganizationIdentityEnsured :exec
 
-UPDATE organization SET idp_ensured_at = now(), idp_ensure_revision = $1 WHERE id = $2
+UPDATE organization SET idp_ensured_at = now(), idp_ensure_revision = $1
+WHERE id = $2 AND updated_at = $3
 `
 
 type MarkOrganizationIdentityEnsuredParams struct {
-	Revision *string
-	ID       uuid.UUID
+	Revision      *string
+	ID            uuid.UUID
+	SeenUpdatedAt time.Time
 }
 
 // Identity rounds (plan M17 decision 20): the worker records a successful EnsureOrganization in the organization's
 // own context; creation, a domain change or an Authentik error clears it to force the next ensure.
+// The mark applies only while the row is as the round read it: a domain change or a re-creation during the ensure
+// bumped updated_at and cleared the mark, and that clear must survive.
 func (q *Queries) MarkOrganizationIdentityEnsured(ctx context.Context, arg MarkOrganizationIdentityEnsuredParams) error {
-	_, err := q.db.Exec(ctx, markOrganizationIdentityEnsured, arg.Revision, arg.ID)
+	_, err := q.db.Exec(ctx, markOrganizationIdentityEnsured, arg.Revision, arg.ID, arg.SeenUpdatedAt)
 	return err
 }
 
@@ -820,7 +824,7 @@ func (q *Queries) TombstoneOrganization(ctx context.Context, id uuid.UUID) (Orga
 }
 
 const updateOrganizationDomains = `-- name: UpdateOrganizationDomains :one
-UPDATE organization SET domains = $1, updated_at = now() WHERE id = $2 RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, recovery_exports, recovery_exports_since
+UPDATE organization SET domains = $1, idp_ensured_at = NULL, updated_at = now() WHERE id = $2 RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, recovery_exports, recovery_exports_since
 `
 
 type UpdateOrganizationDomainsParams struct {
@@ -828,6 +832,8 @@ type UpdateOrganizationDomainsParams struct {
 	ID      uuid.UUID
 }
 
+// A domain change clears idp_ensured_at, so the next identity round checks the Authentik objects in full (plan M17
+// decision 20).
 func (q *Queries) UpdateOrganizationDomains(ctx context.Context, arg UpdateOrganizationDomainsParams) (Organization, error) {
 	row := q.db.QueryRow(ctx, updateOrganizationDomains, arg.Domains, arg.ID)
 	var i Organization
@@ -857,7 +863,7 @@ func (q *Queries) UpdateOrganizationDomains(ctx context.Context, arg UpdateOrgan
 }
 
 const updateOrganizationStatus = `-- name: UpdateOrganizationStatus :one
-UPDATE organization SET status = $1, name = $2, updated_at = now()
+UPDATE organization SET status = $1, name = $2, idp_ensured_at = NULL, updated_at = now()
 WHERE id = $3
 RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, recovery_exports, recovery_exports_since
 `
@@ -868,6 +874,8 @@ type UpdateOrganizationStatusParams struct {
 	ID     uuid.UUID
 }
 
+// A status change is the (re)creation of the organization: it clears idp_ensured_at, so the first identity round after
+// it checks the Authentik objects in full (plan M17 decision 20).
 func (q *Queries) UpdateOrganizationStatus(ctx context.Context, arg UpdateOrganizationStatusParams) (Organization, error) {
 	row := q.db.QueryRow(ctx, updateOrganizationStatus, arg.Status, arg.Name, arg.ID)
 	var i Organization

@@ -12,7 +12,7 @@ COMPOSE_DIR   := deploy/compose
 SECRETS_DIR   := $(COMPOSE_DIR)/.secrets
 GO_MODULES    := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) go list -m -f '{{.Dir}}' | sed 's|^$(CURDIR)|.|')
 GO_PACKAGES   := $(addsuffix /...,$(GO_MODULES))
-UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... \
+UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... ./test/acceptance/cmd/loadenrol/... \
 	./test/acceptance/internal/stack/... \
 	./test/acceptance/cmd/acceptanceshard/... ./test/system/cmd/testlive/...
 WEB_DIR       := server/web
@@ -80,7 +80,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run gen'; fi
 
 .PHONY: lint
-lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose lint-selfservice ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose lint-selfservice renovate-check ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
@@ -103,6 +103,11 @@ lint-migrations-frozen:
 .PHONY: lint-compose
 lint-compose:
 	go run ./tools/composelint --compose-dir $(COMPOSE_DIR)
+
+# Every pin of versions.env and the compiler's Himmelblau default must be matched by a Renovate custom manager (PDK-1023).
+.PHONY: renovate-check
+renovate-check:
+	go run ./tools/renovatecheck
 
 # Regenerates pkg/compat/testdata/<RELEASE>/ (bundles, check-in, events, commands, the audit insert) from the current
 # tree and removes the directories older than two releases (plan M16 decision 2). Run at release time on the release
@@ -604,6 +609,11 @@ LOAD_GUARD = gw=$$(docker ps -q --filter label=com.docker.compose.project=$(DEV_
 	bash $(COMPOSE_DIR)/scripts/load-guard.sh $(COMPOSE_DIR) "$$gw_env" $$(docker ps -a \
 		--filter label=com.docker.compose.project=$(DEV_PROJECT) --format '{{.Label "com.docker.compose.project.config_files"}}' | \
 		tr ',' '\n' | sort -u)
+
+.PHONY: load-enrol-configs
+load-enrol-configs: ## Create TOKENS auto-approving enrollment tokens (USES devices each) in organization ORG and write their configurations to bin/load/token-<i>.json
+	@$(LOAD_GUARD)
+	go run ./test/acceptance/cmd/loadenrol $(if $(ORG),--org $(ORG)) $(if $(TOKENS),--tokens $(TOKENS)) $(if $(USES),--uses $(USES))
 
 .PHONY: load-identities
 load-identities: ## Enroll COUNT load test devices with the enrollment configurations CONFIGS (auto-approving tokens) into bin/load/identities.json

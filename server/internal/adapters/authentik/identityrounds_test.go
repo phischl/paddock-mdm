@@ -8,9 +8,12 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
@@ -276,7 +279,8 @@ func TestDeviceLoginGroupsPaging(t *testing.T) {
 // identity-reconcile against the fake at 10 and 200 organizations in steady state (every group exists with the
 // members it should have): before, three role group listings per organization and a lookup of the organization's root
 // group, a lookup of the device's group and a member listing per device; after, one role group listing and one device
-// group listing per organization. EnsureOrganization, unchanged, is part of both reconcile counts.
+// group listing per organization. EnsureOrganization, unchanged, is part of both reconcile counts. With the ensure
+// cache (PDK-1021) the second round at 200 organizations issues at most 10 % of the first round's requests.
 func TestIdentityRoundRequestCounts(t *testing.T) {
 	const devices = 5
 	for _, orgs := range []int{10, 200} {
@@ -364,8 +368,36 @@ func TestIdentityRoundRequestCounts(t *testing.T) {
 				_, err := c.EnsureOrganization(ctx, o.slug)
 				return err
 			})
+			// The reconcile round with the ensure cache (PDK-1021, plan M17 decision 20), as IdentitySync.Reconcile runs
+			// it: EnsureOrganization only when IdentityEnsureDue, then the device group listing.
+			now := time.Now()
+			marks := map[string]pgstore.Organization{}
+			for _, o := range all {
+				marks[o.slug] = pgstore.Organization{ID: uuid.Must(uuid.NewV7()), Slug: o.slug}
+			}
+			cached := func(o org) error {
+				m := marks[o.slug]
+				if app.IdentityEnsureDue(m, authentik.EnsureRevision, now) {
+					if _, err := c.EnsureOrganization(ctx, o.slug); err != nil {
+						return err
+					}
+					m.IdpEnsuredAt, m.IdpEnsureRevision = new(now), new(authentik.EnsureRevision)
+					marks[o.slug] = m
+				}
+				_, err := c.DeviceLoginGroups(ctx, o.slug)
+				return err
+			}
+			cachedFirst := measure(cached)
+			cachedSteady := measure(cached)
+			now = now.Add(app.IdentityFullEnsureInterval + time.Hour)
+			cachedFull := measure(cached)
 			t.Logf("%d organizations, %d devices each: admin-accounts %d → %d requests, identity-reconcile %d → %d requests "+
-				"(of which EnsureOrganization %d)", orgs, devices, adminBefore, adminAfter, reconcileBefore, reconcileAfter, ensure)
+				"(of which EnsureOrganization %d); with the ensure cache: first round %d, steady state %d, full check %d",
+				orgs, devices, adminBefore, adminAfter, reconcileBefore, reconcileAfter, ensure, cachedFirst, cachedSteady, cachedFull)
+			if cachedFirst != reconcileAfter || cachedFull != reconcileAfter || cachedSteady != orgs || cachedSteady*10 > cachedFirst {
+				t.Errorf("identity-reconcile with the ensure cache: first %d, steady %d, full %d requests; want %d, %d (≤ 10 %%), %d",
+					cachedFirst, cachedSteady, cachedFull, reconcileAfter, orgs, reconcileAfter)
+			}
 			if adminBefore != 3*orgs || adminAfter != orgs {
 				t.Errorf("admin-accounts %d → %d requests, want %d → %d", adminBefore, adminAfter, 3*orgs, orgs)
 			}

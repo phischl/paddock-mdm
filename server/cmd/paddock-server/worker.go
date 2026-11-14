@@ -231,7 +231,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 			aptsign.Signer{}, s.repositoryIndex, s.bundlesURL), pool, platformPool)
 		ak := authentik.New(s.authentikURL, s.authentikToken)
 		reconcileAK := authentik.New(s.authentikURL, s.authentikToken).WithMaxConcurrent(worker.ReconcileAuthentikConcurrency)
-		identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, reconcileAK, ak, ak),
+		identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, reconcileAK, ak, ak).WithEnsureRevision(authentik.EnsureRevision),
 			app.NewAdminAccounts(runner, pool, platformPool, ak, sessions.NewStore(vk)), app.NewRoleMembership(runner, pool, platformPool, ak),
 			ak, pool, platformPool, s.syncEvery, s.reconcileEvery)
 		fleetClient := fleet.New(s.fleetURL, s.fleetToken, s.fleetPublicURL)
