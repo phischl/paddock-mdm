@@ -15,6 +15,21 @@
     "readOnly": "Nur Organisationsadministratoren können die Datenschutzeinstellungen ändern.",
     "saved": "Die Datenschutzeinstellungen wurden gespeichert."
   },
+  "patchSla": {
+    "title": "Patch-SLA",
+    "intro": "Wie viele Tage eine Schwachstelle mit verfügbarer Korrektur auf einem Gerät offen bleiben darf, je Schweregrad. Der Patch-Compliance-Bericht und die Aufmerksamkeitsliste werten einen Befund als überschritten, sobald er länger offen ist; ein tägliches Sammelereignis nennt die Überschreitungen.",
+    "legend": "Tage je Schweregrad",
+    "fields": {
+      "critical_days": "Kritisch",
+      "high_days": "Hoch",
+      "medium_days": "Mittel",
+      "low_days": "Niedrig"
+    },
+    "hint": "0 bedeutet: für diesen Schweregrad gilt keine SLA.",
+    "range": "Geben Sie eine ganze Zahl von {min} bis {max} Tagen ein.",
+    "readOnly": "Nur Organisationsadministratoren können die Patch-SLA ändern.",
+    "saved": "Die Patch-SLA wurde gespeichert."
+  },
   "rolloutSettings": {
     "title": "Rollout-Einstellungen",
     "intro": "Gestufte Rollouts wenden eine Konfigurationsänderung zuerst auf einen Teil der Geräte an, Welle für Welle, und halten automatisch an, wenn zu viele Geräte fehlschlagen. Sie sind standardmäßig aus. Ein laufender Rollout behält die Werte, mit denen er gestartet wurde.",
@@ -131,12 +146,14 @@
     "dms": "Totmannschalter",
     "software": "Software",
     "vulnerabilities": "Schwachstellen",
+    "patchCompliance": "Patch-Compliance",
     "attention": "Handlungsbedarf",
     "findings": "Feststellungen",
     "attentionCount": "{count, plural, one {# offener Befund} other {# offene Befunde}}",
     "packageHolds": "Zurückgehaltene Pakete",
     "updateSettings": "Updates",
     "privacySettings": "Datenschutz",
+    "patchSlaSettings": "Patch-SLA",
     "rolloutSettings": "Rollouts",
     "apiTokens": "API-Tokens",
     "changeSets": "Änderungssätze",
@@ -337,7 +354,8 @@
   "audit": {
     "vulnerability": {
       "critical_summary": "{new_critical, plural, one {# neue kritische Schwachstelle} other {# neue kritische Schwachstellen}} auf {devices, plural, one {# Gerät} other {# Geräten}}",
-      "devices_viewed": "{actor} hat die von {cve} betroffenen Geräte angesehen ({device_count, plural, one {# Gerät} other {# Geräte}})"
+      "devices_viewed": "{actor} hat die von {cve} betroffenen Geräte angesehen ({device_count, plural, one {# Gerät} other {# Geräte}})",
+      "sla_breached": "Patch-SLA auf {devices, plural, one {# Gerät} other {# Geräten}} überschritten: {critical, number} kritisch, {high, number} hoch, {medium, number} mittel, {low, number} niedrig"
     },
     "retention": {
       "purged": "{deleted, plural, one {# abgelaufener Eintrag} other {# abgelaufene Einträge}} von {store} gelöscht"
@@ -602,7 +620,8 @@
       "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert",
       "watched_units_changed": "{actor} hat die überwachten Dienste der Präsenzrichtlinie geändert",
       "privacy_changed": "{actor} hat die Datenschutzeinstellungen geändert: Inventar außer Betrieb genommener Geräte wird {retired_inventory_days, number} Tage aufbewahrt, Suchen im Audit-Protokoll werden {audit_search_recorded, select, true {protokolliert} other {nicht protokolliert}}, Inventaransichten werden {inventory_view_recorded, select, true {protokolliert} other {nicht protokolliert}}",
-      "rollout_changed": "{actor} hat die Rollout-Einstellungen geändert: gestufte Rollouts {enabled, select, true {ein} other {aus}}"
+      "rollout_changed": "{actor} hat die Rollout-Einstellungen geändert: gestufte Rollouts {enabled, select, true {ein} other {aus}}",
+      "patch_sla_changed": "{actor} hat die Patch-SLA geändert: kritisch {critical_days, number} Tage, hoch {high_days, number} Tage, mittel {medium_days, number} Tage, niedrig {low_days, number} Tage (0 = keine SLA)"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",
@@ -697,6 +716,10 @@
     "access_review": {
       "viewed": "{actor} hat den Zugriffsreview geöffnet",
       "exported": "{actor} hat den Zugriffsreview vom {from} bis {to} als {format} exportiert"
+    },
+    "patch_compliance": {
+      "viewed": "{actor} hat den Patch-Compliance-Bericht geöffnet",
+      "exported": "{actor} hat den Patch-Compliance-Bericht vom {from} bis {to} als {format} exportiert"
     }
   },
   "organizations": {
@@ -2588,7 +2611,8 @@
       "clock_drift": "Zeitabweichung",
       "event_gap": "Ereignislücke",
       "report_only": "Berichtsmodus, wartet auf Durchsetzung",
-      "software_requests_open": "Softwareanfragen warten"
+      "software_requests_open": "Softwareanfragen warten",
+      "patch_sla_breached": "Patch-SLA überschritten"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -2609,7 +2633,8 @@
       "clock_drift": "Gerät öffnen",
       "event_gap": "Gerät öffnen",
       "report_only": "Gerät öffnen",
-      "software_requests_open": "Gerät öffnen"
+      "software_requests_open": "Gerät öffnen",
+      "patch_sla_breached": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {
@@ -3057,6 +3082,61 @@
       "reason": "Grund",
       "target": "Ziel",
       "slug": "Slug"
+    }
+  },
+  "patchCompliance": {
+    "title": "Patch-Compliance",
+    "intro": "Der aktuelle Stand der Geräte der Organisation: wie lange Schwachstellen mit verfügbarer Korrektur schon offen sind, gemessen an der Patch-SLA. Jeder offene Befund zählt; seine offenen Tage laufen ab der ersten Meldung durch das Inventarsystem. Für Nachweise über die Zeit dienen die Exporte und die täglichen Sammelereignisse.",
+    "group": "Gerätegruppe",
+    "allGroups": "Alle Geräte",
+    "capNotice": "Angezeigt werden die Überschreitungen von {shown, number} von {total, number} Geräten. Der Export enthält alle Geräte.",
+    "forbidden": {
+      "title": "Kein Zugriff auf den Patch-Compliance-Bericht",
+      "description": "Nur Administratoren, Operatoren und Auditoren der Organisation sehen den Bericht."
+    },
+    "empty": {
+      "title": "Noch kein Inventar",
+      "description": "Kein aktives Gerät in diesem Bereich hat sein Inventar gemeldet, daher gibt es nichts an der SLA zu messen."
+    },
+    "cards": {
+      "devices": "Geräte",
+      "devicesNote": "Aktiv, mit Inventar",
+      "compliant": "Innerhalb der SLA",
+      "compliantNote": "Kein Befund zu lange offen",
+      "breached": "SLA überschritten",
+      "breachedNote": "{findings, plural, one {# Befund} other {# Befunde}} zu lange offen",
+      "sla": "SLA in Tagen",
+      "slaNote": "Kritisch / hoch / mittel / niedrig"
+    },
+    "sections": {
+      "severity": "Nach Schweregrad",
+      "groups": "Nach Gerätegruppe",
+      "breaches": "Befunde länger offen als die SLA",
+      "catalog": "Fest versionierte Pflichtsoftware"
+    },
+    "columns": {
+      "severity": "Schweregrad",
+      "findingsOpen": "Offen",
+      "findingsBreached": "Überschritten",
+      "medianDaysOpen": "Median offene Tage",
+      "p90DaysOpen": "90. Perzentil",
+      "deviceGroup": "Gerätegruppe",
+      "devices": "Geräte",
+      "breachedDevices": "Geräte mit Überschreitung",
+      "hostname": "Gerät",
+      "cve": "CVE",
+      "package": "Paket",
+      "daysOpen": "Tage offen",
+      "slaDays": "SLA-Tage",
+      "fixedVersion": "Behoben in",
+      "entry": "Anwendung",
+      "requiredVersion": "Vorgegebene Version",
+      "devicesBehind": "Geräte im Rückstand"
+    },
+    "stateAt": "Stand vom",
+    "emptySection": {
+      "title": "Nichts anzuzeigen",
+      "description": "Keine Zeilen passen zur Gerätegruppe oder zur Suche."
     }
   },
   "mcp": {

@@ -44,8 +44,8 @@ const flag = (item: ReviewRow, key: string) => (item[key] === true ? t('accessRe
         item-value="__row"
         searchable
         empty-icon="scroll-text"
-        empty-title="accessReview.empty.title"
-        empty-description="accessReview.empty.description"
+        :empty-title="section.empty?.title ?? 'accessReview.empty.title'"
+        :empty-description="section.empty?.description ?? 'accessReview.empty.description'"
       >
         <template
           v-for="c in section.columns.filter((x) => x.kind)"

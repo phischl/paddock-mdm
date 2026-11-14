@@ -22,7 +22,8 @@
           "maxItems": 32,
           "items": { "type": "string" }
         },
-        "privacy": { "$ref": "#/$defs/privacySettings" }
+        "privacy": { "$ref": "#/$defs/privacySettings" },
+        "patch_sla": { "$ref": "#/$defs/patchSlaSettings" }
       }
     },
     "device_groups": {
@@ -140,6 +141,18 @@
         "retired_inventory_days": { "type": "integer", "minimum": 1, "maximum": 365 },
         "audit_search_recorded": { "type": "boolean" },
         "inventory_view_recorded": { "type": "boolean" }
+      }
+    },
+    "patchSlaSettings": {
+      "description": "Days a vulnerability with a fixed version may stay open per severity; 0 = no SLA. When present, every field is required (same constraints as PUT /api/v1/settings/patch-sla: organization administrator).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["critical_days", "high_days", "medium_days", "low_days"],
+      "properties": {
+        "critical_days": { "type": "integer", "minimum": 0, "maximum": 365 },
+        "high_days": { "type": "integer", "minimum": 0, "maximum": 365 },
+        "medium_days": { "type": "integer", "minimum": 0, "maximum": 365 },
+        "low_days": { "type": "integer", "minimum": 0, "maximum": 365 }
       }
     },
     "deviceGroup": {

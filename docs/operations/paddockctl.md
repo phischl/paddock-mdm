@@ -68,15 +68,15 @@ configuration changed after the plan was shown (nothing was applied in both case
 
 ## paddock.yml
 
-`examples/paddock.yml` is a complete example. The document holds the login and update settings, device groups,
+`examples/paddock.yml` is a complete example. The document holds the login and update settings, the patch SLA, device groups,
 permission profiles, managed files and units, package holds, profile assignments and the software sections (`software_sources`, `software_catalog`,
 `software_assignments`, `examples/software.yaml`). It does not hold the dead man's
 switch, users and user groups, enrollment tokens, devices and their groups, or login assignments; manage those in the
 portal.
 
 - **A present section is authoritative.** Items it does not list are deleted, and listed items are created or changed
-  to match. Leave out a section to keep it as it is. Settings are compared field by field; `settings.login` and
-  `settings.updates` need every field when present.
+  to match. Leave out a section to keep it as it is. Settings are compared field by field; `settings.login`,
+  `settings.updates` and `settings.patch_sla` need every field when present.
 - **Items are identified by natural keys:** device groups and profiles by name; files, units and holds by device
   group and path, unit or package; assignments by profile, subject and device group. Renaming a key deletes the old
   item and creates a new one. `device_group: null` means every device of the organization; `subject` is
@@ -87,6 +87,10 @@ portal.
   roots. Paths and units are checked as in the portal. One refused item aborts the whole apply, and the error names
   the document path (`/managed_files/2: …`). Nothing is applied. A dry run checks exactly the same and changes
   nothing.
+- **Patch SLA.** `settings.patch_sla` holds the days a vulnerability with a fixed version may stay open per severity
+  (`critical_days`, `high_days`, `medium_days`, `low_days`, each 0 to 365; 0 = no SLA), the same as `PUT
+  /api/v1/settings/patch-sla`, and needs `org_admin`. A plan shows it like the other settings
+  (`~ settings.patch_sla critical_days: 7 -> 3`); it is never staged.
 - **Software sections.** `software_sources` (key: `slug`), `software_catalog` (key: `name`) and
   `software_assignments` (key: catalog entry and target) follow the rules of their API endpoints; the example in
   `examples/software.yaml` shows one of each:

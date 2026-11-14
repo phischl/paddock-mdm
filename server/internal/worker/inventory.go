@@ -47,11 +47,13 @@ type Inventory struct {
 	source   ports.Inventory
 	sync     *app.InventorySync
 	summary  *app.VulnerabilitySummary
-	org      *db.OrgPool
-	platform *db.PlatformPool
-	every    time.Duration
-	retry    time.Duration
-	now      func() time.Time
+	// slaSummary records the daily patch SLA summary (plan M13c decision 18); nil records none.
+	slaSummary slaSummarizer
+	org        *db.OrgPool
+	platform   *db.PlatformPool
+	every      time.Duration
+	retry      time.Duration
+	now        func() time.Time
 
 	// since is the start of the last complete sync round, vulnState the vulnerability state it stored; rounds counts
 	// them (owned by RunSync).
@@ -65,6 +67,17 @@ func NewInventory(settings InventorySettings, source ports.Inventory, sync *app.
 	org *db.OrgPool, platform *db.PlatformPool, every time.Duration) *Inventory {
 	return &Inventory{settings: settings, source: source, sync: sync, summary: summary, org: org, platform: platform, every: every,
 		retry: inventoryRetryInterval, now: time.Now}
+}
+
+// slaSummarizer records the daily patch SLA summary of the organization of ctx (app.VulnerabilitySLASummary).
+type slaSummarizer interface {
+	Record(ctx context.Context, now time.Time) error
+}
+
+// WithSLASummary makes the inventory round also record the daily patch SLA summary of every organization.
+func (i *Inventory) WithSLASummary(s slaSummarizer) *Inventory {
+	i.slaSummary = s
+	return i
 }
 
 // RunSettings checks the inventory system's settings at start and then every round until ctx ends; every replica
@@ -202,7 +215,8 @@ func (i *Inventory) reportAgents(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-// summarize records the critical CVE summary of every organization (plan M9 decision 37).
+// summarize records the critical CVE summary (plan M9 decision 37) and the patch SLA summary (plan M13c decision 18) of
+// every organization.
 func (i *Inventory) summarize(ctx context.Context, now time.Time) error {
 	orgs, err := i.org.OrganizationIDs(ctx)
 	if err != nil {
@@ -211,6 +225,14 @@ func (i *Inventory) summarize(ctx context.Context, now time.Time) error {
 	for _, org := range orgs {
 		if err := i.summary.Record(systemContext(ctx, org, "inventory-sync"), now); err != nil {
 			return fmt.Errorf("vulnerability summary of organization %s: %w", org, err)
+		}
+		if i.slaSummary == nil {
+			continue
+		}
+		// The patch SLA summary is a notification of its own: one organization's failure must not keep the other
+		// organizations' summaries or the round from completing; the next round tries it again.
+		if err := i.slaSummary.Record(systemContext(ctx, org, "inventory-sync"), now); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "recording the patch sla summary failed", "organization_id", org, "error", err)
 		}
 	}
 	return nil
