@@ -209,3 +209,63 @@ func TestSlowBody(t *testing.T) {
 		t.Fatal("slow body still open after 150 s, want it ended after the 60 s ReadTimeout")
 	}
 }
+
+// TestSlowBodyUnreadLogout is the gate of plan M19 decision D7 (PDK-971): POST /api/auth/logout without a session
+// answers 200 without reading its body, and the edge closes the connection at once instead of draining a body sent at
+// one byte per second, which held it for about 120 s.
+func TestSlowBodyUnreadLogout(t *testing.T) {
+	const announced = 300
+	u, err := url.Parse(stack.AdminURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(t, 3*time.Minute)
+	conn := edgeDial(ctx, t, u)
+	start := time.Now()
+	head := "POST /api/auth/logout HTTP/1.1\r\nHost: " + u.Host + "\r\nX-Paddock-CSRF: 1\r\nContent-Type: application/json\r\n" +
+		"Content-Length: " + strconv.Itoa(announced) + "\r\n\r\n"
+	if _, err := io.WriteString(conn, head); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan string, 1)
+	go func() {
+		r := bufio.NewReader(conn)
+		line, err := r.ReadString('\n')
+		if err != nil {
+			done <- "closed: " + err.Error()
+			return
+		}
+		_, _ = io.Copy(io.Discard, r)
+		done <- strings.TrimSpace(line)
+	}()
+	go func(ctx context.Context) {
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for range announced {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if _, err := conn.Write([]byte(" ")); err != nil {
+					return
+				}
+			}
+		}
+	}(ctx)
+	select {
+	case line := <-done:
+		elapsed := time.Since(start)
+		if strings.Contains(line, " 429 ") {
+			t.Fatalf("logout answered %q after %s: rate limited, the unread-body path was not reached", line, elapsed)
+		}
+		if !strings.Contains(line, " 200 ") {
+			t.Fatalf("logout answered %q, want 200", line)
+		}
+		if elapsed > 70*time.Second {
+			t.Fatalf("connection ended after %s, want within 70 s", elapsed)
+		}
+		t.Logf("connection ended after %s: %s", elapsed.Round(time.Second), line)
+	case <-time.After(150 * time.Second):
+		t.Fatal("connection still open after 150 s, want it closed within 70 s")
+	}
+}
