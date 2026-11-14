@@ -125,6 +125,10 @@ func (g *gateway) enrollStatus(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, err)
 		return
 	}
+	if enr.Status == protocol.EnrollRejected && enr.Reason == devicecache.ReasonOrganizationUnavailable {
+		g.fail(w, r, errIdentityRevoked.with("the organization is being deleted"))
+		return
+	}
 	out := protocol.EnrollStatus{Status: enr.Status, Reason: enr.Reason}
 	if enr.DeviceID != uuid.Nil {
 		out.DeviceID = enr.DeviceID.String()

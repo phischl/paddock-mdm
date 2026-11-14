@@ -96,7 +96,7 @@ func TestOffboardDeleteBatch(t *testing.T) {
 	}
 	t.Cleanup(worker.Close)
 	batch := func(org uuid.UUID, maxRows int32) (n int64, err error) {
-		err = worker.InOrg(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
+		err = worker.InOrgOffboarding(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
 			n, err = q.OffboardDeleteBatch(ctx, maxRows)
 			return err
 		})

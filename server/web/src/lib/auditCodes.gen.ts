@@ -164,6 +164,7 @@ export const auditCodes = [
   'notification.test_sent',
   'organization.created',
   'organization.domains_changed',
+  'organization.inactive_denied',
   'organization.mcp_policy_changed',
   'organization.recompile_requested',
   'organization.security_review_required',

@@ -42,6 +42,9 @@ func (d *Diagnostics) announce(ctx context.Context, messageID string, body []byt
 	}
 	ctx = systemContext(ctx, m.OrganizationID, messageID)
 	counted, err := d.diagnostics.Announce(ctx, m)
+	if unavailable(ctx, err) {
+		return ack
+	}
 	if err != nil {
 		slog.WarnContext(ctx, "recording diagnostics announcement failed; retrying", "diagnostics_id", m.DiagnosticsID, "error", err)
 		return retry

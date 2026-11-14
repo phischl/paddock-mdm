@@ -352,6 +352,40 @@ func TestEnrollFlow(t *testing.T) {
 		http.StatusNotFound, "not_found")
 }
 
+// TestEnrollIntoDeletingOrganization: an enrollment the worker refused because its organization is deleting is
+// answered with 401 identity_revoked (plan M17 amendment 2026-11-14 e point 11); another rejection keeps its answer.
+func TestEnrollIntoDeletingOrganization(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	for _, tc := range []struct {
+		reason string
+		status int
+	}{{devicecache.ReasonOrganizationUnavailable, http.StatusUnauthorized}, {"token_exhausted", http.StatusOK}} {
+		c := newClient(t)
+		res := e.send(c, request{method: "POST", path: "/v1/enroll", device: "enroll",
+			body: e.enrollBody(c, e.token(false, e.now.Add(time.Hour)))})
+		if res.status != http.StatusAccepted {
+			t.Fatalf("enroll: %d %s", res.status, res.body)
+		}
+		var acc protocol.EnrollAccepted
+		_ = json.Unmarshal(res.body, &acc)
+		if err := e.cache.PutEnrollment(context.Background(), uuid.MustParse(acc.EnrollmentID), devicecache.Enrollment{
+			KeyID: c.keyID, PublicKey: c.spki, OrganizationID: e.org, Status: protocol.EnrollRejected, Reason: tc.reason,
+		}, e.now); err != nil {
+			t.Fatal(err)
+		}
+		r := e.send(c, request{method: "GET", path: "/v1/enroll/" + acc.EnrollmentID, device: "enroll"})
+		if tc.status == http.StatusUnauthorized {
+			e.expectProblem(r, http.StatusUnauthorized, "identity_revoked")
+			continue
+		}
+		var s protocol.EnrollStatus
+		_ = json.Unmarshal(r.body, &s)
+		if r.status != tc.status || s.Status != protocol.EnrollRejected || s.Reason != tc.reason {
+			t.Errorf("rejection %s: %d %+v", tc.reason, r.status, s)
+		}
+	}
+}
+
 func TestEnrollRejections(t *testing.T) {
 	e := newEnv(t, 0, 0)
 	c := newClient(t)

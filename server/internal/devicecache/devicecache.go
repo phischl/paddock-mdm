@@ -131,6 +131,10 @@ type Enrollment struct {
 	Reason         string    // rejection reason
 }
 
+// ReasonOrganizationUnavailable is the Reason of an enrollment the worker refused because its organization is deleting
+// or deleted; the gateway answers it with identity_revoked (plan M17 amendment 2026-11-14 e point 11).
+const ReasonOrganizationUnavailable = "organization_inactive"
+
 func enrollmentKey(id uuid.UUID) string { return "enr:" + id.String() }
 
 // PutEnrollment caches an enrollment request for EnrollmentTTL.

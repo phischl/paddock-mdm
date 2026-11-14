@@ -347,6 +347,7 @@
     "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal.",
     "rollout_conflict": "Ein laufender oder angehaltener Rollout staffelt diesen Eintrag. Schließen Sie den Rollout ab oder machen Sie seinen Änderungssatz zuerst rückgängig.",
     "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend.",
+    "organization_inactive": "Diese Organisation wird gelöscht. Ihre Daten können nicht mehr gelesen oder geändert werden.",
     "backup_key_mismatch": "Die Zeichen passen nicht zum Schlüssel.",
     "backup_target_state_unchanged": "Das Ziel hat diesen Zustand bereits.",
     "backup_key_discarded_after_mismatches": "Der Schlüssel wurde nach drei falschen Bestätigungen verworfen. Erzeugen Sie einen neuen."
@@ -404,7 +405,8 @@
       "domains_changed": "{actor} hat die Domains von {slug} festgelegt",
       "recompile_requested": "{actor} hat für jedes Gerät ein neues Bundle angefordert (Wiederherstellung)",
       "security_review_required": "Eine Sicherheitsprüfung ist erforderlich: {root_grant_profiles, number} Root-Berechtigungen, {sensitive_files, number} sensible Dateien und {denied_files, number} Dateien auf gesperrten Pfaden",
-      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Organisation geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}"
+      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Organisation geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}",
+      "inactive_denied": "{actor} wurde abgewiesen: Die Organisation {organization_id} {status, select, deleted {ist gelöscht} other {wird gelöscht}} ({attempted_code})"
     },
     "device_group": {
       "created": "{actor} hat die Gerätegruppe {name} angelegt",
