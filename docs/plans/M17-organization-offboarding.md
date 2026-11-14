@@ -568,3 +568,40 @@ Binding; where it contradicts the sections above, it wins.
    the organization by decision 15); the registry test of decision 8 excludes exactly `offboarding_table` and
    `offboarded_device`. The definer function's `search_path` ends with `pg_temp` (convention of migrations 00034 and
    00076). `max_rows` is limited to 1–10000; a reference loop in the registry order raises.
+
+## Amendment 2026-11-14 d — no writer survives `deleting` (architect decision after PDK-1013 review 2; ticket PDK-1038)
+
+Binding; where it contradicts the sections above, it wins. **Decision: both a status gate and a lock (option c).** The
+gate stops new transactions once `deleting` is committed; the lock covers transactions that entered before that commit
+and are still running when the job finishes.
+
+1. **Gate in the database.** New function `paddock_org_enter() RETURNS void` (`SECURITY DEFINER`, owner
+   `paddock_owner`, the `search_path` convention of `paddock_offboard_delete_batch`, `EXECUTE` for every
+   organization-scoped application role). It reads `current_setting('paddock.org_id')::uuid`, takes
+   `pg_advisory_xact_lock_shared(<offboarding lock key of that organization>)` and raises SQLSTATE `PD001`
+   (`organization_unavailable`) when the organization's status is `deleting` or `deleted`.
+   `db.OrgPool.InOrg` and `InOrgSnapshot` call it right after `SET LOCAL paddock.org_id` in every transaction. The lock
+   key is computed in one place (`db.OffboardingLockKey(org)`, the same derivation in SQL and Go, covered by a test).
+2. **Bypass for the job only.** `db.OrgPool.InOrgOffboarding(ctx, org, fn)` sets the context and skips
+   `paddock_org_enter`; it is used only by `app.Offboarding` (a test fails when another package calls it, by scanning
+   imports and call sites under `server/internal`).
+3. **Final pass under an exclusive lock.** New function `paddock_offboard_finalize() RETURNS void` (definer, `EXECUTE`
+   for `paddock_worker` only), called by step `tombstone` inside `InOrgOffboarding`: it takes
+   `pg_advisory_xact_lock(<same key>)` (waits for every transaction that entered before `deleting`), counts the
+   organization's rows in every registered table, raises `40001` when any remain (the step then returns to `database`
+   and retries next round), and otherwise sets the tombstone (`status = 'deleted'`, `deleted_at`) in the same
+   transaction. Decision 17's status change therefore happens in this function, not through the platform pool; the
+   `organization.deleted` event is recorded after it commits.
+4. **Error mapping.** `PD001` maps to `problem` 403 `organization_inactive` in the api (the existing denial reason of
+   the sign-in) and the MCP surface; the gateway answers 401 `identity_revoked` (offboarded devices are served by
+   decision 15 from the platform table, never through `InOrg`); worker consumers acknowledge and drop the message with
+   one `Info` log line and the counter `paddock_worker_dropped_total{reason="organization_unavailable"}`; rounds skip
+   the organization.
+5. **Cost.** One extra statement per organization transaction. PDK-1038 measures check-in and ingest throughput before
+   and after with the existing load scenarios at a reduced rate and records it in its result document; a regression of
+   more than 5 % stops the ticket.
+6. **Ownership and order.** PDK-1038 owns points 1–5 (migration, `db` changes, mapping, tests). PDK-1015 depends on it
+   and calls `InOrgOffboarding` and `paddock_offboard_finalize`.
+7. **Tests.** A transaction that entered before `deleting` and inserts after the delete loop finished makes
+   `finalize` wait and then raise `40001`; the next round deletes the row and finalizes. After `deleting` is committed,
+   `InOrg` of every role fails with `PD001`. `InOrgOffboarding` is used only by `app.Offboarding`.
