@@ -123,7 +123,7 @@ func TestReadBoundsDecompression(t *testing.T) {
 }
 
 func TestReadControlFields(t *testing.T) {
-	deb := func(control string) []byte { return debtest.Deb(control) }
+	deb := debtest.Deb
 	got, err := read(deb("Package: paddock-agent\r\nVersion: 1.0.0\r\nArchitecture: arm64\r\nDescription: x\n more\n"))
 	if err != nil || got != (debcontrol.Fields{Package: "paddock-agent", Version: "1.0.0", Architecture: "arm64"}) {
 		t.Errorf("crlf and continuation of another field: %+v, %v", got, err)
