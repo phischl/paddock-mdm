@@ -545,3 +545,26 @@ Binding; where it contradicts the sections above, it wins.
 
 12. **PDK-1036** after PDK-1014 (needs the pending state), before PDK-1018 (the portal dialog is part of PDK-1036; the
     banner link in PDK-1018 points to it).
+
+## Amendment 2026-11-14 c — gaps found while implementing PDK-1013 (architect decisions)
+
+Binding; where it contradicts the sections above, it wins.
+
+1. **Uninstall counts are columns.** PDK-1014's migration adds `organization.deletion_uninstalls_issued int` and
+   `organization.deletion_uninstalls_skipped int` (both NULL while no deletion was requested, set by
+   `RequestDeletion`, cleared by `CancelDeletion`, kept on the tombstone). They are not derived from `device_command`,
+   whose rows the database step deletes.
+2. **Outbox check through a definer function, no grant.** `paddock_worker` gets no `SELECT` on `outbox`. PDK-1015's
+   migration adds `paddock_offboard_outbox_pending() RETURNS bigint` (`SECURITY DEFINER`, owner `paddock_owner`, same
+   `search_path` convention as `paddock_offboard_delete_batch`, `EXECUTE` for `paddock_worker` only): it counts the
+   unpublished outbox rows of the organization in `current_setting('paddock.org_id')::uuid` and raises
+   `insufficient_privilege` unless that organization's status is `deleting`. Step `outbox` completes when it returns 0.
+3. **Platform pool wiring is part of PDK-1015.** The round uses the worker's existing `PlatformPool` (organization
+   status transitions, `offboarded_device`) and takes its leader lock from the existing lock pool (12 connections). It
+   adds no pool and no connection to the budget of M19 D1; it is one more lock-holding round (19 → 20), which PDK-1015
+   records in `docs/operations/capacity.md` "PostgreSQL connection budget". The round holds its lock only while it runs
+   one step per organization.
+4. **Accepted implementation details of PDK-1013:** `offboarded_device` is not in `offboarding_table` (its rows outlive
+   the organization by decision 15); the registry test of decision 8 excludes exactly `offboarding_table` and
+   `offboarded_device`. The definer function's `search_path` ends with `pg_temp` (convention of migrations 00034 and
+   00076). `max_rows` is limited to 1–10000; a reference loop in the registry order raises.
