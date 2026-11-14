@@ -22,7 +22,7 @@ import { useSessionStore } from '../stores/session'
  */
 const props = defineProps<{
   fetch: (params: ListParams) => Promise<Page<Diagnostics>>
-  /** The fleet page shows and searches the hostname; the device tab does not. */
+  /** The fleet page shows the hostname column; the device tab does not. */
   fleet?: boolean
 }>()
 
@@ -112,7 +112,7 @@ async function purge(item: Diagnostics): Promise<void> {
       :columns="columns"
       :fetch="props.fetch"
       :filters="[diagnosticsStateFilter]"
-      :searchable="fleet"
+      searchable
       default-sort="-requested_at"
       item-value="id"
       :query-prefix="fleet ? undefined : 'd'"
