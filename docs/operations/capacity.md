@@ -362,6 +362,50 @@ limit, clients see failed uploads and the audit writer retries; raise `PADDOCK_A
 `PADDOCK_RUSTFS_MEM_LIMIT`) and the host's RAM together. OpenBao holds its keys and the Raft index in memory and stays
 small.
 
+## PostgreSQL connection budget
+
+Every Paddock role opens its own connection pools, and every connection counts against the database's
+`max_connections`. The pools open connections only on demand and close them after 5 minutes idle, so the figures
+below are the most a role can hold at once, not what it holds at rest. The api's organization pool and its audit
+reader have no fixed size: they take the default of the PostgreSQL driver, the number of logical CPUs the container
+sees (threads, as `nproc` counts them; a CPU quota does not lower it), at least 4. "CPUs" below means that number.
+
+Control-plane database (`postgres`):
+
+| Role | Pools | Maximum connections |
+| --- | --- | --- |
+| `paddock-api` | organization (one per CPU, at least 4), platform 4 | CPUs + 4 |
+| `paddock-worker` | organization 8, platform 8, leader locks 19, readiness 2 | 37 per replica |
+| `paddock-notifier` | notifier 8, platform 2 | 10 |
+| `paddock-compiler` | 8 | 8 |
+| `paddock-backup` | backup 4, platform 3 | 7 |
+| `paddock-escrow-reader` | 4 | 4 |
+| `paddock-revocation-issuer` | 4 | 4 |
+| `paddock-outbox-relay` | 4 | 4 |
+| `paddock-unsealer` (automatic unseal only) | 2 | 2 |
+| operator commands (`paddock-server admin`, `agent-release`, `backup now`, `restore`, …) | 2–4 each | 4 |
+
+Together the long-running roles of one control plane may hold **CPUs + 80** connections, plus up to 4 for an operator
+command: 100 with 16 CPUs, 116 with 32 CPUs. Every further worker replica (`--scale paddock-worker=N`) adds 37,
+every further api replica CPUs + 4. PostgreSQL keeps 3 of its `max_connections` for the superuser
+(`superuser_reserved_connections`), and its default of 100 left only 97 for the roles: with 18 or more CPUs, with 14
+or more while an operator command runs, or with an extra worker replica at any size, roles could fail with
+`too many clients already`. The control plane therefore sets `max_connections` to **200**
+(`PADDOCK_POSTGRES_MAX_CONNECTIONS`): enough for 32 CPUs with one extra worker replica (153) or 64 CPUs with one extra
+worker replica (185), with headroom.
+
+To raise it, add up the table for your host's CPUs and replicas, add headroom, and set
+`PADDOCK_POSTGRES_MAX_CONNECTIONS` in `.env`; `./paddock up` recreates `postgres` with it (a restart of the database).
+The limit itself costs almost no memory (a fresh database with `max_connections=200` uses about 30 MiB, and
+`shared_buffers` stays at the image's default of 128 MB). What costs memory is the connections the roles actually
+open: a few MiB each, plus up to `work_mem` (4 MiB) per sort or hash while a query runs. When more CPUs or replicas
+let the pools open more connections, raise `PADDOCK_POSTGRES_MEM_LIMIT` (section "Memory limits") by about 10 MiB
+for every connection they add.
+
+The audit database (`audit-postgres`) keeps PostgreSQL's default of 100: the api's audit reader (CPUs, at least 4),
+the audit writer (8 per replica), the notifier's audit reader (2) and an operator command (`paddock-server audit …`
+8, the restore's escrow check 2) together hold at most CPUs + 18, which stays within its 97 up to 79 CPUs.
+
 ## Request limits
 
 The fixed limits that bound one request (ADR 0051 decisions 3 and 6, architecture §4.1). They are sized above every

@@ -316,6 +316,11 @@ Agents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10
   the connections their work and the readiness check need, so `./paddock up` and upgrades no longer time out waiting
   for the worker, and rollouts, role sync and session ends no longer stall. The worker may now open up to 21 more
   PostgreSQL connections than before (PDK-1010).
+- The control-plane database now accepts 200 connections instead of PostgreSQL's default of 100, which the Paddock
+  roles could exhaust together on a host with 18 or more logical CPUs, or with fewer and an extra worker replica, so
+  that roles failed with `too many clients already`. Raise it with `PADDOCK_POSTGRES_MAX_CONNECTIONS` in `.env` for
+  larger hosts or more replicas; `docs/operations/capacity.md`, "PostgreSQL connection budget", lists what each role
+  needs (PDK-1010).
 
 ### Security
 
