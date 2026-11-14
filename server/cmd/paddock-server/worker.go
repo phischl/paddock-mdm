@@ -79,16 +79,18 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		}
 	}
 	tlsAddr := l.String("PADDOCK_TLS_PROBE_ADDR", "caddy:443")
-	pool, err := db.NewOrgPool(ctx, dsn, db.Options{ApplicationName: "paddock-worker", MaxConns: 8})
+	// Readiness pings on connections of their own: long rounds may keep every query connection busy (PDK-1010).
+	pool, err := db.NewOrgPool(ctx, dsn, db.Options{ApplicationName: "paddock-worker", MaxConns: 8, HealthConn: true})
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 	// The platform pool serves the rollout round (agent releases are platform data, plan M2b decision 19) and the host
-	// mapping of the inventory round (plan M5a decision 6), and holds the advisory locks of the rollout, the two
-	// identity, the dead man's switch, the inventory and the osv-sync rounds for their whole duration; two more
-	// connections are left for those rounds' own queries and the readiness check.
-	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-worker-platform", MaxConns: 8})
+	// mapping of the inventory round (plan M5a decision 6). The leader locks of the rounds sit in a lock pool of their
+	// own, one connection per round, because a round holds its lock connection for its whole duration, which at many
+	// organizations is minutes; sharing the query pool, they starved it (PDK-1010).
+	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-worker-platform", MaxConns: 8,
+		LockConns: worker.LeaderRounds, HealthConn: true})
 	if err != nil {
 		return err
 	}

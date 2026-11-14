@@ -311,6 +311,11 @@ Agents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10
   records the schema versions of the pre-upgrade backup before its first `up`, and the rollback restores that point
   with them instead of the schema the new release's backups report; a rollback point without them is refused with a
   pointer to `./paddock restore`.
+- The worker no longer stays unhealthy when many of its periodic rounds run long, for example the identity reconcile
+  round with hundreds of organizations: the rounds' leader locks now use connections of their own instead of taking
+  the connections their work and the readiness check need, so `./paddock up` and upgrades no longer time out waiting
+  for the worker, and rollouts, role sync and session ends no longer stall. The worker may now open up to 21 more
+  PostgreSQL connections than before (PDK-1010).
 
 ### Security
 

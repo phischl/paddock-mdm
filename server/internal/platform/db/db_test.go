@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -753,6 +754,96 @@ func TestWithLeaderLocks(t *testing.T) {
 	ok, err = other.WithLeaderLock(ctx, first, func(context.Context) error { return nil })
 	if err != nil || !ok {
 		t.Fatalf("first key not released after the failed attempt: ok %v, err %v", ok, err)
+	}
+}
+
+// TestLeaderLocksDoNotStarveThePool (PDK-1010): with a lock pool, more rounds than the query pool has connections hold
+// their leader locks at once, and still each round's own query, a further query and readiness get a connection;
+// readiness also gets one while queries hold every connection of the query pool.
+func TestLeaderLocksDoNotStarveThePool(t *testing.T) {
+	env := sharedPaddock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	const queryConns, rounds = 2, 6
+	p, err := db.NewPlatformPool(ctx, env.Platform, db.Options{MaxConns: queryConns, LockConns: rounds, HealthConn: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	release := make(chan struct{})
+	// Close waits for every acquired connection, so a failing test must let the rounds go first.
+	free := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(free)
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem})
+	query := func(ctx context.Context) error {
+		_, err := p.FleetHostInUse(ctx, uuid.Must(uuid.NewV7()), "starvation-test")
+		return err
+	}
+
+	holding := make(chan error, rounds)
+	done := make(chan error, rounds)
+	for i := range rounds {
+		go func() {
+			ok, err := p.WithLeaderLock(sys, int64(0x7465737440)+int64(i), func(ctx context.Context) error {
+				holding <- query(ctx)
+				<-release
+				return nil
+			})
+			if !ok && err == nil {
+				err = errors.New("lock not taken")
+			}
+			done <- err
+		}()
+	}
+	for range rounds {
+		select {
+		case err := <-holding:
+			if err != nil {
+				t.Fatalf("query of a round holding its lock: %v", err)
+			}
+		case err := <-done:
+			t.Fatalf("round ended before the others held their locks: %v", err)
+		case <-ctx.Done():
+			t.Fatal("not every round got its lock and ran its query")
+		}
+	}
+	probe := func(what string, fn func(ctx context.Context) error) {
+		t.Helper()
+		pctx, done := context.WithTimeout(sys, 3*time.Second)
+		defer done()
+		if err := fn(pctx); err != nil {
+			t.Errorf("%s while %d rounds hold their locks: %v", what, rounds, err)
+		}
+	}
+	probe("readiness", p.Ping)
+	probe("query", query)
+
+	busy := make(chan struct{}, queryConns)
+	queriesDone := make(chan error, queryConns)
+	for range queryConns {
+		go func() {
+			queriesDone <- p.InPlatform(sys, func(context.Context, *pgstore.Queries) error {
+				busy <- struct{}{}
+				<-release
+				return nil
+			})
+		}()
+	}
+	for range queryConns {
+		<-busy
+	}
+	probe("readiness with the query pool exhausted", p.Ping)
+
+	free()
+	for range rounds {
+		if err := <-done; err != nil {
+			t.Errorf("round: %v", err)
+		}
+	}
+	for range queryConns {
+		if err := <-queriesDone; err != nil {
+			t.Errorf("query: %v", err)
+		}
 	}
 }
 
