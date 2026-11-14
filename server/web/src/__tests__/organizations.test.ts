@@ -11,7 +11,7 @@ import { vuetify } from '../plugins/vuetify'
 import { parseDomains, validateDomains } from '../lib/validation'
 
 const acme: Organization = {
-  id: 'o1', slug: 'acme', name: 'Acme', status: 'active', domains: ['acme.test'], created_at: '2026-10-01T00:00:00Z',
+  id: 'o1', slug: 'acme', name: 'Acme', status: 'active', domains: ['acme.test'], created_at: '2026-10-01T00:00:00Z', deletion: null,
 }
 const createOrganization = vi.fn<(slug: string, name: string) => Promise<Organization | string>>()
 const updateOrganizationDomains = vi.fn<(id: string, domains: string[]) => Promise<string | null>>()

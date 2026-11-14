@@ -379,14 +379,20 @@
       "export_requested": "{actor} hat einen Nachweis-Export für {from_day} bis {to_day} angefordert",
       "searched": "{actor} hat das Audit-Protokoll durchsucht{q_used, select, true { (mit Suchbegriff)} other {}}",
       "export_completed": "Der Audit-Writer hat den Nachweis-Export für {from_day} bis {to_day} verarbeitet ({events, number} Ereignisse, {objects, number} Objekte)",
-      "export_downloaded": "{actor} hat den Nachweis-Export für {from_day} bis {to_day} heruntergeladen ({size, number} Bytes)"
+      "export_downloaded": "{actor} hat den Nachweis-Export für {from_day} bis {to_day} heruntergeladen ({size, number} Bytes)",
+      "event_after_retirement": "Ein Ereignis {original_code} kam nach dem Schließen des Audit-Protokolls der Organisation an"
     },
     "organization": {
       "created": "{actor} hat die Organisation {slug} angelegt",
       "domains_changed": "{actor} hat die Domains von {slug} festgelegt",
       "recompile_requested": "{actor} hat für jedes Gerät ein neues Bundle angefordert (Wiederherstellung)",
       "security_review_required": "Eine Sicherheitsprüfung ist erforderlich: {root_grant_profiles, number} Root-Berechtigungen, {sensitive_files, number} sensible Dateien und {denied_files, number} Dateien auf gesperrten Pfaden",
-      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Organisation geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}"
+      "mcp_policy_changed": "{actor} hat die MCP-Richtlinie der Organisation geändert: {enabled, select, true {aktiviert} other {deaktiviert}}, Änderungen {write_enabled, select, true {erlaubt} other {nicht erlaubt}}, {mode, select, selected {{allowed_count, plural, one {# ausgewähltes Werkzeug} other {# ausgewählte Werkzeuge}}} other {alle Werkzeuge}}",
+      "deletion_requested": "{actor} hat die Löschung der Organisation {slug} beantragt ({grace_days, plural, one {# Tag} other {# Tage}} Frist)",
+      "deletion_cancelled": "{actor} hat die Löschung der Organisation {slug} abgebrochen",
+      "deletion_step_completed": "Löschung von {slug}: Schritt {step} abgeschlossen",
+      "deletion_step_failed": "Löschung von {slug}: Schritt {step} fehlgeschlagen",
+      "deleted": "Die Organisation {slug} wurde gelöscht"
     },
     "device_group": {
       "created": "{actor} hat die Gerätegruppe {name} angelegt",
@@ -552,7 +558,9 @@
       "restore_started": "Wiederherstellung auf dem Host gestartet (aus {source})",
       "restore_completed": "Wiederherstellung auf dem Host abgeschlossen",
       "restore_failed": "Wiederherstellung auf dem Host fehlgeschlagen ({detail})",
-      "restore_abandoned": "Laufender Wiederherstellungsplan aufgegeben"
+      "restore_abandoned": "Laufender Wiederherstellungsplan aufgegeben",
+      "offboarded_device_uninstalled": "Ein Gerät einer gelöschten Organisation hat Paddock entfernt",
+      "deleted_organization_audit_read": "{actor} hat das Audit-Protokoll der gelöschten Organisation {slug} gelesen"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
@@ -715,7 +723,9 @@
       "provisioning": "Wird eingerichtet",
       "active": "Aktiv",
       "provisioning_failed": "Einrichtung fehlgeschlagen",
-      "suspended": "Ausgesetzt"
+      "suspended": "Ausgesetzt",
+      "deleting": "Wird gelöscht",
+      "deleted": "Gelöscht"
     },
     "empty": {
       "title": "Noch keine Organisationen",

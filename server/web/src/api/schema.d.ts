@@ -3892,7 +3892,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Roles: platform_admin. */
+        /**
+         * @description Roles: platform_admin. Without a status filter the list leaves out deleted organizations (their tombstones,
+         *     ADR 0052); status=deleted lists them.
+         */
         get: operations["listOrganizations"];
         put?: never;
         /**
@@ -3928,6 +3931,58 @@ export interface paths {
          *     and local usernames must use one of them.
          */
         patch: operations["updateOrganization"];
+        trace?: never;
+    };
+    "/api/platform/v1/organizations/{id}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Starts the deletion of the organization (ADR 0052): it stays active and usable until
+         *     deletion.delete_after = now + grace_days, then the worker deletes its data and leaves a tombstone in status
+         *     deleted. Every active device receives the command uninstall (mode leave, reason organization_offboarding),
+         *     valid until delete_after plus 365 days; a device with an open uninstall or an open Lock or Destroy is skipped
+         *     and counted. confirm_slug must be the organization's slug and reason 2 to 500 characters; grace_days is 7 to
+         *     90 (0 to 90 on a development stack) (400 invalid_request otherwise). 409 invalid_state when a deletion is
+         *     already requested or the organization is not active or provisioning_failed. Needs a step-up within the last
+         *     5 minutes (403 step_up_required).
+         */
+        post: operations["deleteOrganization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/organizations/{id}/cancel-deletion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Cancels the pending deletion of the organization: every offboarding uninstall a device
+         *     has not received yet is withdrawn; a device that already received it removes Paddock as instructed. 409
+         *     invalid_state when no deletion is pending (none requested, or the deletion already runs) or the request is
+         *     still issuing its uninstalls.
+         */
+        post: operations["cancelOrganizationDeletion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/platform/v1/ip-allowlist": {
@@ -4995,6 +5050,13 @@ export interface components {
             /** @description DNS domains of the organization's users; the first is the primary domain of the device login. */
             domains: string[];
         };
+        MeOrganizationDeletion: {
+            /**
+             * Format: date-time
+             * @description When the organization's data is deleted.
+             */
+            delete_after: string;
+        };
         Me: {
             /** Format: uuid */
             id: string;
@@ -5003,6 +5065,11 @@ export interface components {
             /** @enum {string} */
             role: "org_admin" | "org_operator" | "org_auditor" | "platform_admin";
             organization: components["schemas"]["MeOrganization"] | null;
+            /**
+             * @description The pending deletion of the administrator's organization (ADR 0052): the portal warns with its date. null
+             *     while no deletion is pending, and for platform administrators.
+             */
+            organization_deletion: components["schemas"]["MeOrganizationDeletion"] | null;
             /** @enum {string} */
             locale: "en" | "de";
             /**
@@ -5413,9 +5480,47 @@ export interface components {
             domains: string[];
             /** Format: date-time */
             created_at: string;
+            /** @description The requested deletion (ADR 0052); null while none is requested, kept on a deleted organization. */
+            deletion: components["schemas"]["OrganizationDeletion"] | null;
         };
-        /** @enum {string} */
-        OrganizationStatus: "provisioning" | "active" | "provisioning_failed" | "suspended";
+        /**
+         * @description A pending deletion keeps the status active (or provisioning_failed) with a deletion object; deleting while the
+         *     worker deletes the organization's data; deleted for the tombstone.
+         * @enum {string}
+         */
+        OrganizationStatus: "provisioning" | "active" | "provisioning_failed" | "suspended" | "deleting" | "deleted";
+        OrganizationDeletion: {
+            /** Format: date-time */
+            requested_at: string;
+            /** @description The platform administrator who requested the deletion. */
+            requested_by: string;
+            reason: string;
+            /**
+             * Format: date-time
+             * @description When the worker starts deleting the data.
+             */
+            delete_after: string;
+            /**
+             * @description The deletion step that runs next; null before the deletion runs.
+             * @enum {string|null}
+             */
+            step: "sessions" | "devices" | "outbox" | "authentik" | "fleet" | "objects" | "valkey" | "audit_final" | "database" | "tombstone" | null;
+            /** @description The error of the step's last failed attempt. */
+            last_error_code: string | null;
+            /** Format: date-time */
+            deleted_at: string | null;
+            /** @description Active devices that received the offboarding uninstall. */
+            uninstalls_issued: number;
+            /** @description Active devices skipped because of an open uninstall or an open Lock or Destroy. */
+            uninstalls_skipped: number;
+        };
+        OrganizationDeleteRequest: {
+            /** @description The organization's slug, typed by the administrator. */
+            confirm_slug: string;
+            reason: string;
+            /** @description Days until the deletion runs; 7 to 90, 0 to 90 on a development stack. */
+            grace_days: number;
+        };
         OrganizationCreate: {
             slug: string;
             name: string;
@@ -6189,6 +6294,13 @@ export interface components {
         DeviceUninstall: {
             /** @enum {string} */
             mode: "leave" | "reset";
+            /**
+             * @description organization_offboarding when the deletion of the organization issued the uninstall (ADR 0052); only
+             *     cancelling the deletion withdraws it (409 invalid_state on the device's cancel). null for an uninstall an
+             *     administrator requested.
+             * @enum {string|null}
+             */
+            reason: "organization_offboarding" | null;
             /** Format: date-time */
             requested_at: string;
             /** Format: uuid */
@@ -16536,6 +16648,67 @@ export interface operations {
                 };
             };
             400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    deleteOrganization: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Deletion requested; the organization with its deletion object. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    cancelOrganizationDeletion: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deletion cancelled; the organization without a deletion object. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];

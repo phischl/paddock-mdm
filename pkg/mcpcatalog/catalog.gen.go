@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "0419103deb515412f2da55ceb345ee9a2667d9cdaa7c4d05e98fb31392f36b27"
+const Version = "7d3eac69a885a6253ac71ff3f8e3b73dac41835f7f3f016a612ae5667cd4a5a0"
 
 var tools = []Tool{
 	{
@@ -222,6 +222,24 @@ var tools = []Tool{
 		AuditCode:   "device.uninstall_cancelled",
 		Summary:     "",
 		Description: "Roles: org_admin. Cancels an uninstall while its command is pending, failed or expired (plan M8d decision 38): the command becomes cancelled and the request is cleared. 409 invalid_state: no uninstall is requested, the device already received the command, or the uninstall completed.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "cancelOrganizationDeletion",
+		Method:      "POST",
+		Path:        "/api/platform/v1/organizations/{id}/cancel-deletion",
+		Pattern:     "POST /api/platform/v1/organizations/{id}/cancel-deletion",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassWrite,
+		StepUp:      false,
+		Expose:      true,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "organization.deletion_cancelled",
+		Summary:     "",
+		Description: "Roles: platform_admin. Cancels the pending deletion of the organization: every offboarding uninstall a device has not received yet is withdrawn; a device that already received it removes Paddock as instructed. 409 invalid_state when no deletion is pending (none requested, or the deletion already runs) or the request is still issuing its uninstalls.\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
@@ -853,6 +871,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin. Deletes the destination with its delivery state and history. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "deleteOrganization",
+		Method:      "POST",
+		Path:        "/api/platform/v1/organizations/{id}/delete",
+		Pattern:     "POST /api/platform/v1/organizations/{id}/delete",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "organization.deletion_requested",
+		Summary:     "",
+		Description: "Roles: platform_admin. Starts the deletion of the organization (ADR 0052): it stays active and usable until deletion.delete_after = now + grace_days, then the worker deletes its data and leaves a tombstone in status deleted. Every active device receives the command uninstall (mode leave, reason organization_offboarding), valid until delete_after plus 365 days; a device with an open uninstall or an open Lock or Destroy is skipped and counted. confirm_slug must be the organization's slug and reason 2 to 500 characters; grace_days is 7 to 90 (0 to 90 on a development stack) (400 invalid_request otherwise). 409 invalid_state when a deletion is already requested or the organization is not active or provisioning_failed. Needs a step-up within the last 5 minutes (403 step_up_required).\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"confirm_slug\":{\"description\":\"The organization's slug, typed by the administrator.\",\"type\":\"string\"},\"grace_days\":{\"description\":\"Days until the deletion runs; 7 to 90, 0 to 90 on a development stack.\",\"maximum\":90,\"minimum\":0,\"type\":\"integer\"},\"reason\":{\"maxLength\":500,\"minLength\":2,\"type\":\"string\"}},\"required\":[\"confirm_slug\",\"reason\",\"grace_days\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "deletePackageHold",
@@ -3299,8 +3335,8 @@ var tools = []Tool{
 		Idempotent:  true,
 		AuditCode:   "",
 		Summary:     "",
-		Description: "Roles: platform_admin.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: slug, name, created_at, status), q (search over: slug, name).",
-		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"slug\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"slug\",\"-slug\",\"name\",\"-name\",\"created_at\",\"-created_at\",\"status\",\"-status\"],\"type\":\"string\"},\"status\":{\"description\":\"Repeatable.\",\"items\":{\"enum\":[\"provisioning\",\"active\",\"provisioning_failed\",\"suspended\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
+		Description: "Roles: platform_admin. Without a status filter the list leaves out deleted organizations (their tombstones, ADR 0052); status=deleted lists them.\n\nRead-only. Paged: page, page_size (10/25/50/100), sort (allow list: slug, name, created_at, status), q (search over: slug, name).",
+		InputSchema: json.RawMessage("{\"properties\":{\"page\":{\"default\":1,\"description\":\"Page number. page × page_size may not exceed 10000 (400 page_out_of_range).\",\"minimum\":1,\"type\":\"integer\"},\"page_size\":{\"default\":25,\"enum\":[10,25,50,100],\"type\":\"integer\"},\"q\":{\"description\":\"Case-insensitive substring search over the fields listed in x-paddock-list.search.\",\"maxLength\":100,\"minLength\":2,\"type\":\"string\"},\"sort\":{\"default\":\"slug\",\"description\":\"Sort field; \\\"-\\\" prefix sorts descending. The id is the tie-breaker.\",\"enum\":[\"slug\",\"-slug\",\"name\",\"-name\",\"created_at\",\"-created_at\",\"status\",\"-status\"],\"type\":\"string\"},\"status\":{\"description\":\"Repeatable.\",\"items\":{\"description\":\"A pending deletion keeps the status active (or provisioning_failed) with a deletion object; deleting while the\\nworker deletes the organization's data; deleted for the tombstone.\\n\",\"enum\":[\"provisioning\",\"active\",\"provisioning_failed\",\"suspended\",\"deleting\",\"deleted\"],\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"}"),
 	},
 	{
 		Name:        "listPackageHolds",

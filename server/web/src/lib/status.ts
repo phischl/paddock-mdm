@@ -253,6 +253,10 @@ export function organizationStatus(s: OrganizationStatus): StatusView {
       return { status: 'critical', label }
     case 'suspended':
       return { status: 'warn', label }
+    case 'deleting':
+      return { status: 'warn', label }
+    case 'deleted':
+      return { status: 'neutral', label }
   }
 }
 

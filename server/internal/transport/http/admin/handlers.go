@@ -11,6 +11,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -245,6 +246,9 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 		}
 		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name,
 			Domains: domains}
+		if organization.DeletionPending(me.Organization.Status, me.Organization.DeleteAfter) {
+			out.OrganizationDeletion = &adminapi.MeOrganizationDeletion{DeleteAfter: me.Organization.DeleteAfter.UTC()}
+		}
 	}
 	if me.MCPWriteEnabledAt != nil {
 		at := me.MCPWriteEnabledAt.UTC()
@@ -507,6 +511,56 @@ func (h *handlers) GetOrganization(ctx context.Context, req adminapi.GetOrganiza
 func toOrganization(o pgstore.Organization) adminapi.Organization {
 	return adminapi.Organization{
 		Id: openapi_types.UUID(o.ID), Slug: o.Slug, Name: o.Name, Status: adminapi.OrganizationStatus(o.Status),
-		Domains: o.Domains, CreatedAt: o.CreatedAt.UTC(),
+		Domains: o.Domains, CreatedAt: o.CreatedAt.UTC(), Deletion: toOrganizationDeletion(o),
 	}
+}
+
+// toOrganizationDeletion is Organization.deletion: nil while no deletion was requested (ADR 0052). The uninstall counts
+// are 0 while the request still issues the uninstalls.
+func toOrganizationDeletion(o pgstore.Organization) *adminapi.OrganizationDeletion {
+	if o.DeletionRequestedAt == nil || o.DeleteAfter == nil {
+		return nil
+	}
+	d := &adminapi.OrganizationDeletion{
+		RequestedAt: o.DeletionRequestedAt.UTC(), DeleteAfter: o.DeleteAfter.UTC(), LastErrorCode: o.OffboardingErrorCode,
+	}
+	if o.DeletionRequestedBy != nil {
+		d.RequestedBy = *o.DeletionRequestedBy
+	}
+	if o.DeletionReason != nil {
+		d.Reason = *o.DeletionReason
+	}
+	if o.OffboardingStep != nil {
+		step := adminapi.OrganizationDeletionStep(*o.OffboardingStep)
+		d.Step = &step
+	}
+	if o.DeletedAt != nil {
+		at := o.DeletedAt.UTC()
+		d.DeletedAt = &at
+	}
+	if o.DeletionUninstallsIssued != nil {
+		d.UninstallsIssued = int(*o.DeletionUninstallsIssued)
+	}
+	if o.DeletionUninstallsSkipped != nil {
+		d.UninstallsSkipped = int(*o.DeletionUninstallsSkipped)
+	}
+	return d
+}
+
+func (h *handlers) DeleteOrganization(ctx context.Context, req adminapi.DeleteOrganizationRequestObject) (adminapi.DeleteOrganizationResponseObject, error) {
+	o, err := h.orgs.RequestDeletion(ctx, req.Id, app.DeletionInput{
+		ConfirmSlug: req.Body.ConfirmSlug, Reason: req.Body.Reason, GraceDays: req.Body.GraceDays,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.DeleteOrganization202JSONResponse(toOrganization(o)), nil
+}
+
+func (h *handlers) CancelOrganizationDeletion(ctx context.Context, req adminapi.CancelOrganizationDeletionRequestObject) (adminapi.CancelOrganizationDeletionResponseObject, error) {
+	o, err := h.orgs.CancelDeletion(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.CancelOrganizationDeletion200JSONResponse(toOrganization(o)), nil
 }

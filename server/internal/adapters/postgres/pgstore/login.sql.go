@@ -215,7 +215,7 @@ func (q *Queries) ListDeviceUsersSeenSince(ctx context.Context, since time.Time)
 }
 
 const setDeviceLoginsSuspended = `-- name: SetDeviceLoginsSuspended :one
-UPDATE device SET logins_suspended = $1 WHERE id = $2 RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at
+UPDATE device SET logins_suspended = $1 WHERE id = $2 RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at, uninstall_requested_at, uninstall_mode, uninstall_command_id, uninstalled_at, retired_reason, name, enrollment_method, config_mode, config_mode_changed_at, compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version, denial_lock_checked_at, uninstall_reason
 `
 
 type SetDeviceLoginsSuspendedParams struct {
@@ -255,6 +255,7 @@ func (q *Queries) SetDeviceLoginsSuspended(ctx context.Context, arg SetDeviceLog
 		&i.CompiledOsVersionID,
 		&i.CompiledAgentVersion,
 		&i.DenialLockCheckedAt,
+		&i.UninstallReason,
 	)
 	return i, err
 }

@@ -61,6 +61,10 @@ func TestMsgIDAliasTableIsAddOnly(t *testing.T) {
 		"notification.destination_secret_rotated":       "notification.dest_secret_rotated", //nolint:gosec // an audit code, not a credential
 		"software_repository.credential_rotated":        "software_repository.cred_rotated", //nolint:gosec // an audit code, not a credential
 		"device.software_request_withdrawn":             "device.sw_request_withdrawn",
+		"organization.deletion_step_completed":          "organization.deletion_step_done",
+		"organization.deletion_step_failed":             "organization.deletion_step_fail",
+		"platform.offboarded_device_uninstalled":        "platform.offboarded_uninstalled",
+		"platform.deleted_organization_audit_read":      "platform.deleted_org_audit_read",
 	}
 	for c, want := range published {
 		if got := msgIDAliases[c]; got != want {
