@@ -484,3 +484,64 @@ Order: 1 → 2 → 3 → (4, 5 in either order) → 6 → 7 → 8; 9 → 10 inde
 - `offboarded_device` holds signed uninstall envelopes valid for a year: they act only on their device and only
   remove Paddock (the action the organization was told about).
 - Open: grace-period bounds 7–90 days with default 30 (maintainer question, default applied).
+
+## Amendment 2026-11-14 b — encrypted recovery export (maintainer decision; ADR 0052 amendment b; ticket PDK-1036)
+
+Binding; where it contradicts the sections above, it wins.
+
+### Requirement
+
+| ID | Requirement | Acceptance (who sees it) |
+| --- | --- | --- |
+| OFB-9 | During the grace period an organization administrator or the platform administrator exports all LUKS recovery keys and local administrator passwords of the organization, encrypted to a public key or passphrase they supply. | The requester downloads one OpenPGP file that `gpg --decrypt` opens with their key or passphrase; the organization's audit log shows one `organization.recovery_exported`. |
+
+### Decisions
+
+21. **Endpoints.** `POST /api/v1/recovery-export` (role `org_admin`) and
+    `POST /api/platform/v1/organizations/{id}/recovery-export` (role `platform_admin`); both `x-paddock-step-up: true`,
+    `x-paddock-audit: organization.recovery_exported`, CSRF header. Available only while the organization's deletion is
+    pending; otherwise 409 `invalid_state`. 409 `export_limit` after five successful exports of the organization since
+    `deletion_requested_at`. 404 `not_found` for an unknown organization (platform path).
+22. **Request body** `RecoveryExportRequest`: `{ "recipient": "public_key" | "passphrase", "public_key": string
+    (ASCII-armoured OpenPGP public key, required for public_key, at most 16 KiB, must contain an encryption-capable
+    key), "passphrase": string (required for passphrase, 16–1024 characters) }`; `additionalProperties: false`. The body
+    is never logged; the passphrase never enters audit params, problem details or metrics.
+23. **Response** `200`, `Content-Type: application/pgp-encrypted`, `Content-Disposition: attachment;
+    filename="paddock-recovery-<slug>-<UTC yyyymmddThhmmssZ>.asc"`, body = one ASCII-armoured OpenPGP message
+    (`github.com/ProtonMail/go-crypto/openpgp`: `Encrypt` to the given entity, or `SymmetricallyEncrypt` with S2K
+    `argon2`, cipher AES-256). Plaintext inside the message: JSON Lines, one object per device:
+    `{"device_id": uuid, "hostname": string, "volumes": [{"uuid": string, "recovery_key": string}],
+    "local_admin": {"username": string, "password": string} | null}`, first line a header object
+    `{"organization_id": uuid, "slug": string, "exported_at": RFC3339, "devices": int}`.
+24. **Flow.** The api checks role, step-up and state, then forwards to the escrow-reader exactly like a reveal (step-up
+    token by `jti`, one use counted in `stepup-uses:*`). The escrow-reader reads the organization's escrow rows (newest
+    recovery key per volume, newest local administrator password) of non-retired devices, decrypts them through Transit
+    in batches of at most `bao.MaxBatch`, and writes the JSON Lines into the OpenPGP writer that streams into the
+    response. Nothing is buffered to disk; the plaintext lives only in process memory per batch and is zeroed after use.
+    The platform path enters the organization context through `db.OrgPool.InPendingDeletionOrg(ctx, platform, org, fn)`
+    (same shape and checks as `InDeletedOrg`, but requires `status = 'active' AND delete_after IS NOT NULL`).
+25. **Audit.** One `organization.recovery_exported` per attempt in the organization's log (success, failure, denial);
+    params `recipient`, `key_fingerprint` (public_key only), `devices`, `secrets`, `requester_scope`
+    (`organization` | `platform`). A failure after streaming began is recorded as failure; the client receives a
+    truncated message that OpenPGP's integrity check rejects.
+26. **Portal.** The banner of OFB-7 links to a dialog (organization administrator; platform administrator on the
+    organization detail) that asks for the recipient type and the key or passphrase (twice, with a strength hint) and
+    starts the download after the step-up. The dialog states that the file is the only remaining copy after the deletion.
+27. **RR-137** is reworded to "only if no export was taken" (PDK-1019).
+
+### Tests
+
+- Integration (escrow-reader and api): an organization with three devices (one retired, one without escrow) → the
+  export holds exactly one device line with its volumes and password; decrypted in the test with the private key and
+  with the passphrase; a wrong passphrase fails; without step-up 403 `step_up_required`; `org_operator` 403; not pending
+  409 `invalid_state`; the sixth export 409 `export_limit`; exactly one audit event per attempt and no secret, no
+  passphrase in any recorded param or log line (log capture asserts); the platform path refused for an organization of
+  another status (404 or 409 as specified).
+- Acceptance gate OF9: request deletion (grace 30), export with a test key generated by `gpg --batch --quick-gen-key` in a temporary
+  `GNUPGHOME`, decrypt with `gpg --batch --decrypt` (the gate fails, never skips, when `gpg` is missing; it is present on
+  the `ubuntu-24.04` runners and the development host), compare with single reveals of the same device.
+
+### Step
+
+12. **PDK-1036** after PDK-1014 (needs the pending state), before PDK-1018 (the portal dialog is part of PDK-1036; the
+    banner link in PDK-1018 points to it).
