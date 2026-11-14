@@ -371,6 +371,8 @@ const (
 	// may enrol a passkey at their next sign-in.
 	CodePlatformMFAEnrolMarksSeeded  Code = "platform.mfa_enrol_marks_seeded"
 	CodePlatformMFAEnrolMarksCleared Code = "platform.mfa_enrol_marks_cleared"
+	// An action refused because its organization is deleting or deleted (plan M17 amendment 2026-11-14 f point 1).
+	CodeOrganizationInactiveDenied Code = "organization.inactive_denied"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -2237,6 +2239,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"cleared"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Recorded only for a round that removed at least one mark; cleared counts them. Failure when a removal failed after others were written; the next round retries it. No usernames. Actor is the system actor worker. Platform pseudo-organization.",
+	},
+	CodeOrganizationInactiveDenied: {
+		Code: CodeOrganizationInactiveDenied, Emitted: true,
+		Description: "An action was refused because its organization is being deleted or was deleted (403 organization_inactive). Actor and target are those of the refused attempt.",
+		Params:      []string{"organization_id", "attempted_code", "status"},
+		Outcomes:    []Outcome{OutcomeDenied},
+		Note:        "Platform pseudo-organization: nothing is written into an organization that is being deleted. organization_id names the refused organization, attempted_code the action's own code (not recorded in addition), status is deleting or deleted.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,
