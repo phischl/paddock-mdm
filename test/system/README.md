@@ -198,8 +198,9 @@ PADDOCK_SYSTEM_BACKUP=1 make system-test VM=all T='TestBackupGates'
 ```
 
 It needs passwordless `sudo` on the host (the local root is root-owned, and `./paddock restore` hands the staged set to
-uid 999), and 80, 443, 445, 2049 and 127.0.0.1:8080 free; the subnets 172.30.0.0/24 and 172.30.1.0/24 of
-`compose.ci-lab.yaml` must not be taken by another Compose network. Run it alone: it destroys the lab twice and must
+uid 999), and 80, 443, 445, 2049 and 127.0.0.1:8080 free; the subnets 172.28.0.0/24, 172.30.0.0/24 and
+172.30.1.0/24 of `compose.ci-lab.yaml` must not be taken by another Compose network (the development stack's edge
+network takes 172.28.0.0/24: `make down` first, without `V=1`). Run it alone: it destroys the lab twice and must
 never run beside acceptance, e2e or other system tests. It takes about two hours. `PADDOCK_SYSTEM_BUNDLE` names another
 bundle tarball. Before the port check it removes what a killed earlier run left behind under the gate's own fixed names
 (the Compose project `paddock-systest-lab` with its volumes, the proxy, the share relay, the S3 store).
