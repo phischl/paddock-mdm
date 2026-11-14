@@ -203,6 +203,7 @@ func gateS3(t *testing.T, d *Device) {
 		}
 	})
 	start := time.Now()
+	t.Logf("%s: checking for 10m0s that the device stays usable while the server is down", d.Name)
 	d.Must("echo offline edit | sudo tee -a " + unit + " >/dev/null")
 	for time.Since(start) < 10*time.Minute {
 		out := d.Must("systemctl is-active paddock-supervisor; pgrep -fc '^/opt/paddock/agent/current/paddockd run'; sudo passwd -S paddock | cut -d' ' -f2; sudo -n true && echo sudo-ok")
@@ -332,6 +333,7 @@ func gateS4(t *testing.T, d *Device) {
 		if p["from_version"] != good || d.AgentVersion() != good || d.Slot() != slot {
 			t.Fatalf("after the rollback: %v, version %s slot %s; want %s in %s", p, d.AgentVersion(), d.Slot(), good, slot)
 		}
+		t.Logf("%s: checking for 3m0s that the rollback is not repeated", d.Name)
 		// Rolled back exactly once (PDK-300): the restarted agent must not stage the release again, also over the
 		// check-ins of the next three minutes.
 		for end := time.Now().Add(3 * time.Minute); time.Now().Before(end); time.Sleep(time.Minute) {

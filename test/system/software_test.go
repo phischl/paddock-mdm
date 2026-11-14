@@ -229,7 +229,7 @@ func gateSW4(t *testing.T, d *Device, g *softwareGate) {
 			strings.Contains(d.Must("LC_ALL=C apt-cache policy "+gateApp+" | grep Candidate: || true"), "1.1")
 	})
 	d.Checkin()
-	time.Sleep(2*driftInterval + 10*time.Second)
+	WaitLogged(t, "two drift passes must run before the installed version is checked", 2*driftInterval+10*time.Second)
 	if v := d.installedVersion(gateApp); v != "1.0" {
 		t.Fatalf("required latest: the catalog moved %s to %s; only the update runs may", gateApp, v)
 	}
@@ -270,7 +270,7 @@ func gateSW5(t *testing.T, d *Device, g *softwareGate) {
 	d.Must("sudo touch -d '-20 min' /run/paddock/last-checkin")
 	d.dpkgInstall(t, gateDeb)
 	softwareState(t, d, gateApp, "pending", "deferred_offline", 3*time.Minute, nil)
-	time.Sleep(2*driftInterval + 10*time.Second)
+	WaitLogged(t, "two drift passes must run before the installed version is checked", 2*driftInterval+10*time.Second)
 	if v := d.installedVersion(gateApp); v != "1.0" {
 		t.Fatalf("%s removed while the server was unreachable (%q)", gateApp, v)
 	}
@@ -310,7 +310,7 @@ func gateSW6(t *testing.T, d *Device, g *softwareGate) {
 	d.reassign(g.assignment, "required", "1.0")
 	softwareState(t, d, gateApp, "pending", "dpkg_locked", 6*time.Minute, d.Checkin)
 	d.Checkin()
-	time.Sleep(70 * time.Second)
+	WaitLogged(t, "a dpkg lock must not record a failure", 70*time.Second)
 	if failed := d.newEvents("device.software_apply_failed", g.fail, nil); len(failed) > 0 {
 		t.Errorf("a dpkg lock recorded device.software_apply_failed: %+v", failed)
 	}
@@ -409,7 +409,7 @@ func gateSW10(t *testing.T, d *Device, g *softwareGate) {
 	g.removed = d.eventIDs("device.software_removed")
 	d.reassign(g.assignment, "forbid", "")
 	softwareState(t, d, gateApp, "pending", "outside_window", 6*time.Minute, d.Checkin)
-	time.Sleep(2*driftInterval + 10*time.Second)
+	WaitLogged(t, "two drift passes must run before the installed version is checked", 2*driftInterval+10*time.Second)
 	if v := d.installedVersion(gateApp); v != "1.1" {
 		t.Fatalf("forbidden %s removed outside the window (%q)", gateApp, v)
 	}
@@ -424,7 +424,7 @@ func gateSW10(t *testing.T, d *Device, g *softwareGate) {
 	g.installed = d.eventIDs("device.software_installed")
 	d.reassign(g.assignment, "required", "1.1")
 	softwareState(t, d, gateApp, "pending", "outside_window", 6*time.Minute, d.Checkin)
-	time.Sleep(2*driftInterval + 10*time.Second)
+	WaitLogged(t, "two drift passes must run before the installed version is checked", 2*driftInterval+10*time.Second)
 	if v := d.installedVersion(gateApp); v != "" {
 		t.Fatalf("required %s installed outside the window at %s", gateApp, v)
 	}

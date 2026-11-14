@@ -14,7 +14,7 @@ GO_MODULES    := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) go list -m -f '{{.Dir}}' | s
 GO_PACKAGES   := $(addsuffix /...,$(GO_MODULES))
 UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... \
 	./test/acceptance/internal/stack/... \
-	./test/acceptance/cmd/acceptanceshard/...
+	./test/acceptance/cmd/acceptanceshard/... ./test/system/cmd/testlive/...
 WEB_DIR       := server/web
 # Default to the tag of this checkout's stack (deploy/compose/.env, see dev_setting), so a second dev stack never
 # retags the first one's image.
@@ -134,6 +134,7 @@ lint-shell:
 	shellcheck -s sh deploy/compose/valkey/entrypoint.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
 	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
+	shellcheck -s bash test/system-test-run.sh test/system-test-run_test.sh
 	shellcheck -s bash test/stack-preflight.sh test/stack-preflight_test.sh
 	shellcheck -s bash scripts/changelog-assemble.sh scripts/changelog-assemble_test.sh
 	shellcheck -s bash scripts/release-notes-check.sh scripts/release-notes-check_test.sh
@@ -262,6 +263,7 @@ typecheck: ## Type-check every Go module (go vet, including tests) and the porta
 test: ## Unit and integration tests (requires Docker)
 	go test -count=1 $(UNIT_PACKAGES)
 	go test -count=1 -tags paddock_revoke_testtarget ./agent/internal/revoke/
+	go test -count=1 -run '^TestSuitesComplete$$' ./test/system/
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/wait-healthy_test.sh
@@ -289,6 +291,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
 	bash test/require-tests_test.sh
+	bash test/system-test-run_test.sh
 	bash test/stack-preflight_test.sh
 	bash test/skill_test.sh
 	bash scripts/changelog-assemble_test.sh
@@ -542,15 +545,15 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 
 .PHONY: system-test
 # T and the zero-test guard as for acceptance (PDK-339).
-system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)
-	@test -n "$(VM)" || { echo "usage: make system-test VM=<paddock-u2404|paddock-u2604|all> [T=<regex>]"; exit 1; }
+system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex> or SUITE=<name|all>, see test/system/suites.txt)
+	@test -n "$(VM)" || { echo "usage: make system-test VM=<paddock-u2404|paddock-u2604|all> [T=<regex> | SUITE=<name|all>]"; exit 1; }
+	@test -z "$(value T)" -o -z "$(SUITE)" || { echo "system-test: T and SUITE are mutually exclusive" >&2; exit 1; }
 	$(STACK_PREFLIGHT)
 	$(MAKE) --no-print-directory deb VERSION=0.1.0 TAGS=paddock_dev REVOKE_TAGS=paddock_revoke_testtarget
 	$(MAKE) --no-print-directory fleetd-deb
 	CGO_ENABLED=0 go build -trimpath -o bin/revoke-release/paddock-revoke ./agent/cmd/paddock-revoke
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
-	set -o pipefail; PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... \
-		$(if $(value T),-run '$(value T)',) -v | bash test/require-tests.sh
+	PADDOCK_SYSTEM_VMS=$(VM) bash test/system-test-run.sh '$(SUITE)' '$(value T)'
 
 # The Playwright image ships the browsers of exactly one @playwright/test version (PDK-290): refuse a mismatch before
 # any test runs instead of failing on missing browsers. Dependabot ignores the package; bump both together.

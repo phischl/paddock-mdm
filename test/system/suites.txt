@@ -1,0 +1,9 @@
+# Suites of `make system-test SUITE=<name|all>` (plan M19 D4, PDK-962): name|timeout|-run regex.
+# TestSuitesComplete fails when a top-level test of this package matches no suite or more than one.
+identity|3h|^(TestIdentityGates)$
+localadmin|2h|^(TestLocalAdminGates)$
+software|3h|^(TestSoftwareGates|TestSelfServiceGates|TestSoftwareHelpersUnit|TestSoftwareAptOutputUnit|TestSoftwareDpkgLockUnit|TestWindowAt|TestSelfServiceHelpersUnit|TestSelfServiceScriptsUnit)$
+disk|4h|^(TestDiskGates|TestDiskUnlockModeTPMOnly|TestDiskUnlockModeMismatch|TestInPlaceEncryptionLVM|TestInPlaceEncryptionPlain|TestInPlaceEncryptionCleanupAdopt|TestInPlaceEncryptionCancelBeforeReboot|TestLUKSPassphraseSlots|TestOpensScriptIgnoresTokens|TestParseInitrds|TestProgress|TestIETemplates)$
+revoke|2h|^(TestRevocationRefusalGates|TestRevocationLockGate|TestDeadMansSwitchGate)$
+lifecycle|3h|^(TestUninstallLeave|TestUninstallReset|TestUninstallLastAdmin|TestUninstallTpmInUse|TestSupervisorUpdate|TestSupervisorRollback|TestUpdateNow|TestUpdatePolicyManual|TestRolloutAutoStop|TestUpdatesGates)$
+misc|3h|^(TestAgentGates|TestAutoinstallGate|TestTokenDevices|TestEndVerbs|TestBackupGates|TestSetEnvLine|TestAlertActive|TestMirroredSince|TestFailedWith|TestListingDiff|TestParamHas|TestPreflight|TestAdoptionGates|TestConfigRolloutGates|TestConfigBucket|TestDiagnosticsGates|TestHostnameGate|TestInventoryGates|TestNoticeGate|TestMustReturnsStdoutAlone|TestDevicePaths|TestMustRootIgnoresSudoNoise|TestOSReleaseGate|TestVMGroupSharedRelease|TestVMGroupAfterAllRunsEvery|TestShutdownBlockers|TestClassifyReboot|TestSSHExitCode|TestSSHHandshakeFailedUnit|TestShouldRetrySSHUnit|TestWithBackup|TestStackHelpersTakeTheCallersT|TestStackHelperScenario|TestBind|TestWatchGate|TestSuitesComplete)$
