@@ -125,10 +125,6 @@ services:
     pids_limit: 512
     # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
     mem_limit: ${PADDOCK_POSTGRES_MEM_LIMIT:-2g}
-    # PostgreSQL's default of 100 connections is less than the roles' pools may open together on a larger host
-    # (docs/operations/capacity.md "PostgreSQL connection budget"). compose.backup.yaml replaces this command and
-    # repeats the setting.
-    command: ["postgres", "-c", "max_connections=${PADDOCK_POSTGRES_MAX_CONNECTIONS:-200}"]
     environment:
       POSTGRES_DB: paddock
       POSTGRES_USER: postgres

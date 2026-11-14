@@ -29,7 +29,6 @@ x-paddock-logging: &paddock-logging
 services:
   postgres:
     logging: *paddock-logging
-    # This command replaces the one of compose.yaml, so it repeats compose.yaml's max_connections.
     command:
       - sh
       - -c
@@ -38,7 +37,6 @@ services:
         install -d -o postgres -g postgres -m 755 /paddock-bundle-seq &&
         exec docker-entrypoint.sh postgres -c archive_mode=on -c archive_timeout=60
         -c 'archive_command=cp %p /pgbackrest-spool/paddock/.%f && mv /pgbackrest-spool/paddock/.%f /pgbackrest-spool/paddock/%f'
-        -c max_connections=${PADDOCK_POSTGRES_MAX_CONNECTIONS:-200}
     volumes:
       - pgbackrest-spool-paddock:/pgbackrest-spool/paddock
       - postgres-socket:/var/run/postgresql
