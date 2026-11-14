@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestVMGroupSharedRelease: two VMs share their input before a rendezvous, the step runs once and sees both values,
@@ -71,5 +72,35 @@ func TestVMGroupAfterAllRunsEvery(t *testing.T) {
 	})
 	if !slices.Equal(undone, []string{"policy", "failed", "release"}) {
 		t.Fatalf("undone %v, want policy, failed, release", undone)
+	}
+}
+
+// TestVMGroupFailedVMDoesNotBlockPeer: VM a failed and waits in a cleanup at "end"; VM b waits at "off", a step a never
+// reaches. Without the fix both wait for each other until the test timeout (PDK-1012).
+func TestVMGroupFailedVMDoesNotBlockPeer(t *testing.T) {
+	g := newVMGroup()
+	g.failed = func(_ *testing.T, vm string) bool { return vm == "a" }
+	for _, n := range []string{"a", "b"} {
+		g.active[n] = true
+	}
+	done := make(chan string, 2)
+	go func() {
+		defer g.leave("a")
+		g.Together(t, "a", "gate", "end", func() string { return "" })
+		done <- "a"
+	}()
+	// b only arrives at "end" once its own step "off" is done, as in the dead man's switch gate.
+	go func() {
+		defer g.leave("b")
+		g.Together(t, "b", "gate", "off", func() string { return "" })
+		g.Together(t, "b", "gate", "end", func() string { return "" })
+		done <- "b"
+	}()
+	for range 2 {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("a rendezvous waits for a VM whose test failed")
+		}
 	}
 }

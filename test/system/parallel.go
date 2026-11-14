@@ -22,6 +22,8 @@ type vmGroup struct {
 	afterAll []func(t *testing.T)
 	// shared holds, per key, the value each VM shared for a step that Together runs for all of them.
 	shared map[string]map[string]string
+	// failed reports whether a VM's test failed; tests replace it to simulate a failure.
+	failed func(t *testing.T, vm string) bool
 }
 
 // round is one rendezvous: the VMs that arrived and, once it started, the result of its step.
@@ -37,6 +39,7 @@ func newVMGroup() *vmGroup {
 	g := &vmGroup{active: map[string]bool{}, finished: map[string]map[string]bool{}, rounds: map[string]*round{},
 		locks: map[string]*sync.Mutex{}, shared: map[string]map[string]string{}}
 	g.cond = sync.NewCond(&g.mu)
+	g.failed = func(t *testing.T, _ string) bool { return t.Failed() }
 	return g
 }
 
@@ -64,7 +67,7 @@ func (g *vmGroup) Gate(t *testing.T, vm, gate string) {
 	})
 }
 
-// Together waits until every running VM arrived at step of gate or left the gate; the VM that finds the rendezvous
+// Together waits until every running VM arrived at step of gate or left the gate (it ended, or its test failed); the VM that finds the rendezvous
 // complete runs fn, and every VM returns its result. If fn fails, the other VMs fail too.
 func (g *vmGroup) Together(t *testing.T, vm, gate, step string, fn func() string) string {
 	t.Helper()
@@ -73,6 +76,16 @@ func (g *vmGroup) Together(t *testing.T, vm, gate, step string, fn func() string
 	}
 	key := gate + "/" + step
 	g.mu.Lock()
+	// A VM whose test failed reaches its rendezvous from a cleanup that runs before the Gate cleanup (cleanups run in
+	// reverse order): it is gone from the gate, and a peer waiting for it at another step must not wait any longer
+	// (PDK-1012).
+	if g.failed(t, vm) {
+		if g.finished[vm] == nil {
+			g.finished[vm] = map[string]bool{}
+		}
+		g.finished[vm][gate] = true
+		g.cond.Broadcast()
+	}
 	r := g.rounds[key]
 	if r == nil {
 		r = &round{arrived: map[string]bool{}, done: make(chan struct{})}
