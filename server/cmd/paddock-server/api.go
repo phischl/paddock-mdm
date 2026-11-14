@@ -234,6 +234,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	diagnostics := app.NewDiagnostics(runner, orgPool, nil, 24*time.Hour).WithDownload(escrowAccess, escrowObjects)
 	softwarePackages := app.NewSoftwarePackages(runner, orgPool, baoClient, packageStore,
 		objectstore.NewPresigner(bundlesURL, bundlesAccessKey, bundlesSecretKey, bundlesBucket), bundlesURL)
+	uninstalls := app.NewUninstalls(runner, orgPool, devicecache.New(vk))
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:     app.NewDeviceGroups(runner, orgPool),
 		Tokens:           app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, devicecache.New(vk), deviceURL),
@@ -241,7 +242,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Declarative:      app.NewDeclarative(runner, orgPool),
 		Devices:          app.NewDevices(runner, orgPool, devicecache.New(vk)),
 		Managed:          app.NewManagedConfig(runner, orgPool),
-		Organizations:    app.NewOrganizations(runner, platformPool, ak),
+		Organizations:    app.NewOrganizations(runner, platformPool, ak, uninstalls, common.Development()),
 		Users:            app.NewUsers(runner, orgPool, ak),
 		UserGroups:       app.NewUserGroups(runner, orgPool, ak),
 		Logins:           app.NewLogins(runner, orgPool, ak),
@@ -286,7 +287,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Releases:         releases,
 		ReleaseImports:   imports,
 		AgentUpdates:     app.NewAgentUpdates(runner, orgPool, devicecache.New(vk)),
-		Uninstalls:       app.NewUninstalls(runner, orgPool, devicecache.New(vk)),
+		Uninstalls:       uninstalls,
 		Conversions:      app.NewDiskConversions(runner, orgPool, devicecache.New(vk)),
 		AuditLog:         app.NewAuditLog(auditReader, orgPool),
 		AuditIntegrity:   app.NewAuditIntegrity(auditReader),

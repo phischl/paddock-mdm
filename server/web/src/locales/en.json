@@ -397,14 +397,20 @@
       "export_requested": "{actor} requested an evidence export of {from_day} to {to_day}",
       "searched": "{actor} searched the audit log{q_used, select, true { with a search term} other {}}",
       "export_completed": "The audit writer processed the evidence export of {from_day} to {to_day} ({events, number} events, {objects, number} objects)",
-      "export_downloaded": "{actor} downloaded the evidence export of {from_day} to {to_day} ({size, number} bytes)"
+      "export_downloaded": "{actor} downloaded the evidence export of {from_day} to {to_day} ({size, number} bytes)",
+      "event_after_retirement": "An event {original_code} arrived after the organization's audit log was closed"
     },
     "organization": {
       "created": "{actor} created the organization {slug}",
       "domains_changed": "{actor} set the domains of {slug}",
       "recompile_requested": "{actor} requested a new bundle for every device (restore)",
       "security_review_required": "A security review is required: {root_grant_profiles, number} root grants, {sensitive_files, number} sensitive files and {denied_files, number} files on denied paths",
-      "mcp_policy_changed": "{actor} changed the MCP policy of the organization: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}"
+      "mcp_policy_changed": "{actor} changed the MCP policy of the organization: {enabled, select, true {enabled} other {disabled}}, changes {write_enabled, select, true {allowed} other {not allowed}}, {mode, select, selected {{allowed_count, plural, one {# selected tool} other {# selected tools}}} other {all tools}}",
+      "deletion_requested": "{actor} requested the deletion of the organization {slug} ({grace_days, plural, one {# day} other {# days}} grace period)",
+      "deletion_cancelled": "{actor} cancelled the deletion of the organization {slug}",
+      "deletion_step_completed": "Deletion of {slug}: step {step} completed",
+      "deletion_step_failed": "Deletion of {slug}: step {step} failed",
+      "deleted": "The organization {slug} was deleted"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -571,6 +577,8 @@
       "restore_completed": "Restore completed on the host",
       "restore_failed": "Restore failed on the host ({detail})",
       "restore_abandoned": "Running restore plan abandoned",
+      "offboarded_device_uninstalled": "A device of a deleted organization removed Paddock",
+      "deleted_organization_audit_read": "{actor} read the audit log of the deleted organization {slug}",
       "mfa_enrol_marks_seeded": "{marked, plural, one {# administrator without a passkey was} other {# administrators without a passkey were}} marked to set one up at the next sign-in ({totp_only, number} with only an authenticator app, {organizations, number} organizations)",
       "mfa_enrol_marks_cleared": "{cleared, plural, one {The sign-in setup mark of # administrator with a passkey was} other {The sign-in setup marks of # administrators with a passkey were}} removed"
     },
@@ -740,7 +748,9 @@
       "provisioning": "Provisioning",
       "active": "Active",
       "provisioning_failed": "Provisioning failed",
-      "suspended": "Suspended"
+      "suspended": "Suspended",
+      "deleting": "Deletion running",
+      "deleted": "Deleted"
     },
     "empty": {
       "title": "No organizations yet",

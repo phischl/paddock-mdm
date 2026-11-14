@@ -86,19 +86,38 @@ RETURNING *;
 -- name: CancelOrganizationDeletion :one
 UPDATE organization
 SET deletion_requested_at = NULL, deletion_requested_by = NULL, deletion_reason = NULL, delete_after = NULL,
-    updated_at = now()
+    deletion_uninstalls_issued = NULL, deletion_uninstalls_skipped = NULL, updated_at = now()
 WHERE id = @id AND status IN ('active', 'provisioning_failed') AND delete_after IS NOT NULL
 RETURNING *;
 
+-- The request's second transaction records the uninstall counts (plan M17 amendment c item 1); it finds no row when
+-- the request it belongs to no longer is the pending one.
+-- name: SetOrganizationDeletionUninstalls :one
+UPDATE organization
+SET deletion_uninstalls_issued = @issued::int, deletion_uninstalls_skipped = @skipped::int, updated_at = now()
+WHERE id = @id AND status IN ('active', 'provisioning_failed') AND deletion_requested_at = @requested_at
+  AND deletion_uninstalls_issued IS NULL
+RETURNING *;
+
+-- Cancelling a deletion holds the organization row while it withdraws the uninstalls, so the worker cannot start the
+-- deletion in between.
+-- FOR NO KEY UPDATE: it waits for and blocks the worker's UPDATE organization, but not the FOR KEY SHARE of the
+-- foreign-key checks of the organization's inserts (plan M17 amendment e point 4).
+-- name: LockOrganization :one
+SELECT * FROM organization WHERE id = @id FOR NO KEY UPDATE;
+
+-- A request whose uninstalls are still being issued (counts NULL) is not due yet: the deletion never starts before
+-- every device was told to leave.
 -- name: ListDueOrganizationDeletions :many
 SELECT id FROM organization
-WHERE status IN ('active', 'provisioning_failed') AND delete_after <= now()
+WHERE status IN ('active', 'provisioning_failed') AND delete_after <= now() AND deletion_uninstalls_issued IS NOT NULL
 ORDER BY delete_after, id;
 
 -- name: StartOrganizationDeletion :one
 UPDATE organization
 SET status = 'deleting', offboarding_step = @step, offboarding_error_code = NULL, updated_at = now()
 WHERE id = @id AND status IN ('active', 'provisioning_failed') AND delete_after <= now()
+  AND deletion_uninstalls_issued IS NOT NULL
 RETURNING *;
 
 -- name: ListDeletingOrganizations :many

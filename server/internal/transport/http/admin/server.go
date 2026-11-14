@@ -213,6 +213,8 @@ var privileged = map[string]struct {
 	"PATCH /api/v1/managed-units/{id}":                                     {app.ScopeOrg, app.SpecManagedUnitUpdate},
 	"DELETE /api/v1/managed-units/{id}":                                    {app.ScopeOrg, app.SpecManagedUnitDelete},
 	"PATCH /api/platform/v1/organizations/{id}":                            {app.ScopePlatform, app.SpecOrganizationSetDomains},
+	"POST /api/platform/v1/organizations/{id}/delete":                      {app.ScopePlatform, app.SpecOrganizationDeletionRequest},
+	"POST /api/platform/v1/organizations/{id}/cancel-deletion":             {app.ScopePlatform, app.SpecOrganizationDeletionCancel},
 	"POST /api/v1/users":                                                   {app.ScopeOrg, app.SpecUserCreate},
 	"PATCH /api/v1/users/{id}":                                             {app.ScopeOrg, app.SpecUserUpdate},
 	"DELETE /api/v1/users/{id}":                                            {app.ScopeOrg, app.SpecUserDelete},

@@ -89,8 +89,8 @@ func TestM8bCodes(t *testing.T) {
 		{"device.event_seq_reset", []string{"previous_high", "reported_high", "events_seen"}, success},
 		{"device.clock_drift", []string{"offset_s", "threshold_s", "last_contact_at"}, success},
 		{"device.clock_drift_cleared", []string{"offset_s", "threshold_s", "since"}, success},
-		{"audit.chain_verified", chain, success},
-		{"audit.chain_verification_failed", append(slices.Clone(chain), "problem_count", "problems"), []Outcome{OutcomeFailure}},
+		{"audit.chain_verified", append(slices.Clone(chain), "final"), success},
+		{"audit.chain_verification_failed", append(slices.Clone(chain), "problem_count", "problems", "final"), []Outcome{OutcomeFailure}},
 		{"admin.role_granted", []string{"role", "username", "authentik_pk", "group", "baseline"}, successFailure},
 		{"admin.role_revoked", []string{"role", "username", "authentik_pk", "group"}, successFailure},
 	} {

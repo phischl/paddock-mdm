@@ -203,3 +203,12 @@ without a usable uninstall: covers every case once, at the point where it is nee
 device enrolled during the grace period works until the deletion runs and then leaves; a device with an unfinished
 in-place encryption or a just-started revocation refuses the leave and keeps an inert agent (residual risk recorded by
 PDK-1019).
+
+## Amendment 2026-11-14 g — recovery export encryption (architect; plan M17 amendment g)
+
+Decision 8 is changed in one detail. A passphrase export uses OpenPGP's iterated and salted SHA-256 S2K at the maximum
+count with AES-256, not Argon2, because GnuPG 2.4 (Ubuntu 24.04) cannot open Argon2-protected messages and plain `gpg`
+must open the file. To compensate, the passphrase minimum rises to 20 characters, and the portal recommends the
+public-key recipient. Argon2 follows once GnuPG ≥ 2.5 is common on the supported platforms (PDK-1044). The export
+enters the organization through the offboarding gate like every other organization transaction, so it fails closed
+once the deletion has started.
