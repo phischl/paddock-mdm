@@ -11,8 +11,10 @@ Staged rollouts are **off by default**. While they are off, every change is imme
 
 ## 1. What is staged and what never is
 
-Staged (the *rollout-able sections*): managed files, managed units, package holds and the update settings
-(`settings.updates`). A change that touches none of them is never staged, whatever the setting says.
+Staged (the *rollout-able sections*): managed files, managed units, package holds, the update settings
+(`settings.updates`) and the software assignments (`software_assignments` in `paddock.yml`). Software sources
+(`software_sources`) and catalog entries (`software_catalog`) are never staged: a source is a trust anchor and needs
+a step-up, and an entry changes nothing on a device until an assignment names it. A change that touches none of them is never staged, whatever the setting says.
 
 **Never staged**, always immediate for every device:
 
@@ -24,7 +26,7 @@ Staged (the *rollout-able sections*): managed files, managed units, package hold
 - agent and supervisor releases (own rollout, [agent releases](agent-releases.md)) and the dead man's switch.
 
 A sudo removal, a user lock or a revocation therefore never waits for a wave. Where a change set mixes sections, only
-its changes to the four rollout-able sections are staged; everything else in it reaches every device at once. Item
+its changes to the rollout-able sections are staged; everything else in it reaches every device at once. Item
 changes that follow from deleting or renaming a device group (the group's files, units and holds) are never staged: they
 reach every device at once, so deleting an unrelated group starts no rollout. Items of a group the change set creates
 follow the normal rules. While a rollout is open, renaming or deleting a device group that scopes a staged item, or

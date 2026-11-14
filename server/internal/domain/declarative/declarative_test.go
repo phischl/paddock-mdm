@@ -316,6 +316,31 @@ func TestExampleIsValid(t *testing.T) {
 	}
 }
 
+// TestSoftwareExampleIsValid: examples/software.yaml passes the schema and decodes with the three software sections.
+func TestSoftwareExampleIsValid(t *testing.T) {
+	raw, err := os.ReadFile("../../../../examples/software.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := yaml.YAMLToJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := declarative.ValidateJSON(doc); err != nil {
+		t.Fatalf("examples/software.yaml violates the schema: %v", err)
+	}
+	d, err := declarative.Decode(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.SoftwareSources == nil || d.SoftwareCatalog == nil || d.SoftwareAssignments == nil {
+		t.Fatalf("the example lacks a software section: %+v", d)
+	}
+	if declarative.Duplicates(d) != nil {
+		t.Fatal("the example has duplicate keys")
+	}
+}
+
 // collisionDoc holds the items whose names contain the characters an old string key joined parts with (review 1 of
 // PDK-008): a global assignment of profile "lab:ops" and the assignment of profile "ops" in group "lab", and a
 // group "a:b" next to group "a".
