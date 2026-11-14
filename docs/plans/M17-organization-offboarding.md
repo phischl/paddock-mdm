@@ -797,3 +797,33 @@ Binding; where it contradicts amendment b decisions 22–24, it wins.
    `organization_inactive`, and the attempt is recorded as `organization.inactive_denied` in the platform
    pseudo-organization (amendment f point 1). Test: an organization moved to `deleting` before the export's
    transaction yields 403 `organization_inactive` and no export bytes.
+
+## Amendment 2026-11-14 h — no recovery export may straddle the start of the deletion (architect decision after PDK-1036 review 2)
+
+Binding; where it contradicts amendments b or g, it wins.
+
+1. **Cutoff, chosen over the alternatives.** An export is allowed only while `delete_after > now() + 20 minutes`
+   (constant `RecoveryExportCutoff = exportTimeout (15 min) + 5 min margin`, defined once in the app layer and used by
+   the escrow-reader). `now()` is the database's clock, in the reservation (tx1) and in the escrow-reader's pending
+   check, the same clock the worker uses for `delete_after <= now()`. Otherwise the answer is 409 `invalid_state` with
+   detail "the recovery export closes 20 minutes before the deletion starts". The escrow-reader's 15-minute stream
+   deadline is a hard limit. Because the worker moves an organization to `deleting` only once `delete_after <= now()`,
+   an export's tx2 always commits while the deletion is still pending, and its `organization.recovery_exported` event
+   reaches the organization's log.
+   - *Rejected:* recording the final event in the platform pseudo-organization. The organization's own log is where
+     the auditor of that organization expects a secret disclosure, and the started `action` row would still be deleted.
+   - *Rejected:* letting the move to `deleting` wait on the advisory lock. The window between the stream and tx2 holds
+     no lock, so the race stays, and the worker round would block for up to 15 minutes under its leader lock.
+2. **Inactive organizations on the platform path (review 2 finding 1, confirmed).** When the platform check finds
+   `deleting` or `deleted`, `db.InPendingDeletionOrg` returns `db.OrganizationUnavailable(org, status)` (PD001
+   semantics: 403 `organization_inactive`, `organization.inactive_denied` in the platform pseudo-organization), never
+   `ErrNotPendingDeletion`. The platform-pool fallback stays only for organizations that are neither pending nor
+   inactive.
+3. **What administrators see.** `Organization.deletion` and `Me.organization_deletion` gain the required property
+   `recovery_export_until: date-time` (= `delete_after − 20 minutes`, computed by the server). The banner and both
+   export dialogs show "Recovery export available until <time>". After that time the action is disabled, with the text
+   "The recovery export closed 20 minutes before the deletion." A deletion with grace 0 (development only) therefore
+   has no export window. Gate OF9 uses grace 30 and is unaffected.
+4. **Tests.** Reservation with `delete_after = now() + 19 min` → 409; with `now() + 21 min` → allowed; the
+   escrow-reader's own check refuses the same 19-minute case; the platform path for a `deleting` organization → 403
+   `organization_inactive`; portal component test for the disabled state.
