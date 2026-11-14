@@ -116,7 +116,8 @@ type LeaderLocker interface {
 }
 
 // leaderCheckEvery is how often the leader asks its lock connection whether it still answers: the longest a process
-// that lost the lock can go on writing beside the next leader (decisions-alpha10 §50).
+// that lost the lock can go on writing to the object stores beside the next leader (decisions-alpha10 §50); its
+// database writes end with the next leader's epoch (Store.Fence, plan M19 D5).
 const leaderCheckEvery = 5 * time.Second
 
 // Snapshotter takes OpenBao's Raft snapshot (bao.Client with the AppRole paddock-backup).
@@ -214,7 +215,8 @@ func NewEngine(cfg Config, lock LeaderLocker, store Store, keys Decrypter, snap 
 // rounds, so lanes and rounds only ever run under the lock. A process that does not get the lock stands by and tries
 // again every RoundInterval. When the lock's connection stops answering, the rounds and lanes stop before any further
 // write, the loss is logged and counted (paddock_backup_leader_lost_total; the audit registry has no code for it), and
-// Run tries to lead again. The end of ctx cancels the lanes, and Run returns once they returned; a lane cancelled so
+// Run tries to lead again; the same happens when a database write finds that another process took a newer leader epoch
+// (db.ErrFenced, plan M19 D5). The end of ctx cancels the lanes, and Run returns once they returned; a lane cancelled so
 // records nothing, and the next leader mirrors its runs.
 func (e *Engine) Run(ctx context.Context) error {
 	for {
@@ -226,8 +228,12 @@ func (e *Engine) Run(ctx context.Context) error {
 			e.metrics.leaderLost.Inc()
 			slog.ErrorContext(ctx, "backup role lost its leader lock; rounds and mirror lanes stopped, leading again when the lock is free",
 				"error", err)
+		case errors.Is(err, db.ErrFenced):
+			e.metrics.leaderLost.Inc()
+			slog.ErrorContext(ctx, "backup role was fenced: another process took the leadership; rounds and mirror lanes stopped, leading again when the lock is free",
+				"error", err)
 		case err != nil:
-			slog.WarnContext(ctx, "backup role could not take its leader lock; retrying", "error", err, "led", led)
+			slog.WarnContext(ctx, "backup role could not take its leader lock or epoch; retrying", "error", err, "led", led)
 		}
 		select {
 		case <-ctx.Done():
@@ -237,9 +243,15 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 }
 
-// lead runs the rounds while this process holds the leader lock; it returns once ctx ended and every lane returned,
-// and forgets the open passes, whose runs the next leadership covers.
+// lead takes a new leader epoch and runs the rounds while this process holds the leader lock; it returns once ctx
+// ended and every lane returned, and forgets the open passes, whose runs the next leadership covers. A write that
+// found the epoch moved on ends ctx, and lead returns db.ErrFenced.
 func (e *Engine) lead(ctx context.Context) error {
+	ctx, stop, err := e.store.Fence(ctx)
+	if err != nil {
+		return fmt.Errorf("take leader epoch: %w", err)
+	}
+	defer stop()
 	e.metrics.leader.Set(1)
 	defer e.metrics.leader.Set(0)
 	defer e.forgetPasses()
@@ -252,6 +264,9 @@ func (e *Engine) lead(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
+			if errors.Is(context.Cause(ctx), db.ErrFenced) {
+				return db.ErrFenced
+			}
 			return nil
 		case <-tick.C:
 		}

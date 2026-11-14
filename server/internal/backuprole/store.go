@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"time"
@@ -81,6 +82,10 @@ type RunRecord struct {
 
 // Store is the database of the backup role.
 type Store interface {
+	// Fence takes a new leader epoch right after the leader lock was taken (plan M19 D5, RR-134) and returns the
+	// context every database access of this leadership runs under: once another process took a newer epoch, a write
+	// fails with db.ErrFenced and ends that context with that cause. stop ends the context when the leadership ends.
+	Fence(ctx context.Context) (fenced context.Context, stop context.CancelFunc, err error)
 	ActiveKey(ctx context.Context) (ActiveKey, bool, error)
 	Keys(ctx context.Context) ([]KeyRecord, error)
 	Schedule(ctx context.Context) (backupset.Schedule, error)
@@ -471,6 +476,14 @@ const mirrorRunsTimeout = 2 * time.Minute
 
 // errRunFailed is the refusal that records a failed run's event with outcome failure; the error class is a param.
 var errRunFailed = fmt.Errorf("backup run failed")
+
+func (s *pgStore) Fence(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	host, err := os.Hostname()
+	if err != nil {
+		host = "unknown"
+	}
+	return s.pool.TakeLeaderEpoch(ctx, fmt.Sprintf("%s pid %d", host, os.Getpid()))
+}
 
 func (s *pgStore) InstallationID(ctx context.Context) (string, error) {
 	id, err := s.pool.SystemIdentifier(ctx)

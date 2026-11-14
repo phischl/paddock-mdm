@@ -43,6 +43,8 @@ func TestRLSLint(t *testing.T) {
 		"backup_run": true, "backup_restore_plan": true,
 		// Registry of the tables the offboarding deletes (plan M17 decision 7), table names only.
 		"offboarding_table": true,
+		// The backup leader epoch (plan M19 D5), role paddock_backup only.
+		"backup_leader": true,
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
