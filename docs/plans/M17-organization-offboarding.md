@@ -763,3 +763,10 @@ Binding; where it contradicts amendment d, it wins.
    granted).
 
 Assignment: points 1, 3 and 4 PDK-1038 (fix round); point 2 PDK-1019 (residual risk), PDK-1016 (no reconciliation).
+
+### Correction 2026-11-14 to amendment f point 1 (PDK-1038 fix round)
+
+`organization.inactive_denied` is **not** classified as Wazuh informational. It has only the outcome `denied`, and the
+classification test rejects informational codes that never succeed. The generic denied rule (level ≥ 7) covers it,
+which fits: a refused request against an organization being deleted is worth an analyst's look. "Wazuh informational"
+in point 1 is struck.

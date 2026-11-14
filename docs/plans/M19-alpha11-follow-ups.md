@@ -333,3 +333,26 @@ Binding; where it contradicts D1, it wins.
    `capacity.md` paragraph "Do not raise `max_connections`" into the D1.2/D1.3 rule (raise only through
    `PADDOCK_PG_MAX_CONNECTIONS`; restores start with the backup's value; rollback to alpha.10 refused above 100).
 4. Ingest containers after a rollback are not a risk: `rollback.sh` runs the new release's `paddock down` first.
+
+## Amendment 2026-11-14 c — budget limit, rollback advice, audit database (architect decision after the PDK-1032 review)
+
+Binding; where it contradicts D1.3 or D1.4, it wins.
+
+1. **The budget limit includes the operator-command reserve.** `./paddock check` FAILs when the sum exceeds
+   `PADDOCK_PG_MAX_CONNECTIONS − 3 − 12 − 4`: 3 superuser slots, 12 for pgBackRest and `paddock-migrate`, 4 for one
+   operator command (`capacity.md`, "operator commands … 4"; they run one at a time). It WARNs within 5 of that limit.
+   At the default 100 the limit is 81. A default install with auto-unseal sums to 81, so it WARNs and does not fail.
+   That WARN is accurate and stays. Sums of 82–85 now FAIL. Test cases in `bundle_test.sh`: 76 (OK), 77 and 81
+   (WARN), 82 (FAIL).
+2. **Rollback refusal advice.** `./paddock rollback` always restores the pre-upgrade point, so D1.3's advice "roll back
+   to a point after that backup" is wrong. The refusal message of `rollback.sh` reads: "PADDOCK_PG_MAX_CONNECTIONS is
+   above 100, which the previous release does not support. Set it to 100 (or remove it) in .env and run ./paddock
+   rollback again." The pre-upgrade backup was taken at the previous release's setting, so it restores as is.
+3. **Audit database.** `restore.sh` restores only the control database; the audit database is never restored by it
+   (ADR 0032). D1.3's "the same for the audit database" is struck: the backup-value rule applies to the control
+   database only.
+4. **Architecture text.** `docs/architecture.md` §2 (N2 amendment note) reads `PADDOCK_WORKER_INGEST_REPLICAS=2`
+   (amendment b point 1); updated in the same PR as this amendment.
+
+Ticket: points 1 and 2 are code changes in PDK-1032 (`deploy/bundle/paddock`, `bundle_test.sh`,
+`deploy/compose/scripts/rollback.sh`, `rollback_test.sh`), before its PR is merged.
