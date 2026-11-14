@@ -117,6 +117,12 @@ func TestValkeyACLItemsFindings(t *testing.T) {
 				s.Secrets = append(s.Secrets, prodcheck.ServiceSecret{Source: "valkey_worker_password"})
 			})
 		}, valkeyUsersItem, "paddock-gateway: mounts [valkey_gateway_password valkey_worker_password], want exactly valkey_gateway_password"},
+		"ingest worker as its own user": {func(_ *testing.T, cfg prodcheck.Config) {
+			svc(cfg, "paddock-worker-ingest", func(s *prodcheck.Service) {
+				v := "worker_ingest"
+				s.Environment["PADDOCK_VALKEY_USER"] = &v
+			})
+		}, valkeyUsersItem, `paddock-worker-ingest: PADDOCK_VALKEY_USER is "worker_ingest", not "worker"`},
 		"leftover valkey_password": {func(_ *testing.T, cfg prodcheck.Config) {
 			svc(cfg, "paddock-api", func(s *prodcheck.Service) {
 				s.Secrets = append(s.Secrets, prodcheck.ServiceSecret{Source: "valkey_password"})
