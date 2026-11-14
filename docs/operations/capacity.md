@@ -541,10 +541,13 @@ per minute) sees a fleet instead of one load generator. The gateway honours that
 rate over enough devices: 10 000 devices check in every 10 s at 1 000/s.
 
 1. **Identities.** Create auto-approving enrollment tokens in a dedicated organization (at most 1 000 devices per
-   token, so 10 tokens for 10 000 devices) and save each token's enrollment configuration as JSON. Then
+   token, so 10 tokens for 10 000 devices) and save each token's enrollment configuration as JSON:
+   `make load-enrol-configs ORG=load-enrol TOKENS=10 USES=1000` creates the organization if it is missing and writes
+   `bin/load/token-1.json …` (git-ignored; it signs in like `make dev-seed` and refuses production like
+   `load-identities`). Then
 
    ```sh
-   make load-identities CONFIGS='token-1.json … token-10.json' COUNT=10000
+   make load-identities CONFIGS='bin/load/token-1.json … bin/load/token-10.json' COUNT=10000
    ```
 
    enrolls the devices through the real enrollment API (`test/load/cmd/identities`) and writes their IDs and keys to
