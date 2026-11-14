@@ -383,3 +383,20 @@ Binding; where it contradicts decision 7 or amendment c, it wins.
    dev stack, because its blueprint skips MFA. They become ticket PDK-1042, "MFA enrolment lab gate", which must be
    green before the alpha.11 release tag and runs as part of the release regression on the lab. PDK-1026 is done when
    its dev-stack gates are green and PDK-1042 exists.
+
+## Amendment 2026-11-14 e — administrators set up their second factor only through the setup link, in every sign-in flow (architect decision; ADR 0053 amendment e)
+
+Binding; it replaces the §4 non-goal "No change to the device login flow's MFA".
+
+1. **One rule for every shipped sign-in flow.** Every Authentik flow that Paddock ships, the device login flows
+   included, applies the deny/enrol pair of amendment c to every stage that can set up a second factor. An
+   administrator who is neither marked (amendment c point 2) nor already has a factor sets one up only through the
+   setup link. The technical binding list is in ticket PDK-1047.
+2. **Device users** keep setting up their factor at their first device sign-in (decision 5, RR-139). **Administrators
+   who approve a device sign-in** prove a factor they already have.
+3. **Tests (both required).** A blueprint test fails when any stage in a production blueprint that can set up a factor
+   lacks the pair. An acceptance regression gate on the dev stack (attribute `paddock_dev_enforce_mfa`) proves that an
+   administrator without a factor cannot set one up in any device sign-in flow, and that a device user still can. The
+   lab repeats the administrator case (PDK-1042).
+4. **Releases.** PDK-1047 implements this. It blocks the alpha.11 release tag. No alpha.10 hotfix: alpha.10 does not
+   have the setup-link model at all, and alpha.11 introduces it.
