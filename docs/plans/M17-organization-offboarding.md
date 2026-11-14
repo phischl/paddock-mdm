@@ -770,3 +770,30 @@ Assignment: points 1, 3 and 4 PDK-1038 (fix round); point 2 PDK-1019 (residual r
 classification test rejects informational codes that never succeed. The generic denied rule (level ≥ 7) covers it,
 which fits: a refused request against an organization being deleted is worth an analyst's look. "Wazuh informational"
 in point 1 is struck.
+
+## Amendment 2026-11-14 g — recovery export: S2K that GnuPG 2.4 opens, and the pending-deletion entry point (architect decision for PDK-1036; ADR 0052 amendment g)
+
+Binding; where it contradicts amendment b decisions 22–24, it wins.
+
+1. **Passphrase S2K.** GnuPG 2.4.4 (Ubuntu 24.04, the gate runners) rejects Argon2 (`unknown S2K mode 4`), and "opens
+   with plain `gpg --decrypt`" is the maintainer's requirement (`decisions-alpha11.md` §4.3). The passphrase export
+   therefore uses S2K **iterated and salted, SHA-256, count 65011712 (the maximum)**, cipher AES-256, with integrity
+   protection (SEIPD v1, MDC), which every GnuPG 2.2+ opens. Decision 23's `argon2` is replaced.
+2. **Longer minimum passphrase.** Iterated S2K is far cheaper to brute-force than Argon2, so the passphrase minimum
+   rises from 16 to **20 characters** (maximum stays 1024). Decision 22 and its test change: 19 characters → 400
+   `invalid_request`, 20 accepted.
+3. **Public key is the recommended recipient.** The portal dialog preselects `public_key`, and its passphrase option
+   states that a generated passphrase of at least 20 characters is needed. Both recipient types stay allowed.
+4. **Argon2 later.** PDK-1044 becomes the follow-up: switch to Argon2 once the gate runners and the documented
+   operator platforms ship GnuPG ≥ 2.5. It is not in alpha.11.
+5. **State names (confirmed).** *Deletion pending* = `status IN ('active','provisioning_failed') AND delete_after IS
+   NOT NULL` (the grace period; the organization works normally). *Deleting* = status `deleting`, set by the worker
+   once `delete_after` has passed, while the steps run. The export is available only while the deletion is pending;
+   amendment d's gate refuses only `deleting` and `deleted`, so it does not block the export.
+6. **`InPendingDeletionOrg` calls `paddock_org_enter`.** Like `InOrg`, it calls `paddock_org_enter()` right after
+   `SET LOCAL paddock.org_id`, and it MUST NOT use the `InOrgOffboarding` bypass. Reason: the shared offboarding lock
+   makes `paddock_offboard_finalize` wait for a running export. When the worker moves the organization to `deleting`
+   between the platform check and the transaction, the export fails closed with `PD001`. That maps to 403
+   `organization_inactive`, and the attempt is recorded as `organization.inactive_denied` in the platform
+   pseudo-organization (amendment f point 1). Test: an organization moved to `deleting` before the export's
+   transaction yields 403 `organization_inactive` and no export bytes.
