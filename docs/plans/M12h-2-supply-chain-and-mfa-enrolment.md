@@ -349,3 +349,37 @@ Binding; where it contradicts decision 7, §8 MF1/MF4 or §9 MFA-R1, it wins.
 
 Tickets: points 1–3 PDK-1026 (blueprint, worker seed, callback, gates MF1/MF4); the reason enum and i18n of point 3
 belong to PDK-1026 as well. PDK-1027 is unchanged except that its portal texts use the reason key of point 3.
+
+## Amendment 2026-11-14 d — the link flow without TOTP, audit of the sign-in marking, lab-only gates (architect decision for PDK-1026; ADR 0053 amendment d)
+
+Binding; where it contradicts decision 7 or amendment c, it wins.
+
+1. **No TOTP stage in the link flow.** Authentik's TOTP setup stage cannot be skipped. An "optional" TOTP would need an
+   extra choice stage, and a mandatory TOTP would add a second enrolment to every link, including local users' password
+   links, for little gain: portal sign-in and step-up accept only WebAuthn, so a TOTP device does not restore access
+   after a lost passkey (that needs a new link). `paddock-recovery` therefore runs: link-token policy → password prompt
+   (only when the password is missing) → WebAuthn setup (required) → end. The binding of
+   `default-authenticator-totp-setup` and the policy `paddock-recovery-totp-missing` are removed from the blueprint.
+   Accounts that want TOTP add it through Authentik's user settings, as before. MF3 asserts that the link flow shows no
+   TOTP stage.
+2. **The marking is audited.** Setting or clearing `paddock_mfa_enrol_at_login` changes an administrator's sign-in
+   requirement, so it is a privileged system action. It goes through `ActionRunner` as the system actor in the
+   platform pseudo-organization, with two new closed codes:
+   - `platform.mfa_enrol_marks_seeded`: params `marked` (int), `totp_only` (int), `organizations` (int); outcomes
+     success and failure.
+   - `platform.mfa_enrol_marks_cleared`: params `cleared` (int); outcomes success and failure.
+
+   An event is recorded per round only when the round wrote at least one attribute. A failure after a partial write
+   is recorded as failure with the count written so far. A round that writes nothing records nothing, so an Authentik
+   outage does not fill the log. No usernames go into the params; Authentik's own event log holds the per-account
+   `model_updated` entries. Both codes are ≤ 32 characters (MSGID as is), have en/de messages, and are Wazuh
+   informational. Tests: the seed records exactly one event with the counts; a second round records none; a clearing
+   round records `cleared`; an injected failure after one write records failure with `marked: 1`.
+3. **Device listing without `?user=`.** Authentik 2026.8.5 ignores the filter. The adapter lists every WebAuthn and
+   every TOTP device (paged) and matches by `user.pk`. This is accepted: `Seed` runs once, `Clear` costs nothing when
+   nothing is marked, and the callback lookup runs only on a factor denial of an account with a portal role.
+   Follow-up PDK-1042 bounds the callback lookup if lab measurements show a cost.
+4. **Lab-only gates get their own ticket.** The MF1 denial page and the MF2 real passkey enrolment cannot run on the
+   dev stack, because its blueprint skips MFA. They become ticket PDK-1042, "MFA enrolment lab gate", which must be
+   green before the alpha.11 release tag and runs as part of the release regression on the lab. PDK-1026 is done when
+   its dev-stack gates are green and PDK-1042 exists.

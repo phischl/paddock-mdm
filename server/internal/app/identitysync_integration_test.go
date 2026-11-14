@@ -54,6 +54,8 @@ type directory struct {
 	// deviceListings counts the listings of device login groups; deviceListFail makes them fail.
 	deviceListings int
 	deviceListFail error
+	// ensures counts the EnsureOrganization calls (PDK-1021).
+	ensures int
 }
 
 func newDirectory() *directory {
@@ -61,6 +63,9 @@ func newDirectory() *directory {
 }
 
 func (d *directory) EnsureOrganization(context.Context, string) (ports.OrgIdentityRefs, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.ensures++
 	return ports.OrgIdentityRefs{}, d.fail
 }
 func (d *directory) CreateUser(context.Context, string, ports.NewIdentityUser) (string, error) {

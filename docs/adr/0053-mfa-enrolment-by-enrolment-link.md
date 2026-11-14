@@ -80,3 +80,12 @@ decision 18, `adapters/authentik/users.go::RecoveryLink`).
   administrators who have only TOTP. Their TOTP is still required before they enrol a passkey.
 - **Decision 3's denial reason.** Authentik's denial is shown by Authentik itself and reaches no Paddock callback. The
   portal reason `mfa_enrolment_required` is used only when the callback does see such an account.
+
+## Amendment 2026-11-14 d — no TOTP in the link flow; the marking is audited (architect; plan M12h-2 amendment d)
+
+- **Decision 2 is changed.** The link flow enrols WebAuthn only; the optional TOTP stage is removed. Authentik's TOTP
+  setup cannot be skipped, and a TOTP device does not give access to the portal, which accepts only WebAuthn. TOTP
+  stays available through Authentik's user settings.
+- **Decision 4 is extended.** Seeding and clearing `paddock_mfa_enrol_at_login` are recorded in the platform
+  pseudo-organization as `platform.mfa_enrol_marks_seeded` and `platform.mfa_enrol_marks_cleared`, with counts, once
+  per round that changed something.

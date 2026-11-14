@@ -427,13 +427,19 @@ func TestOffboardingGrants(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer worker.Close()
+	updatedAt := func(id uuid.UUID) (at time.Time) {
+		if err := super.QueryRow(ctx, "SELECT updated_at FROM organization WHERE id = $1", id).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
 	if err := worker.InOrg(orgCtx(own), func(ctx context.Context, q *pgstore.Queries) error {
 		if err := q.MarkOrganizationIdentityEnsured(ctx, pgstore.MarkOrganizationIdentityEnsuredParams{
-			ID: own, Revision: new("rev-1")}); err != nil {
+			ID: own, Revision: new("rev-1"), SeenUpdatedAt: updatedAt(own)}); err != nil {
 			return err
 		}
 		return q.MarkOrganizationIdentityEnsured(ctx, pgstore.MarkOrganizationIdentityEnsuredParams{
-			ID: other, Revision: new("rev-1")})
+			ID: other, Revision: new("rev-1"), SeenUpdatedAt: updatedAt(other)})
 	}); err != nil {
 		t.Fatal(err)
 	}
