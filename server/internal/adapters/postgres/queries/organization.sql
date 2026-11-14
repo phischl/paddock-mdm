@@ -40,8 +40,10 @@ SELECT count(*) FROM (
   LIMIT @count_limit
 ) matching;
 
+-- A status change is the (re)creation of the organization: it clears idp_ensured_at, so the first identity round after
+-- it checks the Authentik objects in full (plan M17 decision 20).
 -- name: UpdateOrganizationStatus :one
-UPDATE organization SET status = @status, name = @name, updated_at = now()
+UPDATE organization SET status = @status, name = @name, idp_ensured_at = NULL, updated_at = now()
 WHERE id = @id
 RETURNING *;
 
@@ -65,8 +67,10 @@ SELECT pg_advisory_xact_lock(hashtext('paddock.organization.domains'));
 -- name: ListOrganizationsClaimingDomains :many
 SELECT id, slug FROM organization WHERE domains && @domains::text[] AND id <> @id AND status <> 'deleted' ORDER BY slug;
 
+-- A domain change clears idp_ensured_at, so the next identity round checks the Authentik objects in full (plan M17
+-- decision 20).
 -- name: UpdateOrganizationDomains :one
-UPDATE organization SET domains = @domains, updated_at = now() WHERE id = @id RETURNING *;
+UPDATE organization SET domains = @domains, idp_ensured_at = NULL, updated_at = now() WHERE id = @id RETURNING *;
 
 -- Organization offboarding (plan M17 decisions 1, 5, 6, 17; ADR 0052 decision 1). A deletion is pending while the
 -- organization is active (or provisioning_failed) with delete_after set. Each transition is conditional on the state
@@ -120,8 +124,11 @@ RETURNING *;
 -- Identity rounds (plan M17 decision 20): the worker records a successful EnsureOrganization in the organization's
 -- own context; creation, a domain change or an Authentik error clears it to force the next ensure.
 
+-- The mark applies only while the row is as the round read it: a domain change or a re-creation during the ensure
+-- bumped updated_at and cleared the mark, and that clear must survive.
 -- name: MarkOrganizationIdentityEnsured :exec
-UPDATE organization SET idp_ensured_at = now(), idp_ensure_revision = @revision WHERE id = @id;
+UPDATE organization SET idp_ensured_at = now(), idp_ensure_revision = @revision
+WHERE id = @id AND updated_at = @seen_updated_at;
 
 -- name: ClearOrganizationIdentityEnsured :exec
 UPDATE organization SET idp_ensured_at = NULL WHERE id = @id;

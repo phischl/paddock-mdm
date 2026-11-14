@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -30,12 +32,41 @@ type IdentitySync struct {
 	idp    ports.IdentityProvider
 	users  ports.UserDirectory
 	groups ports.GroupDirectory
+	// revision is the identity provider's ensure revision; empty disables the ensure cache (every round ensures).
+	revision string
 }
 
 // NewIdentitySync creates the use cases.
 func NewIdentitySync(runner *ActionRunner, org *db.OrgPool, idp ports.IdentityProvider, users ports.UserDirectory,
 	groups ports.GroupDirectory) *IdentitySync {
 	return &IdentitySync{runner: runner, org: org, idp: idp, users: users, groups: groups}
+}
+
+// WithEnsureRevision enables the ensure cache of the reconcile round (plan M17 decision 20) with the revision of what
+// the identity provider's EnsureOrganization creates or corrects (authentik.EnsureRevision).
+func (s *IdentitySync) WithEnsureRevision(revision string) *IdentitySync {
+	s.revision = revision
+	return s
+}
+
+// IdentityFullEnsureInterval is how long a successful ensure of an organization's identity provider objects stands
+// before the reconcile round checks them in full again, plus the organization's IdentityEnsureJitter (plan M17
+// decision 20).
+const IdentityFullEnsureInterval = 6 * time.Hour
+
+// IdentityEnsureJitter is the organization's fixed share of the hour over which the full checks of all organizations
+// spread: the first eight bytes of its ID as uint64 modulo 3600, in seconds.
+func IdentityEnsureJitter(id uuid.UUID) time.Duration {
+	return time.Duration(binary.BigEndian.Uint64(id[:8])%3600) * time.Second
+}
+
+// IdentityEnsureDue reports whether the reconcile round has to ensure the organization's identity provider objects at
+// now: when they were never ensured or the mark was cleared (creation, domain change, error), when they were ensured
+// by another revision, or when the last ensure is IdentityFullEnsureInterval plus the jitter ago. An empty revision
+// means no cache: always due.
+func IdentityEnsureDue(o pgstore.Organization, revision string, now time.Time) bool {
+	return revision == "" || o.IdpEnsuredAt == nil || o.IdpEnsureRevision == nil || *o.IdpEnsureRevision != revision ||
+		now.Sub(*o.IdpEnsuredAt) >= IdentityFullEnsureInterval+IdentityEnsureJitter(o.ID)
 }
 
 // Specs of the synchronization events (actor: system).
@@ -70,6 +101,9 @@ func (s *IdentitySync) SyncUsers(ctx context.Context, skip func(username string)
 	}
 	upstream, err := s.users.OrganizationUsers(ctx, o.Slug)
 	if err != nil {
+		if o.IdpEnsuredAt != nil {
+			err = errors.Join(err, s.forgetEnsured(ctx, o.ID))
+		}
 		return nil, err
 	}
 	var known []pgstore.AppUser
@@ -234,23 +268,56 @@ func (s *IdentitySync) mirrorChange(ctx context.Context, spec ActionSpec, g pgst
 	})
 }
 
-// Reconcile re-creates or corrects the organization's Authentik objects (groups, device login application) and the
-// per-device login groups: members equal to the directly assigned users, deleted for devices without them and for
-// retired devices.
+// Reconcile re-creates or corrects the organization's Authentik objects (groups, device login application) when
+// IdentityEnsureDue, and the per-device login groups every round: members equal to the directly assigned users,
+// deleted for devices without them and for retired devices. A failed round clears the ensure mark.
 func (s *IdentitySync) Reconcile(ctx context.Context) error {
 	o, active, err := s.activeOrganization(ctx)
 	if err != nil || !active {
 		return err
 	}
-	if _, err := s.idp.EnsureOrganization(ctx, o.Slug); err != nil {
-		return err
+	if err := s.reconcile(ctx, o); err != nil {
+		if s.revision == "" {
+			return err
+		}
+		// The failure may come from an object the mark vouches for (drift, an Authentik restored from a backup), so
+		// the next round checks everything again. The round may have set the mark itself, hence no check of o.
+		return errors.Join(err, s.forgetEnsured(ctx, o.ID))
+	}
+	return nil
+}
+
+// forgetEnsured clears the organization's ensure mark, so the next reconcile round ensures its objects.
+func (s *IdentitySync) forgetEnsured(ctx context.Context, org uuid.UUID) error {
+	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		return q.ClearOrganizationIdentityEnsured(ctx, org)
+	})
+	if err != nil {
+		return fmt.Errorf("clear the identity ensure mark: %w", err)
+	}
+	return nil
+}
+
+func (s *IdentitySync) reconcile(ctx context.Context, o pgstore.Organization) error {
+	if IdentityEnsureDue(o, s.revision, time.Now()) {
+		if _, err := s.idp.EnsureOrganization(ctx, o.Slug); err != nil {
+			return err
+		}
+		if s.revision != "" {
+			if err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+				return q.MarkOrganizationIdentityEnsured(ctx, pgstore.MarkOrganizationIdentityEnsuredParams{
+					ID: o.ID, Revision: &s.revision, SeenUpdatedAt: o.UpdatedAt})
+			}); err != nil {
+				return fmt.Errorf("mark the identity objects ensured: %w", err)
+			}
+		}
 	}
 	type target struct {
 		device  uuid.UUID
 		members []string
 	}
 	var targets []target
-	err = s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		id, err := LoadIdentity(ctx, q)
 		if err != nil {
 			return err
