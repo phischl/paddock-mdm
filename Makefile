@@ -12,7 +12,7 @@ COMPOSE_DIR   := deploy/compose
 SECRETS_DIR   := $(COMPOSE_DIR)/.secrets
 GO_MODULES    := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) go list -m -f '{{.Dir}}' | sed 's|^$(CURDIR)|.|')
 GO_PACKAGES   := $(addsuffix /...,$(GO_MODULES))
-UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... \
+UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/... ./test/acceptance/cmd/loadenrol/... \
 	./test/acceptance/internal/stack/... \
 	./test/acceptance/cmd/acceptanceshard/... ./test/system/cmd/testlive/...
 WEB_DIR       := server/web
@@ -604,6 +604,11 @@ LOAD_GUARD = gw=$$(docker ps -q --filter label=com.docker.compose.project=$(DEV_
 	bash $(COMPOSE_DIR)/scripts/load-guard.sh $(COMPOSE_DIR) "$$gw_env" $$(docker ps -a \
 		--filter label=com.docker.compose.project=$(DEV_PROJECT) --format '{{.Label "com.docker.compose.project.config_files"}}' | \
 		tr ',' '\n' | sort -u)
+
+.PHONY: load-enrol-configs
+load-enrol-configs: ## Create TOKENS auto-approving enrollment tokens (USES devices each) in organization ORG and write their configurations to bin/load/token-<i>.json
+	@$(LOAD_GUARD)
+	go run ./test/acceptance/cmd/loadenrol $(if $(ORG),--org $(ORG)) $(if $(TOKENS),--tokens $(TOKENS)) $(if $(USES),--uses $(USES))
 
 .PHONY: load-identities
 load-identities: ## Enroll COUNT load test devices with the enrollment configurations CONFIGS (auto-approving tokens) into bin/load/identities.json
