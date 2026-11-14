@@ -12,5 +12,4 @@ use (
 	./test/system
 	./tools/composelint
 	./tools/migrationsfrozen
-	./tools/upstreamwatch
 )
