@@ -383,3 +383,53 @@ Binding; where it contradicts decision 7 or amendment c, it wins.
    dev stack, because its blueprint skips MFA. They become ticket PDK-1042, "MFA enrolment lab gate", which must be
    green before the alpha.11 release tag and runs as part of the release regression on the lab. PDK-1026 is done when
    its dev-stack gates are green and PDK-1042 exists.
+
+## Amendment 2026-11-14 e — no password-only enrolment for administrators in any flow (architect decision for PDK-1047; ADR 0053 amendment e)
+
+Binding; it replaces the §4 non-goal "No change to the device login flow's MFA" and wins over decision 7 and
+amendment c where they differ.
+
+**Why.** `paddock-device-authentication` (`authentication: none`, every organization's device login provider, also
+reachable at `/if/flow/paddock-device-authentication/`) runs `paddock-device-mfa` with `not_configured_action:
+configure`. Whoever knows a new administrator's password enrols their own passkey there and then signs in to the portal.
+The §4 premise that only device users run that flow is false.
+
+1. **Rule for every shipped blueprint.** No binding of an authenticator-validate stage with `not_configured_action:
+   configure` may run for an unmarked administrator without a factor. Every such stage is split into a deny stage and
+   an enrol sibling, bound at the same order:
+   - deny: `paddock-mfa-enrol-at-login-absent` AND `paddock-admin-login-webauthn-administrator`, engine mode `all`,
+     `failure_result: true`;
+   - enrol: the combined policy `paddock-mfa-enrol-at-login` (marked OR NOT administrator), engine mode `all`.
+   The only exception is the WebAuthn setup in `paddock-recovery`, which is guarded by the link token on every
+   binding.
+2. **Device flows.** `paddock-device-mfa` switches to `not_configured_action: deny`. A new sibling
+   `paddock-device-mfa-enrol` (`configure`, the same device classes and configuration stages) is added. Both are bound:
+   - in `paddock-device-authentication` at order 30, with `evaluate_on_plan: false` and `re_evaluate_policies: true`
+     (the user is anonymous when the plan is built, as found in PDK-1026);
+   - in `paddock-device-authorization` at order 10, as defence in depth, although the user is already signed in there.
+
+   The policies are those of `paddock-portal.yaml`, referenced with `!Find` by name. If a fresh stack does not resolve
+   that cross-blueprint reference, the implementer stops and reports; the policies MUST NOT be duplicated. The
+   development blueprint's skip binds the new deny and enrol bindings, found by stage name, and the attribute
+   `paddock_dev_enforce_mfa` removes the skip as for the portal flow.
+3. **Device approvals by administrators.** No extra rule. After point 2, an administrator who approves a `/device`
+   code must prove an existing factor (WebAuthn or TOTP) in `paddock-device-mfa`. A marked administrator may enrol
+   there, as at the portal sign-in (amendment c). Device users keep enrolment at their first device login (decision 5,
+   RR-139).
+4. **Static guard.** A Go test in `deploy/compose/authentik` (the blueprint tests' package) parses every production
+   blueprint. It fails when a stage with `not_configured_action: configure` has a flow binding without the enrol
+   policy, or has no deny sibling at the same order, except for the recovery WebAuthn setup. Mutation check: removing
+   one policy binding makes it fail.
+5. **Gate on the dev stack** (`test/acceptance/mfa_enrolment_test.go`, flow executor API, user attribute
+   `paddock_dev_enforce_mfa: true`):
+   - an unmarked administrator without a factor runs `paddock-device-authentication` with identification and password
+     and gets the access-denied component;
+   - a device user without a factor gets the authenticator setup challenge;
+   - a marked administrator gets the setup challenge.
+   The lab repeats the first case (PDK-1042).
+6. **alpha.10: no hotfix.** In alpha.10 the portal sign-in itself still enrols by password alone (the known
+   trust-on-first-use finding AU-3 that alpha.11 closes), so the device flow adds no exposure beyond what alpha.10
+   already documents. The alpha.11 release notes name the fix. Whether a security advisory is published is for the
+   orchestrator and the maintainer to decide; the architect recommends none beyond the release notes.
+7. **Ticket.** PDK-1047 implements points 1, 2, 4 and 5 (Risk high, external review). It blocks the alpha.11 tag.
+   PDK-1026's changelog sentence stays as written and is true once PDK-1047 is merged.

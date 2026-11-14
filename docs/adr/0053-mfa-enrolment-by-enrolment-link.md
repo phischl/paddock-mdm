@@ -89,3 +89,12 @@ decision 18, `adapters/authentik/users.go::RecoveryLink`).
 - **Decision 4 is extended.** Seeding and clearing `paddock_mfa_enrol_at_login` are recorded in the platform
   pseudo-organization as `platform.mfa_enrol_marks_seeded` and `platform.mfa_enrol_marks_cleared`, with counts, once
   per round that changed something.
+
+## Amendment 2026-11-14 e — the device sign-in flow follows the same rule (architect; plan M12h-2 amendment e)
+
+Decision 5 kept the device login flow's enrolment because only device users were assumed to run it. That premise is
+false: `paddock-device-authentication` can be opened directly and accepts any account, so an administrator's password
+alone enrolled a factor there. Decision 3's deny/enrol pair therefore applies to **every** authenticator stage that
+can enrol, in every shipped flow, including `paddock-device-mfa` in the device authentication and authorization flows.
+A static test enforces this for every production blueprint. Device users keep enrolment at their first device login
+(RR-139 unchanged); administrators approving a device code prove an existing factor.
