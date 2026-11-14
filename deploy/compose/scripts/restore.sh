@@ -441,12 +441,35 @@ shift
 exec /usr/local/bin/paddock-pgbackrest restore "$@"'
 
 # restore_wait_recovered <service> <user> <database>
+# Recovery pauses (and the database stays read-only) when the restored cluster needs larger values than the server
+# runs with, such as max_connections; waiting out the timeout would not help, so two paused polls at least 10 s apart
+# fail fast (plan M19 D3).
 restore_wait_recovered() {
-  local deadline=$((SECONDS + ${RESTORE_RECOVERY_TIMEOUT:-1800}))
+  local deadline=$((SECONDS + ${RESTORE_RECOVERY_TIMEOUT:-1800})) state paused=0 excerpt param
   while ((SECONDS < deadline)); do
-    if [[ "$(compose exec -T "$1" psql -U "$2" -d "$3" -Atc 'select pg_is_in_recovery()' </dev/null 2>/dev/null)" == f ]]; then
+    state="$(compose exec -T "$1" psql -U "$2" -d "$3" -Atc \
+      "select case when pg_is_in_recovery() then pg_get_wal_replay_pause_state() else 'f' end" </dev/null 2>/dev/null)"
+    if [[ "$state" == f ]]; then
       return 0
     fi
+    if [[ "$state" == paused ]]; then
+      if ((++paused >= 2)); then
+        excerpt="$(compose logs --no-color --tail 500 "$1" </dev/null 2>&1 || true)"
+        echo "restore: $1 paused its recovery (pg_get_wal_replay_pause_state: $state)" >&2
+        grep -E 'insufficient parameter settings|recovery has paused' <<<"$excerpt" | tail -20 >&2 || true
+        param="$(grep -oE '[a-z_]+ = [0-9]+ is a lower setting' <<<"$excerpt" | tail -1 | cut -d' ' -f1 || true)"
+        if [[ -n "$param" ]]; then
+          echo "restore: the restored cluster needs a larger $param than $1 runs with" >&2
+          if [[ "$param" == max_connections ]]; then
+            echo "restore: set PADDOCK_PG_MAX_CONNECTIONS to at least the backed-up server's value and run the restore again" >&2
+          fi
+        fi
+        return 1
+      fi
+      sleep "${RESTORE_PAUSE_RECHECK_S:-10}"
+      continue
+    fi
+    paused=0
     sleep 2
   done
   echo "restore: $1 did not finish its recovery" >&2

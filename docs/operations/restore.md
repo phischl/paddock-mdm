@@ -245,6 +245,18 @@ The databases are fine, but the `backup-repo` volume or the pgBackRest state vol
 `restore --only backup-repo` touches neither database, OpenBao nor Fleet and needs no restore plan; it refuses to run
 while a restore plan is `running`. It records `platform.restore_completed` with `components: [backup-repo]`.
 
+## A restore stops with "recovery paused"
+
+PostgreSQL pauses the recovery of a restored database when the server starts with a smaller setting than the one the
+backup or its WAL was written with (for example `max_connections`); the database then stays read-only. `restore.sh`
+checks the pause state while it waits for the recovery. When two checks at least 10 s apart both report `paused`, it
+stops with exit 1 instead of waiting for the 1800 s timeout and prints the pause state, the last 20 matching lines of
+the database log (`insufficient parameter settings`, `recovery has paused`) and, when the log names it, the parameter.
+
+1. Raise the named setting to at least the value the backup was written with. For `max_connections`, set
+   `PADDOCK_PG_MAX_CONNECTIONS` in the bundle's `.env` to that value.
+2. Run the restore again.
+
 ## A restore plan stuck in `running`
 
 A restore plan is `running` from the moment the host starts it (`./paddock restore --plan <id>`) until the host reports

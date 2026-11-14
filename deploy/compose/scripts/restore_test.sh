@@ -37,6 +37,7 @@ report_rc=0  # exit code of backup restore-report
 report_fail="" # an outcome whose report fails
 check_rc=0   # exit code of backup restore-repo --check (1: a plan is running)
 plan_json="" # what backup plan prints
+recovery_state="f" # what the database's recovery poll answers (paused: recovery stopped on insufficient settings)
 # The markers are paths of their own: the fake may run inside a step's function whose local work shadows the harness's.
 report_sleep="" # seconds a failed restore-report takes (touches $reporting first)
 reporting="$work/reporting"
@@ -132,12 +133,17 @@ compose() {
       [[ "$plan_json" == *'"state":"approved"'* ]]
       ;;
     *" backup restore-repo "*) cat >/dev/null && printf 'copied 3 files (9 bytes)\nrepo_path=%s\n' "$set_repo_path" ;;
+    *" logs --no-color --tail 500 postgres"*)
+      printf '%s\n' "LOG:  database system is ready" \
+        "DETAIL:  max_connections = 100 is a lower setting than on the primary server, where its value was 150." \
+        "FATAL:  recovery aborted because of insufficient parameter settings" "LOG:  recovery has paused"
+      ;;
     *" exec -T postgres psql "*"bundle_seq"*) fake_bundle_seq "$line" ;;
     *" exec -T -u postgres postgres sh -c "*)
       # The record script itself, on the harness's directory instead of the container's mount.
       sh -c "$BUNDLE_SEQ_RECORD_SCRIPT" bundle-seq "$COMPOSE_DIR/bundle-seq" "${*: -1}"
       ;;
-    *" exec -T postgres psql "* | *" exec -T authentik-postgres psql "*) echo f ;;
+    *" exec -T postgres psql "* | *" exec -T authentik-postgres psql "*) echo "$recovery_state" ;;
     *" openbao bao status "*)
       local n=0
       [[ ! -s "$sealed_polls" ]] || n="$(cat "$sealed_polls")"
@@ -552,6 +558,26 @@ if ((rc == 0)) && [[ -n "$rm_line" && -n "$vol_line" ]] && ((rm_line < vol_line)
 else
   bad "postgres step: rc $rc, role removed at line ${rm_line:-never}, state volume deleted at line ${vol_line:-never}"
 fi
+
+# PDK-1033 (plan M19 D3): a database whose recovery pauses fails the restore after two polls at least 10 s apart, with
+# the pause state, the log excerpt, the parameter and the PADDOCK_PG_MAX_CONNECTIONS hint.
+recovery_state=paused
+sleeps="$work/sleeps.log"
+: >"$sleeps"
+sleep() { echo "$1" >>"$sleeps"; }
+RESTORE_RECOVERY_TIMEOUT=60 run_restore restore fresh "$set_dir" --only postgres
+unset -f sleep
+polls="$(grep -c -- "exec -T postgres psql .*pg_is_in_recovery" "$calls" || true)"
+if ((rc != 0)) && ((polls == 2)) && [[ "$(cat "$sleeps")" == 10 ]] &&
+  [[ "$out" == *"postgres paused its recovery (pg_get_wal_replay_pause_state: paused)"* ]] &&
+  [[ "$out" == *"FATAL:  recovery aborted because of insufficient parameter settings"* ]] &&
+  [[ "$out" == *"LOG:  recovery has paused"* ]] && [[ "$out" == *"needs a larger max_connections"* ]] &&
+  [[ "$out" == *"PADDOCK_PG_MAX_CONNECTIONS"* ]]; then
+  ok "a paused recovery fails after two polls 10 s apart with state, log excerpt, parameter and hint"
+else
+  bad "paused recovery: rc $rc, polls $polls, sleeps $(cat "$sleeps"), out: $out"
+fi
+recovery_state=f
 
 # Review 2 (R2-M2): the postgres step stops OpenBao too, so a restore without openbao states the unseal path and waits.
 echo 1 >"$sealed_polls"
