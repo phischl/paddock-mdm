@@ -180,7 +180,7 @@ rb_legacy_restore() {
 # rollback_main <new dir> <arguments of ./paddock rollback>
 rollback_main() {
   local new="$1" old="" yes="" arg schema record state at="" attempt="" stale="" old_version new_version components=()
-  local answer="" status=0 current superseded running="" lenient="" v bad="" legacy="" fleet=no problem
+  local answer="" status=0 current superseded running="" lenient="" v bad="" legacy="" fleet=no problem pg_max
   shift
   for arg in "$@"; do
     case "$arg" in
@@ -198,6 +198,16 @@ rollback_main() {
   [[ -x "$old/paddock" && -f "$old/.env" ]] || rb_die "$old is no bundle directory of an installation (no ./paddock or .env)" 2
   old_version="$(sed -n 's/^version=//p' "$old/VERSION" 2>/dev/null | head -n 1)"
   new_version="$(sed -n 's/^version=//p' "$new/VERSION" 2>/dev/null | head -n 1)"
+  # A release whose Compose files do not know PADDOCK_PG_MAX_CONNECTIONS (0.1.0-alpha.10 and older) starts PostgreSQL
+  # with 100 connections, and a database or backup written with more pauses its recovery there (plan M19 D1.3).
+  pg_max="$(env_value PADDOCK_PG_MAX_CONNECTIONS)"
+  # Compose also reads quoted or commented values ("150", 150 # note) as a number, so anything but a plain number is
+  # refused rather than taken as "not above 100".
+  [[ "$pg_max" =~ ^[0-9]*$ ]] ||
+    rb_die "PADDOCK_PG_MAX_CONNECTIONS is '$pg_max', not a whole number: write it as a plain number in .env; nothing was changed"
+  if [[ -n "$pg_max" ]] && ((10#$pg_max > 100)) && ! grep -qs PADDOCK_PG_MAX_CONNECTIONS "$old/compose.yaml"; then
+    rb_die "PADDOCK_PG_MAX_CONNECTIONS is $pg_max, and $old_version starts PostgreSQL with max_connections 100, which cannot recover data written with more: lower it to 100, run ./paddock backup now, then roll back to a point after that backup (the lower value takes effect with ./paddock up); nothing was changed"
+  fi
   record="$new/.upgrade-rollback"
   state="$new/.upgrade-state"
   RB_RECORD=""

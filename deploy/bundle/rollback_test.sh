@@ -685,6 +685,39 @@ not_called "no second initialization" '^openbao_restore_sealed'
 FIXTURE_RUNNING="" run 0 "the repeated rollback to alpha.8" "$work/t/old" --yes
 called "the repeated rollback restores OpenBao" '^openbao_restore_sealed'
 
+# PDK-1032 (plan M19 D1.3): above 100 connections, a rollback to a release that starts PostgreSQL with 100 whatever
+# .env says (its compose.yaml does not know PADDOCK_PG_MAX_CONNECTIONS) is refused before anything stops.
+FIXTURE_RUNNING="Paddock|0.1.0-alpha.10"
+setup controlplane "Schema: migrations 00113–00125"
+echo "PADDOCK_PG_MAX_CONNECTIONS=150" >>"$work/t/new/.env"
+run 1 "a rollback to a release without the setting at 150 is refused" "$work/t/old" --yes
+has "the refusal names the value, the old release's 100 and the way out" \
+  "PADDOCK_PG_MAX_CONNECTIONS is 150, and 0.1.0-alpha.9 starts PostgreSQL with max_connections 100, which cannot recover data written with more: lower it to 100, run ./paddock backup now, then roll back to a point after that backup .*; nothing was changed"
+not_called "nothing stops after the refusal" "$DOWN"
+not_called "nothing is restored after the refusal" '^restore_'
+if [[ ! -e "$work/t/new/.upgrade-state" ]] || ! grep -q '^rolled-back=' "$work/t/new/.upgrade-state"; then
+  pass "the refusal leaves the rollback record usable"
+else fail ".upgrade-state after the refusal: $(cat "$work/t/new/.upgrade-state")"; fi
+setup controlplane "Schema: unchanged"
+echo "PADDOCK_PG_MAX_CONNECTIONS=150" >>"$work/t/new/.env"
+run 1 "a rollback without a restore is refused at 150 too" "$work/t/old" --yes
+not_called "nothing stops after that refusal" "$DOWN"
+setup controlplane "Schema: migrations 00113–00125"
+echo "PADDOCK_PG_MAX_CONNECTIONS=100" >>"$work/t/new/.env"
+run 0 "a rollback at 100 runs" "$work/t/old" --yes
+setup controlplane "Schema: migrations 00113–00125"
+echo 'PADDOCK_PG_MAX_CONNECTIONS="150"' >>"$work/t/new/.env"
+run 1 "a quoted value is refused instead of read as not above 100" "$work/t/old" --yes
+has "the refusal asks for a plain number" "PADDOCK_PG_MAX_CONNECTIONS is '.*', not a whole number"
+not_called "nothing stops after the quoted-value refusal" "$DOWN"
+setup controlplane "Schema: migrations 00113–00125"
+echo "PADDOCK_PG_MAX_CONNECTIONS=150" >>"$work/t/new/.env"
+# shellcheck disable=SC2016 # the literal Compose interpolation
+printf 'services:\n  postgres:\n    command: ["postgres", "-c", "max_connections=${PADDOCK_PG_MAX_CONNECTIONS:-100}"]\n' \
+  >"$work/t/old/compose.yaml"
+run 0 "a rollback at 150 to a release that knows the setting runs" "$work/t/old" --yes
+called "that rollback restores" "^restore_run fresh repo --at $AT "
+
 # The old release's restore.sh is an interface between releases: the real one defines every function rollback.sh
 # calls and reads every variable it sets.
 contract="$(cd "$scripts/.." && bash -c '. scripts/lib.sh && . scripts/restore.sh && declare -F' 2>&1)" || true

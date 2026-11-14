@@ -14,7 +14,7 @@ with the same scenarios before a large rollout.
 | Requirement | Target |
 | --- | --- |
 | N1 check-in | 1 000 check-ins/s against **one** gateway replica, p99 latency < 200 ms, error rate < 0.1 % |
-| N2 ingest | 5 000 device events/s with one worker and two ingest workers (`paddock-worker-ingest=2`) at `PADDOCK_PG_MAX_CONNECTIONS=150`, consumer lag of `ingest.event` < 60 s (architecture §2.3, amendment 2026-11-14) |
+| N2 ingest | 5 000 device events/s with one worker and two ingest workers (`PADDOCK_WORKER_INGEST_REPLICAS=2`) at `PADDOCK_PG_MAX_CONNECTIONS=150`, consumer lag of `ingest.event` < 60 s (architecture §2.3, amendment 2026-11-14) |
 
 ## Results
 
@@ -470,17 +470,35 @@ spare. A further full worker replica (`--scale paddock-worker=N`) adds up to 30 
 holds only while not every pool is full at once, and otherwise roles fail with `too many clients already`, and it
 would run every round a second time for nothing, since a leader lock lets only one replica run each.
 
-For more ingest throughput (N2) scale the service `paddock-worker-ingest` instead
-(`docker compose … up -d --scale paddock-worker-ingest=2`). An ingest worker (`PADDOCK_WORKER_MODE=ingest`) runs only
+For more ingest throughput (N2) add ingest workers instead: set `PADDOCK_WORKER_INGEST_REPLICAS=2` in the bundle's
+`.env` (the service `paddock-worker-ingest` declares `deploy.replicas: ${PADDOCK_WORKER_INGEST_REPLICAS:-0}`, so
+`./paddock up`, upgrades and restores keep the number). An ingest worker (`PADDOCK_WORKER_MODE=ingest`) runs only
 the queue consumers (enrollment, heartbeats, events, issued commands, command results, escrow), no round and no
 leader lock, holds at most 11 connections and does not receive the Authentik, Fleet or bundle-bucket credentials
 (it shares the worker's OpenBao login); its `/readyz` answers
 `ready mode=ingest`. Two of them add 22 connections, 103 in all, which exceeds the default of 100: they need
 `PADDOCK_PG_MAX_CONNECTIONS=150` (see the restore and rollback notes of that setting before raising it).
 
-Do not raise `max_connections` on the database: PostgreSQL writes the value into its WAL and into every backup, and a
-restore or a rollback onto a release that starts the database with a lower value stays read-only ("hot standby is not
-possible because of insufficient parameter settings").
+Raise `max_connections` only through `PADDOCK_PG_MAX_CONNECTIONS` in `.env` (default 100; both databases start with
+`-c max_connections=${PADDOCK_PG_MAX_CONNECTIONS:-100}`), never with a `-c` of your own or a mounted configuration
+file. PostgreSQL writes the value into its WAL and into every backup, and a database restored onto a server that starts
+with a lower value pauses its recovery and stays read-only ("hot standby is not possible because of insufficient
+parameter settings"). Therefore:
+
+- **Restores start with the backup's value.** `./paddock restore` (and the rollback's restore from 0.1.0-alpha.11 on)
+  reads `max_connections` from the restored cluster's control file (`pg_controldata`) before its first start and starts
+  it with the larger of that value and `PADDOCK_PG_MAX_CONNECTIONS`, logging both. The next `./paddock up` starts the
+  recovered database with the configured value again; set `PADDOCK_PG_MAX_CONNECTIONS` to the logged value to keep it.
+- **No rollback to 0.1.0-alpha.10 above 100.** That release starts PostgreSQL with 100 whatever `.env` says; alpha.11's
+  `./paddock rollback` refuses it while `PADDOCK_PG_MAX_CONNECTIONS` is above 100: lower it to 100, run
+  `./paddock up` and `./paddock backup now`, then roll back to a point after that backup.
+
+`./paddock check` computes the budget from the effective configuration (`docker compose config`, which resolves the
+replicas of `.env`): each long-running role's maximum from the table above times its replicas, against
+`max_connections` less 3 for the superuser and 12 for pgBackRest and `paddock-migrate`. The item
+`postgres: connection budget` FAILs (and the check exits 1) above that and WARNs with 5 or fewer connections to spare,
+for example with the default 100 and the automatic unseal (81 of 85). The maxima live in one table in
+`deploy/bundle/paddock` (`PG_ROLE_MAX_CONNS`); a test compares it with the pools in `server/cmd/paddock-server`.
 
 The audit database (`audit-postgres`) keeps the same default: the api's audit reader (8), the audit writer (8 per
 replica), the notifier's audit reader (2) and an operator command (`paddock-server audit …` 8, the restore's escrow
@@ -538,8 +556,8 @@ rate over enough devices: 10 000 devices check in every 10 s at 1 000/s.
 
    ramps to `RATE` during `WARMUP`, then holds it for `DURATION`; thresholds apply to the held phase only. Devices
    report the bundle they were offered as applied, so the held phase measures steady-state check-ins.
-3. **Ingest (N2).** Set `PADDOCK_PG_MAX_CONNECTIONS=150` in `deploy/compose/.env`, add two ingest workers
-   (`docker compose … up -d --scale paddock-worker-ingest=2`; each answers `ready mode=ingest`, for example
+3. **Ingest (N2).** Set `PADDOCK_PG_MAX_CONNECTIONS=150` and `PADDOCK_WORKER_INGEST_REPLICAS=2` in
+   `deploy/compose/.env` and start the stack again (two ingest workers; each answers `ready mode=ingest`, for example
    `docker compose … exec prometheus wget -qO- http://worker-ingest-ops:9090/readyz`), start the observability profile
    (`make up` does) and run
 

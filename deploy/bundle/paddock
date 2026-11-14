@@ -263,6 +263,67 @@ resolve_local_targets() {
     backup resolve-local ${root:+--root "$root"} -- "${devs[@]}" </dev/null >/dev/null
 }
 
+# The most connections each long-running role holds on the control-plane database, per replica (plan M19 D1.4;
+# docs/operations/capacity.md "PostgreSQL connection budget"). server/cmd/paddock-server/pgbudget_test.go compares
+# every value with the pools' MaxConns, so a pool that changes without this table fails the tests.
+PG_ROLE_MAX_CONNS=(
+  paddock-api=12
+  paddock-worker=30
+  paddock-worker-ingest=11
+  paddock-notifier=10
+  paddock-compiler=8
+  paddock-backup=7
+  paddock-escrow-reader=4
+  paddock-revocation-issuer=4
+  paddock-outbox-relay=4
+  paddock-unsealer=2
+)
+
+# pg_budget: one checklist item from the effective Compose configuration (YAML on stdin, as `compose config` prints
+# it): every long-running role's maximum times its replicas against the postgres service's max_connections less 3 for
+# the superuser and 12 for pgBackRest and paddock-migrate. FAIL above that, WARN with 5 or fewer to spare. Prints
+# nothing for a configuration without the postgres service (the audit host). Returns 1 on FAIL.
+pg_budget() {
+  local e svc replicas conns max="" seen="" sum=0 limit status=PASS parts=()
+  declare -A role_max=()
+  for e in "${PG_ROLE_MAX_CONNS[@]}"; do role_max["${e%%=*}"]="${e#*=}"; done
+  # One line per service: its name, its replicas (deploy.replicas, else 1) and a max_connections in its command.
+  while read -r svc replicas conns; do
+    if [[ "$svc" == postgres ]]; then
+      seen=1
+      max="$conns"
+    fi
+    [[ -n "${role_max[$svc]:-}" && "$replicas" =~ ^[0-9]+$ ]] || continue
+    ((replicas > 0)) || continue
+    sum=$((sum + role_max[$svc] * replicas))
+    parts+=("$svc ${replicas}x${role_max[$svc]}")
+  done < <(awk '
+    function flush() { if (svc != "") print svc, rep, (conns == "" ? "-" : conns); svc = "" }
+    /^[^ ]/ { flush(); in_services = ($0 == "services:"); next }
+    !in_services { next }
+    /^  [^ ]/ { flush(); svc = $1; sub(/:$/, "", svc); rep = 1; conns = ""; in_deploy = 0; next }
+    /^    [^ ]/ { in_deploy = ($1 == "deploy:") }
+    in_deploy && /^      replicas:/ { rep = $2 }
+    match($0, /max_connections=[0-9]+/) { conns = substr($0, RSTART + 16, RLENGTH - 16) }
+    END { flush() }
+  ')
+  [[ -n "$seen" ]] || return 0
+  [[ "$max" =~ ^[0-9]+$ ]] || max=100
+  limit=$((max - 3 - 12))
+  if ((sum > limit)); then
+    status=FAIL
+  elif ((limit - sum <= 5)); then
+    status=WARN
+  fi
+  echo "$status  postgres: connection budget"
+  echo "      - $sum of $limit connections (max_connections $max less 3 for the superuser and 12 for pgBackRest and paddock-migrate): ${parts[*]:-no role}"
+  case "$status" in
+    FAIL) echo "      - lower the replicas or raise PADDOCK_PG_MAX_CONNECTIONS in .env (docs/operations/capacity.md, \"PostgreSQL connection budget\")" ;;
+    WARN) echo "      - 5 or fewer to spare: a further replica does not fit (docs/operations/capacity.md, \"PostgreSQL connection budget\")" ;;
+  esac
+  [[ "$status" != FAIL ]]
+}
+
 case "$cmd" in
   secrets)
     exec "$BUNDLE_DIR/scripts/gen-prod-secrets.sh" "$PADDOCK_HOST"
@@ -377,11 +438,23 @@ case "$cmd" in
         echo "      - not checked: listing the project's containers failed"
       fi
     fi
+    # The connection budget of the control-plane database (plan M19 D1.4) from the same configuration, so the replicas
+    # of .env count (PADDOCK_WORKER_INGEST_REPLICAS); its FAIL fails the check after the checklist.
+    budget_failed=""
+    if config="$(PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config </dev/null)"; then
+      printf '%s\n' "$config" | pg_budget || budget_failed=1
+    else
+      echo "WARN  postgres: connection budget"
+      echo "      - not checked: rendering the Compose configuration failed"
+    fi
+    rc=0
     PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
       docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" "${containers_mount[@]}" \
         -v "$BUNDLE_DIR:$BUNDLE_DIR:ro" -w "$BUNDLE_DIR" "$PADDOCK_IMAGE" \
         prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online} "${revisions[@]}" \
-        "${docker_networks[@]}" "${containers[@]}"
+        "${docker_networks[@]}" "${containers[@]}" || rc=$?
+    ((rc == 0)) || exit "$rc"
+    [[ -z "$budget_failed" ]] || exit 1
     ;;
   up)
     profiles=(--profile paddock --profile observability)
