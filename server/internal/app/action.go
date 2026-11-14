@@ -601,12 +601,15 @@ func (r *ActionRunner) recordInTx(ctx context.Context, q *pgstore.Queries, spec 
 // OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
 // without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
 // login) and reports false. After (optional) runs when the event was recorded. Refusal (optional) records the event
-// with its outcome and error code, as RecordOnceRefusal does.
+// with its outcome and error code, as RecordOnceRefusal does. Annotate (optional) runs after a claim that reported the
+// key new, before the event is recorded, so a param can carry what the claim found out (a withdrawal's closed, plan
+// M19 D8).
 type OnceEntry struct {
-	Spec    ActionSpec
-	Claim   func(ctx context.Context, q *pgstore.Queries) (bool, error)
-	After   AfterFunc
-	Refusal error
+	Spec     ActionSpec
+	Claim    func(ctx context.Context, q *pgstore.Queries) (bool, error)
+	After    AfterFunc
+	Refusal  error
+	Annotate func(rec Recorder)
 }
 
 // RecordOnceBatch is RecordOnce for several events in one transaction, so a batch of device events costs one commit
@@ -635,6 +638,9 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 			}
 			if !fresh || recs[i] == nil {
 				continue
+			}
+			if e.Annotate != nil {
+				e.Annotate(recs[i])
 			}
 			if err := r.insertFinished(ctx, q, recs[i], e.Refusal); err != nil {
 				return err
@@ -674,9 +680,15 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 // recordOnceEntry records one entry of RecordOnceBatch on its own: RecordOnce, or RecordOnceRefusal with its refusal.
 func (r *ActionRunner) recordOnceEntry(ctx context.Context, e OnceEntry) (bool, error) {
 	if e.Refusal != nil {
-		return r.RecordOnceRefusal(ctx, e.Spec, e.Refusal, e.Claim, e.After)
+		return r.recordOnceRefusal(ctx, e.Spec, e.Refusal, e.Claim, e.Annotate, e.After)
 	}
-	return r.RecordOnce(ctx, e.Spec, e.Claim, e.After)
+	return r.RecordOnceWith(ctx, e.Spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error) {
+		fresh, err := e.Claim(ctx, q)
+		if err == nil && fresh && e.Annotate != nil {
+			e.Annotate(rec)
+		}
+		return fresh, err
+	}, e.After)
 }
 
 // RecordOnceRefusal is RecordOnce for an event refused with refusal (recorded with its outcome and error code):
@@ -684,6 +696,13 @@ func (r *ActionRunner) recordOnceEntry(ctx context.Context, e OnceEntry) (bool, 
 // the event was recorded.
 func (r *ActionRunner) RecordOnceRefusal(ctx context.Context, spec ActionSpec, refusal error,
 	claim func(ctx context.Context, q *pgstore.Queries) (bool, error), after ...AfterFunc) (bool, error) {
+	return r.recordOnceRefusal(ctx, spec, refusal, claim, nil, after...)
+}
+
+// recordOnceRefusal is RecordOnceRefusal with the Annotate of a OnceEntry (nil: none).
+func (r *ActionRunner) recordOnceRefusal(ctx context.Context, spec ActionSpec, refusal error,
+	claim func(ctx context.Context, q *pgstore.Queries) (bool, error), annotate func(rec Recorder),
+	after ...AfterFunc) (bool, error) {
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
@@ -694,6 +713,9 @@ func (r *ActionRunner) RecordOnceRefusal(ctx context.Context, spec ActionSpec, r
 		fresh, err := claim(ctx, q)
 		if err != nil || !fresh {
 			return err
+		}
+		if annotate != nil {
+			annotate(rec)
 		}
 		recorded = true
 		if err := r.insertFinished(ctx, q, rec, refusal); err != nil {

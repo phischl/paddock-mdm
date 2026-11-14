@@ -1231,6 +1231,16 @@ type SoftwareRequest struct {
 	DecidedAt      *time.Time
 	DecisionReason *string
 	Justification  string
+	ReportedSeq    *int64
+}
+
+type SoftwareRequestWithdrawal struct {
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	CatalogEntryID uuid.UUID
+	Username       string
+	EventSeq       int64
+	ReceivedAt     time.Time
 }
 
 type SoftwareSource struct {

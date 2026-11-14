@@ -185,12 +185,18 @@ func (d *DeviceReports) detectEventSeqReset(ctx context.Context, hb ingest.Heart
 	return d.recordEventSeqReset(ctx, hb)
 }
 
-// recordEventSeqReset forgets the event numbers the device delivered before the heartbeat, its dropped ranges and its
-// open gaps (closed without an event), recorded once under the lock of the device's status row: the claim re-reads the delivered numbers in the event's
+// recordEventSeqReset forgets the event numbers the device delivered before the heartbeat, its dropped ranges, its
+// open gaps (closed without an event) and the order of its software requests and withdrawals (plan M19 D8.5: the old
+// numbers cannot be compared with the new ones), recorded once under the lock of the device's status row: the claim re-reads the delivered numbers in the event's
 // transaction, so a second delivery of the same heartbeat finds nothing left to forget and records nothing.
 func (d *DeviceReports) recordEventSeqReset(ctx context.Context, hb ingest.Heartbeat) error {
 	spec := ActionSpec{Code: audit.CodeDeviceEventSeqReset, Target: &audit.Target{Type: "device", ID: hb.DeviceID.String()}}
 	_, err := d.runner.RecordOnceWith(ctx, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error) {
+		// Taken first, as an event batch does, so the reset and a batch with a request or withdrawal of the device wait
+		// for each other in one order.
+		if err := q.LockSoftwareRequestOrder(ctx, hb.DeviceID); err != nil {
+			return false, err
+		}
 		// The event gap round takes the same lock (EventGaps.evaluate); a device that never checked in has no row.
 		if _, err := q.LockDeviceEventSeq(ctx, hb.DeviceID); err != nil && !db.IsNoRows(err) {
 			return false, err
@@ -211,6 +217,12 @@ func (d *DeviceReports) recordEventSeqReset(ctx context.Context, hb ingest.Heart
 			return false, err
 		}
 		if err := q.ResetEventSeq(ctx, pgstore.ResetEventSeqParams{High: hb.EventSeqHigh, DeviceID: hb.DeviceID}); err != nil {
+			return false, err
+		}
+		if err := q.DeleteSoftwareRequestWithdrawals(ctx, hb.DeviceID); err != nil {
+			return false, err
+		}
+		if err := q.UnorderSoftwareRequests(ctx, hb.DeviceID); err != nil {
 			return false, err
 		}
 		rec.SetParam("previous_high", previous)
@@ -499,6 +511,7 @@ func (d *DeviceReports) RecordEventBatch(ctx context.Context, deviceID uuid.UUID
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	entries = softwareRequestOrderLock(entries, deviceID, events)
 	_, err = d.runner.RecordOnceBatch(ctx, entries)
 	for _, c := range claims {
 		if c.fresh {
