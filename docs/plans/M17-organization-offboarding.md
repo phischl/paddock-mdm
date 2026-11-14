@@ -966,3 +966,19 @@ escrow keys in OpenBao stay consistent. The next deployment applies 00131 (PDK-1
 - A migration test: `paddock_org_enter` does not exist; `paddock_escrow_reader` and `paddock_revocation` read `id` and
   `status` of their own organization only (another organization: no row; another column: permission denied).
 - `BenchmarkInOrgGate` stays and reports the new gate against `InOrgOffboarding`.
+
+### Correction 2026-11-14 to amendment i point 4 (PDK-1038 fix round 2)
+
+Point 4's pure try-lock is replaced. A test with 16 continuous writers of the deleting organization made it fail 50 of
+50 times: every refused writer holds the shared lock for one round trip, so one of them almost always holds it and
+finalize starves. Keeping the try-lock would need a status read before the lock in every transaction, which point 2
+removed for cost.
+
+- `paddock_offboard_finalize()` carries the function clause `SET lock_timeout = '1s'` and takes
+  `pg_advisory_xact_lock(paddock_offboarding_lock_key(org))`. When the lock is not granted within 1 s, PostgreSQL
+  raises `55P03` and nothing is written. PDK-1015's reaction is still point 5.
+- While finalize waits, new transactions of that organization only queue behind it, for at most 1 s, and are then
+  refused (status `deleted`) or pass (finalize timed out). Other organizations are unaffected. A wait cycle through a
+  nested `InOrg` of the same organization is broken after 1 s. Guarantee 2 is unchanged.
+- The test asserts that finalize succeeds within 3 attempts under 16 continuous writers. The hot-path gate (points 1–3)
+  is unchanged.
