@@ -79,6 +79,26 @@ backup_root_mount() {
   printf '%s\n' --mount "type=bind,src=$parent,dst=$parent,readonly"
 }
 
+# remove_seq_leftovers <bundle dir> removes the .bundle-seq.replaced.<mktemp suffix> directories that migrate-from
+# keeps aside (PDK-980, plan M16 note 2026-11-11) and reports each one. Only root can delete them (uid 999 owns them),
+# so without root it does nothing and ./paddock check keeps warning. It never follows a symlink (the bundle directory
+# and every entry are checked), matches only the exact name below the directory, and does nothing while bundle-seq/ is
+# missing: after migrate-from's double failure the aside is then the release's only copy of the high-water file.
+remove_seq_leftovers() {
+  local dir="$1" d
+  [[ "$(id -u)" == 0 ]] || return 0
+  [[ -d "$dir" && ! -L "$dir" && -d "$dir/bundle-seq" && ! -L "$dir/bundle-seq" ]] || return 0
+  for d in "$dir"/.bundle-seq.replaced.*; do
+    [[ "${d##*/}" =~ ^\.bundle-seq\.replaced\.[A-Za-z0-9]+$ && -d "$d" && ! -L "$d" ]] || continue
+    if rm -rf --one-file-system -- "$d"; then
+      echo "removed the bundle-seq/ kept aside by an earlier upgrade: $d"
+    else
+      echo "WARN  could not remove $d; remove it with: sudo rm -rf $d" >&2
+    fi
+  done
+  return 0
+}
+
 # backup_host succeeds on a production host that runs the backup role: the control plane, or a lab host with
 # PADDOCK_LAB_BACKUP=yes.
 backup_host() {

@@ -865,6 +865,61 @@ FAKE_PRODCHECK_RC=1 paddock_t check
 [[ $rc == 1 && "$out" == *"WARN  $item"* ]] &&
   pass "the leftover warning leaves a failing check failing" || fail "check with leftovers and a FAIL: exit $rc, $out"
 rm -rf "$work/t/.bundle-seq.replaced.aB3dE9" "$work/t/.bundle-seq.replaced.zz01xy"
+# PDK-1007: ./paddock up removes the leftovers as root only, by the exact name below the bundle directory, without
+# following symlinks, and never while bundle-seq/ is missing (migrate-from's double failure leaves the aside as the only
+# copy). A stand-in id makes the script see root; the removal itself runs as the test user in its own directory.
+cat >"$work/fakebin-backup/id" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$*" == -u && -n "${FAKE_UID:-}" ]]; then echo "$FAKE_UID"; exit 0; fi
+exec /usr/bin/id "$@"
+FAKE
+chmod +x "$work/fakebin-backup/id"
+mkdir -p "$work/outside/keep"
+echo 9 >"$work/outside/keep/high-water"
+seq_leftovers() {
+  mkdir -p "$work/t/bundle-seq" "$work/t/.bundle-seq.replaced.aB3dE9/sub" "$work/t/.bundle-seq.replaced.zz01xy" \
+    "$work/t/.bundle-seq.replaced.with space" "$work/t/.bundle-seq.replaced.x.y" "$work/t/.bundle-seq.replaced." \
+    "$work/t/.bundle-seq.other.aB3dE9" "$work/t/sub/.bundle-seq.replaced.aB3dE9"
+  ln -sfn "$work/outside" "$work/t/.bundle-seq.replaced.link0"
+  ln -sfn "$work/outside" "$work/t/.bundle-seq.replaced.aB3dE9/sub/link"
+  : >"$work/t/.bundle-seq.replaced.file1"
+}
+seq_clean() {
+  rm -rf "$work/t"/.bundle-seq.* "$work/t/sub" "$work/t/bundle-seq"
+}
+seq_clean
+seq_leftovers
+FAKE_UID=0 paddock_t up
+if [[ ! -e "$work/t/.bundle-seq.replaced.aB3dE9" && ! -e "$work/t/.bundle-seq.replaced.zz01xy" &&
+  -d "$work/t/bundle-seq" && -d "$work/t/.bundle-seq.replaced.with space" && -d "$work/t/.bundle-seq.replaced.x.y" &&
+  -d "$work/t/.bundle-seq.replaced." && -d "$work/t/.bundle-seq.other.aB3dE9" &&
+  -d "$work/t/sub/.bundle-seq.replaced.aB3dE9" && -L "$work/t/.bundle-seq.replaced.link0" &&
+  -f "$work/t/.bundle-seq.replaced.file1" && "$(cat "$work/outside/keep/high-water")" == 9 &&
+  "$out" == *"removed the bundle-seq/ kept aside"*"$work/t/.bundle-seq.replaced.aB3dE9"* ]]; then
+  pass "up as root removes only the exact leftover directories, never a symlink, a file or another name"
+else fail "up as root with leftovers: exit $rc, $(ls -a "$work/t"), $out"; fi
+seq_clean
+seq_leftovers
+paddock_t up
+[[ -d "$work/t/.bundle-seq.replaced.aB3dE9" && -d "$work/t/.bundle-seq.replaced.zz01xy" ]] &&
+  pass "up without root keeps the leftovers" || fail "up without root removed leftovers: $(ls -a "$work/t")"
+seq_clean
+seq_leftovers
+rmdir "$work/t/bundle-seq"
+FAKE_UID=0 paddock_t up
+[[ -d "$work/t/.bundle-seq.replaced.aB3dE9" && -d "$work/t/.bundle-seq.replaced.zz01xy" ]] &&
+  pass "up as root keeps the leftovers while bundle-seq/ is missing" || fail "up as root without bundle-seq/: $(ls -a "$work/t")"
+paddock_t check
+[[ "$out" == *"WARN  upgrade: no leftover bundle-seq directories"* && "$out" != *"rm -rf"* && "$out" == *"mv -T"* ]] &&
+  pass "check does not recommend rm -rf while bundle-seq/ is missing" || fail "check without bundle-seq/: $out"
+seq_clean
+seq_leftovers
+rmdir "$work/t/bundle-seq"
+ln -s "$work/outside" "$work/t/bundle-seq"
+FAKE_UID=0 paddock_t up
+[[ -d "$work/t/.bundle-seq.replaced.aB3dE9" && "$(cat "$work/outside/keep/high-water")" == 9 ]] &&
+  pass "up as root keeps the leftovers when bundle-seq is a symlink" || fail "up as root with a bundle-seq symlink: $(ls -a "$work/t")"
+seq_clean
 # PDK-733 review 2 (R2-m1): bash writes a here-string above 64 KiB to a temp file (sh-thd.*), so a large render with the
 # passwords must reach the loop and base64 through pipes. Without strace the backup-target branch is read instead.
 big="$fixture# $(head -c 60000 /dev/zero | tr '\0' x)

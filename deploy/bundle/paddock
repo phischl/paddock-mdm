@@ -348,7 +348,12 @@ case "$cmd" in
         for d in "${leftovers[@]}"; do
           echo "      - $d: a bundle-seq/ replaced by an upgrade after a rollback; nothing reads it, its high-water is outdated"
         done
-        echo "      - remove them (root, they belong to uid 999): sudo rm -rf$(printf ' %q' "${leftovers[@]}")"
+        if [[ -d "$BUNDLE_DIR/bundle-seq" && ! -L "$BUNDLE_DIR/bundle-seq" ]]; then
+          echo "      - remove them (root, they belong to uid 999; ./paddock up does it as root): sudo rm -rf$(printf ' %q' "${leftovers[@]}")"
+        else
+          # migrate-from's double failure (PDK-1007): the aside is then the release's only bundle-seq/.
+          echo "      - $BUNDLE_DIR/bundle-seq is missing: do not remove these; move the newest back with mv -T <aside> $BUNDLE_DIR/bundle-seq"
+        fi
       fi
     fi
     # Online, the project's running containers against the hardening matrix of hardening-exceptions.yaml (plan M12h
@@ -393,6 +398,7 @@ case "$cmd" in
       resolve_local_targets "$BACKUP_TARGETS_FILE" ||
         die "a local backup target no longer resolves below PADDOCK_BACKUP_LOCAL_ROOT (see above); fix the directory or the target, then ./paddock backup-target apply"
     fi
+    backup_host && remove_seq_leftovers "$BUNDLE_DIR"
     run_redacted compose "${profiles[@]}" up -d
     "$BUNDLE_DIR/scripts/wait-healthy.sh" "${profiles[@]}"
     ;;
