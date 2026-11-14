@@ -280,3 +280,29 @@ func (c *Client) UserAuthenticators(ctx context.Context, pks []string) (map[stri
 - **RR-139 (new):** device users still enrol their factor at first device login (ADR 0053 decision 5).
 - Automerge risk: a patch that passes CI but breaks a path CI does not cover reaches `main`; the gated pins are
   excluded and the release regression still runs before every tag.
+
+## Amendment 2026-11-14 b — Renovate without App and automerge (maintainer decision; ADR 0054 amendment b)
+
+Binding; where it contradicts the sections above (decisions 1, 2.1, 4; SC-R1; §11; §12 maintainer actions), it wins.
+
+- **Runtime (replaces decision 1).** `.github/workflows/renovate.yml`: `schedule` `cron: "0 4 * * 1"` and
+  `workflow_dispatch`; workflow-level `permissions: {}`; job permissions `contents: write`, `pull-requests: write`,
+  `issues: write`; `renovatebot/github-action` pinned by SHA with the Renovate image pinned by digest; `token:
+  ${{ secrets.GITHUB_TOKEN }}`; `RENOVATE_REPOSITORIES: phischl/paddock-mdm`; `persist-credentials: false`. No
+  `actions/create-github-app-token`, no App, no new secret.
+- **Configuration (amends decision 2).** Rule 1 becomes `groupName: "patch-weekly"`, `automerge: false`; no rule sets
+  `automerge: true`; `platformAutomerge` is not set. `enabledManagers` excludes `github-actions` (and the
+  `helpers:pinGitHubActionDigests` preset is dropped). Labels: `dependencies`; the group PR additionally `patch-weekly`.
+- **Dependabot (amends decision 4).** `.github/dependabot.yml` keeps only the `github-actions` block; PDK-1024 removes the
+  other blocks, `tools/upstreamwatch`, `upstream-watch.yml` and `make upstream-check`.
+- **CI trigger.** Open choice (A) dispatch or (B) close/reopen, ADR 0054 amendment b point 4; recommendation (B). With (B)
+  `docs/operations/supply-chain.md` documents: before merging a Renovate PR, close and reopen it (`gh pr close <n> &&
+  gh pr reopen <n>`) and merge after every required check is green. With (A) PDK-1023 adds the dispatch step and the
+  `workflow_dispatch` handling in `ci.yml`, with a test run on one Renovate branch.
+- **SC-R1 (replaces).** Given Renovate runs on Monday with patch and digest updates available; then the maintainer sees
+  one open `patch-weekly` PR and one PR per minor or major update; after CI is triggered (A or B) and fully green, a
+  maintainer merges it; nothing merges itself.
+- **Maintainer action (replaces §12 first bullet).** Enable the repository setting "Allow GitHub Actions to create and
+  approve pull requests". New CI component: `renovatebot/github-action` with the Renovate image (approved with Q11).
+- **Stop condition (added).** The repository setting is not enabled when PDK-1023 runs its first dispatch: stop and
+  report; do not work around it with another token.
