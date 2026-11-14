@@ -162,6 +162,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 
 | Tool | Class | Destructive | Summary |
 | --- | --- | --- | --- |
+| `cancelOrganizationDeletion` | write | no | Cancels the pending deletion of the organization: every offboarding uninstall a device has not received yet is withdrawn; a device that already received it removes Paddock as instructed. |
 | `createAgentRelease` | write | no | Creates a draft release. |
 | `createOrganization` | write | no | Creates the organization and its Authentik groups. |
 | `getAgentRelease` | read | no | The release with its artifacts and rollout, including device counts. |
@@ -183,7 +184,7 @@ The tools `paddockctl mcp` can offer, generated from the admin API contract. A s
 | `listBackupTargets` | read | no | The backup targets: local directories of the host, SMB and NFS shares the host mounts, S3-compatible buckets. |
 | `listComponentTargets` | read | no | The versions devices are expected to run (plan M8d decision 55): paddockd, the supervisor and paddock-revoke from the current release, fleetd from the newest published release, Himmelblau from the compiler. |
 | `listIpAllowlist` | read | no | The IP allow list of the administrative surfaces (plan M7a decision 16): while it has entries, the portal and the admin API answer 403 ip_not_allowed to every client address outside it, sessions and API tokens alike. |
-| `listOrganizations` | read | no | GET /api/platform/v1/organizations |
+| `listOrganizations` | read | no | Without a status filter the list leaves out deleted organizations (their tombstones, ADR 0052); status=deleted lists them. |
 | `listPlatformNotificationDestinations` | read | no | The platform's notification destinations: signed webhooks and e-mail address lists that receive platform events (rollouts, releases, OSV, IP allow list) (ADR 0031). |
 | `publishAgentRelease` | write | no | POST /api/platform/v1/agent-releases/{version}/publish |
 | `resumeAgentRollout` | write | no | POST /api/platform/v1/agent-releases/{version}/rollout/resume |
@@ -320,6 +321,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `deleteBackupTarget` | platform | Deletes the target; the backup sets already on it stay. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
 | `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |
+| `deleteOrganization` | platform | Starts the deletion of the organization (ADR 0052): it stays active and usable until deletion.delete_after = now + grace_days, then the worker deletes its data and leaves a tombstone in status deleted. |
 | `deletePlatformNotificationDestination` | platform | Deletes the destination with its delivery state and history. |
 | `deleteSoftwarePackage` | software | Removes a stored package from the repository, which is rebuilt without it. |
 | `deleteSoftwareSource` | software | Removes the source; the devices remove its source file and keyring with their next bundle. |

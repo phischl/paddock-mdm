@@ -410,6 +410,7 @@ var informational = map[audit.Code]bool{
 	"agent_rollout.resumed":                         true,
 	"agent_rollout.started":                         true,
 	"audit.chain_verified":                          true,
+	"audit.event_after_retirement":                  true,
 	"audit.export_completed":                        true,
 	"audit.export_downloaded":                       true,
 	"audit.export_requested":                        true,

@@ -368,6 +368,7 @@ type Device struct {
 	CompiledOsVersionID         string
 	CompiledAgentVersion        string
 	DenialLockCheckedAt         *time.Time
+	UninstallReason             *string
 }
 
 type DeviceAlert struct {
@@ -871,22 +872,24 @@ type OpenbaoAutoUnseal struct {
 }
 
 type Organization struct {
-	ID                   uuid.UUID
-	Slug                 string
-	Name                 string
-	Status               string
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
-	Domains              []string
-	DeletionRequestedAt  *time.Time
-	DeletionRequestedBy  *string
-	DeletionReason       *string
-	DeleteAfter          *time.Time
-	OffboardingStep      *string
-	OffboardingErrorCode *string
-	DeletedAt            *time.Time
-	IdpEnsuredAt         *time.Time
-	IdpEnsureRevision    *string
+	ID                        uuid.UUID
+	Slug                      string
+	Name                      string
+	Status                    string
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+	Domains                   []string
+	DeletionRequestedAt       *time.Time
+	DeletionRequestedBy       *string
+	DeletionReason            *string
+	DeleteAfter               *time.Time
+	OffboardingStep           *string
+	OffboardingErrorCode      *string
+	DeletedAt                 *time.Time
+	IdpEnsuredAt              *time.Time
+	IdpEnsureRevision         *string
+	DeletionUninstallsIssued  *int32
+	DeletionUninstallsSkipped *int32
 }
 
 type OrganizationDmsSetting struct {

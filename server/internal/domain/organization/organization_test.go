@@ -1,7 +1,10 @@
 package organization
 
 import (
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -88,5 +91,59 @@ func TestValidateDomains(t *testing.T) {
 	}
 	if PrimaryDomain(nil) != "" || PrimaryDomain([]string{"b.test", "a.test"}) != "b.test" {
 		t.Error("PrimaryDomain")
+	}
+}
+
+func TestValidateGraceDays(t *testing.T) {
+	cases := []struct {
+		days        int
+		development bool
+		ok          bool
+	}{
+		{6, false, false}, {7, false, true}, {30, false, true}, {90, false, true}, {91, false, false}, {0, false, false},
+		{-1, true, false}, {0, true, true}, {6, true, true}, {90, true, true}, {91, true, false},
+	}
+	for _, c := range cases {
+		if err := ValidateGraceDays(c.days, c.development); (err == nil) != c.ok {
+			t.Errorf("ValidateGraceDays(%d, %v) = %v, want ok %v", c.days, c.development, err, c.ok)
+		}
+	}
+}
+
+func TestValidateDeletionReason(t *testing.T) {
+	for reason, ok := range map[string]bool{
+		"x": false, "ok": true, strings.Repeat("ä", 500): true, strings.Repeat("a", 501): false, "": false,
+	} {
+		if err := ValidateDeletionReason(reason); (err == nil) != ok {
+			t.Errorf("ValidateDeletionReason(%d characters) = %v, want ok %v", len([]rune(reason)), err, ok)
+		}
+	}
+}
+
+func TestDeletionStates(t *testing.T) {
+	at := time.Now()
+	for _, c := range []struct {
+		status    string
+		after     *time.Time
+		deletable bool
+		pending   bool
+	}{
+		{StatusActive, nil, true, false},
+		{StatusActive, &at, true, true},
+		{StatusProvisioningFailed, &at, true, true},
+		{StatusProvisioning, nil, false, false},
+		{StatusSuspended, nil, false, false},
+		{StatusDeleting, &at, false, false},
+		{StatusDeleted, &at, false, false},
+	} {
+		if got := Deletable(c.status); got != c.deletable {
+			t.Errorf("Deletable(%s) = %v", c.status, got)
+		}
+		if got := DeletionPending(c.status, c.after); got != c.pending {
+			t.Errorf("DeletionPending(%s, %v) = %v", c.status, c.after, got)
+		}
+	}
+	if got := ListedByDefault(); slices.Contains(got, StatusDeleted) || !slices.Contains(got, StatusDeleting) || len(got) != 5 {
+		t.Errorf("ListedByDefault() = %v", got)
 	}
 }

@@ -401,7 +401,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		stepUps: newStepUpProofs(), sessions: newFakeSessions(), identitySessions: &fakeIdentitySessions{}}
 	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
 	verifyRelease := app.NewReleaseVerifier(releasePub)
-	e.orgs = app.NewOrganizations(runner, platformPool, idp)
+	e.orgs = app.NewOrganizations(runner, platformPool, idp, app.NewUninstalls(runner, orgPool, discardCommands{}), false)
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
 		if e.keysDown {
 			return nil, problem.UpstreamUnavailable

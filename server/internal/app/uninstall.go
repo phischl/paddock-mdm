@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -44,6 +45,10 @@ type UninstallCache interface {
 func NewUninstalls(runner *ActionRunner, org *db.OrgPool, cache UninstallCache) *Uninstalls {
 	return &Uninstalls{runner: runner, org: org, cache: cache, now: time.Now}
 }
+
+// UninstallReasonOrganizationOffboarding marks the uninstall the deletion of the organization issued
+// (device.uninstall_reason, plan M17 amendment e point 1).
+const UninstallReasonOrganizationOffboarding = "organization_offboarding"
 
 // UninstallReportTimeout is how long after the device received the command, or reported its result, an uninstall
 // may stay without a removal report before an administrator can cancel or request it again: the helper runs from
@@ -237,6 +242,9 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 		if dev.UninstalledAt != nil {
 			return problem.InvalidState.WithDetail("the uninstall completed")
 		}
+		if dev.UninstallReason != nil && *dev.UninstallReason == UninstallReasonOrganizationOffboarding {
+			return problem.InvalidState.WithDetail("the uninstall belongs to the organization's deletion; only cancelling the deletion withdraws it")
+		}
 		cmd, err := q.GetDeviceCommand(ctx, dev.UninstallCommandID.UUID)
 		if err != nil {
 			return err
@@ -285,6 +293,128 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 		dropWithdrawnCommand(ctx, u.cache, deviceID, withdrawn)
 	}
 	return out, err
+}
+
+// requestForOffboarding issues the command uninstall (mode leave) to every active device of the context's
+// organization for its deletion and marks each request with the reason organization_offboarding (plan M17 decision 3,
+// amendment e points 1, 2 and 5). It runs in one transaction with a constant number of statements, so a failed
+// request leaves no device with an uninstall. It records no audit event: the platform administrator's
+// organization.deletion_requested stands for every device. A device with an open uninstall or an open Lock or Destroy
+// is skipped and counted. The commands expire at expiresAt instead of after the uninstall's default lifetime, and no
+// command.issued message is queued (the action is a platform action whose outbox rows belong to the platform
+// pseudo-organization): the worker's command round publishes them within one interval. Only
+// Organizations.RequestDeletion calls it.
+func (u *Uninstalls) requestForOffboarding(ctx context.Context, expiresAt time.Time) (issued, skipped int, err error) {
+	params, err := json.Marshal(command.UninstallParams{Mode: command.UninstallLeave})
+	if err != nil {
+		return 0, 0, err
+	}
+	err = u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		locked, err := q.LockActiveDevicesForOffboarding(ctx)
+		if err != nil {
+			return fmt.Errorf("lock active devices: %w", err)
+		}
+		now := u.now().UTC()
+		cmds, err := q.InsertOffboardingUninstalls(ctx, pgstore.InsertOffboardingUninstallsParams{
+			Params: params, IssuedAt: now.Truncate(time.Second), ExpiresAt: expiresAt, LockedIds: locked,
+		})
+		if err != nil {
+			return fmt.Errorf("insert commands: %w", err)
+		}
+		ids := make([]uuid.UUID, len(cmds))
+		for i, c := range cmds {
+			ids[i] = c.ID
+		}
+		n, err := q.SetOffboardingUninstalls(ctx, pgstore.SetOffboardingUninstallsParams{RequestedAt: now, CommandIds: ids})
+		if err != nil {
+			return fmt.Errorf("set uninstall requests: %w", err)
+		}
+		if n != int64(len(cmds)) {
+			return fmt.Errorf("app: %d uninstall requests set for %d commands", n, len(cmds))
+		}
+		issued, skipped = len(cmds), len(locked)-len(cmds)
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return issued, skipped, nil
+}
+
+// cancelForOffboarding withdraws the offboarding uninstalls of the context's organization that its devices have not
+// received, in one transaction with a constant number of statements and without audit events (plan M17 amendment e
+// points 3 and 6: the platform administrator's organization.deletion_cancelled stands for every device). A pending
+// command's result is claimed as cancelled first, as Cancel does it, so the device's later result is a conflict; a
+// failed or expired command is cancelled; a delivered or succeeded one runs to completion. It returns the number of
+// requests it ended. When it fails, the claims it won are released. Only Organizations.CancelDeletion calls it.
+func (u *Uninstalls) cancelForOffboarding(ctx context.Context) (cancelled int, err error) {
+	var withdrawn []pgstore.CancelOffboardingCommandsRow
+	var claims []*resultClaims
+	err = u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		withdrawn = nil
+		open, err := q.LockOffboardingUninstalls(ctx)
+		if err != nil {
+			return fmt.Errorf("lock offboarding uninstalls: %w", err)
+		}
+		var ids []uuid.UUID
+		claimed := map[uuid.UUID]*resultClaims{}
+		for _, o := range open {
+			switch o.Status {
+			case devicecommand.StatusPending:
+				owner, status, err := u.cache.ClaimResult(ctx, o.DeviceID, o.CommandID, devicecommand.StatusCancelled)
+				if err != nil {
+					return err
+				}
+				if owner != o.DeviceID || status != devicecommand.StatusCancelled {
+					continue
+				}
+				c := newResultClaims(u.cache, o.DeviceID)
+				c.won(o.CommandID)
+				claims = append(claims, c)
+				claimed[o.CommandID] = c
+				ids = append(ids, o.CommandID)
+			case devicecommand.StatusFailed, devicecommand.StatusExpired:
+				ids = append(ids, o.CommandID)
+			}
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		withdrawn, err = q.CancelOffboardingCommands(ctx, pgstore.CancelOffboardingCommandsParams{
+			Ids: ids, FinishedAt: u.now().UTC(),
+		})
+		if err != nil {
+			return fmt.Errorf("cancel commands: %w", err)
+		}
+		devices := make([]uuid.UUID, len(withdrawn))
+		for i, w := range withdrawn {
+			devices[i] = w.DeviceID
+			delete(claimed, w.ID)
+		}
+		// A claimed command that got its result meanwhile stays, and so does the device's request.
+		for _, c := range claimed {
+			c.releaseOn(context.WithoutCancel(ctx), errCommandFinished())
+		}
+		n, err := q.ClearOffboardingUninstalls(ctx, devices)
+		if err != nil {
+			return fmt.Errorf("clear uninstall requests: %w", err)
+		}
+		if n != int64(len(devices)) {
+			return fmt.Errorf("app: %d uninstall requests cleared for %d cancelled commands", n, len(devices))
+		}
+		return nil
+	})
+	// The claims are released even when the budget of the cancel ran out.
+	for _, c := range claims {
+		c.releaseOn(context.WithoutCancel(ctx), err)
+	}
+	if err != nil {
+		return 0, err
+	}
+	for _, w := range withdrawn {
+		dropWithdrawnCommand(ctx, u.cache, w.DeviceID, w.ID)
+	}
+	return len(withdrawn), nil
 }
 
 // withdrawUninstallCommand cancels an uninstall command without a result (pending or delivered): it claims the

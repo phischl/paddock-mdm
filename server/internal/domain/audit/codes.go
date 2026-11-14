@@ -356,6 +356,16 @@ const (
 	CodePlatformRestoreCompleted Code = "platform.restore_completed"
 	CodePlatformRestoreFailed    Code = "platform.restore_failed"
 	CodePlatformRestoreAbandoned Code = "platform.restore_abandoned"
+	// Organization offboarding (plan M17 decision 19, ADR 0052 decision 6): all in the platform pseudo-organization
+	// except audit.chain_verified.
+	CodeOrganizationDeletionRequested        Code = "organization.deletion_requested"
+	CodeOrganizationDeletionCancelled        Code = "organization.deletion_cancelled"
+	CodeOrganizationDeletionStepCompleted    Code = "organization.deletion_step_completed"
+	CodeOrganizationDeletionStepFailed       Code = "organization.deletion_step_failed"
+	CodeOrganizationDeleted                  Code = "organization.deleted"
+	CodePlatformOffboardedDeviceUninstalled  Code = "platform.offboarded_device_uninstalled"
+	CodePlatformDeletedOrganizationAuditRead Code = "platform.deleted_organization_audit_read"
+	CodeAuditEventAfterRetirement            Code = "audit.event_after_retirement"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -1545,16 +1555,16 @@ var registry = map[Code]Definition{
 	CodeAuditChainVerified: {
 		Code: CodeAuditChainVerified, Emitted: true,
 		Description: "The audit writer verified the organization's hash chain for from_day..to_day: every manifest exists, is signed by audit-chain, links to the previous day and lists exactly the indexed objects, and every object's SHA-256 matches (actor: system audit-writer).",
-		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects"},
+		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects", "final"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "trigger is nightly (the last 7 sealed days), sample (one random older day) or cli (paddock-server audit verify).",
+		Note:        "trigger is nightly (the last 7 sealed days), sample (one random older day) or cli (paddock-server audit verify). final is true on the last verification before the organization is deleted (ADR 0052 decision 6), which is the last event of the organization's own log.",
 	},
 	CodeAuditChainVerificationFailed: {
 		Code: CodeAuditChainVerificationFailed, Emitted: true,
 		Description: "The audit writer found problems in the organization's hash chain for from_day..to_day (actor: system audit-writer).",
-		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects", "problem_count", "problems"},
+		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects", "problem_count", "problems", "final"},
 		Outcomes:    []Outcome{OutcomeFailure},
-		Note:        "problems lists at most 50 findings of at most 500 characters each; problem_count is the full number. Raises PaddockAuditChainBroken.",
+		Note:        "problems lists at most 50 findings of at most 500 characters each; problem_count is the full number. Raises PaddockAuditChainBroken. final is true on the last verification before the organization is deleted (ADR 0052 decision 6); a failed final verification does not stop the deletion.",
 	},
 	CodeAdminRoleGranted: {
 		Code: CodeAdminRoleGranted, Emitted: true,
@@ -2152,6 +2162,62 @@ var registry = map[Code]Definition{
 		Params:      restorePlanParams,
 		Outcomes:    adminOutcomes,
 		Note:        "The plan's state becomes abandoned and its outcome_detail reads abandoned by <administrator>. Failure with invalid_request without the typed word, not_found, or invalid_state for a plan that is not running (cancel an approved plan instead). Platform pseudo-organization.",
+	},
+	CodeOrganizationDeletionRequested: {
+		Code: CodeOrganizationDeletionRequested, Emitted: true,
+		Description: "A platform administrator requested the deletion of an organization after a step-up and the typed slug; every active device received the command uninstall (mode leave) and the organization is deleted after the grace period unless the deletion is cancelled (ADR 0052).",
+		Params:      []string{"slug", "reason", "grace_days", "delete_after", "uninstalls_issued", "uninstalls_skipped"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "Platform pseudo-organization; the devices' uninstalls record no device.uninstall_requested. grace_days is 7 to 90 (0 to 90 on a development stack); uninstalls_skipped counts active devices with an open uninstall or an open Lock or Destroy. Failure with invalid_request for a wrong confirm_slug, a reason outside 2 to 500 characters or grace_days outside the bounds, not_found, or invalid_state when a deletion is already requested or the organization is not active or provisioning_failed.",
+	},
+	CodeOrganizationDeletionCancelled: {
+		Code: CodeOrganizationDeletionCancelled, Emitted: true,
+		Description: "A platform administrator cancelled the pending deletion of an organization; every offboarding uninstall the devices had not received was withdrawn, received ones run to completion.",
+		Params:      []string{"slug", "uninstalls_cancelled"},
+		Outcomes:    adminOutcomes,
+		Note:        "Platform pseudo-organization. Failure with not_found, or invalid_state when no deletion is pending or the request is still issuing its uninstalls.",
+	},
+	CodeOrganizationDeletionStepCompleted: {
+		Code: CodeOrganizationDeletionStepCompleted, Emitted: true,
+		Description: "The worker completed one step of an organization's deletion (actor: system).",
+		Params:      []string{"slug", "step", "count", "uninstalls_reissued"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Platform pseudo-organization. step is sessions, devices, outbox, authentik, fleet, objects, valkey, audit_final, database or tombstone; count is what the step removed or recorded. uninstalls_reissued, step devices only, counts the devices that got a fresh uninstall because they had none open (plan M17 amendment e point 10).",
+	},
+	CodeOrganizationDeletionStepFailed: {
+		Code: CodeOrganizationDeletionStepFailed, Emitted: true,
+		Description: "A step of an organization's deletion failed and is retried in the next round (actor: system).",
+		Params:      []string{"slug", "step", "error_code"},
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "Platform pseudo-organization; recorded once per step and error code until the step succeeds.",
+	},
+	CodeOrganizationDeleted: {
+		Code: CodeOrganizationDeleted, Emitted: true,
+		Description: "The worker deleted an organization's data and left its tombstone in status deleted (actor: system).",
+		Params:      []string{"slug", "devices_offboarded", "rows_deleted", "objects_deleted", "authentik_objects_deleted", "fleet_hosts_deleted"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Platform pseudo-organization. The audit evidence of the organization is kept until its retention ends.",
+	},
+	CodePlatformOffboardedDeviceUninstalled: {
+		Code: CodePlatformOffboardedDeviceUninstalled, Emitted: true,
+		Description: "A device of a deleted organization reported that it removed Paddock (actor: system).",
+		Params:      []string{"device_id", "organization_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Platform pseudo-organization; the device's platform record and cache keys are deleted.",
+	},
+	CodePlatformDeletedOrganizationAuditRead: {
+		Code: CodePlatformDeletedOrganizationAuditRead, Emitted: true,
+		Description: "A platform administrator read the retained audit evidence of a deleted organization (ADR 0052 decision 7).",
+		Params:      []string{"organization_id", "slug", "resource"},
+		Outcomes:    adminOutcomes,
+		Note:        "Platform pseudo-organization.",
+	},
+	CodeAuditEventAfterRetirement: {
+		Code: CodeAuditEventAfterRetirement, Emitted: true,
+		Description: "The audit writer received an event of an organization whose log was closed for its deletion and recorded it here instead of dropping it (actor: system audit-writer).",
+		Params:      []string{"organization_id", "original_code", "original_event_id"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,
