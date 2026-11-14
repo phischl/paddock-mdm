@@ -12,5 +12,6 @@ use (
 	./test/system
 	./tools/composelint
 	./tools/migrationsfrozen
+	./tools/renovatecheck
 	./tools/upstreamwatch
 )

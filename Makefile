@@ -80,7 +80,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run gen'; fi
 
 .PHONY: lint
-lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose lint-selfservice ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose lint-selfservice renovate-check ## Run all linters, govulncheck, the license gate and the server image build
 
 # The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
@@ -103,6 +103,11 @@ lint-migrations-frozen:
 .PHONY: lint-compose
 lint-compose:
 	go run ./tools/composelint --compose-dir $(COMPOSE_DIR)
+
+# Every pin of versions.env and the compiler's Himmelblau default must be matched by a Renovate custom manager (PDK-1023).
+.PHONY: renovate-check
+renovate-check:
+	go run ./tools/renovatecheck
 
 # Regenerates pkg/compat/testdata/<RELEASE>/ (bundles, check-in, events, commands, the audit insert) from the current
 # tree and removes the directories older than two releases (plan M16 decision 2). Run at release time on the release

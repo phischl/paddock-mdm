@@ -1,0 +1,97 @@
+// Renovate configuration (ADR 0054, plan M12h-2 decision 2 and amendment b). Nothing merges itself: automerge is off
+// everywhere. Keep this file within JSON with comments and trailing commas only.
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard", ":semanticCommits"],
+  "baseBranches": ["main"],
+  "timezone": "UTC",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 10,
+  "labels": ["dependencies"],
+  "commitMessagePrefix": "build(deps):",
+  // GitHub Actions stay with Dependabot (ADR 0054 amendment b), so the github-actions manager is not listed.
+  "enabledManagers": [
+    "gomod",
+    "npm",
+    "dockerfile",
+    "docker-compose",
+    "custom.regex",
+  ],
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["patch", "digest", "pin", "pinDigest"],
+      "groupName": "patch-weekly",
+      "addLabels": ["patch-weekly"],
+      "automerge": false,
+    },
+    {
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false,
+    },
+    // Pins with a gate a person runs before merging (ADR 0054 decision 2).
+    {
+      "matchPackageNames": [
+        "postgres",
+        "ghcr.io/goauthentik/server",
+        "openbao/openbao",
+        "rustfs/rustfs",
+        "fleetdm/fleet",
+        "fleetdm/fleetctl",
+        "himmelblau-idm/himmelblau",
+      ],
+      "automerge": false,
+      "groupName": null,
+      "addLabels": ["gated-pin"],
+    },
+    {
+      "matchPackageNames": ["@playwright/test", "mcr.microsoft.com/playwright"],
+      "groupName": "playwright",
+      "automerge": false,
+    },
+    {
+      "matchPackageNames": ["typescript"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false,
+    },
+    // A toolchain bump touches go.work, every go.mod and every workflow together (PDK-727 practice).
+    {
+      "matchPackageNames": ["golang", "go"],
+      "groupName": "go-toolchain",
+      "automerge": false,
+    },
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^deploy/compose/versions\\.env$/"],
+      "matchStrings": [
+        "^(?<depName>[A-Z0-9_]+)_IMAGE=(?<packageName>[^:@\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})$",
+      ],
+      "datasourceTemplate": "docker",
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^server/cmd/paddock-server/compiler\\.go$/"],
+      "matchStrings": ["\"PADDOCK_HIMMELBLAU_VERSION\", \"(?<currentValue>[0-9.]+)\""],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "himmelblau-idm/himmelblau",
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^deploy/compose/versions\\.env$/"],
+      "matchStrings": [
+        "^FLEET_CPE_DATABASE_URL=https://github\\.com/fleetdm/nvd/releases/download/(?<currentValue>[0-9]+)/",
+        "^FLEET_CPE_TRANSLATIONS_URL=https://github\\.com/fleetdm/nvd/releases/download/(?<currentValue>[0-9]+)/",
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "fleetdm/nvd",
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["go-version: \"(?<currentValue>[0-9.]+)\""],
+      "datasourceTemplate": "golang-version",
+      "depNameTemplate": "go",
+    },
+  ],
+}
