@@ -135,6 +135,11 @@ The concept's IDs are kept. Each criterion names the role that must be able to o
 | N5 | **Privacy:** the negative list of the concept (no commands, processes, network connections, …) is enforced by schema: ingest rejects unknown event types (amendment 2026-11-11: from 0.1.0-alpha.10 an event of an unknown type is skipped with its data dropped at the gateway and the batch accepted, ADR 0024; nothing of an unknown type is stored). |
 | N6 | **Localization:** no user-visible string in the portal is hard-coded; CI fails on missing English keys. |
 
+> **Amendment 2026-11-14 (plan M19 D1):** N2 reads "5 000 events/s with one worker and two ingest workers
+> (`paddock-worker-ingest=2`, `PADDOCK_WORKER_MODE=ingest`) at `PADDOCK_PG_MAX_CONNECTIONS=150`". Three full worker
+> replicas do not fit PostgreSQL's connection budget (`docs/operations/capacity.md`); every restore starts the
+> database with at least the `max_connections` of the restored backup.
+
 ---
 
 ## 3. System context and building blocks
@@ -462,6 +467,14 @@ Binding rules:
 > target device ID and `finished_at` of those rows: the audited evidence of a Destroy, the only path that deletes
 > escrowed LUKS headers, without which no escrowed header copy leaves the backup set. Its write policy on `action`
 > stays bound to the platform pseudo-organization; no other role gains anything.
+
+> **Amendment 2026-11-14 (ADR 0052, plan M17):** organization offboarding. Status `deleting` and `deleted` (tombstone);
+> the worker deletes an organization's rows only through the `SECURITY DEFINER` function
+> `paddock_offboard_delete_batch` while the organization is `deleting`, in the order of the registry
+> `offboarding_table`, which every migration adding an organization table MUST extend (rule 1 gains this duty).
+> **Deviation from rule 4, narrow:** `db.AuditReader.InDeletedOrg` opens the audit index of an organization named in
+> the URL, only for a platform administrator and only when that organization is `deleted`, so that its retained
+> evidence stays readable until its retention ends.
 
 The automated **negative isolation test** (§22) walks all OpenAPI operations with a principal of
 organization A and IDs of organization B and requires 404 for every one.
@@ -1040,6 +1053,12 @@ be targets of profile and login assignments. *(Decided 2026-10-04, plan M3a.)*
 > portal blueprint binds the stage `paddock-default-login-mfa` (WebAuthn or TOTP, enrolled when missing) at order 31
 > of Authentik's `default-authentication-flow`, so no password-only session can be created through Authentik's own
 > interfaces (ADR 0007 amendment 2026-10-17).
+
+> **Amendment 2026-11-14 (ADR 0053, plan M12h-2):** a portal administrator account without an authenticator is no
+> longer asked to enrol one at sign-in; it enrols through a one-time sign-in setup link (`paddock-recovery` flow)
+> created by an organization administrator or, for platform administrators, by the host operator. Administrators that
+> existed without a factor at the upgrade enrol once at their next sign-in (`paddock_mfa_enrol_at_login`). Device
+> users are unchanged.
 
 ### 9.3 Himmelblau configuration
 
