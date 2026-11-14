@@ -729,3 +729,37 @@ Binding; where it contradicts the sections above (decisions 3, 4, 15, §6 signat
 | Points 13 (runbook), 14 | PDK-1019 |
 
 PDK-1015 is unchanged. PDK-1039 is decided by points 8–12 and carries no implementation of its own.
+
+## Amendment 2026-11-14 f — denials of a deleting organization, dropped device messages, the bypass signature (architect decision after PDK-1038 review 1)
+
+Binding; where it contradicts amendment d, it wins.
+
+1. **Where the denial of an inactive organization is recorded.** When an organization-scoped action fails with
+   `PD001` (`problem.OrganizationInactive`), `ActionRunner` MUST NOT write into that organization (the gate refuses it,
+   and a row written after the delete loop would make `paddock_offboard_finalize` raise 40001). It records the
+   attempt's one event in the **platform pseudo-organization** (`audit.PlatformOrganizationID`, platform scope) with
+   the new code `organization.inactive_denied`, outcome `denied`. Params: `organization_id` (the refused
+   organization), `attempted_code` (the action's own code), `status` (`deleting` or `deleted`). Actor and target are
+   kept from the attempt. The attempt's own code is not recorded in addition. This is the analogue of
+   `audit.event_after_retirement` (decision 16). It is readable where every platform pseudo-organization event is
+   read: the platform administrator's audit log. Nothing has to be read from the deleted organization's retained log
+   for it. Registry: closed code, MSGID ≤ 32 characters as is (28), portal message `audit.organization.inactive_denied`
+   (en/de), Wazuh informational. Test: a POST of an organization administrator against a `deleting` organization gets
+   403 `organization_inactive` and yields exactly one `denied` `organization.inactive_denied` event in the platform
+   pseudo-organization, and none in the organization.
+2. **Device messages between `deleting` and step `devices`: accepted residual risk, no reconciliation.** Amendment d
+   point 4 stays: worker consumers drop them. Consequence: a device whose `agent.uninstalled`, command result or
+   delivery mark arrives in this window (about one round, `devices` is the second step) still gets an
+   `offboarded_device` row. That row holds no personal data, is never used again by a device that has left, and is
+   purged after 365 days. Its count in `organization.deleted` (`devices_offboarded`) is an upper bound, and no
+   `platform.offboarded_device_uninstalled` is recorded for it. PDK-1016 MUST NOT add a reconciliation for it.
+   PDK-1019 records it as a residual risk.
+3. **Bypass signature: `db.OrgPool.InOrgOffboarding(ctx, fn)` confirmed.** It takes the organization from the
+   principal in `ctx`, like `InOrg`; amendment d's `(ctx, org, fn)` is replaced. `app.Offboarding` builds that system
+   principal from the organization it loaded through `PlatformPool` (the pattern of `offboardingContext` of PDK-1014).
+4. **Status check order.** In `paddock_org_enter` the check after `pg_advisory_xact_lock_shared` is mandatory. The
+   check before the lock is kept: it stops new transactions of a deleting organization from queueing behind a waiting
+   finalize. It MAY only be dropped together with a non-queueing finalize (`pg_try_advisory_xact_lock`, 40001 when not
+   granted).
+
+Assignment: points 1, 3 and 4 PDK-1038 (fix round); point 2 PDK-1019 (residual risk), PDK-1016 (no reconciliation).
