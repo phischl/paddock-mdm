@@ -484,3 +484,124 @@ Order: 1 → 2 → 3 → (4, 5 in either order) → 6 → 7 → 8; 9 → 10 inde
 - `offboarded_device` holds signed uninstall envelopes valid for a year: they act only on their device and only
   remove Paddock (the action the organization was told about).
 - Open: grace-period bounds 7–90 days with default 30 (maintainer question, default applied).
+
+## Amendment 2026-11-14 b — encrypted recovery export (maintainer decision; ADR 0052 amendment b; ticket PDK-1036)
+
+Binding; where it contradicts the sections above, it wins.
+
+### Requirement
+
+| ID | Requirement | Acceptance (who sees it) |
+| --- | --- | --- |
+| OFB-9 | During the grace period an organization administrator or the platform administrator exports all LUKS recovery keys and local administrator passwords of the organization, encrypted to a public key or passphrase they supply. | The requester downloads one OpenPGP file that `gpg --decrypt` opens with their key or passphrase; the organization's audit log shows one `organization.recovery_exported`. |
+
+### Decisions
+
+21. **Endpoints.** `POST /api/v1/recovery-export` (role `org_admin`) and
+    `POST /api/platform/v1/organizations/{id}/recovery-export` (role `platform_admin`); both `x-paddock-step-up: true`,
+    `x-paddock-audit: organization.recovery_exported`, CSRF header. Available only while the organization's deletion is
+    pending; otherwise 409 `invalid_state`. 409 `export_limit` after five successful exports of the organization since
+    `deletion_requested_at`. 404 `not_found` for an unknown organization (platform path).
+22. **Request body** `RecoveryExportRequest`: `{ "recipient": "public_key" | "passphrase", "public_key": string
+    (ASCII-armoured OpenPGP public key, required for public_key, at most 16 KiB, must contain an encryption-capable
+    key), "passphrase": string (required for passphrase, 16–1024 characters) }`; `additionalProperties: false`. The body
+    is never logged; the passphrase never enters audit params, problem details or metrics.
+23. **Response** `200`, `Content-Type: application/pgp-encrypted`, `Content-Disposition: attachment;
+    filename="paddock-recovery-<slug>-<UTC yyyymmddThhmmssZ>.asc"`, body = one ASCII-armoured OpenPGP message
+    (`github.com/ProtonMail/go-crypto/openpgp`: `Encrypt` to the given entity, or `SymmetricallyEncrypt` with S2K
+    `argon2`, cipher AES-256). Plaintext inside the message: JSON Lines, one object per device:
+    `{"device_id": uuid, "hostname": string, "volumes": [{"uuid": string, "recovery_key": string}],
+    "local_admin": {"username": string, "password": string} | null}`, first line a header object
+    `{"organization_id": uuid, "slug": string, "exported_at": RFC3339, "devices": int}`.
+24. **Flow.** The api checks role, step-up and state, then forwards to the escrow-reader exactly like a reveal (step-up
+    token by `jti`, one use counted in `stepup-uses:*`). The escrow-reader reads the organization's escrow rows (newest
+    recovery key per volume, newest local administrator password) of non-retired devices, decrypts them through Transit
+    in batches of at most `bao.MaxBatch`, and writes the JSON Lines into the OpenPGP writer that streams into the
+    response. Nothing is buffered to disk; the plaintext lives only in process memory per batch and is zeroed after use.
+    The platform path enters the organization context through `db.OrgPool.InPendingDeletionOrg(ctx, platform, org, fn)`
+    (same shape and checks as `InDeletedOrg`, but requires `status = 'active' AND delete_after IS NOT NULL`).
+25. **Audit.** One `organization.recovery_exported` per attempt in the organization's log (success, failure, denial);
+    params `recipient`, `key_fingerprint` (public_key only), `devices`, `secrets`, `requester_scope`
+    (`organization` | `platform`). A failure after streaming began is recorded as failure; the client receives a
+    truncated message that OpenPGP's integrity check rejects.
+26. **Portal.** The banner of OFB-7 links to a dialog (organization administrator; platform administrator on the
+    organization detail) that asks for the recipient type and the key or passphrase (twice, with a strength hint) and
+    starts the download after the step-up. The dialog states that the file is the only remaining copy after the deletion.
+27. **RR-137** is reworded to "only if no export was taken" (PDK-1019).
+
+### Tests
+
+- Integration (escrow-reader and api): an organization with three devices (one retired, one without escrow) → the
+  export holds exactly one device line with its volumes and password; decrypted in the test with the private key and
+  with the passphrase; a wrong passphrase fails; without step-up 403 `step_up_required`; `org_operator` 403; not pending
+  409 `invalid_state`; the sixth export 409 `export_limit`; exactly one audit event per attempt and no secret, no
+  passphrase in any recorded param or log line (log capture asserts); the platform path refused for an organization of
+  another status (404 or 409 as specified).
+- Acceptance gate OF9: request deletion (grace 30), export with a test key generated by `gpg --batch --quick-gen-key` in a temporary
+  `GNUPGHOME`, decrypt with `gpg --batch --decrypt` (the gate fails, never skips, when `gpg` is missing; it is present on
+  the `ubuntu-24.04` runners and the development host), compare with single reveals of the same device.
+
+### Step
+
+12. **PDK-1036** after PDK-1014 (needs the pending state), before PDK-1018 (the portal dialog is part of PDK-1036; the
+    banner link in PDK-1018 points to it).
+
+## Amendment 2026-11-14 c — gaps found while implementing PDK-1013 (architect decisions)
+
+Binding; where it contradicts the sections above, it wins.
+
+1. **Uninstall counts are columns.** PDK-1014's migration adds `organization.deletion_uninstalls_issued int` and
+   `organization.deletion_uninstalls_skipped int` (both NULL while no deletion was requested, set by
+   `RequestDeletion`, cleared by `CancelDeletion`, kept on the tombstone). They are not derived from `device_command`,
+   whose rows the database step deletes.
+2. **Outbox check through a definer function, no grant.** `paddock_worker` gets no `SELECT` on `outbox`. PDK-1015's
+   migration adds `paddock_offboard_outbox_pending() RETURNS bigint` (`SECURITY DEFINER`, owner `paddock_owner`, same
+   `search_path` convention as `paddock_offboard_delete_batch`, `EXECUTE` for `paddock_worker` only): it counts the
+   unpublished outbox rows of the organization in `current_setting('paddock.org_id')::uuid` and raises
+   `insufficient_privilege` unless that organization's status is `deleting`. Step `outbox` completes when it returns 0.
+3. **Platform pool wiring is part of PDK-1015.** The round uses the worker's existing `PlatformPool` (organization
+   status transitions, `offboarded_device`) and takes its leader lock from the existing lock pool (12 connections). It
+   adds no pool and no connection to the budget of M19 D1; it is one more lock-holding round (19 → 20), which PDK-1015
+   records in `docs/operations/capacity.md` "PostgreSQL connection budget". The round holds its lock only while it runs
+   one step per organization.
+4. **Accepted implementation details of PDK-1013:** `offboarded_device` is not in `offboarding_table` (its rows outlive
+   the organization by decision 15); the registry test of decision 8 excludes exactly `offboarding_table` and
+   `offboarded_device`. The definer function's `search_path` ends with `pg_temp` (convention of migrations 00034 and
+   00076). `max_rows` is limited to 1–10000; a reference loop in the registry order raises.
+
+## Amendment 2026-11-14 d — no writer survives `deleting` (architect decision after PDK-1013 review 2; ticket PDK-1038)
+
+Binding; where it contradicts the sections above, it wins. **Decision: both a status gate and a lock (option c).** The
+gate stops new transactions once `deleting` is committed; the lock covers transactions that entered before that commit
+and are still running when the job finishes.
+
+1. **Gate in the database.** New function `paddock_org_enter() RETURNS void` (`SECURITY DEFINER`, owner
+   `paddock_owner`, the `search_path` convention of `paddock_offboard_delete_batch`, `EXECUTE` for every
+   organization-scoped application role). It reads `current_setting('paddock.org_id')::uuid`, takes
+   `pg_advisory_xact_lock_shared(<offboarding lock key of that organization>)` and raises SQLSTATE `PD001`
+   (`organization_unavailable`) when the organization's status is `deleting` or `deleted`.
+   `db.OrgPool.InOrg` and `InOrgSnapshot` call it right after `SET LOCAL paddock.org_id` in every transaction. The lock
+   key is computed in one place (`db.OffboardingLockKey(org)`, the same derivation in SQL and Go, covered by a test).
+2. **Bypass for the job only.** `db.OrgPool.InOrgOffboarding(ctx, org, fn)` sets the context and skips
+   `paddock_org_enter`; it is used only by `app.Offboarding` (a test fails when another package calls it, by scanning
+   imports and call sites under `server/internal`).
+3. **Final pass under an exclusive lock.** New function `paddock_offboard_finalize() RETURNS void` (definer, `EXECUTE`
+   for `paddock_worker` only), called by step `tombstone` inside `InOrgOffboarding`: it takes
+   `pg_advisory_xact_lock(<same key>)` (waits for every transaction that entered before `deleting`), counts the
+   organization's rows in every registered table, raises `40001` when any remain (the step then returns to `database`
+   and retries next round), and otherwise sets the tombstone (`status = 'deleted'`, `deleted_at`) in the same
+   transaction. Decision 17's status change therefore happens in this function, not through the platform pool; the
+   `organization.deleted` event is recorded after it commits.
+4. **Error mapping.** `PD001` maps to `problem` 403 `organization_inactive` in the api (the existing denial reason of
+   the sign-in) and the MCP surface; the gateway answers 401 `identity_revoked` (offboarded devices are served by
+   decision 15 from the platform table, never through `InOrg`); worker consumers acknowledge and drop the message with
+   one `Info` log line and the counter `paddock_worker_dropped_total{reason="organization_unavailable"}`; rounds skip
+   the organization.
+5. **Cost.** One extra statement per organization transaction. PDK-1038 measures check-in and ingest throughput before
+   and after with the existing load scenarios at a reduced rate and records it in its result document; a regression of
+   more than 5 % stops the ticket.
+6. **Ownership and order.** PDK-1038 owns points 1–5 (migration, `db` changes, mapping, tests). PDK-1015 depends on it
+   and calls `InOrgOffboarding` and `paddock_offboard_finalize`.
+7. **Tests.** A transaction that entered before `deleting` and inserts after the delete loop finished makes
+   `finalize` wait and then raise `40001`; the next round deletes the row and finalizes. After `deleting` is committed,
+   `InOrg` of every role fails with `PD001`. `InOrgOffboarding` is used only by `app.Offboarding`.

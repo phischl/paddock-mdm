@@ -64,3 +64,45 @@ Dependabot **security alerts** are a separate GitHub feature (the dependency gra
   pull request, and acceptance only on pull requests to `main` — the Renovate group targets `main`, so acceptance
   runs too. Pins with gates outside CI are excluded (decision 2).
 - Re-evaluate when CI coverage changes or a bad automerged patch reaches a release.
+
+## Amendment 2026-11-14 b — no GitHub App, no automerge (maintainer decision)
+
+Status of this amendment: **Accepted** except point 4, which is **Proposed** (open design choice, recommendation given).
+
+The maintainer decided: no GitHub App, no bypass of the code-owner review rule, no automerge. Renovate only opens
+grouped pull requests; a maintainer merges them within days once CI is fully green. This replaces decisions 1, 2
+(automerge parts) and 4, and changes decision 5.
+
+**Constraints of the workflow token (`GITHUB_TOKEN`)**, which is all Renovate gets now:
+
+- Events caused by `GITHUB_TOKEN` start no workflow run, except `workflow_dispatch` and `repository_dispatch`
+  (GitHub Actions documentation, "Triggering a workflow from a workflow"). A pull request Renovate opens or updates
+  therefore runs **no** `pull_request` CI on its own.
+- `GITHUB_TOKEN` cannot be granted the `workflows` permission, so it cannot push changes to `.github/workflows/`:
+  Renovate cannot update the SHA pins of GitHub Actions.
+- Creating pull requests with `GITHUB_TOKEN` requires the repository setting "Allow GitHub Actions to create and approve
+  pull requests" (a setting, not an App or a secret; set by the maintainer).
+
+**Decisions.**
+
+1. Renovate runs from `.github/workflows/renovate.yml` with `GITHUB_TOKEN` (`contents: write`, `pull-requests: write`,
+   `issues: write` for the dependency dashboard), weekly and on `workflow_dispatch`. No App, no new secret.
+2. Grouping without automerge: one group `patch-weekly` (patch and digest), one PR per minor or major update, the gated
+   pins of decision 2 always separate; `automerge: false` everywhere.
+3. The `github-actions` ecosystem stays with **Dependabot version updates** (its pull requests trigger CI and it may
+   update workflow files); `.github/dependabot.yml` keeps exactly that block. Renovate's `github-actions` manager is
+   disabled. Decision 5 accordingly removes only the other Dependabot blocks and the upstream watch.
+4. **CI for Renovate's pull requests — open, for the orchestrating maintainer to choose:**
+   - **(A) Dispatch CI from the Renovate workflow.** `ci.yml` gains `workflow_dispatch` (input `base`, default `main`)
+     and treats a dispatch like a pull request to `base` in its pull-request-only steps; the Renovate workflow, after
+     its run, dispatches `ci.yml` once for every open `renovate/*` branch whose head commit has no CI run yet. The check
+     runs attach to the head commit and satisfy the required checks. + Fully automatic, no secret. − `ci.yml` gains a
+     trigger and an event-dependent branch in several jobs; a later push by Renovate to an open branch needs the next
+     Renovate run to be dispatched again.
+   - **(B) Close and reopen.** The maintainer (with a personal token) closes and reopens each Renovate pull request
+     before merging; `reopened` is a `pull_request` event by a user and runs the full CI. + No workflow change. − A
+     manual step per pull request (merging is manual anyway).
+   - (C) A personal access token or App for Renovate — excluded by the maintainer.
+   **Recommendation: (B) for alpha.11** (no change to the CI workflow that guards every pull request, and the merge is a
+   manual step anyway); revisit (A) if Renovate's volume makes the extra step costly. PDK-1023 implements decisions 1–3
+   and whichever of (A) or (B) is chosen; until the choice it implements (B), which needs no code.

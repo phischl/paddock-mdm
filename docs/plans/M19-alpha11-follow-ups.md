@@ -161,6 +161,14 @@ Per-route handling through a role-side marker, not a global close:
    withdrew a software request"; new param `closed` (boolean). Withdrawal rows follow the request retention of ADR
    0032 (same period after `received_at`). RR-135 closes.
 
+5. **Counter reset (amendment 2026-11-14 c, PDK-811d review 1).** Inside the claim of `recordEventSeqReset`, in the
+   same transaction: delete the device's `software_request_withdrawal` rows and set `reported_seq = NULL` on the
+   device's open `software_request` rows (NULL means "unordered": any later withdrawal closes it). `paddock_worker`
+   gets `DELETE` on `software_request_withdrawal` (tenant RLS unchanged; no other role). Integration test: withdrawal
+   at seq 50, reset, request at seq 3 opens; open request with seq 40, reset, withdrawal at seq 2 closes it. The worker
+   SHOULD take the per-device lock at the start of an event batch (removes a harmless, retried deadlock between
+   overlapping redelivered batches).
+
 ### D9 PDK-990 residual (no work left)
 
 Checked on `main` at `f6d59cb9`: plan M5a amendment 2026-11-11 b, P3, already records the second accepted duplicate
@@ -308,3 +316,20 @@ CREATE TABLE software_request_withdrawal (...);  -- D8.2
 - D5 adds one row lock per backup write transaction; the backup role writes rarely.
 - PDK-1010 is fixed on `main` (lock pool and readiness connections, alpha.10) but its ticket file is still in
   `todo/`; its ticket is closed without further work.
+
+## Amendment 2026-11-14 b — persistent ingest replicas (architect decision after the PDK-1031 review)
+
+Binding; where it contradicts D1, it wins.
+
+1. **Scaling is configuration, not `--scale`.** The service `paddock-worker-ingest` declares
+   `deploy.replicas: ${PADDOCK_WORKER_INGEST_REPLICAS:-0}`; the operator sets `PADDOCK_WORKER_INGEST_REPLICAS` in the
+   bundle's `.env` (documented in `prod.env.example`), so `./paddock up`, upgrades and restores keep it.
+   `--scale paddock-worker-ingest=N` is no longer documented. D1.1's "scaling for N2 is `--scale …=2`" and D1.5's N2
+   wording read "`PADDOCK_WORKER_INGEST_REPLICAS=2`".
+2. **The budget check (D1.4)** reads the replica count of every role from the effective configuration
+   (`docker compose config`, which resolves the variable) and therefore sees the ingest workers; a test covers 0, 2 and
+   an unset variable.
+3. **Ticket:** folded into PDK-1032 (same files: compose, `./paddock check`, `capacity.md`). PDK-1032 also rewrites the
+   `capacity.md` paragraph "Do not raise `max_connections`" into the D1.2/D1.3 rule (raise only through
+   `PADDOCK_PG_MAX_CONNECTIONS`; restores start with the backup's value; rollback to alpha.10 refused above 100).
+4. Ingest containers after a rollback are not a risk: `rollback.sh` runs the new release's `paddock down` first.

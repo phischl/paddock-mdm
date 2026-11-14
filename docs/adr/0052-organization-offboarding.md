@@ -140,3 +140,36 @@ Maintainer decisions of 2026-11-14 (`decisions-alpha11.md` §3), binding for thi
 - − One new definer function, one new platform table, one narrow exception to the isolation rules (decision 7).
 - Follow-up: re-evaluate decision 7 if a platform auditor role is introduced; re-evaluate `OffboardedDeviceRetention`
   once real offboardings show how long devices stay offline.
+
+## Amendment 2026-11-14 b — encrypted recovery export during the grace period (maintainer decision; plan M17 amendment b)
+
+**Context.** Decision 5 deletes the escrowed LUKS recovery keys and the escrowed passwords of the managed local
+administrators with the organization; the consequences named the loss and relied on administrators revealing what they
+need one device at a time. The maintainer decided that an organization administrator, or the platform administrator,
+can take all of them out at once before the deletion, encrypted.
+
+**Options.** (a) Reveal per device only (status quo) — impractical for hundreds of devices. (b) A plaintext download —
+puts every secret of the organization on a laptop in the clear; rejected. (c) **An OpenPGP message encrypted to a
+public key or a passphrase the requester supplies, built in memory by the escrow-reader and streamed in the response;
+nothing stored.** + Decrypts with standard `gpg`; uses `github.com/ProtonMail/go-crypto`, already an approved
+dependency (Q4, PDK-812); the escrow-reader stays the only role that decrypts escrow. **Chosen.**
+
+**Decision.**
+8. While a deletion is pending (status `active`, `delete_after` set), `POST /api/v1/recovery-export` (organization
+   administrator) and `POST /api/platform/v1/organizations/{id}/recovery-export` (platform administrator) return one
+   OpenPGP message (ASCII-armoured) containing, per non-retired device that has escrow, the hostname, the device ID, every
+   volume's LUKS recovery key and the managed local administrator's username and newest escrowed password. Both need a
+   step-up, which counts as one decryption use of that step-up; each attempt records exactly one audit event,
+   `organization.recovery_exported`, in the **organization's** log (params: `recipient` = `public_key` or `passphrase`,
+   the key fingerprint for `public_key`, `devices`, `secrets`; never a secret, never the passphrase). The api forwards the
+   request to the escrow-reader like a reveal; the escrow-reader decrypts in Transit batches and encrypts into the
+   message as it streams; no plaintext and no message is written to disk, object storage, Valkey or a log. At most five
+   exports per organization per grace period (409 `export_limit`). The platform path opens the organization context
+   from the URL only for a platform principal and only while that organization's deletion is pending: a second narrow
+   exception to architecture §5 rule 4, next to decision 7.
+9. The grace-period banner links to the export.
+
+**Consequences.** RR-137 narrows to: directory logins on offboarded devices stop, and recovery keys and local
+administrator passwords are lost **only if no export was taken**. An export is a full set of the organization's
+device secrets in the hands of its requester: its protection rests on the supplied key or passphrase (at least 16
+characters) and is audited.
