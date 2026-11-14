@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -844,6 +845,83 @@ func TestLeaderLocksDoNotStarveThePool(t *testing.T) {
 		if err := <-queriesDone; err != nil {
 			t.Errorf("query: %v", err)
 		}
+	}
+}
+
+// TestLeaderLocksWaitForALockConnection (PDK-1010, connection budget): with fewer lock connections than rounds, the
+// rounds beyond the lock pool wait for a lock connection while queries and readiness still get theirs, and run once
+// a round ends.
+func TestLeaderLocksWaitForALockConnection(t *testing.T) {
+	env := sharedPaddock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	const lockConns, rounds = 2, 5
+	p, err := db.NewPlatformPool(ctx, env.Platform, db.Options{MaxConns: 2, LockConns: lockConns, HealthConn: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	release := make(chan struct{})
+	free := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(free)
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem})
+
+	var running atomic.Int32
+	holding := make(chan struct{}, rounds)
+	done := make(chan error, rounds)
+	for i := range rounds {
+		go func() {
+			ok, err := p.WithLeaderLock(sys, int64(0x7761697440)+int64(i), func(ctx context.Context) error {
+				running.Add(1)
+				holding <- struct{}{}
+				<-release
+				return nil
+			})
+			if !ok && err == nil {
+				err = errors.New("lock not taken")
+			}
+			done <- err
+		}()
+	}
+	for range lockConns {
+		select {
+		case <-holding:
+		case <-ctx.Done():
+			t.Fatal("the rounds did not get the lock connections")
+		}
+	}
+	// The other rounds wait in Acquire; give them the chance to (wrongly) start.
+	time.Sleep(500 * time.Millisecond)
+	if n := running.Load(); n != lockConns {
+		t.Fatalf("%d rounds run with %d lock connections", n, lockConns)
+	}
+	probe := func(what string, fn func(ctx context.Context) error) {
+		t.Helper()
+		pctx, done := context.WithTimeout(sys, 3*time.Second)
+		defer done()
+		if err := fn(pctx); err != nil {
+			t.Errorf("%s while rounds wait for a lock connection: %v", what, err)
+		}
+	}
+	probe("readiness", p.Ping)
+	probe("query", func(ctx context.Context) error {
+		_, err := p.FleetHostInUse(ctx, uuid.Must(uuid.NewV7()), "lock-wait-test")
+		return err
+	})
+
+	free()
+	for range rounds {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("round: %v", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("a waiting round never got a lock connection")
+		}
+	}
+	if n := running.Load(); n != rounds {
+		t.Errorf("%d of %d rounds ran", n, rounds)
 	}
 }
 

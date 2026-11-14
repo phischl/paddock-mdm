@@ -87,10 +87,10 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	defer pool.Close()
 	// The platform pool serves the rollout round (agent releases are platform data, plan M2b decision 19) and the host
 	// mapping of the inventory round (plan M5a decision 6). The leader locks of the rounds sit in a lock pool of their
-	// own, one connection per round, because a round holds its lock connection for its whole duration, which at many
-	// organizations is minutes; sharing the query pool, they starved it (PDK-1010).
+	// own, because a round holds its lock connection for its whole duration, which at many organizations is minutes;
+	// sharing the query pool, they starved it (PDK-1010).
 	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-worker-platform", MaxConns: 8,
-		LockConns: worker.LeaderRounds, HealthConn: true})
+		LockConns: worker.LeaderLockConns, HealthConn: true})
 	if err != nil {
 		return err
 	}

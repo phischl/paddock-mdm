@@ -25,13 +25,13 @@ const Prefetch = 100
 // RetryPause delays the requeue of a message that failed for a transient reason (database or Valkey down).
 const RetryPause = 5 * time.Second
 
-// LeaderRounds is the number of rounds that hold a leader lock connection for their whole duration: commands, escrow,
-// diagnostics, dead man's switch, staleness, findings, event gaps, retention, rollouts, config rollouts, software
-// requests, software repositories, the four identity rounds, inventory sync, osv sync and auto-unseal. Each holds at
-// most one lock connection at a time, so a lock pool of this size never makes a round wait for another round's lock
-// connection (PDK-1010). Findings runs after the staleness lock is released, so one connection is spare. A round
-// added without raising this only waits for a lock connection now and then; it cannot starve the query pool.
-const LeaderRounds = 19
+// LeaderLockConns is the size of the worker's lock pool. 19 rounds hold a leader lock connection for their whole
+// duration (commands, escrow, diagnostics, dead man's switch, staleness, findings, event gaps, retention, rollouts,
+// config rollouts, software requests, software repositories, the four identity rounds, inventory sync, osv sync and
+// auto-unseal), but a connection for each would put the roles' pools together above PostgreSQL's default of 100
+// connections (docs/operations/capacity.md, "PostgreSQL connection budget"). A round that finds every lock connection
+// taken waits for one; the query and readiness pools stay its own, so a waiting round never starves them (PDK-1010).
+const LeaderLockConns = 8
 
 // outcome is how a delivery is settled.
 type outcome int

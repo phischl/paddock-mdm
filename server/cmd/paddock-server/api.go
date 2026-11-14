@@ -42,6 +42,12 @@ import (
 // sessionKeyPath is the KV v2 secret holding the session cookie keys (fields current and previous).
 const sessionKeyPath = "secret/data/paddock/session"
 
+// The api's pools of organization data and of the audit database.
+const (
+	apiOrgConns   = 8
+	apiAuditConns = 8
+)
+
 func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error {
 	httpAddr := l.String("PADDOCK_HTTP_ADDR", ":8080")
 	publicURL := strings.TrimRight(l.Required("PADDOCK_PUBLIC_ADMIN_URL"), "/")
@@ -148,7 +154,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	}
 	verifyRevokeRelease := app.NewReleaseVerifier(revokeReleasePub)
 
-	orgPool, err := db.NewOrgPool(ctx, orgDSN, db.Options{ApplicationName: "paddock-api"})
+	// Fixed sizes instead of the driver's default of one connection per CPU: the roles' pools together must stay within
+	// PostgreSQL's default of 100 connections on any host (docs/operations/capacity.md, "PostgreSQL connection budget").
+	orgPool, err := db.NewOrgPool(ctx, orgDSN, db.Options{ApplicationName: "paddock-api", MaxConns: apiOrgConns})
 	if err != nil {
 		return err
 	}
@@ -158,7 +166,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		return err
 	}
 	defer platformPool.Close()
-	auditReader, err := db.NewAuditReader(ctx, auditDSN, db.Options{ApplicationName: "paddock-api-audit"})
+	auditReader, err := db.NewAuditReader(ctx, auditDSN, db.Options{ApplicationName: "paddock-api-audit", MaxConns: apiAuditConns})
 	if err != nil {
 		return err
 	}

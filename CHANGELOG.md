@@ -314,8 +314,11 @@ Agents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10
 - The worker no longer stays unhealthy when many of its periodic rounds run long, for example the identity reconcile
   round with hundreds of organizations: the rounds' leader locks now use connections of their own instead of taking
   the connections their work and the readiness check need, so `./paddock up` and upgrades no longer time out waiting
-  for the worker, and rollouts, role sync and session ends no longer stall. The worker may now open up to 21 more
+  for the worker, and rollouts, role sync and session ends no longer stall. The worker may now open up to 10 more
   PostgreSQL connections than before (PDK-1010).
+- The api now opens at most 8 connections to the control-plane database and 8 to the audit database instead of one per
+  logical CPU, so that all Paddock roles together stay within PostgreSQL's default of 100 connections on hosts of any
+  size; `docs/operations/capacity.md`, "PostgreSQL connection budget", lists what each role needs (PDK-1010).
 
 ### Security
 

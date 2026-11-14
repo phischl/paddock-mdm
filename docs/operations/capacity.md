@@ -362,6 +362,44 @@ limit, clients see failed uploads and the audit writer retries; raise `PADDOCK_A
 `PADDOCK_RUSTFS_MEM_LIMIT`) and the host's RAM together. OpenBao holds its keys and the Raft index in memory and stays
 small.
 
+## PostgreSQL connection budget
+
+Every Paddock role opens its own connection pools, and every connection counts against the database's
+`max_connections`, PostgreSQL's default of 100, of which it keeps 3 for the superuser
+(`superuser_reserved_connections`): 97 for the roles. The pools open connections only on demand and close them after 5
+minutes idle, so the figures below are the most a role can hold at once, not what it holds at rest. Every pool has a
+fixed size; none grows with the host's CPUs.
+
+Control-plane database (`postgres`):
+
+| Role | Pools | Maximum connections |
+| --- | --- | --- |
+| `paddock-api` | organization 8, platform 4 | 12 |
+| `paddock-worker` | organization 8, platform 8, leader locks 8, readiness 2 | 26 |
+| `paddock-notifier` | notifier 8, platform 2 | 10 |
+| `paddock-compiler` | 8 | 8 |
+| `paddock-backup` | backup 4, platform 3 | 7 |
+| `paddock-escrow-reader` | 4 | 4 |
+| `paddock-revocation-issuer` | 4 | 4 |
+| `paddock-outbox-relay` | 4 | 4 |
+| `paddock-unsealer` (automatic unseal only) | 2 | 2 |
+| operator commands (`paddock-server admin`, `agent-release`, `backup now`, `restore`, …) | 2–4 each | 4 |
+
+Together the long-running roles of one control plane hold at most **77** connections, 81 while an operator command
+runs, which leaves 16 for pgBackRest and `paddock-migrate`. The worker runs 19 rounds that each hold a leader lock
+connection for their whole duration; with 8 lock connections a round that finds them all taken waits for one, while
+its queries and the readiness check keep pools of their own. A further api replica adds 12 and still fits. A further
+worker replica (`--scale paddock-worker=N`, as in the ingest test N2 above) adds up to 26 and does not: the budget
+then holds only while not every pool is full at once, and otherwise roles fail with `too many clients already`.
+
+Do not raise `max_connections` on the database: PostgreSQL writes the value into its WAL and into every backup, and a
+restore or a rollback onto a release that starts the database with a lower value stays read-only ("hot standby is not
+possible because of insufficient parameter settings").
+
+The audit database (`audit-postgres`) keeps the same default: the api's audit reader (8), the audit writer (8 per
+replica), the notifier's audit reader (2) and an operator command (`paddock-server audit …` 8, the restore's escrow
+check 2) together hold at most 28.
+
 ## Request limits
 
 The fixed limits that bound one request (ADR 0051 decisions 3 and 6, architecture §4.1). They are sized above every
