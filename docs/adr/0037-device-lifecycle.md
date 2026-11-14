@@ -370,3 +370,11 @@ first start after the completed reencryption has enrolled the TPM or the boot PI
 (d) fail safe: the device's latest completed row is less than 30 days old and the last health is missing or
 carries no `conversion` block. A health with `disk.state = compliant` is never active. The device-side refusal
 (`conversion_pending`) is unchanged. Lock, Destroy and Retire remain never blocked.
+
+## Amendment 2026-11-14 — Renovate and offboarding (ADR 0052, ADR 0054)
+
+- Decision II (upstream version watch) is superseded by ADR 0054: Renovate replaces Dependabot version updates and
+  `tools/upstreamwatch`.
+- Decision D3: the system issues `uninstall` with mode `leave` to every active device of an organization whose
+  deletion a platform administrator requested with a step-up (ADR 0052 decision 2). That is the only uninstall not
+  requested by an organization administrator per device; it records no per-device `device.uninstall_requested`.
