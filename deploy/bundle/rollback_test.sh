@@ -691,8 +691,8 @@ FIXTURE_RUNNING="Paddock|0.1.0-alpha.10"
 setup controlplane "Schema: migrations 00113–00125"
 echo "PADDOCK_PG_MAX_CONNECTIONS=150" >>"$work/t/new/.env"
 run 1 "a rollback to a release without the setting at 150 is refused" "$work/t/old" --yes
-has "the refusal names the value, the old release's 100 and the way out" \
-  "PADDOCK_PG_MAX_CONNECTIONS is 150, and 0.1.0-alpha.9 starts PostgreSQL with max_connections 100, which cannot recover data written with more: lower it to 100, run ./paddock backup now, then roll back to a point after that backup .*; nothing was changed"
+has "the refusal names the setting and the way out (M19 amendment c)" \
+  "^rollback: PADDOCK_PG_MAX_CONNECTIONS is above 100, which the previous release does not support\. Set it to 100 \(or remove it\) in \.env and run \./paddock rollback again; nothing was changed$"
 not_called "nothing stops after the refusal" "$DOWN"
 not_called "nothing is restored after the refusal" '^restore_'
 if [[ ! -e "$work/t/new/.upgrade-state" ]] || ! grep -q '^rolled-back=' "$work/t/new/.upgrade-state"; then

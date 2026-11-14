@@ -281,7 +281,8 @@ PG_ROLE_MAX_CONNS=(
 
 # pg_budget: one checklist item from the effective Compose configuration (YAML on stdin, as `compose config` prints
 # it): every long-running role's maximum times its replicas against the postgres service's max_connections less 3 for
-# the superuser and 12 for pgBackRest and paddock-migrate. FAIL above that, WARN with 5 or fewer to spare. Prints
+# the superuser, 12 for pgBackRest and paddock-migrate and 4 for one operator command (plan M19 amendment c). FAIL
+# above that, WARN with fewer than 5 to spare. Prints
 # nothing for a configuration without the postgres service (the audit host). Returns 1 on FAIL.
 pg_budget() {
   local e svc replicas conns max="" seen="" sum=0 limit status=PASS parts=()
@@ -309,17 +310,17 @@ pg_budget() {
   ')
   [[ -n "$seen" ]] || return 0
   [[ "$max" =~ ^[0-9]+$ ]] || max=100
-  limit=$((max - 3 - 12))
+  limit=$((max - 3 - 12 - 4))
   if ((sum > limit)); then
     status=FAIL
-  elif ((limit - sum <= 5)); then
+  elif ((limit - sum < 5)); then
     status=WARN
   fi
   echo "$status  postgres: connection budget"
-  echo "      - $sum of $limit connections (max_connections $max less 3 for the superuser and 12 for pgBackRest and paddock-migrate): ${parts[*]:-no role}"
+  echo "      - $sum of $limit connections (max_connections $max less 3 for the superuser, 12 for pgBackRest and paddock-migrate and 4 for an operator command): ${parts[*]:-no role}"
   case "$status" in
     FAIL) echo "      - lower the replicas or raise PADDOCK_PG_MAX_CONNECTIONS in .env (docs/operations/capacity.md, \"PostgreSQL connection budget\")" ;;
-    WARN) echo "      - 5 or fewer to spare: a further replica does not fit (docs/operations/capacity.md, \"PostgreSQL connection budget\")" ;;
+    WARN) echo "      - fewer than 5 to spare: a further replica does not fit (docs/operations/capacity.md, \"PostgreSQL connection budget\")" ;;
   esac
   [[ "$status" != FAIL ]]
 }

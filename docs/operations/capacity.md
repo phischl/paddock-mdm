@@ -461,7 +461,8 @@ Control-plane database (`postgres`):
 | operator commands (`paddock-server admin`, `agent-release`, `backup now`, `restore`, …) | 2–4 each | 4 |
 
 Together the long-running roles of one control plane hold at most **81** connections, 85 while an operator command
-runs (operator commands run one at a time), which leaves 12 for pgBackRest and `paddock-migrate`. The worker runs 19
+runs (operator commands run one at a time), which leaves 12 for pgBackRest and `paddock-migrate`: at the default 100
+the budget of `./paddock check` (below) is used up exactly. The worker runs 19
 rounds that each hold a leader lock connection for their whole duration; with 12 lock connections a round that finds
 them all taken waits for one, while its queries and the readiness check keep pools of their own. At many
 organizations up to 9 rounds run for minutes (identity, inventory, osv, staleness, findings, retention), so a short
@@ -490,14 +491,16 @@ parameter settings"). Therefore:
   it with the larger of that value and `PADDOCK_PG_MAX_CONNECTIONS`, logging both. The next `./paddock up` starts the
   recovered database with the configured value again; set `PADDOCK_PG_MAX_CONNECTIONS` to the logged value to keep it.
 - **No rollback to 0.1.0-alpha.10 above 100.** That release starts PostgreSQL with 100 whatever `.env` says; alpha.11's
-  `./paddock rollback` refuses it while `PADDOCK_PG_MAX_CONNECTIONS` is above 100: lower it to 100, run
-  `./paddock up` and `./paddock backup now`, then roll back to a point after that backup.
+  `./paddock rollback` refuses it while `PADDOCK_PG_MAX_CONNECTIONS` is above 100: set it to 100 (or remove it) in
+  `.env` and run `./paddock rollback` again. The rollback restores the pre-upgrade backup, which the previous release
+  took at its own setting.
 
 `./paddock check` computes the budget from the effective configuration (`docker compose config`, which resolves the
 replicas of `.env`): each long-running role's maximum from the table above times its replicas, against
-`max_connections` less 3 for the superuser and 12 for pgBackRest and `paddock-migrate`. The item
-`postgres: connection budget` FAILs (and the check exits 1) above that and WARNs with 5 or fewer connections to spare,
-for example with the default 100 and the automatic unseal (81 of 85). The maxima live in one table in
+`max_connections` less 3 for the superuser, 12 for pgBackRest and `paddock-migrate` and 4 for one operator command
+(81 at the default 100). The item `postgres: connection budget` FAILs (and the check exits 1) above that and WARNs with
+fewer than 5 connections to spare: the default configuration warns with 79 of 81, with the automatic unseal 81 of 81;
+both are accurate and exit 0. The maxima live in one table in
 `deploy/bundle/paddock` (`PG_ROLE_MAX_CONNS`); a test compares it with the pools in `server/cmd/paddock-server`.
 
 The audit database (`audit-postgres`) keeps the same default: the api's audit reader (8), the audit writer (8 per

@@ -206,7 +206,7 @@ rollback_main() {
   [[ "$pg_max" =~ ^[0-9]*$ ]] ||
     rb_die "PADDOCK_PG_MAX_CONNECTIONS is '$pg_max', not a whole number: write it as a plain number in .env; nothing was changed"
   if [[ -n "$pg_max" ]] && ((10#$pg_max > 100)) && ! grep -qs PADDOCK_PG_MAX_CONNECTIONS "$old/compose.yaml"; then
-    rb_die "PADDOCK_PG_MAX_CONNECTIONS is $pg_max, and $old_version starts PostgreSQL with max_connections 100, which cannot recover data written with more: lower it to 100, run ./paddock backup now, then roll back to a point after that backup (the lower value takes effect with ./paddock up); nothing was changed"
+    rb_die "PADDOCK_PG_MAX_CONNECTIONS is above 100, which the previous release does not support. Set it to 100 (or remove it) in .env and run ./paddock rollback again; nothing was changed"
   fi
   record="$new/.upgrade-rollback"
   state="$new/.upgrade-state"
