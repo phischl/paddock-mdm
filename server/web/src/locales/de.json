@@ -570,7 +570,9 @@
       "restore_started": "Wiederherstellung auf dem Host gestartet (aus {source})",
       "restore_completed": "Wiederherstellung auf dem Host abgeschlossen",
       "restore_failed": "Wiederherstellung auf dem Host fehlgeschlagen ({detail})",
-      "restore_abandoned": "Laufender Wiederherstellungsplan aufgegeben"
+      "restore_abandoned": "Laufender Wiederherstellungsplan aufgegeben",
+      "mfa_enrol_marks_seeded": "{marked, plural, one {# Administrator ohne Passkey wurde} other {# Administratoren ohne Passkey wurden}} markiert, ihn bei der nächsten Anmeldung einzurichten ({totp_only, number} nur mit Authenticator-App, {organizations, number} Organisationen)",
+      "mfa_enrol_marks_cleared": "{cleared, plural, one {Die Einrichtungsmarkierung von # Administrator mit Passkey wurde} other {Die Einrichtungsmarkierungen von # Administratoren mit Passkey wurden}} entfernt"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
@@ -837,6 +839,7 @@
     "login_failed": "Die Anmeldung konnte nicht abgeschlossen werden.",
     "mfa_required": "Ihre Anmeldung enthielt keinen zweiten Faktor. Melden Sie sich erneut an: Das Portal fragt nach Ihrem Passwort und Ihrem Authenticator.",
     "passkey_required": "Ihre Anmeldung wurde nicht mit einem Passkey bestätigt, und jede Rolle im Paddock-Portal erfordert einen (einen Sicherheitsschlüssel oder den eingebauten Authenticator Ihres Geräts). Melden Sie sich beim Identitätsanbieter ab, melden Sie sich dann erneut an und bestätigen Sie mit Ihrem Passkey. Haben Sie noch keinen Passkey, richtet die Anmeldung einen ein.",
+    "mfa_enrolment_required": "Ihr Konto hat noch keinen Passkey. Ein neues Administratorkonto richtet ihn nur über einen einmaligen Link zur Einrichtung der Anmeldung ein: Bitten Sie eine Administratorin oder einen Administrator Ihrer Organisation (als Plattformadministrator den Betrieb) um einen Link, öffnen Sie ihn und melden Sie sich dann erneut an.",
     "key_store_sealed": "Der Schlüsselspeicher des Servers ist versiegelt, deshalb kann das Portal keine Sitzungen starten. Ein Operator muss OpenBao entsiegeln (docs/operations/openbao.md, Abschnitt 2). Geräte arbeiten weiter.",
     "no_role": "Ihr Konto ist in keiner Paddock-Rollengruppe. Bitten Sie Ihren Administrator, Sie genau einer der Gruppen paddock.'<Organisation>'.admins, .operators oder .auditors hinzuzufügen.",
     "multiple_organizations": "Ihr Konto hat Rollen in mehreren Organisationen. Ein Konto gehört zu genau einer Organisation; bitten Sie Ihren Administrator, die übrigen Mitgliedschaften zu entfernen oder getrennte Konten anzulegen.",

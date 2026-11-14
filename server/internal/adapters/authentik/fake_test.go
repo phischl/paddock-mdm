@@ -77,6 +77,8 @@ type fakeAuthentik struct {
 	unnamedGroupRefusal bool
 	// dropGroupsObj answers include_groups=true without groups_obj (an Authentik that ignores the parameter).
 	dropGroupsObj bool
+	// devices are the owners (user pks) of the authenticator devices by Authentik model label, one entry per device.
+	devices map[string][]int
 }
 
 type fakeRequest struct {
@@ -443,6 +445,10 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 				}
 				return http.StatusOK, f.userJSON(u, false)
 			}
+			if attrs, ok := body["attributes"].(map[string]any); ok { // Authentik replaces the whole object
+				u.attributes = attrs
+				return http.StatusOK, f.userJSON(u, false)
+			}
 			u.name, _ = body["name"].(string)
 			u.email, _ = body["email"].(string)
 			return http.StatusOK, f.userJSON(u, false)
@@ -450,6 +456,21 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 			delete(f.users, pk)
 			return http.StatusNoContent, nil
 		}
+	case p == "/api/v3/authenticators/admin/all/" && r.Method == http.MethodGet:
+		// Authentik's device listing of one user: unpaged, every device type, 400 on the user field for an unknown pk.
+		owner, err := strconv.Atoi(q.Get("user"))
+		if _, ok := f.users[owner]; err != nil || !ok {
+			return http.StatusBadRequest, map[string]any{"user": []string{"Invalid pk - object does not exist."}}
+		}
+		items := []map[string]any{}
+		for kind, owners := range f.devices {
+			for i, o := range owners {
+				if o == owner {
+					items = append(items, map[string]any{"pk": strconv.Itoa(i + 1), "name": "device", "type": kind, "confirmed": true})
+				}
+			}
+		}
+		return http.StatusOK, items
 	case p == "/api/v3/core/brands/" && r.Method == http.MethodGet:
 		var items []map[string]any
 		for _, b := range f.brands {

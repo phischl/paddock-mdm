@@ -1082,6 +1082,12 @@ type PlatformMcpSetting struct {
 	UpdatedBy         uuid.NullUUID
 }
 
+type PlatformMfaEnrolment struct {
+	ID             bool
+	FirstAttemptAt time.Time
+	SeededAt       *time.Time
+}
+
 type PlatformRoleMember struct {
 	Role         string
 	AuthentikPk  string

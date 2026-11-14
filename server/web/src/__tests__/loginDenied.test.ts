@@ -39,6 +39,11 @@ describe('login denied', () => {
       'Ihre Anmeldung enthielt keinen zweiten Faktor. Melden Sie sich erneut an: Das Portal fragt nach Ihrem Passwort und Ihrem Authenticator.')
   })
 
+  it('names the missing passkey setup in German (ADR 0053 amendment c)', async () => {
+    const w = await mountView('mfa_enrolment_required', 'de')
+    expect(w.get('[data-testid="login-denied-message"]').text()).toContain('einmaligen Link zur Einrichtung der Anmeldung')
+  })
+
   it('names a sealed key store (plan M8x decision 28)', async () => {
     const w = await mountView('key_store_sealed')
     expect(w.get('[data-testid="login-denied-message"]').text()).toContain('An operator must unseal OpenBao (docs/operations/openbao.md, section 2).')
@@ -51,6 +56,7 @@ describe('login denied', () => {
     ['role_not_granted', 'The role you chose is no longer granted'],
     ['organization_inactive', 'Your organization is not active. Ask a platform administrator.'],
     ['not_authorized', 'Your account is not authorized for the Paddock portal.'],
+    ['mfa_enrolment_required', 'only through a one-time sign-in setup link'],
   ])('names the denial reason %s (plan M8x decision 32)', async (reason, text) => {
     const w = await mountView(reason)
     expect(w.get('[data-testid="login-denied-message"]').text()).toContain(text)

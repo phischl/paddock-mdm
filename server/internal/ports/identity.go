@@ -4,6 +4,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // OrgIdentityRefs are the Authentik primary keys of an organization's groups.
@@ -36,7 +37,19 @@ type IdentityUser struct {
 	// UID is the user's stable identifier, the subject of the portal's and the step-up's ID tokens (Authentik's uid
 	// under the providers' sub_mode hashed_user_id) and so admin_account.authentik_sub.
 	UID string
+	// MFAEnrolAtLogin is true for a user marked to enrol a second factor at the next portal sign-in (attribute
+	// paddock_mfa_enrol_at_login, ADR 0053 decision 4).
+	MFAEnrolAtLogin bool
+	// Joined is when the identity provider created the user; zero when it did not say.
+	Joined time.Time
 }
+
+// AttrMFAEnrolAtLogin is the identity provider's user attribute that lets the portal sign-in enrol a second factor once
+// (ADR 0053 decision 3); the sign-in denies an administrator without one otherwise.
+const AttrMFAEnrolAtLogin = "paddock_mfa_enrol_at_login"
+
+// Authenticators are the kinds of second factor a user has registered in the identity provider.
+type Authenticators struct{ WebAuthn, TOTP bool }
 
 // NewIdentityUser is a local user to create.
 type NewIdentityUser struct{ Username, Name, Email string }

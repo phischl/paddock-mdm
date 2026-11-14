@@ -179,7 +179,8 @@ func expectCreated(t *testing.T, res env.Response) env.Response {
 // TestStepUpFactor is gate S16 of plan M8s (decision 40): the shipped step-up flow validates with WebAuthn only at
 // order 30, the development blueprint adds the stage at order 31 that also accepts TOTP, and both blueprints applied.
 // The portal sign-in validates any existing authenticator at order 30 and enrols WebAuthn at order 31 for an account
-// without a WebAuthn device (plan M8f decision 13 as amended on 2026-10-18); development skips both.
+// without a WebAuthn device (plan M8f decision 13 as amended on 2026-10-18), since ADR 0053 only in the enrolment
+// siblings of the two stages, which deny instead; development skips all of them.
 func TestStepUpFactor(t *testing.T) {
 	ctx := testContext(t, time.Minute)
 	ak, err := env.NewAuthentik()
@@ -238,9 +239,11 @@ func TestStepUpFactor(t *testing.T) {
 		NotConfiguredAction string   `json:"not_configured_action"`
 		ConfigurationStages []string `json:"configuration_stages"`
 	}
-	for _, c := range []struct{ name, classes string }{
-		{"paddock-admin-login-mfa", "[webauthn totp]"},
-		{"paddock-admin-login-webauthn", "[webauthn]"},
+	for _, c := range []struct{ name, classes, action string }{
+		{"paddock-admin-login-mfa", "[webauthn totp]", "deny"},
+		{"paddock-admin-login-mfa-enrol", "[webauthn totp]", "configure"},
+		{"paddock-admin-login-webauthn", "[webauthn]", "deny"},
+		{"paddock-admin-login-webauthn-enrol", "[webauthn]", "configure"},
 	} {
 		var login struct {
 			Results []validateStage `json:"results"`
@@ -248,59 +251,31 @@ func TestStepUpFactor(t *testing.T) {
 		if err := ak.Get(ctx, "/stages/authenticator/validate/?name="+c.name, &login); err != nil || len(login.Results) != 1 {
 			t.Fatalf("stage %s: %+v %v", c.name, login, err)
 		}
-		if s := login.Results[0]; fmt.Sprint(s.DeviceClasses) != c.classes || s.NotConfiguredAction != "configure" ||
+		if s := login.Results[0]; fmt.Sprint(s.DeviceClasses) != c.classes || s.NotConfiguredAction != c.action ||
 			len(s.ConfigurationStages) != 1 {
-			t.Errorf("%s: %+v, want %s, configure and one configuration stage", c.name, s, c.classes)
+			t.Errorf("%s: %+v, want %s, %s and one configuration stage", c.name, s, c.classes, c.action)
 		}
 	}
-	if err := ak.Get(ctx, "/flows/instances/?slug=paddock-admin-login", &flows); err != nil || len(flows.Results) != 1 {
-		t.Fatalf("flow paddock-admin-login: %+v %v", flows, err)
+	login := flowStages(ctx, t, ak, "paddock-admin-login")
+	expectStagesAt(t, "paddock-admin-login", login, map[int][]string{
+		30: {"paddock-admin-login-mfa", "paddock-admin-login-mfa-enrol"},
+		31: {"paddock-admin-login-webauthn", "paddock-admin-login-webauthn-enrol"},
+		32: {"paddock-admin-login-webauthn-confirm"},
+	})
+	stageB, ok := login["paddock-admin-login-webauthn"]
+	if !ok || stageB.Order != 31 || stageB.EngineMode != "all" {
+		t.Fatalf("paddock-admin-login stage B: %+v (found %v), want order 31 in mode all", stageB, ok)
 	}
-	var loginBindings struct {
-		Results []struct {
-			Order      int    `json:"order"`
-			PolicyPK   string `json:"policybindingmodel_ptr_id"`
-			EngineMode string `json:"policy_engine_mode"`
-			StageObj   struct {
-				Name string `json:"name"`
-			} `json:"stage_obj"`
-		} `json:"results"`
-	}
-	if err := ak.Get(ctx, "/flows/bindings/?target="+flows.Results[0].PK, &loginBindings); err != nil {
-		t.Fatal(err)
-	}
-	var policies []string
-	for _, b := range loginBindings.Results {
-		if b.Order != 31 {
-			continue
-		}
-		if b.StageObj.Name != "paddock-admin-login-webauthn" || b.EngineMode != "all" {
-			t.Errorf("paddock-admin-login order 31: %+v, want paddock-admin-login-webauthn in mode all", b)
-		}
-		var pb struct {
-			Results []struct {
-				PolicyObj struct {
-					Name string `json:"name"`
-				} `json:"policy_obj"`
-			} `json:"results"`
-		}
-		if err := ak.Get(ctx, "/policies/bindings/?target="+b.PolicyPK, &pb); err != nil {
-			t.Fatal(err)
-		}
-		for _, p := range pb.Results {
-			policies = append(policies, p.PolicyObj.Name)
-		}
-	}
-	slices.Sort(policies)
-	if fmt.Sprint(policies) != "[paddock-admin-login-webauthn-administrator paddock-admin-login-webauthn-missing paddock-dev-skip-mfa]" {
-		t.Errorf("paddock-admin-login order 31 policies %v, want the administrator and WebAuthn-missing policies and the development skip", policies)
+	if fmt.Sprint(stageB.Policies) != "[paddock-admin-login-webauthn-administrator paddock-admin-login-webauthn-missing paddock-dev-skip-mfa paddock-mfa-enrol-at-login-absent]" {
+		t.Errorf("paddock-admin-login stage B policies %v, want the administrator, WebAuthn-missing and enrolment-mark-absent policies and the development skip", stageB.Policies)
 	}
 }
 
 // TestPortalLoginPasskeyEnrolmentScope (ADR 0034 amendment 2026-10-29, PDK-498): paddock-admin-login is also the
-// default brand's authentication flow, which the device-code page runs for every device user, so its passkey
-// enrolment (stage B at order 31) applies only to members of Paddock administrator groups. The development blueprint
-// skips stage B for everybody, so the gate evaluates the shipped policies of the binding (all except the development
+// default brand's authentication flow, which the device-code page runs for every device user, so its passkey stage
+// (stage B at order 31, since ADR 0053 a denial for an administrator without the enrolment mark; its enrolment sibling
+// is gated in TestMFAEnrolmentSignInScope) applies only to members of Paddock administrator groups. The development
+// blueprint skips stage B for everybody, so the gate evaluates the shipped policies of the binding (all except the development
 // skip; the binding's mode is "all") through Authentik's policy test endpoint for users without a WebAuthn device.
 func TestPortalLoginPasskeyEnrolmentScope(t *testing.T) {
 	ctx := testContext(t, 2*time.Minute)
@@ -321,6 +296,9 @@ func TestPortalLoginPasskeyEnrolmentScope(t *testing.T) {
 			Order      int    `json:"order"`
 			PolicyPK   string `json:"policybindingmodel_ptr_id"`
 			EngineMode string `json:"policy_engine_mode"`
+			StageObj   struct {
+				Name string `json:"name"`
+			} `json:"stage_obj"`
 		} `json:"results"`
 	}
 	if err := ak.Get(ctx, "/flows/bindings/?target="+flows.Results[0].PK, &bindings); err != nil {
@@ -328,7 +306,7 @@ func TestPortalLoginPasskeyEnrolmentScope(t *testing.T) {
 	}
 	target := ""
 	for _, b := range bindings.Results {
-		if b.Order == 31 {
+		if b.Order == 31 && b.StageObj.Name == "paddock-admin-login-webauthn" {
 			if b.EngineMode != "all" {
 				t.Fatalf("paddock-admin-login order 31 policy engine mode %q, want all", b.EngineMode)
 			}
@@ -367,8 +345,8 @@ func TestPortalLoginPasskeyEnrolmentScope(t *testing.T) {
 		names = append(names, p.PolicyObj.Name)
 	}
 	slices.Sort(names)
-	if fmt.Sprint(names) != "[paddock-admin-login-webauthn-administrator paddock-admin-login-webauthn-missing]" {
-		t.Fatalf("shipped policies of paddock-admin-login order 31: %v", names)
+	if fmt.Sprint(names) != "[paddock-admin-login-webauthn-administrator paddock-admin-login-webauthn-missing paddock-mfa-enrol-at-login-absent]" {
+		t.Fatalf("shipped policies of paddock-admin-login stage B: %v", names)
 	}
 	enrols := func(t *testing.T, username string) bool {
 		t.Helper()
@@ -402,7 +380,7 @@ func TestPortalLoginPasskeyEnrolmentScope(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			user, _ := tempUser(t, "pdk498", c.groups...)
 			if got := enrols(t, user); got != c.want {
-				t.Errorf("stage B (passkey enrolment) runs for %s without a WebAuthn device: %v, want %v", c.name, got, c.want)
+				t.Errorf("stage B (passkey stage) runs for %s without a WebAuthn device: %v, want %v", c.name, got, c.want)
 			}
 		})
 	}

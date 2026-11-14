@@ -18,7 +18,8 @@ import (
 	"time"
 )
 
-// ErrAccessDenied means Authentik refused the device approval (application policy).
+// ErrAccessDenied means Authentik refused the device approval (application policy) or ended a flow at its access-denied
+// stage (a sign-in denied for a missing second factor, ADR 0053).
 var ErrAccessDenied = errors.New("authflow: access denied")
 
 // TOTP generates RFC 6238 codes for an authenticator secret and never repeats a time step (Authentik rejects a
@@ -220,7 +221,7 @@ func runDeviceFlow(ctx context.Context, client *http.Client, page *url.URL, slug
 				return false, "", err
 			}
 		default:
-			return false, "", fmt.Errorf("authflow: unsupported stage %q in flow %s: %s", ch.Component, slug, truncate(ch.Raw))
+			return false, "", &StageError{Flow: slug, Component: ch.Component, Raw: truncate(ch.Raw)}
 		}
 		answer["component"] = ch.Component
 		if ch, err = executor(ctx, client, http.MethodPost, exec, answer); err != nil {
