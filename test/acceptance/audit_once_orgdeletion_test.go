@@ -30,7 +30,12 @@ func requestDeletion(t *testing.T, root *env.Portal, id, slug string) env.Respon
 	t.Helper()
 	res := call(t, root, http.MethodPost, orgPath+id+"/delete", deletionBody(slug))
 	expectStatus(t, res, http.StatusAccepted, "")
-	t.Cleanup(func() { call(t, root, http.MethodPost, orgPath+id+"/cancel-deletion", nil) })
+	t.Cleanup(func() {
+		// 409: the case cancelled the deletion itself; anything else leaves the gate organization pending deletion.
+		if res := call(t, root, http.MethodPost, orgPath+id+"/cancel-deletion", nil); res.Status != http.StatusOK && res.Status != http.StatusConflict {
+			t.Errorf("cancel the deletion of gate organization %s: HTTP %d %s", id, res.Status, res.ProblemCode())
+		}
+	})
 	return res
 }
 
