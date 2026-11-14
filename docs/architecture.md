@@ -2389,6 +2389,10 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 - Migrations with **goose** (`server/migrations/NNNNN_name.sql`), forward-only in production; each migration
   ships with a test that applies it to the previous schema with fixture data.
 - SQL access with **sqlc** + **pgx/v5**; no ORM. Every generated query runs inside `db.InOrg`.
+- Every migration that adds a table with `organization_id` MUST insert it into `offboarding_table` with a
+  `delete_order` lower than every registered table it references; `TestOffboardingRegistry` fails otherwise. Only a
+  table whose rows must outlive the organization's deletion (today `offboarded_device`) stays out, listed in that
+  test (ADR 0052 decision 4, plan M17 decision 8).
 
 ---
 

@@ -77,6 +77,13 @@ type AuditObject struct {
 	CreatedAt      time.Time
 }
 
+type AuditOrgRetired struct {
+	OrganizationID  uuid.UUID
+	RetiredAt       time.Time
+	FinalVerifiedAt *time.Time
+	FinalOutcome    *string
+}
+
 type AuditOrgSeq struct {
 	OrganizationID uuid.UUID
 	LastSeq        int64

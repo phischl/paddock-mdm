@@ -827,6 +827,20 @@ type NotificationPseudonymLookup struct {
 	ResolvedAt       *time.Time
 }
 
+type OffboardedDevice struct {
+	DeviceID        uuid.UUID
+	OrganizationID  uuid.UUID
+	Keys            json.RawMessage
+	CommandID       uuid.UUID
+	CommandEnvelope []byte
+	OffboardedAt    time.Time
+}
+
+type OffboardingTable struct {
+	TableName   string
+	DeleteOrder int32
+}
+
 type OpenbaoAutoUnseal struct {
 	ID                    int16
 	State                 string
@@ -850,13 +864,22 @@ type OpenbaoAutoUnseal struct {
 }
 
 type Organization struct {
-	ID        uuid.UUID
-	Slug      string
-	Name      string
-	Status    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Domains   []string
+	ID                   uuid.UUID
+	Slug                 string
+	Name                 string
+	Status               string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	Domains              []string
+	DeletionRequestedAt  *time.Time
+	DeletionRequestedBy  *string
+	DeletionReason       *string
+	DeleteAfter          *time.Time
+	OffboardingStep      *string
+	OffboardingErrorCode *string
+	DeletedAt            *time.Time
+	IdpEnsuredAt         *time.Time
+	IdpEnsureRevision    *string
 }
 
 type OrganizationDmsSetting struct {

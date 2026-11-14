@@ -41,6 +41,8 @@ func TestRLSLint(t *testing.T) {
 		// paddock_backup only.
 		"backup_key": true, "backup_target": true, "backup_target_status": true, "backup_schedule": true,
 		"backup_run": true, "backup_restore_plan": true,
+		// Registry of the tables the offboarding deletes (plan M17 decision 7), table names only.
+		"offboarding_table": true,
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
