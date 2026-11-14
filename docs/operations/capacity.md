@@ -375,7 +375,7 @@ Control-plane database (`postgres`):
 | Role | Pools | Maximum connections |
 | --- | --- | --- |
 | `paddock-api` | organization 8, platform 4 | 12 |
-| `paddock-worker` | organization 8, platform 8, leader locks 8, readiness 2 | 26 |
+| `paddock-worker` | organization 8, platform 8, leader locks 12, readiness 2 | 30 |
 | `paddock-notifier` | notifier 8, platform 2 | 10 |
 | `paddock-compiler` | 8 | 8 |
 | `paddock-backup` | backup 4, platform 3 | 7 |
@@ -385,12 +385,15 @@ Control-plane database (`postgres`):
 | `paddock-unsealer` (automatic unseal only) | 2 | 2 |
 | operator commands (`paddock-server admin`, `agent-release`, `backup now`, `restore`, …) | 2–4 each | 4 |
 
-Together the long-running roles of one control plane hold at most **77** connections, 81 while an operator command
-runs, which leaves 16 for pgBackRest and `paddock-migrate`. The worker runs 19 rounds that each hold a leader lock
-connection for their whole duration; with 8 lock connections a round that finds them all taken waits for one, while
-its queries and the readiness check keep pools of their own. A further api replica adds 12 and still fits. A further
-worker replica (`--scale paddock-worker=N`, as in the ingest test N2 above) adds up to 26 and does not: the budget
-then holds only while not every pool is full at once, and otherwise roles fail with `too many clients already`.
+Together the long-running roles of one control plane hold at most **81** connections, 85 while an operator command
+runs (operator commands run one at a time), which leaves 12 for pgBackRest and `paddock-migrate`. The worker runs 19
+rounds that each hold a leader lock connection for their whole duration; with 12 lock connections a round that finds
+them all taken waits for one, while its queries and the readiness check keep pools of their own. At many
+organizations up to 9 rounds run for minutes (identity, inventory, osv, staleness, findings, retention), so a short
+round such as commands or escrow waits only when they all run at once. A further api replica adds 12 and uses up the
+spare. A further worker replica (`--scale paddock-worker=N`, as in the ingest test N2 above) adds up to 30 and does
+not fit: the budget then holds only while not every pool is full at once, and otherwise roles fail with
+`too many clients already`.
 
 Do not raise `max_connections` on the database: PostgreSQL writes the value into its WAL and into every backup, and a
 restore or a rollback onto a release that starts the database with a lower value stays read-only ("hot standby is not

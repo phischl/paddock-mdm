@@ -31,7 +31,9 @@ const RetryPause = 5 * time.Second
 // auto-unseal), but a connection for each would put the roles' pools together above PostgreSQL's default of 100
 // connections (docs/operations/capacity.md, "PostgreSQL connection budget"). A round that finds every lock connection
 // taken waits for one; the query and readiness pools stay its own, so a waiting round never starves them (PDK-1010).
-const LeaderLockConns = 8
+// 12 is more than the 9 rounds that may run for minutes at many organizations (identity, inventory, osv, staleness,
+// findings, retention), so the short ones rarely queue behind them.
+const LeaderLockConns = 12
 
 // outcome is how a delivery is settled.
 type outcome int
