@@ -8,8 +8,9 @@
 -- transaction advisory lock. The device numbers anew after its agent state was reset (device.event_seq_reset), so
 -- the worker then deletes the device's withdrawal rows and sets reported_seq to NULL on its open requests (amendment
 -- 2026-11-14 c, D8.5): only the worker deletes rows here. A withdrawal row follows the retention of the requests (ADR 0032): it stays as long as the
--- requests do, and goes with its catalog entry. The plan's file name is <next>; 00126 and 00127 are taken by PDK-1013
--- and PDK-1034. Forward-only: there is no Down migration.
+-- requests do, and goes with its catalog entry. The offboarding (00126) deletes the rows of an organization through
+-- its registry; the table comes before software_catalog_entry and device, which it references. The plan's file name
+-- is <next>; 00126 and 00127 are taken by PDK-1013 and PDK-1034. Forward-only: there is no Down migration.
 -- +goose Up
 ALTER TABLE software_request ADD COLUMN reported_seq bigint;
 
@@ -31,5 +32,6 @@ CREATE POLICY tenant ON software_request_withdrawal TO paddock_worker
   USING (organization_id = current_setting('paddock.org_id')::uuid)
   WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON software_request_withdrawal TO paddock_worker;
+INSERT INTO offboarding_table (table_name, delete_order) VALUES ('software_request_withdrawal', 545);
 
 -- +goose Down
