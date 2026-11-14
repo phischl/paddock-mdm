@@ -566,12 +566,18 @@ e2e-check-playwright:
 # Only the checkout is mounted at /src, so a .secrets symlink to another worktree would dangle in the container
 # (ENOENT on every login); its resolved path is mounted at /secrets instead, for the specs (PADDOCK_E2E_SECRETS) and
 # the Go helpers they run, bin/devicesim and bin/agentrelease (PADDOCK_SECRETS_DIR, stack.SecretsDir) (PDK-353).
+# Neither glibc nor Node resolves *.localhost by itself: with --network host the container only got the names from the
+# host's systemd-resolved stub, which intermittently answered ENOTFOUND on CI runners (PDK-998). Explicit hosts entries
+# for every public name of a *.localhost stack take the host resolver out of the path.
+E2E_DOMAIN    = $(call dev_setting,PADDOCK_DOMAIN,paddock.localhost)
+E2E_ADD_HOSTS = $(if $(filter %.localhost,$(E2E_DOMAIN)),$(foreach name,admin auth bundles device fleet,--add-host $(name).$(E2E_DOMAIN):127.0.0.1))
+unexport E2E_DOMAIN E2E_ADD_HOSTS
 .PHONY: e2e
 e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running stack (optional SPEC=<spec file or filter>; PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
 	$(STACK_PREFLIGHT)
 	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
-	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
+	docker run --rm --network host $(E2E_ADD_HOSTS) -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
 		-e PADDOCK_E2E_SECRETS=/secrets -e PADDOCK_SECRETS_DIR=/secrets -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
 		-e PADDOCK_PROJECT=$(DEV_PROJECT) \
 		-e PADDOCK_E2E_BASE_URL=$(or $(PADDOCK_E2E_BASE_URL),$(subst %,admin,$(DEV_HTTPS))) \
