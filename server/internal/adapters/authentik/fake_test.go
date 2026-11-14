@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -44,6 +45,8 @@ type fakeAuthentik struct {
 
 	brands   []map[string]any
 	requests []string // "METHOD path" of every request
+	// served are the requests with their query and decoded body, in the order served (PDK-1021).
+	served []fakeRequest
 	// longestURI is the length of the longest request target (path and query) served.
 	longestURI int
 	// failNext makes the next n requests answer with failStatus.
@@ -74,6 +77,12 @@ type fakeAuthentik struct {
 	unnamedGroupRefusal bool
 	// dropGroupsObj answers include_groups=true without groups_obj (an Authentik that ignores the parameter).
 	dropGroupsObj bool
+}
+
+type fakeRequest struct {
+	method, path string
+	query        url.Values
+	body         map[string]any
 }
 
 type fakeGroup struct {
@@ -317,6 +326,7 @@ func (f *fakeAuthentik) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil && r.ContentLength != 0 {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
+	f.served = append(f.served, fakeRequest{method: r.Method, path: r.URL.Path, query: r.URL.Query(), body: body})
 	status, out := f.route(r, body)
 	if f.loseCreateAnswers && r.Method == http.MethodPost && status == http.StatusCreated && !f.lostCreates[r.URL.Path] {
 		f.lostCreates[r.URL.Path] = true

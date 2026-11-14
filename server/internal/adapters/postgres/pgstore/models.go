@@ -180,6 +180,13 @@ type BackupKey struct {
 	RetiredAt          *time.Time
 }
 
+type BackupLeader struct {
+	ID         bool
+	Epoch      int64
+	Holder     string
+	AcquiredAt time.Time
+}
+
 type BackupRestorePlan struct {
 	ID             uuid.UUID
 	Kind           string
