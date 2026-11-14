@@ -38,13 +38,30 @@ WHERE device_id = @device_id AND catalog_entry_id = @catalog_entry_id AND userna
   AND decided_at IS NOT NULL
 ORDER BY decided_at DESC LIMIT 1;
 
+-- name: LockSoftwareRequestOrder :exec
+-- Serializes the requests and withdrawals of a device until the transaction ends (plan M19 D8): without it a request
+-- and its withdrawal in two concurrent batches could each miss the other's uncommitted row.
+SELECT pg_advisory_xact_lock(hashtextextended('software_request_order:' || CAST(@device_id::uuid AS text), 0));
+
 -- name: InsertSoftwareRequest :execrows
--- Opens a request; none while one of the device, entry and user is open (software_request_open_idx).
+-- Opens a request; none while one of the device, entry and user is open (software_request_open_idx), and none when a
+-- withdrawal the device reported after it (a higher event_seq) was processed first (plan M19 D8).
 INSERT INTO software_request (id, organization_id, catalog_entry_id, device_id, user_id, username, state, requested_at,
-  expires_at, approval_epoch, justification)
-VALUES (@id, @organization_id, @catalog_entry_id, @device_id, sqlc.narg(user_id), @username, 'requested', @requested_at,
-  @expires_at, @approval_epoch, @justification)
+  expires_at, approval_epoch, justification, reported_seq)
+SELECT @id, @organization_id, @catalog_entry_id, @device_id, sqlc.narg(user_id), @username, 'requested', @requested_at,
+  @expires_at, @approval_epoch, @justification, @reported_seq::bigint
+WHERE NOT EXISTS (
+  SELECT 1 FROM software_request_withdrawal w
+  WHERE w.device_id = @device_id AND w.catalog_entry_id = @catalog_entry_id AND w.username = @username
+    AND w.event_seq > @reported_seq::bigint
+)
 ON CONFLICT (device_id, catalog_entry_id, username) WHERE state = 'requested' DO NOTHING;
+
+-- name: RepeatSoftwareRequest :exec
+-- A repeat of the open request moves its reported_seq to the repeat's when that is newer, so a withdrawal the device
+-- reported between the two closes it no longer: the device shows the repeat as pending (plan M19 D8).
+UPDATE software_request SET reported_seq = greatest(reported_seq, @reported_seq::bigint)
+WHERE device_id = @device_id AND catalog_entry_id = @catalog_entry_id AND username = @username AND state = 'requested';
 
 -- name: ListSoftwareRequestsToExpire :many
 -- The requests to expire, oldest first, with the cause: open or approved ones no available assignment of the entry
@@ -114,12 +131,30 @@ UPDATE software_request SET state = @state, decided_by = @decided_by, decided_at
   decision_reason = sqlc.narg(decision_reason)
 WHERE id = @id AND state = 'requested';
 
+-- name: RecordSoftwareRequestWithdrawal :exec
+-- Keeps the highest event_seq of a withdrawal of the device, entry and user (plan M19 D8), with when it was received.
+INSERT INTO software_request_withdrawal (organization_id, device_id, catalog_entry_id, username, event_seq, received_at)
+VALUES (@organization_id, @device_id, @catalog_entry_id, @username, @event_seq, @received_at)
+ON CONFLICT (organization_id, device_id, catalog_entry_id, username) DO UPDATE
+SET event_seq = EXCLUDED.event_seq, received_at = EXCLUDED.received_at
+WHERE software_request_withdrawal.event_seq < EXCLUDED.event_seq;
+
+-- name: DeleteSoftwareRequestWithdrawals :exec
+-- Forgets the withdrawal numbers of a device whose event numbering restarted (device.event_seq_reset, plan M19 D8.5).
+DELETE FROM software_request_withdrawal WHERE device_id = @device_id;
+
+-- name: UnorderSoftwareRequests :exec
+-- Drops the number of a device's open requests when its event numbering restarted (plan M19 D8.5): NULL has no order,
+-- so any later withdrawal closes the request.
+UPDATE software_request SET reported_seq = NULL WHERE device_id = @device_id AND state = 'requested';
+
 -- name: WithdrawSoftwareRequest :execrows
 -- Closes the open request of the device, entry and user a device reported withdrawn (PDK-811b); the partial unique
--- index allows one at most. A request opened after the report was received is a newer one and stays.
+-- index allows one at most. Only a request the device reported before the withdrawal closes (plan M19 D8); one opened
+-- before reported_seq existed (NULL) has no order and closes too.
 UPDATE software_request SET state = 'withdrawn', decided_at = @decided_at
 WHERE device_id = @device_id AND catalog_entry_id = @catalog_entry_id AND username = @username AND state = 'requested'
-  AND requested_at <= @decided_at;
+  AND (reported_seq IS NULL OR reported_seq < @event_seq::bigint);
 
 -- name: ListSoftwareRequests :many
 -- The rows are read through a subquery, so the sort columns are unambiguous (device has a state too).

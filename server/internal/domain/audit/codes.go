@@ -321,7 +321,8 @@ const (
 	// Approvals for available entries (plan M13c decisions 9 and 10): a user's request reported by the device, the
 	// request the worker opened from it (a notification code), the administrator's decision and the worker's expiry.
 	CodeDeviceSoftwareRequested Code = "device.software_requested"
-	// A user withdrew a pending request on the device; the worker closed it (PDK-811b).
+	// The device reported that a user withdrew a pending request; closed says whether the worker closed one (PDK-811b,
+	// plan M19 D8).
 	CodeDeviceSoftwareRequestWithdrawn Code = "device.software_request_withdrawn"
 	CodeSoftwareRequestOpened          Code = "software_request.opened"
 	CodeSoftwareRequestApproved        Code = "software_request.approved"
@@ -1513,7 +1514,7 @@ var registry = map[Code]Definition{
 		Description: "A device reported a highest event sequence number below the numbers it had already delivered: its agent state was reset (re-installed or wiped). The worker forgets the delivered numbers so that the new numbering is recorded, and closes open gaps without an event (actor: system).",
 		Params:      []string{"previous_high", "reported_high", "events_seen"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "events_seen is the number of forgotten sequence numbers. A state wipe also restarts the check-in sequence, which quarantines the device as a suspected clone (device.clone_suspected).",
+		Note:        "events_seen is the number of forgotten sequence numbers. A state wipe also restarts the check-in sequence, which quarantines the device as a suspected clone (device.clone_suspected). The order of the device's software requests and withdrawals starts over too: a withdrawal reported after the reset closes a request opened before it.",
 	},
 	CodeDeviceClockDrift: {
 		Code: CodeDeviceClockDrift, Emitted: true,
@@ -1965,10 +1966,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceSoftwareRequestWithdrawn: {
 		Code: CodeDeviceSoftwareRequestWithdrawn, Emitted: true,
-		Description: "A user withdrew a pending software request through the self-service app of a device (actor: the device; user: the user name of the withdrawing account); the worker closed the open request of that device, entry and user as withdrawn.",
-		Params:      []string{"event_seq", "occurred_at", "user", "entry_id"},
+		Description: "The device reported that a user withdrew a software request through its self-service app (actor: the device; user: the user name of the withdrawing account). closed is true when the worker closed the open request of that device, entry and user as withdrawn.",
+		Params:      []string{"event_seq", "occurred_at", "user", "entry_id", "closed"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "Recorded once per report; a redelivered report records nothing. A report without an open request (an administrator decided it or it expired first) changes no request. Only an agent whose bundle carries the server's request_withdraw flag sends it; an older agent keeps the withdrawal on the device.",
+		Note:        "Recorded once per report; a redelivered report records nothing. closed is false when there was no open request the device reported before the withdrawal (an administrator decided it, it expired first, the user asked again afterwards, or the request has not been processed yet: it then never opens). Only an agent whose bundle carries the server's request_withdraw flag sends it; an older agent keeps the withdrawal on the device.",
 	},
 	CodeSoftwareRequestOpened: {
 		Code: CodeSoftwareRequestOpened, Emitted: true,

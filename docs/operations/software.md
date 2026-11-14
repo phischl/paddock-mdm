@@ -294,7 +294,9 @@ administrator's reason, which the bundle shows to that user only. The user can w
 An agent whose bundle carries the server's `request_withdraw` flag (set with every software section that has a package
 requiring approval, so only agents from 0.1.0-alpha.10) reports it once (`software.request_withdrawn`): the server
 closes the open request as *Withdrawn* and records `device.software_request_withdrawn`; a request an administrator
-decided first stays as decided. Without the flag (an older server) the withdrawal stays on the device, and the server's
+decided first stays as decided. The server follows the order in which the device sent the request and the withdrawal,
+also when they arrive in different check-ins: a request withdrawn before the server processed it never opens, and a
+request the user sent again after a withdrawal stays open. The event's `closed` param says whether it closed a request. Without the flag (an older server) the withdrawal stays on the device, and the server's
 request ends with a decision or after 30 days, as does the device's. A withdrawal while the agent's event queue is full
 answers 429 `busy` and keeps the request. A second request while one is pending answers 409 `already_requested`, one for an entry without approval 409
 `not_required`; a user makes at most 10 requests an hour. Only directory users can ask: an approval names a user
