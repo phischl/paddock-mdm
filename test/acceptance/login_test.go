@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"testing"
 	"time"
 
@@ -126,7 +125,8 @@ func TestLoginGate(t *testing.T) {
 
 // TestLoginMFAPath (plan M8x decision 7d): the portal sign-in sends no prompt, so that Authentik never skips the flow of a
 // later step-up (an existing Authentik session may satisfy the sign-in, the callback still requires MFA in amr), and
-// Authentik's default authentication flow asks for a second factor at order 31, enrolling one when missing.
+// Authentik's default authentication flow asks for a second factor at order 31, enrolling one when missing except for an
+// administrator without the enrolment mark, who is denied (ADR 0053).
 func TestLoginMFAPath(t *testing.T) {
 	ctx := testContext(t, time.Minute)
 	client, err := env.NewHTTPClient()
@@ -152,66 +152,28 @@ func TestLoginMFAPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var flows struct {
-		Results []struct {
-			PK string `json:"pk"`
-		} `json:"results"`
-	}
-	if err := ak.Get(ctx, "/flows/instances/?slug=default-authentication-flow", &flows); err != nil || len(flows.Results) != 1 {
-		t.Fatalf("flow default-authentication-flow: %+v %v", flows, err)
-	}
-	var bindings struct {
-		Results []struct {
-			Order      int    `json:"order"`
-			Stage      string `json:"stage"`
-			PolicyPK   string `json:"policybindingmodel_ptr_id"`
-			EngineMode string `json:"policy_engine_mode"`
-		} `json:"results"`
-	}
-	if err := ak.Get(ctx, "/flows/bindings/?target="+flows.Results[0].PK, &bindings); err != nil {
-		t.Fatal(err)
-	}
-	stage, policyPK := "", ""
-	for _, b := range bindings.Results {
-		if b.Order == 31 {
-			stage, policyPK = b.Stage, b.PolicyPK
-			if b.EngineMode != "all" {
-				t.Errorf("order 31 evaluates its policies in mode %q, want all", b.EngineMode)
-			}
+	// Since ADR 0053 order 31 holds the second factor in two stages: one denies an administrator without a factor and
+	// the enrolment marker, its sibling enrols everyone else (TestMFAEnrolmentSignInBindings). Both are skipped only
+	// after a WebAuthn or TOTP validation at order 30 in the same sign-in (PDK-324); the development blueprint skips
+	// them entirely.
+	stages := flowStages(ctx, t, ak, "default-authentication-flow")
+	expectStagesAt(t, "default-authentication-flow", stages, map[int][]string{
+		31: {"paddock-default-login-mfa", "paddock-default-login-mfa-enrol"},
+	})
+	for name, want := range map[string]string{
+		"paddock-default-login-mfa":       "[paddock-admin-login-webauthn-administrator paddock-default-login-mfa-missing paddock-dev-skip-mfa paddock-mfa-enrol-at-login-absent]",
+		"paddock-default-login-mfa-enrol": "[paddock-default-login-mfa-missing paddock-dev-skip-mfa paddock-mfa-enrol-at-login]",
+	} {
+		b, ok := stages[name]
+		if !ok {
+			t.Fatalf("default-authentication-flow has no binding of %s: %v", name, stages)
 		}
-	}
-	if stage == "" {
-		t.Fatalf("no stage binding at order 31: %+v", bindings.Results)
-	}
-	// The stage is skipped only after a WebAuthn or TOTP validation at order 30 in the same sign-in (PDK-324); the
-	// development blueprint skips it entirely.
-	var pb struct {
-		Results []struct {
-			PolicyObj struct {
-				Name string `json:"name"`
-			} `json:"policy_obj"`
-		} `json:"results"`
-	}
-	if err := ak.Get(ctx, "/policies/bindings/?target="+policyPK, &pb); err != nil {
-		t.Fatal(err)
-	}
-	var policies []string
-	for _, p := range pb.Results {
-		policies = append(policies, p.PolicyObj.Name)
-	}
-	slices.Sort(policies)
-	if fmt.Sprint(policies) != "[paddock-default-login-mfa-missing paddock-dev-skip-mfa]" {
-		t.Errorf("order 31 policies %v, want the authenticator-missing policy and the development skip", policies)
-	}
-	var v struct {
-		Name                string `json:"name"`
-		NotConfiguredAction string `json:"not_configured_action"`
-	}
-	if err := ak.Get(ctx, "/stages/authenticator/validate/"+stage+"/", &v); err != nil {
-		t.Fatal(err)
-	}
-	if v.Name != "paddock-default-login-mfa" || v.NotConfiguredAction != "configure" {
-		t.Fatalf("order 31 stage %+v, want paddock-default-login-mfa with not_configured_action configure", v)
+		if b.Order != 31 || b.EngineMode != "all" {
+			t.Errorf("%s at order %d in mode %q, want order 31 in mode all", name, b.Order, b.EngineMode)
+		}
+		if fmt.Sprint(b.Policies) != want {
+			t.Errorf("%s policies %v, want %s", name, b.Policies, want)
+		}
 	}
 }
 

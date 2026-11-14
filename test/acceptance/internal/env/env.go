@@ -595,6 +595,32 @@ func (a *Authentik) SetPassword(ctx context.Context, pk int, password string) er
 	return a.do(ctx, http.MethodPost, fmt.Sprintf("/core/users/%d/set_password/", pk), map[string]any{"password": password}, nil)
 }
 
+// SetUserAttribute sets one attribute of a user and keeps the others (Authentik replaces the whole object).
+func (a *Authentik) SetUserAttribute(ctx context.Context, pk int, key string, value any) error {
+	var u struct {
+		Attributes map[string]any `json:"attributes"`
+	}
+	if err := a.do(ctx, http.MethodGet, fmt.Sprintf("/core/users/%d/", pk), nil, &u); err != nil {
+		return err
+	}
+	if u.Attributes == nil {
+		u.Attributes = map[string]any{}
+	}
+	u.Attributes[key] = value
+	return a.do(ctx, http.MethodPatch, fmt.Sprintf("/core/users/%d/", pk), map[string]any{"attributes": u.Attributes}, nil)
+}
+
+// UserAttribute reads one attribute of a user; nil when it is not set.
+func (a *Authentik) UserAttribute(ctx context.Context, pk int, key string) (any, error) {
+	var u struct {
+		Attributes map[string]any `json:"attributes"`
+	}
+	if err := a.do(ctx, http.MethodGet, fmt.Sprintf("/core/users/%d/", pk), nil, &u); err != nil {
+		return nil, err
+	}
+	return u.Attributes[key], nil
+}
+
 // SetActive sets is_active of a user.
 func (a *Authentik) SetActive(ctx context.Context, pk int, active bool) error {
 	return a.do(ctx, http.MethodPatch, fmt.Sprintf("/core/users/%d/", pk), map[string]any{"is_active": active}, nil)

@@ -147,3 +147,26 @@ func TestDeletionStates(t *testing.T) {
 		t.Errorf("ListedByDefault() = %v", got)
 	}
 }
+
+// IsAdministratorGroup is the predicate of the sign-in policy paddock-admin-login-webauthn-administrator (ADR 0053):
+// three dot-separated parts, paddock first, a role suffix last, whatever the middle part names.
+func TestIsAdministratorGroup(t *testing.T) {
+	for name, want := range map[string]bool{
+		"paddock.platform.admins":   true,
+		"paddock.acme.admins":       true,
+		"paddock.acme.operators":    true,
+		"paddock.acme.auditors":     true,
+		"paddock.platform.auditors": true,
+		"paddock.gone-org.admins":   true,
+		"paddock.acme":              false,
+		"paddock.acme.locked":       false,
+		"paddock.acme.g.admins":     false,
+		"other.acme.admins":         false,
+		"Paddock.acme.admins":       false,
+		"paddock.acme.admins.x":     false,
+	} {
+		if got := IsAdministratorGroup(name); got != want {
+			t.Errorf("IsAdministratorGroup(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

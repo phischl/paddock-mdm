@@ -45,6 +45,8 @@ func TestRLSLint(t *testing.T) {
 		"offboarding_table": true,
 		// The backup leader epoch (plan M19 D5), role paddock_backup only.
 		"backup_leader": true,
+		// The one-time seed of the second-factor enrolment at sign-in (ADR 0053 decision 4), role paddock_platform only.
+		"platform_mfa_enrolment": true,
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,

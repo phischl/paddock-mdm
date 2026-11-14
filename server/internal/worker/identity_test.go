@@ -34,7 +34,7 @@ func TestIdentityRoundContinuesAfterAFailingOrganization(t *testing.T) {
 		other, "w"+other.String()[24:]); err != nil {
 		t.Fatal(err)
 	}
-	i := NewIdentity(nil, nil, nil, nil, f.pool, platform, time.Minute, time.Minute)
+	i := NewIdentity(nil, nil, nil, nil, nil, f.pool, platform, time.Minute, time.Minute)
 	var mu sync.Mutex
 	seen := map[uuid.UUID]bool{}
 	err = i.Round(ctx, identityAdminAccountsLockKey, "admin-accounts", func(ctx context.Context) error {
@@ -115,7 +115,7 @@ func TestAdminAccountsRoundSharesTheListings(t *testing.T) {
 	dir := &roleDirectory{listings: map[string]int{},
 		members: map[string][]ports.IdentityUser{admins: {{PK: "71", Username: "alice", UID: "uid-alice", Active: true}}}}
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
-	i := NewIdentity(nil, app.NewAdminAccounts(runner, f.pool, platform, dir, nil), app.NewRoleMembership(runner, f.pool, platform, dir),
+	i := NewIdentity(nil, app.NewAdminAccounts(runner, f.pool, platform, dir, nil), app.NewRoleMembership(runner, f.pool, platform, dir), nil,
 		nil, f.pool, platform, time.Minute, time.Minute)
 	if err := i.adminAccounts(systemContext(ctx, f.org, "admin-accounts-test")); err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestAdminAccountsRoundCountsRefusals(t *testing.T) {
 	}
 	dir := &roleDirectory{listings: map[string]int{}, members: map[string][]ports.IdentityUser{admins: {alice}}, readable: true}
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
-	i := NewIdentity(nil, app.NewAdminAccounts(runner, f.pool, platform, dir, nil), app.NewRoleMembership(runner, f.pool, platform, dir),
+	i := NewIdentity(nil, app.NewAdminAccounts(runner, f.pool, platform, dir, nil), app.NewRoleMembership(runner, f.pool, platform, dir), nil,
 		nil, f.pool, platform, time.Minute, time.Minute)
 	sys := systemContext(ctx, f.org, "admin-accounts-test")
 	if err := i.adminAccounts(sys); err != nil {
@@ -215,7 +215,7 @@ func TestPlatformAdminsRoundCountsRefusals(t *testing.T) {
 	akadmin := []ports.IdentityUser{{PK: "74", Username: "akadmin"}}
 	dir := &roleDirectory{listings: map[string]int{}, members: map[string][]ports.IdentityUser{group: {root}}, superusers: akadmin}
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
-	i := NewIdentity(nil, app.NewAdminAccounts(runner, f.pool, platform, dir, nil), app.NewRoleMembership(runner, f.pool, platform, dir),
+	i := NewIdentity(nil, app.NewAdminAccounts(runner, f.pool, platform, dir, nil), app.NewRoleMembership(runner, f.pool, platform, dir), nil,
 		nil, f.pool, platform, time.Minute, time.Minute)
 	sys := httpx.WithRequestID(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"}), "platform-admins-test")
 	if err := i.platformAdmins(sys); err != nil {

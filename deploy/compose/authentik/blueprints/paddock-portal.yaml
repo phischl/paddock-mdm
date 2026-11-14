@@ -45,14 +45,57 @@ entries:
       # Stage A (plan M8f decision 13 as amended on 2026-10-18): an administrator with any authenticator proves it
       # before anything is enrolled, so the password alone never enrols a key. Authentik accepts one of the account's
       # recovery codes in place of the TOTP code (maintainer decision 2026-10-18, RR-62). Authentik counts an account
-      # as not configured only when it has no WebAuthn and no TOTP device; only then is WebAuthn enrolled here.
+      # as not configured only when it has no WebAuthn and no TOTP device. This stage runs for administrators without
+      # the enrolment mark and denies such an account: a password alone never enrols a factor for an administrator, who
+      # enrols through a one-time link instead (ADR 0053 decision 3, plan M12h-2 amendment c).
+      device_classes: [webauthn, totp]
+      not_configured_action: deny
+      configuration_stages:
+        - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+
+  # Stage A's sibling for everyone else: device users, who keep enrolling at their first sign-in (ADR 0053 decision 5,
+  # RR-139), and administrators marked with paddock_mfa_enrol_at_login (ADR 0053 decision 4). Exactly one of the two
+  # runs at order 30 (policy paddock-mfa-enrol-at-login).
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: mfa-enrol
+    identifiers:
+      name: paddock-admin-login-mfa-enrol
+    attrs:
       device_classes: [webauthn, totp]
       not_configured_action: configure
       configuration_stages:
         - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
 
+  # The enrolment mark the worker sets once on administrators without a passkey and removes once they have one (ADR
+  # 0053 decision 4). The absent policy binds the deny stages, the other one the enrolment siblings.
+  - model: authentik_policies_expression.expressionpolicy
+    id: enrol-at-login-absent
+    identifiers:
+      name: paddock-mfa-enrol-at-login-absent
+    attrs:
+      expression: |
+        return not bool(request.user.attributes.get("paddock_mfa_enrol_at_login"))
+
+  # Marked, or not an administrator: the complement of "absent AND administrator" on the deny stages, in one policy so
+  # that the enrolment bindings evaluate in mode "all" and the development blueprint's skip policy (failing for every
+  # account without its test attribute) still skips them (plan M12h-2 amendment c point 1). An administrator check that failed to run counts as an administrator,
+  # so it never opens the enrolment to an unmarked administrator.
+  - model: authentik_policies_expression.expressionpolicy
+    id: enrol-at-login
+    identifiers:
+      name: paddock-mfa-enrol-at-login
+    attrs:
+      expression: |
+        if bool(request.user.attributes.get("paddock_mfa_enrol_at_login")):
+            return True
+        administrator = ak_call_policy("paddock-admin-login-webauthn-administrator")
+        if administrator.messages:
+            return False
+        return not administrator.passing
+
   # Stage B: the step-up accepts WebAuthn only, so an administrator who has just proven TOTP (or entered a recovery
-  # code) in stage A and has no WebAuthn device enrols one now. The policy on its binding skips it for an account with
+  # code) in stage A and has no WebAuthn device enrols one now if marked (stage B's sibling) and is denied otherwise
+  # (ADR 0053 decision 3; this stage). The policy on its binding skips it for an account with
   # a WebAuthn device, because the MFA cookie is bound to the stage that set it and a last_auth_threshold would ask a
   # WebAuthn user twice. This flow is also the default brand's authentication flow, which the device-code page runs
   # for every device user; a second policy limits the enrolment to members of Paddock administrator groups (ADR 0034
@@ -61,6 +104,16 @@ entries:
     id: mfa-webauthn
     identifiers:
       name: paddock-admin-login-webauthn
+    attrs:
+      device_classes: [webauthn]
+      not_configured_action: deny
+      configuration_stages:
+        - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: mfa-webauthn-enrol
+    identifiers:
+      name: paddock-admin-login-webauthn-enrol
     attrs:
       device_classes: [webauthn]
       not_configured_action: configure
@@ -128,6 +181,8 @@ entries:
       target: !KeyOf login-flow
       stage: !KeyOf password
       order: 20
+  # Stage A and its sibling share order 30; their policies are evaluated when the stage is reached, for the identified
+  # user (on the plan the user is still anonymous). The bindings' policies are each other's complement.
   - model: authentik_flows.flowstagebinding
     id: mfa-binding
     identifiers:
@@ -135,10 +190,42 @@ entries:
       stage: !KeyOf mfa
       order: 30
     attrs:
-      evaluate_on_plan: true
+      evaluate_on_plan: false
       re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf enrol-at-login-absent
+      order: 0
+    attrs:
+      target: !KeyOf mfa-binding
+      # An attribute check that raised counts as unmarked: the deny stage runs.
+      failure_result: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-administrator
+      order: 3
+    attrs:
+      target: !KeyOf mfa-binding
+      failure_result: true
+  - model: authentik_flows.flowstagebinding
+    id: mfa-enrol-binding
+    identifiers:
+      target: !KeyOf login-flow
+      stage: !KeyOf mfa-enrol
+      order: 30
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf enrol-at-login
+      order: 0
+    attrs:
+      target: !KeyOf mfa-enrol-binding
   # Re-evaluated when stage B is reached, after stage A, so that an account that enrolled WebAuthn in stage A skips it.
-  # "all": the development blueprint binds a policy that always fails to skip this stage as well.
+  # "all": the development blueprint binds a policy that fails (except for its test attribute) to skip this stage.
   - model: authentik_flows.flowstagebinding
     id: mfa-webauthn-binding
     identifiers:
@@ -163,9 +250,45 @@ entries:
       order: 1
     attrs:
       target: !KeyOf mfa-webauthn-binding
-      # Authentik's default failure result (false) would skip the enrolment for an administrator if the expression
-      # raised; true fails closed.
+      # Authentik's default failure result (false) would skip the denial for an administrator if the expression raised;
+      # true fails closed.
       failure_result: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf enrol-at-login-absent
+      order: 1
+    attrs:
+      target: !KeyOf mfa-webauthn-binding
+      failure_result: true
+  # Stage B's sibling: a marked administrator without a WebAuthn device enrols one here; "all" as stage B.
+  - model: authentik_flows.flowstagebinding
+    id: mfa-webauthn-enrol-binding
+    identifiers:
+      target: !KeyOf login-flow
+      stage: !KeyOf mfa-webauthn-enrol
+      order: 31
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-missing
+      order: 1
+    attrs:
+      target: !KeyOf mfa-webauthn-enrol-binding
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-administrator
+      order: 5
+    attrs:
+      target: !KeyOf mfa-webauthn-enrol-binding
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf enrol-at-login
+      order: 1
+    attrs:
+      target: !KeyOf mfa-webauthn-enrol-binding
   # Re-evaluated when stage C is reached, after stages A and B; "all": administrators only (end users would be denied,
   # which breaks the device-code sign-in), and the development blueprint skips it like stage B.
   - model: authentik_flows.flowstagebinding
@@ -194,7 +317,8 @@ entries:
       target: !KeyOf mfa-webauthn-confirm-binding
       failure_result: true
   # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17, plan M8x decision 5):
-  # every sign-in validates a WebAuthn or TOTP device; a user without one enrols one here. The policy below skips this
+  # every sign-in validates a WebAuthn or TOTP device; a user without one enrols one in the sibling stage below, unless
+  # it is an administrator without the enrolment mark, whom this stage denies (ADR 0053 decision 3). The policy below skips this
   # stage only when Authentik's own stage at order 30 has just validated a WebAuthn or TOTP device in this flow
   # (PDK-324): the MFA cookie of a last_auth_threshold is bound to the stage that set it and never let this stage skip
   # a validation of the stage at order 30. Owning such a device is not enough: order 30 also accepts recovery codes,
@@ -204,6 +328,17 @@ entries:
     id: default-flow-mfa
     identifiers:
       name: paddock-default-login-mfa
+    attrs:
+      device_classes: [webauthn, totp]
+      not_configured_action: deny
+      last_auth_threshold: seconds=0
+      configuration_stages:
+        - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+        - !Find [authentik_stages_authenticator_totp.authenticatortotpstage, [name, default-authenticator-totp-setup]]
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: default-flow-mfa-enrol
+    identifiers:
+      name: paddock-default-login-mfa-enrol
     attrs:
       device_classes: [webauthn, totp]
       not_configured_action: configure
@@ -219,7 +354,7 @@ entries:
       order: 31
     attrs:
       # Evaluated when the stage is reached, for the identified user; "all": the development blueprint binds a policy
-      # that always fails to skip this stage.
+      # that fails (except for its test attribute) to skip this stage.
       evaluate_on_plan: false
       re_evaluate_policies: true
       policy_engine_mode: all
@@ -242,6 +377,45 @@ entries:
       target: !KeyOf default-flow-mfa-binding
       # Authentik's default failure result (false) would remove the stage if the expression raised; true fails closed.
       failure_result: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf enrol-at-login-absent
+      order: 2
+    attrs:
+      target: !KeyOf default-flow-mfa-binding
+      failure_result: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-administrator
+      order: 4
+    attrs:
+      target: !KeyOf default-flow-mfa-binding
+      failure_result: true
+  # The sibling at the same order, for everyone the deny stage leaves out (the complement, policy
+  # paddock-mfa-enrol-at-login).
+  - model: authentik_flows.flowstagebinding
+    id: default-flow-mfa-enrol-binding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      stage: !KeyOf default-flow-mfa-enrol
+      order: 31
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf default-flow-mfa-missing
+      order: 1
+    attrs:
+      target: !KeyOf default-flow-mfa-enrol-binding
+      failure_result: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf enrol-at-login
+      order: 2
+    attrs:
+      target: !KeyOf default-flow-mfa-enrol-binding
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf login-flow
@@ -387,6 +561,9 @@ entries:
         - authentik_brands.view_brand
         - authentik_brands.change_brand
         - authentik_crypto.view_certificatekeypair
+        # The second-factor enrolment marks (ADR 0053 decision 4): which administrators have a passkey.
+        - authentik_stages_authenticator_webauthn.view_webauthndevice
+        - authentik_stages_authenticator_totp.view_totpdevice
 
   - model: authentik_core.user
     id: service-user

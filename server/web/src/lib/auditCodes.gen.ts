@@ -205,6 +205,8 @@ export const auditCodes = [
   'platform.ip_allowlist_denied',
   'platform.ip_allowlist_disabled',
   'platform.mcp_policy_changed',
+  'platform.mfa_enrol_marks_cleared',
+  'platform.mfa_enrol_marks_seeded',
   'platform.offboarded_device_uninstalled',
   'platform.openbao_auto_unsealed',
   'platform.osv_imported',

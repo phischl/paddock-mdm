@@ -66,6 +66,25 @@ func (g *RoleGroups) Members(name string) ([]ports.IdentityUser, error) {
 	return l.members, l.err
 }
 
+// ListedMembers returns the members of every group the round listed without an error, each account once, in the order
+// of the groups' names.
+func (g *RoleGroups) ListedMembers() []ports.IdentityUser {
+	seen := map[string]bool{}
+	var out []ports.IdentityUser
+	for _, name := range slices.Sorted(maps.Keys(g.listed)) {
+		if g.listed[name].err != nil {
+			continue
+		}
+		for _, u := range g.listed[name].members {
+			if !seen[u.PK] {
+				seen[u.PK] = true
+				out = append(out, u)
+			}
+		}
+	}
+	return out
+}
+
 // DirectoryVisible proves that listings of the round that came back empty are real (PDK-424, architect decision
 // 2026-10-29): every group the round listed without an error is readable by name, and a user listing returns at least
 // one user who is not a service account. A service token that lost its view permissions passes the group filter of

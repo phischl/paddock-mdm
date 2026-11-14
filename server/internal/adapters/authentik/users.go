@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
@@ -33,14 +34,16 @@ type user struct {
 	Attributes map[string]any `json:"attributes"`
 	IsActive   bool           `json:"is_active"`
 	UID        string         `json:"uid"`
+	DateJoined time.Time      `json:"date_joined"`
 	// GroupsObj are the direct groups of the user (only with include_groups=true).
 	GroupsObj []group `json:"groups_obj"`
 }
 
 func (u user) identity() ports.IdentityUser {
 	managed, _ := u.Attributes[attrManaged].(bool)
+	enrol, _ := u.Attributes[ports.AttrMFAEnrolAtLogin].(bool)
 	return ports.IdentityUser{PK: strconv.Itoa(u.PK), Username: u.Username, Name: u.Name, Email: u.Email, Managed: managed,
-		Active: u.IsActive, UID: u.UID}
+		Active: u.IsActive, UID: u.UID, MFAEnrolAtLogin: enrol, Joined: u.DateJoined}
 }
 
 // CreateUser creates a Paddock-managed internal user without password in the organization's root group (path
@@ -94,6 +97,95 @@ func (c *Client) RecoveryLink(ctx context.Context, pk string) (string, error) {
 		return "", upstream(errors.New("recovery link missing in the response"))
 	}
 	return res.Link, nil
+}
+
+// SetUserAttribute sets the attribute key of the user pk to value; a nil value removes it. Authentik replaces the
+// whole attributes object on a change, so the user's attributes are read and written back with the one key changed.
+func (c *Client) SetUserAttribute(ctx context.Context, pk, key string, value any) error {
+	var u struct {
+		Attributes map[string]any `json:"attributes"`
+	}
+	if err := c.do(ctx, http.MethodGet, userPath(pk), nil, &u); err != nil {
+		return upstream(err)
+	}
+	if u.Attributes == nil {
+		u.Attributes = map[string]any{}
+	}
+	if value == nil {
+		if _, ok := u.Attributes[key]; !ok {
+			return nil
+		}
+		delete(u.Attributes, key)
+	} else {
+		u.Attributes[key] = value
+	}
+	if err := c.do(ctx, http.MethodPatch, userPath(pk), map[string]any{"attributes": u.Attributes}, nil); err != nil {
+		return upstream(err)
+	}
+	return nil
+}
+
+// Device types of Authentik's device listing (the model label).
+const (
+	deviceWebAuthn = "authentik_stages_authenticator_webauthn.webauthndevice"
+	deviceTOTP     = "authentik_stages_authenticator_totp.totpdevice"
+)
+
+// UserAuthenticators reports which kinds of second factor each of the users pks has, keyed by pk, with one request per
+// user to Authentik's device listing filtered by user (GET /api/v3/authenticators/admin/all/?user=<pk>, unpaged: the
+// devices of one user). A user without any device is present with both false; a user Authentik does not know (deleted
+// meanwhile) is absent. Only confirmed devices count.
+func (c *Client) UserAuthenticators(ctx context.Context, pks []string) (map[string]ports.Authenticators, error) {
+	out := make(map[string]ports.Authenticators, len(pks))
+	for _, pk := range pks {
+		if _, err := strconv.Atoi(pk); err != nil {
+			return nil, fmt.Errorf("authentik: user pk %q is not an integer", pk)
+		}
+	}
+	for _, pk := range pks {
+		var devices []struct {
+			Type      string `json:"type"`
+			Confirmed bool   `json:"confirmed"`
+		}
+		err := c.do(ctx, http.MethodGet, "/api/v3/authenticators/admin/all/?"+url.Values{"user": {pk}}.Encode(), nil, &devices)
+		var st *errStatus
+		if errors.As(err, &st) && st.code == http.StatusBadRequest && strings.Contains(st.body, `"user"`) {
+			continue
+		}
+		if err != nil {
+			return nil, upstream(err)
+		}
+		var a ports.Authenticators
+		for _, d := range devices {
+			switch strings.ToLower(d.Type) {
+			case deviceWebAuthn:
+				a.WebAuthn = a.WebAuthn || d.Confirmed
+			case deviceTOTP:
+				a.TOTP = a.TOTP || d.Confirmed
+			}
+		}
+		out[pk] = a
+	}
+	return out, nil
+}
+
+// PortalRoleGroupNames lists the names of every group that grants a portal role by its name: paddock.platform.admins
+// and paddock.<x>.admins|operators|auditors for any x, the predicate of the sign-in policy
+// paddock-admin-login-webauthn-administrator (organization.IsAdministratorGroup), whether or not an organization of
+// that slug exists.
+func (c *Client) PortalRoleGroupNames(ctx context.Context) ([]string, error) {
+	var out []string
+	err := pages(ctx, c, "/api/v3/core/groups/", url.Values{"search": {"paddock."}, "include_users": {"false"}},
+		func(g group) {
+			if organization.IsAdministratorGroup(g.Name) {
+				out = append(out, g.Name)
+			}
+		})
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(out)
+	return slices.Compact(out), nil
 }
 
 // UserMembership reads the user username directly, with its groups, and requires its UID: a username can be reused.
