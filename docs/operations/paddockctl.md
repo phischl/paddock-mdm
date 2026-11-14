@@ -69,7 +69,8 @@ configuration changed after the plan was shown (nothing was applied in both case
 ## paddock.yml
 
 `examples/paddock.yml` is a complete example. The document holds the login and update settings, device groups,
-permission profiles, managed files and units, package holds and profile assignments. It does not hold the dead man's
+permission profiles, managed files and units, package holds, profile assignments and the software sections (`software_sources`, `software_catalog`,
+`software_assignments`, `examples/software.yaml`). It does not hold the dead man's
 switch, users and user groups, enrollment tokens, devices and their groups, or login assignments; manage those in the
 portal.
 
@@ -86,6 +87,33 @@ portal.
   roots. Paths and units are checked as in the portal. One refused item aborts the whole apply, and the error names
   the document path (`/managed_files/2: …`). Nothing is applied. A dry run checks exactly the same and changes
   nothing.
+- **Software sections.** `software_sources` (key: `slug`), `software_catalog` (key: `name`) and
+  `software_assignments` (key: catalog entry and target) follow the rules of their API endpoints; the example in
+  `examples/software.yaml` shows one of each:
+
+  ```yaml
+  software_sources:
+    - {slug: vendor, name: Vendor repository, uris: ["https://apt.example.com/ubuntu"], suites: [stable],
+       components: [main], signing_key: "<armored public key>", fingerprint: "<its fingerprint>"}
+  software_catalog:
+    - name: Vendor Browser
+      source: vendor            # null: the distribution's own repositories
+      packages: [{distribution: ubuntu, release: "*", architecture: amd64, package: vendor-browser}]
+      approval: none            # required: users ask before they install
+  software_assignments:
+    - entry: Vendor Browser
+      target: {type: organization}   # or device_group + name, user + username, user_group + slug
+      intent: required               # required, uninstall, hold, forbid, available
+  ```
+
+  A plan names the sections like any other (`+ software_catalog ["Vendor Browser"]`). **Sources need a step-up:** a
+  plan that changes `software_sources` ends with `Requires a step-up: software_sources (an API token cannot apply this
+  plan; apply these sections from the portal)`, and the real apply with a token is refused as a whole (403
+  `step_up_required`, exit code 1, with the hint to make the change in the portal). Follow the two-step flow
+  below: an organization administrator creates or changes the source in the portal, the file then lists it unchanged.
+  Catalog entries and assignments need no step-up. A change of `software_assignments` is staged like a managed file when
+  staged rollouts are on ([configuration-rollouts.md](configuration-rollouts.md)); the `urgent` flag of an assignment is
+  not part of the document ([software.md](software.md)). `paddockctl get config` exports all three sections.
 - **Deleting a device group deletes everything scoped to it**: its managed files, units, package holds and profile
   assignments. Each of them must be a deletion in the plan. A document that deletes a group is refused when it leaves
   out one of those sections while the group still has items there (409 `in_use`), or when it still lists an item of
