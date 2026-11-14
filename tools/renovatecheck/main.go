@@ -41,7 +41,7 @@ func main() {
 }
 
 func run(renovatePath, versionsPath, compilerPath string) error {
-	raw, err := os.ReadFile(renovatePath)
+	raw, err := os.ReadFile(renovatePath) //nolint:gosec // the operator names the file to read
 	if err != nil {
 		return err
 	}
@@ -49,11 +49,11 @@ func run(renovatePath, versionsPath, compilerPath string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", renovatePath, err)
 	}
-	vers, err := os.ReadFile(versionsPath)
+	vers, err := os.ReadFile(versionsPath) //nolint:gosec // the operator names the file to read
 	if err != nil {
 		return err
 	}
-	comp, err := os.ReadFile(compilerPath)
+	comp, err := os.ReadFile(compilerPath) //nolint:gosec // the operator names the file to read
 	if err != nil {
 		return err
 	}
