@@ -451,6 +451,123 @@ func TestMFAEnrolmentSignInFlow(t *testing.T) {
 	})
 }
 
+// TestMFAEnrolmentDeviceSignIn is the regression gate of plan M12h-2 amendment e: administrators set up their second
+// factor only through the setup link, in every device sign-in flow, and device users still set theirs up at their
+// first device sign-in.
+//   - Structure: both device flows bind the deny stage and its enrolment sibling at the same order, as the portal
+//     sign-in does.
+//   - paddock-device-authentication, with accounts the development blueprint does not skip (enforceMFA): an
+//     administrator without a factor and without the mark is denied; a device user and a marked administrator get the
+//     authenticator setup.
+//   - paddock-device-authorization, which the development blueprint does not skip: an administrator without a factor
+//     signs in through the skipped portal sign-in and is denied at the device approval, without a setup.
+func TestMFAEnrolmentDeviceSignIn(t *testing.T) {
+	ctx := testContext(t, 3*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		absent = "paddock-mfa-enrol-at-login-absent"
+		enrol  = "paddock-mfa-enrol-at-login"
+		admin  = "paddock-admin-login-webauthn-administrator"
+		skip   = "paddock-dev-skip-mfa"
+		authn  = "paddock-device-authentication"
+		authz  = "paddock-device-authorization"
+	)
+	t.Run("structure", func(t *testing.T) {
+		signIn, approval := flowStages(ctx, t, ak, authn), flowStages(ctx, t, ak, authz)
+		expectStagesAt(t, authn, signIn, map[int][]string{30: {"paddock-device-mfa", "paddock-device-mfa-enrol"}})
+		expectStagesAt(t, authz, approval, map[int][]string{10: {"paddock-device-mfa", "paddock-device-mfa-enrol"}})
+		for _, c := range []struct {
+			flow     string
+			stages   map[string]boundStage
+			stage    string
+			action   string
+			policies []string
+		}{
+			{authn, signIn, "paddock-device-mfa", "deny", []string{admin, skip, absent}},
+			{authn, signIn, "paddock-device-mfa-enrol", "configure", []string{skip, enrol}},
+			{authz, approval, "paddock-device-mfa", "deny", []string{admin, absent}},
+			{authz, approval, "paddock-device-mfa-enrol", "configure", []string{enrol}},
+		} {
+			b, ok := c.stages[c.stage]
+			if !ok {
+				t.Errorf("%s has no binding of %s", c.flow, c.stage)
+				continue
+			}
+			want := slices.Sorted(slices.Values(c.policies))
+			if b.EngineMode != "all" || fmt.Sprint(b.Policies) != fmt.Sprint(want) {
+				t.Errorf("%s %s: mode %q, policies %v; want mode all, policies %v", c.flow, c.stage, b.EngineMode, b.Policies, want)
+			}
+			if c.action == "deny" && (!b.FailClosed[admin] || !b.FailClosed[absent]) {
+				t.Errorf("%s %s: the deny stage's policies do not fail closed: %v", c.flow, c.stage, b.FailClosed)
+			}
+			var v struct {
+				NotConfiguredAction string `json:"not_configured_action"`
+			}
+			if err := ak.Get(ctx, "/stages/authenticator/validate/"+b.Stage+"/", &v); err != nil {
+				t.Fatal(err)
+			}
+			if v.NotConfiguredAction != c.action {
+				t.Errorf("%s %s: not_configured_action %q, want %s", c.flow, c.stage, v.NotConfiguredAction, c.action)
+			}
+		}
+	})
+	signIn := func(t *testing.T, username, password string) error {
+		t.Helper()
+		client, err := env.NewHTTPClient()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = authflow.RunFlow(ctx, client, stack.AuthURL()+"/if/flow/"+authn+"/", username, password, &authflow.TOTP{})
+		return err
+	}
+	expectSetup := func(t *testing.T, err error) {
+		t.Helper()
+		var stage *authflow.StageError
+		if !errors.As(err, &stage) || stage.Flow != authn || stage.Component != "ak-stage-authenticator-totp" {
+			t.Fatalf("device sign-in: %v, want the authenticator setup of %s", err, authn)
+		}
+	}
+	t.Run("administrator without a factor is denied in the device sign-in", func(t *testing.T) {
+		user, password := tempUser(t, "mf5", env.RootGroup("acme"), env.RoleGroup("acme", "admins"))
+		enforceMFA(ctx, t, ak, user, false)
+		if err := signIn(t, user, password); !errors.Is(err, authflow.ErrAccessDenied) {
+			t.Fatalf("device sign-in: %v, want Authentik's access denial", err)
+		}
+	})
+	t.Run("platform administrator without a factor is denied in the device sign-in", func(t *testing.T) {
+		user, password := tempUser(t, "mf5", "paddock.platform.admins")
+		enforceMFA(ctx, t, ak, user, false)
+		if err := signIn(t, user, password); !errors.Is(err, authflow.ErrAccessDenied) {
+			t.Fatalf("device sign-in: %v, want Authentik's access denial", err)
+		}
+	})
+	t.Run("device user without a factor gets the setup in the device sign-in", func(t *testing.T) {
+		user, password := tempUser(t, "mf5-device", env.RootGroup("acme"))
+		enforceMFA(ctx, t, ak, user, false)
+		expectSetup(t, signIn(t, user, password))
+	})
+	t.Run("marked administrator gets the setup in the device sign-in", func(t *testing.T) {
+		user, password := tempUser(t, "mf5", env.RootGroup("acme"), env.RoleGroup("acme", "admins"))
+		enforceMFA(ctx, t, ak, user, true)
+		expectSetup(t, signIn(t, user, password))
+	})
+	t.Run("administrator without a factor is denied at the device approval", func(t *testing.T) {
+		u := newDeviceUser(t, ak, "mf5-approval", "acme.test", env.RootGroup("acme"), env.RoleGroup("acme", "admins"))
+		_, stages, err := deviceLogin(t, "paddock-device-acme", u)
+		if !errors.Is(err, authflow.ErrAccessDenied) {
+			t.Fatalf("device approval: %v (stages %v), want Authentik's access denial", err, stages)
+		}
+		if !slices.Contains(stages, authz+" ak-stage-access-denied") ||
+			slices.ContainsFunc(stages, func(s string) bool { return strings.HasSuffix(s, " ak-stage-authenticator-totp") }) ||
+			u.totp.Secret != "" {
+			t.Errorf("stages %v, want the denial in %s and no authenticator setup", stages, authz)
+		}
+	})
+}
+
 // seedState reads the seed's row of platform_mfa_enrolment (test-only database access): the first attempt's time and,
 // once the seed completed, its time; ok is false while the worker has not tried yet.
 func seedState(t *testing.T) (first, seeded time.Time, ok bool) {
