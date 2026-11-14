@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { saveFile } from '../lib/disk'
 import { useProblemText } from '../lib/problems'
 import { exportRecoveryKeys, passphraseStrength, validateExport } from '../lib/recoveryExport'
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
+import { formatAbsoluteFull } from '../lib/time'
 import { usePending } from '../composables/usePending'
 
 /**
@@ -18,6 +19,8 @@ const props = defineProps<{
   /** The organization of a platform administrator; null exports the administrator's own organization. */
   organizationId: string | null
   slug: string
+  /** deletion.recovery_export_until: the export closes 20 minutes before the deletion (plan M17 amendment h). */
+  until: string
 }>()
 
 const { t } = useI18n()
@@ -36,6 +39,11 @@ const repeat = ref('')
 const touched = ref(false)
 const problem = ref('')
 const done = ref(false)
+const now = ref(Date.now())
+const closed = computed(() => now.value >= Date.parse(props.until))
+// The window closes while the page is open; the action is disabled from that moment.
+const tick = setInterval(() => { now.value = Date.now() }, 15_000)
+onUnmounted(() => clearInterval(tick))
 
 const request = computed(() => recipient.value === 'public_key'
   ? { recipient: recipient.value, public_key: publicKey.value }
@@ -52,6 +60,7 @@ function clear(): void {
 }
 
 function start(): void {
+  if (closed.value) return
   problem.value = ''
   done.value = false
   startStepUp(action, target.value)
@@ -71,7 +80,8 @@ onMounted(async () => {
 
 async function submit(): Promise<void> {
   touched.value = true
-  if (error.value) return
+  now.value = Date.now()
+  if (error.value || closed.value) return
   problem.value = ''
   const res = await exportRecoveryKeys(props.organizationId, request.value)
   if (typeof res === 'string') {
@@ -95,10 +105,17 @@ function close(): void {
       color="primary"
       variant="tonal"
       :data-testid="'recovery-export-' + slug"
+      :disabled="closed"
       @click="start"
     >
       {{ t('recoveryExport.button') }}
     </v-btn>
+    <p
+      class="text-medium-emphasis"
+      data-testid="recovery-export-window"
+    >
+      {{ closed ? t('recoveryExport.closed') : t('recoveryExport.until', { time: formatAbsoluteFull(until) }) }}
+    </p>
     <v-alert
       v-if="problem && !open"
       type="error"
@@ -135,6 +152,9 @@ function close(): void {
             @submit.prevent="run(submit)"
           >
             <p>{{ t('recoveryExport.intro', { slug }) }}</p>
+            <p data-testid="recovery-export-dialog-window">
+              {{ closed ? t('recoveryExport.closed') : t('recoveryExport.until', { time: formatAbsoluteFull(until) }) }}
+            </p>
             <v-alert
               type="warning"
               variant="tonal"
@@ -214,7 +234,7 @@ function close(): void {
                 type="submit"
                 color="primary"
                 :loading="pending"
-                :disabled="pending"
+                :disabled="pending || closed"
                 data-testid="recovery-export-submit"
               >
                 {{ t('recoveryExport.submit') }}

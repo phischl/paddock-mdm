@@ -17,7 +17,7 @@ import (
 )
 
 // exportTimeout bounds one recovery export; Transit decrypts thousands of escrows per minute.
-const exportTimeout = 15 * time.Minute
+const exportTimeout = app.RecoveryExportTimeout
 
 // Client is the api's client of the escrow-reader (app.EscrowDecrypter).
 type Client struct {

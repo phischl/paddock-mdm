@@ -3839,6 +3839,8 @@
       "mismatch": "The passphrases do not match."
     },
     "pending": "This organization will be deleted on {date}. Export its recovery keys and local administrator passwords before then.",
-    "passphraseNote": "Use a generated passphrase of at least 20 characters, for example from a password manager. A public key is safer."
+    "passphraseNote": "Use a generated passphrase of at least 20 characters, for example from a password manager. A public key is safer.",
+    "until": "Recovery export available until {time}.",
+    "closed": "The recovery export closed 20 minutes before the deletion."
   }
 }

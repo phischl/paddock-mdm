@@ -313,8 +313,8 @@ paths:
         Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
         of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
         (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
-        organization's deletion is pending (409 invalid_state otherwise), at most five successful exports per grace
-        period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
+        organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until;
+        409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
         one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
         16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
         otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
@@ -6257,8 +6257,8 @@ paths:
         Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
         of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
         (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
-        organization's deletion is pending (409 invalid_state otherwise), at most five successful exports per grace
-        period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
+        organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until;
+        409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
         one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
         16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
         otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
@@ -8497,9 +8497,15 @@ components:
           items: { type: string }
     MeOrganizationDeletion:
       type: object
-      required: [delete_after]
+      required: [delete_after, recovery_export_until]
       properties:
         delete_after: { type: string, format: date-time, description: When the organization's data is deleted. }
+        recovery_export_until:
+          type: string
+          format: date-time
+          description: |
+            delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
+            amendment h).
     Me:
       type: object
       required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,
@@ -8999,13 +9005,19 @@ components:
       enum: [provisioning, active, provisioning_failed, suspended, deleting, deleted]
     OrganizationDeletion:
       type: object
-      required: [requested_at, requested_by, reason, delete_after, step, last_error_code, deleted_at, uninstalls_issued,
-        uninstalls_skipped]
+      required: [requested_at, requested_by, reason, delete_after, recovery_export_until, step, last_error_code,
+        deleted_at, uninstalls_issued, uninstalls_skipped]
       properties:
         requested_at: { type: string, format: date-time }
         requested_by: { type: string, description: The platform administrator who requested the deletion. }
         reason: { type: string }
         delete_after: { type: string, format: date-time, description: When the worker starts deleting the data. }
+        recovery_export_until:
+          type: string
+          format: date-time
+          description: |
+            delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
+            amendment h).
         step:
           type: string
           nullable: true
@@ -9041,6 +9053,7 @@ components:
           description: One ASCII-armoured OpenPGP public key with an encryption-capable key; required for public_key.
         passphrase:
           type: string
+          minLength: 20
           maxLength: 1024
           description: |
             20 to 1024 characters (plan M17 amendment g); required for passphrase. Never logged, never recorded in the

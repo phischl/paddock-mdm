@@ -116,6 +116,7 @@ const rollout = computed(() => configuration.value?.rollout ?? null)
       <RecoveryExport
         :organization-id="null"
         :slug="session.me.organization.slug"
+        :until="session.me.organization_deletion.recovery_export_until"
       />
     </v-alert>
     <div

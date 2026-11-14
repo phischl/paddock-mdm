@@ -854,7 +854,9 @@ func (r *ActionRunner) RunExternal(ctx context.Context, scope Scope, spec Action
 // OrgPool.InPendingDeletionOrg, and its event is recorded in the organization's own log, a denial included. When the
 // organization cannot be entered (no deletion pending), the transactions run in the platform scope instead, where
 // prepare finds the organization's state and refuses; the event still names the organization, or, for an unknown
-// organization (known false), the platform pseudo-organization.
+// organization (known false), the platform pseudo-organization. An organization that is deleting or deleted is never
+// written through the platform pool: InPendingDeletionOrg refuses it with problem.OrganizationInactive, recorded as
+// organization.inactive_denied in the platform pseudo-organization (plan M17 amendment h point 2).
 func (r *ActionRunner) RunExternalInPendingDeletion(ctx context.Context, org uuid.UUID, known bool, spec ActionSpec,
 	prepare func(ctx context.Context, q *pgstore.Queries, rec Recorder) error,
 	external func(ctx context.Context) error,

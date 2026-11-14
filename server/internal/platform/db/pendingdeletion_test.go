@@ -141,6 +141,16 @@ func TestInPendingDeletionOrgRacesDeleting(t *testing.T) {
 	if !errors.Is(err, problem.OrganizationInactive) || db.OrganizationUnavailableStatus(err) != "deleting" || ran {
 		t.Fatalf("race with deleting: %v (ran %v)", err, ran)
 	}
+	// Once deleting is committed, the platform check itself refuses with the gate's error, never
+	// ErrNotPendingDeletion, whose caller would fall back to the ungated platform pool (amendment h point 2).
+	err = f.org.InPendingDeletionOrg(root, f.platform, f.orgA, func(context.Context, *pgstore.Queries) error {
+		t.Error("fn ran for a deleting organization")
+		return nil
+	})
+	if !errors.Is(err, problem.OrganizationInactive) || errors.Is(err, db.ErrNotPendingDeletion) ||
+		db.OrganizationUnavailableStatus(err) != "deleting" {
+		t.Fatalf("deleting: %v", err)
+	}
 }
 
 // TestInPendingDeletionOrgCallers: the exception is reached only through ActionRunner.RunExternalInPendingDeletion

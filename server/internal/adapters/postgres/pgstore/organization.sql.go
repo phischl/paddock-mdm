@@ -533,19 +533,6 @@ func (q *Queries) MarkOrganizationIdentityEnsured(ctx context.Context, arg MarkO
 	return err
 }
 
-const organizationDeletionPending = `-- name: OrganizationDeletionPending :one
-SELECT EXISTS (SELECT 1 FROM organization WHERE id = $1 AND status IN ('active', 'provisioning_failed') AND delete_after IS NOT NULL)
-`
-
-// Whether the organization's deletion is pending: db.OrgPool.InPendingDeletionOrg through the platform pool, and the
-// escrow-reader inside the organization before an export (it may read only these columns, migration 00133).
-func (q *Queries) OrganizationDeletionPending(ctx context.Context, id uuid.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, organizationDeletionPending, id)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const organizationIDBySlug = `-- name: OrganizationIDBySlug :one
 SELECT coalesce(paddock_org_id_by_slug($1), '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS id
 `
@@ -556,6 +543,25 @@ func (q *Queries) OrganizationIDBySlug(ctx context.Context, slug string) (uuid.U
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const recoveryExportOpen = `-- name: RecoveryExportOpen :one
+SELECT EXISTS (SELECT 1 FROM organization WHERE id = $1 AND status IN ('active', 'provisioning_failed')
+  AND delete_after IS NOT NULL AND delete_after > now() + make_interval(secs => $2::float8))
+`
+
+type RecoveryExportOpenParams struct {
+	ID            uuid.UUID
+	CutoffSeconds float64
+}
+
+// Whether the export is open (see above): the api before it reserves, and the escrow-reader inside the organization
+// before it decrypts (it may read only these columns, migration 00133).
+func (q *Queries) RecoveryExportOpen(ctx context.Context, arg RecoveryExportOpenParams) (bool, error) {
+	row := q.db.QueryRow(ctx, recoveryExportOpen, arg.ID, arg.CutoffSeconds)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const releaseRecoveryExport = `-- name: ReleaseRecoveryExport :exec
@@ -633,13 +639,15 @@ SET recovery_exports = CASE WHEN recovery_exports_since IS NOT DISTINCT FROM del
                             THEN recovery_exports + 1 ELSE 1 END,
     recovery_exports_since = deletion_requested_at
 WHERE id = $1 AND status IN ('active', 'provisioning_failed') AND delete_after IS NOT NULL
-  AND (recovery_exports_since IS DISTINCT FROM deletion_requested_at OR recovery_exports < $2::int)
+  AND delete_after > now() + make_interval(secs => $2::float8)
+  AND (recovery_exports_since IS DISTINCT FROM deletion_requested_at OR recovery_exports < $3::int)
 RETURNING recovery_exports, recovery_exports_since
 `
 
 type ReserveRecoveryExportParams struct {
-	ID         uuid.UUID
-	MaxExports int32
+	ID            uuid.UUID
+	CutoffSeconds float64
+	MaxExports    int32
 }
 
 type ReserveRecoveryExportRow struct {
@@ -647,11 +655,14 @@ type ReserveRecoveryExportRow struct {
 	RecoveryExportsSince *time.Time
 }
 
-// Encrypted recovery export (plan M17 amendment b decisions 21 and 24, migration 00133). Reserving counts one export of
-// the pending deletion atomically, so concurrent exports cannot pass the limit together; a count of an earlier
-// (cancelled) deletion starts again at one. No row: no deletion is pending or the limit is reached.
+// Encrypted recovery export (plan M17 amendment b decisions 21 and 24, amendments g and h, migration 00133). An export
+// is open while the deletion is pending and delete_after lies more than the cutoff (app.RecoveryExportCutoff) ahead on
+// the database's clock, the clock of the worker's delete_after <= now(): an export then always finishes while the
+// deletion is still pending (amendment h point 1). Reserving counts one export of the pending deletion atomically, so
+// concurrent exports cannot pass the limit together; a count of an earlier (cancelled) deletion starts again at one.
+// No row: the export is not open or the limit is reached.
 func (q *Queries) ReserveRecoveryExport(ctx context.Context, arg ReserveRecoveryExportParams) (ReserveRecoveryExportRow, error) {
-	row := q.db.QueryRow(ctx, reserveRecoveryExport, arg.ID, arg.MaxExports)
+	row := q.db.QueryRow(ctx, reserveRecoveryExport, arg.ID, arg.CutoffSeconds, arg.MaxExports)
 	var i ReserveRecoveryExportRow
 	err := row.Scan(&i.RecoveryExports, &i.RecoveryExportsSince)
 	return i, err

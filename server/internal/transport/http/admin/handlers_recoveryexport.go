@@ -16,7 +16,7 @@ import (
 
 // recoveryExportDeadline replaces the server's write timeout while an export streams: the escrow-reader decrypts the
 // whole organization during the response.
-const recoveryExportDeadline = 15 * time.Minute
+const recoveryExportDeadline = app.RecoveryExportTimeout
 
 // recoveryExportResponse runs the export while the response is written (ADR 0052 amendment b): the download's headers
 // are set when the escrow-reader accepted it, and the message streams through. An error before that is answered as a

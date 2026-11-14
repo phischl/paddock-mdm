@@ -3839,6 +3839,8 @@
       "mismatch": "Die Passphrasen stimmen nicht überein."
     },
     "pending": "Diese Organisation wird am {date} gelöscht. Exportieren Sie vorher ihre Wiederherstellungsschlüssel und lokalen Administratorpasswörter.",
-    "passphraseNote": "Verwenden Sie eine generierte Passphrase mit mindestens 20 Zeichen, zum Beispiel aus einem Passwortmanager. Ein öffentlicher Schlüssel ist sicherer."
+    "passphraseNote": "Verwenden Sie eine generierte Passphrase mit mindestens 20 Zeichen, zum Beispiel aus einem Passwortmanager. Ein öffentlicher Schlüssel ist sicherer.",
+    "until": "Wiederherstellungsexport verfügbar bis {time}.",
+    "closed": "Der Wiederherstellungsexport wurde 20 Minuten vor der Löschung geschlossen."
   }
 }

@@ -169,9 +169,10 @@ async function saveDomains(): Promise<void> {
           {{ t('organizations.editDomains') }}
         </v-btn>
         <RecoveryExport
-          v-if="item.status === 'active' && item.deletion"
+          v-if="(item.status === 'active' || item.status === 'provisioning_failed') && item.deletion"
           :organization-id="item.id"
           :slug="item.slug"
+          :until="item.deletion.recovery_export_until"
         />
       </template>
     </DataList>

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -32,6 +33,24 @@ var (
 		RequiresStepUp: true}
 )
 
+// RecoveryExportTimeout is the hard limit of one export's stream, in the escrow-reader, its client and the api's
+// response (plan M17 amendment h point 1).
+const RecoveryExportTimeout = 15 * time.Minute
+
+// RecoveryExportCutoff closes the export this long before delete_after: the stream's hard limit plus a margin of
+// 5 minutes, so an export always finishes, and its event is recorded, while the deletion is still pending (plan M17
+// amendment h point 1).
+const RecoveryExportCutoff = RecoveryExportTimeout + 5*time.Minute
+
+// RecoveryExportUntil is when the export of a deletion due at deleteAfter closes (Organization.deletion and
+// Me.organization_deletion recovery_export_until, amendment h point 3).
+func RecoveryExportUntil(deleteAfter time.Time) time.Time {
+	return deleteAfter.Add(-RecoveryExportCutoff)
+}
+
+// errRecoveryExportClosed is the refusal outside the export window; the detail is amendment h's.
+var errRecoveryExportClosed = problem.InvalidState.WithDetail("the recovery export closes 20 minutes before the deletion starts")
+
 // ErrEscrowNotPending is wrapped by a RecoveryExporter when the escrow-reader found no pending deletion of the
 // organization.
 var ErrEscrowNotPending = errors.New("the escrow reader found no pending deletion of the organization")
@@ -58,9 +77,11 @@ type RecoveryExportCounts struct {
 
 // RecoveryExporter streams the encrypted recovery export of the escrow-reader (escrowreader.Client). It calls open
 // once the escrow-reader accepted the request, before the first byte, and copies the message into the writer open
-// returns. A refusal of the step-up proof wraps ErrEscrowRefused, a missing pending deletion ErrEscrowNotPending.
+// returns, all but the end of the message: release writes the end. A refusal of the step-up proof wraps
+// ErrEscrowRefused, a missing pending deletion ErrEscrowNotPending.
 type RecoveryExporter interface {
-	Export(ctx context.Context, call RecoveryExportCall, open func(RecoveryExportCounts) io.Writer) (RecoveryExportCounts, error)
+	Export(ctx context.Context, call RecoveryExportCall, open func(RecoveryExportCounts) io.Writer) (
+		counts RecoveryExportCounts, release func() error, err error)
 }
 
 // RecoveryExportInput is the request body of an export (RecoveryExportRequest). It is never logged.
@@ -102,7 +123,7 @@ func NewRecoveryExports(runner *ActionRunner, platform *db.PlatformPool, tokens 
 func (e *RecoveryExports) Export(ctx context.Context, in RecoveryExportInput, open func(RecoveryExportFile) io.Writer) error {
 	p, _ := principal.From(ctx)
 	ex := e.export(p.OrganizationID, RequesterOrganization, in, open)
-	return e.runner.RunExternal(ctx, ScopeOrg, ex.spec(SpecRecoveryExport), ex.prepare, ex.external, ex.finalize)
+	return ex.complete(e.runner.RunExternal(ctx, ScopeOrg, ex.spec(SpecRecoveryExport), ex.prepare, ex.external, ex.finalize))
 }
 
 // ExportPlatform exports an organization for a platform administrator
@@ -126,8 +147,8 @@ func (e *RecoveryExports) ExportPlatform(ctx context.Context, org uuid.UUID, in 
 		known = err == nil && status != organization.StatusDeleting && status != organization.StatusDeleted
 	}
 	ex := e.export(org, RequesterPlatform, in, open)
-	return e.runner.RunExternalInPendingDeletion(ctx, org, known, ex.spec(SpecPlatformRecoveryExport), ex.prepare,
-		ex.external, ex.finalize)
+	return ex.complete(e.runner.RunExternalInPendingDeletion(ctx, org, known, ex.spec(SpecPlatformRecoveryExport),
+		ex.prepare, ex.external, ex.finalize))
 }
 
 func (e *RecoveryExports) export(org uuid.UUID, scope string, in RecoveryExportInput, open func(RecoveryExportFile) io.Writer) *export {
@@ -148,6 +169,19 @@ type export struct {
 	since    *time.Time
 	counts   RecoveryExportCounts
 	started  bool
+	release  func() error
+}
+
+// complete writes the end of the message only once the action, and with it the audit event, is recorded: a download
+// whose event could not be recorded never becomes a message that decrypts.
+func (x *export) complete(err error) error {
+	if err != nil || x.release == nil {
+		return err
+	}
+	if err := x.release(); err != nil {
+		return fmt.Errorf("write the end of the recovery export: %w", err)
+	}
+	return nil
 }
 
 func (x *export) spec(base ActionSpec) ActionSpec {
@@ -181,11 +215,20 @@ func (x *export) prepare(ctx context.Context, q *pgstore.Queries, rec Recorder) 
 	if fp := r.Fingerprint(); fp != "" {
 		rec.SetParam("key_fingerprint", fp)
 	}
+	cutoff := RecoveryExportCutoff.Seconds()
+	open, err := q.RecoveryExportOpen(ctx, pgstore.RecoveryExportOpenParams{ID: cur.ID, CutoffSeconds: cutoff})
+	if err != nil {
+		return err
+	}
+	if !open {
+		return errRecoveryExportClosed
+	}
 	settings, err := q.GetLoginSettings(ctx)
 	if err != nil {
 		return err
 	}
-	res, err := q.ReserveRecoveryExport(ctx, pgstore.ReserveRecoveryExportParams{ID: cur.ID, MaxExports: recoveryexport.MaxExports})
+	res, err := q.ReserveRecoveryExport(ctx, pgstore.ReserveRecoveryExportParams{ID: cur.ID, CutoffSeconds: cutoff,
+		MaxExports: recoveryexport.MaxExports})
 	if db.IsNoRows(err) {
 		return problem.ExportLimit.WithDetail("the organization was exported 5 times during this grace period already")
 	}
@@ -210,7 +253,7 @@ func (x *export) external(ctx context.Context) error {
 	if !ok {
 		return problem.StepUpRequired.WithDetail("the step-up proof expired; authenticate again")
 	}
-	counts, err := x.e.exporter.Export(ctx, RecoveryExportCall{
+	counts, release, err := x.e.exporter.Export(ctx, RecoveryExportCall{
 		OrganizationID: x.org, Slug: x.file.Slug, ExportedAt: x.file.ExportedAt, Scope: x.scope, StepUpIDToken: raw,
 		LocalAdminUsername: x.username, Recipient: x.in.Recipient, PublicKey: x.in.PublicKey, Passphrase: x.in.Passphrase,
 	}, func(c RecoveryExportCounts) io.Writer {
@@ -219,7 +262,7 @@ func (x *export) external(ctx context.Context) error {
 	})
 	switch {
 	case err == nil:
-		x.counts = counts
+		x.counts, x.release = counts, release
 		return nil
 	case errors.Is(err, ErrEscrowRefused):
 		slog.WarnContext(ctx, "the escrow reader refused a recovery export", "organization_id", x.org, "error", err)

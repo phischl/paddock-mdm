@@ -40,12 +40,12 @@ afterEach(() => {
   wrapper = null
 })
 
-async function mountExport(organizationId: string | null): Promise<void> {
+async function mountExport(organizationId: string | null, until = '2099-01-01T00:00:00Z'): Promise<void> {
   const pinia = createPinia()
   setActivePinia(pinia)
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/overview', component: () => h(RecoveryExport, { organizationId, slug: 'acme' }) }],
+    routes: [{ path: '/overview', component: () => h(RecoveryExport, { organizationId, slug: 'acme', until }) }],
   })
   await router.push('/overview')
   await router.isReady()
@@ -138,6 +138,20 @@ describe('RecoveryExport', () => {
     expect(saveFile).not.toHaveBeenCalled()
     const alerts = [...document.querySelectorAll('[role="alert"]')].map((a) => a.textContent)
     expect(alerts.some((a) => a?.includes('five times'))).toBe(true)
+  })
+
+  it('shows the window and disables the export once it closed', async () => {
+    await mountExport(null, '2099-01-01T00:00:00Z')
+    expect(document.querySelector('[data-testid="recovery-export-window"]')?.textContent).toContain('available until')
+    wrapper?.unmount()
+    resumed('own')
+    await mountExport(null, '2020-01-01T00:00:00Z')
+    expect(document.querySelector('[data-testid="recovery-export-window"]')?.textContent).toContain('closed 20 minutes before the deletion')
+    expect(document.querySelector<HTMLButtonElement>('[data-testid="recovery-export-acme"]')!.disabled).toBe(true)
+    expect(document.querySelector<HTMLButtonElement>('[data-testid="recovery-export-submit"]')!.disabled).toBe(true)
+    input('recovery-export-key', '-----BEGIN PGP PUBLIC KEY BLOCK-----')
+    await submit()
+    expect(exportRecoveryKeys).not.toHaveBeenCalled()
   })
 
   it('shows a failed step-up', async () => {

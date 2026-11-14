@@ -48,10 +48,17 @@ func (w *world) call(i int, scope, token string) app.RecoveryExportCall {
 func (w *world) export(call app.RecoveryExportCall) ([]byte, app.RecoveryExportCounts, bool, error) {
 	var out bytes.Buffer
 	opened := false
-	counts, err := w.client.Export(context.Background(), call, func(app.RecoveryExportCounts) io.Writer {
+	counts, release, err := w.client.Export(context.Background(), call, func(app.RecoveryExportCounts) io.Writer {
 		opened = true
 		return &out
 	})
+	if err == nil {
+		// The end of the message waits for the caller's release (the api's audit commit).
+		if strings.Contains(out.String(), "END PGP MESSAGE") {
+			w.t.Fatal("the end of the message was written before its release")
+		}
+		err = release()
+	}
 	return out.Bytes(), counts, opened, err
 }
 
@@ -216,8 +223,18 @@ func TestExportRefusals(t *testing.T) {
 	if _, _, opened, err := w.export(bad); err == nil || opened {
 		t.Fatalf("short passphrase: %v", err)
 	}
+	// Plan M17 amendment h point 1: the escrow-reader closes the export 20 minutes before delete_after on the database's
+	// clock, also when the api let it through.
+	w.exec(`UPDATE organization SET delete_after = now() + interval '19 minutes' WHERE id = $1`, w.orgs[0])
+	if _, _, opened, err := w.export(w.call(0, app.RequesterPlatform, w.platformToken(0))); !errors.Is(err, app.ErrEscrowNotPending) || opened {
+		t.Fatalf("19 minutes before the deletion: %v", err)
+	}
+	w.exec(`UPDATE organization SET delete_after = now() + interval '21 minutes' WHERE id = $1`, w.orgs[0])
+	if _, _, _, err := w.export(w.call(0, app.RequesterPlatform, w.platformToken(0))); err != nil {
+		t.Fatalf("21 minutes before the deletion: %v", err)
+	}
 	wrong := escrowreader.NewClient(w.srv.URL, "another secret")
-	if _, err := wrong.Export(context.Background(), w.call(0, app.RequesterOrganization, w.token(0, "org_admin")),
+	if _, _, err := wrong.Export(context.Background(), w.call(0, app.RequesterOrganization, w.token(0, "org_admin")),
 		func(app.RecoveryExportCounts) io.Writer { t.Fatal("opened without the secret"); return nil }); err == nil {
 		t.Fatal("export with another secret")
 	}
@@ -290,7 +307,7 @@ func TestExportBodyMAC(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	var out bytes.Buffer
-	_, err := escrowreader.NewClient(srv.URL, secret).Export(context.Background(), app.RecoveryExportCall{},
+	_, _, err := escrowreader.NewClient(srv.URL, secret).Export(context.Background(), app.RecoveryExportCall{},
 		func(app.RecoveryExportCounts) io.Writer { return &out })
 	if err == nil || strings.Contains(out.String(), "END PGP MESSAGE") || out.Len() != len(body)-1024 {
 		t.Fatalf("forged body: %v, %d of %d bytes handed on", err, out.Len(), len(body))
@@ -326,8 +343,11 @@ func TestExportOutlastsWriteTimeout(t *testing.T) {
 	srv.Start()
 	t.Cleanup(srv.Close)
 	var out bytes.Buffer
-	counts, err := escrowreader.NewClient(srv.URL, secret).Export(context.Background(),
+	counts, release, err := escrowreader.NewClient(srv.URL, secret).Export(context.Background(),
 		w.call(0, app.RequesterOrganization, w.token(0, "org_admin")), func(app.RecoveryExportCounts) io.Writer { return &out })
+	if err == nil {
+		err = release()
+	}
 	if err != nil || counts.Devices != 261 || len(batches) < 2 {
 		t.Fatalf("slow export: %v %+v, %d batches", err, counts, len(batches))
 	}

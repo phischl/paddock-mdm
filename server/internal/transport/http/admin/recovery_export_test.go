@@ -18,10 +18,14 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
 
 const exportPassphrase = "the requester's long passphrase"
@@ -136,7 +140,7 @@ func TestRecoveryExportAPI(t *testing.T) {
 	e.expectEvent(r, "organization.recovery_exported:denied:forbidden")
 	// Plan M17 amendment g point 2: 19 characters are refused, 20 accepted (below).
 	nineteen := strings.Repeat("p", 19)
-	r = e.do(call{method: "POST", path: path, cookie: e.steppedUp(alice, time.Now()), body: exportBody(nineteen)})
+	r = e.do(call{method: "POST", path: path, cookie: e.steppedUp(alice, time.Now()), body: exportBody(nineteen), skipReqCheck: true})
 	if r.status != http.StatusBadRequest || strings.Contains(string(r.body), nineteen) {
 		t.Fatalf("short passphrase: %d %s", r.status, r.body)
 	}
@@ -357,5 +361,176 @@ func TestPlatformRecoveryExportAPI(t *testing.T) {
 	}
 	if got := e.events(r.header.Get(httpx.HeaderRequestID)); len(got) != 1 {
 		t.Fatalf("events of the refused export: %v", got)
+	}
+}
+
+// setDeleteAfter moves the pending deletion of org to now() plus d on the database's clock.
+func (e *env) setDeleteAfter(org uuid.UUID, d time.Duration) {
+	e.t.Helper()
+	if _, err := e.super.Exec(context.Background(), `UPDATE organization SET delete_after = now() + make_interval(secs => $2)
+		WHERE id = $1`, org, d.Seconds()); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// TestRecoveryExportCutoff (plan M17 amendment h points 1 and 3): the export closes 20 minutes before delete_after on
+// the database's clock, and the API names that time.
+func TestRecoveryExportCutoff(t *testing.T) {
+	e := newEnv(t)
+	e.exportDevice(e.acme, "active", "key-1")
+	e.pendingDeletion(e.acme)
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	root := e.platformSession()
+	for _, tc := range []struct {
+		name   string
+		cookie func() *http.Cookie
+		path   string
+	}{
+		{"organization", func() *http.Cookie { return e.steppedUp(alice, time.Now()) }, "/api/v1/recovery-export"},
+		{"platform", func() *http.Cookie { return e.steppedUp(root, time.Now()) },
+			"/api/platform/v1/organizations/" + e.acme.String() + "/recovery-export"},
+	} {
+		e.setDeleteAfter(e.acme, 19*time.Minute)
+		r := e.do(call{method: "POST", path: tc.path, cookie: tc.cookie(), body: exportBody(exportPassphrase)})
+		var p httpx.Problem
+		r.decode(t, &p)
+		if r.status != http.StatusConflict || p.Code != "invalid_state" || !strings.Contains(p.Detail, "20 minutes") {
+			t.Fatalf("%s at 19 minutes: %d %s", tc.name, r.status, r.body)
+		}
+		e.expectEvent(r, "organization.recovery_exported:failure:invalid_state")
+		e.setDeleteAfter(e.acme, 21*time.Minute)
+		if r := e.do(call{method: "POST", path: tc.path, cookie: tc.cookie(), body: exportBody(exportPassphrase)}); r.status != http.StatusOK {
+			t.Fatalf("%s at 21 minutes: %d %s", tc.name, r.status, r.body)
+		}
+	}
+
+	var me adminapi.Me
+	e.do(call{method: "GET", path: "/api/v1/me", cookie: alice}).decode(t, &me)
+	var deleteAfter time.Time
+	if err := e.super.QueryRow(context.Background(), "SELECT delete_after FROM organization WHERE id = $1", e.acme).Scan(&deleteAfter); err != nil {
+		t.Fatal(err)
+	}
+	if me.OrganizationDeletion == nil || !me.OrganizationDeletion.RecoveryExportUntil.Equal(deleteAfter.Add(-20*time.Minute)) {
+		t.Fatalf("me: %+v, delete_after %s", me.OrganizationDeletion, deleteAfter)
+	}
+}
+
+// TestPlatformExportOutlivesPending (plan M17 amendment h point 2): when the organization becomes deleting while an
+// export streams, the platform path writes no action or outbox row into it through the platform pool; the download is
+// cut off and the started action stays for the deletion to remove.
+func TestPlatformExportOutlivesPending(t *testing.T) {
+	e := newEnv(t)
+	e.exportDevice(e.acme, "active", "key-1")
+	e.pendingDeletion(e.acme)
+	e.disk.onBatch = func() {
+		if _, err := e.super.Exec(context.Background(), `UPDATE organization SET status = 'deleting' WHERE id = $1`, e.acme); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { e.disk.onBatch = nil })
+	root := e.steppedUp(e.platformSession(), time.Now())
+	body, _ := json.Marshal(exportBody(exportPassphrase))
+	req := httptest.NewRequest(http.MethodPost, "https://admin.test/api/platform/v1/organizations/"+e.acme.String()+"/recovery-export",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Paddock-CSRF", "1")
+	req.AddCookie(root)
+	rec := httptest.NewRecorder()
+	func() {
+		defer func() {
+			if v := recover(); v == nil || !errors.Is(v.(error), http.ErrAbortHandler) {
+				t.Fatalf("the export was not cut off: %v", v)
+			}
+		}()
+		e.handler.ServeHTTP(rec, req)
+	}()
+	if strings.Contains(rec.Body.String(), "END PGP MESSAGE") {
+		t.Fatal("a complete message reached the client")
+	}
+	var finished, outbox int
+	if err := e.super.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE status = 'finished') FROM action
+		WHERE organization_id = $1 AND correlation_id = $2`, e.acme, rec.Header().Get(httpx.HeaderRequestID)).Scan(&finished); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.super.QueryRow(context.Background(), `SELECT count(*) FROM outbox WHERE organization_id = $1 AND created_at > now() - interval '1 minute'`,
+		e.acme).Scan(&outbox); err != nil {
+		t.Fatal(err)
+	}
+	if finished != 0 || outbox != 0 {
+		t.Fatalf("rows written into the deleting organization: %d finished actions, %d outbox rows", finished, outbox)
+	}
+}
+
+// TestPlatformExportRacesGate (review 2 finding 6): the worker commits deleting while the export's first transaction
+// waits in paddock_org_enter: 403 organization_inactive, no export bytes, exactly one organization.inactive_denied in
+// the platform pseudo-organization.
+func TestPlatformExportRacesGate(t *testing.T) {
+	e := newEnv(t)
+	e.exportDevice(e.acme, "active", "key-1")
+	e.pendingDeletion(e.acme)
+	root := e.steppedUp(e.platformSession(), time.Now())
+	ctx := context.Background()
+	worker, err := pgx.Connect(ctx, pgtest.SharedPaddock(t).Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.Close(ctx) }()
+	tx, err := worker.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", db.OffboardingLockKey(e.acme)); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(exportBody(exportPassphrase))
+	req := httptest.NewRequest(http.MethodPost, "https://admin.test/api/platform/v1/organizations/"+e.acme.String()+"/recovery-export",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Paddock-CSRF", "1")
+	req.AddCookie(root)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.handler.ServeHTTP(rec, req)
+	}()
+	waiter, err := pgx.Connect(ctx, pgtest.SharedPaddock(t).Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = waiter.Close(ctx) }()
+	for waited := 0; ; waited++ {
+		var waiting bool
+		if err := waiter.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)`).
+			Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if waited > 500 {
+			t.Fatal("the export never waited in the gate")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE organization SET status = 'deleting' WHERE id = $1", e.acme); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	var p httpx.Problem
+	if rec.Code != http.StatusForbidden || json.Unmarshal(rec.Body.Bytes(), &p) != nil || p.Code != "organization_inactive" ||
+		rec.Header().Get("Content-Type") == "application/pgp-encrypted" {
+		t.Fatalf("race through the gate: %d %s", rec.Code, rec.Body.String())
+	}
+	got := e.events(rec.Header().Get(httpx.HeaderRequestID))
+	var org uuid.UUID
+	if err := e.super.QueryRow(ctx, `SELECT organization_id FROM action WHERE correlation_id = $1`,
+		rec.Header().Get(httpx.HeaderRequestID)).Scan(&org); err != nil || len(got) != 1 ||
+		got[0] != "organization.inactive_denied:denied:organization_inactive" || org != audit.PlatformOrganizationID {
+		t.Fatalf("events %v in %s (%v)", got, org, err)
 	}
 }

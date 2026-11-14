@@ -47,8 +47,11 @@ var ErrInvalid = errors.New("recoveryexport: invalid recipient")
 
 // Recipient is who the export is encrypted to: an OpenPGP public key with an encryption-capable key, or a passphrase.
 type Recipient struct {
-	kind       string
-	entity     *openpgp.Entity
+	kind   string
+	entity *openpgp.Entity
+	// checkedAt is when the key was checked; Encrypt selects its encryption key at this time, so a subkey that becomes
+	// valid later, and was never checked, is never used.
+	checkedAt  time.Time
 	passphrase []byte
 }
 
@@ -59,11 +62,12 @@ func ParseRecipient(kind, publicKey, passphrase string) (Recipient, error) {
 		if passphrase != "" {
 			return Recipient{}, fmt.Errorf("%w: passphrase given for recipient public_key", ErrInvalid)
 		}
-		e, err := parsePublicKey(publicKey)
+		now := time.Now()
+		e, err := parsePublicKey(publicKey, now)
 		if err != nil {
 			return Recipient{}, err
 		}
-		return Recipient{kind: kind, entity: e}, nil
+		return Recipient{kind: kind, entity: e, checkedAt: now}, nil
 	case RecipientPassphrase:
 		if publicKey != "" {
 			return Recipient{}, fmt.Errorf("%w: public_key given for recipient passphrase", ErrInvalid)
@@ -77,7 +81,7 @@ func ParseRecipient(kind, publicKey, passphrase string) (Recipient, error) {
 	}
 }
 
-func parsePublicKey(armored string) (*openpgp.Entity, error) {
+func parsePublicKey(armored string, now time.Time) (*openpgp.Entity, error) {
 	if armored == "" || len(armored) > MaxPublicKeyBytes {
 		return nil, fmt.Errorf("%w: public_key must be an ASCII-armoured OpenPGP public key of at most %d bytes", ErrInvalid,
 			MaxPublicKeyBytes)
@@ -96,7 +100,7 @@ func parsePublicKey(armored string) (*openpgp.Entity, error) {
 	if keys[0].PrivateKey != nil {
 		return nil, fmt.Errorf("%w: public_key contains a private key; send the public key only", ErrInvalid)
 	}
-	k, ok := keys[0].EncryptionKey(time.Now())
+	k, ok := keys[0].EncryptionKey(now)
 	if !ok {
 		return nil, fmt.Errorf("%w: public_key has no valid (unexpired, unrevoked) encryption-capable key", ErrInvalid)
 	}
@@ -151,8 +155,9 @@ func (r Recipient) Clear() { clear(r.passphrase) }
 // count OpenPGP can encode, not with Argon2 (plan M17 amendment g point 1): GnuPG 2.4 (Ubuntu 24.04, the gate's
 // runners) refuses S2K mode 4, and the export must open with plain gpg. The cheaper S2K is why the passphrase needs
 // at least 20 characters (amendment g point 2).
-func config() *packet.Config {
+func config(at time.Time) *packet.Config {
 	return &packet.Config{
+		Time:          func() time.Time { return at },
 		DefaultCipher: packet.CipherAES256,
 		DefaultHash:   crypto.SHA256,
 		S2KConfig:     &s2k.Config{S2KMode: s2k.IteratedSaltedS2K, Hash: crypto.SHA256, S2KCount: 65011712},
@@ -170,9 +175,9 @@ func Encrypt(dst io.Writer, r Recipient) (io.WriteCloser, error) {
 	var plain io.WriteCloser
 	switch r.kind {
 	case RecipientPublicKey:
-		plain, err = openpgp.Encrypt(arm, []*openpgp.Entity{r.entity}, nil, hints, config())
+		plain, err = openpgp.Encrypt(arm, []*openpgp.Entity{r.entity}, nil, hints, config(r.checkedAt))
 	case RecipientPassphrase:
-		plain, err = openpgp.SymmetricallyEncrypt(arm, r.passphrase, hints, config())
+		plain, err = openpgp.SymmetricallyEncrypt(arm, r.passphrase, hints, config(time.Now()))
 	default:
 		err = errors.New("no recipient")
 	}

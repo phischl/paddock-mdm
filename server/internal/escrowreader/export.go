@@ -212,12 +212,13 @@ func (s *Service) exportRows(ctx context.Context, req exportRequest) ([]pgstore.
 				return err
 			}
 		}
-		pending, err := q.OrganizationDeletionPending(ctx, req.OrganizationID)
+		open, err := q.RecoveryExportOpen(ctx, pgstore.RecoveryExportOpenParams{ID: req.OrganizationID,
+			CutoffSeconds: app.RecoveryExportCutoff.Seconds()})
 		if err != nil {
 			return err
 		}
-		if !pending {
-			return errRefused{refusedState, "no deletion of the organization is pending"}
+		if !open {
+			return errRefused{refusedState, "no deletion of the organization is pending, or its export closed"}
 		}
 		rows, err = q.ListRecoveryExportEscrows(ctx)
 		return err
@@ -326,69 +327,70 @@ func wrappedOf(row pgstore.ListRecoveryExportEscrowsRow) bao.VersionedCiphertext
 
 // Export implements app.RecoveryExporter: it sends the request with a fresh nonce, checks the MAC of the answer's
 // headers before it calls open, and copies the message into open's writer while it computes the body's MAC. The
-// last bytes, which end the armour, are released only after the trailer's MAC matched, so an answer of anyone else
-// never becomes a complete message.
+// last bytes, which end the armour, are held back: release writes them, which the caller does only after the
+// trailer's MAC matched and the export's audit event was recorded, so neither an answer of anyone else nor an
+// unaudited export becomes a complete message.
 func (c *Client) Export(ctx context.Context, call app.RecoveryExportCall, open func(app.RecoveryExportCounts) io.Writer) (
-	app.RecoveryExportCounts, error,
+	app.RecoveryExportCounts, func() error, error,
 ) {
 	var counts app.RecoveryExportCounts
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
-		return counts, err
+		return counts, nil, err
 	}
 	nonce := base64.RawURLEncoding.EncodeToString(raw)
 	body, err := json.Marshal(exportRequest{OrganizationID: call.OrganizationID, Slug: call.Slug, ExportedAt: call.ExportedAt,
 		Scope: call.Scope, StepUpIDToken: call.StepUpIDToken, LocalAdminUsername: call.LocalAdminUsername,
 		Recipient: call.Recipient, PublicKey: call.PublicKey, Passphrase: call.Passphrase, Nonce: nonce})
 	if err != nil {
-		return counts, err
+		return counts, nil, err
 	}
 	defer clear(body)
 	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+ExportPath, bytes.NewReader(body))
 	if err != nil {
-		return counts, err
+		return counts, nil, err
 	}
 	hr.Header.Set("Authorization", "Bearer "+string(c.secret))
 	hr.Header.Set("Content-Type", "application/json")
 	resp, err := c.stream.Do(hr)
 	if err != nil {
-		return counts, fmt.Errorf("escrow reader: %w", err)
+		return counts, nil, fmt.Errorf("escrow reader: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusForbidden {
 		data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		if err != nil {
-			return counts, fmt.Errorf("escrow reader: %w", err)
+			return counts, nil, fmt.Errorf("escrow reader: %w", err)
 		}
 		if !hmac.Equal([]byte(resp.Header.Get(macHeader)), []byte(mac(c.secret, data))) {
-			return counts, errors.New("escrow reader: refusal without valid MAC")
+			return counts, nil, errors.New("escrow reader: refusal without valid MAC")
 		}
 		var r refusal
 		_ = json.Unmarshal(data, &r)
 		if r.Code == refusedState {
-			return counts, fmt.Errorf("%w: %s", app.ErrEscrowNotPending, r.Code)
+			return counts, nil, fmt.Errorf("%w: %s", app.ErrEscrowNotPending, r.Code)
 		}
-		return counts, fmt.Errorf("%w: %s", app.ErrEscrowRefused, r.Code)
+		return counts, nil, fmt.Errorf("%w: %s", app.ErrEscrowRefused, r.Code)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return counts, fmt.Errorf("escrow reader: HTTP %d", resp.StatusCode)
+		return counts, nil, fmt.Errorf("escrow reader: HTTP %d", resp.StatusCode)
 	}
 	counts.Devices, err = strconv.Atoi(resp.Header.Get(devicesHeader))
 	if err == nil {
 		counts.Secrets, err = strconv.Atoi(resp.Header.Get(secretsHeader))
 	}
 	if err != nil || !hmac.Equal([]byte(resp.Header.Get(macHeader)), []byte(headerMAC(c.secret, nonce, counts.Devices, counts.Secrets))) {
-		return app.RecoveryExportCounts{}, errors.New("escrow reader: export answer without valid MAC")
+		return app.RecoveryExportCounts{}, nil, errors.New("escrow reader: export answer without valid MAC")
 	}
 	dst := &holdback{w: open(counts), keep: holdbackBytes}
 	sum := hmac.New(sha256.New, c.secret)
 	if _, err := io.Copy(dst, io.TeeReader(resp.Body, sum)); err != nil {
-		return counts, fmt.Errorf("escrow reader: the export broke off: %w", err)
+		return counts, nil, fmt.Errorf("escrow reader: the export broke off: %w", err)
 	}
 	if !macMatches(sum, resp.Trailer.Get(bodyMacHeader)) {
-		return counts, errors.New("escrow reader: export body without valid MAC")
+		return counts, nil, errors.New("escrow reader: export body without valid MAC")
 	}
-	return counts, dst.release()
+	return counts, dst.release, nil
 }
 
 func macMatches(sum hash.Hash, got string) bool {

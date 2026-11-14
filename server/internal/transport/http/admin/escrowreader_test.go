@@ -101,6 +101,9 @@ func (k escrowKeys) Decrypt(_ context.Context, version int, ciphertext string) (
 }
 
 func (k escrowKeys) DecryptBatch(ctx context.Context, items []bao.VersionedCiphertext) ([][]byte, error) {
+	if k.disk.onBatch != nil {
+		k.disk.onBatch()
+	}
 	out := make([][]byte, len(items))
 	for i, it := range items {
 		b, err := k.Decrypt(ctx, it.Version, it.Ciphertext)

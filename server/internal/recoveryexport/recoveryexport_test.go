@@ -323,3 +323,57 @@ func TestWeakRecipientKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestEncryptUsesTheCheckedKey (review 2 finding 5): a weak subkey that becomes valid after the recipient was checked
+// is never selected; the message goes to the encryption key that was checked.
+func TestEncryptUsesTheCheckedKey(t *testing.T) {
+	e, err := openpgp.NewEntity("Export Test", "", "export@example.test", &packet.Config{Algorithm: packet.PubKeyAlgoEdDSA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(2 * time.Second)
+	if err := e.AddEncryptionSubkey(&packet.Config{Algorithm: packet.PubKeyAlgoRSA, RSABits: 1024,
+		Time: func() time.Time { return later }}); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	w, err := armor.Encode(&buf, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Serialize(w); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	r, err := recoveryexport.ParseRecipient(recoveryexport.RecipientPublicKey, buf.String(), "")
+	if err != nil {
+		t.Fatalf("the key is valid at the check: %v", err)
+	}
+	checked, ok := e.EncryptionKey(time.Now())
+	if !ok || checked.PublicKey.PubKeyAlgo == packet.PubKeyAlgoRSA {
+		t.Fatalf("checked key: %v", checked.PublicKey)
+	}
+	time.Sleep(time.Until(later) + 500*time.Millisecond)
+	if weak, _ := e.EncryptionKey(time.Now()); weak.PublicKey.PubKeyAlgo != packet.PubKeyAlgoRSA {
+		t.Fatal("the weak subkey is not the newest valid one now; the test proves nothing")
+	}
+	var out bytes.Buffer
+	pw, err := recoveryexport.Encrypt(&out, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = pw.Write([]byte("x"))
+	_ = pw.Close()
+	block, err := armor.Decode(&out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := packet.Read(block.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ek, ok := p.(*packet.EncryptedKey)
+	if !ok || ek.KeyId != checked.PublicKey.KeyId {
+		t.Fatalf("encrypted to key %X, want the checked %X", ek.KeyId, checked.PublicKey.KeyId)
+	}
+}

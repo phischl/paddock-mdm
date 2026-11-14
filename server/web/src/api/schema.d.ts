@@ -222,8 +222,8 @@ export interface paths {
          *     Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
          *     of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
          *     (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
-         *     organization's deletion is pending (409 invalid_state otherwise), at most five successful exports per grace
-         *     period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
+         *     organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until;
+         *     409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
          *     one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
          *     16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
          *     otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
@@ -4108,8 +4108,8 @@ export interface paths {
          *     Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
          *     of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
          *     (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
-         *     organization's deletion is pending (409 invalid_state otherwise), at most five successful exports per grace
-         *     period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
+         *     organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until;
+         *     409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
          *     one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
          *     16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
          *     otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
@@ -5193,6 +5193,12 @@ export interface components {
              * @description When the organization's data is deleted.
              */
             delete_after: string;
+            /**
+             * Format: date-time
+             * @description delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
+             *     amendment h).
+             */
+            recovery_export_until: string;
         };
         Me: {
             /** Format: uuid */
@@ -5637,6 +5643,12 @@ export interface components {
              * @description When the worker starts deleting the data.
              */
             delete_after: string;
+            /**
+             * Format: date-time
+             * @description delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
+             *     amendment h).
+             */
+            recovery_export_until: string;
             /**
              * @description The deletion step that runs next; null before the deletion runs.
              * @enum {string|null}
