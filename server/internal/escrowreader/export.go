@@ -121,8 +121,9 @@ func groupDevices(rows []pgstore.ListRecoveryExportEscrowsRow) ([]exportDevice, 
 // recipient, the step-up token, that its subject is an administrator of the organization (scope organization) or a
 // platform administrator by the token's signed groups (scope platform), that the organization's deletion is pending,
 // and the token's use count (one use per export); then it decrypts in Transit batches of at most bao.MaxBatch and
-// encrypts every batch into the message as it streams. Each batch's plaintexts and lines are zeroed after writing; no
-// plaintext, token or passphrase is written anywhere else or logged. A failure after the first byte cuts the
+// encrypts every batch into the message as it streams. Each batch's plaintexts and lines are zeroed after writing, as a
+// best effort (the OpenBao client and go-crypto keep copies in memory until garbage collection, see package
+// recoveryexport); no plaintext, token or passphrase is written anywhere else or logged. A failure after the first byte cuts the
 // response off, so the client holds a message OpenPGP rejects.
 func (s *Service) export(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -168,9 +169,13 @@ func (s *Service) export(w http.ResponseWriter, r *http.Request) {
 	h.Set(devicesHeader, strconv.Itoa(len(devices)))
 	h.Set(secretsHeader, strconv.Itoa(secrets))
 	h.Set(macHeader, headerMAC(s.secret, req.Nonce, len(devices), secrets))
+	rc := http.NewResponseController(w)
+	// The server's write timeout (120 s) would cut a large organization's export off; the stream gets the client's
+	// whole export budget instead. A writer without deadline support (HTTP/2, tests) has no timeout to extend.
+	_ = rc.SetWriteDeadline(time.Now().Add(exportTimeout))
 	w.WriteHeader(http.StatusOK)
 	body := hmac.New(sha256.New, s.secret)
-	if err := s.stream(ctx, io.MultiWriter(w, body), http.NewResponseController(w), req, recipient, rows, devices); err != nil {
+	if err := s.stream(ctx, io.MultiWriter(w, body), rc, req, recipient, rows, devices); err != nil {
 		slog.ErrorContext(ctx, "recovery export broke off while streaming", "organization_id", req.OrganizationID, "error", err)
 		panic(http.ErrAbortHandler)
 	}
@@ -304,7 +309,7 @@ func (s *Service) writeBatch(ctx context.Context, msg io.Writer, rows []pgstore.
 			line.LocalAdmin = &recoveryexport.LocalAdmin{Username: username, Password: plain[next]}
 			next++
 		}
-		// Allocated at its bound, the line never grows, so no copy of a secret is left behind unzeroed.
+		// Allocated at its bound, the line never grows, so this buffer leaves no copy of a secret behind unzeroed.
 		buf := recoveryexport.AppendDevice(make([]byte, 0, recoveryexport.DeviceLineBound(line)), line)
 		_, err := msg.Write(buf)
 		clear(buf)

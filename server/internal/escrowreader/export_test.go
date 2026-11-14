@@ -21,6 +21,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
@@ -156,7 +157,7 @@ func TestExport(t *testing.T) {
 
 func newRecipientKey(t *testing.T) (*openpgp.Entity, string) {
 	t.Helper()
-	e, err := openpgp.NewEntity("Requester", "", "requester@example.test", nil)
+	e, err := openpgp.NewEntity("Requester", "", "requester@example.test", &packet.Config{Algorithm: packet.PubKeyAlgoEdDSA})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,5 +294,44 @@ func TestExportBodyMAC(t *testing.T) {
 		func(app.RecoveryExportCounts) io.Writer { return &out })
 	if err == nil || strings.Contains(out.String(), "END PGP MESSAGE") || out.Len() != len(body)-1024 {
 		t.Fatalf("forged body: %v, %d of %d bytes handed on", err, out.Len(), len(body))
+	}
+}
+
+// slowKeys is plainKeys that takes delay per Transit batch.
+type slowKeys struct {
+	plainKeys
+	delay time.Duration
+}
+
+func (k slowKeys) DecryptBatch(ctx context.Context, items []bao.VersionedCiphertext) ([][]byte, error) {
+	time.Sleep(k.delay)
+	return k.plainKeys.DecryptBatch(ctx, items)
+}
+
+// TestExportOutlastsWriteTimeout (review 1 finding 2): an export that streams longer than the server's write timeout
+// still arrives complete, because the escrow-reader extends its write deadline for the export.
+func TestExportOutlastsWriteTimeout(t *testing.T) {
+	w := newWorld(t)
+	w.pending(0)
+	for range 260 {
+		d := uuid.New()
+		w.exec(`INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, $3, 'active')`, d, w.orgs[0], "s-"+d.String())
+		w.exec(`INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, ciphertext, key_version)
+			VALUES ($1, $2, $3, 'luks_recovery_key', 1, 'stored', 'k', 1)`, uuid.New(), w.orgs[0], d)
+	}
+	var used, batches []int
+	srv := httptest.NewUnstartedServer(escrowreader.NewService(secret, w.pool, w.proofs, w.proofs,
+		slowKeys{plainKeys{&used, &batches}, 400 * time.Millisecond}).Handler())
+	srv.Config.WriteTimeout = 300 * time.Millisecond
+	srv.Start()
+	t.Cleanup(srv.Close)
+	var out bytes.Buffer
+	counts, err := escrowreader.NewClient(srv.URL, secret).Export(context.Background(),
+		w.call(0, app.RequesterOrganization, w.token(0, "org_admin")), func(app.RecoveryExportCounts) io.Writer { return &out })
+	if err != nil || counts.Devices != 261 || len(batches) < 2 {
+		t.Fatalf("slow export: %v %+v, %d batches", err, counts, len(batches))
+	}
+	if lines := openExport(t, out.Bytes(), nil); len(lines) != 262 {
+		t.Fatalf("lines: %d", len(lines))
 	}
 }

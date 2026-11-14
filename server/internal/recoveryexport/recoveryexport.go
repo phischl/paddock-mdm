@@ -1,8 +1,10 @@
 // Package recoveryexport builds the encrypted recovery export of an organization during the grace period of its
 // deletion (plan M17 amendment b decisions 22 and 23; ADR 0052 amendment b decision 8): the recipient a requester
 // supplies, the ASCII-armoured OpenPGP message the escrow-reader streams, and the JSON Lines inside it. A device line
-// is appended from the decrypted bytes into a buffer the caller zeroes, so no secret is ever copied into an immutable
-// string.
+// is appended from the decrypted bytes into a buffer the caller zeroes, so this package copies no secret into an
+// immutable string. Zeroing is best effort only: go-crypto's literal-data writer buffers plaintext it never clears, and
+// the OpenBao client receives every plaintext as an immutable string; both copies stay in process memory until the
+// garbage collector reuses it. Nothing is written to disk, object storage, Valkey or a log.
 package recoveryexport
 
 import (
@@ -32,7 +34,7 @@ const (
 // Bounds of the request (plan M17 amendment b decision 22) and the export limit per grace period (decision 21).
 const (
 	MaxPublicKeyBytes = 16 << 10
-	MinPassphrase     = 16
+	MinPassphrase     = 20
 	MaxPassphrase     = 1024
 	MaxExports        = 5
 )
@@ -94,10 +96,41 @@ func parsePublicKey(armored string) (*openpgp.Entity, error) {
 	if keys[0].PrivateKey != nil {
 		return nil, fmt.Errorf("%w: public_key contains a private key; send the public key only", ErrInvalid)
 	}
-	if _, ok := keys[0].EncryptionKey(time.Now()); !ok {
-		return nil, fmt.Errorf("%w: public_key has no valid encryption-capable key", ErrInvalid)
+	k, ok := keys[0].EncryptionKey(time.Now())
+	if !ok {
+		return nil, fmt.Errorf("%w: public_key has no valid (unexpired, unrevoked) encryption-capable key", ErrInvalid)
+	}
+	if err := strongEnough(k.PublicKey); err != nil {
+		return nil, err
 	}
 	return keys[0], nil
+}
+
+// MinRSABits is the smallest RSA key an export is encrypted to.
+const MinRSABits = 3072
+
+// strongEnough requires the key the message is encrypted to (the one openpgp.Encrypt selects, EncryptionKey) to be
+// RSA of at least MinRSABits, X25519, X448 or ECDH on a curve other than secp256k1. The v1 openpgp API enforces no
+// minimum itself, and the export is the only remaining copy of the organization's secrets (ADR 0052 amendment b).
+func strongEnough(pk *packet.PublicKey) error {
+	switch pk.PubKeyAlgo {
+	case packet.PubKeyAlgoRSA, packet.PubKeyAlgoRSAEncryptOnly:
+		if bits, err := pk.BitLength(); err != nil || int(bits) < MinRSABits {
+			return fmt.Errorf("%w: the encryption key is RSA of %d bits; at least %d are needed (or use X25519)", ErrInvalid,
+				bits, MinRSABits)
+		}
+		return nil
+	case packet.PubKeyAlgoX25519, packet.PubKeyAlgoX448:
+		return nil
+	case packet.PubKeyAlgoECDH:
+		if curve, err := pk.Curve(); err != nil || curve == packet.CurveSecP256k1 {
+			return fmt.Errorf("%w: the encryption key's curve is not accepted; use X25519", ErrInvalid)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: the encryption key's algorithm (%d) is not accepted; use X25519 or RSA of at least %d bits",
+			ErrInvalid, pk.PubKeyAlgo, MinRSABits)
+	}
 }
 
 // Kind is RecipientPublicKey or RecipientPassphrase.
@@ -115,9 +148,9 @@ func (r Recipient) Fingerprint() string {
 func (r Recipient) Clear() { clear(r.passphrase) }
 
 // config is AES-256 without compression. A passphrase is stretched with iterated and salted SHA-256 at the highest
-// count OpenPGP can encode, not with Argon2 as plan M17 amendment b decision 23 names: GnuPG 2.4 (Ubuntu 24.04, the
-// gate's runners) refuses S2K mode 4 ("unknown S2K mode 4"), and the export must open with plain gpg (decision 23,
-// acceptance gate OF9). The passphrase has at least 16 characters (decision 22).
+// count OpenPGP can encode, not with Argon2 (plan M17 amendment g point 1): GnuPG 2.4 (Ubuntu 24.04, the gate's
+// runners) refuses S2K mode 4, and the export must open with plain gpg. The cheaper S2K is why the passphrase needs
+// at least 20 characters (amendment g point 2).
 func config() *packet.Config {
 	return &packet.Config{
 		DefaultCipher: packet.CipherAES256,

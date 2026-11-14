@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/escrowreader"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/stepupproof"
 )

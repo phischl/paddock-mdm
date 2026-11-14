@@ -76,6 +76,7 @@ type world struct {
 	proofs  *proofs
 	used    []int // the escrow-wrap versions of the decryptions
 	batches []int // the sizes of the batch decryptions
+	pool    *db.OrgPool
 	srv     *httptest.Server
 	client  *escrowreader.Client
 	orgs    [2]uuid.UUID
@@ -100,6 +101,7 @@ func newWorld(t *testing.T) *world {
 	t.Cleanup(pool.Close)
 	w := &world{t: t, super: super, proofs: &proofs{subjects: map[string]string{}, uses: map[string]int64{},
 		groups: map[string][]string{}}}
+	w.pool = pool
 	w.srv = httptest.NewServer(escrowreader.NewService(secret, pool, w.proofs, w.proofs, plainKeys{&w.used, &w.batches}).Handler())
 	t.Cleanup(w.srv.Close)
 	w.client = escrowreader.NewClient(w.srv.URL, secret)

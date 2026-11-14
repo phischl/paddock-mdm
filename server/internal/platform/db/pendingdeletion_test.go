@@ -3,20 +3,19 @@ package db_test
 import (
 	"context"
 	"errors"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // TestInPendingDeletionOrg (ADR 0052 amendment b decision 8): the organization of the argument is entered only by a
@@ -82,15 +81,76 @@ func TestInPendingDeletionOrg(t *testing.T) {
 	expectPermissionDenied(t, "paddock_api cancels a deletion", err)
 }
 
+// TestInPendingDeletionOrgRacesDeleting (plan M17 amendment g point 6): when the worker commits deleting after the
+// platform check but before the transaction passes the gate, InPendingDeletionOrg fails closed with
+// problem.OrganizationInactive (PD001) and fn never runs.
+func TestInPendingDeletionOrgRacesDeleting(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	root := principal.With(ctx, principal.Principal{Kind: principal.KindPlatformAdmin, Role: principal.RolePlatform})
+	err := f.platform.InPlatform(root, func(ctx context.Context, q *pgstore.Queries) error {
+		_, err := q.RequestOrganizationDeletion(ctx, pgstore.RequestOrganizationDeletionParams{ID: f.orgA, GraceDays: 30})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The worker's side: hold the offboarding lock exclusively, as paddock_offboard_finalize does, so the export's
+	// transaction waits in paddock_org_enter after the platform check passed.
+	worker, err := pgx.Connect(ctx, sharedPaddock(t).Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.Close(ctx) }()
+	tx, err := worker.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", db.OffboardingLockKey(f.orgA)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	ran := false
+	go func() {
+		done <- f.org.InPendingDeletionOrg(root, f.platform, f.orgA, func(context.Context, *pgstore.Queries) error {
+			ran = true
+			return nil
+		})
+	}()
+	for waited := 0; ; waited++ {
+		var waiting bool
+		if err := worker.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)`).
+			Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if waited > 200 {
+			t.Fatal("the export's transaction never waited for the lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE organization SET status = 'deleting' WHERE id = $1", f.orgA); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	err = <-done
+	if !errors.Is(err, problem.OrganizationInactive) || db.OrganizationUnavailableStatus(err) != "deleting" || ran {
+		t.Fatalf("race with deleting: %v (ran %v)", err, ran)
+	}
+}
+
 // TestInPendingDeletionOrgCallers: the exception is reached only through ActionRunner.RunExternalInPendingDeletion
 // (ADR 0052 amendment b decision 8).
 func TestInPendingDeletionOrgCallers(t *testing.T) {
 	var callers []string
-	for _, ref := range identRefs(t, filepath.Join("..", ".."), "InPendingDeletionOrg") {
-		if strings.Contains(ref, "_test.go") {
-			continue
+	for _, ref := range identRefs(t, filepath.Join("..", ".."), "InPendingDeletionOrg", "web", "node_modules") {
+		if !strings.HasSuffix(ref, "_test.go") {
+			callers = append(callers, filepath.ToSlash(ref))
 		}
-		callers = append(callers, filepath.ToSlash(ref[:strings.Index(ref, ".go:")+3]))
 	}
 	for _, c := range callers {
 		if !strings.HasSuffix(c, "platform/db/db.go") && !strings.HasSuffix(c, "app/action.go") {
@@ -100,31 +160,4 @@ func TestInPendingDeletionOrgCallers(t *testing.T) {
 	if len(callers) < 2 {
 		t.Fatalf("the scan found no use: %v", callers)
 	}
-}
-
-// identRefs lists the positions of the identifier name in the Go files under root.
-func identRefs(t *testing.T, root, name string) []string {
-	t.Helper()
-	var refs []string
-	fset := token.NewFileSet()
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") {
-			return err
-		}
-		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			return err
-		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			if id, ok := n.(*ast.Ident); ok && id.Name == name {
-				refs = append(refs, fset.Position(id.Pos()).String())
-			}
-			return true
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return refs
 }

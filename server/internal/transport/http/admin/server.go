@@ -38,21 +38,21 @@ type Deps struct {
 	Managed      *app.ManagedConfig
 	Releases     *app.AgentReleases
 	// ReleaseImports import agent releases from the configured release source (ADR 0043).
-	ReleaseImports  *app.ReleaseImports
-	Users           *app.Users
-	UserGroups      *app.UserGroups
-	Logins          *app.Logins
-	LoginSettings   *app.LoginSettings
-	WatchedUnits    *app.WatchedUnits
-	LoginHistory    *app.LoginHistory
-	AgentUpdates    *app.AgentUpdates
-	Uninstalls      *app.Uninstalls
-	Conversions     *app.DiskConversions
-	Privileges      *app.Privileges
-	Commands        *app.DeviceCommands
-	LocalAdmin      *app.LocalAdmin
-	Autoinstall     *app.Autoinstall
-	Disk            *app.Disk
+	ReleaseImports *app.ReleaseImports
+	Users          *app.Users
+	UserGroups     *app.UserGroups
+	Logins         *app.Logins
+	LoginSettings  *app.LoginSettings
+	WatchedUnits   *app.WatchedUnits
+	LoginHistory   *app.LoginHistory
+	AgentUpdates   *app.AgentUpdates
+	Uninstalls     *app.Uninstalls
+	Conversions    *app.DiskConversions
+	Privileges     *app.Privileges
+	Commands       *app.DeviceCommands
+	LocalAdmin     *app.LocalAdmin
+	Autoinstall    *app.Autoinstall
+	Disk           *app.Disk
 	// RecoveryExports is the encrypted recovery export during a pending deletion (ADR 0052 amendment b).
 	RecoveryExports *app.RecoveryExports
 	Revocations     *app.Revocations
@@ -238,7 +238,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/devices/{id}/local-admin/rotate":                         {app.ScopeOrg, app.SpecLocalAdminRotate},
 	"POST /api/v1/devices/{id}/local-admin/reveal":                         {app.ScopeOrg, app.SpecLocalAdminReveal},
 	"POST /api/v1/autoinstall":                                             {app.ScopeOrg, app.SpecAutoinstallGenerate},
-	"POST /api/v1/recovery-export":                                        {app.ScopeOrg, app.SpecRecoveryExport},
+	"POST /api/v1/recovery-export":                                         {app.ScopeOrg, app.SpecRecoveryExport},
 	"POST /api/platform/v1/organizations/{id}/recovery-export":             {app.ScopePlatform, app.SpecPlatformRecoveryExport},
 	"POST /api/v1/devices/{id}/disk/recovery-key":                          {app.ScopeOrg, app.SpecDiskRecoveryKeyReveal},
 	"POST /api/v1/devices/{id}/disk/header":                                {app.ScopeOrg, app.SpecDiskHeaderDownload},

@@ -28,7 +28,8 @@ const { pending, run } = usePending()
 const action = 'recovery-export'
 const target = computed(() => props.organizationId ?? 'own')
 const open = ref(false)
-const recipient = ref<'passphrase' | 'public_key'>('passphrase')
+// A public key is the recommended recipient (plan M17 amendment g point 3).
+const recipient = ref<'passphrase' | 'public_key'>('public_key')
 const publicKey = ref('')
 const passphrase = ref('')
 const repeat = ref('')
@@ -43,6 +44,7 @@ const error = computed(() => validateExport(request.value, repeat.value))
 const strength = computed(() => passphraseStrength(passphrase.value))
 
 function clear(): void {
+  recipient.value = 'public_key'
   publicKey.value = ''
   passphrase.value = ''
   repeat.value = ''
@@ -145,12 +147,14 @@ function close(): void {
               :label="t('recoveryExport.recipient')"
             >
               <v-radio
-                value="passphrase"
-                :label="t('recoveryExport.recipientPassphrase')"
-              />
-              <v-radio
                 value="public_key"
                 :label="t('recoveryExport.recipientPublicKey')"
+                data-testid="recovery-export-public-key"
+              />
+              <v-radio
+                value="passphrase"
+                :label="t('recoveryExport.recipientPassphrase')"
+                data-testid="recovery-export-passphrase-option"
               />
             </v-radio-group>
             <v-textarea
@@ -164,6 +168,9 @@ function close(): void {
               :error-messages="touched && error ? [t(error)] : []"
             />
             <template v-else>
+              <p data-testid="recovery-export-passphrase-note">
+                {{ t('recoveryExport.passphraseNote') }}
+              </p>
               <v-text-field
                 id="recovery-export-passphrase"
                 v-model="passphrase"

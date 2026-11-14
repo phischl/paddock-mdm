@@ -11,6 +11,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -109,16 +110,20 @@ func (e *RecoveryExports) Export(ctx context.Context, in RecoveryExportInput, op
 // ActionRunner.RunExternalInPendingDeletion, and its event lands in the organization's own log.
 func (e *RecoveryExports) ExportPlatform(ctx context.Context, org uuid.UUID, in RecoveryExportInput,
 	open func(RecoveryExportFile) io.Writer) error {
+	// An organization that is deleting or deleted gets no row in its own log (the writer gate); its attempt is recorded
+	// in the platform pseudo-organization, as for an unknown one.
 	known := false
 	if p, ok := principal.From(ctx); ok && p.Kind == principal.KindPlatformAdmin {
+		var status string
 		err := e.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-			_, err := q.GetOrganization(ctx, org)
+			o, err := q.GetOrganization(ctx, org)
+			status = o.Status
 			return err
 		})
 		if err != nil && !db.IsNoRows(err) {
 			return err
 		}
-		known = err == nil
+		known = err == nil && status != organization.StatusDeleting && status != organization.StatusDeleted
 	}
 	ex := e.export(org, RequesterPlatform, in, open)
 	return e.runner.RunExternalInPendingDeletion(ctx, org, known, ex.spec(SpecPlatformRecoveryExport), ex.prepare,
@@ -161,7 +166,11 @@ func (x *export) prepare(ctx context.Context, q *pgstore.Queries, rec Recorder) 
 		return notFound(err)
 	}
 	rec.SetTarget(audit.Target{Type: "organization", ID: cur.ID.String(), Display: cur.Slug})
-	if cur.Status != "active" || cur.DeleteAfter == nil {
+	if cur.Status == organization.StatusDeleting || cur.Status == organization.StatusDeleted {
+		return db.OrganizationUnavailable(cur.ID, cur.Status)
+	}
+	// Pending: active or provisioning_failed with delete_after set (plan M17 amendment g point 5).
+	if !organization.Deletable(cur.Status) || cur.DeleteAfter == nil {
 		return problem.InvalidState.WithDetail("the recovery export is available only while the organization's deletion is pending")
 	}
 	r, err := recoveryexport.ParseRecipient(x.in.Recipient, x.in.PublicKey, x.in.Passphrase)

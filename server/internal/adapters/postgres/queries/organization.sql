@@ -161,7 +161,7 @@ UPDATE organization
 SET recovery_exports = CASE WHEN recovery_exports_since IS NOT DISTINCT FROM deletion_requested_at
                             THEN recovery_exports + 1 ELSE 1 END,
     recovery_exports_since = deletion_requested_at
-WHERE id = @id AND status = 'active' AND delete_after IS NOT NULL
+WHERE id = @id AND status IN ('active', 'provisioning_failed') AND delete_after IS NOT NULL
   AND (recovery_exports_since IS DISTINCT FROM deletion_requested_at OR recovery_exports < @max_exports::int)
 RETURNING recovery_exports, recovery_exports_since;
 
@@ -173,4 +173,4 @@ WHERE id = @id AND recovery_exports_since = @since::timestamptz AND recovery_exp
 -- Whether the organization's deletion is pending: db.OrgPool.InPendingDeletionOrg through the platform pool, and the
 -- escrow-reader inside the organization before an export (it may read only these columns, migration 00133).
 -- name: OrganizationDeletionPending :one
-SELECT EXISTS (SELECT 1 FROM organization WHERE id = @id AND status = 'active' AND delete_after IS NOT NULL);
+SELECT EXISTS (SELECT 1 FROM organization WHERE id = @id AND status IN ('active', 'provisioning_failed') AND delete_after IS NOT NULL);

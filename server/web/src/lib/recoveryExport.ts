@@ -8,7 +8,7 @@ import type { HeaderFile } from './disk'
  */
 
 /** Bounds of the passphrase (plan M17 amendment b decision 22). */
-export const minPassphrase = 16
+export const minPassphrase = 20
 export const maxPassphrase = 1024
 
 /** The strength hint of a passphrase: too short, acceptable, or strong (24+ characters of three character classes). */

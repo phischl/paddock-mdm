@@ -15,6 +15,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/recoveryexport"
@@ -24,7 +25,13 @@ const passphrase = "correct horse battery staple"
 
 func newKey(t *testing.T) (*openpgp.Entity, string) {
 	t.Helper()
-	e, err := openpgp.NewEntity("Export Test", "", "export@example.test", nil)
+	return newKeyWith(t, &packet.Config{Algorithm: packet.PubKeyAlgoEdDSA})
+}
+
+// newKeyWith generates a key with cfg and returns it with its armoured public key.
+func newKeyWith(t *testing.T, cfg *packet.Config) (*openpgp.Entity, string) {
+	t.Helper()
+	e, err := openpgp.NewEntity("Export Test", "", "export@example.test", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +259,7 @@ func TestParseRecipientRefusals(t *testing.T) {
 	_, second := newKey(t)
 	cases := map[string][3]string{
 		"unknown recipient":   {"pgp", "", ""},
-		"short passphrase":    {"passphrase", "", strings.Repeat("x", 15)},
+		"short passphrase":    {"passphrase", "", strings.Repeat("x", 19)},
 		"long passphrase":     {"passphrase", "", strings.Repeat("x", 1025)},
 		"invalid utf-8":       {"passphrase", "", strings.Repeat("\xff", 20)},
 		"passphrase with key": {"passphrase", armored, passphrase},
@@ -273,8 +280,8 @@ func TestParseRecipientRefusals(t *testing.T) {
 			t.Errorf("%s: the refusal echoes the secret: %v", name, err)
 		}
 	}
-	if _, err := recoveryexport.ParseRecipient("passphrase", "", strings.Repeat("ä", 16)); err != nil {
-		t.Fatalf("16 characters refused: %v", err)
+	if _, err := recoveryexport.ParseRecipient("passphrase", "", strings.Repeat("ä", 20)); err != nil {
+		t.Fatalf("20 characters refused: %v", err)
 	}
 }
 
@@ -287,5 +294,32 @@ func TestDeviceLineBound(t *testing.T) {
 	out := recoveryexport.AppendDevice(buf, d)
 	if cap(out) != cap(buf) || &out[:1][0] != &buf[:1][0] {
 		t.Fatalf("the line grew beyond its bound: %d > %d", len(out), cap(buf))
+	}
+}
+
+// TestWeakRecipientKeys (review 1 finding 3): the key the export is encrypted to must be RSA of at least 3072 bits,
+// X25519, X448 or ECDH on another curve than secp256k1, and valid now.
+func TestWeakRecipientKeys(t *testing.T) {
+	past := time.Now().Add(-48 * time.Hour)
+	for name, cfg := range map[string]*packet.Config{
+		"RSA-1024":  {Algorithm: packet.PubKeyAlgoRSA, RSABits: 1024},
+		"RSA-2048":  {Algorithm: packet.PubKeyAlgoRSA, RSABits: 2048},
+		"secp256k1": {Algorithm: packet.PubKeyAlgoECDSA, Curve: packet.CurveSecP256k1},
+		"expired":   {Algorithm: packet.PubKeyAlgoEdDSA, KeyLifetimeSecs: 3600, Time: func() time.Time { return past }},
+	} {
+		_, armored := newKeyWith(t, cfg)
+		if _, err := recoveryexport.ParseRecipient(recoveryexport.RecipientPublicKey, armored, ""); !errors.Is(err, recoveryexport.ErrInvalid) {
+			t.Errorf("%s accepted: %v", name, err)
+		}
+	}
+	for name, cfg := range map[string]*packet.Config{
+		"RSA-3072":   {Algorithm: packet.PubKeyAlgoRSA, RSABits: 3072},
+		"Curve25519": {Algorithm: packet.PubKeyAlgoEdDSA},
+		"P-384":      {Algorithm: packet.PubKeyAlgoECDSA, Curve: packet.CurveNistP384},
+	} {
+		_, armored := newKeyWith(t, cfg)
+		if _, err := recoveryexport.ParseRecipient(recoveryexport.RecipientPublicKey, armored, ""); err != nil {
+			t.Errorf("%s refused: %v", name, err)
+		}
 	}
 }

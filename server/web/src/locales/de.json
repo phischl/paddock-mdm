@@ -3820,13 +3820,13 @@
     "intro": "Lädt alle Festplatten-Wiederherstellungsschlüssel und das neueste lokale Administratorpasswort aller Geräte von {slug} als eine verschlüsselte Datei herunter. Öffnen Sie sie später mit gpg --decrypt.",
     "lastCopy": "Nach der Löschung ist diese Datei die einzige verbleibende Kopie. Paddock behält keine Kopie. Bewahren Sie sie sicher auf; ohne Schlüssel oder Passphrase kann niemand sie öffnen.",
     "recipient": "Verschlüsseln mit",
-    "recipientPublicKey": "Meinem öffentlichen OpenPGP-Schlüssel",
-    "recipientPassphrase": "Einer Passphrase",
+    "recipientPublicKey": "Meinem öffentlichen OpenPGP-Schlüssel (empfohlen)",
+    "recipientPassphrase": "Einer Passphrase (generiert, mindestens 20 Zeichen)",
     "publicKey": "Öffentlicher OpenPGP-Schlüssel (ASCII-armoured)",
     "passphrase": "Passphrase",
     "passphraseRepeat": "Passphrase wiederholen",
     "strength": {
-      "short": "Zu kurz: mindestens 16 Zeichen.",
+      "short": "Zu kurz: mindestens 20 Zeichen.",
       "fair": "Ausreichend. Länger und mit gemischten Zeichen ist stärker.",
       "strong": "Stark."
     },
@@ -3835,9 +3835,10 @@
     "limit": "Höchstens fünf Exporte pro Frist.",
     "errors": {
       "publicKey": "Fügen Sie einen ASCII-armoured öffentlichen OpenPGP-Schlüssel ein (-----BEGIN PGP PUBLIC KEY BLOCK-----).",
-      "length": "Die Passphrase braucht 16 bis 1024 Zeichen.",
+      "length": "Die Passphrase braucht 20 bis 1024 Zeichen.",
       "mismatch": "Die Passphrasen stimmen nicht überein."
     },
-    "pending": "Diese Organisation wird am {date} gelöscht. Exportieren Sie vorher ihre Wiederherstellungsschlüssel und lokalen Administratorpasswörter."
+    "pending": "Diese Organisation wird am {date} gelöscht. Exportieren Sie vorher ihre Wiederherstellungsschlüssel und lokalen Administratorpasswörter.",
+    "passphraseNote": "Verwenden Sie eine generierte Passphrase mit mindestens 20 Zeichen, zum Beispiel aus einem Passwortmanager. Ein öffentlicher Schlüssel ist sicherer."
   }
 }

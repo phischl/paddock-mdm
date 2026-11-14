@@ -3820,13 +3820,13 @@
     "intro": "Downloads every disk recovery key and the newest local administrator password of every device of {slug} as one encrypted file. Open it later with gpg --decrypt.",
     "lastCopy": "After the deletion this file is the only remaining copy. Paddock keeps no copy. Store it safely; without the key or passphrase nobody can open it.",
     "recipient": "Encrypt to",
-    "recipientPublicKey": "My OpenPGP public key",
-    "recipientPassphrase": "A passphrase",
+    "recipientPublicKey": "My OpenPGP public key (recommended)",
+    "recipientPassphrase": "A passphrase (generated, at least 20 characters)",
     "publicKey": "OpenPGP public key (ASCII-armoured)",
     "passphrase": "Passphrase",
     "passphraseRepeat": "Repeat the passphrase",
     "strength": {
-      "short": "Too short: at least 16 characters.",
+      "short": "Too short: at least 20 characters.",
       "fair": "Acceptable. Longer, with mixed characters, is stronger.",
       "strong": "Strong."
     },
@@ -3835,9 +3835,10 @@
     "limit": "At most five exports per grace period.",
     "errors": {
       "publicKey": "Paste an ASCII-armoured OpenPGP public key (-----BEGIN PGP PUBLIC KEY BLOCK-----).",
-      "length": "The passphrase needs 16 to 1024 characters.",
+      "length": "The passphrase needs 20 to 1024 characters.",
       "mismatch": "The passphrases do not match."
     },
-    "pending": "This organization will be deleted on {date}. Export its recovery keys and local administrator passwords before then."
+    "pending": "This organization will be deleted on {date}. Export its recovery keys and local administrator passwords before then.",
+    "passphraseNote": "Use a generated passphrase of at least 20 characters, for example from a password manager. A public key is safer."
   }
 }

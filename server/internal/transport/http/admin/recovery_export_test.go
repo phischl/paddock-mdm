@@ -16,6 +16,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -133,8 +134,10 @@ func TestRecoveryExportAPI(t *testing.T) {
 		t.Fatalf("operator: %d %s", r.status, r.body)
 	}
 	e.expectEvent(r, "organization.recovery_exported:denied:forbidden")
-	r = e.do(call{method: "POST", path: path, cookie: e.steppedUp(alice, time.Now()), body: exportBody("short phrase")})
-	if r.status != http.StatusBadRequest || strings.Contains(string(r.body), "short phrase") {
+	// Plan M17 amendment g point 2: 19 characters are refused, 20 accepted (below).
+	nineteen := strings.Repeat("p", 19)
+	r = e.do(call{method: "POST", path: path, cookie: e.steppedUp(alice, time.Now()), body: exportBody(nineteen)})
+	if r.status != http.StatusBadRequest || strings.Contains(string(r.body), nineteen) {
 		t.Fatalf("short passphrase: %d %s", r.status, r.body)
 	}
 	e.expectEvent(r, "organization.recovery_exported:failure:invalid_request")
@@ -196,8 +199,8 @@ func TestRecoveryExportAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i := range 3 {
-		if r := e.do(call{method: "POST", path: path, cookie: e.steppedUp(alice, time.Now()), body: exportBody(exportPassphrase)}); r.status != http.StatusOK {
+	for i, pass := range []string{strings.Repeat("p", 20), exportPassphrase, exportPassphrase} {
+		if r := e.do(call{method: "POST", path: path, cookie: e.steppedUp(alice, time.Now()), body: exportBody(pass)}); r.status != http.StatusOK {
 			t.Fatalf("export %d: %d %s", i+3, r.status, r.body)
 		}
 	}
@@ -254,7 +257,7 @@ func (e *env) abortedExport(path string, cookie *http.Cookie) (string, string) {
 
 func exportKey(t *testing.T) (*openpgp.Entity, string) {
 	t.Helper()
-	k, err := openpgp.NewEntity("Requester", "", "requester@example.test", nil)
+	k, err := openpgp.NewEntity("Requester", "", "requester@example.test", &packet.Config{Algorithm: packet.PubKeyAlgoEdDSA})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,4 +327,35 @@ func TestPlatformRecoveryExportAPI(t *testing.T) {
 		t.Fatalf("organization administrator on the platform path: %d %s", r.status, r.body)
 	}
 	e.expectEvent(r, "organization.recovery_exported:denied:forbidden")
+
+	// Plan M17 amendment g point 5: provisioning_failed with delete_after set is pending as well.
+	if _, err := e.super.Exec(context.Background(), `UPDATE organization SET status = 'provisioning_failed' WHERE id = $1`, e.globex); err != nil {
+		t.Fatal(err)
+	}
+	e.pendingDeletion(e.globex)
+	r = e.do(call{method: "POST", path: path(e.globex), cookie: e.steppedUp(root, time.Now()), body: exportBody(exportPassphrase)})
+	if r.status != http.StatusOK {
+		t.Fatalf("provisioning_failed with a pending deletion: %d %s", r.status, r.body)
+	}
+
+	// Plan M17 amendment g point 6: an organization the worker moved to deleting is refused with 403
+	// organization_inactive, recorded as organization.inactive_denied in the platform pseudo-organization only.
+	if _, err := e.super.Exec(context.Background(), `UPDATE organization SET status = 'deleting' WHERE id = $1`, e.acme); err != nil {
+		t.Fatal(err)
+	}
+	r = e.do(call{method: "POST", path: path(e.acme), cookie: e.steppedUp(root, time.Now()), body: exportBody(exportPassphrase)})
+	if r.status != http.StatusForbidden || r.problemCode(t) != "organization_inactive" || r.header.Get("Content-Type") == "application/pgp-encrypted" {
+		t.Fatalf("deleting: %d %s", r.status, r.body)
+	}
+	var deniedIn uuid.UUID
+	var params []byte
+	if err := e.super.QueryRow(context.Background(), `SELECT organization_id, params FROM action WHERE correlation_id = $1
+		AND code = 'organization.inactive_denied' AND outcome = 'denied'`, r.header.Get(httpx.HeaderRequestID)).Scan(&deniedIn, &params); err != nil ||
+		deniedIn != audit.PlatformOrganizationID || !strings.Contains(string(params), "organization.recovery_exported") ||
+		!strings.Contains(string(params), "deleting") {
+		t.Fatalf("inactive_denied: %s %s %v", deniedIn, params, err)
+	}
+	if got := e.events(r.header.Get(httpx.HeaderRequestID)); len(got) != 1 {
+		t.Fatalf("events of the refused export: %v", got)
+	}
 }

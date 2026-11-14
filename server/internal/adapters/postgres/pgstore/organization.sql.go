@@ -534,7 +534,7 @@ func (q *Queries) MarkOrganizationIdentityEnsured(ctx context.Context, arg MarkO
 }
 
 const organizationDeletionPending = `-- name: OrganizationDeletionPending :one
-SELECT EXISTS (SELECT 1 FROM organization WHERE id = $1 AND status = 'active' AND delete_after IS NOT NULL)
+SELECT EXISTS (SELECT 1 FROM organization WHERE id = $1 AND status IN ('active', 'provisioning_failed') AND delete_after IS NOT NULL)
 `
 
 // Whether the organization's deletion is pending: db.OrgPool.InPendingDeletionOrg through the platform pool, and the
@@ -632,7 +632,7 @@ UPDATE organization
 SET recovery_exports = CASE WHEN recovery_exports_since IS NOT DISTINCT FROM deletion_requested_at
                             THEN recovery_exports + 1 ELSE 1 END,
     recovery_exports_since = deletion_requested_at
-WHERE id = $1 AND status = 'active' AND delete_after IS NOT NULL
+WHERE id = $1 AND status IN ('active', 'provisioning_failed') AND delete_after IS NOT NULL
   AND (recovery_exports_since IS DISTINCT FROM deletion_requested_at OR recovery_exports < $2::int)
 RETURNING recovery_exports, recovery_exports_since
 `

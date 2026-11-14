@@ -288,7 +288,8 @@ type VersionedCiphertext struct {
 
 // DecryptBatch is Decrypt for many ciphertexts with batch_input, at most MaxBatch per call (the escrow-reader's
 // encrypted recovery export, plan M17 amendment b decision 24). The result has one plaintext per ciphertext in order;
-// on an error every plaintext decrypted so far is zeroed. The caller zeroes the result after use.
+// on an error every plaintext decrypted so far is zeroed. The caller zeroes the result after use; the decoded
+// response of the OpenBao client keeps each plaintext as an immutable string until garbage collection.
 func (c *Client) DecryptBatch(ctx context.Context, key string, items []VersionedCiphertext) ([][]byte, error) {
 	if err := c.ensureToken(ctx); err != nil {
 		return nil, err

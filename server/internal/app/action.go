@@ -102,6 +102,9 @@ type ActionRunner struct {
 	stepUpWindow  time.Duration
 	// platformTx replaces platform.InPlatform for ScopePlatform (WithPlatformScope).
 	platformTx func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error
+	// pendingOrg is the organization of RunExternalInPendingDeletion, whose refusal for a deleting organization is
+	// recorded as organization.inactive_denied.
+	pendingOrg uuid.UUID
 }
 
 // RunnerOption configures an ActionRunner.
@@ -861,7 +864,12 @@ func (r *ActionRunner) RunExternalInPendingDeletion(ctx context.Context, org uui
 		platform = r.platformTx
 	}
 	in := *r
+	in.pendingOrg = org
 	in.platformTx = func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+		// The record of an inactive organization's refusal runs as the system, in the platform scope.
+		if p, _ := principal.From(ctx); p.Kind != principal.KindPlatformAdmin {
+			return platform(ctx, fn)
+		}
 		err := r.org.InPendingDeletionOrg(ctx, r.platform, org, fn)
 		if errors.Is(err, db.ErrNotPendingDeletion) {
 			return platform(ctx, fn)
@@ -890,7 +898,11 @@ func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, s
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	if scope == ScopeOrg && p.OrganizationID != uuid.Nil && errors.Is(cause, problem.OrganizationInactive) {
-		r.recordInactiveDenied(ctx, p, rec, cause)
+		r.recordInactiveDenied(ctx, p, p.OrganizationID, rec, cause)
+		return
+	}
+	if scope == ScopePlatform && r.pendingOrg != uuid.Nil && errors.Is(cause, problem.OrganizationInactive) {
+		r.recordInactiveDenied(ctx, p, r.pendingOrg, rec, cause)
 		return
 	}
 	// Denials of organization actions by principals without an organization go to the platform pseudo-organization.
@@ -916,16 +928,17 @@ func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, s
 // organization.inactive_denied in the platform pseudo-organization: the gate refuses every write into the
 // organization, and a row written after the delete loop would make the offboarding's finalize fail (plan M17
 // amendment 2026-11-14 f point 1). The attempt's actor and target are kept; its own code is a param only.
-func (r *ActionRunner) recordInactiveDenied(ctx context.Context, p principal.Principal, rec *recorder, cause error) {
+func (r *ActionRunner) recordInactiveDenied(ctx context.Context, p principal.Principal, org uuid.UUID, rec *recorder,
+	cause error) {
 	if r.platformTx == nil && r.platform == nil {
 		slog.WarnContext(ctx, "audit: no platform scope to record the refusal of an inactive organization",
-			"action_id", rec.id, "code", rec.code, "organization_id", p.OrganizationID)
+			"action_id", rec.id, "code", rec.code, "organization_id", org)
 		return
 	}
 	denied := *rec
 	denied.code = audit.CodeOrganizationInactiveDenied
 	denied.org = audit.PlatformOrganizationID
-	denied.params = map[string]any{"organization_id": p.OrganizationID.String(), "attempted_code": string(rec.code),
+	denied.params = map[string]any{"organization_id": org.String(), "attempted_code": string(rec.code),
 		"status": db.OrganizationUnavailableStatus(cause)}
 	denied.changes, denied.commands, denied.approved = nil, nil, nil
 	// The platform scope needs a platform principal; the refused principal stays the event's actor.
@@ -934,7 +947,7 @@ func (r *ActionRunner) recordInactiveDenied(ctx context.Context, p principal.Pri
 		func(ctx context.Context, q *pgstore.Queries) error { return r.insertFinished(ctx, q, &denied, cause) })
 	if err != nil {
 		slog.ErrorContext(ctx, "audit: could not record the refusal of an inactive organization", "action_id", rec.id,
-			"code", rec.code, "organization_id", p.OrganizationID, "error", err)
+			"code", rec.code, "organization_id", org, "error", err)
 	}
 }
 

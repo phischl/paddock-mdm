@@ -316,7 +316,7 @@ paths:
         organization's deletion is pending (409 invalid_state otherwise), at most five successful exports per grace
         period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
         one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
-        16 KiB with an encryption-capable key, recipient passphrase 16 to 1024 characters (400 invalid_request
+        16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
         otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
         secret.
       x-paddock-audit: organization.recovery_exported
@@ -6252,14 +6252,15 @@ paths:
       description: |
         Roles: platform_admin. The export of POST /api/v1/recovery-export for the organization of the path (404
         not_found for an unknown organization); the platform administrator acts inside that organization only while
-        its deletion is pending (ADR 0052 amendment b decision 8).
+        its deletion is pending (ADR 0052 amendment b decision 8). 403 organization_inactive when the organization is
+        being deleted or was deleted (recorded as organization.inactive_denied in the platform log).
         Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
         of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
         (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
         organization's deletion is pending (409 invalid_state otherwise), at most five successful exports per grace
         period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
         one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
-        16 KiB with an encryption-capable key, recipient passphrase 16 to 1024 characters (400 invalid_request
+        16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
         otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
         secret.
       x-paddock-audit: organization.recovery_exported
@@ -9042,7 +9043,8 @@ components:
           type: string
           maxLength: 1024
           description: |
-            16 to 1024 characters; required for passphrase. Never logged, never recorded in the audit log.
+            20 to 1024 characters (plan M17 amendment g); required for passphrase. Never logged, never recorded in the
+            audit log.
     OrganizationCreate:
       type: object
       required: [slug, name]

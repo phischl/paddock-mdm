@@ -65,17 +65,24 @@ function input(id: string, value: string): void {
   el.dispatchEvent(new Event('input'))
 }
 
+/** Switches the dialog from the preselected public key to a passphrase. */
+async function choosePassphrase(): Promise<void> {
+  document.querySelector<HTMLInputElement>('[data-testid="recovery-export-passphrase-option"] input')!.click()
+  await flushPromises()
+}
+
 async function submit(): Promise<void> {
   document.querySelector<HTMLElement>('[data-testid="recovery-export-submit"]')!.click()
   await flushPromises()
 }
 
 describe('recovery export rules', () => {
-  it('rates passphrases and refuses those under 16 characters', () => {
-    expect(passphraseStrength('x'.repeat(15))).toBe('short')
-    expect(passphraseStrength('ä'.repeat(16))).toBe('fair')
+  it('rates passphrases and refuses those under 20 characters', () => {
+    expect(passphraseStrength('x'.repeat(19))).toBe('short')
+    expect(passphraseStrength('ä'.repeat(20))).toBe('fair')
     expect(passphraseStrength(passphrase)).toBe('strong')
-    expect(validateExport({ recipient: 'passphrase', passphrase: 'x'.repeat(15) }, 'x'.repeat(15))).toBe('recoveryExport.errors.length')
+    expect(validateExport({ recipient: 'passphrase', passphrase: 'x'.repeat(19) }, 'x'.repeat(19))).toBe('recoveryExport.errors.length')
+    expect(validateExport({ recipient: 'passphrase', passphrase: 'x'.repeat(20) }, 'x'.repeat(20))).toBe('')
     expect(validateExport({ recipient: 'passphrase', passphrase }, passphrase + 'x')).toBe('recoveryExport.errors.mismatch')
     expect(validateExport({ recipient: 'passphrase', passphrase }, passphrase)).toBe('')
     expect(validateExport({ recipient: 'public_key', public_key: 'ssh-ed25519 AAAA' }, '')).toBe('recoveryExport.errors.publicKey')
@@ -100,6 +107,10 @@ describe('RecoveryExport', () => {
     resumed('own')
     await mountExport(null)
     expect(document.body.textContent).toContain('only remaining copy')
+    expect(document.querySelector<HTMLInputElement>('[data-testid="recovery-export-public-key"] input')!.checked).toBe(true)
+    expect(document.getElementById('recovery-export-key')).not.toBeNull()
+    await choosePassphrase()
+    expect(document.querySelector('[data-testid="recovery-export-passphrase-note"]')?.textContent).toContain('at least 20 characters')
     input('recovery-export-passphrase', passphrase)
     input('recovery-export-repeat', 'something else entirely')
     await submit()
@@ -118,6 +129,7 @@ describe('RecoveryExport', () => {
   it('exports another organization for a platform administrator and shows the export limit', async () => {
     resumed('o1')
     await mountExport('o1')
+    await choosePassphrase()
     input('recovery-export-passphrase', passphrase)
     input('recovery-export-repeat', passphrase)
     exportRecoveryKeys.mockResolvedValueOnce('export_limit')
