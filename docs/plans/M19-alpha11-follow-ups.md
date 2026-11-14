@@ -161,6 +161,14 @@ Per-route handling through a role-side marker, not a global close:
    withdrew a software request"; new param `closed` (boolean). Withdrawal rows follow the request retention of ADR
    0032 (same period after `received_at`). RR-135 closes.
 
+5. **Counter reset (amendment 2026-11-14 c, PDK-811d review 1).** Inside the claim of `recordEventSeqReset`, in the
+   same transaction: delete the device's `software_request_withdrawal` rows and set `reported_seq = NULL` on the
+   device's open `software_request` rows (NULL means "unordered": any later withdrawal closes it). `paddock_worker`
+   gets `DELETE` on `software_request_withdrawal` (tenant RLS unchanged; no other role). Integration test: withdrawal
+   at seq 50, reset, request at seq 3 opens; open request with seq 40, reset, withdrawal at seq 2 closes it. The worker
+   SHOULD take the per-device lock at the start of an event batch (removes a harmless, retried deadlock between
+   overlapping redelivered batches).
+
 ### D9 PDK-990 residual (no work left)
 
 Checked on `main` at `f6d59cb9`: plan M5a amendment 2026-11-11 b, P3, already records the second accepted duplicate
