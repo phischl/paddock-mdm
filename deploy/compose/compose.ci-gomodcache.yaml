@@ -13,6 +13,7 @@ services:
   paddock-escrow-reader: { build: *gomodcache }
   paddock-outbox-relay: { build: *gomodcache }
   paddock-worker: { build: *gomodcache }
+  paddock-worker-ingest: { build: *gomodcache }
   paddock-gateway: { build: *gomodcache }
   paddock-compiler: { build: *gomodcache }
   paddock-audit-migrate: { build: *gomodcache }

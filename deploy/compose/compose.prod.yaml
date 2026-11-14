@@ -182,6 +182,13 @@ services:
       - authentik_service_token
       - internal_ca_bundle
 
+  paddock-worker-ingest:
+    environment:
+      PADDOCK_ENV: production
+      PADDOCK_OPENBAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/secrets/internal_ca_bundle
+    secrets: [internal_ca_bundle]
+
   paddock-notifier:
     environment:
       PADDOCK_ENV: production

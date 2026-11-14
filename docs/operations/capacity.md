@@ -14,7 +14,7 @@ with the same scenarios before a large rollout.
 | Requirement | Target |
 | --- | --- |
 | N1 check-in | 1 000 check-ins/s against **one** gateway replica, p99 latency < 200 ms, error rate < 0.1 % |
-| N2 ingest | 5 000 device events/s with 3 worker replicas, consumer lag of `ingest.event` < 60 s |
+| N2 ingest | 5 000 device events/s with one worker and two ingest workers (`paddock-worker-ingest=2`) at `PADDOCK_PG_MAX_CONNECTIONS=150`, consumer lag of `ingest.event` < 60 s (architecture §2.3, amendment 2026-11-14) |
 
 ## Results
 
@@ -334,6 +334,7 @@ without a limit yet are listed in `deploy/compose/hardening-exceptions.yaml`.
 | `prometheus` | control plane | 1 GiB | `PADDOCK_PROMETHEUS_MEM_LIMIT` | 60–65 MiB |
 | `authentik-server` | control plane | 2 GiB | `PADDOCK_AUTHENTIK_SERVER_MEM_LIMIT` | 860 MiB–1.05 GiB idle with 4 web workers; 1.1 GiB peak at the first start |
 | `authentik-worker` | control plane | 1 GiB | `PADDOCK_AUTHENTIK_WORKER_MEM_LIMIT` | 265–330 MiB; 370 MiB peak at the first start |
+| `paddock-worker-ingest` | control plane | 1 GiB per replica | `PADDOCK_WORKER_INGEST_MEM_LIMIT` | not measured yet (no replica by default) |
 
 The snapshot is the resident memory (`docker stats`) of two idle development stacks after their acceptance runs, not
 a peak under load. PostgreSQL's page cache does not count against the limit beyond what the kernel can reclaim, so a
@@ -376,6 +377,7 @@ Control-plane database (`postgres`):
 | --- | --- | --- |
 | `paddock-api` | organization 8, platform 4 | 12 |
 | `paddock-worker` | organization 8, platform 8, leader locks 12, readiness 2 | 30 |
+| `paddock-worker-ingest` (per replica, none by default) | organization 8, platform 2, readiness 1 | 11 |
 | `paddock-notifier` | notifier 8, platform 2 | 10 |
 | `paddock-compiler` | 8 | 8 |
 | `paddock-backup` | backup 4, platform 3 | 7 |
@@ -391,9 +393,17 @@ rounds that each hold a leader lock connection for their whole duration; with 12
 them all taken waits for one, while its queries and the readiness check keep pools of their own. At many
 organizations up to 9 rounds run for minutes (identity, inventory, osv, staleness, findings, retention), so a short
 round such as commands or escrow waits only when they all run at once. A further api replica adds 12 and uses up the
-spare. A further worker replica (`--scale paddock-worker=N`, as in the ingest test N2 above) adds up to 30 and does
-not fit: the budget then holds only while not every pool is full at once, and otherwise roles fail with
-`too many clients already`.
+spare. A further full worker replica (`--scale paddock-worker=N`) adds up to 30 and does not fit: the budget then
+holds only while not every pool is full at once, and otherwise roles fail with `too many clients already`, and it
+would run every round a second time for nothing, since a leader lock lets only one replica run each.
+
+For more ingest throughput (N2) scale the service `paddock-worker-ingest` instead
+(`docker compose … up -d --scale paddock-worker-ingest=2`). An ingest worker (`PADDOCK_WORKER_MODE=ingest`) runs only
+the queue consumers (enrollment, heartbeats, events, issued commands, command results, escrow), no round and no
+leader lock, holds at most 11 connections and does not receive the Authentik, Fleet or bundle-bucket credentials
+(it shares the worker's OpenBao login); its `/readyz` answers
+`ready mode=ingest`. Two of them add 22 connections, 103 in all, which exceeds the default of 100: they need
+`PADDOCK_PG_MAX_CONNECTIONS=150` (see the restore and rollback notes of that setting before raising it).
 
 Do not raise `max_connections` on the database: PostgreSQL writes the value into its WAL and into every backup, and a
 restore or a rollback onto a release that starts the database with a lower value stays read-only ("hot standby is not
@@ -455,8 +465,10 @@ rate over enough devices: 10 000 devices check in every 10 s at 1 000/s.
 
    ramps to `RATE` during `WARMUP`, then holds it for `DURATION`; thresholds apply to the held phase only. Devices
    report the bundle they were offered as applied, so the held phase measures steady-state check-ins.
-3. **Ingest (N2).** Scale the workers to 3 replicas (`docker compose … up -d --scale paddock-worker=3`), start the
-   observability profile (`make up` does) and run
+3. **Ingest (N2).** Set `PADDOCK_PG_MAX_CONNECTIONS=150` in `deploy/compose/.env`, add two ingest workers
+   (`docker compose … up -d --scale paddock-worker-ingest=2`; each answers `ready mode=ingest`, for example
+   `docker compose … exec prometheus wget -qO- http://worker-ingest-ops:9090/readyz`), start the observability profile
+   (`make up` does) and run
 
    ```sh
    make load-test SCENARIO=ingest EVENTS_PER_S=5000 BATCH=50 VUS=200 DURATION=5m DRAIN=2m
