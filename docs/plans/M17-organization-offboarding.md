@@ -605,3 +605,127 @@ and are still running when the job finishes.
 7. **Tests.** A transaction that entered before `deleting` and inserts after the delete loop finished makes
    `finalize` wait and then raise `40001`; the next round deletes the row and finalizes. After `deleting` is committed,
    `InOrg` of every role fails with `PD001`. `InOrgOffboarding` is used only by `app.Offboarding`.
+
+## Amendment 2026-11-14 e — offboarding uninstalls: marker, set-based issue and cancel, locks, gaps of the grace period (architect decision after PDK-1014 review 1; ADR 0052 amendment e)
+
+Binding; where it contradicts the sections above (decisions 3, 4, 15, §6 signatures), it wins.
+
+### Deviations of PDK-1014 (review 1, Major 3)
+
+1. **Marker column: accepted.** `device.uninstall_reason text CHECK (uninstall_reason IN ('organization_offboarding'))`
+   with `CHECK (uninstall_reason IS NULL OR uninstall_requested_at IS NOT NULL)` is the only marker of an offboarding
+   uninstall. Every query that sets or clears an uninstall request (`SetDeviceUninstall`, `ClearDeviceUninstall`,
+   `EndFailedUninstall`, `SetDeviceOffboardingUninstall`) MUST set the column in the same statement. Code MUST NOT
+   identify offboarding uninstalls through `device_command.issued_by IS NULL`. Reason: `issued_by` is NULL for every
+   non-administrator issuer (`app/commands.go::queueCommandID`), lives on the command instead of the device's request
+   state that Cancel, Lock and step `devices` read, and needs a join; an explicit, constrained column states the
+   meaning where it is used. The agent decodes uninstall params with `DisallowUnknownFields` and MUST NOT change, so the
+   reason cannot travel in the command.
+2. **Set-based, unexported methods: accepted; they replace the §6 signature.**
+   ```go
+   // server/internal/app/uninstall.go — callable only from Organizations.RequestDeletion / CancelDeletion
+   func (u *Uninstalls) requestForOffboarding(ctx context.Context, expiresAt time.Time) (issued, skipped int, err error)
+   func (u *Uninstalls) cancelForOffboarding(ctx context.Context) (cancelled int, err error)
+   ```
+   `Uninstalls.RequestForOffboarding(ctx, deviceID, expiresAt) (issued bool, err error)` of §6 MUST NOT be added.
+   Reason: one transaction for all devices means a failed request leaves no device with an uninstall.
+3. **Cancel without `Uninstalls.Cancel`: accepted.** `CancelDeletion` records exactly one event,
+   `organization.deletion_cancelled` (param `uninstalls_cancelled`), and MUST NOT record `device.uninstall_cancelled`
+   or any other per-device event. It reuses `withdrawUninstallCommand` for the result claim. Decision 4's wording
+   "calls the existing `Uninstalls.Cancel`" is replaced by this rule.
+
+### Locks and duration (review 1, Majors 1 and 2)
+
+4. **Lock strength.** `LockOrganization`, the device selection of `requestForOffboarding` and the device selection of
+   `cancelForOffboarding` MUST use `FOR NO KEY UPDATE` (devices `ORDER BY id`). `FOR UPDATE` MUST NOT be used in these
+   queries. Reason: foreign-key checks take `FOR KEY SHARE`; `FOR UPDATE` would stall every insert that references the
+   organization or its devices, and the cancel's two-connection hold could wait in a cycle PostgreSQL cannot detect.
+5. **Set-based request.** Inside one organization transaction `requestForOffboarding` runs a constant number of SQL
+   statements, independent of the device count (at most five): lock the active devices; one
+   `INSERT INTO device_command … SELECT … FROM device WHERE state = 'active' AND NOT (uninstall_requested_at IS NOT NULL
+   AND uninstalled_at IS NULL) AND NOT EXISTS (open Lock/Destroy, the condition of DeviceHasOpenRevocation) RETURNING id,
+   device_id`; one `UPDATE device … FROM` the returned rows setting the request with `uninstall_reason =
+   'organization_offboarding'`; `skipped` = locked active devices minus issued. Per-device statements MUST NOT be used.
+6. **Set-based cancel with a budget.** `cancelForOffboarding` reads the open offboarding uninstalls with their command
+   status in one statement (`device JOIN device_command`, `FOR NO KEY UPDATE OF device`). Per command in status
+   `pending` it calls the Valkey result claim (`withdrawUninstallCommand` logic; one call per command is allowed, it is a
+   cache round trip, not SQL). The command cancellation of all withdrawn, `failed` and `expired` commands is one
+   `UPDATE device_command … WHERE id = ANY(@ids)`, the clearing of their devices one `UPDATE device … WHERE id =
+   ANY(@ids)`. `delivered` and `succeeded` commands stay. `CancelDeletion` MUST bound the call with
+   `context.WithTimeout(ctx, DeletionRequestBudget)` (2 min); on timeout the whole cancel rolls back, the deletion stays
+   pending, the action records failure, and the result claims are released (existing `releaseOn`).
+7. **Measurement, binding targets.** A test `TestOrganizationDeletionTenThousandDevices` in
+   `server/internal/app/organizations_deletion_integration_test.go` (skipped with `-short`) seeds one organization with
+   10 000 active devices (set-based insert) and measures `RequestDeletion` and `CancelDeletion` end to end. On the
+   development host, measured without a parallel suite: request ≤ **5 s**, cancel ≤ **20 s**. The test asserts the
+   loose ceilings request ≤ 30 s and cancel ≤ 60 s (CI headroom) and logs both durations; the result document records
+   the development-host numbers. A development-host number above its target is a stop condition (report, do not tune
+   the test).
+
+### Gaps during the grace period (review 1 Minor 4, PDK-1039)
+
+8. **The organization administrator cannot withdraw an offboarding uninstall.** `Uninstalls.Cancel` (and so
+   `POST /api/v1/devices/{id}/uninstall/cancel`, MCP included) answers 409 `invalid_state` with detail "the uninstall
+   belongs to the organization's deletion; only cancelling the deletion withdraws it" when `uninstall_reason =
+   'organization_offboarding'`; the attempt records `device.uninstall_cancelled` with outcome failure (runner rule).
+   `Uninstalls.Request` keeps its rules: while an offboarding uninstall is open it refuses (409), and when that
+   uninstall's report is overdue (`UninstallReportTimeout`) an organization administrator MAY replace it with an own
+   request, whose `uninstall_reason` is NULL.
+9. **Lock and Destroy still take precedence.** `Revocations.Request` keeps cancelling an open uninstall, the offboarding
+   one included (review 2 finding D of M8d: the removal purges `paddock-revoke`). The deletion request never triggers a
+   revocation (maintainer decision §3.1); an administrator's own Lock or Destroy stays possible during the grace period.
+10. **Every device gets its leave at step `devices` at the latest.** Step `devices` (PDK-1016) runs in one
+    `InOrgOffboarding` transaction that first takes `pg_advisory_xact_lock(db.OffboardingLockKey(org))` (exclusive;
+    every transaction that entered before `deleting` has ended, amendment d), then, for every device with
+    `uninstalled_at IS NULL` and `state NOT IN ('retired','rejected')`:
+    - it keeps the device's open uninstall (any mode, any reason) when its command status is `pending`, `delivered` or
+      `succeeded`;
+    - otherwise (no open uninstall; command `failed`, `expired` or `cancelled`) it issues a fresh `uninstall` `leave`
+      as the system, set-based as in point 5, with `uninstall_reason = 'organization_offboarding'` and `expires_at =
+      now() + OffboardedDeviceRetention`, regardless of an open Lock or Destroy (that revocation cannot be served once
+      the organization is gone; the agent's own `revocationWindow` still refuses an uninstall right after a
+      revocation);
+    - it signs each kept or issued command with `commandsign.Sign(ctx, signer, app.Payload(cmd))` and writes the
+      `offboarded_device` row with that envelope.
+
+    This covers devices enrolled or approved during the grace period, devices whose offboarding uninstall a Lock or
+    Destroy cancelled, devices skipped at the request whose own uninstall ended later, refused (`conversion_pending`,
+    `revocation_pending`) and expired commands, and `pending`/`quarantined` devices. The step's
+    `organization.deletion_step_completed` gains the param `uninstalls_reissued` (registered by PDK-1014). The function
+    is `func (u *Uninstalls) reissueForOffboarding(ctx context.Context, q *pgstore.Queries, expiresAt time.Time)
+    (reissued int, err error)` and is called only by `app.Offboarding`.
+11. **No enrollment refusal during the grace period.** A pending deletion does not refuse enrollment or approval; such
+    devices receive their leave through point 10. Once the status is `deleting`, amendment d's gate refuses enrollment
+    (gateway 401 `identity_revoked`); PDK-1038 proves it with a test.
+12. **The organization administrator sees why.** `DeviceUninstall` (admin API) gains the required, nullable property
+    `reason: { type: string, enum: [organization_offboarding], nullable: true }`. The portal (PDK-1018) labels such an
+    uninstall "Removal for the organization's deletion" (en/de) and offers no cancel action for it.
+
+### Failure after the uninstalls went out (review 1 Minor 5)
+
+13. **Documented, plus the count in the failure event.** If `RequestDeletion`'s finalize transaction fails after
+    `requestForOffboarding` committed, the action records failure while the uninstalls are live and the deletion stays
+    pending with NULL counts (never started; cancellable after `DeletionRequestStale`). This stays as designed. Binding:
+    finalize MUST set `uninstalls_issued` and `uninstalls_skipped` on the recorder before the statement that can fail,
+    so the failure event states how many devices were told to leave (test with an injected finalize failure); the
+    runbook (PDK-1019) states the recovery: wait 10 minutes, cancel (withdraws the undelivered uninstalls), request
+    again.
+
+### Residual risk (PDK-1019 records it)
+
+14. A device whose in-place encryption is unfinished or whose revocation was just handed to `paddock-revoke` when the
+    organization is deleted refuses the leave; after the deletion its result route answers 401, so it keeps an inert
+    Paddock agent until reinstalled. The user keeps working (contract 8). The banner and the runbook ask administrators
+    to finish in-place encryptions during the grace period.
+
+### Assignment
+
+| Item | Ticket |
+| --- | --- |
+| Points 1–7, 8, 12 (API), 13, registration of `uninstalls_reissued` | PDK-1014 fix round |
+| Point 10 | PDK-1016 |
+| Point 11 (enrollment refused while `deleting`) | PDK-1038 |
+| Point 12 (portal) | PDK-1018 |
+| Points 13 (runbook), 14 | PDK-1019 |
+
+PDK-1015 is unchanged. PDK-1039 is decided by points 8–12 and carries no implementation of its own.
