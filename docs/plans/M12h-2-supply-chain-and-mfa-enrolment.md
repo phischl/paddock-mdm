@@ -427,3 +427,9 @@ Binding; where it contradicts decision 7 or the amendments above, it wins.
 3. **Banner audience and wording: accepted as implemented.** All portal roles (organization administrator, operator,
    auditor, platform administrator) see it during the 30 days. With nothing pending it shows the announcement without a
    count. Reusing the setup-link wording is correct; the denial reason key stays for the denial page only.
+4. **No organization-issued link for a platform administrator.** When the account is a direct member of
+   `paddock.platform.admins` (an identity with both roles, ADR 0045), `POST /api/v1/users/{id}/enrolment-link` answers
+   409 `invalid_state` with the detail "platform administrators receive their setup link from the host operator" and
+   records the attempt as a failure. Reason: an organization administrator must not control how a platform account gets
+   its second factor; the host command stays the only path for platform administrators. In **PDK-1027**, with an
+   acceptance case.
