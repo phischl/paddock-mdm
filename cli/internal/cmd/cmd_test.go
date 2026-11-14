@@ -305,6 +305,25 @@ func TestApplySoftwareDocument(t *testing.T) {
 	}
 }
 
+// TestApplyPatchSLA is PDK-814: settings.patch_sla is planned field by field like the other settings sections.
+func TestApplyPatchSLA(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "paddock.yml")
+	doc := "api_version: paddock/v1\nkind: OrganizationConfig\nsettings:\n  patch_sla:\n    critical_days: 3\n    high_days: 30\n" +
+		"    medium_days: 90\n    low_days: 0\n"
+	if err := os.WriteFile(file, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api, pc := setup(t, `{"changes":[{"section":"settings.patch_sla","key":"","action":"update","fields":`+
+		`[{"name":"critical_days","before":7,"after":3}]}],"created":0,"updated":1,"deleted":0}`)
+	r := pc("", "apply", "-f", file, "--dry-run")
+	if r.code != 0 || r.stdout != "~ settings.patch_sla critical_days: 7 -> 3\nPlan: 0 to create, 1 to update, 0 to delete\n" {
+		t.Fatalf("dry run:\n%s\n%+v", r.stdout, r)
+	}
+	if !strings.Contains(string(api.lastBody), `"patch_sla":{"critical_days":3,"high_days":30,"low_days":0,"medium_days":90}`) {
+		t.Fatalf("document sent %s", api.lastBody)
+	}
+}
+
 // TestApplyRolloutLine is PDK-159 (plan M11 decision 38, amendment R6.1): the apply prints how the change set reaches
 // the devices; there are no --urgent and --reason flags, because a token never satisfies the step-up they need.
 func TestApplyRolloutLine(t *testing.T) {

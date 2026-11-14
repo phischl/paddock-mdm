@@ -306,3 +306,46 @@ Binding; where it contradicts the sections above (decisions 1, 2.1, 4; SC-R1; §
   approve pull requests". New CI component: `renovatebot/github-action` with the Renovate image (approved with Q11).
 - **Stop condition (added).** The repository setting is not enabled when PDK-1023 runs its first dispatch: stop and
   report; do not work around it with another token.
+
+## Amendment 2026-11-14 c — MFA enrolment: administrators only, TOTP-only administrators, the denial reason (architect decision for PDK-1026; ADR 0053 amendment c)
+
+Binding; where it contradicts decision 7, §8 MF1/MF4 or §9 MFA-R1, it wins.
+
+1. **The deny applies to administrators only.** `paddock-admin-login` is the default brand's authentication flow, so
+   the device-code page runs it for every device user (blueprint comment of stage B, PDK-498). "Administrator" is the
+   existing policy `paddock-admin-login-webauthn-administrator`: a direct member of `paddock.platform.admins` or of
+   `paddock.<slug>.admins|operators|auditors`. Decision 4's seed MUST use exactly this predicate. Bindings, with all
+   object names of decision 7 unchanged:
+   - Stage A `paddock-admin-login-mfa` (deny): `paddock-mfa-enrol-at-login-absent` AND `…-webauthn-administrator`
+     (policy engine mode `all`).
+   - Stage A sibling `paddock-admin-login-mfa-enrol` (configure): `paddock-mfa-enrol-at-login` OR NOT
+     `…-webauthn-administrator`. NOT is the binding's `negate: true` on a second binding of the administrator
+     policy; engine mode `any`. Device users therefore keep today's enrolment (ADR 0053 decision 5, RR-139).
+   - Stage B `paddock-admin-login-webauthn` (deny): `…-webauthn-missing` AND `…-webauthn-administrator` AND
+     `paddock-mfa-enrol-at-login-absent`.
+   - Stage B sibling `paddock-admin-login-webauthn-enrol` (configure): `…-webauthn-missing` AND
+     `…-webauthn-administrator` AND `paddock-mfa-enrol-at-login`.
+   - `paddock-default-login-mfa` and `paddock-default-login-mfa-enrol`: the same pair as stage A.
+   Test (acceptance, added to MF1): a new device user without a factor completes `/device` enrolment through the
+   brand flow as before; a new administrator without a factor is denied.
+2. **Seed every administrator without a WebAuthn device.** Decision 4's seed sets `paddock_mfa_enrol_at_login: true` on
+   every administrator (point 1 predicate) without a WebAuthn device at the first round after the upgrade, including
+   accounts that have only TOTP. Reason: stage B now denies an administrator without WebAuthn, so seeding only accounts
+   with neither factor would lock TOTP-only administrators out. Stage A still demands their TOTP (configure acts only
+   when no device exists, so it validates the existing TOTP). The removal rule is unchanged: the attribute is cleared
+   once the account has a WebAuthn device. MF4 gains a case: a TOTP-only administrator existing before the seed gets
+   the attribute, proves TOTP, enrols a passkey, and the next round clears the attribute.
+3. **The denial reason.** Authentik's deny ends on Authentik's own access-denied page; no callback reaches Paddock,
+   so no `admin.login` event is recorded for it (an Authentik decision, not a Paddock action). Binding:
+   - `mfa_enrolment_required` joins the closed `/login-denied` reason set (API enum, en/de i18n).
+   - The OIDC callback uses it in place of `passkey_required`/`mfa_required` when `UserAuthenticators` reports no
+     WebAuthn device for the account. This is reached only when Authentik let such an account through, for example
+     with `PADDOCK_LOGIN_MFA_OPTIONAL`.
+   - MF1 asserts the Authentik denial (the flow executor answers with the access-denied component), that no portal
+     session exists, and that no `admin.login` success event is recorded.
+   - MFA-R1 reads "sees Authentik's denial".
+   - The Authentik-side denial is visible in Authentik's event log (`login_failed`), which is shipped like every
+     Authentik event.
+
+Tickets: points 1–3 PDK-1026 (blueprint, worker seed, callback, gates MF1/MF4); the reason enum and i18n of point 3
+belong to PDK-1026 as well. PDK-1027 is unchanged except that its portal texts use the reason key of point 3.

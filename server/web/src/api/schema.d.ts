@@ -2006,6 +2006,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/patch-sla": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The patch SLA (plan M13c decision 17): days a vulnerability with a fixed version may stay open per severity, 0 = no SLA; the defaults 7/30/90/0 until changed. */
+        get: operations["getPatchSlaSettings"];
+        /**
+         * @description Roles: org_admin. Replaces the patch SLA: critical_days, high_days, medium_days and low_days, each 0 to 365
+         *     (0 = the severity has no SLA). A finding breaches when it is open more whole days than its severity's SLA. 400
+         *     invalid_request for a value out of range.
+         */
+        put: operations["updatePatchSlaSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/package-holds": {
         parameters: {
             query?: never;
@@ -2602,6 +2624,60 @@ export interface paths {
          *     Every export is recorded as access_review.exported, whatever the privacy settings.
          */
         get: operations["exportAccessReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/patch-compliance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The patch compliance report of the organization (plan M13c decision
+         *     18 and amendment 2026-11-14) against its patch SLA: the state at generated_at, with no period. It covers active
+         *     devices the inventory system knows (optionally the members of one device group) and every open finding with a
+         *     severity and a fixed version; days_open = floor((generated_at - first_seen_at) / 24 h), breached when days_open
+         *     is greater than the severity's SLA days; per severity the open and breached findings with the median and 90th
+         *     percentile of days open, per device group the devices and how many have a breach, the devices with a breach
+         *     (at most 1000, devices_total counts all) and the pinned required catalog assignments with the devices they
+         *     target that run an older version. One report object, not a collection; without inventory every section is
+         *     empty and summary.devices is 0. 404 not_found for an unknown device group. The view
+         *     is recorded as patch_compliance.viewed once per actor and UTC day, only while the organization's
+         *     inventory_view_recorded privacy setting is on.
+         */
+        get: operations["getPatchCompliance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/patch-compliance/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The patch compliance report as a download, with every device (no
+         *     cap): format json (the report object) or csv (one file for every section, told apart by the section column:
+         *     summary, severity, group, one breach row per breached finding, catalog; cells that a spreadsheet could run as a
+         *     formula carry a leading apostrophe). Content-Disposition names the file
+         *     paddock-patch-compliance-<organization slug>-<day of generated_at>.<json|csv>. The state at generated_at and the
+         *     device group as for the view.
+         *     Every export is recorded as patch_compliance.exported, whatever the privacy settings.
+         */
+        get: operations["exportPatchCompliance"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6966,6 +7042,98 @@ export interface components {
             audit_search_recorded: boolean;
             inventory_view_recorded: boolean;
         };
+        /** @description Days a vulnerability with a fixed version may stay open per severity; 0 = no SLA. */
+        PatchSlaSettings: {
+            critical_days: number;
+            high_days: number;
+            medium_days: number;
+            low_days: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        PatchSlaSettingsUpdate: {
+            critical_days: number;
+            high_days: number;
+            medium_days: number;
+            low_days: number;
+        };
+        /** @description The SLA the report was computed against. */
+        PatchSla: {
+            critical_days: number;
+            high_days: number;
+            medium_days: number;
+            low_days: number;
+        };
+        PatchComplianceReport: {
+            /**
+             * Format: date-time
+             * @description The moment the report shows the state of; days_open is measured to it.
+             */
+            generated_at: string;
+            /**
+             * Format: uuid
+             * @description The device group filter; null for all devices.
+             */
+            device_group_id: string | null;
+            sla: components["schemas"]["PatchSla"];
+            summary: {
+                /** @description Active devices in scope that the inventory system knows. */
+                devices: number;
+                /** @description Devices without a breached finding. */
+                compliant: number;
+                /** @description Devices with at least one breached finding. */
+                breached: number;
+            };
+            /** @description Severities with open findings, most severe first. */
+            by_severity: components["schemas"]["PatchComplianceSeverity"][];
+            /** @description Device groups of the devices in scope, by name. */
+            by_group: components["schemas"]["PatchComplianceGroup"][];
+            /** @description Devices with a breached finding, most breaches first; at most row_cap in the view, all in the export. */
+            devices: components["schemas"]["PatchComplianceDevice"][];
+            /** @description Every device with a breached finding. */
+            devices_total: number;
+            /** @description The most devices the view lists. */
+            row_cap: number;
+            /** @description Pinned required catalog assignments and the devices they target that run an older version. */
+            catalog: components["schemas"]["PatchComplianceCatalogRow"][];
+        };
+        PatchComplianceSeverity: {
+            /** @enum {string} */
+            severity: "critical" | "high" | "medium" | "low";
+            findings_open: number;
+            findings_breached: number;
+            median_days_open: number;
+            p90_days_open: number;
+        };
+        PatchComplianceGroup: {
+            /** Format: uuid */
+            device_group_id: string;
+            device_group: string;
+            devices: number;
+            breached: number;
+        };
+        PatchComplianceDevice: {
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            breached: components["schemas"]["PatchComplianceBreach"][];
+        };
+        PatchComplianceBreach: {
+            cve: string;
+            package: string;
+            /** @enum {string} */
+            severity: "critical" | "high" | "medium" | "low";
+            days_open: number;
+            fixed_version: string;
+            sla_days: number;
+        };
+        PatchComplianceCatalogRow: {
+            /** Format: uuid */
+            assignment_id: string;
+            entry: string;
+            required_version: string;
+            devices_behind: number;
+        };
         UpdateSettings: {
             security_daily_at: string;
             regular_schedule: string;
@@ -7627,7 +7795,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap" | "report_only" | "software_requests_open";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind" | "disk_conversion_failed" | "clock_drift" | "event_gap" | "report_only" | "software_requests_open" | "patch_sla_breached";
         Attention: {
             /** @description The live finding of the condition (plan M9 decision 34); null until the findings round created it. */
             finding: components["schemas"]["AttentionFinding"] | null;
@@ -7639,10 +7807,10 @@ export interface components {
             hostname: string;
             /**
              * Format: date-time
-             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled; for software_requests_open when the oldest open request was made).
+             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled; for software_requests_open when the oldest open request was made; for patch_sla_breached when the first of the device's findings exceeded its severity's SLA).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; report_only: the enrollment method; software_requests_open: the number of the device's open software requests; otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as "<seconds> s" (server time minus device time); event_gap: the missing event sequence numbers as "<from>-<to>"; report_only: the enrollment method; software_requests_open: the number of the device's open software requests; patch_sla_breached: the number of the device's findings open longer than their severity's patch SLA; otherwise empty. */
             detail: string;
         };
         /** @enum {string} */
@@ -9556,6 +9724,8 @@ export interface components {
         /** @description RFC 3339; the end of the period, default now. */
         AccessReviewTo: string;
         AccessReviewFormat: "json" | "csv";
+        /** @description Only the members of this device group. */
+        PatchComplianceDeviceGroup: string;
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         BackupTargetSort: "name" | "-name" | "type" | "-type" | "created_at" | "-created_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -13324,6 +13494,57 @@ export interface operations {
             403: components["responses"]["Problem"];
         };
     };
+    getPatchSlaSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The patch SLA. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatchSlaSettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updatePatchSlaSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchSlaSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatchSlaSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
     listPackageHolds: {
         parameters: {
             query?: {
@@ -14490,6 +14711,63 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    getPatchCompliance: {
+        parameters: {
+            query?: {
+                /** @description Only the members of this device group. */
+                device_group_id?: components["parameters"]["PatchComplianceDeviceGroup"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The patch compliance report. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatchComplianceReport"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    exportPatchCompliance: {
+        parameters: {
+            query: {
+                /** @description Only the members of this device group. */
+                device_group_id?: components["parameters"]["PatchComplianceDeviceGroup"];
+                format: components["parameters"]["AccessReviewFormat"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The exported report. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatchComplianceReport"];
+                    "text/csv": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
         };
     };
     listAttentionDevices: {

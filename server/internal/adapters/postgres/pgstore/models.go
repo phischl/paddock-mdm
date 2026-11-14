@@ -938,6 +938,16 @@ type OrganizationMcpSetting struct {
 	UpdatedBy         uuid.NullUUID
 }
 
+type OrganizationPatchSla struct {
+	OrganizationID uuid.UUID
+	CriticalDays   int32
+	HighDays       int32
+	MediumDays     int32
+	LowDays        int32
+	UpdatedAt      time.Time
+	UpdatedBy      uuid.NullUUID
+}
+
 type OrganizationPrivacySetting struct {
 	OrganizationID        uuid.UUID
 	RetiredInventoryDays  int32
@@ -1302,6 +1312,11 @@ type VulnerabilityFinding struct {
 	CvssVector        *string
 	FleetSeverity     *string
 	FleetFixedVersion *string
+}
+
+type VulnerabilitySlaSummary struct {
+	OrganizationID uuid.UUID
+	Day            time.Time
 }
 
 type VulnerabilitySummary struct {

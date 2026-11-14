@@ -696,6 +696,14 @@ case "$*" in
   "volume ls"*) printf '%s\n' $FAKE_VOLUMES ;;
   "volume rm"*) [[ " $FAKE_IN_USE " != *" ${*: -1} "* ]] || exit 1 ;;
   # Compose folds a long plain scalar at its spaces onto more-indented continuation lines (PDK-733 review 3).
+  # The YAML rendering of ./paddock check's connection budget: a file (FAKE_CONFIG_FILE; a missing one fails) or the
+  # real Compose (FAKE_REAL_DOCKER).
+  *" config")
+    if [[ -n "${FAKE_CONFIG_FILE:-}" ]]; then exec cat "$FAKE_CONFIG_FILE"; fi
+    if [[ -n "${FAKE_REAL_DOCKER:-}" ]]; then exec "$FAKE_REAL_DOCKER" "$@"; fi
+    printf '%s\n' '      o: uid=999,gid=999,file_mode=0640,dir_mode=0750,vers=3,username=svc,password=S3cr3t' \
+      '        pass$word battery staple'
+    ;;
   *" config"*) printf '%s\n' '      o: uid=999,gid=999,file_mode=0640,dir_mode=0750,vers=3,username=svc,password=S3cr3t' \
     '        pass$word battery staple' ;;
 esac
@@ -865,6 +873,67 @@ FAKE_PRODCHECK_RC=1 paddock_t check
 [[ $rc == 1 && "$out" == *"WARN  $item"* ]] &&
   pass "the leftover warning leaves a failing check failing" || fail "check with leftovers and a FAIL: exit $rc, $out"
 rm -rf "$work/t/.bundle-seq.replaced.aB3dE9" "$work/t/.bundle-seq.replaced.zz01xy"
+# PDK-1032 (plan M19 D1.4, amendments b and c): ./paddock check sums each long-running role's maximum connections
+# times its replicas, as `docker compose config` renders them from .env, against max_connections less 3, 12 and 4;
+# FAIL above it (exit 1), WARN with fewer than 5 to spare.
+item="postgres: connection budget"
+cp -p "$work/t/.env" "$work/env.budget-keep"
+# budget_check <.env lines…>: ./paddock check with the lines added to .env, rendered by the real Compose.
+budget_check() {
+  cp -p "$work/env.budget-keep" "$work/t/.env"
+  (($# == 0)) || printf '%s\n' "$@" >>"$work/t/.env"
+  FAKE_REAL_DOCKER="$(command -v docker)" paddock_t check
+}
+budget_check
+[[ $rc == 0 && "$out" == *"WARN  $item"*"79 of 81 connections (max_connections 100 "*"4 for an operator command"* &&
+  "$out" != *"paddock-worker-ingest"* ]] &&
+  pass "budget: the default configuration (ingest replicas unset) warns with 79 of 81 and exits 0" ||
+  fail "budget, replicas unset: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=0
+[[ $rc == 0 && "$out" == *"WARN  $item"*"79 of 81 connections"* && "$out" != *"paddock-worker-ingest"* ]] &&
+  pass "budget: no ingest worker counts with PADDOCK_WORKER_INGEST_REPLICAS=0" || fail "budget, 0 replicas: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=2 PADDOCK_PG_MAX_CONNECTIONS=150
+[[ $rc == 0 && "$out" == *"PASS  $item"*"101 of 131 connections (max_connections 150 "*"paddock-worker 1x30"*"paddock-worker-ingest 2x11"* ]] &&
+  pass "budget: one worker and two ingest workers pass at 150" || fail "budget, 2 replicas at 150: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=2
+[[ $rc == 1 && "$out" == *"FAIL  $item"*"101 of 81 connections"*"raise PADDOCK_PG_MAX_CONNECTIONS"* ]] &&
+  pass "budget: two ingest workers at the default 100 fail the check" || fail "budget, 2 replicas at 100: exit $rc, $out"
+# The boundaries of amendment c with one ingest worker (90 connections); the limit is max_connections less 19, so these
+# equal sums of 76 (OK), 77 and 81 (WARN) and 82 (FAIL) against the default limit of 81.
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=1 PADDOCK_PG_MAX_CONNECTIONS=114
+[[ $rc == 0 && "$out" == *"PASS  $item"*"90 of 95 connections"* ]] &&
+  pass "budget: 5 to spare (76 of 81) passes" || fail "budget, 5 to spare: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=1 PADDOCK_PG_MAX_CONNECTIONS=113
+[[ $rc == 0 && "$out" == *"WARN  $item"*"90 of 94 connections"*"fewer than 5 to spare"* ]] &&
+  pass "budget: 4 to spare (77 of 81) warns and keeps the exit code" || fail "budget, 4 to spare: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=1 PADDOCK_PG_MAX_CONNECTIONS=109
+[[ $rc == 0 && "$out" == *"WARN  $item"*"90 of 90 connections"* ]] &&
+  pass "budget: none to spare (81 of 81) warns" || fail "budget, 0 to spare: exit $rc, $out"
+budget_check PADDOCK_WORKER_INGEST_REPLICAS=1 PADDOCK_PG_MAX_CONNECTIONS=108
+[[ $rc == 1 && "$out" == *"FAIL  $item"*"90 of 89 connections"* ]] &&
+  pass "budget: one over (82 of 81) fails" || fail "budget, one over: exit $rc, $out"
+# Three full workers, which no setting of the bundle configures: the rendered configuration with paddock-worker's
+# replicas set to 3.
+cp -p "$work/env.budget-keep" "$work/t/.env"
+budget_files=()
+for f in $(host_files "$work/t" controlplane); do budget_files+=(-f "$work/t/$f"); done
+docker compose --project-directory "$work/t" -p paddock-bundle-test --env-file "$work/t/versions.env" \
+  --env-file "$work/t/.env" "${budget_files[@]}" --profile '*' config |
+  awk '{ print } $0 == "  paddock-worker:" { print "    deploy:"; print "      replicas: 3" }' >"$work/budget-worker3.yaml"
+FAKE_CONFIG_FILE="$work/budget-worker3.yaml" paddock_t check
+[[ $rc == 1 && "$out" == *"FAIL  $item"*"139 of 81 connections"*"paddock-worker 3x30"* ]] &&
+  pass "budget: paddock-worker=3 fails at 100" || fail "budget, 3 workers: exit $rc, $out"
+FAKE_CONFIG_FILE="$work/nonexistent.yaml" paddock_t check
+[[ $rc == 0 && "$out" == *"WARN  $item"*"not checked: rendering the Compose configuration failed"* ]] &&
+  pass "budget: a failed rendering is reported as not checked" || fail "budget, failed rendering: exit $rc, $out"
+FAKE_PRODCHECK_RC=3 FAKE_CONFIG_FILE="$work/budget-worker3.yaml" paddock_t check
+[[ $rc == 3 && "$out" == *"FAIL  $item"* ]] && pass "budget: a failing prod-check keeps its exit code" ||
+  fail "budget with a failing prod-check: exit $rc, $out"
+sed -i 's/^PADDOCK_HOST=.*/PADDOCK_HOST=audit/' "$work/t/.env"
+FAKE_REAL_DOCKER="$(command -v docker)" paddock_t check
+[[ $rc == 0 && "$out" != *"$item"* ]] && pass "budget: the audit host, without the control-plane database, has no budget item" ||
+  fail "budget on the audit host: exit $rc, $out"
+cp -p "$work/env.budget-keep" "$work/t/.env"
 # PDK-1007: ./paddock up removes the leftovers as root only, by the exact name below the bundle directory, without
 # following symlinks, and never while bundle-seq/ is missing (migrate-from's double failure leaves the aside as the only
 # copy). A stand-in id makes the script see root; the removal itself runs as the test user in its own directory.

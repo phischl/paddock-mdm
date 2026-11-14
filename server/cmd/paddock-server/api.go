@@ -276,6 +276,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Overview:         app.NewOverview(orgPool),
 		SecurityReview:   app.NewSecurityReview(orgPool),
 		AccessReview:     app.NewAccessReview(runner, orgPool, auditReader),
+		PatchSLA:         app.NewPatchSLA(runner, orgPool),
+		PatchCompliance:  app.NewPatchCompliance(runner, orgPool),
 		Diagnostics:      diagnostics,
 		MCPSettings:      app.NewMCPSettings(runner, orgPool, platformPool),
 		MCPAccess:        app.NewMCPAccessService(orgPool, platformPool, admin.PrivilegedRoles),

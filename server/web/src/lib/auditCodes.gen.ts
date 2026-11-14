@@ -176,6 +176,8 @@ export const auditCodes = [
   'package_hold.created',
   'package_hold.deleted',
   'package_hold.updated',
+  'patch_compliance.exported',
+  'patch_compliance.viewed',
   'permission_profile.created',
   'permission_profile.deleted',
   'permission_profile.root_grant_confirmed',
@@ -228,6 +230,7 @@ export const auditCodes = [
   'settings.dms_changed',
   'settings.login_changed',
   'settings.managed_files_changed',
+  'settings.patch_sla_changed',
   'settings.privacy_changed',
   'settings.rollout_changed',
   'settings.updates_changed',
@@ -265,4 +268,5 @@ export const auditCodes = [
   'user_group.updated',
   'vulnerability.critical_summary',
   'vulnerability.devices_viewed',
+  'vulnerability.sla_breached',
 ] as const
