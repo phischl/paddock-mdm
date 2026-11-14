@@ -277,6 +277,79 @@ empty index and needs none of this.
 - **Planning figure:** about 1.5 min per million events in the index. Count the events before an upgrade with
   `SELECT count(*) FROM audit_event` on `paddock_audit`.
 
+## Identity rounds
+
+The worker reconciles the identity provider every 10 minutes (`IdentitySync.Reconcile`: `EnsureOrganization` per
+active organization, plus the device login groups) and the admin accounts every 5 minutes. Every call is a request to
+`authentik-server` and a burst of queries on `authentik-postgres`, also while nobody uses the portal. The cost grows
+with the number of organizations, so it is measured at **250 organizations** (PDK-1020) and again after every change
+of the rounds (PDK-1021 repeats it with the same procedure).
+
+### Procedure
+
+Run it on a development stack only (`make load-orgs` refuses a stack with production markers, like `make
+load-identities`), with the worker as the only load: no portal sessions, no load test, no other Paddock stack on the
+host. Record the commit (`git rev-parse --short HEAD` of the image's checkout) and the hardware next to the figures.
+
+1. **Seed.** Log in to the portal as the platform admin, copy the value of the `paddock_session` cookie (browser
+   developer tools) into `bin/load/platform-session` (a file inside the checkout, mode 0600), then
+
+   ```sh
+   make load-orgs COOKIE_FILE=bin/load/platform-session N=250
+   ```
+
+   creates the organizations `load-001` … `load-250` through `POST /api/platform/v1/organizations`
+   (`test/load/cmd/orgseed`). It is repeatable: organizations that exist are counted, not recreated. The session
+   expires; use a fresh cookie for a second run. Sign out of the portal afterwards so the window below has no activity.
+   `orgseed` creates no devices: the platform principal cannot act inside an organization, and a login assignment
+   needs a device of that organization. The figures therefore measure `EnsureOrganization` and the admin-account
+   round, not the per-device group calls (see "Limits of the baseline").
+2. **Settle.** Wait until the worker log shows a finished reconcile round (`docker logs <paddock-worker>` ends with
+   the last `authentik organization ensured` line of an organization and stays quiet) so that the first round after
+   the seeding (which creates groups) is not part of the window.
+3. **Measure 10 minutes without portal activity.** Note the start time `T0` (UTC, `date -u +%Y-%m-%dT%H:%M:%SZ`),
+   start `docker stats --format '{{.Name}} {{.CPUPerc}}' <authentik-postgres>` in a second shell, sampling every 2 s
+   into a file (`while sleep 2; do docker stats --no-stream --format '{{.CPUPerc}}' <authentik-postgres>; done >
+   bin/load/pg-cpu.txt`), and wait 10 minutes. The window covers one reconcile round and two admin-accounts rounds.
+4. **Count the requests by path.** There is no Paddock metric for Authentik requests; Authentik's access log names
+   every API request with its path:
+
+   ```sh
+   docker logs <authentik-server> --since <T0> --until <T0+10m> 2>&1 | grep '"paddock-service"' \
+     | grep -o '"event": "/api/v3/[a-z_/]*' | sort | uniq -c | sort -rn
+   ```
+
+   Sum the counts for the total. (`grep '"paddock-service"'` keeps the requests of Paddock's service account.)
+5. **CPU average.** `awk '{ sub("%",""); s+=$1; n++ } END { printf "%.1f%%\n", s/n }' bin/load/pg-cpu.txt` (percent of
+   one core).
+6. **Round duration.** In the worker log, the time between the first and the last `authentik organization ensured`
+   line of the reconcile round inside the window.
+7. **Repeat** steps 2–6 once; the two runs must agree within 10 %. Record the mean.
+
+### Cleanup
+
+Offboard the organizations `load-001` … `load-250` through organization offboarding (M17) after the measurement,
+with a grace period of 0 (development and test stacks only). Never run the measurement on a stack whose data must be
+kept and that cannot be offboarded: use a separate scratch stack instead, and remove it afterwards.
+
+### Baseline at 250 organizations
+
+PLACEHOLDER (PDK-1020, measurement still open): the lead fills this table after running the procedure above.
+
+| Item | Baseline (current code) | After PDK-1021 |
+| --- | --- | --- |
+| Commit | _tbd_ | _tbd_ |
+| Hardware | _tbd_ | _tbd_ |
+| Authentik requests in 10 min, total | _tbd_ | _tbd_ |
+| of which per path (`/api/v3/...`) | _tbd_ | _tbd_ |
+| `authentik-postgres` CPU average | _tbd_ | _tbd_ |
+| Reconcile round duration | _tbd_ | _tbd_ |
+
+### Limits of the baseline
+
+Organizations without devices do not exercise `DeviceLoginGroups`; with devices the round costs 14 + 1 requests per
+organization instead of 14 (PDK-570), so the baseline is a lower bound of the real cost.
+
 ## Backup repository
 
 The local backup repository (volume `backup-repo` of the control-plane host, `docs/operations/backup.md`) is the one
