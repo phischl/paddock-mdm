@@ -590,6 +590,7 @@ e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running
 # one gateway replica directly (http://paddock-gateway:8081), each device with its own X-Paddock-Client-IP address.
 LOAD_DIR := bin/load
 COUNT    ?= 10000
+N        ?= 250
 SCENARIO ?= checkin
 # Never against production (PDK-006 review 1): load-guard.sh refuses unless the running gateway of the checkout's project
 # is not PADDOCK_ENV=production and the checkout is a development one.
@@ -609,6 +610,14 @@ load-identities: ## Enroll COUNT load test devices with the enrollment configura
 	docker run --rm --network $(DEV_PROJECT)_edge -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
 		/src/$(LOAD_DIR)/identities $(foreach c,$(CONFIGS),--config $(c)) --count $(COUNT) \
 		--server http://paddock-gateway:8081 --client-ip --out $(LOAD_DIR)/identities.json
+
+.PHONY: load-orgs
+load-orgs: ## Create N organizations (load-001 …) through the admin API; COOKIE_FILE = file inside the checkout with the platform admin's paddock_session value (PDK-1020)
+	@test -s "$(COOKIE_FILE)" || { echo "usage: make load-orgs COOKIE_FILE=bin/load/platform-session [N=250]"; exit 2; }
+	@$(LOAD_GUARD)
+	CGO_ENABLED=0 go build -trimpath -o $(LOAD_DIR)/orgseed ./test/load/cmd/orgseed
+	docker run --rm --network $(DEV_PROJECT)_edge -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
+		/src/$(LOAD_DIR)/orgseed --server http://paddock-api:8080 --cookie-file $(COOKIE_FILE) --count $(N)
 
 # k6 joins edge for the gateway and data for the ingest scenario's Prometheus, which stays off edge (PDK-819).
 .PHONY: load-test
