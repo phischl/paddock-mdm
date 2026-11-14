@@ -68,3 +68,15 @@ decision 18, `adapters/authentik/users.go::RecoveryLink`).
 - − Device users still enrol at their first device login (decision 5); residual risk RR-139 until a later decision.
 - Follow-up: ADR 0007 and ADR 0034 amendments (pointer); `TestIdentityLockAuthentik`-style acceptance gates for the
   denied and the grandfathered path.
+
+## Amendment 2026-11-14 c — scope of the deny and the seed (architect; plan M12h-2 amendment c)
+
+- **Decision 3 is scoped to administrators** (decision 5 made explicit). The sign-in flow is also the brand flow that
+  every device-code approval runs. The deny stages therefore apply only to accounts matched by
+  `paddock-admin-login-webauthn-administrator` (direct members of the portal role groups); every other account keeps
+  `configure`.
+- **Decision 4 is changed.** The seed marks every administrator **without a WebAuthn device**, not only those with
+  neither WebAuthn nor TOTP. The WebAuthn stage now denies, and seeding only factorless accounts would lock out
+  administrators who have only TOTP. Their TOTP is still required before they enrol a passkey.
+- **Decision 3's denial reason.** Authentik's denial is shown by Authentik itself and reaches no Paddock callback. The
+  portal reason `mfa_enrolment_required` is used only when the callback does see such an account.

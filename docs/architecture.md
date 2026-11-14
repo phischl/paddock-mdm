@@ -136,7 +136,7 @@ The concept's IDs are kept. Each criterion names the role that must be able to o
 | N6 | **Localization:** no user-visible string in the portal is hard-coded; CI fails on missing English keys. |
 
 > **Amendment 2026-11-14 (plan M19 D1):** N2 reads "5 000 events/s with one worker and two ingest workers
-> (`paddock-worker-ingest=2`, `PADDOCK_WORKER_MODE=ingest`) at `PADDOCK_PG_MAX_CONNECTIONS=150`". Three full worker
+> (`PADDOCK_WORKER_INGEST_REPLICAS=2`, `PADDOCK_WORKER_MODE=ingest`) at `PADDOCK_PG_MAX_CONNECTIONS=150`". Three full worker
 > replicas do not fit PostgreSQL's connection budget (`docs/operations/capacity.md`); every restore starts the
 > database with at least the `max_connections` of the restored backup.
 
