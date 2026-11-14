@@ -39,7 +39,7 @@ export function listDeviceDiagnostics(id: string): (p: ListParams) => Promise<Pa
       await api.GET('/api/v1/devices/{id}/diagnostics', {
         params: {
           path: { id },
-          query: { page: p.page, page_size: p.page_size, sort: p.sort as DeviceDiagnosticsSort, state: p.state as DiagnosticsState[] },
+          query: { page: p.page, page_size: p.page_size, sort: p.sort as DeviceDiagnosticsSort, q: p.q, state: p.state as DiagnosticsState[] },
         },
       }),
     )

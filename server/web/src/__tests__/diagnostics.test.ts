@@ -45,7 +45,9 @@ const page = (items: Diagnostics[]) => () => Promise.resolve({ items, page: 1, p
 
 let wrapper: VueWrapper | null = null
 
-async function mountList(role: string, items: Diagnostics[], locale: 'en' | 'de' = 'en'): Promise<void> {
+async function mountList(
+  role: string, items: Diagnostics[], locale: 'en' | 'de' = 'en', fleet = true, fetch = page(items),
+): Promise<void> {
   const pinia = createPinia()
   setActivePinia(pinia)
   useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role, locale: 'en', theme: 'system', organization: null } as never
@@ -62,7 +64,7 @@ async function mountList(role: string, items: Diagnostics[], locale: 'en' | 'de'
   const Host = defineComponent({
     setup: () => () => h(VApp, null, {
       default: () => [
-        h(DiagnosticsList, { fetch: page(items), fleet: true }),
+        h(DiagnosticsList, { fetch, fleet }),
         pendingConfirm.value
           ? h(ConfirmDialog, {
             key: pendingConfirm.value.id, modelValue: true, ...pendingConfirm.value.options,
@@ -99,6 +101,23 @@ describe('diagnostics list', () => {
 
     await mountList('org_admin', [bundle('b1', 'stored')])
     expect(button('diagnostics-purge')).not.toBeNull()
+  })
+
+  it('searches the bundles of one device through the search field', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const fetch = vi.fn(page([bundle('b1', 'stored')]))
+      await mountList('org_operator', [], 'en', false, fetch)
+      const input = document.querySelector('input[type="text"], input[type="search"]') as HTMLInputElement
+      expect(input).not.toBeNull()
+      input.value = 'VPN'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await vi.advanceTimersByTimeAsync(500)
+      await flushPromises()
+      expect(fetch).toHaveBeenLastCalledWith(expect.objectContaining({ q: 'VPN' }))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('starts the step-up when the server asks for it and downloads once it is back', async () => {
