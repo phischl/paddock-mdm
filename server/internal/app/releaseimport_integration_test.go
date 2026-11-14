@@ -66,6 +66,12 @@ func (h releaseHarness) addSigned(f *fakeSource, v, name string, body []byte, co
 	f.add(v, name+".minisig", minisign.SignWithComments(h.priv, body, comment, ""))
 }
 
+// addSignedAs replaces the listed file name with body and its signature with the release comment of v and arch.
+func (h releaseHarness) addSignedAs(f *fakeSource, name string, body []byte, v, arch string) {
+	f.files[name] = body
+	f.files[name+".minisig"] = minisign.SignWithComments(h.priv, body, releasesig.Comment(v, arch), "")
+}
+
 // addRelease lists the required assets of v as the release workflow ships them (ADR 0043 decision 4), plus the
 // unsigned paddock-revoke package and SHA256SUMS, which the import must ignore.
 func (h releaseHarness) addRelease(f *fakeSource, v string) {
@@ -73,7 +79,11 @@ func (h releaseHarness) addRelease(f *fakeSource, v string) {
 		if !a.Required {
 			continue
 		}
-		h.addSigned(f, v, a.Name, []byte("content of "+a.Name), releasesig.Comment(v, a.Arch))
+		body := []byte("content of " + a.Name)
+		if a.Package != "" {
+			body = releaseDeb(a.Package, v, a.Arch, "content of "+a.Name)
+		}
+		h.addSigned(f, v, a.Name, body, releasesig.Comment(v, a.Arch))
 	}
 	f.add(v, "paddock-revoke_"+v+"_amd64-unsigned.deb", []byte("revoke"))
 	f.add(v, "SHA256SUMS", []byte("sums"))
@@ -166,7 +176,7 @@ func TestReleaseImport(t *testing.T) {
 	// The next import names the release just imported as the newest stored; optional packages are imported.
 	v2 := sourceVersion()
 	h.addRelease(src, v2)
-	deb := []byte("arm64 deb")
+	deb := releaseDeb(agentrelease.PackageAgent, v2, "arm64", "arm64 deb")
 	h.addSigned(src, v2, "paddock-agent_"+v2+"_arm64.deb", deb, releasesig.Comment(v2, "arm64"))
 	ctx, _, corr = steppedUpAdmin()
 	if d, err = imp.Import(ctx, v2); err != nil || len(d.Packages) != 4 {
@@ -186,7 +196,7 @@ func TestReleaseImport(t *testing.T) {
 
 	v4 := sourceVersion()
 	h.addRelease(src, v4)
-	fleetd := []byte("fleetd deb")
+	fleetd := releaseDeb(agentrelease.PackageFleetd, "1.48.0", "amd64", "fleetd deb")
 	h.addSigned(src, v4, "fleet-osquery_1.48.0_amd64.deb", fleetd, releasesig.Comment(v4, "amd64"))
 	ctx, _, _ = steppedUpAdmin()
 	if d, err = imp.Import(ctx, v4); err != nil {
@@ -346,6 +356,48 @@ func TestReleaseImportRefusals(t *testing.T) {
 			h.addSigned(src, v, "fleet-osquery_1.48.0_amd64.deb", []byte("fleetd 1.48.0"), "fleet-osquery 1.48.0 amd64")
 			return v
 		}, problem.ReleaseSignatureMismatch, "failure"},
+		// Plan M19 D6: correctly signed packages whose control file names another package, version or architecture.
+		"supervisor package stored as the agent package": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-agent_" + v + "_amd64.deb"
+			src.files[name] = src.files["paddock-supervisor_"+v+"_amd64.deb"]
+			src.files[name+".minisig"] = minisign.SignWithComments(h.priv, src.files[name], releasesig.Comment(v, "amd64"), "")
+			return v
+		}, problem.PackageNameMismatch, "failure"},
+		"package of another version": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-supervisor_" + v + "_amd64.deb"
+			h.addSignedAs(src, name, releaseDeb(agentrelease.PackageSupervisor, published, "amd64", "older"), v, "amd64")
+			return v
+		}, problem.PackageVersionMismatch, "failure"},
+		"package of another arch": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			name := "paddock-self-service_" + v + "_all.deb"
+			h.addSignedAs(src, name, releaseDeb(agentrelease.PackageSelfService, v, "amd64", "amd64 build"), v, agentrelease.ArchAll)
+			return v
+		}, problem.PackageArchMismatch, "failure"},
+		"fleetd named after another fleetd version": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSigned(src, v, "fleet-osquery_1.49.0_amd64.deb", releaseDeb(agentrelease.PackageFleetd, "1.48.0", "amd64", "fleetd"),
+				releasesig.Comment(v, "amd64"))
+			return v
+		}, problem.PackageVersionMismatch, "failure"},
+		"package with an xz control archive": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSignedAs(src, "paddock-agent_"+v+"_amd64.deb", xzControlDeb(), v, "amd64")
+			return v
+		}, problem.UnsupportedControlCompression, "failure"},
+		"signed file that is no package": {func() string {
+			v := sourceVersion()
+			h.addRelease(src, v)
+			h.addSignedAs(src, "paddock-agent_"+v+"_amd64.deb", []byte("no package"), v, "amd64")
+			return v
+		}, problem.InvalidRequest, "failure"},
 	} {
 		v := c.setup()
 		ctx, _, corr := steppedUpAdmin()

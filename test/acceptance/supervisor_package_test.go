@@ -24,7 +24,7 @@ func TestSupervisorPackage(t *testing.T) {
 	haltRunningRollouts(t, root)
 	t.Cleanup(func() { haltRunningRollouts(t, root) })
 	v := gateRelease(t, root, true, false)
-	deb := []byte("!<arch>\ngate supervisor " + v)
+	deb := releaseDeb("paddock-supervisor", v, "amd64")
 	expectStatus(t, uploadPackage(t, root, v, "paddock-supervisor", deb, signPackage(t, deb, v)), http.StatusOK, "")
 	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/publish", nil), http.StatusOK, "")
 	d := v2Device(t, alice, "", bundle.SchemaVersion, bundle.SchemaVersion2)

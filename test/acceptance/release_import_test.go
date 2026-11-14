@@ -140,7 +140,7 @@ func selfServicePackages(v string) int {
 func addSignedPackage(t *testing.T, files map[string][]byte, pkg, v, arch string) {
 	t.Helper()
 	name := pkg + "_" + v + "_" + arch + ".deb"
-	files[name] = []byte("!<arch>\ngate " + name)
+	files[name] = releaseDeb(pkg, v, arch)
 	files[name+".minisig"] = minisign.SignWithComments(releaseKey(t), files[name], releasesig.Comment(v, arch), "")
 }
 

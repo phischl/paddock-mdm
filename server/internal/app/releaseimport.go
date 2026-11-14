@@ -271,6 +271,9 @@ func (r *ReleaseImports) fetch(ctx context.Context, version string) ([]HostArtif
 		if _, err := r.verify(r.releases.packageVerifier(want.Package), want, body, sig, version); err != nil {
 			return nil, nil, err
 		}
+		if err := checkPackageControl(want.Package, pv, version, want.Arch, body); err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", want.Name, err)
+		}
 		pkgs = append(pkgs, HostPackage{Name: want.Package, PackageVersion: pv, Arch: want.Arch, Deb: body, Minisig: sig})
 	}
 	return arts, pkgs, nil

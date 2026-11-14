@@ -4058,7 +4058,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Roles: platform_admin, with a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). Imports the version from the configured release source (ADR 0043): the version must be newer than the newest published release, every file is verified with the release public key before anything is stored, and the release is published without a rollout; paddock-revoke is never imported. The whole import is bounded by 90 s. */
+        /** @description Roles: platform_admin, with a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). Imports the version from the configured release source (ADR 0043): the version must be newer than the newest published release, every file is verified with the release public key before anything is stored, and the release is published without a rollout; paddock-revoke is never imported. Every package's control file must name the package, version and architecture it is stored as (422 package_name_mismatch, package_version_mismatch, package_arch_mismatch; 415 unsupported_control_compression for a control archive in another compression than gzip or zstd). The whole import is bounded by 90 s. */
         post: operations["importAgentRelease"];
         delete?: never;
         options?: never;
@@ -4167,7 +4167,11 @@ export interface paths {
          *     `paddock-agent version=<version> arch=<arch>` for this release and architecture, for fleet-osquery and
          *     paddock-revoke too (the release version, not fleet-osquery's package_version; 422 release_signature_mismatch
          *     otherwise), so that a package
-         *     signed for another release cannot be stored under this one.
+         *     signed for another release cannot be stored under this one. The package's control file must name this
+         *     package, the release version in Debian form (the SemVer pre-release separator - written as ~, for example
+         *     0.1.0~alpha.11; for fleet-osquery its package_version) and this architecture (422 package_name_mismatch,
+         *     package_version_mismatch or package_arch_mismatch); a control archive in another compression than gzip or
+         *     zstd is 415 unsupported_control_compression, a file that is no Debian package 400.
          *     Packages are stored below packages/ in the artifact bucket and served without authentication at
          *     https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb; the Paddock autoinstall pins their
          *     SHA-256 (plan M4b decision 1). fleet-osquery (fleetd, plan M5a decision 3) needs package_version, the fleetd
@@ -16848,6 +16852,7 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            415: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
         };
@@ -17004,6 +17009,7 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            415: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
         };

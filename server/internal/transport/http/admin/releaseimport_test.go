@@ -18,6 +18,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/debtest"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 )
@@ -31,6 +32,9 @@ func githubFixture(t *testing.T, key minisign.PrivateKey, v string) *httptest.Se
 			continue
 		}
 		body := []byte("content of " + a.Name)
+		if a.Package != "" {
+			body = debtest.Deb(debtest.Control(a.Package, agentrelease.DebianVersion(v), a.Arch))
+		}
 		files[a.Name] = body
 		files[a.Name+".minisig"] = minisign.SignWithComments(key, body, releasesig.Comment(v, a.Arch), "")
 	}

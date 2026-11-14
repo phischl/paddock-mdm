@@ -20,7 +20,7 @@ import (
 // hostFiles are the signed files of a release as the offline signing step produces them (plan M7b §6.4).
 func (h releaseHarness) hostFiles(version string) ([]app.HostArtifact, []app.HostPackage) {
 	bin := []byte("paddockd " + version)
-	deb := []byte("paddock-agent deb " + version)
+	deb := releaseDeb(agentrelease.PackageAgent, version, "amd64", "paddock-agent deb "+version)
 	return []app.HostArtifact{{Arch: "amd64", Binary: bin,
 			Minisig: minisign.SignWithComments(h.priv, bin, releasesig.Comment(version, "amd64"), "")}},
 		[]app.HostPackage{{Name: agentrelease.PackageAgent, Arch: "amd64", Deb: deb,
@@ -29,14 +29,14 @@ func (h releaseHarness) hostFiles(version string) ([]app.HostArtifact, []app.Hos
 
 // hostFleetd is fleetd 1.48.0 for amd64 signed with the agent release key and the trusted comment comment.
 func (h releaseHarness) hostFleetd(comment string) app.HostPackage {
-	deb := []byte("fleet-osquery deb 1.48.0")
+	deb := releaseDeb(agentrelease.PackageFleetd, "1.48.0", "amd64", "fleet-osquery deb 1.48.0")
 	return app.HostPackage{Name: agentrelease.PackageFleetd, PackageVersion: "1.48.0", Arch: "amd64", Deb: deb,
 		Minisig: minisign.SignWithComments(h.priv, deb, comment, "")}
 }
 
-// hostRevoke is paddock-revoke for amd64 signed with key and the trusted comment comment.
-func (h releaseHarness) hostRevoke(key minisign.PrivateKey, comment string) app.HostPackage {
-	deb := []byte("paddock-revoke deb")
+// hostRevoke is paddock-revoke of release version for amd64 signed with key and the trusted comment comment.
+func (h releaseHarness) hostRevoke(key minisign.PrivateKey, version, comment string) app.HostPackage {
+	deb := releaseDeb(agentrelease.PackageRevoke, version, "amd64", "paddock-revoke deb")
 	return app.HostPackage{Name: agentrelease.PackageRevoke, Arch: "amd64", Deb: deb, Minisig: minisign.SignWithComments(key, deb, comment, "")}
 }
 
@@ -47,7 +47,7 @@ func TestAgentReleasePublishFromHostRevoke(t *testing.T) {
 	ctx := httpx.WithRequestID(context.Background(), uuid.NewString())
 	v := uniqueVersion()
 	arts, pkgs := h.hostFiles(v)
-	revoke := h.hostRevoke(h.revokePriv, releasesig.Comment(v, "amd64"))
+	revoke := h.hostRevoke(h.revokePriv, v, releasesig.Comment(v, "amd64"))
 	d, err := h.releases.PublishFromHost(ctx, v, arts, append(pkgs, revoke))
 	if err != nil {
 		t.Fatal(err)
@@ -155,21 +155,21 @@ func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 			pkgs[1] = h.hostFleetd("fleet-osquery 1.48.0 amd64")
 		},
 		"paddock-revoke signed with the agent release key": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
-			pkgs[2] = h.hostRevoke(h.priv, releasesig.Comment(v, "amd64"))
+			pkgs[2] = h.hostRevoke(h.priv, v, releasesig.Comment(v, "amd64"))
 		},
-		"paddock-revoke signed for another release": func(_ string, _ []app.HostArtifact, pkgs []app.HostPackage) {
-			pkgs[2] = h.hostRevoke(h.revokePriv, releasesig.Comment("0.0.1", "amd64"))
+		"paddock-revoke signed for another release": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
+			pkgs[2] = h.hostRevoke(h.revokePriv, v, releasesig.Comment("0.0.1", "amd64"))
 		},
 		"paddock-revoke signed for another arch": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
-			pkgs[2] = h.hostRevoke(h.revokePriv, releasesig.Comment(v, "arm64"))
+			pkgs[2] = h.hostRevoke(h.revokePriv, v, releasesig.Comment(v, "arm64"))
 		},
 		"paddock-revoke signed without a release comment": func(v string, _ []app.HostArtifact, pkgs []app.HostPackage) {
-			pkgs[2] = h.hostRevoke(h.revokePriv, "paddock-revoke "+v+" amd64")
+			pkgs[2] = h.hostRevoke(h.revokePriv, v, "paddock-revoke "+v+" amd64")
 		},
 	} {
 		v := uniqueVersion()
 		arts, pkgs := h.hostFiles(v)
-		pkgs = append(pkgs, h.hostFleetd(releasesig.Comment(v, "amd64")), h.hostRevoke(h.revokePriv, releasesig.Comment(v, "amd64")))
+		pkgs = append(pkgs, h.hostFleetd(releasesig.Comment(v, "amd64")), h.hostRevoke(h.revokePriv, v, releasesig.Comment(v, "amd64")))
 		tamper(v, arts, pkgs)
 		before := len(h.store.puts)
 		_, err := h.releases.PublishFromHost(ctx, v, arts, pkgs)
@@ -194,6 +194,62 @@ func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 			AND code = 'agent_release.artifact_uploaded' AND outcome = 'failure'
 			AND actor->>'type' = 'system' AND actor->>'display' = 'paddock-server admin'`, v); n != 1 {
 			t.Errorf("%s: no failed agent_release.artifact_uploaded event of the host actor", name)
+		}
+	}
+}
+
+// TestAgentReleasePublishFromHostRefusesControlMismatch holds plan M19 D6 for the host command: a correctly signed
+// package whose control file names another package, version or architecture creates nothing and stores nothing.
+func TestAgentReleasePublishFromHostRefusesControlMismatch(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := httpx.WithRequestID(context.Background(), uuid.NewString())
+	signed := func(name, packageVersion, arch string, deb []byte, v string) app.HostPackage {
+		key := h.priv
+		if name == agentrelease.PackageRevoke {
+			key = h.revokePriv
+		}
+		return app.HostPackage{Name: name, PackageVersion: packageVersion, Arch: arch, Deb: deb,
+			Minisig: minisign.SignWithComments(key, deb, releasesig.Comment(v, arch), "")}
+	}
+	for name, c := range map[string]struct {
+		pkg  func(v string) app.HostPackage
+		want *problem.Error
+	}{
+		"supervisor as agent": {func(v string) app.HostPackage {
+			return signed(agentrelease.PackageAgent, "", "amd64", releaseDeb(agentrelease.PackageSupervisor, v, "amd64", "s"), v)
+		}, problem.PackageNameMismatch},
+		"agent as paddock-revoke": {func(v string) app.HostPackage {
+			return signed(agentrelease.PackageRevoke, "", "amd64", releaseDeb(agentrelease.PackageAgent, v, "amd64", "a"), v)
+		}, problem.PackageNameMismatch},
+		"package of an older release": {func(v string) app.HostPackage {
+			return signed(agentrelease.PackageSupervisor, "", "amd64", releaseDeb(agentrelease.PackageSupervisor, "0.0.1", "amd64", "s"), v)
+		}, problem.PackageVersionMismatch},
+		"fleetd under another package_version": {func(v string) app.HostPackage {
+			return signed(agentrelease.PackageFleetd, "1.49.0", "amd64", releaseDeb(agentrelease.PackageFleetd, "1.48.0", "amd64", "f"), v)
+		}, problem.PackageVersionMismatch},
+		"arm64 build as amd64": {func(v string) app.HostPackage {
+			return signed(agentrelease.PackageSupervisor, "", "amd64", releaseDeb(agentrelease.PackageSupervisor, v, "arm64", "s"), v)
+		}, problem.PackageArchMismatch},
+		"xz control archive": {func(v string) app.HostPackage {
+			return signed(agentrelease.PackageSupervisor, "", "amd64", xzControlDeb(), v)
+		}, problem.UnsupportedControlCompression},
+	} {
+		v := uniqueVersion()
+		arts, pkgs := h.hostFiles(v)
+		before := len(h.store.puts)
+		_, err := h.releases.PublishFromHost(ctx, v, arts, append(pkgs, c.pkg(v)))
+		if problem.From(err).Code != c.want.Code {
+			t.Errorf("%s: err = %v, want %s", name, err, c.want.Code)
+		}
+		if n := countRows(t, h.super, "SELECT count(*) FROM agent_release WHERE version = $1", v); n != 0 {
+			t.Errorf("%s: the release was created", name)
+		}
+		if len(h.store.puts) != before {
+			t.Errorf("%s: a file was stored", name)
+		}
+		if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE target->>'id' = $1
+			AND code = 'agent_release.artifact_uploaded' AND outcome = 'failure' AND error_code = $2`, v, c.want.Code); n != 1 {
+			t.Errorf("%s: no failed agent_release.artifact_uploaded event with %s", name, c.want.Code)
 		}
 	}
 }
