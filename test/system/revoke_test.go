@@ -498,6 +498,9 @@ func TestDeadMansSwitchGate(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Fresh()
 		vm.Gate(t, "R6")
+		// A run cut short before the cleanup leaves the switch on, and every device enrolled afterwards gets a self-lock
+		// token (PDK-1012).
+		vm.Together(t, "R6", "switch off at the start", func() string { setDMS(t, s, false); return "" })
 		warned := dmsWarnedUser
 		// The account exists before enrollment, while no Himmelblau answers its name (PDK-983).
 		vm.MustRootIn([]byte(ssUserScript), "bash -s -- "+shellQuote(warned.name)+" "+strconv.Itoa(warned.uid))
