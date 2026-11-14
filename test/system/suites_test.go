@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -53,20 +54,21 @@ func readSuites(t *testing.T) []suite {
 // topLevelTests lists the Test functions of the package the way `go test` finds them.
 func topLevelTests(t *testing.T) []string {
 	t.Helper()
-	files, err := parser.ParseDir(token.NewFileSet(), ".", func(fi os.FileInfo) bool {
-		return strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	paths, err := filepath.Glob("*_test.go")
 	if err != nil {
 		t.Fatal(err)
 	}
+	fset := token.NewFileSet()
 	var names []string
-	for _, pkg := range files {
-		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if ok && fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Test") && fn.Type.Params.NumFields() == 1 {
-					names = append(names, fn.Name.Name)
-				}
+	for _, path := range paths {
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if ok && fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Test") && fn.Type.Params.NumFields() == 1 {
+				names = append(names, fn.Name.Name)
 			}
 		}
 	}

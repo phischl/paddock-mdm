@@ -25,17 +25,21 @@ type event struct {
 func main() {
 	raw := flag.String("raw", "", "also write the unchanged JSON stream to this file")
 	flag.Parse()
-	var tee io.Writer = io.Discard
-	if *raw != "" {
-		f, err := os.Create(*raw)
+	os.Exit(runMain(*raw))
+}
+
+func runMain(raw string) int {
+	tee := io.Discard
+	if raw != "" {
+		f, err := os.Create(raw)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "testlive:", err)
-			os.Exit(2)
+			return 2
 		}
 		defer f.Close()
 		tee = f
 	}
-	os.Exit(run(os.Stdin, os.Stdout, os.Stderr, tee))
+	return run(os.Stdin, os.Stdout, os.Stderr, tee)
 }
 
 func run(in io.Reader, out, errw, tee io.Writer) int {
