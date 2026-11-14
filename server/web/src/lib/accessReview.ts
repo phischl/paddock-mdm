@@ -31,6 +31,8 @@ export interface ReviewSection {
   defaultSort: string
   /** An additional line (message key and its parameters) shown above the table. */
   note?: { key: string; params: Record<string, number> }
+  /** The message keys of the empty table; the access review's "nothing in this period" when absent. */
+  empty?: { title: string; description: string }
 }
 
 /** The presets of the period picker, in days. */

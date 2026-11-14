@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
 	"github.com/phischl/paddock-mdm/server/internal/domain/devicegroup"
 	"github.com/phischl/paddock-mdm/server/internal/domain/loginsettings"
+	"github.com/phischl/paddock-mdm/server/internal/domain/patchsla"
 	"github.com/phischl/paddock-mdm/server/internal/domain/privilege"
 	"github.com/phischl/paddock-mdm/server/internal/domain/software"
 	"github.com/phischl/paddock-mdm/server/internal/domain/updates"
@@ -181,6 +182,8 @@ func (ex *configExec) change(ctx context.Context, c declarative.Change) error {
 		return ex.watchedUnits(ctx)
 	case declarative.SectionSettingsPrivacy:
 		return ex.privacySettings(ctx)
+	case declarative.SectionSettingsPatchSLA:
+		return ex.patchSLA(ctx)
 	}
 	return problem.InvalidDocument.WithDetail("unknown section " + c.Section)
 }
@@ -506,6 +509,18 @@ func (ex *configExec) privacySettings(ctx context.Context) error {
 	_, err := upsertPrivacySettings(ctx, ex.q, ex.p, PrivacySettings{
 		RetiredInventoryDays: s.RetiredInventoryDays, AuditSearchRecorded: s.AuditSearchRecorded,
 		InventoryViewRecorded: s.InventoryViewRecorded,
+	})
+	return err
+}
+
+// patchSLA replaces the patch SLA with the rule of PatchSLA.Update: an organization administrator.
+func (ex *configExec) patchSLA(ctx context.Context) error {
+	if err := ex.requireAdmin("change the patch SLA"); err != nil {
+		return err
+	}
+	s := ex.desired.Settings.PatchSLA
+	_, err := upsertPatchSLA(ctx, ex.q, ex.p, patchsla.SLA{
+		CriticalDays: s.CriticalDays, HighDays: s.HighDays, MediumDays: s.MediumDays, LowDays: s.LowDays,
 	})
 	return err
 }

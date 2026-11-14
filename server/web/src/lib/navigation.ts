@@ -88,6 +88,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
     items: [
       { to: '/software', label: 'nav.software', icon: 'package-search', shortcut: 'g s', visible: orgReader },
       { to: '/vulnerabilities', label: 'nav.vulnerabilities', icon: 'bug', shortcut: 'g v', visible: orgReader },
+      { to: '/patch-compliance', label: 'nav.patchCompliance', icon: 'file-check', visible: orgReader, testid: 'nav-patch-compliance' },
     ],
   },
   {
@@ -102,6 +103,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/settings/updates', label: 'nav.updateSettings', icon: 'refresh-cw', visible: orgReader },
       { to: '/settings/rollout', label: 'nav.rolloutSettings', icon: 'rocket', visible: orgReader },
       { to: '/settings/privacy', label: 'nav.privacySettings', icon: 'shield', visible: orgReader },
+      { to: '/settings/patch-sla', label: 'nav.patchSlaSettings', icon: 'timer', visible: orgReader },
       { to: '/audit', label: 'nav.audit', icon: 'scroll-text', shortcut: 'g l', visible: (a) => a.canReadAudit },
       { to: '/audit/integrity', label: 'nav.auditIntegrity', icon: 'shield-check', visible: (a) => a.canReadAudit, testid: 'nav-audit-integrity' },
       { to: '/audit/exports', label: 'nav.auditExports', icon: 'file-check', visible: (a) => a.canReadAudit, testid: 'nav-audit-exports' },

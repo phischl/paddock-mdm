@@ -188,3 +188,52 @@ func TestInventoryRoundRecordsCriticalSummary(t *testing.T) {
 		t.Fatalf("%d summaries, %v", n, err)
 	}
 }
+
+// failingSLASummary fails every organization's patch SLA summary and records which organizations it was asked for.
+type failingSLASummary struct{ orgs map[uuid.UUID]bool }
+
+func (f *failingSLASummary) Record(ctx context.Context, _ time.Time) error {
+	p, _ := principal.From(ctx)
+	f.orgs[p.OrganizationID] = true
+	return errors.New("injected sla summary failure")
+}
+
+// TestInventoryRoundSurvivesSLASummaryFailure (PDK-814 review 1): a failing patch SLA summary is logged and skipped;
+// the round still succeeds and tries every organization: with two organizations of its own and every summary failing,
+// both are attempted whichever comes first, and the critical summary is recorded.
+func TestInventoryRoundSurvivesSLASummaryFailure(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	dev := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-sla', 'active')", dev, f.org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.super.Exec(ctx, `INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version,
+		severity, first_seen_at) VALUES ($1, $2, 'CVE-2026-2222', 'p', '1', 'critical', now() - interval '1 hour')`, dev, f.org); err != nil {
+		t.Fatal(err)
+	}
+	second := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'W2', 'active')",
+		second, "w2"+second.String()[24:]); err != nil {
+		t.Fatal(err)
+	}
+	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
+	failing := &failingSLASummary{orgs: map[uuid.UUID]bool{}}
+	i := NewInventory(nil, &fakeSource{hosts: []ports.InventoryHost{{Ref: "1", HardwareUUID: uuid.NewString()}}}, app.NewInventorySync(runner, f.pool, platform),
+		app.NewVulnerabilitySummary(runner), f.pool, platform, time.Minute).WithSLASummary(failing)
+	if err := i.Round(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})); err != nil {
+		t.Fatalf("round = %v", err)
+	}
+	if !failing.orgs[f.org] || !failing.orgs[second] {
+		t.Fatalf("sla summary attempted for %v, want both %s and %s: the loop stopped at the first failure", failing.orgs, f.org, second)
+	}
+	var n int
+	if err := f.super.QueryRow(ctx, "SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'vulnerability.critical_summary'", f.org).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%d critical summaries, %v", n, err)
+	}
+}

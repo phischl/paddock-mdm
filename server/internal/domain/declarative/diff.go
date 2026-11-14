@@ -25,13 +25,15 @@ const (
 	SectionSettingsManaged    = "settings.managed_files"
 	SectionSettingsWatched    = "settings.watched_units"
 	SectionSettingsPrivacy    = "settings.privacy"
+	SectionSettingsPatchSLA   = "settings.patch_sla"
 )
 
 // Sections returns the sections in application order (plan M6c decision 14); deletions run in reverse order first.
 func Sections() []string {
 	return []string{SectionDeviceGroups, SectionPermissionProfiles, SectionManagedFiles, SectionManagedUnits,
 		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSoftwareSources, SectionSoftwareCatalog,
-		SectionSoftwareAssignments, SectionSettingsLogin, SectionSettingsManaged, SectionSettingsWatched, SectionSettingsPrivacy}
+		SectionSoftwareAssignments, SectionSettingsLogin, SectionSettingsManaged, SectionSettingsWatched, SectionSettingsPrivacy,
+		SectionSettingsPatchSLA}
 }
 
 // RolloutSections returns the sections a staged rollout stages, in Sections order (plan M11 decision 1): the ones that
@@ -156,6 +158,11 @@ func section(d Document, name string) (bool, []entry) {
 			return false, nil
 		}
 		return true, []entry{{fields: d.Settings.Privacy.fields(), item: *d.Settings.Privacy}}
+	case SectionSettingsPatchSLA:
+		if d.Settings == nil || d.Settings.PatchSLA == nil {
+			return false, nil
+		}
+		return true, []entry{{fields: d.Settings.PatchSLA.fields(), item: *d.Settings.PatchSLA}}
 	}
 	return false, nil
 }
@@ -219,6 +226,8 @@ func Path(section string, index int) string {
 		return "/settings/watched_units"
 	case SectionSettingsPrivacy:
 		return "/settings/privacy"
+	case SectionSettingsPatchSLA:
+		return "/settings/patch_sla"
 	}
 	return "/" + section + "/" + strconv.Itoa(index)
 }
@@ -413,13 +422,17 @@ func revertSettings(d *Document, c Change, before map[string]map[string]json.Raw
 		v, err := beforeItem[PrivacySettings](c, before)
 		d.Settings.Privacy = &v
 		return err
+	case SectionSettingsPatchSLA:
+		v, err := beforeItem[PatchSLASettings](c, before)
+		d.Settings.PatchSLA = &v
+		return err
 	}
 	return fmt.Errorf("revert: unknown section %s", c.Section)
 }
 
 func isSettings(s string) bool {
 	return s == SectionSettingsLogin || s == SectionSettingsUpdates || s == SectionSettingsManaged ||
-		s == SectionSettingsWatched || s == SectionSettingsPrivacy
+		s == SectionSettingsWatched || s == SectionSettingsPrivacy || s == SectionSettingsPatchSLA
 }
 
 func sorted(items []entry) []entry {
@@ -608,6 +621,11 @@ func (s UpdateSettings) fields() []field {
 func (s PrivacySettings) fields() []field {
 	return []field{{"retired_inventory_days", s.RetiredInventoryDays}, {"audit_search_recorded", s.AuditSearchRecorded},
 		{"inventory_view_recorded", s.InventoryViewRecorded}}
+}
+
+func (s PatchSLASettings) fields() []field {
+	return []field{{"critical_days", s.CriticalDays}, {"high_days", s.HighDays}, {"medium_days", s.MediumDays},
+		{"low_days", s.LowDays}}
 }
 
 func (s ManagedFileSettings) fields() []field {
