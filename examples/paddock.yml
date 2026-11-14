@@ -28,6 +28,11 @@ settings:
     max_random_delay_min: 60
     staleness_warning_h: 24
     staleness_critical_h: 168
+  patch_sla:
+    critical_days: 7
+    high_days: 30
+    medium_days: 90
+    low_days: 0
 device_groups:
   - name: laptops
     description: Notebooks of the field staff

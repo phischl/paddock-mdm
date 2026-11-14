@@ -3138,6 +3138,43 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/settings/patch-sla:
+    get:
+      operationId: getPatchSlaSettings
+      tags: [settings]
+      description: "Roles: org_admin, org_operator, org_auditor. The patch SLA (plan M13c decision 17): days a vulnerability with a fixed version may stay open per severity, 0 = no SLA; the defaults 7/30/90/0 until changed."
+      responses:
+        "200":
+          description: The patch SLA.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatchSlaSettings" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updatePatchSlaSettings
+      tags: [settings]
+      description: |
+        Roles: org_admin. Replaces the patch SLA: critical_days, high_days, medium_days and low_days, each 0 to 365
+        (0 = the severity has no SLA). A finding breaches when it is open more whole days than its severity's SLA. 400
+        invalid_request for a value out of range.
+      x-paddock-audit: settings.patch_sla_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchSlaSettingsUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatchSlaSettings" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/package-holds:
     get:
       operationId: listPackageHolds
@@ -4105,6 +4142,65 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/patch-compliance:
+    get:
+      operationId: getPatchCompliance
+      tags: [overview]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The patch compliance report of the organization (plan M13c decision
+        18 and amendment 2026-11-14) against its patch SLA: the state at generated_at, with no period. It covers active
+        devices the inventory system knows (optionally the members of one device group) and every open finding with a
+        severity and a fixed version; days_open = floor((generated_at - first_seen_at) / 24 h), breached when days_open
+        is greater than the severity's SLA days; per severity the open and breached findings with the median and 90th
+        percentile of days open, per device group the devices and how many have a breach, the devices with a breach
+        (at most 1000, devices_total counts all) and the pinned required catalog assignments with the devices they
+        target that run an older version. One report object, not a collection; without inventory every section is
+        empty and summary.devices is 0. 404 not_found for an unknown device group. The view
+        is recorded as patch_compliance.viewed once per actor and UTC day, only while the organization's
+        inventory_view_recorded privacy setting is on.
+      parameters:
+        - $ref: "#/components/parameters/PatchComplianceDeviceGroup"
+      responses:
+        "200":
+          description: The patch compliance report.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatchComplianceReport" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/patch-compliance/export:
+    get:
+      operationId: exportPatchCompliance
+      x-paddock-mcp: { expose: false }
+      tags: [overview]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The patch compliance report as a download, with every device (no
+        cap): format json (the report object) or csv (one file for every section, told apart by the section column:
+        summary, severity, group, one breach row per breached finding, catalog; cells that a spreadsheet could run as a
+        formula carry a leading apostrophe). Content-Disposition names the file
+        paddock-patch-compliance-<organization slug>-<day of generated_at>.<json|csv>. The state at generated_at and the
+        device group as for the view.
+        Every export is recorded as patch_compliance.exported, whatever the privacy settings.
+      x-paddock-audit: patch_compliance.exported
+      parameters:
+        - $ref: "#/components/parameters/PatchComplianceDeviceGroup"
+        - $ref: "#/components/parameters/AccessReviewFormat"
+      responses:
+        "200":
+          description: The exported report.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatchComplianceReport" }
+            text/csv:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
   /api/v1/attention/devices:
     get:
       operationId: listAttentionDevices
@@ -7617,6 +7713,11 @@ components:
       in: query
       required: true
       schema: { type: string, enum: [json, csv] }
+    PatchComplianceDeviceGroup:
+      name: device_group_id
+      in: query
+      description: Only the members of this device group.
+      schema: { type: string, format: uuid }
     BackupTargetSort:
       name: sort
       in: query
@@ -10279,6 +10380,109 @@ components:
         retired_inventory_days: { type: integer, minimum: 1, maximum: 365 }
         audit_search_recorded: { type: boolean }
         inventory_view_recorded: { type: boolean }
+    PatchSlaSettings:
+      type: object
+      description: Days a vulnerability with a fixed version may stay open per severity; 0 = no SLA.
+      required: [critical_days, high_days, medium_days, low_days, updated_at]
+      properties:
+        critical_days: { type: integer, minimum: 0, maximum: 365 }
+        high_days: { type: integer, minimum: 0, maximum: 365 }
+        medium_days: { type: integer, minimum: 0, maximum: 365 }
+        low_days: { type: integer, minimum: 0, maximum: 365 }
+        updated_at: { type: string, format: date-time }
+    PatchSlaSettingsUpdate:
+      type: object
+      required: [critical_days, high_days, medium_days, low_days]
+      properties:
+        critical_days: { type: integer, minimum: 0, maximum: 365 }
+        high_days: { type: integer, minimum: 0, maximum: 365 }
+        medium_days: { type: integer, minimum: 0, maximum: 365 }
+        low_days: { type: integer, minimum: 0, maximum: 365 }
+    PatchSla:
+      type: object
+      description: The SLA the report was computed against.
+      required: [critical_days, high_days, medium_days, low_days]
+      properties:
+        critical_days: { type: integer, minimum: 0, maximum: 365 }
+        high_days: { type: integer, minimum: 0, maximum: 365 }
+        medium_days: { type: integer, minimum: 0, maximum: 365 }
+        low_days: { type: integer, minimum: 0, maximum: 365 }
+    PatchComplianceReport:
+      type: object
+      required: [generated_at, device_group_id, sla, summary, by_severity, by_group, devices, devices_total, row_cap, catalog]
+      properties:
+        generated_at: { type: string, format: date-time, description: The moment the report shows the state of; days_open is measured to it. }
+        device_group_id: { type: string, format: uuid, nullable: true, description: The device group filter; null for all devices. }
+        sla: { $ref: "#/components/schemas/PatchSla" }
+        summary:
+          type: object
+          required: [devices, compliant, breached]
+          properties:
+            devices: { type: integer, description: Active devices in scope that the inventory system knows. }
+            compliant: { type: integer, description: Devices without a breached finding. }
+            breached: { type: integer, description: Devices with at least one breached finding. }
+        by_severity:
+          type: array
+          description: Severities with open findings, most severe first.
+          items: { $ref: "#/components/schemas/PatchComplianceSeverity" }
+        by_group:
+          type: array
+          description: Device groups of the devices in scope, by name.
+          items: { $ref: "#/components/schemas/PatchComplianceGroup" }
+        devices:
+          type: array
+          description: Devices with a breached finding, most breaches first; at most row_cap in the view, all in the export.
+          items: { $ref: "#/components/schemas/PatchComplianceDevice" }
+        devices_total: { type: integer, description: Every device with a breached finding. }
+        row_cap: { type: integer, description: The most devices the view lists. }
+        catalog:
+          type: array
+          description: Pinned required catalog assignments and the devices they target that run an older version.
+          items: { $ref: "#/components/schemas/PatchComplianceCatalogRow" }
+    PatchComplianceSeverity:
+      type: object
+      required: [severity, findings_open, findings_breached, median_days_open, p90_days_open]
+      properties:
+        severity: { type: string, enum: [critical, high, medium, low] }
+        findings_open: { type: integer }
+        findings_breached: { type: integer }
+        median_days_open: { type: integer }
+        p90_days_open: { type: integer }
+    PatchComplianceGroup:
+      type: object
+      required: [device_group_id, device_group, devices, breached]
+      properties:
+        device_group_id: { type: string, format: uuid }
+        device_group: { type: string }
+        devices: { type: integer }
+        breached: { type: integer }
+    PatchComplianceDevice:
+      type: object
+      required: [device_id, hostname, breached]
+      properties:
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        breached:
+          type: array
+          items: { $ref: "#/components/schemas/PatchComplianceBreach" }
+    PatchComplianceBreach:
+      type: object
+      required: [cve, package, severity, days_open, fixed_version, sla_days]
+      properties:
+        cve: { type: string }
+        package: { type: string }
+        severity: { type: string, enum: [critical, high, medium, low] }
+        days_open: { type: integer }
+        fixed_version: { type: string }
+        sla_days: { type: integer }
+    PatchComplianceCatalogRow:
+      type: object
+      required: [assignment_id, entry, required_version, devices_behind]
+      properties:
+        assignment_id: { type: string, format: uuid }
+        entry: { type: string }
+        required_version: { type: string }
+        devices_behind: { type: integer }
     UpdateSettings:
       type: object
       required: [security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h,
@@ -10858,7 +11062,7 @@ components:
       enum: [stale_warning, stale_critical, presumed_lost, quarantined, disk_not_compliant, agent_outdated,
              login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired, agent_rollback_pending,
              agent_not_running, uninstall_pending, config_behind, disk_conversion_failed, clock_drift, event_gap, report_only,
-             software_requests_open]
+             software_requests_open, patch_sla_breached]
     Attention:
       type: object
       required: [id, kind, device_id, hostname, since, detail, finding]
@@ -10872,10 +11076,10 @@ components:
         kind: { $ref: "#/components/schemas/AttentionKind" }
         device_id: { type: string, format: uuid }
         hostname: { type: string }
-        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled; for software_requests_open when the oldest open request was made). }
+        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled; for clock_drift when the drift was first measured; for event_gap when the gap was reported; for report_only when the device enrolled; for software_requests_open when the oldest open request was made; for patch_sla_breached when the first of the device's findings exceeded its severity's SLA). }
         detail:
           type: string
-          description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as \"<applied> < <newest>\"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as \"<seconds> s\" (server time minus device time); event_gap: the missing event sequence numbers as \"<from>-<to>\"; report_only: the enrollment method; software_requests_open: the number of the device's open software requests; otherwise empty."
+          description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as \"<applied> < <newest>\"; disk_conversion_failed: stage:reason of the device's latest in-place encryption; clock_drift: the clock offset of the last check-in as \"<seconds> s\" (server time minus device time); event_gap: the missing event sequence numbers as \"<from>-<to>\"; report_only: the enrollment method; software_requests_open: the number of the device's open software requests; patch_sla_breached: the number of the device's findings open longer than their severity's patch SLA; otherwise empty."
     FindingKind:
       type: string
       enum: [tamper, attention]

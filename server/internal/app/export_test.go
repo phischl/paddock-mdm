@@ -5,6 +5,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/patchsla"
 )
 
 // SetTimeout shortens the bound of one import for tests of a source that does not answer.
@@ -53,3 +56,17 @@ func (a *AgentReleases) SetStoreTimeouts(store, verify time.Duration) {
 
 // ForeignNotFound exposes the mapping of a destination foreign key violation to not_found.
 var ForeignNotFound = foreignNotFound
+
+// SetClock replaces the clock of the patch compliance report.
+func (p *PatchCompliance) SetClock(now func() time.Time) { p.now = now }
+
+// CountLoads counts the findings loads of the patch SLA summary; the returned function reads the count.
+func (s *VulnerabilitySLASummary) CountLoads() func() int {
+	n := 0
+	load := s.load
+	s.load = func(ctx context.Context, q *pgstore.Queries, group uuid.NullUUID, now time.Time) (patchsla.Input, error) {
+		n++
+		return load(ctx, q, group, now)
+	}
+	return func() int { return n }
+}

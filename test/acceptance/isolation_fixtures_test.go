@@ -520,6 +520,12 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/access-review/export": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/access-review/export?format=json", nil
 	}},
+	"GET /api/v1/patch-compliance": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/patch-compliance", nil
+	}},
+	"GET /api/v1/patch-compliance/export": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/patch-compliance/export?format=json", nil
+	}},
 	"GET /api/v1/attention/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/attention/devices?page_size=100", nil
 	}},
@@ -992,6 +998,12 @@ var isolationFixtures = map[string]isolationFixture{
 	}},
 	"PUT /api/v1/settings/privacy": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
 		return "/api/v1/settings/privacy", currentPrivacySettings(t, w.alice)
+	}},
+	"GET /api/v1/settings/patch-sla": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/patch-sla", nil
+	}},
+	"PUT /api/v1/settings/patch-sla": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/settings/patch-sla", currentPatchSLA(t, w.alice)
 	}},
 	"GET /api/v1/package-holds": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/package-holds?page_size=100", nil

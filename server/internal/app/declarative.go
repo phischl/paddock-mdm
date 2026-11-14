@@ -620,6 +620,10 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	if err != nil {
 		return st, fmt.Errorf("privacy settings: %w", err)
 	}
+	sla, err := LoadPatchSLA(ctx, q)
+	if err != nil {
+		return st, fmt.Errorf("patch sla: %w", err)
+	}
 	doc.Settings = &declarative.Settings{Login: loginDocOfRow(login), Updates: &declarative.UpdateSettings{
 		SecurityDailyAt: upd.SecurityDailyAt, RegularSchedule: upd.RegularSchedule, RegularUpdatesEnabled: upd.RegularUpdatesEnabled,
 		MaxRandomDelayMin: upd.MaxRandomDelayMin, StalenessWarningH: upd.StalenessWarningH, StalenessCriticalH: upd.StalenessCriticalH,
@@ -628,6 +632,9 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 		Privacy: &declarative.PrivacySettings{
 			RetiredInventoryDays: privacy.RetiredInventoryDays, AuditSearchRecorded: privacy.AuditSearchRecorded,
 			InventoryViewRecorded: privacy.InventoryViewRecorded,
+		},
+		PatchSLA: &declarative.PatchSLASettings{
+			CriticalDays: sla.CriticalDays, HighDays: sla.HighDays, MediumDays: sla.MediumDays, LowDays: sla.LowDays,
 		}}
 
 	groups, err := q.ListAllDeviceGroups(ctx)

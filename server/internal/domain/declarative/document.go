@@ -61,6 +61,16 @@ type Settings struct {
 	WatchedUnits *[]string `json:"watched_units,omitempty"`
 	// Privacy are the privacy settings (plan M10 decision 9).
 	Privacy *PrivacySettings `json:"privacy,omitempty"`
+	// PatchSLA is the patch SLA (plan M13c decision 17).
+	PatchSLA *PatchSLASettings `json:"patch_sla,omitempty"`
+}
+
+// PatchSLASettings are the fields of PUT /api/v1/settings/patch-sla: days per severity, 0 = no SLA.
+type PatchSLASettings struct {
+	CriticalDays int `json:"critical_days"`
+	HighDays     int `json:"high_days"`
+	MediumDays   int `json:"medium_days"`
+	LowDays      int `json:"low_days"`
 }
 
 // PrivacySettings are the fields of PUT /api/v1/settings/privacy.

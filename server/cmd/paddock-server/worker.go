@@ -238,7 +238,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		retention := worker.NewRetention(app.NewRetention(runner, pool, platformPool, fleetClient, retentionDay, s.indexRetention).WithDiagnosticsObjects(escrowObjects),
 			app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, s.retentionEvery)
 		inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool),
-			app.NewVulnerabilitySummary(runner), pool, platformPool, s.inventoryEvery)
+			app.NewVulnerabilitySummary(runner), pool, platformPool, s.inventoryEvery).WithSLASummary(app.NewVulnerabilitySLASummary(runner))
 		osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(s.osvURL), pool, platformPool, s.osvEvery)
 		return []func(context.Context) error{
 			worker.NewOpsProbe(signer, worker.DialCertExpiry(s.tlsAddr, nil), s.tlsHosts).Run,
