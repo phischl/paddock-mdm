@@ -1,8 +1,10 @@
 # yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
 # Paddock account recovery (plan M3a decision 18): the one-time links paddock-server creates for new local users
 # (POST /api/v3/core/users/<pk>/recovery/, valid 24 h) open this flow with the user already identified by the link
-# token; the user sets a password of at least 12 characters. paddock-server's worker makes it the default brand's
-# recovery flow (plan M3.1 decision 5).
+# token. The flow sets up the sign-in (ADR 0053 decision 2 as amended): a password of at least 12 characters if the
+# account has none, then a passkey if it has none; an account with a password and a passkey changes nothing. There is
+# no authenticator app stage (ADR 0053 amendment d): portal sign-in and step-up accept only a passkey, and an account
+# adds an authenticator app in Authentik's user settings. paddock-server's worker makes it the default brand's recovery flow (plan M3.1 decision 5).
 version: 1
 metadata:
   name: Paddock - Recovery
@@ -15,7 +17,7 @@ entries:
       slug: paddock-recovery
     attrs:
       name: Paddock account recovery
-      title: Set your password
+      title: Set up your sign-in
       designation: recovery
       authentication: require_unauthenticated
 
@@ -41,6 +43,24 @@ entries:
     attrs:
       expression: |
         return bool(request.context.get("is_restored"))
+
+  # The password stages run only for an account without a usable password (a new local user); an account with one
+  # keeps it (ADR 0053 decision 2).
+  - model: authentik_policies_expression.expressionpolicy
+    id: password-missing
+    identifiers:
+      name: paddock-recovery-password-missing
+    attrs:
+      expression: |
+        return not request.user.has_usable_password()
+
+  - model: authentik_policies_expression.expressionpolicy
+    id: webauthn-missing
+    identifiers:
+      name: paddock-recovery-webauthn-missing
+    attrs:
+      expression: |
+        return not ak_user_has_authenticator(request.user, "webauthn")
 
   - model: authentik_stages_prompt.prompt
     id: field-password
@@ -95,6 +115,7 @@ entries:
     attrs:
       evaluate_on_plan: false
       re_evaluate_policies: true
+      policy_engine_mode: all
   - model: authentik_flows.flowstagebinding
     id: user-write-binding
     identifiers:
@@ -104,7 +125,21 @@ entries:
     attrs:
       evaluate_on_plan: false
       re_evaluate_policies: true
+      policy_engine_mode: all
+  # The passkey is required: the stage has no skip, so the link ends only once a passkey is enrolled.
+  - model: authentik_flows.flowstagebinding
+    id: webauthn-binding
+    identifiers:
+      target: !KeyOf flow
+      stage: !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+      order: 30
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
 
+  # The link token guards the password stages as since plan M3a decision 18; these two entries are unchanged, so that an
+  # installation that applied an earlier version and a new one hold the same bindings.
   - model: authentik_policies.policybinding
     identifiers:
       policy: !KeyOf link-token
@@ -115,3 +150,30 @@ entries:
       policy: !KeyOf link-token
       target: !KeyOf user-write-binding
       order: 0
+
+  # The bindings added for ADR 0053 are identified by policy and order, not by the target (as in paddock-portal.yaml);
+  # the orders keep the identifiers of the bindings of one policy apart.
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf password-missing
+      order: 0
+    attrs:
+      target: !KeyOf prompt-binding
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf password-missing
+      order: 1
+    attrs:
+      target: !KeyOf user-write-binding
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf link-token
+      order: 1
+    attrs:
+      target: !KeyOf webauthn-binding
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-missing
+      order: 0
+    attrs:
+      target: !KeyOf webauthn-binding

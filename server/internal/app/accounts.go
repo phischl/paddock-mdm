@@ -95,6 +95,9 @@ const (
 	// ReasonPasskeyRequired: the portal sign-in validated no WebAuthn authenticator (ADR 0034 amendment 2026-10-29,
 	// PDK-500).
 	ReasonPasskeyRequired = "passkey_required"
+	// ReasonMFAEnrolmentRequired: the sign-in was refused for its factors and the account has no passkey, which an
+	// administrator sets up through a one-time link (ADR 0053 amendment c).
+	ReasonMFAEnrolmentRequired = "mfa_enrolment_required"
 	// ReasonMCPLoginRequired: an MCP renewal without a live login binding of its sub and auth_time (ADR 0044
 	// amendment 2026-10-28).
 	ReasonMCPLoginRequired = "mcp_login_required"

@@ -9938,7 +9938,9 @@ export interface operations {
              *     platform role and one organization role signs in to the organization role (ADR 0045). The callback of a
              *     role switch (POST /api/auth/switch) opens a new session in the chosen role, ends the previous session and
              *     records admin.login with previous_role; a role the fresh groups claim no longer grants is refused with
-             *     reason role_not_granted and leaves the previous session untouched.
+             *     reason role_not_granted and leaves the previous session untouched. A sign-in refused for its factors whose
+             *     account has no passkey is refused with reason mfa_enrolment_required: the account sets one up through a
+             *     one-time link (ADR 0053).
              */
             302: {
                 headers: {

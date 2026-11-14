@@ -366,6 +366,11 @@ const (
 	CodePlatformOffboardedDeviceUninstalled  Code = "platform.offboarded_device_uninstalled"
 	CodePlatformDeletedOrganizationAuditRead Code = "platform.deleted_organization_audit_read"
 	CodeAuditEventAfterRetirement            Code = "audit.event_after_retirement"
+
+	// Second-factor enrolment at sign-in (ADR 0053 decision 4 and amendment d): the worker's marks of administrators who
+	// may enrol a passkey at their next sign-in.
+	CodePlatformMFAEnrolMarksSeeded  Code = "platform.mfa_enrol_marks_seeded"
+	CodePlatformMFAEnrolMarksCleared Code = "platform.mfa_enrol_marks_cleared"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -2218,6 +2223,20 @@ var registry = map[Code]Definition{
 		Params:      []string{"organization_id", "original_code", "original_event_id"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Platform pseudo-organization.",
+	},
+	CodePlatformMFAEnrolMarksSeeded: {
+		Code: CodePlatformMFAEnrolMarksSeeded, Emitted: true,
+		Description: "The worker's one-time seed after the upgrade marked the administrators without a passkey (paddock_mfa_enrol_at_login), so that they set one up at their next sign-in instead of being denied (ADR 0053 decision 4).",
+		Params:      []string{"marked", "totp_only", "organizations"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Recorded only when the seed marked at least one account. marked counts the accounts marked, totp_only those of them with only an authenticator app, organizations the organizations with a marked account (the platform group not counted). Failure when a mark failed after others were written: marked is the count written; the unmarked accounts need a sign-in setup link. No usernames; Authentik's event log holds the per-account changes. Actor is the system actor worker. Platform pseudo-organization.",
+	},
+	CodePlatformMFAEnrolMarksCleared: {
+		Code: CodePlatformMFAEnrolMarksCleared, Emitted: true,
+		Description: "The worker removed the enrolment mark of administrators who have set up a passkey (ADR 0053 decision 4).",
+		Params:      []string{"cleared"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Recorded only for a round that removed at least one mark; cleared counts them. Failure when a removal failed after others were written; the next round retries it. No usernames. Actor is the system actor worker. Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

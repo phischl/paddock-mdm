@@ -147,6 +147,16 @@ func ParseRoleGroup(name string) (slug string, role GroupRole, ok bool) {
 	return m[1], GroupRole(m[2]), true
 }
 
+// IsAdministratorGroup reports whether a direct membership of the group name grants a portal role by its name alone:
+// paddock.<x>.admins, .operators or .auditors for any x, the platform group included. It is the predicate of the
+// sign-in policy paddock-admin-login-webauthn-administrator (deploy/compose/authentik/blueprints/paddock-portal.yaml),
+// which denies such an account without a passkey (ADR 0053); the two MUST stay equal.
+func IsAdministratorGroup(name string) bool {
+	p := strings.Split(name, ".")
+	return len(p) == 3 && p[0] == "paddock" && (p[2] == string(GroupAdmins) || p[2] == string(GroupOperators) ||
+		p[2] == string(GroupAuditors))
+}
+
 // LockedGroup returns the group whose members are locked: paddock.<slug>.locked (architecture §9.2).
 func LockedGroup(slug string) string { return RootGroup(slug) + ".locked" }
 

@@ -384,6 +384,12 @@ Binding; where it contradicts decision 7 or amendment c, it wins.
    green before the alpha.11 release tag and runs as part of the release regression on the lab. PDK-1026 is done when
    its dev-stack gates are green and PDK-1042 exists.
 
+### Correction 2026-11-14 to amendment d point 3
+
+Amendment d point 3 is wrong and is replaced. In Authentik 2026.8.5, `GET /api/v3/authenticators/admin/all/?user=<pk>`
+does filter by user. The adapter's `UserAuthenticators` uses that endpoint, one request per account, and decision 7's
+per-type listings are replaced by it. The PDK-1042 measurement of the callback lookup stays.
+
 ## Amendment 2026-11-14 e — administrators set up their second factor only through the setup link, in every sign-in flow (architect decision; ADR 0053 amendment e)
 
 Binding; it replaces the §4 non-goal "No change to the device login flow's MFA".
