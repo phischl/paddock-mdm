@@ -1109,7 +1109,10 @@ grant; query text, state and timestamps of other roles are not exposed. Nothing 
    status was certainly visible.
 2. **`paddock_offboard_quiesce() RETURNS boolean`** (`SECURITY DEFINER`, owner `paddock_owner`, `EXECUTE` for
    `paddock_worker` only, context organization, status `deleting` required):
-   - Before the cutoff it returns `false` and writes nothing.
+   - It captures the wait set **only when the database's `now()` is at or after the cutoff**
+     (`deleting_committed_at + 6 s`). Before that it returns `false` and stores nothing.
+     Reason: a set captured earlier would miss a transaction that starts between the capture and the cutoff, because
+     that transaction's cache can still say `active`.
    - At the first call after the cutoff it stores the **wait set** in `organization.offboarding_wait_vxids text[]` and
      `offboarding_wait_taken_at` and commits. The wait set is every `virtualxid` lock held by a backend whose `usename`
      is an organization role (amendment j point 4) and whose `datname` is the current database, excluding its own
@@ -1144,7 +1147,14 @@ grant; query text, state and timestamps of other roles are not exposed. Nothing 
    - The reproduction above: W begins and reads before the status change and writes after the delete loop. `quiesce`
      returns `false` until W ends; then `finalize` raises `40001`; the next delete loop and `finalize` write the
      tombstone.
+   - `quiesce` called before the cutoff stores no wait set and returns `false`. Test the boundary with the
+     database's `now()` just below and just at the cutoff.
    - A read-only transaction open at the cutoff blocks `quiesce`.
+   - Cache staleness (amendment j point 2) is measured on the **process's monotonic clock**, never on wall time or on
+     the database's clock. The 5 s bound therefore holds as an elapsed duration whatever the drift between the process
+     and the database, and stays below the 6 s margin of the cutoff. The cache takes an injectable monotonic clock. A
+     test advances it past 5 s without a successful refresh and asserts the fallback status read. A second test moves
+     the wall clock (not the monotonic one) and asserts that nothing changes.
    - Sessions of a non-organization role do not block.
    - The wait set survives a failed `finalize` and is not re-taken.
    - Application roles still see `<insufficient privilege>` for other sessions' query text: no grant was added.
