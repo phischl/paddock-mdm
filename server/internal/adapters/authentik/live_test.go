@@ -87,6 +87,23 @@ func TestLiveAuthentik(t *testing.T) {
 	if err != nil || !strings.Contains(link, "/if/flow/paddock-recovery/?flow_token=") {
 		t.Fatalf("RecoveryLink: %q, %v", link, err)
 	}
+	// The pinned Authentik keeps the link as the user's token <uid>-password-reset and reuses its key (plan M12h-2
+	// amendment f): a second link is the same URL until the token is deleted, and ending it leaves none.
+	if again, err := c.RecoveryLink(ctx, pk); err != nil || again != link {
+		t.Fatalf("RecoveryLink again: %q, %v, want Authentik's reused link", again, err)
+	}
+	if n, err := c.RevokeRecoveryLinks(ctx, pk); err != nil || n != 1 {
+		t.Fatalf("RevokeRecoveryLinks: %d, %v, want 1", n, err)
+	}
+	if n, err := c.RevokeRecoveryLinks(ctx, pk); err != nil || n != 0 {
+		t.Fatalf("RevokeRecoveryLinks again: %d, %v, want 0", n, err)
+	}
+	if fresh, err := c.RecoveryLink(ctx, pk); err != nil || fresh == link {
+		t.Fatalf("RecoveryLink after revocation: %q, %v, want a new link", fresh, err)
+	}
+	if connected, err := c.HasSourceConnection(ctx, pk); err != nil || connected {
+		t.Fatalf("HasSourceConnection of a user Paddock created: %v, %v, want false", connected, err)
+	}
 	if err := c.UpdateUser(ctx, pk, "Live Test Renamed", username); err != nil {
 		t.Fatalf("UpdateUser: %v", err)
 	}

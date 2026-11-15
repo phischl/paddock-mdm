@@ -2174,11 +2174,11 @@
     "enrolmentLink": {
       "create": "Link zur Einrichtung der Anmeldung erstellen",
       "title": "Link zur Einrichtung der Anmeldung",
-      "confirm": "Einen einmaligen Link zur Einrichtung der Anmeldung für {username} erstellen? Damit setzt das Konto sein Passwort, falls es keines hat, und einen Passkey, falls es keinen hat. Der Link ist 24 Stunden gültig und wird nur einmal angezeigt.",
+      "confirm": "Einen einmaligen Link zur Einrichtung der Anmeldung für {username} erstellen? Damit richtet das Konto einen Passkey ein, falls es keinen hat, und ein Passwort nur, wenn Paddock das Konto angelegt hat und es keines hat. Ein neuer Link beendet jeden älteren. Der Link ist 24 Stunden gültig und wird nur einmal angezeigt.",
       "link": "Link zur Einrichtung der Anmeldung",
       "copyFailed": "Der Link konnte nicht kopiert werden. Markieren Sie ihn im Feld und kopieren Sie ihn von Hand.",
       "shownOnce": "Geben Sie diesen Einmal-Link über einen vertrauenswürdigen Kanal an {username}. Er ist bis {at} gültig und wird nur jetzt angezeigt.",
-      "help": "Mit einem Link zur Einrichtung der Anmeldung setzt das Konto einmalig innerhalb von 24 Stunden sein Passwort und einen Passkey. Ein Link, der erstellt wurde, solange der Benutzer keine Portalrolle hat, etwa der Passwort-Link eines neuen Benutzers, bleibt seine 24 Stunden gültig, und ein neuerer Link beendet ihn nicht: Sein Inhaber könnte den Passkey des Kontos einrichten, sobald es Administrator geworden ist. Geben Sie dem Benutzer eine Portalrolle erst, nachdem er den Link verwendet hat, oder erstellen Sie nach der Ernennung einen neuen Link und geben Sie nur diesen weiter."
+      "help": "Mit einem Link zur Einrichtung der Anmeldung richtet das Konto einmalig innerhalb von 24 Stunden einen Passkey ein; ein von Paddock angelegtes Konto ohne Passwort setzt außerdem eines. Ein neuer Link beendet jeden älteren: Erstellen Sie nach der Vergabe einer Portalrolle einen neuen Link und geben Sie nur diesen weiter, sofern der Benutzer seinen Link nicht schon verwendet hat."
     },
     "syncedHint": "Dieser Benutzer wird aus einem Quellverzeichnis synchronisiert: Name, E-Mail und Passwort werden dort verwaltet. Sperre, Gruppen und Berechtigungen werden hier verwaltet.",
     "lock": "Sperren",

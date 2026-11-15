@@ -48,6 +48,11 @@ type IdentityUser struct {
 // (ADR 0053 decision 3); the sign-in denies an administrator without one otherwise.
 const AttrMFAEnrolAtLogin = "paddock_mfa_enrol_at_login"
 
+// AttrPasswordByLink is the identity provider's user attribute with which paddock-server admin enrolment-link lets
+// the sign-in setup link of an account Paddock did not create set a password (plan M12h-2 amendment f addendum): true
+// lets the link ask for one while the account has none; the link flow overwrites it once the password is set.
+const AttrPasswordByLink = "paddock_password_by_link"
+
 // RecoveryLinkValidity is how long a link of UserDirectory.RecoveryLink stays usable (plan M3a decision 18, ADR 0053
 // decision 1); the identity provider adapter requests exactly this duration.
 const RecoveryLinkValidity = 24 * time.Hour
@@ -75,9 +80,13 @@ type UserDirectory interface {
 	UpdateUser(ctx context.Context, pk, name, email string) error
 	// DeleteUser deletes a user; a missing user is not an error.
 	DeleteUser(ctx context.Context, pk string) error
-	// RecoveryLink creates a one-time link (valid RecoveryLinkValidity) with which the user sets a password if it has
-	// none and sets up a passkey if it has none (ADR 0053 decision 2).
+	// RecoveryLink creates a one-time link (valid RecoveryLinkValidity) with which the user sets up a passkey if it has
+	// none, and a password only if it has none and Paddock created the account or AttrPasswordByLink is true (ADR 0053
+	// decision 2, plan M12h-2 amendment f and its addendum).
 	RecoveryLink(ctx context.Context, pk string) (string, error)
+	// RevokeRecoveryLinks ends every unexpired one-time link of the user pk and returns how many it ended; callers
+	// run it before RecoveryLink, so only the newest link of an account works (plan M12h-2 amendment f).
+	RevokeRecoveryLinks(ctx context.Context, pk string) (int, error)
 	// UserActive reports whether the user is active (not deactivated) in the identity provider.
 	UserActive(ctx context.Context, pk string) (bool, error)
 	// LockUser adds the user to the organization's locked group and deletes the user's refresh tokens, access tokens

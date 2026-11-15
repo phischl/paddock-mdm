@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "ee7d6302ccc75f2593678ebaeb95713729a1adb3a6f318b70138e4f4aafafe05"
+const Version = "7544301854be64c13d3534a9f9ea1f3b04236868634414b1b469cd71b7a9cb59"
 
 var tools = []Tool{
 	{
@@ -743,7 +743,7 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "user.enrolment_link_created",
 		Summary:     "",
-		Description: "Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). A one-time sign-in setup link for the user (ADR 0053 decision 1), valid 24 hours: the account sets its password if it has none and a passkey if it has none. The link is returned once and never stored, logged or audited; responses are never cached. A locked user, a user deactivated in the identity provider, a user not provisioned there and a platform administrator (a direct member of paddock.platform.admins, who receives the setup link from the host operator) get none (409 invalid_state). A link created while the user has no portal role stays usable for its 24 hours and a newer link does not end it: give the user a portal role only after the link was used, or create a fresh link after the promotion and hand only that one over.\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). A one-time sign-in setup link for the user (ADR 0053 decision 1), valid 24 hours: the account sets up a passkey if it has none, and a password only if Paddock created the account and it has none. The link is returned once and never stored, logged or audited; responses are never cached. A locked user, a user deactivated in the identity provider, a user not provisioned there and a platform administrator (a direct member of paddock.platform.admins, who receives the setup link from the host operator) get none (409 invalid_state). A new link ends every older one; when the older links cannot be ended, no link is issued (502 upstream_unavailable).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{

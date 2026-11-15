@@ -564,6 +564,13 @@ entries:
         # The second-factor enrolment marks (ADR 0053 decision 4): which administrators have a passkey.
         - authentik_stages_authenticator_webauthn.view_webauthndevice
         - authentik_stages_authenticator_totp.view_totpdevice
+        # A new sign-in setup link ends the account's older links (plan M12h-2 amendment f): their tokens are listed
+        # and deleted.
+        - authentik_core.view_token
+        - authentik_core.delete_token
+        # paddock-server admin enrolment-link lets a platform administrator's link set a password only when the account
+        # has no upstream source connection (plan M12h-2 amendment f addendum point 1).
+        - authentik_core.view_usersourceconnection
 
   - model: authentik_core.user
     id: service-user

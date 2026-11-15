@@ -877,6 +877,177 @@ func TestMF3EnrolmentLinkPlatformAdministrator(t *testing.T) {
 	}
 }
 
+// createEnrolmentLink requests a setup link for the user id as the stepped-up administrator p, expects the success
+// event and returns the link with the event's previous_links_revoked.
+func createEnrolmentLink(t *testing.T, p *env.Portal, id string) (string, any) {
+	t.Helper()
+	res := call(t, p, http.MethodPost, "/api/v1/users/"+id+"/enrolment-link", nil)
+	expectStatus(t, res, http.StatusCreated, "")
+	var link struct {
+		Link string `json:"link"`
+	}
+	if err := res.JSON(&link); err != nil {
+		t.Fatal(err)
+	}
+	ev := expectOneEvent(t, p, res.RequestID, "user.enrolment_link_created", "success")
+	return link.Link, ev.Params["previous_links_revoked"]
+}
+
+// expectLinkRefused runs link and fails unless Authentik refused it: neither the password prompt nor the passkey setup,
+// and an answer of Authentik rather than a transport error.
+func expectLinkRefused(ctx context.Context, t *testing.T, link, what string) {
+	t.Helper()
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := authflow.SetupLink(ctx, client, link, "pw-"+uuid.NewString(), nil)
+	if slices.Contains(seen, "ak-stage-authenticator-webauthn") || slices.Contains(seen, "ak-stage-prompt") {
+		t.Fatalf("%s: %v, stages %v, want it refused: no passkey and no password step", what, err, seen)
+	}
+	var stageErr *authflow.StageError
+	var execErr *authflow.ExecutorError
+	if !errors.Is(err, authflow.ErrAccessDenied) && !errors.As(err, &stageErr) && !errors.As(err, &execErr) {
+		t.Fatalf("%s: %v, stages %v, want a refusal by Authentik", what, err, seen)
+	}
+}
+
+// TestMF3EnrolmentLinkEndsOlderLinks is gate MF3 for plan M12h-2 amendment f point 1: a new setup link ends every
+// older link of the account. Of two links created one after the other, the first is refused by Authentik and the
+// second works (the link of a new user Paddock created still asks for the password first); each event counts one older
+// link ended
+// (the creation's password link, then the first setup link).
+func TestMF3EnrolmentLinkEndsOlderLinks(t *testing.T) {
+	ctx := testContext(t, 4*time.Minute)
+	alice := login(t, env.Alice)
+	u := createLocalUser(t, alice, "mf3-older")
+	stepUp(t, alice, env.Alice, true)
+
+	first, revoked := createEnrolmentLink(t, alice, u.ID)
+	if revoked != float64(1) {
+		t.Fatalf("first link: previous_links_revoked %v, want 1 (the password link of the creation)", revoked)
+	}
+	second, revoked := createEnrolmentLink(t, alice, u.ID)
+	if revoked != float64(1) {
+		t.Fatalf("second link: previous_links_revoked %v, want 1", revoked)
+	}
+	if first == second {
+		t.Fatalf("both links are %q, want a new link", first)
+	}
+
+	expectLinkRefused(ctx, t, first, "the older link")
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	passkey, err := authflow.NewWebAuthn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := authflow.SetupLink(ctx, client, second, "pw-"+uuid.NewString(), passkey)
+	if want := []string{"ak-stage-prompt", "ak-stage-authenticator-webauthn", "xak-flow-redirect"}; err != nil || !slices.Equal(seen, want) {
+		t.Fatalf("the newest link: %v, stages %v, want %v", err, seen, want)
+	}
+}
+
+// TestMF3EnrolmentLinkSyncedAccount is gate MF3 for plan M12h-2 amendment f point 2: the link of an account Paddock
+// does not manage (no paddock_managed, as every account synced from the organization's identity source) and that has
+// no password only sets up the passkey and never asks for a password. The account is a new user Paddock created whose
+// paddock_managed is switched off in Authentik, which gives exactly that state: no password and not managed.
+func TestMF3EnrolmentLinkSyncedAccount(t *testing.T) {
+	ctx := testContext(t, 4*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := login(t, env.Alice)
+	u := createLocalUser(t, alice, "mf3-synced")
+	pk, err := ak.UserPK(ctx, u.Username)
+	if err != nil || pk == 0 {
+		t.Fatalf("user %s: pk %d, %v", u.Username, pk, err)
+	}
+	if err := ak.SetUserAttribute(ctx, pk, "paddock_managed", false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ak.SetUserAttribute(context.Background(), pk, "paddock_managed", true) })
+	stepUp(t, alice, env.Alice, true)
+
+	link, _ := createEnrolmentLink(t, alice, u.ID)
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	passkey, err := authflow.NewWebAuthn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := authflow.SetupLink(ctx, client, link, "pw-"+uuid.NewString(), passkey)
+	if want := []string{"ak-stage-authenticator-webauthn", "xak-flow-redirect"}; err != nil || !slices.Equal(seen, want) {
+		t.Fatalf("a synced account's link: %v, stages %v, want %v (the passkey only, no password)", err, seen, want)
+	}
+}
+
+// TestMF3EnrolmentLinkHandCreatedPlatformAdmin is gate MF3 for the addendum to plan M12h-2 amendment f: a platform
+// administrator the operator created by hand in Authentik, without a password and without an authenticator (install
+// §9 step 1), gets a link from paddock-server admin enrolment-link that asks for the password and then sets up the
+// passkey. The command marks the account (paddock_password_by_link true, passkey_only false in its event) before
+// it issues the link, and the link overwrites the mark once the password is set.
+func TestMF3EnrolmentLinkHandCreatedPlatformAdmin(t *testing.T) {
+	ctx := testContext(t, 6*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	username := "mf3-hand-" + uniqueSuffix() + "@acceptance.test"
+	pk, err := ak.CreateUserWithoutPassword(ctx, username, "paddock.platform.admins")
+	t.Cleanup(func() {
+		if pk != 0 {
+			_ = ak.DeleteUser(context.Background(), pk)
+		}
+	})
+	if err != nil {
+		t.Fatalf("create user %s: %v", username, err)
+	}
+
+	since := time.Now().Add(-time.Second)
+	out := runAdmin(t, "enrolment-link", "--username", username)
+	if strings.Contains(out, "upstream identity source") {
+		t.Fatalf("enrolment-link printed %q, want a link that sets the password", out)
+	}
+	var link string
+	for line := range strings.Lines(out) {
+		if l := strings.TrimSpace(line); strings.HasPrefix(l, "https://") {
+			link = l
+		}
+	}
+	if link == "" {
+		t.Fatalf("enrolment-link printed no link: %q", out)
+	}
+	if v, err := ak.UserAttribute(ctx, pk, "paddock_password_by_link"); err != nil || v != true {
+		t.Fatalf("paddock_password_by_link %v, %v, want true before the link is used", v, err)
+	}
+	ev := expectIndexEventSince(t, auditIndex(t), platformOrg, "platform.enrolment_link_created", since)
+	if ev.Params["passkey_only"] != false || ev.Params["username"] != username {
+		t.Fatalf("platform.enrolment_link_created params %v, want passkey_only false for %s", ev.Params, username)
+	}
+
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	passkey, err := authflow.NewWebAuthn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := authflow.SetupLink(ctx, client, link, "pw-"+uuid.NewString(), passkey)
+	if want := []string{"ak-stage-prompt", "ak-stage-authenticator-webauthn", "xak-flow-redirect"}; err != nil || !slices.Equal(seen, want) {
+		t.Fatalf("the hand-created platform administrator's link: %v, stages %v, want %v", err, seen, want)
+	}
+	if v, err := ak.UserAttribute(ctx, pk, "paddock_password_by_link"); err != nil || v != "used" {
+		t.Fatalf("paddock_password_by_link %v, %v after the password was set, want used", v, err)
+	}
+}
+
 // removePasskeys deletes every WebAuthn device of the Authentik user pk and confirms that none is left.
 func removePasskeys(ctx context.Context, t *testing.T, ak *env.Authentik, pk int) {
 	t.Helper()

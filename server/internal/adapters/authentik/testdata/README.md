@@ -21,3 +21,10 @@ Re-record them when the pinned Authentik version changes (development stack runn
       SSL_CERT_FILE=$R/caddy-root.crt go test -count=1 -run TestLiveAuthentik ./internal/adapters/authentik/
 
 Without `PADDOCK_AUTHENTIK_RECORD` the same command only runs the adapter against the real instance.
+
+`get_core_tokens.json` was written by hand on 2026-11-15 (PDK-1052) from the token serializer of Authentik 2026.8.5
+(`pk`, `managed`, `identifier`, `intent`, `user`, `user_obj`, `description`, `expires`, `expiring`): the one link token
+of an account, identifier `<uid>-password-reset`, intent `verification` (the model's default; the recovery link sets
+none). `get_sources_user_connections_all.json` was written by hand the same way from the user source connection
+serializer (`pk`, `user`, `source`, `source_obj`, `identifier`, `created`, `last_updated`). Neither is recorded:
+replace them with recorded ones at the next `TestLiveAuthentik` run with `PADDOCK_AUTHENTIK_RECORD=1`.
