@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,9 +24,10 @@ const offboardingLockKey = 0x706164646f666662
 const OffboardingInterval = time.Minute
 
 // OffboardingRoundBudget is the wall-clock time one round spends on all deletions together (plan M17 amendment p): it
-// ends after the step that was running when the budget ran out, so it stays below OffboardingInterval, and the leader
-// lock held for the round is released before the next tick. A step is never cut short: it is idempotent but may have
-// reached an external system.
+// ends after the step that was running when the budget ran out. The budget is checked only before a step, so the last
+// step may overrun it; nothing overlaps then: the ticker drops the missed tick, the next round starts at once, and
+// other replicas skip while the leader lock is held. The budget never cuts a step short (it is idempotent but may have
+// reached an external system); only a lost leadership does.
 const OffboardingRoundBudget = 45 * time.Second
 
 // offboardingLeaderCheck is how often the leader connection is asked whether it still answers; when it does not, the
@@ -84,12 +86,16 @@ type Offboarding struct {
 	interval time.Duration
 	now      func() time.Time
 	retries  map[uuid.UUID]*offboardingRetry
+	// advanced is when an organization last took a step, kept in memory: the next round serves the longest-waiting
+	// organizations first, so a slow deletion that uses the whole budget cannot starve the others. A new leader starts
+	// again in database order.
+	advanced map[uuid.UUID]time.Time
 }
 
 // NewOffboarding creates the round; lock is the worker's platform pool, whose lock pool holds the leader lock.
 func NewOffboarding(job offboarder, lock leaderLocker) *Offboarding {
 	return &Offboarding{job: job, lock: lock, interval: OffboardingInterval, now: time.Now,
-		retries: map[uuid.UUID]*offboardingRetry{}}
+		retries: map[uuid.UUID]*offboardingRetry{}, advanced: map[uuid.UUID]time.Time{}}
 }
 
 // WithClock replaces time.Now (tests).
@@ -139,6 +145,7 @@ func (o *Offboarding) Round(ctx context.Context) error {
 			pending[org.ID] = true
 			active = append(active, org.ID)
 		}
+		sort.SliceStable(active, func(i, j int) bool { return o.advanced[active[i]].Before(o.advanced[active[j]]) })
 		deadline := o.now().Add(OffboardingRoundBudget)
 		for len(active) > 0 && ctx.Err() == nil && o.now().Before(deadline) {
 			next := active[:0]
@@ -153,6 +160,11 @@ func (o *Offboarding) Round(ctx context.Context) error {
 			active = next
 		}
 		capped := 0
+		for id := range o.advanced {
+			if !pending[id] {
+				delete(o.advanced, id)
+			}
+		}
 		for id, r := range o.retries {
 			if !pending[id] {
 				delete(o.retries, id)
@@ -168,6 +180,7 @@ func (o *Offboarding) Round(ctx context.Context) error {
 		metricOffboardingRetryCapped.Set(0)
 		metricOffboardingStepFailing.Reset()
 		clear(o.retries)
+		clear(o.advanced)
 	}
 	return err
 }
@@ -191,6 +204,7 @@ func (o *Offboarding) advance(ctx context.Context, org uuid.UUID) bool {
 	if r != nil && now.Before(r.next) {
 		return false
 	}
+	o.advanced[org] = now
 	done, err := o.job.Advance(ctx, org)
 	switch {
 	case err == nil:

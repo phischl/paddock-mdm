@@ -347,11 +347,23 @@ func TestOffboardingRoundFairness(t *testing.T) {
 	if len(s.log) < 3 || s.log[0] != a || s.log[1] != b || s.log[2] != c {
 		t.Fatalf("order of steps %v, want every organization once first", s.log)
 	}
+	s.log = nil
+	s.cost = OffboardingRoundBudget
+	for _, want := range []uuid.UUID{a, b, c} {
+		*now = now.Add(OffboardingInterval)
+		if err := r.Round(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(s.log) != 1 || s.log[0] != want {
+			t.Fatalf("round ran %v, want the organization that waited longest (%v) alone", s.log, want)
+		}
+		s.log = nil
+	}
 }
 
-// TestOffboardingRoundBetweenSteps (main's condition 2): the round holds nothing between steps but the leader
-// connection: every step is its own Advance call, and the budget is checked against the clock between them, so a
-// round of slow steps ends on time.
+// TestOffboardingRoundBetweenSteps (main's condition 2, clock part): every step is its own Advance call and the budget
+// is checked against the clock between them. That the round holds no transaction between steps follows from Advance
+// taking its own transactions; this test cannot observe connections.
 func TestOffboardingRoundBetweenSteps(t *testing.T) {
 	org := uuid.New()
 	s, now := newStepper(OffboardingRoundBudget, map[uuid.UUID]int{org: 3})
@@ -418,5 +430,38 @@ func TestOffboardingRoundCrashResumes(t *testing.T) {
 	}
 	if s.left[org] != 0 || len(s.log) != 10 {
 		t.Fatalf("after resume %d steps left, %d run; want 0 and 10 (no step repeated)", s.left[org], len(s.log))
+	}
+}
+
+// TestOffboardingRoundsRotate (main's condition 1, review 1 blocker): with the slow organization first in database
+// order, every organization still advances within a bounded number of rounds.
+func TestOffboardingRoundsRotate(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cost   time.Duration
+		orgs   int
+		rounds int
+	}{{"steps of the whole budget", OffboardingRoundBudget, 2, 2}, {"25 s steps", 25 * time.Second, 3, 3}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ids := make([]uuid.UUID, tc.orgs)
+			steps := map[uuid.UUID]int{}
+			for i := range ids {
+				ids[i] = uuid.New()
+				steps[ids[i]] = 100
+			}
+			s, now := newStepper(tc.cost, steps)
+			r := NewOffboarding(s.fake(ids...), &fakeLock{}).WithClock(func() time.Time { return *now })
+			for range tc.rounds {
+				if err := r.Round(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				*now = now.Add(OffboardingInterval)
+			}
+			for _, id := range ids {
+				if steps[id] == 100 {
+					t.Fatalf("an organization took no step in %d rounds: %v", tc.rounds, s.log)
+				}
+			}
+		})
 	}
 }
