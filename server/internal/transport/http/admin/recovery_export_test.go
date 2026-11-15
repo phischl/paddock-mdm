@@ -147,8 +147,11 @@ func TestRecoveryExportAPI(t *testing.T) {
 	if r.status != http.StatusOK || r.header.Get("Content-Type") != "application/pgp-encrypted" {
 		t.Fatalf("export: %d %s", r.status, r.body)
 	}
-	_, params, err := mime.ParseMediaType(r.header.Get("Content-Disposition"))
-	if err != nil || !strings.HasPrefix(params["filename"], "paddock-recovery-acme-") || !strings.HasSuffix(params["filename"], "Z.asc") {
+	if r.header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("export without nosniff: %v", r.header)
+	}
+	disposition, params, err := mime.ParseMediaType(r.header.Get("Content-Disposition"))
+	if err != nil || disposition != "attachment" || !strings.HasPrefix(params["filename"], "paddock-recovery-acme-") || !strings.HasSuffix(params["filename"], "Z.asc") {
 		t.Fatalf("disposition %q: %v", r.header.Get("Content-Disposition"), err)
 	}
 	e.expectEvent(r, "organization.recovery_exported:success:")
