@@ -60,7 +60,8 @@ func TestOffboardingHelpersUnit(t *testing.T) {
 		{"1.0 armed\n2.5 token_gone installed=no\n3.0 removed\n", true},
 		{"1.0 armed\n3.0 removed\n", true},
 		{"1.0 armed\n2.0 token_gone installed=yes\n", true},
-		{"3.5 token_gone installed=yes\n3.0 removed\n", true},
+		{"3.0 removed\n3.5 token_gone installed=yes\n", true},
+		{"3.5 token_gone installed=yes\n3.0 removed\n", false},
 		{"x token_gone installed=yes\n", true},
 		{"", true},
 	} {

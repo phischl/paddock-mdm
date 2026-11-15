@@ -284,6 +284,8 @@ done
 
 const watchUnit = `[Unit]
 Description=Gate OS1 watcher of the dead man's switch token
+# The watcher must hold the token in view before the agent's first check-in can disarm it after the boot.
+Before=paddock-supervisor.service
 
 [Service]
 ExecStart=/usr/local/sbin/os1-watch.sh
@@ -306,28 +308,28 @@ func installWatcher(vm *VM) {
 // checkWatchLog fails unless the log shows the token gone while the packages were still installed, before they were
 // removed: the disarm came first.
 func checkWatchLog(log string) error {
-	var gone, removed float64
-	var goneInstalled, haveGone, haveRemoved bool
-	for _, line := range strings.Split(log, "\n") {
+	// Line order, not the timestamps, decides: a clock step after the boot must not fail the gate.
+	gone, removed := -1, -1
+	var goneInstalled bool
+	for i, line := range strings.Split(log, "\n") {
 		f := strings.Fields(line)
 		if len(f) < 2 {
 			continue
 		}
-		ts, err := strconv.ParseFloat(f[0], 64)
-		if err != nil {
+		if _, err := strconv.ParseFloat(f[0], 64); err != nil {
 			return fmt.Errorf("watch log line %q: %w", line, err)
 		}
 		switch f[1] {
 		case "token_gone":
-			gone, haveGone, goneInstalled = ts, true, len(f) > 2 && f[2] == "installed=yes"
+			gone, goneInstalled = i, len(f) > 2 && f[2] == "installed=yes"
 		case "removed":
-			removed, haveRemoved = ts, true
+			removed = i
 		}
 	}
 	switch {
-	case !haveGone:
+	case gone < 0:
 		return fmt.Errorf("the token was never seen to go (log %q)", log)
-	case !haveRemoved:
+	case removed < 0:
 		return fmt.Errorf("the removal was never seen (log %q)", log)
 	case !goneInstalled:
 		return fmt.Errorf("the token went only after the packages were removed: the disarm did not come first (log %q)", log)
