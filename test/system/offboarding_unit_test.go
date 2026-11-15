@@ -50,4 +50,22 @@ func TestOffboardingHelpersUnit(t *testing.T) {
 			t.Errorf("trace %v: %v", tt.seen, err)
 		}
 	}
+
+	for _, tt := range []struct {
+		log string
+		bad bool
+	}{
+		{"1.0 armed\n2.5 token_gone installed=yes\n3.0 removed\n", false},
+		{"2.5 token_gone installed=yes\n2.5 removed\n", false},
+		{"1.0 armed\n2.5 token_gone installed=no\n3.0 removed\n", true},
+		{"1.0 armed\n3.0 removed\n", true},
+		{"1.0 armed\n2.0 token_gone installed=yes\n", true},
+		{"3.5 token_gone installed=yes\n3.0 removed\n", true},
+		{"x token_gone installed=yes\n", true},
+		{"", true},
+	} {
+		if err := checkWatchLog(tt.log); (err != nil) != tt.bad {
+			t.Errorf("checkWatchLog(%q): %v", tt.log, err)
+		}
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -93,6 +94,9 @@ func newOffboardingGate(t *testing.T, vm *VM, names []string) *offboardingGate {
 		t.Fatal(err)
 	}
 	for _, name := range names {
+		// Each administrator gets its own budget: an `ak shell` for the TOTP authenticator is slow under load.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
 		a := &orgAdmin{username: "systest-os1-" + unique() + "@" + slug + ".test", password: "pw-" + uuid.NewString()}
 		pk, err := ak.CreateUser(ctx, a.username, a.password, portal.RoleGroup(slug, "admins"))
 		vm.AfterAll(t, func(*testing.T) {
@@ -108,7 +112,25 @@ func newOffboardingGate(t *testing.T, vm *VM, names []string) *offboardingGate {
 		}
 		g.admins[name] = a
 	}
+	setTestVMLoginSettings(t, &Stack{gate: g.admins[names[0]]})
 	return g
+}
+
+// setTestVMLoginSettings gives the organization the login settings of the test VMs, as `make dev-seed` does for acme
+// and (*Lab).stack for the lab: without the install administrator as break-glass account and 90-paddock in the
+// allowlist, the first enforcement quarantines the sudoers file the harness runs on.
+func setTestVMLoginSettings(t *testing.T, s *Stack) {
+	t.Helper()
+	s.Login(t)
+	var settings map[string]any
+	if err := json.Unmarshal(s.Call(t, http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK).Body, &settings); err != nil {
+		t.Fatal(err)
+	}
+	delete(settings, "updated_at")
+	settings["break_glass_accounts"] = []string{vmAdmin}
+	settings["sudoers_d_allowlist"] = []string{"README", "90-paddock"}
+	s.StepUp(t)
+	s.Call(t, http.MethodPut, "/api/v1/settings/login", settings, http.StatusOK)
 }
 
 func (g *offboardingGate) platformSession(t *testing.T) *portal.Session {
@@ -149,6 +171,8 @@ func (g *offboardingGate) requestDeletion(t *testing.T) {
 	t.Helper()
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// The session was idle through the VM setup, longer than the server's idle timeout (30 min).
+	g.root = g.platformSession(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	final, err := g.root.StepUp(ctx, portal.PlatformAdmin, "/")
@@ -172,7 +196,7 @@ func (g *offboardingGate) waitDeleted(t *testing.T, timeout time.Duration) {
 // organization here (OFB-8). Failures are reported on t, which is the parent test.
 func (g *offboardingGate) ensureDeleted(t *testing.T) {
 	st := g.status(t)
-	if st == "active" {
+	if st == "active" || st == "provisioning_failed" {
 		g.requestDeletion(t)
 	}
 	if st != "deleted" {
@@ -233,6 +257,82 @@ func (tr phaseTrace) check() error {
 	}
 	if len(tr) == 0 || tr[len(tr)-1] != phaseRemoved {
 		return fmt.Errorf("phases do not end in removal: %v", tr)
+	}
+	return nil
+}
+
+// watchScript runs on the guest from before the deletion to the removal and timestamps (wall clock, seconds) the
+// first time the dead man's switch token is seen, the first time it is gone, and the removal of the Paddock packages.
+// A package list file exists while the package is installed. The loop is cheap enough to catch a change within 0.2 s,
+// and the log, unlike a poll over SSH, shows which came first.
+const watchScript = `#!/bin/bash
+log=/var/log/os1-watch.log
+tok=/var/lib/paddock/revoke/self-lock.dsse
+seen=0; gone=0; rem=0
+while :; do
+  if compgen -G '/var/lib/dpkg/info/paddock-*.list' >/dev/null; then inst=yes; else inst=no; fi
+  if [ -e "$tok" ]; then
+    [ $seen = 0 ] && { echo "$(date +%s.%N) armed" >>$log; seen=1; }
+  elif [ $seen = 1 ] && [ $gone = 0 ]; then
+    echo "$(date +%s.%N) token_gone installed=$inst" >>$log; gone=1
+  fi
+  if [ $inst = no ] && [ $rem = 0 ]; then echo "$(date +%s.%N) removed" >>$log; rem=1; fi
+  [ $rem = 1 ] && [ $gone = 1 ] && exit 0
+  sleep 0.2
+done
+`
+
+const watchUnit = `[Unit]
+Description=Gate OS1 watcher of the dead man's switch token
+
+[Service]
+ExecStart=/usr/local/sbin/os1-watch.sh
+
+[Install]
+WantedBy=multi-user.target
+`
+
+const watchLog = "/var/log/os1-watch.log"
+
+// installWatcher starts the watcher now and at every boot; it is a guest file of the gate, not of Paddock, and
+// survives the removal.
+func installWatcher(vm *VM) {
+	vm.t.Helper()
+	vm.MustIn([]byte(watchScript), "sudo tee /usr/local/sbin/os1-watch.sh >/dev/null && sudo chmod 0755 /usr/local/sbin/os1-watch.sh")
+	vm.MustIn([]byte(watchUnit), "sudo tee /etc/systemd/system/os1-watch.service >/dev/null")
+	vm.Must("sudo systemctl daemon-reload && sudo systemctl enable --now os1-watch.service")
+}
+
+// checkWatchLog fails unless the log shows the token gone while the packages were still installed, before they were
+// removed: the disarm came first.
+func checkWatchLog(log string) error {
+	var gone, removed float64
+	var goneInstalled, haveGone, haveRemoved bool
+	for _, line := range strings.Split(log, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		ts, err := strconv.ParseFloat(f[0], 64)
+		if err != nil {
+			return fmt.Errorf("watch log line %q: %w", line, err)
+		}
+		switch f[1] {
+		case "token_gone":
+			gone, haveGone, goneInstalled = ts, true, len(f) > 2 && f[2] == "installed=yes"
+		case "removed":
+			removed, haveRemoved = ts, true
+		}
+	}
+	switch {
+	case !haveGone:
+		return fmt.Errorf("the token was never seen to go (log %q)", log)
+	case !haveRemoved:
+		return fmt.Errorf("the removal was never seen (log %q)", log)
+	case !goneInstalled:
+		return fmt.Errorf("the token went only after the packages were removed: the disarm did not come first (log %q)", log)
+	case gone > removed:
+		return fmt.Errorf("the token went after the removal (log %q)", log)
 	}
 	return nil
 }

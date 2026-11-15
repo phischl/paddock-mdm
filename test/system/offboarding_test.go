@@ -67,9 +67,11 @@ func waitRemoved(t *testing.T, vm *VM, timeout time.Duration) phaseTrace {
 // the device, and the disk unlocks at the next boot. The VMs run in parallel; the organization is created once and
 // ends deleted.
 //
-// Not covered: the variant in which the uninstall is refused (a revocation handed to paddock-revoke within 24 h).
-// It needs a third device that stays in a deleted organization, and the gate has two VMs; the agent's unit test
-// TestOffboardedDeviceDisarmsBeforeRefusedUninstall and acceptance gate OF6 cover the disarm that comes first.
+// A watcher on the guest timestamps the token's disappearance and the removal, so the order (disarm first) is asserted
+// from its log, not from polls. Not covered: the variant in which the uninstall is refused (a revocation handed to
+// paddock-revoke within 24 h); it needs a device that stays in a deleted organization, and the gate has two VMs
+// (follow-up ticket); the agent's unit test TestOffboardedDeviceDisarmsBeforeRefusedUninstall and acceptance gate OF6
+// cover the disarm that comes first.
 func TestOffboarding(t *testing.T) {
 	var gate *offboardingGate
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
@@ -82,9 +84,6 @@ func TestOffboarding(t *testing.T) {
 		})
 		s.gate = gate.admins[vm.Name]
 		s.Login(t)
-		// The organization is deleted at the end: its group, files and token have nothing left to clean up.
-		t.Cleanup(func() { s.orgGone.Store(true) })
-
 		vm.Fresh()
 		d := Install(t, s, vm, debDir(s))
 		w := &uninstallWorld{laWorld: newLAWorld(t, d)}
@@ -102,6 +101,8 @@ func TestOffboarding(t *testing.T) {
 		if p, _, _ := guestPhaseNow(t, vm); p != phaseArmed {
 			t.Fatalf("%s is %q before the deletion, want armed", vm.Name, p)
 		}
+
+		installWatcher(vm)
 
 		var lastCheckin time.Time
 		if off {
@@ -135,8 +136,8 @@ func TestOffboarding(t *testing.T) {
 		}
 		seen := waitRemoved(t, vm, 20*time.Minute)
 		t.Logf("%s: phases %v (off during the deletion: %v)", vm.Name, seen, off)
-		if off && seen[0] == phaseRemoved {
-			t.Logf("%s: removed between two polls; the disarm is proven by acceptance gate OF6", vm.Name)
+		if err := checkWatchLog(vm.Must("sudo cat " + watchLog)); err != nil {
+			t.Fatalf("%s: %v", vm.Name, err)
 		}
 
 		w.packagesGone(t)
