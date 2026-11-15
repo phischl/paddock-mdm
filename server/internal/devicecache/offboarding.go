@@ -18,9 +18,17 @@ type OffboardDevice struct {
 	Offboarded bool
 }
 
+// OffboardOrgKeys are the identifiers of the organization's cached keys that no device row names: the SHA-256 of
+// every enrollment token secret and every escrow id. The deletion reads them before the database step removes the rows.
+type OffboardOrgKeys struct {
+	TokenHashes [][]byte
+	EscrowIDs   []uuid.UUID
+}
+
 // DeleteOrganization deletes the device keys of an organization that is being deleted (plan M17 decision 13,
-// amendment l point 3) and returns how many keys existed:
-//   - of every device bp:, hb: and au:;
+// amendment l points 2 and 3) and returns how many keys existed:
+//   - of every device bp:, hb:, au: and enr: (an enrollment request id is the id of the device it created);
+//   - the organization's et: and esc: from refs;
 //   - of a device that is not offboarded also cmd:, seq:, sd: and dk: of its keys;
 //   - the organization's tt:.
 //
@@ -29,11 +37,11 @@ type OffboardDevice struct {
 // 365-day purge. The worker may only delete bp: and tt: (its delete-only selector, M17 amendment k addendum point 2):
 // Valkey allows a DEL only when the root permissions or one selector cover every key of it, and that selector grants
 // neither UNLINK nor scripts, so those keys go in plain DEL calls of their own.
-func (c *Cache) DeleteOrganization(ctx context.Context, org uuid.UUID, devices []OffboardDevice) (int64, error) {
-	owned := make([]string, 0, 6*len(devices))
+func (c *Cache) DeleteOrganization(ctx context.Context, org uuid.UUID, devices []OffboardDevice, refs OffboardOrgKeys) (int64, error) {
+	owned := make([]string, 0, 7*len(devices)+len(refs.TokenHashes)+len(refs.EscrowIDs))
 	deleteOnly := make([]string, 0, len(devices)+1)
 	for _, d := range devices {
-		owned = append(owned, heartbeatKey(d.ID), updateRequestKey(d.ID))
+		owned = append(owned, heartbeatKey(d.ID), updateRequestKey(d.ID), enrollmentKey(d.ID))
 		deleteOnly = append(deleteOnly, bundleKey(d.ID))
 		if d.Offboarded {
 			continue
@@ -42,6 +50,12 @@ func (c *Cache) DeleteOrganization(ctx context.Context, org uuid.UUID, devices [
 		for _, k := range d.KeyIDs {
 			owned = append(owned, deviceKeyKey(k))
 		}
+	}
+	for _, h := range refs.TokenHashes {
+		owned = append(owned, tokenKey(h))
+	}
+	for _, id := range refs.EscrowIDs {
+		owned = append(owned, escrowKey(id))
 	}
 	deleteOnly = append(deleteOnly, ticketKey(org))
 	var total int64

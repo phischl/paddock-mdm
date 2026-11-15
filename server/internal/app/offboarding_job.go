@@ -51,7 +51,7 @@ type OffboardingInventory interface {
 type OffboardingCache interface {
 	PutOffboardedDevice(ctx context.Context, d devicecache.OffboardedDevice, lastSeq int64) error
 	DeleteCommand(ctx context.Context, device, id uuid.UUID) error
-	DeleteOrganization(ctx context.Context, org uuid.UUID, devices []devicecache.OffboardDevice) (int64, error)
+	DeleteOrganization(ctx context.Context, org uuid.UUID, devices []devicecache.OffboardDevice, refs devicecache.OffboardOrgKeys) (int64, error)
 }
 
 // OffboardingSessions ends the portal and MCP sessions of an administrator account (sessions.Store).
@@ -455,13 +455,22 @@ func (o *Offboarding) fleet(ctx context.Context, org uuid.UUID) (int, error) {
 	return deleted, nil
 }
 
-// valkey deletes the cached keys of the organization's devices and its time ticket (plan M17 decision 13). A device
+// valkey deletes the cached keys of the organization's devices, enrollment tokens and escrow uploads and its time
+// ticket (plan M17 decision 13, amendment l point 2); the token hashes are read here because the database step deletes
+// the rows. A device
 // with an offboarded_device record keeps what its uninstall needs (amendment l point 3, devicecache.DeleteOrganization).
 func (o *Offboarding) valkey(ctx context.Context, org uuid.UUID) (int, error) {
 	var rows []pgstore.ListOffboardingDeviceKeysRow
+	var refs devicecache.OffboardOrgKeys
 	err := o.deps.Worker.InOrgOffboarding(offboardingContext(ctx, org), func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
-		rows, err = q.ListOffboardingDeviceKeys(ctx)
+		if rows, err = q.ListOffboardingDeviceKeys(ctx); err != nil {
+			return err
+		}
+		if refs.TokenHashes, err = q.ListOffboardingEnrollmentTokenHashes(ctx); err != nil {
+			return err
+		}
+		refs.EscrowIDs, err = q.ListOffboardingEscrowIDs(ctx)
 		return err
 	})
 	if err != nil {
@@ -491,7 +500,7 @@ func (o *Offboarding) valkey(ctx context.Context, org uuid.UUID) (int, error) {
 			last.KeyIDs = append(last.KeyIDs, r.KeyID)
 		}
 	}
-	n, err := o.deps.Cache.DeleteOrganization(ctx, org, devices)
+	n, err := o.deps.Cache.DeleteOrganization(ctx, org, devices, refs)
 	return int(n), stepError(offboarding.ErrorValkeyUnavailable, err)
 }
 

@@ -38,6 +38,15 @@ SELECT d.id AS device_id, coalesce(k.key_id, '')::text AS key_id
 FROM device d LEFT JOIN device_identity_key k ON k.device_id = d.id
 ORDER BY d.id, k.key_id;
 
+-- The enrollment token hashes of the context organization, whose cached et: keys the step valkey deletes before the
+-- step database removes the rows (plan M17 amendment l point 2).
+-- name: ListOffboardingEnrollmentTokenHashes :many
+SELECT secret_sha256 FROM enrollment_token ORDER BY id;
+
+-- The escrow ids of the context organization, whose cached esc: keys the step valkey deletes (amendment l point 2).
+-- name: ListOffboardingEscrowIDs :many
+SELECT id FROM escrow_secret ORDER BY id;
+
 -- The Fleet hosts the context organization's devices reference, for the step fleet (decision 11).
 -- name: ListOffboardingInventoryRefs :many
 SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id;
