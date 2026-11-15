@@ -1,7 +1,9 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,6 +73,7 @@ type fakeOffboardCache struct {
 	keys       map[uuid.UUID]int
 	err        error
 	devices    []devicecache.OffboardDevice
+	refs       devicecache.OffboardOrgKeys
 	offboarded map[uuid.UUID]devicecache.OffboardedDevice
 	dropped    []uuid.UUID
 }
@@ -112,13 +115,13 @@ func (f fakeCommandSigner) SignBatch(_ context.Context, _ string, messages [][]b
 	return out, nil
 }
 
-func (f *fakeOffboardCache) DeleteOrganization(_ context.Context, org uuid.UUID, devices []devicecache.OffboardDevice) (int64, error) {
+func (f *fakeOffboardCache) DeleteOrganization(_ context.Context, org uuid.UUID, devices []devicecache.OffboardDevice, refs devicecache.OffboardOrgKeys) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return 0, f.err
 	}
-	f.devices = devices
+	f.devices, f.refs = devices, refs
 	n := f.keys[org]
 	delete(f.keys, org)
 	return int64(n), nil
@@ -735,6 +738,11 @@ func TestOffboardingKeepsOffboardedDeviceKeys(t *testing.T) {
 	w.exec(t, `INSERT INTO offboarded_device (device_id, organization_id, keys, command_envelopes)
 		VALUES ($1, $2, '[]', '[]')`, leaving, w.org)
 	t.Cleanup(func() { w.exec(t, "DELETE FROM offboarded_device WHERE device_id = $1", leaving) })
+	hash, escrow := sha256.Sum256([]byte("pdk-1059-"+w.org.String())), uuid.New()
+	w.exec(t, `INSERT INTO enrollment_token (id, organization_id, name, secret_sha256, auto_approve, max_uses, expires_at, created_by)
+		VALUES (gen_random_uuid(), $1, 'pdk-1059', $2, false, 1, now() + interval '1 day', gen_random_uuid())`, w.org, hash[:])
+	w.exec(t, `INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, ciphertext, key_version)
+		VALUES ($1, $2, $3, 'admin_password', 1, 'stored', '\x00', 1)`, escrow, w.org, w.device)
 	w.requestDue(t, job)
 	w.advanceTo(t, job, offboarding.StepAuditFinal)
 	got := map[uuid.UUID]devicecache.OffboardDevice{}
@@ -745,6 +753,10 @@ func TestOffboardingKeepsOffboardedDeviceKeys(t *testing.T) {
 		!slices.Equal(got[leaving].KeyIDs, []string{"k-" + leaving.String()}) ||
 		!slices.Equal(got[w.device].KeyIDs, []string{"k-" + w.device.String()}) {
 		t.Fatalf("devices handed to the cache: %+v", w.cache.devices)
+	}
+	if len(w.cache.refs.TokenHashes) != 1 || !bytes.Equal(w.cache.refs.TokenHashes[0], hash[:]) ||
+		!slices.Equal(w.cache.refs.EscrowIDs, []uuid.UUID{escrow}) {
+		t.Fatalf("token hashes and escrow ids handed to the cache: %+v", w.cache.refs)
 	}
 }
 

@@ -309,6 +309,57 @@ func (q *Queries) ListOffboardingDeviceKeys(ctx context.Context) ([]ListOffboard
 	return items, nil
 }
 
+const listOffboardingEnrollmentTokenHashes = `-- name: ListOffboardingEnrollmentTokenHashes :many
+SELECT secret_sha256 FROM enrollment_token ORDER BY id
+`
+
+// The enrollment token hashes of the context organization, whose cached et: keys the step valkey deletes before the
+// step database removes the rows (plan M17 amendment l point 2).
+func (q *Queries) ListOffboardingEnrollmentTokenHashes(ctx context.Context) ([][]byte, error) {
+	rows, err := q.db.Query(ctx, listOffboardingEnrollmentTokenHashes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := [][]byte{}
+	for rows.Next() {
+		var secret_sha256 []byte
+		if err := rows.Scan(&secret_sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, secret_sha256)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardingEscrowIDs = `-- name: ListOffboardingEscrowIDs :many
+SELECT id FROM escrow_secret ORDER BY id
+`
+
+// The escrow ids of the context organization, whose cached esc: keys the step valkey deletes (amendment l point 2).
+func (q *Queries) ListOffboardingEscrowIDs(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listOffboardingEscrowIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOffboardingHandedDevices = `-- name: ListOffboardingHandedDevices :many
 SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('retired', 'rejected') ORDER BY id
 `
