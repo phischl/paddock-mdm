@@ -462,8 +462,9 @@ Control-plane database (`postgres`):
 
 Together the long-running roles of one control plane hold at most **81** connections, 85 while an operator command
 runs (operator commands run one at a time), which leaves 12 for pgBackRest and `paddock-migrate`: at the default 100
-the budget of `./paddock check` (below) is used up exactly. The worker runs 19
-rounds that each hold a leader lock connection for their whole duration; with 12 lock connections a round that finds
+the budget of `./paddock check` (below) is used up exactly. The worker runs 20
+rounds that each hold a leader lock connection for their whole duration (the organization deletion round of M17 is
+the 20th; it adds no pool and no connection); with 12 lock connections a round that finds
 them all taken waits for one, while its queries and the readiness check keep pools of their own. At many
 organizations up to 9 rounds run for minutes (identity, inventory, osv, staleness, findings, retention), so a short
 round such as commands or escrow waits only when they all run at once. A further api replica adds 12 and uses up the

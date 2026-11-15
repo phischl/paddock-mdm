@@ -26,12 +26,26 @@ const notifyChannel = "device_cache"
 // every ReconcileInterval, which also repairs lost notifications and an emptied Valkey (and then restores seq:
 // from device_status.last_seq).
 type CacheSync struct {
-	pool     *db.OrgPool
-	cache    *devicecache.Cache
-	interval time.Duration
-	now      func() time.Time
+	pool       *db.OrgPool
+	cache      *devicecache.Cache
+	offboarded offboardedRestorer
+	interval   time.Duration
+	now        func() time.Time
 	// beforeListen, if set, runs before each LISTEN attempt; tests use it to hold the listener back.
 	beforeListen func(ctx context.Context)
+}
+
+// offboardedRestorer rewrites the cached keys and uninstalls of the devices of deleted organizations
+// (app.OffboardedDevices).
+type offboardedRestorer interface {
+	Restore(ctx context.Context) (int, error)
+}
+
+// WithOffboardedDevices makes every reconcile also restore the devices of deleted organizations (plan M17 decision
+// 15): their rows left with the organization, so only their platform records can rebuild them.
+func (s *CacheSync) WithOffboardedDevices(o offboardedRestorer) *CacheSync {
+	s.offboarded = o
+	return s
 }
 
 // NewCacheSync creates the sync.
@@ -124,15 +138,23 @@ func (s *CacheSync) Changed(ctx context.Context, payload string) error {
 // the joined error of all failures is returned: since PDK-475 a device whose counter is missing gets 503 until a
 // reconcile restores it, so one broken organization must not keep the devices of all later ones waiting.
 func (s *CacheSync) ReconcileAll(ctx context.Context) error {
+	var errs []error
 	orgs, err := s.pool.OrganizationIDs(principal.With(ctx, principal.Principal{Kind: principal.KindSystem}))
 	if err != nil {
-		return err
+		errs = append(errs, err)
 	}
-	var errs []error
 	for _, org := range orgs {
 		if err := s.Reconcile(ctx, org); err != nil {
 			slog.WarnContext(ctx, "device cache reconcile of an organization failed", "organization", org, "error", err)
 			errs = append(errs, fmt.Errorf("organization %s: %w", org, err))
+		}
+	}
+	// The offboarded devices are platform records, independent of the organization list: they are restored also when
+	// that list failed.
+	if s.offboarded != nil {
+		if _, err := s.offboarded.Restore(ctx); err != nil {
+			slog.WarnContext(ctx, "device cache reconcile of the offboarded devices failed", "error", err)
+			errs = append(errs, fmt.Errorf("offboarded devices: %w", err))
 		}
 	}
 	return errors.Join(errs...)

@@ -836,12 +836,11 @@ type NotificationPseudonymLookup struct {
 }
 
 type OffboardedDevice struct {
-	DeviceID        uuid.UUID
-	OrganizationID  uuid.UUID
-	Keys            json.RawMessage
-	CommandID       uuid.UUID
-	CommandEnvelope []byte
-	OffboardedAt    time.Time
+	DeviceID         uuid.UUID
+	OrganizationID   uuid.UUID
+	Keys             json.RawMessage
+	OffboardedAt     time.Time
+	CommandEnvelopes json.RawMessage
 }
 
 type OffboardingTable struct {
@@ -895,6 +894,7 @@ type Organization struct {
 	OffboardingWaitTakenAt    *time.Time
 	RecoveryExports           int32
 	RecoveryExportsSince      *time.Time
+	OffboardingCounts         json.RawMessage
 }
 
 type OrganizationDmsSetting struct {

@@ -7,14 +7,13 @@ package pgstore
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
 )
 
 const deleteOffboardedDevice = `-- name: DeleteOffboardedDevice :one
-DELETE FROM offboarded_device WHERE device_id = $1 RETURNING device_id, organization_id, keys, command_id, command_envelope, offboarded_at
+DELETE FROM offboarded_device WHERE device_id = $1 RETURNING device_id, organization_id, keys, offboarded_at, command_envelopes
 `
 
 func (q *Queries) DeleteOffboardedDevice(ctx context.Context, deviceID uuid.UUID) (OffboardedDevice, error) {
@@ -24,15 +23,26 @@ func (q *Queries) DeleteOffboardedDevice(ctx context.Context, deviceID uuid.UUID
 		&i.DeviceID,
 		&i.OrganizationID,
 		&i.Keys,
-		&i.CommandID,
-		&i.CommandEnvelope,
 		&i.OffboardedAt,
+		&i.CommandEnvelopes,
 	)
 	return i, err
 }
 
+const deleteOffboardedDevices = `-- name: DeleteOffboardedDevices :execrows
+DELETE FROM offboarded_device WHERE device_id = ANY($1::uuid[])
+`
+
+func (q *Queries) DeleteOffboardedDevices(ctx context.Context, deviceIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOffboardedDevices, deviceIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getOffboardedDevice = `-- name: GetOffboardedDevice :one
-SELECT device_id, organization_id, keys, command_id, command_envelope, offboarded_at FROM offboarded_device WHERE device_id = $1
+SELECT device_id, organization_id, keys, offboarded_at, command_envelopes FROM offboarded_device WHERE device_id = $1
 `
 
 func (q *Queries) GetOffboardedDevice(ctx context.Context, deviceID uuid.UUID) (OffboardedDevice, error) {
@@ -42,42 +52,104 @@ func (q *Queries) GetOffboardedDevice(ctx context.Context, deviceID uuid.UUID) (
 		&i.DeviceID,
 		&i.OrganizationID,
 		&i.Keys,
-		&i.CommandID,
-		&i.CommandEnvelope,
 		&i.OffboardedAt,
+		&i.CommandEnvelopes,
 	)
 	return i, err
 }
 
-const insertOffboardedDevice = `-- name: InsertOffboardedDevice :exec
+const insertOffboardedDevices = `-- name: InsertOffboardedDevices :execrows
 
-INSERT INTO offboarded_device (device_id, organization_id, keys, command_id, command_envelope)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO offboarded_device (device_id, organization_id, keys, command_envelopes)
+SELECT unnest($1::uuid[]), $2::uuid, unnest($3::text[])::jsonb, unnest($4::text[])::jsonb
 ON CONFLICT (device_id) DO NOTHING
 `
 
-type InsertOffboardedDeviceParams struct {
-	DeviceID        uuid.UUID
-	OrganizationID  uuid.UUID
-	Keys            json.RawMessage
-	CommandID       uuid.UUID
-	CommandEnvelope []byte
+type InsertOffboardedDevicesParams struct {
+	DeviceIds        []uuid.UUID
+	OrganizationID   uuid.UUID
+	Keys             []string
+	CommandEnvelopes []string
 }
 
 // Devices that had not reported their removal when their organization was deleted (platform role only).
-func (q *Queries) InsertOffboardedDevice(ctx context.Context, arg InsertOffboardedDeviceParams) error {
-	_, err := q.db.Exec(ctx, insertOffboardedDevice,
-		arg.DeviceID,
+// A device handed over again (a repeated step) keeps its row; only new rows count.
+func (q *Queries) InsertOffboardedDevices(ctx context.Context, arg InsertOffboardedDevicesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertOffboardedDevices,
+		arg.DeviceIds,
 		arg.OrganizationID,
 		arg.Keys,
-		arg.CommandID,
-		arg.CommandEnvelope,
+		arg.CommandEnvelopes,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const listExpiredOffboardedDevices = `-- name: ListExpiredOffboardedDevices :many
+SELECT device_id, organization_id, keys, offboarded_at, command_envelopes FROM offboarded_device WHERE offboarded_at < $1 ORDER BY offboarded_at, device_id LIMIT $2
+`
+
+type ListExpiredOffboardedDevicesParams struct {
+	Before  time.Time
+	MaxRows int32
+}
+
+func (q *Queries) ListExpiredOffboardedDevices(ctx context.Context, arg ListExpiredOffboardedDevicesParams) ([]OffboardedDevice, error) {
+	rows, err := q.db.Query(ctx, listExpiredOffboardedDevices, arg.Before, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []OffboardedDevice{}
+	for rows.Next() {
+		var i OffboardedDevice
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.OrganizationID,
+			&i.Keys,
+			&i.OffboardedAt,
+			&i.CommandEnvelopes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardedDeviceIDs = `-- name: ListOffboardedDeviceIDs :many
+SELECT device_id FROM offboarded_device WHERE organization_id = $1 ORDER BY device_id
+`
+
+// The offboarded devices of an organization, whose identity, command and sequence keys outlive it (plan M17 amendment l
+// point 3).
+func (q *Queries) ListOffboardedDeviceIDs(ctx context.Context, organizationID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listOffboardedDeviceIDs, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var device_id uuid.UUID
+		if err := rows.Scan(&device_id); err != nil {
+			return nil, err
+		}
+		items = append(items, device_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listOffboardedDevices = `-- name: ListOffboardedDevices :many
-SELECT device_id, organization_id, keys, command_id, command_envelope, offboarded_at FROM offboarded_device ORDER BY device_id
+SELECT device_id, organization_id, keys, offboarded_at, command_envelopes FROM offboarded_device ORDER BY device_id
 `
 
 func (q *Queries) ListOffboardedDevices(ctx context.Context) ([]OffboardedDevice, error) {
@@ -93,10 +165,239 @@ func (q *Queries) ListOffboardedDevices(ctx context.Context) ([]OffboardedDevice
 			&i.DeviceID,
 			&i.OrganizationID,
 			&i.Keys,
-			&i.CommandID,
-			&i.CommandEnvelope,
 			&i.OffboardedAt,
+			&i.CommandEnvelopes,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardingAdminAccounts = `-- name: ListOffboardingAdminAccounts :many
+SELECT id FROM admin_account ORDER BY id
+`
+
+// The administrator accounts of the context organization, whose portal and MCP sessions the step sessions ends.
+func (q *Queries) ListOffboardingAdminAccounts(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listOffboardingAdminAccounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardingCancelledUninstalls = `-- name: ListOffboardingCancelledUninstalls :many
+SELECT device_id, id FROM device_command
+WHERE device_id = ANY($1::uuid[]) AND type = 'uninstall' AND status = 'cancelled'
+ORDER BY device_id, id
+`
+
+type ListOffboardingCancelledUninstallsRow struct {
+	DeviceID uuid.UUID
+	ID       uuid.UUID
+}
+
+// The cancelled uninstalls of the handed-over devices, among them the predecessors the hand-over replaced: the worker's
+// removal of cancelled commands from cmd: runs through the gate and no longer reaches a deleting organization.
+func (q *Queries) ListOffboardingCancelledUninstalls(ctx context.Context, deviceIds []uuid.UUID) ([]ListOffboardingCancelledUninstallsRow, error) {
+	rows, err := q.db.Query(ctx, listOffboardingCancelledUninstalls, deviceIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOffboardingCancelledUninstallsRow{}
+	for rows.Next() {
+		var i ListOffboardingCancelledUninstallsRow
+		if err := rows.Scan(&i.DeviceID, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardingDeviceIdentities = `-- name: ListOffboardingDeviceIdentities :many
+SELECT k.device_id, k.key_id, k.public_key, coalesce(s.last_seq, 0)::bigint AS last_seq
+FROM device_identity_key k LEFT JOIN device_status s ON s.device_id = k.device_id
+WHERE k.device_id = ANY($1::uuid[]) AND k.status = 'active'
+ORDER BY k.device_id, k.key_id
+`
+
+type ListOffboardingDeviceIdentitiesRow struct {
+	DeviceID  uuid.UUID
+	KeyID     string
+	PublicKey []byte
+	LastSeq   int64
+}
+
+// The active identity keys of the handed-over devices with their check-in counters.
+func (q *Queries) ListOffboardingDeviceIdentities(ctx context.Context, deviceIds []uuid.UUID) ([]ListOffboardingDeviceIdentitiesRow, error) {
+	rows, err := q.db.Query(ctx, listOffboardingDeviceIdentities, deviceIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOffboardingDeviceIdentitiesRow{}
+	for rows.Next() {
+		var i ListOffboardingDeviceIdentitiesRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.KeyID,
+			&i.PublicKey,
+			&i.LastSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardingDeviceKeys = `-- name: ListOffboardingDeviceKeys :many
+SELECT d.id AS device_id, coalesce(k.key_id, '')::text AS key_id
+FROM device d LEFT JOIN device_identity_key k ON k.device_id = d.id
+ORDER BY d.id, k.key_id
+`
+
+type ListOffboardingDeviceKeysRow struct {
+	DeviceID uuid.UUID
+	KeyID    string
+}
+
+// Every device of the context organization with its identity keys (key_id empty for a device without one), for the
+// step valkey (decision 13).
+func (q *Queries) ListOffboardingDeviceKeys(ctx context.Context) ([]ListOffboardingDeviceKeysRow, error) {
+	rows, err := q.db.Query(ctx, listOffboardingDeviceKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOffboardingDeviceKeysRow{}
+	for rows.Next() {
+		var i ListOffboardingDeviceKeysRow
+		if err := rows.Scan(&i.DeviceID, &i.KeyID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardingHandedDevices = `-- name: ListOffboardingHandedDevices :many
+SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('retired', 'rejected') ORDER BY id
+`
+
+// The devices the step devices hands over to offboarded_device: no reported removal, neither retired nor rejected.
+func (q *Queries) ListOffboardingHandedDevices(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listOffboardingHandedDevices)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardingHandoverCommands = `-- name: ListOffboardingHandoverCommands :many
+SELECT c.id, c.organization_id, c.device_id, c.type, c.params, c.status, c.issued_by, c.issued_at, c.expires_at, c.not_before, c.delivered_at, c.finished_at, c.result FROM device_command c JOIN device d ON d.id = c.device_id
+WHERE d.id = ANY($1::uuid[])
+  AND (c.id = d.uninstall_command_id OR (c.type = 'delete_self_lock' AND c.status IN ('pending', 'delivered', 'succeeded')
+    AND c.expires_at > now() + interval '31 days'))
+ORDER BY c.device_id, c.id
+`
+
+// The commands the handed-over devices keep: the uninstall, kept or fresh, and the hand-over's delete_self_lock (the only
+// disarm that lives longer than the type's 30 days).
+func (q *Queries) ListOffboardingHandoverCommands(ctx context.Context, deviceIds []uuid.UUID) ([]DeviceCommand, error) {
+	rows, err := q.db.Query(ctx, listOffboardingHandoverCommands, deviceIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeviceCommand{}
+	for rows.Next() {
+		var i DeviceCommand
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.DeviceID,
+			&i.Type,
+			&i.Params,
+			&i.Status,
+			&i.IssuedBy,
+			&i.IssuedAt,
+			&i.ExpiresAt,
+			&i.NotBefore,
+			&i.DeliveredAt,
+			&i.FinishedAt,
+			&i.Result,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardingInventoryRefs = `-- name: ListOffboardingInventoryRefs :many
+SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id
+`
+
+type ListOffboardingInventoryRefsRow struct {
+	DeviceID   uuid.UUID
+	ExternalID string
+}
+
+// The Fleet hosts the context organization's devices reference, for the step fleet (decision 11).
+func (q *Queries) ListOffboardingInventoryRefs(ctx context.Context) ([]ListOffboardingInventoryRefsRow, error) {
+	rows, err := q.db.Query(ctx, listOffboardingInventoryRefs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOffboardingInventoryRefsRow{}
+	for rows.Next() {
+		var i ListOffboardingInventoryRefsRow
+		if err := rows.Scan(&i.DeviceID, &i.ExternalID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -131,6 +432,32 @@ func (q *Queries) ListOffboardingTables(ctx context.Context) ([]OffboardingTable
 	return items, nil
 }
 
+const listPresentOffboardedDevices = `-- name: ListPresentOffboardedDevices :many
+SELECT device_id FROM offboarded_device WHERE device_id = ANY($1::uuid[]) ORDER BY device_id
+`
+
+// The devices of ids that still have a record: the cache sync deletes the keys it rewrote for any other (a device
+// that reported its removal meanwhile).
+func (q *Queries) ListPresentOffboardedDevices(ctx context.Context, deviceIds []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listPresentOffboardedDevices, deviceIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var device_id uuid.UUID
+		if err := rows.Scan(&device_id); err != nil {
+			return nil, err
+		}
+		items = append(items, device_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const offboardDeleteBatch = `-- name: OffboardDeleteBatch :one
 
 SELECT paddock_offboard_delete_batch($1::int)::bigint AS deleted
@@ -158,6 +485,19 @@ func (q *Queries) OffboardFinalize(ctx context.Context) error {
 	return err
 }
 
+const offboardOutboxPending = `-- name: OffboardOutboxPending :one
+SELECT paddock_offboard_outbox_pending()::bigint AS pending
+`
+
+// The number of the context organization's unpublished outbox rows (plan M17 decision 9, amendment c point 2); the
+// step outbox completes at 0. Only paddock_worker may call it, inside InOrgOffboarding of a deleting organization.
+func (q *Queries) OffboardOutboxPending(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, offboardOutboxPending)
+	var pending int64
+	err := row.Scan(&pending)
+	return pending, err
+}
+
 const offboardQuiesce = `-- name: OffboardQuiesce :one
 SELECT paddock_offboard_quiesce()::boolean AS ready
 `
@@ -173,31 +513,28 @@ func (q *Queries) OffboardQuiesce(ctx context.Context) (bool, error) {
 	return ready, err
 }
 
-const purgeOffboardedDevices = `-- name: PurgeOffboardedDevices :many
-DELETE FROM offboarded_device WHERE offboarded_at < $1 RETURNING device_id, organization_id
+const offboardReissueUninstalls = `-- name: OffboardReissueUninstalls :one
+SELECT paddock_offboard_reissue_uninstalls()::bigint
 `
 
-type PurgeOffboardedDevicesRow struct {
-	DeviceID       uuid.UUID
-	OrganizationID uuid.UUID
+// Locks the devices of the context organization that may still contact the server, disarms their dead man's switch and
+// gives each without a usable open uninstall a fresh one (plan M17 decision 15, amendments e, m and n, migration
+// 00135); returns how many uninstalls this call issued.
+func (q *Queries) OffboardReissueUninstalls(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, offboardReissueUninstalls)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
-func (q *Queries) PurgeOffboardedDevices(ctx context.Context, before time.Time) ([]PurgeOffboardedDevicesRow, error) {
-	rows, err := q.db.Query(ctx, purgeOffboardedDevices, before)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []PurgeOffboardedDevicesRow{}
-	for rows.Next() {
-		var i PurgeOffboardedDevicesRow
-		if err := rows.Scan(&i.DeviceID, &i.OrganizationID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+const offboardRevokeAPITokens = `-- name: OffboardRevokeAPITokens :one
+SELECT paddock_offboard_revoke_api_tokens()::bigint AS revoked
+`
+
+// Revokes every API token of the context organization (decision 14) and returns how many were still live.
+func (q *Queries) OffboardRevokeAPITokens(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, offboardRevokeAPITokens)
+	var revoked int64
+	err := row.Scan(&revoked)
+	return revoked, err
 }

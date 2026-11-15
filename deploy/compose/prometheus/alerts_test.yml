@@ -810,3 +810,20 @@ tests:
             exp_annotations:
               summary: "The local backup repository has less than 10 % free space"
               description: "pgBackRest and the backup role stop writing when the volume backup-repo is full; free space or lower the retention (docs/operations/restore.md)."
+
+  - name: an organization deletion at the longest backoff warns at once
+    interval: 1m
+    input_series:
+      - series: 'paddock_offboarding_retry_capped{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0 0 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PaddockOrganizationDeletionStuck
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: PaddockOrganizationDeletionStuck
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "An organization deletion keeps failing"
+              description: "1 organization deletion(s) retry a failing step at the longest backoff; see the organization's deletion step and error code."

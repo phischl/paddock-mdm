@@ -114,6 +114,17 @@ groups:
 
   - name: paddock-control-plane
     rules:
+      # A deletion step that failed long enough to wait the longest backoff (30 min) between attempts (plan M17,
+      # PDK-1015): the job keeps retrying, but its dependency needs an operator; the step and code are on the
+      # organization and in paddock_offboarding_step_failing.
+      - alert: PaddockOrganizationDeletionStuck
+        expr: max(paddock_offboarding_retry_capped) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An organization deletion keeps failing"
+          description: "{{ $value }} organization deletion(s) retry a failing step at the longest backoff; see the organization's deletion step and error code."
       - alert: PaddockCompileLatencyHigh
         expr: histogram_quantile(0.95, sum by (le) (rate(paddock_compiler_latency_seconds_bucket[10m]))) > 30
         for: 10m

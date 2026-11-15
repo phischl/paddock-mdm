@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -25,10 +26,24 @@ var metricUnknownEvents = promauto.NewCounter(prometheus.CounterOpts{
 
 // Reports consumes ingest.heartbeat and ingest.event.
 type Reports struct {
-	reports  *app.DeviceReports
-	commands *app.DeviceCommands
-	cache    *devicecache.Cache
-	pause    time.Duration
+	reports    *app.DeviceReports
+	commands   *app.DeviceCommands
+	cache      *devicecache.Cache
+	offboarded offboardedUninstalls
+	pause      time.Duration
+}
+
+// offboardedUninstalls ends the record of a device of a deleted organization on its removal report
+// (app.OffboardedDevices).
+type offboardedUninstalls interface {
+	Uninstalled(ctx context.Context, device uuid.UUID) (bool, error)
+}
+
+// WithOffboardedDevices handles agent.uninstalled of devices whose organization is being deleted or was deleted (plan
+// M17 decision 15); without it such a report is dropped like every other message of the organization.
+func (r *Reports) WithOffboardedDevices(o offboardedUninstalls) *Reports {
+	r.offboarded = o
+	return r
 }
 
 // NewReports creates the consumers.
@@ -113,7 +128,7 @@ func (r *Reports) events(ctx context.Context, messageID string, body []byte) out
 		slog.WarnContext(ctx, "device event of an unknown type skipped", "device_id", batch.DeviceID, "type", t)
 	}
 	if unavailable(ctx, err) {
-		return ack
+		return r.offboardedReport(ctx, batch)
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "recording device events failed; retrying", "device_id", batch.DeviceID,
@@ -126,6 +141,23 @@ func (r *Reports) events(ctx context.Context, messageID string, body []byte) out
 			slog.WarnContext(ctx, "retiring the uninstalled device failed; retrying", "device_id", batch.DeviceID, "error", err)
 			return retry
 		}
+	}
+	return ack
+}
+
+// offboardedReport handles the batch of a device whose organization is being deleted or was deleted: its removal
+// report ends the device's offboarded record; anything else stays dropped (amendment f point 2).
+func (r *Reports) offboardedReport(ctx context.Context, batch ingest.Events) outcome {
+	if r.offboarded == nil || !slices.ContainsFunc(batch.Events, func(e protocol.Event) bool { return e.Type == protocol.EventAgentUninstalled }) {
+		return ack
+	}
+	recorded, err := r.offboarded.Uninstalled(ctx, batch.DeviceID)
+	if err != nil {
+		slog.WarnContext(ctx, "ending the record of an uninstalled offboarded device failed; retrying", "device_id", batch.DeviceID, "error", err)
+		return retry
+	}
+	if recorded {
+		slog.InfoContext(ctx, "a device of a deleted organization removed Paddock", "device_id", batch.DeviceID)
 	}
 	return ack
 }
