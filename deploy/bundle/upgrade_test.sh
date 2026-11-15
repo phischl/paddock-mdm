@@ -111,6 +111,10 @@ setup() {
   done
   # shellcheck disable=SC2016 # the stub expands the variable when it runs
   echo '[[ "${1:-}" != --import ]] || exit "${FIXTURE_BROKER_IMPORT_EXIT:-0}"' >>"$work/t/new/scripts/rabbitmq-definitions.sh"
+  # shellcheck disable=SC2016 # the stub expands the variable when it runs
+  echo '[[ "${1:-}" != --check ]] || exit "${FIXTURE_BROKER_CHECK_EXIT:-0}"' >>"$work/t/new/scripts/rabbitmq-definitions.sh"
+  # shellcheck disable=SC2016 # the stub expands the variable when it runs
+  echo 'exit "${FIXTURE_BUCKETS_EXIT:-0}"' >>"$work/t/new/scripts/rustfs-bundles-bootstrap.sh"
   sed -i 's/^version=.*/version=0.1.0-alpha.10/' "$work/t/new/VERSION"
   echo 0.1.0-alpha.10 >>"$work/t/new/RELEASES"
   printf '%s\nUpgrade: from 0.1.0-alpha.9: automatic\nAgents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10\n' \
@@ -841,6 +845,21 @@ if [[ "$(grep -cE "$BACKUP" "$calls")" == 1 && "$(grep -cE '^script rabbitmq-def
   pass "the import runs again, the backup does not"
 else fail "backups $(grep -cE "$BACKUP" "$calls"), imports $(grep -cE '^script rabbitmq-definitions.sh --import$' "$calls")"; fi
 before "the repeated import precedes up" '^script rabbitmq-definitions.sh --import$' "$UP"
+
+# A failure after up (PDK-1017b): the new release runs, so the message must not say nothing changed.
+for failing in broker-check buckets; do
+  setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
+  if [[ "$failing" == broker-check ]]; then
+    FIXTURE_BROKER_CHECK_EXIT=1 run 1 "a failed $failing stops the upgrade" "$work/t/old" --yes
+  else
+    FIXTURE_BUCKETS_EXIT=1 run 1 "a failed $failing stops the upgrade" "$work/t/old" --yes
+  fi
+  called "$failing runs after up" "$UP"
+  has "a failed $failing says the new release runs" 'The new release 0\.1\.0-alpha\.10 runs on the migrated data'
+  has "a failed $failing names the rollback" "\./paddock rollback $work/t/old"
+  has "a failed $failing names the resume path" "it continues at the step $failing"
+  hasnt "a failed $failing does not say nothing changed" 'Nothing changed on the running stack'
+done
 
 # Usage and preconditions.
 setup controlplane "Schema: unchanged"
