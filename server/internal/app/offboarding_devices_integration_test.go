@@ -334,6 +334,7 @@ func TestOffboardingDevicesRepeatable(t *testing.T) {
 	job := w.job()
 	w.requestDueWithDevices(t, job)
 	enrolled, _ := w.newDevice(t, w.org, "active")
+	pending, _ := w.newDevice(t, w.org, "pending")
 	w.advanceTo(t, job, offboarding.StepDevices)
 	var oe *app.OffboardingError
 	for {
@@ -358,6 +359,13 @@ func TestOffboardingDevicesRepeatable(t *testing.T) {
 	}
 	if n := w.count(t, `SELECT count(*) FROM device_command WHERE organization_id = $1 AND type = 'delete_self_lock'`, w.org); n != 2 {
 		t.Fatalf("%d disarms after the repeated step, want one per device", n)
+	}
+	if _, ok := rows[pending]; ok {
+		t.Fatal("the pending device was handed over")
+	}
+	// Both attempts of the step counted the pending device; the stored count is the latest value, not their sum.
+	if n := w.count(t, `SELECT (offboarding_counts ->> 'devices.pending_dropped')::bigint FROM organization WHERE id = $1`, w.org); n != 1 {
+		t.Fatalf("devices.pending_dropped = %d after two attempts of the step, want 1", n)
 	}
 	ev := w.devicesStepEvent(t)
 	if ev.Params["count"] != float64(2) || ev.Params["uninstalls_reissued"] != float64(1) || ev.Params["disarms_issued"] != float64(2) {
