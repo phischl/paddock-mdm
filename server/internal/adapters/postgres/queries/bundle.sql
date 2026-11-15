@@ -17,6 +17,19 @@ SELECT d.id, d.state, d.bundle_seq, d.logins_suspended, coalesce(s.schema_versio
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.id = ANY(@ids::uuid[]) ORDER BY d.id;
 
+-- The group memberships of the devices a compile renders, read in its one snapshot so that rendering needs no
+-- transaction (plan M17 amendment r point 7).
+-- name: ListDeviceGroupIDsOfDevices :many
+SELECT device_id, device_group_id FROM device_group_member WHERE device_id = ANY(@ids::uuid[])
+ORDER BY device_id, device_group_id;
+
+-- The content digest of the latest bundle of each of the devices a compile renders, read in its one snapshot (plan
+-- M17 amendment r point 7); a device without a bundle has no row.
+-- name: ListLatestBundleContents :many
+SELECT d.id AS device_id, lb.content_sha256 FROM device d
+JOIN LATERAL (SELECT b.content_sha256 FROM bundle b WHERE b.device_id = d.id ORDER BY b.version DESC LIMIT 1) lb ON true
+WHERE d.id = ANY(@ids::uuid[]);
+
 -- Active devices whose latest bundle has another schema than their agent's newest supported one (v2 when the agent
 -- reports 2, else v1); devices without a bundle are compiled at enrollment.
 -- name: ListDevicesWithOutdatedSchema :many
@@ -39,11 +52,12 @@ WHERE d.state = 'active' AND d.bundle_seq > 0
     OR d.compiled_agent_version <> coalesce(s.agent_version, ''))
 ORDER BY d.id;
 
--- The platform inputs a compile of the device saw (PDK-695, PDK-799).
+-- The platform inputs a compile of the device saw (PDK-695, PDK-799), only while the device's bundle_seq is still the one
+-- that compile left: a concurrent compile that moved it on records its own (plan M17 amendment r point 7).
 -- name: SetDeviceCompiledPlatform :exec
 UPDATE device SET compiled_arch = @arch, compiled_os_id = @os_id, compiled_os_version_id = @os_version_id,
   compiled_agent_version = @agent_version
-WHERE id = @id AND (compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version)
+WHERE id = @id AND bundle_seq = @bundle_seq AND (compiled_arch, compiled_os_id, compiled_os_version_id, compiled_agent_version)
   IS DISTINCT FROM (@arch::text, @os_id::text, @os_version_id::text, @agent_version::text);
 
 -- Optimistic: a concurrent compile of the same device makes this update no row.
