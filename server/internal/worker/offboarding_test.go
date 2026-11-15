@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"slices"
 	"testing"
 	"time"
 
@@ -381,51 +380,68 @@ func TestOffboardingRoundBetweenSteps(t *testing.T) {
 	}
 }
 
-// TestOffboardingRoundLargeDatabaseStep (plan M17 amendment 2026-11-16 q points 6 and 9): the database step gets the
-// round's deadline, works in batches up to it and yields without completing; the large organization continues next
-// round, and the other organization still takes a step in every round instead of waiting behind one unbounded step.
-func TestOffboardingRoundLargeDatabaseStep(t *testing.T) {
-	large, small := uuid.New(), uuid.New()
-	s, now := newStepper(time.Second, map[uuid.UUID]int{large: 1_000_000, small: 4})
-	f := s.fake(large, small)
+// largeDatabaseRounds runs rounds until the small deletion (4 steps of 1 s) is done and returns how many it took. With
+// large set, a large deletion is pending too; its database step never finishes and each call costs step(start of the
+// call, round deadline) of fake time. It checks that every call got the round's deadline.
+func largeDatabaseRounds(t *testing.T, large bool, step func(now, deadline time.Time) time.Duration) int {
+	t.Helper()
+	big, small := uuid.New(), uuid.New()
+	left := map[uuid.UUID]int{small: 4}
+	orgs := []uuid.UUID{small}
+	if large {
+		// The large deletion comes first in database order, as in TestOffboardingRoundsRotate.
+		left[big] = 1_000_000
+		orgs = []uuid.UUID{big, small}
+	}
+	s, now := newStepper(time.Second, left)
+	f := s.fake(orgs...)
 	inner := f.advance
-	var deadlines []time.Time
+	var start time.Time
 	f.advance = func(org uuid.UUID) error {
-		if org != large {
+		if org != big {
 			return inner(org)
 		}
-		s.log = append(s.log, org)
-		deadlines = append(deadlines, f.deadline)
-		for now.Before(f.deadline) {
-			*now = now.Add(2 * time.Second)
-			s.left[org]--
+		if want := start.Add(OffboardingRoundBudget); !f.deadline.Equal(want) {
+			t.Fatalf("the database step got deadline %v, want the round's %v", f.deadline, want)
 		}
+		s.log = append(s.log, org)
+		*now = now.Add(step(*now, f.deadline))
 		return nil
 	}
 	r := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return *now })
-	for round := range 5 {
-		start := *now
-		before := s.left[small]
-		s.log = nil
+	for round := 1; round <= 20; round++ {
+		start = *now
 		if err := r.Round(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if got := deadlines[len(deadlines)-1]; !got.Equal(start.Add(OffboardingRoundBudget)) {
-			t.Fatalf("round %d: the database step got deadline %v, want the round's %v", round, got, start.Add(OffboardingRoundBudget))
+		if over := now.Sub(start) - OffboardingRoundBudget; over > app.OffboardingDatabaseSlice {
+			t.Fatalf("round %d took %v, more than the budget plus one slice", round, now.Sub(start))
 		}
-		if over := now.Sub(start) - OffboardingRoundBudget; over < 0 || over > 3*time.Second {
-			t.Fatalf("round %d took %v, want the budget %v plus at most one batch and one step", round, now.Sub(start), OffboardingRoundBudget)
-		}
-		if n := slices.Index(s.log, large); n < 0 || slices.Index(s.log[n+1:], large) >= 0 {
-			t.Fatalf("round %d ran %v, want the large deletion exactly once, yielding at the budget", round, s.log)
-		}
-		if round > 0 && s.left[small] == before && before > 0 {
-			t.Fatalf("round %d ran %v: the small deletion took no step behind the large database step", round, s.log)
+		if s.left[small] <= 0 {
+			return round
 		}
 		*now = now.Add(OffboardingInterval)
 	}
-	if s.left[small] != 0 || s.left[large] <= 0 {
-		t.Fatalf("steps left: small %d, large %d; want the small deletion done and the large one still running", s.left[small], s.left[large])
+	t.Fatalf("the small deletion did not finish in 20 rounds: %v", s.log)
+	return 0
+}
+
+// TestOffboardingRoundLargeDatabaseStep (plan M17 amendment q point 9, amendment p point 2a, main §61): the database
+// step gets the round's deadline and yields after OffboardingDatabaseSlice, so the round's passes interleave the
+// organizations: with a large deletion running, a small one finishes in as many rounds as alone. The second half shows
+// that the check tells the behaviours apart: a database step that runs to the round deadline (before §61) delays the
+// small deletion by several rounds.
+func TestOffboardingRoundLargeDatabaseStep(t *testing.T) {
+	slice := func(now, deadline time.Time) time.Duration {
+		return min(app.OffboardingDatabaseSlice, max(deadline.Sub(now), time.Second))
+	}
+	alone := largeDatabaseRounds(t, false, slice)
+	if with := largeDatabaseRounds(t, true, slice); with != alone {
+		t.Fatalf("the small deletion took %d rounds next to a large database step, %d alone", with, alone)
+	}
+	toDeadline := func(now, deadline time.Time) time.Duration { return max(deadline.Sub(now), time.Second) }
+	if old := largeDatabaseRounds(t, true, toDeadline); old <= alone {
+		t.Fatalf("a step running to the deadline let the small deletion finish in %d rounds (alone %d): the test does not discriminate", old, alone)
 	}
 }
 

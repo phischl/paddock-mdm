@@ -163,10 +163,12 @@ RETURNING *;
 
 -- Progress of the database step, stored per batch with the delete_order it reached (plan M17 amendment 2026-11-16 q
 -- point 6), so neither a crash nor a yield at the round budget loses the count of what is gone or where the step
--- continues; a NULL position starts at the first registered table.
+-- continues; a NULL position starts at the first registered table. A stored batch is progress, so it clears the error
+-- code of an earlier failed attempt and with it the paddock_offboarding_step_failing gauge.
 -- name: SaveOrganizationOffboardingDatabaseBatch :exec
 UPDATE organization
-SET offboarding_counts = offboarding_counts || jsonb_build_object('database',
+SET offboarding_error_code = NULL,
+    offboarding_counts = offboarding_counts || jsonb_build_object('database',
       coalesce((offboarding_counts ->> 'database')::bigint, 0) + @added::bigint),
     offboarding_db_order = sqlc.narg(db_order)::int
 WHERE id = @id AND status = 'deleting' AND offboarding_step = 'database';

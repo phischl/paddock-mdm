@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -1102,5 +1104,168 @@ func TestOffboardingDatabaseRestartsOnReference(t *testing.T) {
 	if n := w.count(t, "SELECT count(*) FROM api_token WHERE organization_id = $1", w.org) +
 		w.count(t, "SELECT count(*) FROM admin_account WHERE organization_id = $1", w.org); n != 0 {
 		t.Fatalf("%d tokens and accounts left after the step", n)
+	}
+}
+
+// TestOffboardingDatabaseSlice (plan M17 amendment p point 2a, main §61): inside a round the database step yields after
+// OffboardingDatabaseSlice, long before the round's deadline, so the round can serve the next organization; every
+// clock reading here takes one second, so the slice ends after five batches.
+func TestOffboardingDatabaseSlice(t *testing.T) {
+	w := newOffboardWorld(t)
+	w.requestDue(t, w.job())
+	w.advanceTo(t, w.job(), offboarding.StepDatabase)
+	w.exec(t, `INSERT INTO watched_unit (organization_id, unit) SELECT $1, 'u' || g || '.service' FROM generate_series(1, 9000) g`, w.org)
+	var mu sync.Mutex
+	clock := time.Now()
+	job := w.job().WithClock(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		clock = clock.Add(time.Second)
+		return clock
+	})
+	before := w.count(t, "SELECT count(*) FROM watched_unit WHERE organization_id = $1", w.org)
+	mu.Lock()
+	deadline := clock.Add(time.Hour)
+	mu.Unlock()
+	if done, err := job.AdvanceWithin(context.Background(), w.org, deadline); done || err != nil {
+		t.Fatalf("database step with an hour left: %v, %v; want a yield after the slice", done, err)
+	}
+	if _, step, _ := w.state(t); step != offboarding.StepDatabase {
+		t.Fatalf("at %s after the slice, want database", step)
+	}
+	gone := before - w.count(t, "SELECT count(*) FROM watched_unit WHERE organization_id = $1", w.org)
+	if gone > 5000 || w.dbPosition(t) < 0 {
+		t.Fatalf("%d watched units deleted in one slice at position %d; want at most five batches and a stored position",
+			gone, w.dbPosition(t))
+	}
+}
+
+// TestOffboardingDatabaseClearsErrorCode: a stored batch clears the error code of an earlier failed attempt, so the
+// paddock_offboarding_step_failing gauge clears while the step progresses again.
+func TestOffboardingDatabaseClearsErrorCode(t *testing.T) {
+	w := newOffboardWorld(t)
+	job := w.job()
+	w.requestDue(t, job)
+	w.advanceTo(t, job, offboarding.StepDatabase)
+	w.exec(t, "UPDATE organization SET offboarding_error_code = $2 WHERE id = $1", w.org, offboarding.ErrorDatabase)
+	if n := w.databaseBatch(t, job); n < 1 {
+		t.Fatalf("the batch stored %d rows", n)
+	}
+	if _, step, code := w.state(t); step != offboarding.StepDatabase || code != "" {
+		t.Fatalf("after a stored batch: at %s with %q, want database without an error code", step, code)
+	}
+}
+
+// offboardingRestartWorld is a deletion whose database step has passed api_token and stands before admin_account, with
+// tokens and accounts the delete_order of both.
+func offboardingRestartWorld(t *testing.T) (w *offboardWorld, job *app.Offboarding, tokens, accounts int) {
+	t.Helper()
+	w = newOffboardWorld(t)
+	job = w.job()
+	w.requestDue(t, job)
+	w.advanceTo(t, job, offboarding.StepDatabase)
+	if err := w.super.QueryRow(context.Background(), `SELECT
+		(SELECT delete_order FROM offboarding_table WHERE table_name = 'api_token'),
+		(SELECT delete_order FROM offboarding_table WHERE table_name = 'admin_account')`).Scan(&tokens, &accounts); err != nil {
+		t.Fatal(err)
+	}
+	for calls := 0; w.dbPosition(t) <= tokens; calls++ {
+		if calls > 100 {
+			t.Fatal("the step never passed api_token")
+		}
+		w.databaseBatch(t, job)
+	}
+	if pos := w.dbPosition(t); pos >= accounts {
+		t.Fatalf("position %d, want one before admin_account (%d)", pos, accounts)
+	}
+	return w, job, tokens, accounts
+}
+
+// TestOffboardingDatabaseRestartYields: the pass that starts again at the first table after a foreign-key failure is
+// still bounded: with the round's budget spent it takes one batch and yields.
+func TestOffboardingDatabaseRestartYields(t *testing.T) {
+	w, job, tokens, _ := offboardingRestartWorld(t)
+	w.exec(t, `INSERT INTO api_token (id, organization_id, name, role, secret_sha256, prefix, created_by, expires_at)
+		VALUES ($1, $2, 'late', 'org_admin', $3, 'pdk_latelate', $4, now() + interval '1 day')`,
+		uuid.Must(uuid.NewV7()), w.org, []byte(uuid.NewString()), w.account)
+	// Run up to the failing table without the budget check: one call that reaches admin_account restarts there.
+	for calls := 0; w.count(t, "SELECT count(*) FROM api_token WHERE organization_id = $1", w.org) > 0; calls++ {
+		if calls > 100 {
+			t.Fatal("the straggler was never deleted")
+		}
+		w.databaseBatch(t, job)
+	}
+	if pos := w.dbPosition(t); pos > tokens {
+		t.Fatalf("position %d after the restart pass deleted the straggler, want at most api_token's %d", pos, tokens)
+	}
+	if _, step, code := w.state(t); step != offboarding.StepDatabase || code != "" {
+		t.Fatalf("after the restart: at %s with %q, want database without an error", step, code)
+	}
+}
+
+// restartLog counts the database step's restarts at the first table from its log line and passes every record on to
+// Handler. Handler must not be the default logger's own handler: that one writes through package log, which a default
+// slog logger sends back here, and the call deadlocks.
+type restartLog struct {
+	slog.Handler
+	mu       *sync.Mutex
+	restarts *int
+}
+
+func (h restartLog) Handle(ctx context.Context, r slog.Record) error {
+	if strings.Contains(r.Message, "starting again at the first table") {
+		h.mu.Lock()
+		*h.restarts++
+		h.mu.Unlock()
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h restartLog) WithAttrs(as []slog.Attr) slog.Handler {
+	return restartLog{Handler: h.Handler.WithAttrs(as), mu: h.mu, restarts: h.restarts}
+}
+
+func (h restartLog) WithGroup(name string) slog.Handler {
+	return restartLog{Handler: h.Handler.WithGroup(name), mu: h.mu, restarts: h.restarts}
+}
+
+// TestOffboardingDatabaseRestartOnce: the step starts again at the first table at most once per call. Here a straggler
+// token referencing an administrator account makes the first pass fail on admin_account; the restart deletes the token
+// and walks on into a reference cycle of change sets, which fails on its foreign key again from a stored position: the
+// step then fails with database_error after exactly one restart instead of starting again.
+func TestOffboardingDatabaseRestartOnce(t *testing.T) {
+	w, job, _, _ := offboardingRestartWorld(t)
+	w.exec(t, `INSERT INTO api_token (id, organization_id, name, role, secret_sha256, prefix, created_by, expires_at)
+		VALUES ($1, $2, 'late', 'org_admin', $3, 'pdk_latelate', $4, now() + interval '1 day')`,
+		uuid.Must(uuid.NewV7()), w.org, []byte(uuid.NewString()), w.account)
+	a, b := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	changeSet := `INSERT INTO change_set (id, organization_id, actor, source, created_n, updated_n, deleted_n, sections,
+		plan, reverts_change_set_id) VALUES ($1, $2, '{}', 'session', 0, 0, 0, '{}', '{}', $3)`
+	w.exec(t, changeSet, a, w.org, nil)
+	w.exec(t, changeSet, b, w.org, a)
+	w.exec(t, "UPDATE change_set SET reverts_change_set_id = $2 WHERE id = $1", a, b)
+
+	restarts := 0
+	previous := slog.Default()
+	slog.SetDefault(slog.New(restartLog{Handler: slog.NewTextHandler(os.Stderr, nil), mu: &sync.Mutex{}, restarts: &restarts}))
+	defer slog.SetDefault(previous)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := job.Advance(ctx, w.org)
+	if ctx.Err() != nil {
+		t.Fatal("the step did not end within 30 s: it restarts without end")
+	}
+	var oe *app.OffboardingError
+	if !errors.As(err, &oe) || oe.Code != offboarding.ErrorDatabase || !db.IsForeignKeyViolation(err) {
+		t.Fatalf("database step over a reference cycle: %v, want database_error on the foreign key", err)
+	}
+	if restarts != 1 {
+		t.Fatalf("%d restarts at the first table, want exactly 1", restarts)
+	}
+	if n := w.count(t, "SELECT count(*) FROM api_token WHERE organization_id = $1", w.org); n != 0 {
+		t.Fatalf("%d tokens left: the restart did not run", n)
+	}
+	if _, step, code := w.state(t); step != offboarding.StepDatabase || code != offboarding.ErrorDatabase {
+		t.Fatalf("at %s with %q, want database with database_error", step, code)
 	}
 }

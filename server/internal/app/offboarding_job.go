@@ -33,6 +33,11 @@ const FinalizeWaitAlert = time.Hour
 // 2026-11-16 q point 6).
 const offboardingBatch = 1000
 
+// OffboardingDatabaseSlice is how long the database step runs inside a round before it yields to the next
+// organization (plan M17 amendment p point 2a, main §61): the round's passes then interleave the organizations, so a
+// large deletion takes one slice per pass instead of the whole remaining budget. It is checked between batches.
+const OffboardingDatabaseSlice = 5 * time.Second
+
 // AuditFinalWaitAlert is how long step audit_final waits for the audit writer's acknowledgement before it records
 // organization.deletion_step_failed with audit_writer_pending (plan M17 amendment 2026-11-15 o point 6).
 const AuditFinalWaitAlert = time.Hour
@@ -572,8 +577,9 @@ func (o *Offboarding) valkey(ctx context.Context, org uuid.UUID) (int, error) {
 // database deletes the organization's rows in batches until paddock_offboard_delete_batch_from reports nothing left
 // (plan M17 decision 7, amendment 2026-11-16 q point 6). Each batch is its own transaction; its count and the
 // delete_order it reached are stored right after it, so neither a failure, a crash nor a yield loses the count of
-// what is gone or where the step continues. It starts at the stored position and, once deadline is reached, yields
-// between two batches (errDatabaseYield); at least one batch runs per call, so the step always progresses. When nothing
+// what is gone or where the step continues. It starts at the stored position and, inside a round (non-zero deadline),
+// yields between two batches (errDatabaseYield) once OffboardingDatabaseSlice or the deadline is reached, whichever
+// comes first; at least one batch runs per call, so the step always progresses. When nothing
 // is left the position is cleared, so a return from the tombstone (40001 on a straggler row in a table the step had
 // passed) starts again at the first table. A batch from a stored position that fails on a foreign key starts again at
 // the first table once per call: a row written into a table the step had passed can reference a row of the table it
@@ -582,6 +588,7 @@ func (o *Offboarding) valkey(ctx context.Context, org uuid.UUID) (int, error) {
 func (o *Offboarding) database(ctx context.Context, row pgstore.Organization, deadline time.Time) (int, error) {
 	from := row.OffboardingDbOrder
 	restarted := false
+	slice := o.now().Add(OffboardingDatabaseSlice)
 	for {
 		var b pgstore.OffboardDeleteBatchFromRow
 		err := o.deps.Worker.InOrgOffboarding(offboardingContext(ctx, row.ID), func(ctx context.Context, q *pgstore.Queries) error {
@@ -612,7 +619,7 @@ func (o *Offboarding) database(ctx context.Context, row pgstore.Organization, de
 		if b.Deleted == 0 {
 			return 0, nil
 		}
-		if !deadline.IsZero() && !o.now().Before(deadline) {
+		if now := o.now(); !deadline.IsZero() && (!now.Before(deadline) || !now.Before(slice)) {
 			return 0, errDatabaseYield
 		}
 	}

@@ -28,8 +28,9 @@ const OffboardingInterval = time.Minute
 
 // OffboardingRoundBudget is the wall-clock time one round spends on all deletions together (plan M17 amendment p): it
 // ends after the step that was running when the budget ran out. The budget is checked before a step and, inside the
-// database step, between its batches (amendment 2026-11-16 q point 6), where the step yields and resumes from its
-// stored position; any other step may overrun it; nothing overlaps then: the ticker drops the missed tick, the next
+// database step, between its batches (amendment 2026-11-16 q point 6), where the step yields after
+// app.OffboardingDatabaseSlice or at the budget and resumes from its stored position, so the passes interleave the
+// organizations; any other step may overrun it; nothing overlaps then: the ticker drops the missed tick, the next
 // round starts at once, and other replicas skip while the leader lock is held. The budget never cuts another step
 // short (it is idempotent but may have reached an external system); only a lost leadership does.
 const OffboardingRoundBudget = 45 * time.Second
