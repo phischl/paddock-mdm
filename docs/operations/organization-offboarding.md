@@ -3,7 +3,7 @@
 How a platform administrator deletes an organization, what its users and devices experience, what each failure of the
 deletion means and what to do, and how to repeat a deletion after a restore (ADR 0052, plan M17). What is deleted,
 what is kept and on which basis: [retention.md](../compliance/retention.md), section "Organization offboarding".
-Residual risks: [residual-risks.md](../compliance/residual-risks.md) RR-137, RR-138, RR-140, RR-142 to RR-144.
+Residual risks: [residual-risks.md](../compliance/residual-risks.md) RR-137, RR-138, RR-140 to RR-144.
 
 Sentences marked **(PDK-1017)** describe the audit retirement, the reading of retained evidence and the host command
 `paddock-server audit deletions`, which arrive with PDK-1017; they follow plan M17 amendment o.
@@ -93,6 +93,11 @@ no configuration, agent update or time ticket; its final report `agent.uninstall
 - The count `devices_offboarded` of `organization.deleted` is an upper bound (RR-143).
 - A device that refused the removal (unfinished in-place encryption, a revocation just handed to `paddock-revoke`)
   keeps an inert agent (RR-142): remove the packages by hand, `sudo apt purge paddock-agent paddock-supervisor`.
+- **Devices still pending approval get no removal** (RR-141): they never received a bundle and cannot verify a command.
+  Before the deletion, approve and then delete them (they then receive the removal), or have their owners run
+  `sudo apt purge paddock-agent paddock-supervisor`; the grace-period banner counts them. After the deletion their
+  enrollment status answers `rejected` and the agent stays inert. The number is `devices_pending_dropped` in
+  `organization.deleted` (PDK-1061).
 - Monitor `platform.offboarded_device_uninstalled` in the platform audit log to see devices return.
 
 ## The steps and their failures
