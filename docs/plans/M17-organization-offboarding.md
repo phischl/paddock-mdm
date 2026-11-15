@@ -1366,8 +1366,14 @@ never approved has never received a bundle, so it cannot verify an uninstall, wh
 - `delivered` and `succeeded` commands stay unchanged: the device already holds them.
 - No reissue on contact is needed: every handed-over device now holds or will fetch a command valid for the whole
   retention.
-- Test: a kept administrator `reset` with 7 days left is replaced by a `reset` valid for 365 days; a delivered one is
-  untouched.
+- **Threshold (main, §40).** A kept `pending` command is renewed only when its `expires_at` lies **more than 30 days**
+  before `now() + OffboardedDeviceRetention`. The deletion's own leave, which is always only minutes short of the
+  365 days, is therefore never re-issued, and no device gets two leaves. An administrator's uninstall with 7 days left
+  is always renewed.
+- Tests:
+  - a kept administrator `reset` with 7 days left is replaced by a `reset` valid for 365 days;
+  - the deletion's own leave (expiring 364 days and 23 hours from now) is kept as it is;
+  - a delivered command is untouched.
 
 ### 3. PDK-1016's deviations, accepted (main reviews the contract changes)
 
@@ -1380,3 +1386,7 @@ never approved has never received a bundle, so it cannot verify an uninstall, wh
 3. **A check-in after the removal report gets 401 `invalid_signature`, not `identity_revoked`.** Amendment l point 3
    deletes `dk:` at the final event. The device has removed Paddock at that point, and any 401 ends its loop. The
    device contract documents both 401 reasons for an offboarded identity.
+
+### 4. The offboarding system gate is mandatory for alpha.11 (main)
+
+PDK-1022 (gate OS1, including amendment n's dead man's switch case) MUST be green on both VMs before the alpha.11 tag.
