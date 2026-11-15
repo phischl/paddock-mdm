@@ -953,25 +953,36 @@ tests:
               summary: "OpenBao's seal status is unknown"
               description: "The worker runs but exports no OpenBao health."
 
-  - name: automatic unseal alerts ignore another role's default gauges
+  - name: automatic unseal alerts ignore another role reporting an enabled unsealer that is not up
     interval: 1m
     input_series:
       - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
-        values: "1x70"
+        values: "0x70"
       - series: 'paddock_auto_unseal_unsealer_up{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
-        values: "1x70"
+        values: "0x70"
       - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
-        values: "1x70"
+        values: "0x70"
       - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
-        values: "0x70"
+        values: "1x70"
       - series: 'paddock_auto_unseal_unsealer_up{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
-        values: "0x70"
-      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
         values: "0x70"
     alert_rule_test:
       - eval_time: 65m
         alertname: PaddockAutoUnsealerDown
         exp_alerts: []
+
+  - name: automatic unseal alerts ignore another role reporting shares on the host
+    interval: 1m
+    input_series:
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "1x70"
+    alert_rule_test:
       - eval_time: 65m
         alertname: PaddockAutoUnsealWithdrawn
         exp_alerts: []
@@ -980,21 +991,21 @@ tests:
     interval: 1m
     input_series:
       - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
-        values: "0+60x2900"
+        values: "0+60x3100"
       - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
-        values: "0+60x2900"
+        values: "0+60x3100"
       - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
-        values: "0x2900"
+        values: "0x3100"
       - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
-        values: "0x2900"
+        values: "0x3100"
       - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
-        values: "0x2900"
+        values: "0x3100"
       - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
-        values: "0x2900"
+        values: "0x3100"
     alert_rule_test:
-      - eval_time: 40h
+      - eval_time: 50h
         alertname: PaddockAuditVerifyStale
         exp_alerts: []
-      - eval_time: 40h
+      - eval_time: 50h
         alertname: PaddockAuditIndexPurgeStale
         exp_alerts: []
