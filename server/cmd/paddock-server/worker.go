@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/phischl/paddock-mdm/server/internal/adapters/aptsign"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/fleet"
@@ -93,7 +95,8 @@ type workerConsumers struct {
 	offboarding *mq.Consumer
 }
 
-func newWorkerConsumers(cfg mq.Config) workerConsumers {
+// newWorkerConsumers creates the consumers; offboardingConnected receives the state of the offboarding consumer.
+func newWorkerConsumers(cfg mq.Config, offboardingConnected func(connected bool)) workerConsumers {
 	return workerConsumers{
 		enroll:      mq.NewConsumer(cfg, mq.IngestQueue(mq.IngestEnroll), worker.Prefetch),
 		heartbeat:   mq.NewConsumer(cfg, mq.IngestQueue(mq.IngestHeartbeat), worker.Prefetch),
@@ -101,7 +104,7 @@ func newWorkerConsumers(cfg mq.Config) workerConsumers {
 		issued:      mq.NewConsumer(cfg, mq.QueueCommandIssued, worker.Prefetch),
 		result:      mq.NewConsumer(cfg, mq.IngestQueue(mq.IngestCommandResult), worker.Prefetch),
 		escrow:      mq.NewConsumer(cfg, mq.IngestQueue(mq.IngestEscrow), worker.Prefetch),
-		offboarding: mq.NewConsumer(cfg, mq.QueueWorkerOffboarding, worker.Prefetch).OnConnection(worker.AuditRetirementsConnected),
+		offboarding: mq.NewConsumer(cfg, mq.QueueWorkerOffboarding, worker.Prefetch).OnConnection(offboardingConnected),
 	}
 }
 
@@ -250,7 +253,11 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	}
 	runner := app.NewActionRunner(pool, platformPool, httpx.RequestID)
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
-	wc := newWorkerConsumers(mqCfg)
+	offboardingConnected, err := worker.NewAuditRetirementsGauge(prometheus.DefaultRegisterer)
+	if err != nil {
+		return err
+	}
+	wc := newWorkerConsumers(mqCfg, offboardingConnected)
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
 	deviceCommands := app.NewDeviceCommands(runner, pool)
 	offboarded := app.NewOffboardedDevices(runner, platformPool, cache)

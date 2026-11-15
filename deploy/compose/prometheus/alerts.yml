@@ -69,6 +69,18 @@ groups:
         annotations:
           summary: "The audit hash chain failed its nightly verification"
           description: "{{ $value }} organization(s) have a broken or unreadable audit chain; see the evidence integrity page and paddock-server audit verify."
+      # An event of an organization whose audit log is closed (plan M17 decision 16) is kept in the platform log as
+      # audit.event_after_retirement. During a deletion that is rare; a run of them means the log of an organization
+      # that is still in use was closed, for example by a forged retirement request, and its later events lose their
+      # params (main §46). The SIEM rule of the code alerts as well (siemcontent).
+      - alert: PaddockAuditEventAfterRetirement
+        expr: increase(paddock_audit_events_after_retirement_total{role="paddock-audit-writer"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Events arrived for an organization whose audit log is closed"
+          description: "The audit writer recorded events of a retired organization as audit.event_after_retirement in the last hour. Check in the platform audit log (code audit.event_after_retirement, param organization_id) whether that organization is really deleted."
       # The final verification of a deleted organization's chain (ADR 0052 decision 6, plan M17 amendment
       # 2026-11-15 o) is not repeated: the nightly cycle skips the retired organization, so PaddockAuditChainBroken never
       # sees it. The counter is read from audit_verification_run, so a writer restart does not raise it again; the
@@ -140,9 +152,10 @@ groups:
       # The worker's readiness does not wait for its consumer of worker.offboarding (PDK-1017, main §45), so a broker
       # that refuses it (the upgrade's step broker did not run) or a lost session shows only here. 15 min cover the
       # consumer's reconnects (backoff up to 30 s) and a broker restart; while it lasts, step audit_final of an
-      # organization deletion waits for the audit writer's acknowledgement. Per worker replica.
+      # organization deletion waits for the audit writer's acknowledgement. Only the worker role registers the gauge;
+      # the role selector keeps any other target out as well (main §46).
       - alert: PaddockWorkerOffboardingConsumerDisconnected
-        expr: paddock_worker_offboarding_consumer_connected == 0
+        expr: paddock_worker_offboarding_consumer_connected{role="paddock-worker"} == 0
         for: 15m
         labels:
           severity: warning

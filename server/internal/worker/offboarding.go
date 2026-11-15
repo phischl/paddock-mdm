@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -46,10 +47,6 @@ var (
 	metricOffboardingFinalizeBusy = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "paddock_offboarding_finalize_busy_total",
 		Help: "Rounds in which an organization's tombstone waited for organization transactions older than the deletion.",
-	})
-	metricAuditRetirementsConnected = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "paddock_worker_offboarding_consumer_connected",
-		Help: "1 while the worker consumes worker.offboarding (the audit writer's acknowledgements of retired organizations), else 0.",
 	})
 )
 
@@ -224,15 +221,26 @@ func NewAuditRetirements(job auditFinalRecorder) *AuditRetirements {
 	return &AuditRetirements{job: job, pause: RetryPause}
 }
 
-// AuditRetirementsConnected is the mq.Consumer OnConnection hook of queue worker.offboarding. The worker's readiness
-// does not wait for this consumer (main §45), so the gauge and PaddockWorkerOffboardingConsumerDisconnected are what
-// reports a consumer the broker keeps refusing.
-func AuditRetirementsConnected(connected bool) {
-	if connected {
-		metricAuditRetirementsConnected.Set(1)
-	} else {
-		metricAuditRetirementsConnected.Set(0)
+// NewAuditRetirementsGauge registers paddock_worker_offboarding_consumer_connected with reg and returns the
+// mq.Consumer OnConnection hook of queue worker.offboarding that sets it. The worker's readiness does not wait for this
+// consumer (main §45), so the gauge and PaddockWorkerOffboardingConsumerDisconnected are what reports a consumer the
+// broker keeps refusing. Only the worker role calls it: every role serves the default registry, and a gauge at 0 in
+// the others would raise the alert without a consumer (main §46).
+func NewAuditRetirementsGauge(reg prometheus.Registerer) (func(connected bool), error) {
+	g := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "paddock_worker_offboarding_consumer_connected",
+		Help: "1 while the worker consumes worker.offboarding (the audit writer's acknowledgements of retired organizations), else 0.",
+	})
+	if err := reg.Register(g); err != nil {
+		return nil, fmt.Errorf("worker: register the offboarding consumer gauge: %w", err)
 	}
+	return func(connected bool) {
+		if connected {
+			g.Set(1)
+		} else {
+			g.Set(0)
+		}
+	}, nil
 }
 
 // Handle is the mq.ConsumeFunc of queue worker.offboarding.

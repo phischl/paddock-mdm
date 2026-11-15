@@ -13,6 +13,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/mqtest"
+	"github.com/phischl/paddock-mdm/server/internal/worker"
 )
 
 // alpha10WorkerRead is the worker's read pattern before 0.1.0-alpha.11, which has no worker.offboarding: the broker
@@ -26,7 +27,12 @@ func TestOffboardingConsumerOutsideReadiness(t *testing.T) {
 	broker := mqtest.Start(t)
 	broker.Ctl(t, "add_user", "worker", "worker-pw")
 	broker.Ctl(t, "set_permissions", "-p", "paddock", "worker", "^$", "^$", alpha10WorkerRead)
-	wc := newWorkerConsumers(broker.As("worker", "worker-pw"))
+	reg := prometheus.NewRegistry()
+	offboardingConnected, err := worker.NewAuditRetirementsGauge(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wc := newWorkerConsumers(broker.As("worker", "worker-pw"), offboardingConnected)
 
 	if err := consumersReady(wc.ready()); err == nil {
 		t.Fatal("ready before any consumer connected")
@@ -56,13 +62,13 @@ func TestOffboardingConsumerOutsideReadiness(t *testing.T) {
 	if err := consumersReady(wc.ready()); err != nil {
 		t.Fatalf("a refused worker.offboarding made the worker unready: %v", err)
 	}
-	if got := offboardingConnectedGauge(t); got != 0 {
+	if got := offboardingConnectedGauge(t, reg); got != 0 {
 		t.Errorf("gauge while refused = %v, want 0", got)
 	}
 
 	broker.Ctl(t, "set_permissions", "-p", "paddock", "worker", "^$", "^$", definitionsWorkerRead(t))
 	waitFor(t, 60*time.Second, "worker.offboarding after its permission appeared", wc.offboarding.Connected)
-	if got := offboardingConnectedGauge(t); got != 1 {
+	if got := offboardingConnectedGauge(t, reg); got != 1 {
 		t.Errorf("gauge once connected = %v, want 1", got)
 	}
 	if err := consumersReady(wc.ready()); err != nil {
@@ -103,9 +109,9 @@ func definitionsWorkerRead(t *testing.T) string {
 	return ""
 }
 
-func offboardingConnectedGauge(t *testing.T) float64 {
+func offboardingConnectedGauge(t *testing.T, reg prometheus.Gatherer) float64 {
 	t.Helper()
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := reg.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}

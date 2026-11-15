@@ -141,6 +141,9 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 	if err := prometheus.Register(recorder.Collector()); err != nil {
 		return err
 	}
+	if err := deps.writer.CountAfterRetirement(prometheus.DefaultRegisterer); err != nil {
+		return err
+	}
 	nightly := auditwriter.NewNightly(deps.pool, deps.verifier(), recorder, time.Now)
 	retirement := auditwriter.NewRetirement(deps.pool, deps.writer, deps.verifier(), sealer, recorder, acks)
 	purger := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention)

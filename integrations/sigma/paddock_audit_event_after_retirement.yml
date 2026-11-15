@@ -1,0 +1,20 @@
+title: Paddock event of an organization whose audit log is closed
+id: 6a0f3c1e-5b8d-4c27-9e41-2d7f8b3a6c90
+status: experimental
+description: The audit writer received an event of an organization whose audit log was closed for its deletion and kept it as audit.event_after_retirement without its params. Outside a deletion this means the log of an organization still in use was closed.
+references:
+  - https://github.com/phischl/paddock-mdm/blob/main/docs/operations/siem.md
+author: Paddock
+date: 2026-11-15
+tags:
+  - paddock.wazuh_100916
+logsource:
+  product: paddock
+  service: audit
+detection:
+  selection:
+    code: 'audit.event_after_retirement'
+  condition: selection
+falsepositives:
+  - An event that was already on its way while the organization was being deleted; check that the organization in params.organization_id is deleted.
+level: high
