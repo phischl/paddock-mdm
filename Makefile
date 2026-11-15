@@ -277,6 +277,8 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/openbao-configure_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-policy-removal_test.sh
+	bash $(COMPOSE_DIR)/scripts/rustfs-offboard_test.sh
+	bash $(COMPOSE_DIR)/scripts/gen-secrets-upgrade_test.sh
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
 	bash $(COMPOSE_DIR)/scripts/provision-roles_test.sh
 	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh

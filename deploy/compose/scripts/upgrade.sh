@@ -10,7 +10,7 @@
 # ./paddock rollback needs (the old directory, the backup label, the point in time just before the first `up`).
 # shellcheck shell=bash
 
-UG_STEPS=(upgrade-check migrate-from secrets pull check backup audit-writer-stop up openbao post-checks)
+UG_STEPS=(upgrade-check migrate-from secrets pull check backup audit-writer-stop up buckets openbao post-checks)
 
 # UG_RETIRED: the services an earlier release defines and this one no longer does. `up` and `down` without
 # --remove-orphans leave their containers running beside this release (PDK-845), so the step up removes them through
@@ -306,6 +306,18 @@ ug_migrate_from_step() {
   ug_show "$UG_NEW/paddock" migrate-from "$UG_OLD"
 }
 
+# ug_buckets_step: the object-store users and policies a release adds (plan M17 amendment k: the organization deletion's
+# two users) are created once the new stack runs. --add-missing changes nothing that exists: no bucket setting, policy,
+# user secret or escrowed object; it removes only known-obsolete policies (paddock-escrow-read). A rollback leaves the
+# added users behind, unused by the older release and inert.
+ug_buckets_step() {
+  if [[ "$UG_HOST" == audit ]]; then
+    echo "skipped: the audit host runs no control-plane object store"
+  else
+    ug_show "$UG_NEW/paddock" bootstrap buckets --add-missing </dev/null
+  fi
+}
+
 ug_openbao_step() {
   if [[ "$UG_HOST" == audit ]]; then
     echo "skipped: the audit host runs no OpenBao"
@@ -378,6 +390,10 @@ ug_plan() {
         if [[ "$UG_BACKUP" == yes ]] && la8_applies "$UG_OLD_VERSION"; then
           what="$UG_OLD/paddock compose stop pgbackrest pgbackrest-authentik and flush both (the backup bucket's WAL archive ends here), then $what"
         fi
+        ;;
+      buckets)
+        [[ "$UG_HOST" != audit ]] || continue
+        what="./paddock bootstrap buckets --add-missing (creates the object-store users and policies this release adds, changes none, removes obsolete ones)"
         ;;
       openbao)
         [[ "$UG_HOST" != audit ]] || continue
@@ -489,6 +505,7 @@ upgrade_main() {
   ug_step backup ug_backup_step
   ug_step audit-writer-stop ug_audit_writer_step
   ug_step up ug_up_step
+  ug_step buckets ug_buckets_step
   ug_step openbao ug_openbao_step
   ug_step post-checks ug_post_checks_step
   rm -f "$UG_STATE"

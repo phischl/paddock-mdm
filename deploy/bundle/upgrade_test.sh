@@ -104,7 +104,7 @@ setup() {
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
   for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
-  for s in gen-prod-secrets.sh wait-healthy.sh openbao-configure.sh; do
+  for s in gen-prod-secrets.sh wait-healthy.sh openbao-configure.sh rustfs-bundles-bootstrap.sh; do
     # shellcheck disable=SC2016 # the stub expands its arguments when it runs
     printf '#!/usr/bin/env bash\necho "script %s $*" >>"$FIXTURE_CALLS"\n' "$s" >"$work/t/new/scripts/$s"
     chmod +x "$work/t/new/scripts/$s"
@@ -180,6 +180,11 @@ before "pull before the configuration check" '^docker pull ' '^docker run .*prod
 before "configuration check before the backup" '^docker run .*prod-check' "$BACKUP"
 before "the backup completes before up uses the pulled images" "$BACKUP" "$UP"
 before "up before the post-check report" "$UP" '^docker compose .*admin upgrade-check --target-version 0.1.0-alpha.10'
+# Plan M17 amendment k: the users a release adds to the object store are created after up, adding only what is missing.
+before "the bucket bootstrap adds the missing users after up" "$UP" '^script rustfs-bundles-bootstrap.sh --add-missing$'
+before "and before the post-checks" '^script rustfs-bundles-bootstrap.sh --add-missing$' '^docker compose .*admin upgrade-check --target-version 0.1.0-alpha.10'
+not_called "the upgrade never runs the full bucket bootstrap" '^script rustfs-bundles-bootstrap.sh$'
+has "the plan names the bucket step" 'buckets +\./paddock bootstrap buckets --add-missing'
 not_called "only an upgrade from 0.1.0-alpha.8 stops the old pgBackRest" 'compose stop pgbackrest'
 if [[ -f "$work/t/new/.env" && -d "$work/t/new/.secrets" ]]; then pass "migrate-from copied .env and .secrets/"; else fail "no .env or .secrets/ here"; fi
 if [[ ! -e "$work/t/new/.upgrade-state" ]]; then pass "success deletes .upgrade-state"; else fail ".upgrade-state is left"; fi
@@ -756,6 +761,7 @@ has "the audit host's plan names the online check" '^  check +\./paddock check -
 before "the audit host lists its containers only after up" "$UP" '^docker ps -q'
 before "the audit host checks the container matrix only after up" "$UP" '^docker run .*prod-check .*--containers '
 not_called "the audit host asks no server report" '^docker compose .*admin upgrade-check'
+not_called "the audit host runs no bucket bootstrap" 'rustfs-bundles-bootstrap'
 setup audit "Schema: migrations 00105 (control-plane database); audit unchanged"
 run 0 "audit host without audit migrations" "$work/t/old" --yes
 not_called "no audit writer stop without audit migrations" 'paddock-audit-writer'
@@ -791,6 +797,7 @@ has "a lab with backups names the rollback" '^Rollback afterwards: \./paddock ro
 before "the lab backup completes before up" "$BACKUP" "$UP"
 called "the lab with backups runs the online check" '^docker run .*prod-check .*--online'
 before "the lab with backups checks online before up" '^docker run .*prod-check .*--online' "$UP"
+before "the lab adds the missing object-store users after up" "$UP" '^script rustfs-bundles-bootstrap.sh --add-missing$'
 before "the lab with backups reads the targets' revisions only after up" "$UP" 'admin backup-targets revisions'
 
 # Usage and preconditions.
