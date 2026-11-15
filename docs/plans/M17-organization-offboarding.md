@@ -1219,3 +1219,33 @@ decisions it wins.
    clients and the ACL. The non-blocking findings of the PDK-1015 stop stand as the implementer described them:
    session revocation per administrator account, child groups before the parent, the outbox function in the next free
    migration.
+
+### Addendum 2026-11-15 to amendment k — what PDK-1054 established (architect record after its review; main's decisions)
+
+Binding; it refines amendment k.
+
+1. **Approved deviations of PDK-1054.**
+   - The bootstrap's `--add-missing` mode runs during `./paddock upgrade` and creates only what is missing.
+   - A list probe at the end of the bootstrap, with the new offboard credentials, replaces an online user check.
+   - `--add-missing` also removes an explicit, closed list of policies known to be obsolete. Today that list is only
+     `paddock-escrow-read`, and it is removed only after checking that the api user still holds
+     `paddock-escrow-api`. Main decided that removing that stale escrow read right is a security gain.
+   - Any further entry on that list needs an architect decision.
+2. **Valkey: delete only, not write-only.** Amendment k point 5 is corrected.
+   - A bare `%W~` pattern would also allow `SET`, `HSET` and `PEXPIREAT` on those keys.
+   - The worker user therefore gets a separate selector: `(%W~bp:* %W~tt:* -@all +del)`. Inside that selector the
+     worker can only `DEL` `bp:*` and `tt:*`; it cannot read or write them.
+   - The ADR 0051 amendment of 2026-11-15 is corrected to the same wording.
+3. **Error code `object_retained` (decides PDK-1054a).** The closed set of `offboarding_error_code` values in §6 gains
+   `object_retained`.
+   - **When it is set:** the step `objects` sets it when an object version is kept by Object Lock retention or a legal
+     hold. Neither the bundles bucket nor the escrow bucket has Object Lock by default, so this happens only when an
+     operator added retention.
+   - **Every other failure:** missing credentials included, it stays `object_store_unavailable`.
+   - **No false progress:** the step does not count retained versions as deleted and does not complete. It retries
+     every round, and records `organization.deletion_step_failed` once per code, as for every step.
+   - **Where it is exposed:** `Organization.deletion.last_error_code` is a free string in the API (no enum), so the API
+     contract does not change. The portal (PDK-1018) gains the i18n key `offboarding.error.object_retained` (en/de).
+   - **Runbook:** PDK-1019's runbook names the remedy: let the retention expire, or remove the hold; the deletion then
+     continues by itself.
+   - PDK-1015 stores and records the code that `Offboarding.DeleteObjects` returns.
