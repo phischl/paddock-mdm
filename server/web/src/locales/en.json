@@ -757,6 +757,42 @@
     "empty": {
       "title": "No organizations yet",
       "description": "Create the first organization to onboard its administrators."
+    },
+    "delete": {
+      "action": "Delete",
+      "title": "Delete {name}?",
+      "message": "All data of {name} is deleted for good after the grace period. Until then the organization stays usable; every device receives the order to remove Paddock.",
+      "confirm": "Delete organization",
+      "reason": "Reason",
+      "reasonHint": "2 to 500 characters; kept in the audit trail.",
+      "grace": "Grace period (days)",
+      "graceHint": "The organization stays usable for this long, then its data is deleted.",
+      "graceInvalid": "Enter a whole number of days from {min} to {max}."
+    },
+    "deletion": {
+      "pending": "Deletion on {date}",
+      "cancel": "Cancel deletion",
+      "cancelTitle": "Cancel the deletion of {name}?",
+      "cancelMessage": "The organization stays as it is. Devices that already received the order to remove Paddock still do so.",
+      "cancelConfirm": "Cancel deletion",
+      "step": "Step: {step}",
+      "lastError": "Last error: {error}",
+      "steps": {
+        "sessions": "sessions",
+        "devices": "devices",
+        "outbox": "outbox",
+        "authentik": "identity provider",
+        "fleet": "fleet",
+        "objects": "stored objects",
+        "valkey": "cache",
+        "audit_final": "final audit export",
+        "database": "database",
+        "tombstone": "tombstone"
+      }
+    },
+    "banner": {
+      "message": "The organization is scheduled for deletion on {date}. All its data is deleted for good then.",
+      "advice": "Secure what you still need before: the recovery keys of the encrypted disks (ask your platform administrator for the encrypted recovery-key export) and the passwords of the local administrators."
     }
   },
   "agentReleases": {

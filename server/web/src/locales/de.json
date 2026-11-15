@@ -757,6 +757,42 @@
     "empty": {
       "title": "Noch keine Organisationen",
       "description": "Legen Sie die erste Organisation an, um ihre Administratoren aufzunehmen."
+    },
+    "delete": {
+      "action": "Löschen",
+      "title": "{name} löschen?",
+      "message": "Alle Daten von {name} werden nach der Karenzzeit endgültig gelöscht. Bis dahin bleibt die Organisation nutzbar; jedes Gerät erhält den Auftrag, Paddock zu entfernen.",
+      "confirm": "Organisation löschen",
+      "reason": "Grund",
+      "reasonHint": "2 bis 500 Zeichen; wird im Audit-Trail festgehalten.",
+      "grace": "Karenzzeit (Tage)",
+      "graceHint": "So lange bleibt die Organisation nutzbar, danach werden ihre Daten gelöscht.",
+      "graceInvalid": "Geben Sie eine ganze Zahl von {min} bis {max} Tagen ein."
+    },
+    "deletion": {
+      "pending": "Löschung am {date}",
+      "cancel": "Löschung abbrechen",
+      "cancelTitle": "Löschung von {name} abbrechen?",
+      "cancelMessage": "Die Organisation bleibt, wie sie ist. Geräte, die den Auftrag zum Entfernen von Paddock schon erhalten haben, führen ihn trotzdem aus.",
+      "cancelConfirm": "Löschung abbrechen",
+      "step": "Schritt: {step}",
+      "lastError": "Letzter Fehler: {error}",
+      "steps": {
+        "sessions": "Sitzungen",
+        "devices": "Geräte",
+        "outbox": "Outbox",
+        "authentik": "Identitätsanbieter",
+        "fleet": "Flotte",
+        "objects": "gespeicherte Objekte",
+        "valkey": "Cache",
+        "audit_final": "abschließender Audit-Export",
+        "database": "Datenbank",
+        "tombstone": "Grabstein"
+      }
+    },
+    "banner": {
+      "message": "Die Organisation ist zur Löschung am {date} vorgemerkt. Alle ihre Daten werden dann endgültig gelöscht.",
+      "advice": "Sichern Sie vorher, was Sie noch brauchen: die Wiederherstellungsschlüssel der verschlüsselten Festplatten (fragen Sie Ihre Plattform-Administration nach dem verschlüsselten Export) und die Passwörter der lokalen Administratoren."
     }
   },
   "agentReleases": {
