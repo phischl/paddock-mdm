@@ -1582,7 +1582,7 @@ Binding; it completes decision 10, which named the objects to delete but not the
    token could already change those objects and delete groups and users, so the exposure grows only slightly.
    - PDK-1019 records this as a sentence in RR-140, next to the object-store risk of amendment k.
    - The worker's identity rounds (`EnsureOrganization`) recreate deleted objects of a live organization within one
-     reconcile interval (at most 6 h plus jitter after amendment-era caching, or at once after an Authentik error).
+     full check (decision 20: at most 6 h plus jitter, or at once after an Authentik error).
 4. **Rule for every new Authentik write path.** It needs:
    - a live test against the pinned Authentik with the service account's own token (`TestLiveAuthentik`; here it runs
      `DeleteOrganization`);
