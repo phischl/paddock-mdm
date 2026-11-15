@@ -138,7 +138,7 @@ var ackedRe = regexp.MustCompile(`rabbitmq_detailed_channel_messages_acked_total
 // the broker's Prometheus plugin, queried inside the broker where the endpoint is always reachable.
 func ackedByIngestWorker(ctx context.Context, broker string, channels map[string]bool) (int, error) {
 	out, err := stack.Docker(ctx, nil, "exec", broker, "rabbitmqctl", "-q", "eval",
-		`inets:start(), {ok,{_,_,B}} = httpc:request("http://127.0.0.1:15692/metrics/detailed?family=channel_queue_metrics"), list_to_binary(B).`)
+		`inets:start(), {ok,{_,_,B}} = httpc:request("http://127.0.0.1:15692/metrics/detailed?family=channel_queue_metrics"), io:format("~s", [B]).`)
 	if err != nil {
 		return 0, err
 	}
