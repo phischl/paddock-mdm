@@ -126,6 +126,15 @@ entries:
       validation_policies:
         - !KeyOf password-policy
 
+  # A used, older, expired or unknown link restores no plan; without this stage every other stage would be skipped and
+  # the empty flow would end in a silent redirect, so the visitor would not learn that the link no longer works.
+  - model: authentik_stages_deny.denystage
+    id: link-invalid
+    identifiers:
+      name: paddock-recovery-link-invalid
+    attrs:
+      deny_message: This link is invalid, has expired or has already been used. Ask your administrator for a new link.
+
   - model: authentik_stages_user_write.userwritestage
     id: user-write
     identifiers:
@@ -133,6 +142,16 @@ entries:
     attrs:
       user_creation_mode: never_create
 
+  - model: authentik_flows.flowstagebinding
+    id: link-invalid-binding
+    identifiers:
+      target: !KeyOf flow
+      stage: !KeyOf link-invalid
+      order: 0
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
   - model: authentik_flows.flowstagebinding
     id: prompt-binding
     identifiers:
@@ -198,6 +217,16 @@ entries:
       order: 1
     attrs:
       target: !KeyOf webauthn-binding
+  # The deny stage runs exactly when the link token is missing. Authentik applies negate only to a policy that ran; a
+  # policy that fails with an error takes failure_result as is, so true keeps the deny stage on that path too.
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf link-token
+      order: 2
+    attrs:
+      target: !KeyOf link-invalid-binding
+      negate: true
+      failure_result: true
   - model: authentik_policies.policybinding
     identifiers:
       policy: !KeyOf webauthn-missing

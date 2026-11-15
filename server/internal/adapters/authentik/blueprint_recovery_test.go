@@ -13,7 +13,9 @@ import (
 
 // TestRecoveryFlowEveryStageNeedsTheLinkToken (ADR 0053 decision 2): every stage binding of paddock-recovery has the
 // policy paddock-recovery-link-token bound, so a visitor without a one-time link (no restored plan, no user) is never
-// shown the password prompt or the passkey setup. The blueprint is read as YAML nodes: it uses Authentik's custom tags.
+// shown the password prompt or the passkey setup. Exactly one of them, the deny stage at order 0, has it negated (and
+// fails closed), so such a visitor is refused instead of silently redirected; every other binding has it as is. The
+// blueprint is read as YAML nodes: it uses Authentik's custom tags.
 func TestRecoveryFlowEveryStageNeedsTheLinkToken(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "..", "deploy", "compose", "authentik", "blueprints", "paddock-recovery.yaml")
 	raw, err := os.ReadFile(path)
@@ -35,37 +37,105 @@ func TestRecoveryFlowEveryStageNeedsTheLinkToken(t *testing.T) {
 		}
 		return nil
 	}
+	value := func(m *yaml.Node, key string) string {
+		if n := field(m, key); n != nil {
+			return n.Value
+		}
+		return ""
+	}
+	type linkTokenBinding struct{ negate, failureResult string }
 	var stageBindings []string
-	guarded := map[string]bool{}
+	stageOf := map[string]string{}
+	orderOf := map[string]string{}
+	guarded := map[string][]linkTokenBinding{}
+	denyStages := map[string]bool{}
 	for _, e := range field(doc.Content[0], "entries").Content {
 		switch field(e, "model").Value {
+		case "authentik_stages_deny.denystage":
+			denyStages[value(e, "id")] = true
 		case "authentik_flows.flowstagebinding":
 			id := field(e, "id")
 			if id == nil {
 				t.Fatalf("a stage binding of paddock-recovery has no id: line %d", e.Line)
 			}
 			stageBindings = append(stageBindings, id.Value)
+			stageOf[id.Value] = value(field(e, "identifiers"), "stage")
+			orderOf[id.Value] = value(field(e, "identifiers"), "order")
 		case "authentik_policies.policybinding":
 			ids := field(e, "identifiers")
 			if field(ids, "policy").Value != "link-token" {
 				continue
 			}
+			attrs := field(e, "attrs")
 			target := field(ids, "target")
 			if target == nil {
-				target = field(field(e, "attrs"), "target")
+				target = field(attrs, "target")
 			}
-			guarded[target.Value] = true
+			guarded[target.Value] = append(guarded[target.Value],
+				linkTokenBinding{negate: value(attrs, "negate"), failureResult: value(attrs, "failure_result")})
 		}
 	}
-	if len(stageBindings) < 3 {
-		t.Fatalf("stage bindings %v", stageBindings)
+	if len(stageBindings) < 4 || len(denyStages) != 1 {
+		t.Fatalf("stage bindings %v, deny stages %v", stageBindings, slices.Sorted(maps.Keys(denyStages)))
 	}
+	refusing := 0
 	for _, b := range stageBindings {
-		if !guarded[b] {
-			t.Errorf("stage binding %s of paddock-recovery runs without the link token (bound to %v)", b,
-				slices.Sorted(maps.Keys(guarded)))
+		bound := guarded[b]
+		if len(bound) != 1 {
+			t.Errorf("stage binding %s of paddock-recovery has %d link token bindings, want 1 (bound to %v)", b,
+				len(bound), slices.Sorted(maps.Keys(guarded)))
+			continue
+		}
+		if !denyStages[stageOf[b]] {
+			if bound[0].negate != "" && bound[0].negate != "false" {
+				t.Errorf("stage binding %s of paddock-recovery runs without the link token (negate %s)", b, bound[0].negate)
+			}
+			continue
+		}
+		refusing++
+		if bound[0].negate != "true" || bound[0].failureResult != "true" || orderOf[b] != "0" {
+			t.Errorf("deny stage binding %s: order %s, negate %q, failure_result %q; want order 0, negate and "+
+				"failure_result true, so a visitor without a valid link is refused first", b, orderOf[b],
+				bound[0].negate, bound[0].failureResult)
 		}
 	}
+	if refusing != 1 {
+		t.Errorf("paddock-recovery binds the deny stage %d times, want once", refusing)
+	}
+}
+
+// TestRecoveryFlowDenyMessage: the deny stage tells the visitor only that the link no longer works and what to do.
+func TestRecoveryFlowDenyMessage(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "deploy", "compose", "authentik", "blueprints", "paddock-recovery.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Entries []struct {
+			Model string `yaml:"model"`
+			Ident struct {
+				Name string `yaml:"name"`
+			} `yaml:"identifiers"`
+			Attrs struct {
+				DenyMessage string `yaml:"deny_message"`
+			} `yaml:"attrs"`
+		} `yaml:"entries"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range doc.Entries {
+		if e.Model != "authentik_stages_deny.denystage" {
+			continue
+		}
+		want := "This link is invalid, has expired or has already been used. Ask your administrator for a new link."
+		if e.Ident.Name != "paddock-recovery-link-invalid" || e.Attrs.DenyMessage != want {
+			t.Fatalf("deny stage %q says %q, want paddock-recovery-link-invalid saying %q", e.Ident.Name,
+				e.Attrs.DenyMessage, want)
+		}
+		return
+	}
+	t.Fatal("deny stage paddock-recovery-link-invalid missing")
 }
 
 // TestRecoveryFlowPasswordOnlyForManagedAccounts (plan M12h-2 amendment f point 2 and its addendum point 2): both
