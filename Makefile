@@ -499,6 +499,10 @@ fleet-bootstrap: ## Set up Fleet: admin user, API-only user paddock (token), glo
 dev-seed: ## Create organizations acme and globex and assign the dev users (BACKUP=1: and a confirmed backup key and the development backup targets)
 	BACKUP=$(BACKUP) go run ./test/acceptance/cmd/devseed
 
+.PHONY: dev-prune-gate-orgs
+dev-prune-gate-orgs: ## Delete the leftover "Gate gate-" organizations of a development stack through the admin API (refuses unless PADDOCK_ENV=development)
+	go run ./test/acceptance/cmd/orgprune
+
 # Guard against hangs; the whole suite took ~85 min on a development machine and ~82 min on a GitHub runner since M8x
 # (measured 2026-10-18) and 101 min on a GitHub runner on 2026-10-21 (PR #118). CI therefore runs it in shards
 # (SHARD=i/n, PDK-359), each against its own stack: with four shards ~32 min of measured gate time each (PDK-361,
