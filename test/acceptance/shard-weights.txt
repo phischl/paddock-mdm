@@ -20,6 +20,8 @@
 # Estimate, not yet measured (PDK-1066): OF3, OF4 and OF7 each wait for a grace-0 deletion of their own organization,
 # 2–4 worker rounds of a minute (plan M17 amendment p); OF2 waits for one command round, OF1 for twelve audit lookups.
 260 TestOrganizationDeletedWithinFiveMinutes
+# OF3L (PDK-1087) skips unless PADDOCK_OF3_LARGE_ORG names a seeded large organization; CI seeds none.
+0 TestOrganizationDeletedWithinFiveMinutesNextToLargeOrganization
 280 TestDeletedOrganizationAPITokenRefused
 260 TestDeletedOrganizationSlugReuse
 150 TestOrganizationDeletionUninstallsDevices

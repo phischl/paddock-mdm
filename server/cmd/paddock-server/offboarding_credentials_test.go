@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -120,7 +121,7 @@ func TestLoadOffboardingObjectsFailsClosed(t *testing.T) {
 		t.Fatalf("clients without credentials: %+v", o)
 	}
 	var oe *app.OffboardingError
-	if _, err := app.NewOffboarding(o).DeleteObjects(context.Background(), uuid.New()); !errors.As(err, &oe) ||
+	if _, err := app.NewOffboarding(o).DeleteObjects(context.Background(), uuid.New(), time.Time{}); !errors.As(err, &oe) ||
 		oe.Code != app.OffboardingObjectStoreUnavailable {
 		t.Fatalf("DeleteObjects without credentials: %v", err)
 	}

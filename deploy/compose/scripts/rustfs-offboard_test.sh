@@ -320,20 +320,40 @@ versions() {
   root s3api list-object-versions --bucket paddock-escrow --prefix "$1" --query 'Versions[].VersionId' --output text |
     sed 's/^None$//'
 }
-for v in $(versions "$A/devices/d1/luks-header/h"); do
-  expect_allowed "escrow offboard delete header version" "${oe[@]}" s3api delete-object --bucket paddock-escrow \
-    --key "$A/devices/d1/luks-header/h" --version-id "$v"
-done
-for v in $(versions "$A/devices/d1/diagnostics/z"); do
-  expect_allowed "escrow offboard delete diagnostics version" "${oe[@]}" s3api delete-object --bucket paddock-escrow \
-    --key "$A/devices/d1/diagnostics/z" --version-id "$v"
-done
+# expect_batch <description> <denied|deleted> <key file> <key file> <bucket> <key[@version]…>: one quiet DeleteObjects,
+# as the step objects sends it (plan M17 amendment 2026-11-16 s point 1.4, PDK-1087); the request itself must succeed,
+# and its per-key result must be AccessDenied for every key (denied) or an error for none (deleted).
+expect_batch() {
+  local d="$1" want="$2" bucket="$5" objects="" k out
+  for k in "${@:6}"; do
+    if [[ "$k" == *@* ]]; then
+      objects+="{\"Key\":\"${k%@*}\",\"VersionId\":\"${k#*@}\"},"
+    else
+      objects+="{\"Key\":\"$k\"},"
+    fi
+  done
+  if ! out="$(s3 "$3" "$4" s3api delete-objects --bucket "$bucket" --output json \
+    --delete "{\"Objects\":[${objects%,}],\"Quiet\":true}" 2>&1)"; then
+    fail "$d: the DeleteObjects request failed: $out"
+  elif [[ "$want" == deleted && "$out" != *'"Errors"'* ]]; then
+    ok "$d: deleted"
+  elif [[ "$want" == denied && "$(grep -c '"Code": "AccessDenied"' <<<"$out")" == "$(($# - 5))" ]]; then
+    ok "$d: AccessDenied per key"
+  else
+    fail "$d: want $want, got $out"
+  fi
+}
+expect_batch "bundles offboard DeleteObjects keep/" denied "${ob[@]}" paddock-bundles keep/x
+expect_batch "escrow offboard DeleteObjects other prefix" denied "${oe[@]}" paddock-escrow "$A/devices/d1/other/o"
+batch=()
+for v in $(versions "$A/devices/d1/luks-header/h"); do batch+=("$A/devices/d1/luks-header/h@$v"); done
+for v in $(versions "$A/devices/d1/diagnostics/z"); do batch+=("$A/devices/d1/diagnostics/z@$v"); done
+expect_batch "escrow offboard DeleteObjects header and diagnostics versions" deleted "${oe[@]}" paddock-escrow "${batch[@]}"
 [[ -z "$(versions "$A/devices/d1/luks-header/")" ]] && ok "no header version of the organization is left" ||
   fail "header versions left"
 [[ -n "$(versions "$B/devices/d2/luks-header/h")" && -n "$(versions "$A/devices/d1/other/o")" ]] &&
   ok "the other organization's header and other prefixes survive" || fail "objects outside the deleted ones are gone"
-expect_allowed "bundles offboard delete org/" "${ob[@]}" s3api delete-object --bucket paddock-bundles --key "$A/bundle"
-expect_allowed "bundles offboard delete apt/" "${ob[@]}" s3api delete-object --bucket paddock-bundles --key apt/aaaa/pool/p.deb
+expect_batch "bundles offboard DeleteObjects org/ and apt/" deleted "${ob[@]}" paddock-bundles "$A/bundle" apt/aaaa/pool/p.deb
 
 # A user the bootstrap cannot verify fails it instead of passing as ready.
 K="$(key rustfs_escrow_offboard_access_key)" S="not-the-file-$$" rcx 'rc admin user passwd --password-from-env S -- t "$K" >/dev/null'

@@ -34,13 +34,13 @@ func (e *OffboardingError) Unwrap() error { return e.Err }
 // OffboardingBundles is the bundles bucket with the deletion's credential paddock-bundles-offboard: list and delete
 // below org/ and apt/, no read (plan M17 amendment k point 1).
 type OffboardingBundles interface {
-	PurgeObjects(ctx context.Context, prefix string) (objectstore.Purge, error)
+	PurgeObjects(ctx context.Context, prefix string, until time.Time) (objectstore.Purge, error)
 }
 
 // OffboardingEscrow is the escrow bucket with the deletion's credential paddock-escrow-offboard: list versions and
 // delete header and diagnostics versions, no read.
 type OffboardingEscrow interface {
-	PurgeVersions(ctx context.Context, prefix string) (objectstore.Purge, error)
+	PurgeVersions(ctx context.Context, prefix string, until time.Time) (objectstore.Purge, error)
 }
 
 // OffboardingObjects are the organization deletion's object-store credentials. A nil field means its credential
@@ -63,19 +63,21 @@ func NewOffboarding(objects OffboardingObjects) *Offboarding {
 	return &Offboarding{objects: objects, now: time.Now}
 }
 
-// DeleteObjects is the object-store part of the step objects (plan M17 decision 12): every object below org/<org>/
-// and apt/<org>/ of bundles and every version below org/<org>/ of escrow. It returns how many objects and versions it
-// deleted. An *OffboardingError carries the step's error code: object_store_unavailable without credentials or on a
-// store error, object_retained when Object Lock kept something; the other prefixes are still purged then, so a retry
-// only meets what is kept.
-func (o *Offboarding) DeleteObjects(ctx context.Context, org uuid.UUID) (int, error) {
+// DeleteObjects is the object-store part of the step objects (plan M17 decision 12, amendment 2026-11-16 s point 1.4):
+// every object below org/<org>/ and apt/<org>/ of bundles and every version below org/<org>/ of escrow, in this order,
+// each purge with until. It returns how many objects and versions it deleted. When a purge stops at until before its
+// listing ends, DeleteObjects returns OffboardingYield with the count so far; the next call lists every prefix from its
+// start again, and an emptied prefix costs one list request. An *OffboardingError carries the step's error code:
+// object_store_unavailable without credentials or on a store error, object_retained when Object Lock kept something
+// once all three listings ended. A zero until runs to the end.
+func (o *Offboarding) DeleteObjects(ctx context.Context, org uuid.UUID, until time.Time) (int, error) {
 	if o.objects.Bundles == nil || o.objects.Escrow == nil {
 		return 0, &OffboardingError{Code: OffboardingObjectStoreUnavailable,
 			Err: errors.New("the organization deletion's object-store credentials are not configured")}
 	}
 	purges := []struct {
 		name   string
-		purge  func(context.Context, string) (objectstore.Purge, error)
+		purge  func(context.Context, string, time.Time) (objectstore.Purge, error)
 		prefix string
 	}{
 		{"bundles", o.objects.Bundles.PurgeObjects, "org/" + org.String() + "/"},
@@ -84,11 +86,14 @@ func (o *Offboarding) DeleteObjects(ctx context.Context, org uuid.UUID) (int, er
 	}
 	deleted, retained := 0, 0
 	for _, p := range purges {
-		res, err := p.purge(ctx, p.prefix)
+		res, err := p.purge(ctx, p.prefix, until)
 		deleted += res.Deleted
 		retained += len(res.Retained)
 		if err != nil && !errors.Is(err, objectstore.ErrRetained) {
 			return deleted, &OffboardingError{Code: OffboardingObjectStoreUnavailable, Err: fmt.Errorf("%s %s: %w", p.name, p.prefix, err)}
+		}
+		if !res.Done {
+			return deleted, OffboardingYield{Step: offboarding.StepObjects}
 		}
 	}
 	if retained > 0 {

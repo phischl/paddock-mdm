@@ -142,11 +142,11 @@ SELECT * FROM organization
 WHERE status = 'deleting' OR (status = 'deleted' AND offboarding_step = 'tombstone')
 ORDER BY delete_after, id;
 
--- A step's checkpoint (plan M17 decision 6): the next step, the cleared error and what the step removed, only while the
--- organization is still at that step, so a step completes once.
+-- A step's checkpoint (plan M17 decision 6): the next step, the cleared error and cursor and what the step removed, only
+-- while the organization is still at that step, so a step completes once.
 -- name: CompleteOrganizationOffboardingStep :one
 UPDATE organization
-SET offboarding_step = @next_step, offboarding_error_code = NULL, updated_at = now(),
+SET offboarding_step = @next_step, offboarding_error_code = NULL, offboarding_cursor = NULL, updated_at = now(),
     offboarding_counts = offboarding_counts || jsonb_build_object(@current_step::text,
       coalesce((offboarding_counts ->> @current_step::text)::bigint, 0) + @added::bigint)
 WHERE id = @id AND status = 'deleting' AND offboarding_step = @current_step
@@ -172,6 +172,23 @@ SET offboarding_error_code = NULL,
       coalesce((offboarding_counts ->> 'database')::bigint, 0) + @added::bigint),
     offboarding_db_order = sqlc.narg(db_order)::int
 WHERE id = @id AND status = 'deleting' AND offboarding_step = 'database';
+
+-- Progress of a resumable step other than database (plan M17 amendment 2026-11-16 s point 1.2), stored after every
+-- unit: its count and the cursor the step resumes at, so neither a crash nor a yield loses the count of what is gone
+-- or where the step continues. Like a stored database batch it clears the error code of an earlier failed attempt.
+-- name: SaveOrganizationOffboardingProgress :exec
+UPDATE organization
+SET offboarding_error_code = NULL,
+    offboarding_counts = offboarding_counts || jsonb_build_object(@step::text,
+      coalesce((offboarding_counts ->> @step::text)::bigint, 0) + @added::bigint),
+    offboarding_cursor = sqlc.narg(cursor)::text
+WHERE id = @id AND status = 'deleting' AND offboarding_step = @step;
+
+-- The error code whose organization.deletion_step_failed the deletion records, at most once per code (main §32,
+-- amendment 2026-11-16 s point 3); 0 rows when it was recorded already.
+-- name: MarkOrganizationOffboardingFailureRecorded :execrows
+UPDATE organization SET offboarding_failures_recorded = array_append(offboarding_failures_recorded, @code::text)
+WHERE id = @id AND NOT (@code::text = ANY(offboarding_failures_recorded));
 
 -- Step audit_final (plan M17 amendment o point 1): the claim of the one organization.audit_retirement_requested,
 -- which also starts the step's wait.

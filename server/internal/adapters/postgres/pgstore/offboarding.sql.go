@@ -134,32 +134,6 @@ func (q *Queries) ListExpiredOffboardedDevices(ctx context.Context, arg ListExpi
 	return items, nil
 }
 
-const listOffboardedDeviceIDs = `-- name: ListOffboardedDeviceIDs :many
-SELECT device_id FROM offboarded_device WHERE organization_id = $1 ORDER BY device_id
-`
-
-// The offboarded devices of an organization, whose identity, command and sequence keys outlive it (plan M17 amendment l
-// point 3).
-func (q *Queries) ListOffboardedDeviceIDs(ctx context.Context, organizationID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, listOffboardedDeviceIDs, organizationID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []uuid.UUID{}
-	for rows.Next() {
-		var device_id uuid.UUID
-		if err := rows.Scan(&device_id); err != nil {
-			return nil, err
-		}
-		items = append(items, device_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listOffboardedDevices = `-- name: ListOffboardedDevices :many
 SELECT device_id, organization_id, keys, offboarded_at, command_envelopes FROM offboarded_device ORDER BY device_id
 `
@@ -288,28 +262,34 @@ func (q *Queries) ListOffboardingDeviceIdentities(ctx context.Context, deviceIds
 	return items, nil
 }
 
-const listOffboardingDeviceKeys = `-- name: ListOffboardingDeviceKeys :many
+const listOffboardingDeviceKeysPage = `-- name: ListOffboardingDeviceKeysPage :many
 SELECT d.id AS device_id, coalesce(k.key_id, '')::text AS key_id
-FROM device d LEFT JOIN device_identity_key k ON k.device_id = d.id
-ORDER BY d.id, k.key_id
+FROM (SELECT id FROM device WHERE id > $1::uuid ORDER BY id LIMIT $2) d
+LEFT JOIN device_identity_key k ON k.device_id = d.id ORDER BY d.id, k.key_id
 `
 
-type ListOffboardingDeviceKeysRow struct {
+type ListOffboardingDeviceKeysPageParams struct {
+	AfterDevice uuid.UUID
+	MaxDevices  int32
+}
+
+type ListOffboardingDeviceKeysPageRow struct {
 	DeviceID uuid.UUID
 	KeyID    string
 }
 
-// Every device of the context organization with its identity keys (key_id empty for a device without one), for the
-// step valkey (decision 13).
-func (q *Queries) ListOffboardingDeviceKeys(ctx context.Context) ([]ListOffboardingDeviceKeysRow, error) {
-	rows, err := q.db.Query(ctx, listOffboardingDeviceKeys)
+// One page of the context organization's devices after after_device with their identity keys (key_id empty for a
+// device without one), for the step valkey (decision 13, amendment 2026-11-16 s point 1.3): max_devices devices, each
+// with all its keys, so a device never spans two pages.
+func (q *Queries) ListOffboardingDeviceKeysPage(ctx context.Context, arg ListOffboardingDeviceKeysPageParams) ([]ListOffboardingDeviceKeysPageRow, error) {
+	rows, err := q.db.Query(ctx, listOffboardingDeviceKeysPage, arg.AfterDevice, arg.MaxDevices)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListOffboardingDeviceKeysRow{}
+	items := []ListOffboardingDeviceKeysPageRow{}
 	for rows.Next() {
-		var i ListOffboardingDeviceKeysRow
+		var i ListOffboardingDeviceKeysPageRow
 		if err := rows.Scan(&i.DeviceID, &i.KeyID); err != nil {
 			return nil, err
 		}
@@ -372,14 +352,21 @@ func (q *Queries) ListOffboardingEscrowIDs(ctx context.Context) ([]uuid.UUID, er
 	return items, nil
 }
 
-const listOffboardingHandedDevices = `-- name: ListOffboardingHandedDevices :many
-SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('pending', 'retired', 'rejected') ORDER BY id
+const listOffboardingHandedDevicesPage = `-- name: ListOffboardingHandedDevicesPage :many
+SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('pending', 'retired', 'rejected')
+  AND id > $1::uuid ORDER BY id LIMIT $2
 `
 
-// The devices the step devices hands over to offboarded_device: no reported removal, approved at least once (a pending
-// device cannot verify a command), neither retired nor rejected.
-func (q *Queries) ListOffboardingHandedDevices(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, listOffboardingHandedDevices)
+type ListOffboardingHandedDevicesPageParams struct {
+	AfterDevice uuid.UUID
+	MaxDevices  int32
+}
+
+// One page of the devices the step devices hands over to offboarded_device after after_device: no reported removal,
+// approved at least once (a pending device cannot verify a command), neither retired nor rejected (amendment
+// 2026-11-16 s point 1.3).
+func (q *Queries) ListOffboardingHandedDevicesPage(ctx context.Context, arg ListOffboardingHandedDevicesPageParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listOffboardingHandedDevicesPage, arg.AfterDevice, arg.MaxDevices)
 	if err != nil {
 		return nil, err
 	}
@@ -442,26 +429,33 @@ func (q *Queries) ListOffboardingHandoverCommands(ctx context.Context, deviceIds
 	return items, nil
 }
 
-const listOffboardingInventoryRefs = `-- name: ListOffboardingInventoryRefs :many
-SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id
+const listOffboardingInventoryRefsPage = `-- name: ListOffboardingInventoryRefsPage :many
+SELECT DISTINCT ON (external_id) external_id, device_id FROM device_inventory_ref
+WHERE external_id <> '' AND external_id > $1::text ORDER BY external_id, device_id LIMIT $2
 `
 
-type ListOffboardingInventoryRefsRow struct {
-	DeviceID   uuid.UUID
-	ExternalID string
+type ListOffboardingInventoryRefsPageParams struct {
+	AfterExternalID string
+	MaxHosts        int32
 }
 
-// The Fleet hosts the context organization's devices reference, for the step fleet (decision 11).
-func (q *Queries) ListOffboardingInventoryRefs(ctx context.Context) ([]ListOffboardingInventoryRefsRow, error) {
-	rows, err := q.db.Query(ctx, listOffboardingInventoryRefs)
+type ListOffboardingInventoryRefsPageRow struct {
+	ExternalID string
+	DeviceID   uuid.UUID
+}
+
+// One page of the Fleet hosts the context organization's devices reference after after_external_id, for the step fleet
+// (decision 11, amendment 2026-11-16 s point 1.3): every host once, with one of the devices that reference it.
+func (q *Queries) ListOffboardingInventoryRefsPage(ctx context.Context, arg ListOffboardingInventoryRefsPageParams) ([]ListOffboardingInventoryRefsPageRow, error) {
+	rows, err := q.db.Query(ctx, listOffboardingInventoryRefsPage, arg.AfterExternalID, arg.MaxHosts)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListOffboardingInventoryRefsRow{}
+	items := []ListOffboardingInventoryRefsPageRow{}
 	for rows.Next() {
-		var i ListOffboardingInventoryRefsRow
-		if err := rows.Scan(&i.DeviceID, &i.ExternalID); err != nil {
+		var i ListOffboardingInventoryRefsPageRow
+		if err := rows.Scan(&i.ExternalID, &i.DeviceID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -150,6 +150,18 @@ groups:
         annotations:
           summary: "An organization deletion keeps failing"
           description: "{{ $value }} organization deletion(s) retry a failing step at the longest backoff; see the organization's deletion step and error code."
+      # A deletion round that took longer than twice the round interval (plan M17 amendment 2026-11-16 s point 2.3,
+      # PDK-1087): every step whose work grows with the organization yields after its slice, so a round lasts at most
+      # the budget plus one slice and one unit; an overrun means a step stopped yielding and holds the other
+      # organizations' deletions.
+      - alert: PaddockOrganizationDeletionRoundOverrun
+        expr: increase(paddock_offboarding_round_overruns_total[30m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An organization deletion round overran"
+          description: "An organization deletion round took longer than 2 minutes in the last 30 minutes; a deletion step stopped yielding to the other organizations. See paddock_offboarding_step_yields_total and the worker's log."
       # The worker's readiness does not wait for its consumer of worker.offboarding (PDK-1017, main §45), so a broker
       # that refuses it (the upgrade's step broker did not run) or a lost session shows only here. 15 min cover the
       # consumer's reconnects (backoff up to 30 s) and a broker restart; while it lasts, step audit_final of an

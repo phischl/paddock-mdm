@@ -27,17 +27,26 @@ const offboardingLockKey = 0x706164646f666662
 const OffboardingInterval = time.Minute
 
 // OffboardingRoundBudget is the wall-clock time one round spends on all deletions together (plan M17 amendment p): it
-// ends after the step that was running when the budget ran out. The budget is checked before a step and, inside the
-// database step, between its batches (amendment 2026-11-16 q point 6), where the step yields after
-// app.OffboardingDatabaseSlice or at the budget and resumes from its stored position, so the passes interleave the
-// organizations; any other step may overrun it; nothing overlaps then: the ticker drops the missed tick, the next
-// round starts at once, and other replicas skip while the leader lock is held. The budget never cuts another step
-// short (it is idempotent but may have reached an external system); only a lost leadership does.
+// ends after the step that was running when the budget ran out. The budget is checked before a step and, inside every
+// resumable step, after each unit of work (amendments 2026-11-16 q point 6 and s point 1), where the step yields after
+// app.OffboardingStepSlice or at the budget and resumes from its stored position, so the passes interleave the
+// organizations; a round therefore lasts at most the budget plus one slice plus one unit. Nothing overlaps when it
+// runs longer: the ticker drops the missed tick, the next round starts at once, and other replicas skip while the
+// leader lock is held. The budget never cuts a unit short (it is idempotent but may have reached an external system);
+// only a lost leadership does.
 const OffboardingRoundBudget = 45 * time.Second
 
 // offboardingLeaderCheck is how often the leader connection is asked whether it still answers; when it does not, the
 // round's context ends and no further step starts (db.PlatformPool.Lead).
 const offboardingLeaderCheck = 5 * time.Second
+
+// offboardingPollInterval is how often a round asks a step that waits for an acknowledgement (audit_final,
+// app.ErrOffboardingPolling) again (amendment 2026-11-16 s point 2.2).
+const offboardingPollInterval = 2 * time.Second
+
+// offboardingRoundOverrun is the round duration counted as an overrun (amendment 2026-11-16 s point 2.3): longer than
+// the budget plus a slice and a unit can take, so one step stopped yielding.
+const offboardingRoundOverrun = 2 * OffboardingInterval
 
 // OffboardingBackoffCap is the longest wait between two attempts of a failing step. The wait doubles from the round
 // interval up to it; reaching it raises PaddockOrganizationDeletionStuck (requirement of main, 2026-11-14): the job
@@ -60,6 +69,14 @@ var (
 	metricOffboardingFinalizeBusy = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "paddock_offboarding_finalize_busy_total",
 		Help: "Rounds in which an organization's tombstone waited for organization transactions older than the deletion.",
+	})
+	metricOffboardingStepYields = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "paddock_offboarding_step_yields_total",
+		Help: "Calls of a resumable organization deletion step that stored their progress and yielded to other organizations, by step.",
+	}, []string{"step"})
+	metricOffboardingRoundOverruns = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "paddock_offboarding_round_overruns_total",
+		Help: "Organization deletion rounds that took longer than twice the round interval.",
 	})
 )
 
@@ -91,6 +108,8 @@ type Offboarding struct {
 	interval time.Duration
 	now      func() time.Time
 	retries  map[uuid.UUID]*offboardingRetry
+	// sleep waits while only organizations that poll remain in a round; it returns early when ctx ends (tests replace it).
+	sleep func(ctx context.Context, d time.Duration)
 	// advanced is when an organization last took a step, kept in memory: the next round serves the longest-waiting
 	// organizations first, so a slow deletion that uses the whole budget cannot starve the others. A new leader starts
 	// again in database order.
@@ -99,8 +118,18 @@ type Offboarding struct {
 
 // NewOffboarding creates the round; lock is the worker's platform pool, whose lock pool holds the leader lock.
 func NewOffboarding(job offboarder, lock leaderLocker) *Offboarding {
-	return &Offboarding{job: job, lock: lock, interval: OffboardingInterval, now: time.Now,
+	return &Offboarding{job: job, lock: lock, interval: OffboardingInterval, now: time.Now, sleep: sleepContext,
 		retries: map[uuid.UUID]*offboardingRetry{}, advanced: map[uuid.UUID]time.Time{}}
+}
+
+// sleepContext waits d or until ctx ends.
+func sleepContext(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
 }
 
 // WithClock replaces time.Now (tests).
@@ -127,11 +156,19 @@ func (o *Offboarding) Run(ctx context.Context) error {
 
 // Round starts the due deletions and advances the pending ones step by step, one step per organization in turn, until
 // every organization is done, waits or fails, or OffboardingRoundBudget is used; a failing organization does not stop
-// the others, and a long deletion cannot starve them. Every step is its own transaction: the round holds only the
-// leader connection between steps. The lock is held only while the round runs (amendment c point 3).
+// the others, and a long deletion cannot starve them. An organization whose step polls for an acknowledgement is asked
+// again every offboardingPollInterval; when only such organizations remain, the round sleeps until the next poll is
+// due. Every step is its own transaction: the round holds only the leader connection between steps. The lock is held
+// only while the round runs (amendment c point 3).
 func (o *Offboarding) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	leader, err := o.lock.Lead(sys, offboardingLockKey, offboardingLeaderCheck, func(ctx context.Context) error {
+		began := o.now()
+		defer func() {
+			if o.now().Sub(began) > offboardingRoundOverrun {
+				metricOffboardingRoundOverruns.Inc()
+			}
+		}()
 		started, err := o.job.StartDue(ctx)
 		if err != nil {
 			return err
@@ -152,17 +189,32 @@ func (o *Offboarding) Round(ctx context.Context) error {
 		}
 		sort.SliceStable(active, func(i, j int) bool { return o.advanced[active[i]].Before(o.advanced[active[j]]) })
 		deadline := o.now().Add(OffboardingRoundBudget)
+		polled := map[uuid.UUID]time.Time{}
 		for len(active) > 0 && ctx.Err() == nil && o.now().Before(deadline) {
 			next := active[:0]
+			progressed := false
 			for _, id := range active {
 				if ctx.Err() != nil || !o.now().Before(deadline) {
 					break
 				}
-				if o.advance(ctx, id, deadline) {
+				if at, ok := polled[id]; ok && o.now().Before(at.Add(offboardingPollInterval)) {
+					next = append(next, id)
+					continue
+				}
+				switch o.advance(ctx, id, deadline) {
+				case stepAgain:
+					delete(polled, id)
+					progressed = true
+					next = append(next, id)
+				case stepPolling:
+					polled[id] = o.now()
 					next = append(next, id)
 				}
 			}
 			active = next
+			if !progressed && len(active) > 0 {
+				o.awaitPoll(ctx, active, polled, deadline)
+			}
 		}
 		capped := 0
 		for id := range o.advanced {
@@ -201,21 +253,61 @@ func (o *Offboarding) observe(orgs []pgstore.Organization) {
 	}
 }
 
-// advance runs one step of org within the round's deadline unless its backoff has not elapsed and reports whether the
-// organization may take another step in this round: only after a step that completed or yielded at the budget and left
-// the deletion unfinished.
-func (o *Offboarding) advance(ctx context.Context, org uuid.UUID, deadline time.Time) bool {
+// awaitPoll sleeps, when every organization left in the round polls, until the earliest poll is due or the deadline,
+// whichever comes first.
+func (o *Offboarding) awaitPoll(ctx context.Context, active []uuid.UUID, polled map[uuid.UUID]time.Time, deadline time.Time) {
+	wake := deadline
+	for _, id := range active {
+		at, ok := polled[id]
+		if !ok {
+			return
+		}
+		if due := at.Add(offboardingPollInterval); due.Before(wake) {
+			wake = due
+		}
+	}
+	if d := wake.Sub(o.now()); d > 0 {
+		o.sleep(ctx, d)
+	}
+}
+
+// stepOutcome is what a call of advance leaves for the rest of the round.
+type stepOutcome int
+
+const (
+	// stepStop: the organization takes no further step in this round (done, waiting, failing or in backoff).
+	stepStop stepOutcome = iota
+	// stepAgain: the step completed or yielded and the deletion is unfinished; the organization stays in the passes.
+	stepAgain
+	// stepPolling: the step waits for an acknowledgement; the organization is asked again after offboardingPollInterval.
+	stepPolling
+)
+
+// advance runs one step of org within the round's deadline unless its backoff has not elapsed and reports what the
+// organization does for the rest of the round.
+func (o *Offboarding) advance(ctx context.Context, org uuid.UUID, deadline time.Time) stepOutcome {
 	now := o.now()
 	r := o.retries[org]
 	if r != nil && now.Before(r.next) {
-		return false
+		return stepStop
 	}
 	o.advanced[org] = now
 	done, err := o.job.AdvanceWithin(ctx, org, deadline)
+	var yield app.OffboardingYield
 	switch {
 	case err == nil:
 		delete(o.retries, org)
-		return !done
+		if done {
+			return stepStop
+		}
+		return stepAgain
+	case errors.As(err, &yield):
+		metricOffboardingStepYields.WithLabelValues(yield.Step).Inc()
+		delete(o.retries, org)
+		return stepAgain
+	case errors.Is(err, app.ErrOffboardingPolling):
+		delete(o.retries, org)
+		return stepPolling
 	case errors.Is(err, app.ErrOffboardingWaiting):
 		metricOffboardingFinalizeBusy.Inc()
 		delete(o.retries, org)
@@ -227,7 +319,9 @@ func (o *Offboarding) advance(ctx context.Context, org uuid.UUID, deadline time.
 		}
 		r.failures++
 		delay := o.backoff(r.failures)
-		r.next = now.Add(delay)
+		// From the end of the attempt: a step that failed after running longer than the delay would otherwise be retried
+		// at once (amendment 2026-11-16 s point 2.1).
+		r.next = o.now().Add(delay)
 		if delay >= OffboardingBackoffCap && !r.capped {
 			r.capped = true
 			metricOffboardingCapReached.Inc()
@@ -235,7 +329,7 @@ func (o *Offboarding) advance(ctx context.Context, org uuid.UUID, deadline time.
 				"organization", org, "failures", r.failures, "backoff", delay, "error", err)
 		}
 	}
-	return false
+	return stepStop
 }
 
 // backoff is the wait after the n-th consecutive failure: the round interval, doubled per failure, at most the cap.

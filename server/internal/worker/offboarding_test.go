@@ -406,7 +406,7 @@ func largeDatabaseRounds(t *testing.T, large bool, step func(now, deadline time.
 		}
 		s.log = append(s.log, org)
 		*now = now.Add(step(*now, f.deadline))
-		return nil
+		return app.OffboardingYield{Step: offboarding.StepDatabase}
 	}
 	r := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return *now })
 	for round := 1; round <= 20; round++ {
@@ -414,7 +414,7 @@ func largeDatabaseRounds(t *testing.T, large bool, step func(now, deadline time.
 		if err := r.Round(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if over := now.Sub(start) - OffboardingRoundBudget; over > app.OffboardingDatabaseSlice {
+		if over := now.Sub(start) - OffboardingRoundBudget; over > app.OffboardingStepSlice {
 			t.Fatalf("round %d took %v, more than the budget plus one slice", round, now.Sub(start))
 		}
 		if s.left[small] <= 0 {
@@ -427,13 +427,13 @@ func largeDatabaseRounds(t *testing.T, large bool, step func(now, deadline time.
 }
 
 // TestOffboardingRoundLargeDatabaseStep (plan M17 amendment q point 9, amendment p point 2a, main §61): the database
-// step gets the round's deadline and yields after OffboardingDatabaseSlice, so the round's passes interleave the
+// step gets the round's deadline and yields after OffboardingStepSlice, so the round's passes interleave the
 // organizations: with a large deletion running, a small one finishes in as many rounds as alone. The second half shows
 // that the check tells the behaviours apart: a database step that runs to the round deadline (before §61) delays the
 // small deletion by several rounds.
 func TestOffboardingRoundLargeDatabaseStep(t *testing.T) {
 	slice := func(now, deadline time.Time) time.Duration {
-		return min(app.OffboardingDatabaseSlice, max(deadline.Sub(now), time.Second))
+		return min(app.OffboardingStepSlice, max(deadline.Sub(now), time.Second))
 	}
 	alone := largeDatabaseRounds(t, false, slice)
 	if with := largeDatabaseRounds(t, true, slice); with != alone {
@@ -608,5 +608,157 @@ func TestAuditRetirementsGaugeOnlyWhereRegistered(t *testing.T) {
 	}
 	if _, err := NewAuditRetirementsGauge(reg); err == nil {
 		t.Fatal("a second registration in the same registry succeeded")
+	}
+}
+
+// TestOffboardingRoundYieldingStep (PDK-1087 AC5, plan M17 amendment 2026-11-16 s points 1.6 and 1.7): a large deletion
+// whose step yields on every call stays in the passes and gets one call per pass, and a small deletion with 10 quick
+// steps next to it completes in the first round. Every yield is counted by step.
+func TestOffboardingRoundYieldingStep(t *testing.T) {
+	large, small := uuid.New(), uuid.New()
+	s, now := newStepper(100*time.Millisecond, map[uuid.UUID]int{small: 10, large: 1_000_000})
+	f := s.fake(large, small)
+	inner := f.advance
+	f.advance = func(org uuid.UUID) error {
+		if org == small {
+			return inner(org)
+		}
+		s.log = append(s.log, org)
+		*now = now.Add(2 * time.Second)
+		return app.OffboardingYield{Step: offboarding.StepObjects}
+	}
+	yields := testutil.ToFloat64(metricOffboardingStepYields.WithLabelValues(offboarding.StepObjects))
+	r := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return *now })
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.left[small] != 0 {
+		t.Fatalf("the small deletion has %d steps left after the first round: %v", s.left[small], s.log)
+	}
+	for i := 0; i+1 < 20; i += 2 {
+		if s.log[i] != large || s.log[i+1] != small {
+			t.Fatalf("pass %d ran %v, want the large deletion once, then the small one", i/2, s.log[i:i+2])
+		}
+	}
+	calls := 0
+	for _, id := range s.log {
+		if id == large {
+			calls++
+		}
+	}
+	if got := testutil.ToFloat64(metricOffboardingStepYields.WithLabelValues(offboarding.StepObjects)) - yields; got != float64(calls) {
+		t.Fatalf("%v yields counted for %d yielding calls", got, calls)
+	}
+	if len(r.retries) != 0 {
+		t.Fatalf("a yield started a backoff: %v", r.retries)
+	}
+}
+
+// TestOffboardingRoundBackoffFromFailureEnd (PDK-1087 AC6, amendment 2026-11-16 s point 2.1): a step that fails after
+// running 10 minutes is retried no earlier than the end of the failed attempt plus the backoff, not from its start.
+func TestOffboardingRoundBackoffFromFailureEnd(t *testing.T) {
+	start := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	now := start
+	org := uuid.New()
+	f := &fakeOffboarder{attempts: map[uuid.UUID][]time.Time{}, now: func() time.Time { return now },
+		pending: []pgstore.Organization{deletingOrg(org, offboarding.StepObjects, "")},
+		advance: func(uuid.UUID) error {
+			now = now.Add(10 * time.Minute)
+			return &app.OffboardingError{Code: offboarding.ErrorObjectStoreUnavailable, Err: errors.New("down")}
+		}}
+	r := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return now })
+	ctx := context.Background()
+	if err := r.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	failed := start.Add(10 * time.Minute)
+	for _, at := range []time.Time{start.Add(time.Minute), failed, failed.Add(OffboardingInterval - time.Second)} {
+		now = at
+		if err := r.Round(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if n := len(f.attempts[org]); n != 1 {
+			t.Fatalf("retried at %v, %v after the failed attempt ended: %d attempts", at, at.Sub(failed), n)
+		}
+	}
+	now = failed.Add(OffboardingInterval)
+	if err := r.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.attempts[org]); n != 2 {
+		t.Fatalf("%d attempts at the end of the failed attempt plus the backoff, want 2", n)
+	}
+}
+
+// TestOffboardingRoundPollsAuditFinal (PDK-1087 AC7, amendment 2026-11-16 s point 2.2): a step that waits for an
+// acknowledgement is asked at most every 2 s, and a round with only such an organization sleeps in between instead of
+// spinning: at most 23 calls in the 45 s budget. An acknowledgement is seen at the next poll.
+func TestOffboardingRoundPollsAuditFinal(t *testing.T) {
+	start := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	now := start
+	org := uuid.New()
+	var ackAt time.Time
+	f := &fakeOffboarder{attempts: map[uuid.UUID][]time.Time{}, now: func() time.Time { return now },
+		pending: []pgstore.Organization{deletingOrg(org, offboarding.StepAuditFinal, "")},
+		advance: func(uuid.UUID) error {
+			if !ackAt.IsZero() && !now.Before(ackAt) {
+				return nil
+			}
+			return app.ErrOffboardingPolling
+		}}
+	r := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return now })
+	slept := time.Duration(0)
+	r.sleep = func(_ context.Context, d time.Duration) {
+		slept += d
+		now = now.Add(d)
+	}
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.attempts[org]
+	if len(calls) > 23 || len(calls) < 20 {
+		t.Fatalf("%d calls in a round with only a polling organization, want at most 23 (one per 2 s)", len(calls))
+	}
+	for i := 1; i < len(calls); i++ {
+		if gap := calls[i].Sub(calls[i-1]); gap < offboardingPollInterval {
+			t.Fatalf("polls %v apart, want at least %v", gap, offboardingPollInterval)
+		}
+	}
+	if slept < OffboardingRoundBudget-offboardingPollInterval {
+		t.Fatalf("the round slept %v of its budget", slept)
+	}
+
+	now = start.Add(OffboardingInterval)
+	ackAt = now.Add(7500 * time.Millisecond)
+	f.attempts[org] = nil
+	f.done = func(uuid.UUID) bool { return true }
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls = f.attempts[org]
+	if last := calls[len(calls)-1]; last.Before(ackAt) || last.Sub(ackAt) > offboardingPollInterval || len(calls) != 5 {
+		t.Fatalf("calls at %v; the acknowledgement at %v must be seen at the next poll", calls, ackAt)
+	}
+}
+
+// TestOffboardingRoundOverrun (amendment 2026-11-16 s point 2.3): a round longer than twice the interval is counted in
+// paddock_offboarding_round_overruns_total; a round within the budget is not.
+func TestOffboardingRoundOverrun(t *testing.T) {
+	org := uuid.New()
+	s, now := newStepper(time.Second, map[uuid.UUID]int{org: 3})
+	r := NewOffboarding(s.fake(org), &fakeLock{}).WithClock(func() time.Time { return *now })
+	before := testutil.ToFloat64(metricOffboardingRoundOverruns)
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metricOffboardingRoundOverruns) - before; got != 0 {
+		t.Fatalf("a 3 s round counted %v overruns", got)
+	}
+	s.left[org], s.cost = 1, 2*OffboardingInterval+time.Second
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metricOffboardingRoundOverruns) - before; got != 1 {
+		t.Fatalf("a round of %v counted %v overruns, want 1", s.cost, got)
 	}
 }

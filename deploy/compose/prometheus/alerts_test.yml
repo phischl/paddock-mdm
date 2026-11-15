@@ -850,6 +850,26 @@ tests:
               summary: "An organization deletion keeps failing"
               description: "1 organization deletion(s) retry a failing step at the longest backoff; see the organization's deletion step and error code."
 
+  - name: an overrun organization deletion round warns for 30 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_offboarding_round_overruns_total{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x20 1x60"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PaddockOrganizationDeletionRoundOverrun
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: PaddockOrganizationDeletionRoundOverrun
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock, role: paddock-worker, instance: "paddock-worker:9090" }
+            exp_annotations:
+              summary: "An organization deletion round overran"
+              description: "An organization deletion round took longer than 2 minutes in the last 30 minutes; a deletion step stopped yielding to the other organizations. See paddock_offboarding_step_yields_total and the worker's log."
+      - eval_time: 55m
+        alertname: PaddockOrganizationDeletionRoundOverrun
+        exp_alerts: []
+
   - name: a worker that does not consume worker.offboarding for 15 minutes warns
     interval: 1m
     input_series:

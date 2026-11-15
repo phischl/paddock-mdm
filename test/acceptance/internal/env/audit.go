@@ -120,6 +120,7 @@ type IndexEvent struct {
 	ObjectKey     string
 	Params        map[string]any
 	ActorDisplay  string
+	OccurredAt    time.Time
 }
 
 // RecordingLag returns recorded_at - occurred_at of the event of org with correlationID; found is false while the
@@ -151,15 +152,16 @@ func (a *AuditIndex) Events(ctx context.Context, org uuid.UUID, where string, ar
 		if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", org.String()); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT event_id, code, outcome, correlation_id, object_key, params, coalesce(actor->>'display', '')
-			FROM audit_event WHERE `+where+` ORDER BY occurred_at`, arg)
+		rows, err := tx.Query(ctx, `SELECT event_id, code, outcome, correlation_id, object_key, params, coalesce(actor->>'display', ''),
+			occurred_at FROM audit_event WHERE `+where+` ORDER BY occurred_at`, arg)
 		if err != nil {
 			return err
 		}
 		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (IndexEvent, error) {
 			var e IndexEvent
 			var params []byte
-			if err := r.Scan(&e.EventID, &e.Code, &e.Outcome, &e.CorrelationID, &e.ObjectKey, &params, &e.ActorDisplay); err != nil {
+			if err := r.Scan(&e.EventID, &e.Code, &e.Outcome, &e.CorrelationID, &e.ObjectKey, &params, &e.ActorDisplay,
+				&e.OccurredAt); err != nil {
 				return e, err
 			}
 			return e, json.Unmarshal(params, &e.Params)

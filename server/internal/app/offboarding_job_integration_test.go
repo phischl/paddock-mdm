@@ -69,15 +69,25 @@ func (f *fakeOffboardFleet) DeleteHost(_ context.Context, ref ports.HostRef) err
 }
 
 // fakeOffboardCache is the device keys in Valkey, by organization; it records the devices of every deletion and the
-// devices handed over by the step devices.
+// devices handed over by the step devices. A call of DeleteOrganization deletes the organization's keys in keys, the
+// first time, and with perDevice one key per device it is given.
 type fakeOffboardCache struct {
 	mu         sync.Mutex
 	keys       map[uuid.UUID]int
 	err        error
 	devices    []devicecache.OffboardDevice
 	refs       devicecache.OffboardOrgKeys
+	calls      []valkeyCall
+	perDevice  bool
 	offboarded map[uuid.UUID]devicecache.OffboardedDevice
 	dropped    []uuid.UUID
+}
+
+// valkeyCall is one DeleteOrganization call: how many devices it got and whether the organization's token hashes or
+// escrow IDs came with it.
+type valkeyCall struct {
+	devices int
+	refs    bool
 }
 
 func (f *fakeOffboardCache) DeleteCommand(_ context.Context, _, id uuid.UUID) error {
@@ -123,9 +133,16 @@ func (f *fakeOffboardCache) DeleteOrganization(_ context.Context, org uuid.UUID,
 	if f.err != nil {
 		return 0, f.err
 	}
-	f.devices, f.refs = devices, refs
+	f.devices = append(f.devices, devices...)
+	if len(refs.TokenHashes) > 0 || len(refs.EscrowIDs) > 0 {
+		f.refs = refs
+	}
+	f.calls = append(f.calls, valkeyCall{devices: len(devices), refs: len(refs.TokenHashes)+len(refs.EscrowIDs) > 0})
 	n := f.keys[org]
 	delete(f.keys, org)
+	if f.perDevice {
+		n += len(devices)
+	}
 	return int64(n), nil
 }
 
@@ -144,7 +161,8 @@ func (f *fakeOffboardSessions) RevokeAccount(_ context.Context, account uuid.UUI
 }
 
 // fakeBucket is one bucket of the object store with the purge of the deletion's credentials; it records every call
-// with its bucket, so a test sees which buckets the step used.
+// with its bucket, so a test sees which buckets the step used. With page set and a non-zero until, a call deletes at
+// most page entries and stops before the end of the listing (objectstore's yield after a page past until).
 type fakeBucket struct {
 	name    string
 	mu      *sync.Mutex
@@ -152,23 +170,32 @@ type fakeBucket struct {
 	objects map[string]bool
 	retain  map[string]bool
 	err     error
+	page    int
 }
 
-func (b *fakeBucket) purge(prefix string) (objectstore.Purge, error) {
+func (b *fakeBucket) purge(prefix string, until time.Time) (objectstore.Purge, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	*b.calls = append(*b.calls, b.name+":"+prefix)
 	if b.err != nil {
 		return objectstore.Purge{}, b.err
 	}
-	var p objectstore.Purge
+	var keys []string
 	for k := range b.objects {
-		if !strings.HasPrefix(k, prefix) {
-			continue
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
 		}
+	}
+	slices.Sort(keys)
+	p := objectstore.Purge{Done: true}
+	for _, k := range keys {
 		if b.retain[k] {
 			p.Retained = append(p.Retained, k)
 			continue
+		}
+		if b.page > 0 && !until.IsZero() && p.Deleted == b.page {
+			p.Done = false
+			return p, nil
 		}
 		delete(b.objects, k)
 		p.Deleted++
@@ -179,12 +206,12 @@ func (b *fakeBucket) purge(prefix string) (objectstore.Purge, error) {
 	return p, nil
 }
 
-func (b *fakeBucket) PurgeObjects(_ context.Context, prefix string) (objectstore.Purge, error) {
-	return b.purge(prefix)
+func (b *fakeBucket) PurgeObjects(_ context.Context, prefix string, until time.Time) (objectstore.Purge, error) {
+	return b.purge(prefix, until)
 }
 
-func (b *fakeBucket) PurgeVersions(_ context.Context, prefix string) (objectstore.Purge, error) {
-	return b.purge(prefix)
+func (b *fakeBucket) PurgeVersions(_ context.Context, prefix string, until time.Time) (objectstore.Purge, error) {
+	return b.purge(prefix, until)
 }
 
 // offboardWorld is an organization whose deletion is due, another organization that must survive it, and the fakes
@@ -373,6 +400,7 @@ func (w *offboardWorld) advanceTo(t *testing.T, job *app.Offboarding, step strin
 		}
 		done, err := job.Advance(context.Background(), w.org)
 		switch {
+		case errors.Is(err, app.ErrOffboardingPolling):
 		case errors.Is(err, app.ErrOffboardingWaiting):
 			w.passCutoff(t)
 			time.Sleep(50 * time.Millisecond)
@@ -906,8 +934,8 @@ func TestOffboardingAuditFinal(t *testing.T) {
 	w.requestDue(t, job)
 	w.advanceTo(t, job, offboarding.StepAuditFinal)
 	for range 3 {
-		if done, err := job.Advance(ctx, w.org); done || err != nil {
-			t.Fatalf("waiting step: done %v, %v", done, err)
+		if done, err := job.Advance(ctx, w.org); done || !errors.Is(err, app.ErrOffboardingPolling) {
+			t.Fatalf("waiting step: done %v, %v; want ErrOffboardingPolling", done, err)
 		}
 	}
 	requests := w.stepEvents(t, audit.CodeOrganizationAuditRetirementRequested)
@@ -961,6 +989,12 @@ func TestOffboardingAuditFinal(t *testing.T) {
 	}
 }
 
+// isYield reports whether err is the yield of step.
+func isYield(err error, step string) bool {
+	var y app.OffboardingYield
+	return errors.As(err, &y) && y.Step == step
+}
+
 // dbPosition is the database step's stored position (organization.offboarding_db_order); -1 for NULL.
 func (w *offboardWorld) dbPosition(t *testing.T) int {
 	t.Helper()
@@ -978,7 +1012,7 @@ func (w *offboardWorld) databaseBatch(t *testing.T, job *app.Offboarding) int {
 	w.clockMu.Lock()
 	spent := w.clock.Add(-time.Second)
 	w.clockMu.Unlock()
-	if done, err := job.AdvanceWithin(context.Background(), w.org, spent); done || err != nil {
+	if done, err := job.AdvanceWithin(context.Background(), w.org, spent); done || !isYield(err, offboarding.StepDatabase) {
 		t.Fatalf("database step at a spent budget: %v, %v; want a yield", done, err)
 	}
 	return stored() - before
@@ -1108,7 +1142,7 @@ func TestOffboardingDatabaseRestartsOnReference(t *testing.T) {
 }
 
 // TestOffboardingDatabaseSlice (plan M17 amendment p point 2a, main §61): inside a round the database step yields after
-// OffboardingDatabaseSlice, long before the round's deadline, so the round can serve the next organization; every
+// OffboardingStepSlice, long before the round's deadline, so the round can serve the next organization; every
 // clock reading here takes one second, so the slice ends after five batches.
 func TestOffboardingDatabaseSlice(t *testing.T) {
 	w := newOffboardWorld(t)
@@ -1127,7 +1161,7 @@ func TestOffboardingDatabaseSlice(t *testing.T) {
 	mu.Lock()
 	deadline := clock.Add(time.Hour)
 	mu.Unlock()
-	if done, err := job.AdvanceWithin(context.Background(), w.org, deadline); done || err != nil {
+	if done, err := job.AdvanceWithin(context.Background(), w.org, deadline); done || !isYield(err, offboarding.StepDatabase) {
 		t.Fatalf("database step with an hour left: %v, %v; want a yield after the slice", done, err)
 	}
 	if _, step, _ := w.state(t); step != offboarding.StepDatabase {

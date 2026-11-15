@@ -38,12 +38,13 @@ SELECT paddock_offboard_revoke_api_tokens()::bigint AS revoked;
 -- name: ListOffboardingAdminAccounts :many
 SELECT id FROM admin_account ORDER BY id;
 
--- Every device of the context organization with its identity keys (key_id empty for a device without one), for the
--- step valkey (decision 13).
--- name: ListOffboardingDeviceKeys :many
+-- One page of the context organization's devices after after_device with their identity keys (key_id empty for a
+-- device without one), for the step valkey (decision 13, amendment 2026-11-16 s point 1.3): max_devices devices, each
+-- with all its keys, so a device never spans two pages.
+-- name: ListOffboardingDeviceKeysPage :many
 SELECT d.id AS device_id, coalesce(k.key_id, '')::text AS key_id
-FROM device d LEFT JOIN device_identity_key k ON k.device_id = d.id
-ORDER BY d.id, k.key_id;
+FROM (SELECT id FROM device WHERE id > @after_device::uuid ORDER BY id LIMIT @max_devices) d
+LEFT JOIN device_identity_key k ON k.device_id = d.id ORDER BY d.id, k.key_id;
 
 -- The enrollment token hashes of the context organization, whose cached et: keys the step valkey deletes before the
 -- step database removes the rows (plan M17 amendment l point 2).
@@ -54,9 +55,11 @@ SELECT secret_sha256 FROM enrollment_token ORDER BY id;
 -- name: ListOffboardingEscrowIDs :many
 SELECT id FROM escrow_secret ORDER BY id;
 
--- The Fleet hosts the context organization's devices reference, for the step fleet (decision 11).
--- name: ListOffboardingInventoryRefs :many
-SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id;
+-- One page of the Fleet hosts the context organization's devices reference after after_external_id, for the step fleet
+-- (decision 11, amendment 2026-11-16 s point 1.3): every host once, with one of the devices that reference it.
+-- name: ListOffboardingInventoryRefsPage :many
+SELECT DISTINCT ON (external_id) external_id, device_id FROM device_inventory_ref
+WHERE external_id <> '' AND external_id > @after_external_id::text ORDER BY external_id, device_id LIMIT @max_hosts;
 
 -- Locks the devices of the context organization that may still contact the server, disarms their dead man's switch and
 -- gives each without a usable open uninstall a fresh one (plan M17 decision 15, amendments e, m and n, migration
@@ -64,10 +67,12 @@ SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id;
 -- name: OffboardReissueUninstalls :one
 SELECT paddock_offboard_reissue_uninstalls()::bigint;
 
--- The devices the step devices hands over to offboarded_device: no reported removal, approved at least once (a pending
--- device cannot verify a command), neither retired nor rejected.
--- name: ListOffboardingHandedDevices :many
-SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('pending', 'retired', 'rejected') ORDER BY id;
+-- One page of the devices the step devices hands over to offboarded_device after after_device: no reported removal,
+-- approved at least once (a pending device cannot verify a command), neither retired nor rejected (amendment
+-- 2026-11-16 s point 1.3).
+-- name: ListOffboardingHandedDevicesPage :many
+SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('pending', 'retired', 'rejected')
+  AND id > @after_device::uuid ORDER BY id LIMIT @max_devices;
 
 -- The commands the handed-over devices keep: the uninstall, kept or fresh, and the hand-over's delete_self_lock (the only
 -- disarm that lives longer than the type's 30 days).
@@ -102,11 +107,6 @@ SELECT table_name, delete_order FROM offboarding_table ORDER BY delete_order;
 INSERT INTO offboarded_device (device_id, organization_id, keys, command_envelopes)
 SELECT unnest(@device_ids::uuid[]), @organization_id::uuid, unnest(@keys::text[])::jsonb, unnest(@command_envelopes::text[])::jsonb
 ON CONFLICT (device_id) DO NOTHING;
-
--- The offboarded devices of an organization, whose identity, command and sequence keys outlive it (plan M17 amendment l
--- point 3).
--- name: ListOffboardedDeviceIDs :many
-SELECT device_id FROM offboarded_device WHERE organization_id = @organization_id ORDER BY device_id;
 
 -- name: GetOffboardedDevice :one
 SELECT * FROM offboarded_device WHERE device_id = @device_id;

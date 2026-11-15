@@ -13,6 +13,7 @@ import (
 func RegisterMetrics(reg prometheus.Registerer) error {
 	for _, c := range []prometheus.Collector{
 		metricOffboardingStepFailing, metricOffboardingRetryCapped, metricOffboardingCapReached, metricOffboardingFinalizeBusy,
+		metricOffboardingStepYields, metricOffboardingRoundOverruns,
 		metricRetentionLastSuccess, metricRetentionDeleted, metricRetentionStores,
 		metricAutoUnsealEnabled, metricAutoUnsealSharesPresent, metricAutoUnsealUnsealerUp,
 		metricDirectoryRefusals, metricUnknownEvents, metricDropped, metricConfigRollouts, metricUnmappedHosts,
