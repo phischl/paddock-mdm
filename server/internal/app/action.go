@@ -21,6 +21,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/revocation"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/op"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
@@ -365,6 +366,7 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 //     error_code=<problem code>) + outbox row. The original error is returned.
 func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 	fn func(ctx context.Context, q *pgstore.Queries, rec Recorder) error) error {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok {
 		return problem.Unauthenticated
@@ -393,6 +395,7 @@ func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 // with its rejected state (plan M4c decision 8). fn's own error rolls everything back and is recorded instead.
 func (r *ActionRunner) RunTxRefusal(ctx context.Context, scope Scope, spec ActionSpec, refusal error,
 	fn func(ctx context.Context, q *pgstore.Queries, rec Recorder) error) error {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok {
 		return problem.Unauthenticated
@@ -447,6 +450,7 @@ func (r *ActionRunner) RecordOnce(ctx context.Context, spec ActionSpec,
 // changes), such as a system transition that must be recorded at most once.
 func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error), after ...AfterFunc) (bool, error) {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
@@ -481,6 +485,7 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 	enabled func(ctx context.Context, q *pgstore.Queries) (bool, error),
 	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok {
 		return false, problem.Unauthenticated
@@ -576,6 +581,7 @@ func (r *ActionRunner) RecordAllOnce(ctx context.Context, scope Scope, specs []A
 // such as the import of the legacy backup key (plan M15 decision 9).
 func (r *ActionRunner) RecordOnceInScope(ctx context.Context, scope Scope, spec ActionSpec,
 	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
@@ -719,6 +725,7 @@ func (r *ActionRunner) RecordOnceRefusal(ctx context.Context, spec ActionSpec, r
 func (r *ActionRunner) recordOnceRefusal(ctx context.Context, spec ActionSpec, refusal error,
 	claim func(ctx context.Context, q *pgstore.Queries) (bool, error), annotate func(rec Recorder),
 	after ...AfterFunc) (bool, error) {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
@@ -749,6 +756,7 @@ func (r *ActionRunner) recordOnceRefusal(ctx context.Context, spec ActionSpec, r
 // CSRF header): exactly one event, denied when the principal may not perform the action at all, otherwise with the
 // rejection's outcome. It returns the error to send to the client.
 func (r *ActionRunner) RecordRejected(ctx context.Context, scope Scope, spec ActionSpec, rejection error) error {
+	ctx = op.With(ctx, string(spec.Code))
 	return r.RunTx(ctx, scope, spec, func(context.Context, *pgstore.Queries, Recorder) error { return rejection })
 }
 
@@ -757,6 +765,7 @@ func (r *ActionRunner) RecordRejected(ctx context.Context, scope Scope, spec Act
 // so that an MCP session asking for a step-up action learns that the MCP never offers it rather than that a step-up
 // is missing. It returns the refusal.
 func (r *ActionRunner) RecordRefusal(ctx context.Context, scope Scope, spec ActionSpec, refusal error) error {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok {
 		return problem.Unauthenticated
@@ -785,6 +794,7 @@ func (r *ActionRunner) RunExternal(ctx context.Context, scope Scope, spec Action
 	prepare func(ctx context.Context, q *pgstore.Queries, rec Recorder) error,
 	external func(ctx context.Context) error,
 	finalize func(ctx context.Context, q *pgstore.Queries, rec Recorder, externalErr error) error) error {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok {
 		return problem.Unauthenticated

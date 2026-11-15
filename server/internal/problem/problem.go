@@ -172,7 +172,14 @@ var (
 	// OrganizationInactive: the organization is deleting or deleted, so every organization transaction is refused (plan
 	// M17 amendment 2026-11-14 d; the code of the sign-in's denial reason). Recorded as denied.
 	OrganizationInactive = &Error{Code: "organization_inactive", Status: http.StatusForbidden}
+	// TransactionTimeout: PostgreSQL ended the request's database transaction because it exceeded transaction_timeout
+	// and rolled it back (plan M17 amendment r point 5). Answered 503 with Retry-After: TransactionTimeoutRetryAfter;
+	// recorded as failure.
+	TransactionTimeout = &Error{Code: "transaction_timeout", Status: http.StatusServiceUnavailable}
 )
+
+// TransactionTimeoutRetryAfter is the Retry-After, in seconds, of a 503 transaction_timeout.
+const TransactionTimeoutRetryAfter = 5
 
 // From converts any error into a problem: *Error as is, context cancellation as "canceled", anything else internal.
 func From(err error) *Error {

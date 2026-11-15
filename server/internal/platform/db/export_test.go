@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -28,3 +29,17 @@ func StopStatusPoller(p *OrgPool) { p.gate.close() }
 // SetBeforeGate makes fn run at the start of every gate pass of p, before the status cache is consulted. Set it
 // before p is used concurrently.
 func SetBeforeGate(p *OrgPool, fn func(org uuid.UUID)) { p.beforeGate = fn }
+
+// TransactionTimeouts is the value of paddock_db_transaction_timeout_total{op}.
+func TransactionTimeouts(op string) float64 {
+	return testutil.ToFloat64(metricTransactionTimeouts.WithLabelValues(op))
+}
+
+// InOrgTx is InOrg with fn on the raw transaction, so a test can run a statement pgstore has no query for.
+func InOrgTx(p *OrgPool, ctx context.Context, fn func(tx pgx.Tx) error) error {
+	org, err := orgFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return inTx(ctx, p.p, func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) }, fn)
+}

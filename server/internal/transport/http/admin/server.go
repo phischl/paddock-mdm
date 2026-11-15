@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/apitoken"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/platform/op"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -386,7 +387,7 @@ func NewHandler(d Deps) http.Handler {
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}
 	}
-	strict := adminapi.NewStrictHandlerWithOptions(h, []adminapi.StrictMiddlewareFunc{uploadDeadlines},
+	strict := adminapi.NewStrictHandlerWithOptions(h, []adminapi.StrictMiddlewareFunc{uploadDeadlines, namedOperation},
 		adminapi.StrictHTTPServerOptions{
 			RequestErrorHandlerFunc:  s.rejected,
 			ResponseErrorHandlerFunc: httpx.WriteProblem,
@@ -596,6 +597,14 @@ func limitBody(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// namedOperation names the request's context by its operation ID, the label op of the metrics of its database work
+// (plan M17 amendment r point 5); an audited action replaces it with its code.
+func namedOperation(f adminapi.StrictHandlerFunc, operationID string) adminapi.StrictHandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
+		return f(op.With(ctx, operationID), w, r, request)
+	}
 }
 
 // uploadDeadlines extends the read and write deadlines of the agent release and package uploads before their handlers
