@@ -561,6 +561,13 @@ entries:
         - authentik_brands.view_brand
         - authentik_brands.change_brand
         - authentik_crypto.view_certificatekeypair
+        # Deleting an organization removes its device login application, provider, access policy with its bindings
+        # and groups mapping (plan M17 decision 10).
+        - authentik_core.delete_application
+        - authentik_providers_oauth2.delete_oauth2provider
+        - authentik_providers_oauth2.delete_scopemapping
+        - authentik_policies_expression.delete_expressionpolicy
+        - authentik_policies.delete_policybinding
         # The second-factor enrolment marks (ADR 0053 decision 4): which administrators have a passkey.
         - authentik_stages_authenticator_webauthn.view_webauthndevice
         - authentik_stages_authenticator_totp.view_totpdevice
