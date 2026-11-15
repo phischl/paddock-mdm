@@ -248,6 +248,7 @@ Pool modes (`db.openPool`; pinned by `TestPoolQueryExecModes`):
 | Pool | Roles | Mode |
 | --- | --- | --- |
 | `OrgPool` (incl. `NotifierPool`) | api, worker incl. ingest, compiler, notifier, escrow-reader, revocation-issuer, the `paddock-server admin` commands (the gateway opens no PostgreSQL pool) | per execution (`CacheDescribe`), `jit = off` |
+| `OrgPool.WithStatementCache()` view (same connections) | worker `ingest.heartbeat` and `ingest.event` consumers, full and ingest mode | listed statements `CacheStatement`, all others per execution; `jit = off` |
 | `PlatformPool` and its lock pool | platform endpoints, leader locks | statement cache |
 | `AuditReader`, `AuditWriterPool` | audit reader and writer | statement cache |
 | `RelayPool`, `UnsealerPool`, `BackupPool` | outbox relay, unsealer, backup and restore | statement cache |
@@ -260,6 +261,22 @@ transaction" still holds. `TestOrganizationPoolPlansPerExecution` seeds 70 000 d
 catastrophic queries to 1 s in the large organization after six runs in a small one on the same connection.
 
 Ingest CPU per event with and without per-execution planning (N2 method, ADR 0055 decision 3): TODO-LEAD.
+
+The heartbeat and event ingest keeps cached statements (ADR 0055 amendment 2026-11-15 (2), PDK-1079b): planning its
+short, keyed statements per execution cost about 30 % more CPU per event in the first N2 measurement. The worker's
+`ingest.heartbeat` and `ingest.event` consumers run on `OrgPool.WithStatementCache()`, a view of the worker's
+organization pool with the same connections, role, offboarding gate and `jit = off`; it adds no connection. The view
+runs a statement as a named, cached one only if its sqlc name is on the closed allow list `ingestStatementCached`
+(`server/internal/platform/db/statementcache.go`): `device` by `id`, `device_status` by `device_id`, the device-keyed
+queries of `device_event_seen`, `device_event_gap` and `device_event_dropped`, `InsertAction`, `FinishAction`,
+`InsertOutbox` and plain inserts. Every other statement, also on the view, is planned per execution. Migration 00158
+replaced the organization-only indexes of the three event tables by `(organization_id, device_id)`, so a generic plan
+that takes the organization index still reads only one device's rows (7 000 shared buffers before, 13 after, for
+`MaxDeviceEventSeenBefore` at 70 000 devices). `TestIngestViewGenericPlans` forces generic plans and bounds every
+listed read and write, and the two event-gap lookups, to 100 shared buffers in a 70 000-device organization.
+
+Ingest CPU per event with the statement-cache view (N2 method, ADR 0055 amendment 2 decision 12, series 1 and 2):
+TODO-LEAD.
 
 The organization pools also open their connections with `jit = off` (connection runtime parameter, no statement per
 transaction; ADR 0055 amendment 2026-11-15, PDK-1081); the other pools keep the server's default. At 70 000 active

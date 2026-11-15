@@ -280,7 +280,12 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
 	deviceCommands := app.NewDeviceCommands(runner, pool)
 	offboarded := app.NewOffboardedDevices(runner, platformPool, cache)
-	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache).WithOffboardedDevices(offboarded)
+	// The heartbeat and event consumers run their listed statements cached on a view of the same pool: planning each of
+	// their short, keyed statements per execution cost about 30 % CPU per event (ADR 0055 amendment 2 decisions 8 and 9).
+	ingestPool := pool.WithStatementCache()
+	ingestRunner := app.NewActionRunner(ingestPool, platformPool, httpx.RequestID)
+	reports := worker.NewReports(app.NewDeviceReports(ingestRunner, ingestPool), app.NewDeviceCommands(ingestRunner, ingestPool),
+		cache).WithOffboardedDevices(offboarded)
 	commands := worker.NewCommands(deviceCommands, app.NewRevocationReports(runner, pool), pool, platformPool, cache, signer)
 	diagnostics := worker.NewDiagnostics(app.NewDiagnostics(runner, pool, escrowObjects, retentionDay), pool, platformPool)
 	escrowStore := worker.NewEscrow(app.NewEscrow(runner, pool, escrowObjects), cache, pool, platformPool).WithDiagnostics(diagnostics)

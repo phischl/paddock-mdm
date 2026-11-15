@@ -45,6 +45,12 @@ func InOrgTx(p *OrgPool, ctx context.Context, fn func(tx pgx.Tx) error) error {
 	return inTx(ctx, p.p, func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) }, fn)
 }
 
+// IngestStatementCached reports whether the statement-cache view runs the pgstore statement name cached.
+func IngestStatementCached(name string) bool { return ingestStatementCached(name) }
+
+// StatementName returns the sqlc name of a pgstore statement's SQL text, or "".
+func StatementName(sql string) string { return statementName(sql) }
+
 // QueryExecModes returns the default query execution mode of the query pool behind p, keyed "query", and of its health
 // ("health") and lock ("locks") pools where it has them. p is one of the pool types of this package.
 func QueryExecModes(p any) map[string]pgx.QueryExecMode {

@@ -203,7 +203,7 @@ func TestOffboardingRegistryIndexes(t *testing.T) {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 		for _, stmt := range []string{
-			"DROP INDEX device_event_gap_org_idx",
+			"DROP INDEX device_event_gap_org_device_idx",
 			// What a failed CREATE INDEX CONCURRENTLY leaves behind.
 			"UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'action_org_idx'::regclass",
 			"DROP INDEX outbox_org_idx",

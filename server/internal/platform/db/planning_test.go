@@ -16,7 +16,9 @@ import (
 
 // TestPoolQueryExecModes: the pools that open organization transactions plan every execution
 // (pgx.QueryExecModeCacheDescribe) and run without JIT; every other pool, and the health and lock pools, keep pgx's
-// statement cache and the server's JIT setting (ADR 0055 decisions 1, 2 and 6). The test covers the pool types of
+// statement cache and the server's JIT setting (ADR 0055 decisions 1, 2 and 6). A statement-cache view of an
+// organization pool runs a listed statement as a named, cached one, still without JIT, while its parent keeps running
+// it unnamed; Close of the view leaves the parent open (ADR 0055 amendment 2 decisions 8 and 12). The test covers the pool types of
 // this package as of PDK-1079 (org, notifier, platform, relay, unsealer, backup, audit reader and writer); a new type
 // needs an entry here and in connPools (export_test.go), which panics on a type it does not know.
 func TestPoolQueryExecModes(t *testing.T) {
@@ -64,7 +66,14 @@ func TestPoolQueryExecModes(t *testing.T) {
 				t.Errorf("%s pool, %s connections: jit %q, want %q (empty: the server's default)", name, pool, jit, wantJIT)
 			}
 		}
-		if org, ok := p.(*db.OrgPool); ok {
+		var org *db.OrgPool
+		switch v := p.(type) {
+		case *db.OrgPool:
+			org = v
+		case *db.NotifierPool:
+			org = &v.OrgPool
+		}
+		if org != nil {
 			var jit string
 			if err := db.InOrgTx(org, orgCtx(f.orgA), func(tx pgx.Tx) error {
 				return tx.QueryRow(ctx, "SHOW jit").Scan(&jit)
@@ -72,10 +81,69 @@ func TestPoolQueryExecModes(t *testing.T) {
 				t.Fatal(err)
 			}
 			if jit != "off" {
-				t.Errorf("SHOW jit on an organization pool connection: %s, want off", jit)
+				t.Errorf("SHOW jit on a %s pool connection: %s, want off", name, jit)
 			}
 		}
 	}
+
+	t.Run("statement-cache view", func(t *testing.T) {
+		parent, err := db.NewOrgPool(ctx, env.API, db.Options{MaxConns: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(parent.Close)
+		view := parent.WithStatementCache()
+		if mode := db.QueryExecModes(view)["query"]; mode != pgx.QueryExecModeCacheDescribe {
+			t.Errorf("view: pool mode %s, want %s (only the listed statements run cached)", mode, pgx.QueryExecModeCacheDescribe)
+		}
+		getDevice := func(p *db.OrgPool) {
+			t.Helper()
+			err := p.InOrg(orgCtx(f.orgA), func(ctx context.Context, q *pgstore.Queries) error {
+				_, err := q.GetDevice(ctx, uuid.New())
+				return err
+			})
+			if err != nil && !db.IsNoRows(err) {
+				t.Fatal(err)
+			}
+		}
+		getDevice(parent)
+		if got := preparedStatements(t, parent, f.orgA, "-- name: GetDevice %"); len(got) != 0 {
+			t.Errorf("parent pool: GetDevice prepared as %v, want unnamed (CacheDescribe)", got)
+		}
+		getDevice(view)
+		if got := preparedStatements(t, parent, f.orgA, "-- name: GetDevice %"); len(got) != 1 {
+			t.Errorf("view: GetDevice prepared as %v, want one named, cached statement", got)
+		}
+		var jit string
+		if err := db.InOrgTx(view, orgCtx(f.orgA), func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, "SHOW jit").Scan(&jit)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if jit != "off" {
+			t.Errorf("SHOW jit on a view connection: %s, want off", jit)
+		}
+		view.Close()
+		getDevice(parent)
+	})
+}
+
+// preparedStatements returns the names of the prepared statements of p's connection whose SQL text is LIKE pattern.
+func preparedStatements(t *testing.T, p *db.OrgPool, org uuid.UUID, pattern string) []string {
+	t.Helper()
+	var names []string
+	err := db.InOrgTx(p, orgCtx(org), func(tx pgx.Tx) error {
+		rows, err := tx.Query(context.Background(), "SELECT name FROM pg_prepared_statements WHERE statement LIKE $1", pattern)
+		if err != nil {
+			return err
+		}
+		names, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return names
 }
 
 const (
