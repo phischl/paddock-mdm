@@ -8,6 +8,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ShortcutHelpDialog from './components/ShortcutHelpDialog.vue'
 import McpWriteDialog from './components/McpWriteDialog.vue'
+import OrganizationDeletionBanner from './components/OrganizationDeletionBanner.vue'
 import PdIcon from './components/PdIcon'
 import { pendingConfirm, settleConfirm, useConfirm } from './composables/useConfirm'
 import { modifierLabel, useShortcuts } from './composables/useShortcuts'
@@ -727,6 +728,7 @@ onBeforeUnmount(() => observer.disconnect())
         >
           {{ t('app.roleFallbackOrganizationInactive') }}
         </v-alert>
+        <OrganizationDeletionBanner />
         <RouterView />
       </v-main>
       <v-snackbar

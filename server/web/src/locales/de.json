@@ -760,6 +760,53 @@
     "empty": {
       "title": "Noch keine Organisationen",
       "description": "Legen Sie die erste Organisation an, um ihre Administratoren aufzunehmen."
+    },
+    "delete": {
+      "action": "Löschen",
+      "title": "{name} löschen?",
+      "message": "Alle Daten von {name} werden nach der Karenzzeit endgültig gelöscht. Bis dahin bleibt die Organisation nutzbar; jedes Gerät erhält den Auftrag, Paddock zu entfernen.",
+      "confirm": "Organisation löschen",
+      "reason": "Grund",
+      "reasonHint": "2 bis 500 Zeichen; wird im Audit-Trail festgehalten.",
+      "grace": "Karenzzeit (Tage)",
+      "graceHint": "So lange bleibt die Organisation nutzbar, danach werden ihre Daten gelöscht.",
+      "graceInvalid": "Geben Sie eine ganze Zahl von {min} bis {max} Tagen ein."
+    },
+    "deletion": {
+      "pending": "Löschung am {date}",
+      "cancel": "Löschung abbrechen",
+      "cancelTitle": "Löschung von {name} abbrechen?",
+      "cancelMessage": "Die Organisation bleibt, wie sie ist. Geräte, die den Auftrag zum Entfernen von Paddock schon erhalten haben, führen ihn trotzdem aus.",
+      "cancelConfirm": "Löschung abbrechen",
+      "step": "Schritt: {step}",
+      "lastError": "Letzter Fehler: {error}",
+      "steps": {
+        "sessions": "Sitzungen",
+        "devices": "Geräte",
+        "outbox": "Outbox",
+        "authentik": "Identitätsanbieter",
+        "fleet": "Flotte",
+        "objects": "gespeicherte Objekte",
+        "valkey": "Cache",
+        "audit_final": "abschließender Audit-Export",
+        "database": "Datenbank",
+        "tombstone": "Grabstein"
+      }
+    },
+    "banner": {
+      "message": "Die Organisation ist zur Löschung am {date} vorgemerkt. Alle ihre Daten werden dann endgültig gelöscht.",
+      "advice": "Sichern Sie vorher, was Sie noch brauchen: die Wiederherstellungsschlüssel der verschlüsselten Festplatten (fragen Sie Ihre Plattform-Administration nach dem verschlüsselten Export) und die Passwörter der lokalen Administratoren."
+    },
+    "audit": {
+      "open": "Aufbewahrtes Audit",
+      "title": "Aufbewahrtes Audit von {name}",
+      "back": "Zurück zu den Organisationen",
+      "intro": "Das Audit-Log der gelöschten Organisation {slug} bleibt hier lesbar. Jeder Lesezugriff wird im Plattform-Audit-Log festgehalten.",
+      "logTitle": "Audit-Log",
+      "finalVerified": "Die Audit-Kette der Organisation wurde vor ihrer Löschung am {date} verifiziert.",
+      "finalFailed": "Die abschließende Verifikation der Audit-Kette am {date} ist fehlgeschlagen: Die aufbewahrten Audit-Nachweise ließen sich nicht verifizieren. Verlassen Sie sich nicht darauf als Nachweis, bevor die Ursache geklärt ist.",
+      "finalNone": "Die Audit-Kette wurde bei der Löschung noch nicht verifiziert.",
+      "finalFailedChip": "Audit-Verifikation fehlgeschlagen"
     }
   },
   "agentReleases": {
@@ -1420,7 +1467,8 @@
         "skipped_in_use": "nicht gelöscht (die Festplatte wird damit entsperrt)",
         "not_requested": "nicht angefordert",
         "failed": "Löschen fehlgeschlagen"
-      }
+      },
+      "offboarding": "Entfernung wegen der Löschung der Organisation: Das Gerät entfernt Paddock, weil seine Organisation gelöscht wird. Nur das Abbrechen der Löschung der Organisation nimmt sie zurück."
     },
     "components": {
       "title": "Komponenten",
