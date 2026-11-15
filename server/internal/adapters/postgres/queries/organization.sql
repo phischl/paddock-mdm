@@ -151,3 +151,31 @@ WHERE id = @id AND updated_at = @seen_updated_at;
 
 -- name: ClearOrganizationIdentityEnsured :exec
 UPDATE organization SET idp_ensured_at = NULL WHERE id = @id;
+
+-- Encrypted recovery export (plan M17 amendment b decisions 21 and 24, amendments g and h, migration 00133). An export
+-- is open while the deletion is pending and delete_after lies more than the cutoff (app.RecoveryExportCutoff) ahead on
+-- the database's clock, the clock of the worker's delete_after <= now(): an export then always finishes while the
+-- deletion is still pending (amendment h point 1). Reserving counts one export of the pending deletion atomically, so
+-- concurrent exports cannot pass the limit together; a count of an earlier (cancelled) deletion starts again at one.
+-- No row: the export is not open or the limit is reached.
+
+-- name: ReserveRecoveryExport :one
+UPDATE organization
+SET recovery_exports = CASE WHEN recovery_exports_since IS NOT DISTINCT FROM deletion_requested_at
+                            THEN recovery_exports + 1 ELSE 1 END,
+    recovery_exports_since = deletion_requested_at
+WHERE id = @id AND status IN ('active', 'provisioning_failed') AND delete_after IS NOT NULL
+  AND delete_after > now() + make_interval(secs => @cutoff_seconds::float8)
+  AND (recovery_exports_since IS DISTINCT FROM deletion_requested_at OR recovery_exports < @max_exports::int)
+RETURNING recovery_exports, recovery_exports_since;
+
+-- A failed export gives its reservation back, only within the deletion it was reserved in.
+-- name: ReleaseRecoveryExport :exec
+UPDATE organization SET recovery_exports = recovery_exports - 1
+WHERE id = @id AND recovery_exports_since = @since::timestamptz AND recovery_exports > 0;
+
+-- Whether the export is open (see above): the api before it reserves, and the escrow-reader inside the organization
+-- before it decrypts (it may read only these columns, migration 00133).
+-- name: RecoveryExportOpen :one
+SELECT EXISTS (SELECT 1 FROM organization WHERE id = @id AND status IN ('active', 'provisioning_failed')
+  AND delete_after IS NOT NULL AND delete_after > now() + make_interval(secs => @cutoff_seconds::float8));

@@ -28,6 +28,9 @@ type Claims struct {
 	JTI      string
 	AuthTime time.Time
 	Expiry   time.Time
+	// Groups are the role groups of the token, signed by the issuer; the escrow-reader resolves a platform
+	// administrator from them (plan M17 amendment b decision 24). nil when the issuer sent none.
+	Groups []string
 }
 
 // Verifier checks step-up ID tokens of one issuer and client: signature (JWKS, fetched and cached by go-oidc),
@@ -120,11 +123,13 @@ func (v *Verifier) verify(ctx context.Context, verifier *oidc.IDTokenVerifier, r
 		AuthTime int64    `json:"auth_time"`
 		AMR      []string `json:"amr"`
 		JTI      string   `json:"jti"`
+		Groups   []string `json:"groups"`
 	}
 	if err := idt.Claims(&c); err != nil {
 		return Claims{}, fmt.Errorf("%w: claims: %v", ErrInvalid, err)
 	}
-	out := Claims{Subject: idt.Subject, JTI: c.JTI, AuthTime: time.Unix(c.AuthTime, 0), Expiry: idt.Expiry}
+	out := Claims{Subject: idt.Subject, JTI: c.JTI, AuthTime: time.Unix(c.AuthTime, 0), Expiry: idt.Expiry,
+		Groups: c.Groups}
 	return out, v.check(out, c.AuthTime, c.AMR, at)
 }
 

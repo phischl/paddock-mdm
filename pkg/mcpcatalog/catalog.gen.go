@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "65146bc3e5ba61cdf772a78a96aca4be57c5f4027d9240b299ba78bbe0137f41"
+const Version = "94580a041f884f84da7defadf5d26ccbec79ed53bab54073168c301d748841f7"
 
 var tools = []Tool{
 	{
@@ -1359,6 +1359,24 @@ var tools = []Tool{
 		InputSchema: json.RawMessage("{\"properties\":{\"format\":{\"enum\":[\"json\",\"csv\"],\"type\":\"string\"},\"from\":{\"description\":\"RFC 3339; the start of the period, default 90 days before to.\",\"format\":\"date-time\",\"type\":\"string\"},\"to\":{\"description\":\"RFC 3339; the end of the period, default now.\",\"format\":\"date-time\",\"type\":\"string\"}},\"required\":[\"format\"],\"type\":\"object\"}"),
 	},
 	{
+		Name:        "exportOrganizationRecoveryKeys",
+		Method:      "POST",
+		Path:        "/api/platform/v1/organizations/{id}/recovery-export",
+		Pattern:     "POST /api/platform/v1/organizations/{id}/recovery-export",
+		Tag:         "platform",
+		Scope:       ScopePlatform,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "organization.recovery_exported",
+		Summary:     "",
+		Description: "Roles: platform_admin. The export of POST /api/v1/recovery-export for the organization of the path (404 not_found for an unknown organization); the platform administrator acts inside that organization only while its deletion is pending (ADR 0052 amendment b decision 8). 403 organization_inactive when the organization is being deleted or was deleted (recorded as organization.inactive_denied in the platform log). Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password of every non-retired device of the organization, encrypted to the public key or the passphrase of the request (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until; 409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most 16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a secret.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"passphrase\":{\"description\":\"20 to 1024 characters (plan M17 amendment g); required for passphrase. Never logged, never recorded in the\\naudit log.\\n\",\"maxLength\":1024,\"minLength\":20,\"type\":\"string\"},\"public_key\":{\"description\":\"One ASCII-armoured OpenPGP public key with an encryption-capable key; required for public_key.\",\"maxLength\":16384,\"type\":\"string\"},\"recipient\":{\"enum\":[\"public_key\",\"passphrase\"],\"type\":\"string\"}},\"required\":[\"recipient\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
+	},
+	{
 		Name:        "exportPatchCompliance",
 		Method:      "GET",
 		Path:        "/api/v1/patch-compliance/export",
@@ -1393,6 +1411,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: platform_admin. The access review as a download: format json (the same object as the view) or csv (one file for every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a leading apostrophe). Content-Disposition names the file paddock-access-review-platform-<from>-<to>.<json|csv>. Period as for the view. Every export is recorded as platform.access_review_exported, whatever the privacy settings.\n\nRead-only.",
 		InputSchema: json.RawMessage("{\"properties\":{\"format\":{\"enum\":[\"json\",\"csv\"],\"type\":\"string\"},\"from\":{\"description\":\"RFC 3339; the start of the period, default 90 days before to.\",\"format\":\"date-time\",\"type\":\"string\"},\"to\":{\"description\":\"RFC 3339; the end of the period, default now.\",\"format\":\"date-time\",\"type\":\"string\"}},\"required\":[\"format\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "exportRecoveryKeys",
+		Method:      "POST",
+		Path:        "/api/v1/recovery-export",
+		Pattern:     "POST /api/v1/recovery-export",
+		Tag:         "settings",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "organization.recovery_exported",
+		Summary:     "",
+		Description: "Roles: org_admin. Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password of every non-retired device of the organization, encrypted to the public key or the passphrase of the request (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until; 409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most 16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a secret.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"passphrase\":{\"description\":\"20 to 1024 characters (plan M17 amendment g); required for passphrase. Never logged, never recorded in the\\naudit log.\\n\",\"maxLength\":1024,\"minLength\":20,\"type\":\"string\"},\"public_key\":{\"description\":\"One ASCII-armoured OpenPGP public key with an encryption-capable key; required for public_key.\",\"maxLength\":16384,\"type\":\"string\"},\"recipient\":{\"enum\":[\"public_key\",\"passphrase\"],\"type\":\"string\"}},\"required\":[\"recipient\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "feedAuditEvents",

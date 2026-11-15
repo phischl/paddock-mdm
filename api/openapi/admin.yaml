@@ -305,6 +305,49 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/recovery-export:
+    post:
+      operationId: exportRecoveryKeys
+      tags: [settings]
+      x-paddock-step-up: true
+      description: |
+        Roles: org_admin.
+        Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
+        of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
+        (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
+        organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until;
+        409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
+        one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
+        16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
+        otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
+        secret.
+      x-paddock-audit: organization.recovery_exported
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecoveryExportRequest" }
+      responses:
+        "200":
+          description: |
+            One ASCII-armoured OpenPGP message (AES-256; a passphrase is stretched with iterated and salted SHA-256,
+            which GnuPG 2.4 opens) as the file paddock-recovery-<slug>-<UTC yyyymmddThhmmssZ>.asc. Its plaintext is
+            JSON Lines: a header {organization_id, slug, exported_at, devices}, then per non-retired device with escrow
+            {device_id, hostname, volumes: [{uuid, recovery_key}], local_admin: {username, password} | null}. The body
+            streams; a failure after the first byte cuts it off, and OpenPGP rejects the truncated message.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/pgp-encrypted:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /api/v1/me/mcp-write/enable:
     post:
       operationId: enableMcpWrite
@@ -6201,6 +6244,54 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/organizations/{id}/recovery-export:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: exportOrganizationRecoveryKeys
+      tags: [platform]
+      x-paddock-step-up: true
+      description: |
+        Roles: platform_admin. The export of POST /api/v1/recovery-export for the organization of the path (404
+        not_found for an unknown organization); the platform administrator acts inside that organization only while
+        its deletion is pending (ADR 0052 amendment b decision 8). 403 organization_inactive when the organization is
+        being deleted or was deleted (recorded as organization.inactive_denied in the platform log).
+        Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
+        of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
+        (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
+        organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until;
+        409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
+        one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
+        16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
+        otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
+        secret.
+      x-paddock-audit: organization.recovery_exported
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecoveryExportRequest" }
+      responses:
+        "200":
+          description: |
+            One ASCII-armoured OpenPGP message (AES-256; a passphrase is stretched with iterated and salted SHA-256,
+            which GnuPG 2.4 opens) as the file paddock-recovery-<slug>-<UTC yyyymmddThhmmssZ>.asc. Its plaintext is
+            JSON Lines: a header {organization_id, slug, exported_at, devices}, then per non-retired device with escrow
+            {device_id, hostname, volumes: [{uuid, recovery_key}], local_admin: {username, password} | null}. The body
+            streams; a failure after the first byte cuts it off, and OpenPGP rejects the truncated message.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/pgp-encrypted:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
 
   /api/platform/v1/ip-allowlist:
     get:
@@ -8408,9 +8499,15 @@ components:
           items: { type: string }
     MeOrganizationDeletion:
       type: object
-      required: [delete_after]
+      required: [delete_after, recovery_export_until]
       properties:
         delete_after: { type: string, format: date-time, description: When the organization's data is deleted. }
+        recovery_export_until:
+          type: string
+          format: date-time
+          description: |
+            delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
+            amendment h).
     Me:
       type: object
       required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,
@@ -8910,13 +9007,19 @@ components:
       enum: [provisioning, active, provisioning_failed, suspended, deleting, deleted]
     OrganizationDeletion:
       type: object
-      required: [requested_at, requested_by, reason, delete_after, step, last_error_code, deleted_at, uninstalls_issued,
-        uninstalls_skipped]
+      required: [requested_at, requested_by, reason, delete_after, recovery_export_until, step, last_error_code,
+        deleted_at, uninstalls_issued, uninstalls_skipped]
       properties:
         requested_at: { type: string, format: date-time }
         requested_by: { type: string, description: The platform administrator who requested the deletion. }
         reason: { type: string }
         delete_after: { type: string, format: date-time, description: When the worker starts deleting the data. }
+        recovery_export_until:
+          type: string
+          format: date-time
+          description: |
+            delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
+            amendment h).
         step:
           type: string
           nullable: true
@@ -8940,6 +9043,23 @@ components:
           minimum: 0
           maximum: 90
           description: Days until the deletion runs; 7 to 90, 0 to 90 on a development stack.
+    RecoveryExportRequest:
+      type: object
+      required: [recipient]
+      additionalProperties: false
+      properties:
+        recipient: { type: string, enum: [public_key, passphrase] }
+        public_key:
+          type: string
+          maxLength: 16384
+          description: One ASCII-armoured OpenPGP public key with an encryption-capable key; required for public_key.
+        passphrase:
+          type: string
+          minLength: 20
+          maxLength: 1024
+          description: |
+            20 to 1024 characters (plan M17 amendment g); required for passphrase. Never logged, never recorded in the
+            audit log.
     OrganizationCreate:
       type: object
       required: [slug, name]

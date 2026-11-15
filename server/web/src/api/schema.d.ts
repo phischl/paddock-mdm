@@ -208,6 +208,34 @@ export interface paths {
         patch: operations["updateMe"];
         trace?: never;
     };
+    "/api/v1/recovery-export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin.
+         *     Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
+         *     of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
+         *     (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
+         *     organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until;
+         *     409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
+         *     one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
+         *     16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
+         *     otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
+         *     secret.
+         */
+        post: operations["exportRecoveryKeys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/mcp-write/enable": {
         parameters: {
             query?: never;
@@ -4061,6 +4089,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/organizations/{id}/recovery-export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. The export of POST /api/v1/recovery-export for the organization of the path (404
+         *     not_found for an unknown organization); the platform administrator acts inside that organization only while
+         *     its deletion is pending (ADR 0052 amendment b decision 8). 403 organization_inactive when the organization is
+         *     being deleted or was deleted (recorded as organization.inactive_denied in the platform log).
+         *     Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
+         *     of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
+         *     (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
+         *     organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until;
+         *     409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
+         *     one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
+         *     16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
+         *     otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
+         *     secret.
+         */
+        post: operations["exportOrganizationRecoveryKeys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/ip-allowlist": {
         parameters: {
             query?: never;
@@ -5132,6 +5193,12 @@ export interface components {
              * @description When the organization's data is deleted.
              */
             delete_after: string;
+            /**
+             * Format: date-time
+             * @description delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
+             *     amendment h).
+             */
+            recovery_export_until: string;
         };
         Me: {
             /** Format: uuid */
@@ -5577,6 +5644,12 @@ export interface components {
              */
             delete_after: string;
             /**
+             * Format: date-time
+             * @description delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
+             *     amendment h).
+             */
+            recovery_export_until: string;
+            /**
              * @description The deletion step that runs next; null before the deletion runs.
              * @enum {string|null}
              */
@@ -5596,6 +5669,17 @@ export interface components {
             reason: string;
             /** @description Days until the deletion runs; 7 to 90, 0 to 90 on a development stack. */
             grace_days: number;
+        };
+        RecoveryExportRequest: {
+            /** @enum {string} */
+            recipient: "public_key" | "passphrase";
+            /** @description One ASCII-armoured OpenPGP public key with an encryption-capable key; required for public_key. */
+            public_key?: string;
+            /**
+             * @description 20 to 1024 characters (plan M17 amendment g); required for passphrase. Never logged, never recorded in the
+             *     audit log.
+             */
+            passphrase?: string;
         };
         OrganizationCreate: {
             slug: string;
@@ -10200,6 +10284,45 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    exportRecoveryKeys: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryExportRequest"];
+            };
+        };
+        responses: {
+            /**
+             * @description One ASCII-armoured OpenPGP message (AES-256; a passphrase is stretched with iterated and salted SHA-256,
+             *     which GnuPG 2.4 opens) as the file paddock-recovery-<slug>-<UTC yyyymmddThhmmssZ>.asc. Its plaintext is
+             *     JSON Lines: a header {organization_id, slug, exported_at, devices}, then per non-retired device with escrow
+             *     {device_id, hostname, volumes: [{uuid, recovery_key}], local_admin: {username, password} | null}. The body
+             *     streams; a failure after the first byte cuts it off, and OpenPGP rejects the truncated message.
+             */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pgp-encrypted": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     enableMcpWrite: {
@@ -16993,6 +17116,47 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    exportOrganizationRecoveryKeys: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryExportRequest"];
+            };
+        };
+        responses: {
+            /**
+             * @description One ASCII-armoured OpenPGP message (AES-256; a passphrase is stretched with iterated and salted SHA-256,
+             *     which GnuPG 2.4 opens) as the file paddock-recovery-<slug>-<UTC yyyymmddThhmmssZ>.asc. Its plaintext is
+             *     JSON Lines: a header {organization_id, slug, exported_at, devices}, then per non-retired device with escrow
+             *     {device_id, hostname, volumes: [{uuid, recovery_key}], local_admin: {username, password} | null}. The body
+             *     streams; a failure after the first byte cuts it off, and OpenPGP rejects the truncated message.
+             */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pgp-encrypted": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     listIpAllowlist: {

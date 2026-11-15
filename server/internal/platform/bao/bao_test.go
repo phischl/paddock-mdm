@@ -252,3 +252,48 @@ func TestOrganizationContext(t *testing.T) {
 		t.Errorf("platform context %q", raw)
 	}
 }
+
+// TestEscrowWrapDecryptBatch checks the batch decryption of the encrypted recovery export (plan M17 amendment b
+// decision 24): more ciphertexts than MaxBatch come back in order, and only the escrow reader may decrypt them.
+func TestEscrowWrapDecryptBatch(t *testing.T) {
+	b := baotest.Start(t)
+	ctx := context.Background()
+	compilerRole := b.AppRole(t, "paddock-compiler")
+	compiler, err := bao.New(b.Addr, compilerRole.RoleID, compilerRole.SecretID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, pemKey, err := compiler.LatestPublicKeyPEM(ctx, escrow.KeyName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := escrow.ParsePublicKey(pemKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := make([]bao.VersionedCiphertext, bao.MaxBatch+3)
+	for i := range items {
+		ct, err := escrow.Encrypt(pub, fmt.Appendf(nil, "secret-%03d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		items[i] = bao.VersionedCiphertext{Version: version, Ciphertext: ct}
+	}
+	readerRole := b.AppRole(t, "paddock-escrow-reader")
+	reader, err := bao.New(b.Addr, readerRole.RoleID, readerRole.SecretID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := reader.DecryptBatch(ctx, escrow.KeyName, items)
+	if err != nil || len(plain) != len(items) {
+		t.Fatalf("decrypt batch: %d %v", len(plain), err)
+	}
+	for i, p := range plain {
+		if want := fmt.Sprintf("secret-%03d", i); string(p) != want {
+			t.Fatalf("item %d: %q, want %q", i, p, want)
+		}
+	}
+	if _, err := compiler.DecryptBatch(ctx, escrow.KeyName, items[:2]); err == nil {
+		t.Fatal("the compiler may decrypt escrowed secrets in a batch")
+	}
+}

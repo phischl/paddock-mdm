@@ -173,6 +173,7 @@ export const auditCodes = [
   'organization.inactive_denied',
   'organization.mcp_policy_changed',
   'organization.recompile_requested',
+  'organization.recovery_exported',
   'organization.security_review_required',
   'package_hold.created',
   'package_hold.deleted',

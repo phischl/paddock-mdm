@@ -26,6 +26,9 @@ var (
 	ErrNoOrganization = errors.New("db: no organization in context")
 	// ErrForbiddenScope is returned by InPlatform for principals other than platform admins and system.
 	ErrForbiddenScope = errors.New("db: principal may not use the platform scope")
+	// ErrNotPendingDeletion is returned by InPendingDeletionOrg when the organization is unknown, or no deletion of it
+	// is pending and it is neither deleting nor deleted (those get OrganizationUnavailable).
+	ErrNotPendingDeletion = errors.New("db: no deletion of the organization is pending")
 )
 
 // Options tunes a pool.
@@ -264,6 +267,42 @@ func (p *OrgPool) InOrgSnapshot(ctx context.Context, fn func(ctx context.Context
 		return err
 	}
 	return inTxWith(ctx, p.p, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly},
+		func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// InPendingDeletionOrg is InOrg for an organization named by its argument instead of the principal: the second narrow
+// exception to architecture §5 rule 4 (ADR 0052 amendment b decision 8), used only by the platform administrator's
+// encrypted recovery export (app.RecoveryExports). It returns ErrForbiddenScope unless the principal is a platform
+// administrator, OrganizationUnavailable when platform finds the organization deleting or deleted (plan M17 amendment
+// h point 2), and ErrNotPendingDeletion unless platform confirms that the organization's deletion is pending (status
+// active or provisioning_failed with delete_after set); otherwise it runs fn in the organization's context
+// exactly like InOrg, through enterOrg and never its bypass (plan M17 amendments g point 6, i point 3): a deleting
+// committed after the platform check refuses with OrganizationUnavailable before fn runs.
+func (p *OrgPool) InPendingDeletionOrg(ctx context.Context, platform *PlatformPool, org uuid.UUID,
+	fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	pr, ok := principal.From(ctx)
+	if !ok || pr.Kind != principal.KindPlatformAdmin || org == uuid.Nil {
+		return ErrForbiddenScope
+	}
+	var o pgstore.Organization
+	err := platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		o, err = q.GetOrganization(ctx, org)
+		return err
+	})
+	switch {
+	case IsNoRows(err):
+		return ErrNotPendingDeletion
+	case err != nil:
+		return fmt.Errorf("db: check the pending deletion: %w", err)
+	case o.Status == "deleting" || o.Status == "deleted":
+		// Never ErrNotPendingDeletion: its caller would fall back to the ungated platform pool (amendment h point 2).
+		return OrganizationUnavailable(org, o.Status)
+	case (o.Status != "active" && o.Status != "provisioning_failed") || o.DeleteAfter == nil:
+		return ErrNotPendingDeletion
+	}
+	return inTx(ctx, p.p,
 		func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) },
 		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }

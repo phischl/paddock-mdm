@@ -15,7 +15,7 @@ import (
 const advanceOrganizationOffboardingStep = `-- name: AdvanceOrganizationOffboardingStep :one
 UPDATE organization SET offboarding_step = $1, offboarding_error_code = NULL, updated_at = now()
 WHERE id = $2 AND status = 'deleting' AND offboarding_step = $3
-RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since
 `
 
 type AdvanceOrganizationOffboardingStepParams struct {
@@ -49,6 +49,8 @@ func (q *Queries) AdvanceOrganizationOffboardingStep(ctx context.Context, arg Ad
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
@@ -58,7 +60,7 @@ UPDATE organization
 SET deletion_requested_at = NULL, deletion_requested_by = NULL, deletion_reason = NULL, delete_after = NULL,
     deletion_uninstalls_issued = NULL, deletion_uninstalls_skipped = NULL, updated_at = now()
 WHERE id = $1 AND status IN ('active', 'provisioning_failed') AND delete_after IS NOT NULL
-RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since
 `
 
 func (q *Queries) CancelOrganizationDeletion(ctx context.Context, id uuid.UUID) (Organization, error) {
@@ -86,6 +88,8 @@ func (q *Queries) CancelOrganizationDeletion(ctx context.Context, id uuid.UUID) 
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
@@ -124,7 +128,7 @@ func (q *Queries) CountOrganizations(ctx context.Context, arg CountOrganizations
 }
 
 const getOrganization = `-- name: GetOrganization :one
-SELECT id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at FROM organization WHERE id = $1
+SELECT id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since FROM organization WHERE id = $1
 `
 
 func (q *Queries) GetOrganization(ctx context.Context, id uuid.UUID) (Organization, error) {
@@ -152,12 +156,14 @@ func (q *Queries) GetOrganization(ctx context.Context, id uuid.UUID) (Organizati
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
 
 const getOrganizationBySlug = `-- name: GetOrganizationBySlug :one
-SELECT id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at FROM organization WHERE slug = $1 AND status <> 'deleted'
+SELECT id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since FROM organization WHERE slug = $1 AND status <> 'deleted'
 `
 
 // A deleted organization's tombstone keeps its slug (plan M17 decision 17); only a live organization owns it.
@@ -186,6 +192,8 @@ func (q *Queries) GetOrganizationBySlug(ctx context.Context, slug string) (Organ
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
@@ -193,7 +201,7 @@ func (q *Queries) GetOrganizationBySlug(ctx context.Context, slug string) (Organ
 const insertOrganization = `-- name: InsertOrganization :one
 INSERT INTO organization (id, slug, name, status)
 VALUES ($1, $2, $3, $4)
-RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since
 `
 
 type InsertOrganizationParams struct {
@@ -233,12 +241,14 @@ func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganization
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
 
 const listDeletingOrganizations = `-- name: ListDeletingOrganizations :many
-SELECT id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at FROM organization WHERE status = 'deleting' ORDER BY delete_after, id
+SELECT id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since FROM organization WHERE status = 'deleting' ORDER BY delete_after, id
 `
 
 func (q *Queries) ListDeletingOrganizations(ctx context.Context) ([]Organization, error) {
@@ -272,6 +282,8 @@ func (q *Queries) ListDeletingOrganizations(ctx context.Context) ([]Organization
 			&i.DeletingCommittedAt,
 			&i.OffboardingWaitVxids,
 			&i.OffboardingWaitTakenAt,
+			&i.RecoveryExports,
+			&i.RecoveryExportsSince,
 		); err != nil {
 			return nil, err
 		}
@@ -363,7 +375,7 @@ func (q *Queries) ListOrganizationSlugs(ctx context.Context) ([]string, error) {
 
 const listOrganizations = `-- name: ListOrganizations :many
 
-SELECT id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at FROM organization
+SELECT id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since FROM organization
 WHERE ($1::text IS NULL
        OR slug ILIKE $1::text ESCAPE '\'
        OR name ILIKE $1::text ESCAPE '\')
@@ -427,6 +439,8 @@ func (q *Queries) ListOrganizations(ctx context.Context, arg ListOrganizationsPa
 			&i.DeletingCommittedAt,
 			&i.OffboardingWaitVxids,
 			&i.OffboardingWaitTakenAt,
+			&i.RecoveryExports,
+			&i.RecoveryExportsSince,
 		); err != nil {
 			return nil, err
 		}
@@ -473,7 +487,7 @@ func (q *Queries) ListOrganizationsClaimingDomains(ctx context.Context, arg List
 }
 
 const lockOrganization = `-- name: LockOrganization :one
-SELECT id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at FROM organization WHERE id = $1 FOR NO KEY UPDATE
+SELECT id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since FROM organization WHERE id = $1 FOR NO KEY UPDATE
 `
 
 // Cancelling a deletion holds the organization row while it withdraws the uninstalls, so the worker cannot start the
@@ -505,6 +519,8 @@ func (q *Queries) LockOrganization(ctx context.Context, id uuid.UUID) (Organizat
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
@@ -553,13 +569,48 @@ func (q *Queries) OrganizationIDBySlug(ctx context.Context, slug string) (uuid.U
 	return id, err
 }
 
+const recoveryExportOpen = `-- name: RecoveryExportOpen :one
+SELECT EXISTS (SELECT 1 FROM organization WHERE id = $1 AND status IN ('active', 'provisioning_failed')
+  AND delete_after IS NOT NULL AND delete_after > now() + make_interval(secs => $2::float8))
+`
+
+type RecoveryExportOpenParams struct {
+	ID            uuid.UUID
+	CutoffSeconds float64
+}
+
+// Whether the export is open (see above): the api before it reserves, and the escrow-reader inside the organization
+// before it decrypts (it may read only these columns, migration 00133).
+func (q *Queries) RecoveryExportOpen(ctx context.Context, arg RecoveryExportOpenParams) (bool, error) {
+	row := q.db.QueryRow(ctx, recoveryExportOpen, arg.ID, arg.CutoffSeconds)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const releaseRecoveryExport = `-- name: ReleaseRecoveryExport :exec
+UPDATE organization SET recovery_exports = recovery_exports - 1
+WHERE id = $1 AND recovery_exports_since = $2::timestamptz AND recovery_exports > 0
+`
+
+type ReleaseRecoveryExportParams struct {
+	ID    uuid.UUID
+	Since time.Time
+}
+
+// A failed export gives its reservation back, only within the deletion it was reserved in.
+func (q *Queries) ReleaseRecoveryExport(ctx context.Context, arg ReleaseRecoveryExportParams) error {
+	_, err := q.db.Exec(ctx, releaseRecoveryExport, arg.ID, arg.Since)
+	return err
+}
+
 const requestOrganizationDeletion = `-- name: RequestOrganizationDeletion :one
 
 UPDATE organization
 SET deletion_requested_at = now(), deletion_requested_by = $1, deletion_reason = $2,
     delete_after = now() + make_interval(days => $3::int), updated_at = now()
 WHERE id = $4 AND status IN ('active', 'provisioning_failed') AND delete_after IS NULL
-RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since
 `
 
 type RequestOrganizationDeletionParams struct {
@@ -602,7 +653,45 @@ func (q *Queries) RequestOrganizationDeletion(ctx context.Context, arg RequestOr
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
+	return i, err
+}
+
+const reserveRecoveryExport = `-- name: ReserveRecoveryExport :one
+
+UPDATE organization
+SET recovery_exports = CASE WHEN recovery_exports_since IS NOT DISTINCT FROM deletion_requested_at
+                            THEN recovery_exports + 1 ELSE 1 END,
+    recovery_exports_since = deletion_requested_at
+WHERE id = $1 AND status IN ('active', 'provisioning_failed') AND delete_after IS NOT NULL
+  AND delete_after > now() + make_interval(secs => $2::float8)
+  AND (recovery_exports_since IS DISTINCT FROM deletion_requested_at OR recovery_exports < $3::int)
+RETURNING recovery_exports, recovery_exports_since
+`
+
+type ReserveRecoveryExportParams struct {
+	ID            uuid.UUID
+	CutoffSeconds float64
+	MaxExports    int32
+}
+
+type ReserveRecoveryExportRow struct {
+	RecoveryExports      int32
+	RecoveryExportsSince *time.Time
+}
+
+// Encrypted recovery export (plan M17 amendment b decisions 21 and 24, amendments g and h, migration 00133). An export
+// is open while the deletion is pending and delete_after lies more than the cutoff (app.RecoveryExportCutoff) ahead on
+// the database's clock, the clock of the worker's delete_after <= now(): an export then always finishes while the
+// deletion is still pending (amendment h point 1). Reserving counts one export of the pending deletion atomically, so
+// concurrent exports cannot pass the limit together; a count of an earlier (cancelled) deletion starts again at one.
+// No row: the export is not open or the limit is reached.
+func (q *Queries) ReserveRecoveryExport(ctx context.Context, arg ReserveRecoveryExportParams) (ReserveRecoveryExportRow, error) {
+	row := q.db.QueryRow(ctx, reserveRecoveryExport, arg.ID, arg.CutoffSeconds, arg.MaxExports)
+	var i ReserveRecoveryExportRow
+	err := row.Scan(&i.RecoveryExports, &i.RecoveryExportsSince)
 	return i, err
 }
 
@@ -611,7 +700,7 @@ UPDATE organization
 SET deletion_uninstalls_issued = $1::int, deletion_uninstalls_skipped = $2::int, updated_at = now()
 WHERE id = $3 AND status IN ('active', 'provisioning_failed') AND deletion_requested_at = $4
   AND deletion_uninstalls_issued IS NULL
-RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since
 `
 
 type SetOrganizationDeletionUninstallsParams struct {
@@ -653,6 +742,8 @@ func (q *Queries) SetOrganizationDeletionUninstalls(ctx context.Context, arg Set
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
@@ -660,7 +751,7 @@ func (q *Queries) SetOrganizationDeletionUninstalls(ctx context.Context, arg Set
 const setOrganizationOffboardingError = `-- name: SetOrganizationOffboardingError :one
 UPDATE organization SET offboarding_error_code = $1, updated_at = now()
 WHERE id = $2 AND status = 'deleting'
-RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since
 `
 
 type SetOrganizationOffboardingErrorParams struct {
@@ -693,6 +784,8 @@ func (q *Queries) SetOrganizationOffboardingError(ctx context.Context, arg SetOr
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
@@ -702,7 +795,7 @@ UPDATE organization
 SET status = 'deleting', offboarding_step = $1, offboarding_error_code = NULL, updated_at = now()
 WHERE id = $2 AND status IN ('active', 'provisioning_failed') AND delete_after <= now()
   AND deletion_uninstalls_issued IS NOT NULL
-RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since
 `
 
 type StartOrganizationDeletionParams struct {
@@ -735,6 +828,8 @@ func (q *Queries) StartOrganizationDeletion(ctx context.Context, arg StartOrgani
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
@@ -744,7 +839,7 @@ UPDATE organization
 SET status = 'deleted', deleted_at = now(), domains = '{}', offboarding_error_code = NULL, idp_ensured_at = NULL,
     idp_ensure_revision = NULL, updated_at = now()
 WHERE id = $1 AND status = 'deleting'
-RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since
 `
 
 func (q *Queries) TombstoneOrganization(ctx context.Context, id uuid.UUID) (Organization, error) {
@@ -772,12 +867,14 @@ func (q *Queries) TombstoneOrganization(ctx context.Context, id uuid.UUID) (Orga
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
 
 const updateOrganizationDomains = `-- name: UpdateOrganizationDomains :one
-UPDATE organization SET domains = $1, idp_ensured_at = NULL, updated_at = now() WHERE id = $2 RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+UPDATE organization SET domains = $1, idp_ensured_at = NULL, updated_at = now() WHERE id = $2 RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since
 `
 
 type UpdateOrganizationDomainsParams struct {
@@ -812,6 +909,8 @@ func (q *Queries) UpdateOrganizationDomains(ctx context.Context, arg UpdateOrgan
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }
@@ -819,7 +918,7 @@ func (q *Queries) UpdateOrganizationDomains(ctx context.Context, arg UpdateOrgan
 const updateOrganizationStatus = `-- name: UpdateOrganizationStatus :one
 UPDATE organization SET status = $1, name = $2, idp_ensured_at = NULL, updated_at = now()
 WHERE id = $3
-RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at, recovery_exports, recovery_exports_since
 `
 
 type UpdateOrganizationStatusParams struct {
@@ -855,6 +954,8 @@ func (q *Queries) UpdateOrganizationStatus(ctx context.Context, arg UpdateOrgani
 		&i.DeletingCommittedAt,
 		&i.OffboardingWaitVxids,
 		&i.OffboardingWaitTakenAt,
+		&i.RecoveryExports,
+		&i.RecoveryExportsSince,
 	)
 	return i, err
 }

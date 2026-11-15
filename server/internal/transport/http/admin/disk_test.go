@@ -25,6 +25,8 @@ type diskEscrow struct {
 	key     *rsa.PrivateKey
 	mu      sync.Mutex
 	objects map[string][]byte
+	// onBatch, when set, runs before every batch decryption of a recovery export (TestPlatformExportOutlivesPending).
+	onBatch func()
 }
 
 func newDiskEscrow(t *testing.T) *diskEscrow {

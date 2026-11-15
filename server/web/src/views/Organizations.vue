@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import SetupChecklist from '../components/SetupChecklist.vue'
 import UpgradeCard from '../components/UpgradeCard.vue'
 import DataList from '../components/DataList.vue'
+import RecoveryExport from '../components/RecoveryExport.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import type { Organization } from '../api/client'
@@ -167,6 +168,12 @@ async function saveDomains(): Promise<void> {
         >
           {{ t('organizations.editDomains') }}
         </v-btn>
+        <RecoveryExport
+          v-if="(item.status === 'active' || item.status === 'provisioning_failed') && item.deletion"
+          :organization-id="item.id"
+          :slug="item.slug"
+          :until="item.deletion.recovery_export_until"
+        />
       </template>
     </DataList>
 

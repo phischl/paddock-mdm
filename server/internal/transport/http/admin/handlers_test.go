@@ -401,7 +401,8 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 	}
 	e := &env{t: t, keys: keys, super: super, writer: writer, writerDSN: ag.Writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t),
 		stepUps: newStepUpProofs(), sessions: newFakeSessions(), identitySessions: &fakeIdentitySessions{}, orgPool: orgPool}
-	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
+	escrowReader := newEscrowReader(t, pg.EscrowReader, e.stepUps, e.disk)
+	escrowAccess := app.NewEscrowAccess(escrowReader, e.stepUps)
 	verifyRelease := app.NewReleaseVerifier(releasePub)
 	e.orgs = app.NewOrganizations(runner, platformPool, idp, app.NewUninstalls(runner, orgPool, discardCommands{}), false)
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
@@ -439,6 +440,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		LocalAdmin:      app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:     app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
 		Disk:            app.NewDisk(runner, orgPool, escrowAccess, e.disk),
+		RecoveryExports: app.NewRecoveryExports(runner, platformPool, e.stepUps, escrowReader, time.Now),
 		Revocations:     app.NewRevocations(runner, orgPool, e.stepUps, discardCommands{}, true),
 		DMS:             app.NewDMS(runner, orgPool, discardCommands{}, true, false),
 		Inventory:       app.NewInventory(orgPool),
@@ -533,6 +535,9 @@ func (e *env) steppedUp(c *http.Cookie, at time.Time) *http.Cookie {
 		e.t.Fatal(err)
 	}
 	sess.StepUpAt, sess.StepUpJTI, sess.StepUpClasses = at.Unix(), e.stepUps.issue(sess.Sub, at), []string{admin.StepUpWebAuthnClass}
+	if principal.Kind(sess.Kind) == principal.KindPlatformAdmin {
+		e.stepUps.withGroups(sess.StepUpJTI, []string{organization.PlatformAdminsGroup()})
+	}
 	v, err := e.keys.Seal(admin.SessionCookie, sess)
 	if err != nil {
 		e.t.Fatal(err)
