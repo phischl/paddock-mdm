@@ -896,9 +896,9 @@ var registry = map[Code]Definition{
 	CodeOrganizationDomainsChanged: {
 		Code: CodeOrganizationDomainsChanged, Emitted: true,
 		Description: "A platform administrator changed the domains of an organization; the first domain is the primary domain of device logins.",
-		Params:      []string{"slug", "domains", "old_domains"},
+		Params:      []string{"slug", "target_organization_id", "domains", "old_domains"},
 		Outcomes:    adminOutcomes,
-		Note:        "Recorded in the organization whose domains changed. A domain of another organization is refused with error_code domain_taken.",
+		Note:        "A success is recorded in the organization whose domains changed; a failure (invalid_request, domain_taken, invalid_state for an organization that is deleting or deleted) is recorded in the platform pseudo-organization, with the organization in target_organization_id and the target. A domain of another organization is refused with error_code domain_taken.",
 	},
 	CodeUserCreated: {
 		Code: CodeUserCreated, Emitted: true,

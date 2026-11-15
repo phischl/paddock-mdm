@@ -96,7 +96,7 @@ func TestOrganizationSetDomainsOffboarding(t *testing.T) {
 		expectUninstallProblem(t, err, "invalid_state", 409, "the organization is "+status+": its domains cannot be changed")
 		ev := d.attempt(t, ctx)
 		expectAttempt(t, ev, audit.CodeOrganizationDomainsChanged, audit.OutcomeFailure, "invalid_state", audit.PlatformOrganizationID)
-		if ev.Target == nil || ev.Target.ID != org.String() {
+		if ev.Target == nil || ev.Target.ID != org.String() || ev.Params["target_organization_id"] != org.String() {
 			t.Fatalf("%s: target %+v", status, ev.Target)
 		}
 		if a, o := d.rowsOf(t, org); a != actions || o != outbox {
@@ -117,9 +117,58 @@ func TestOrganizationSetDomainsOffboarding(t *testing.T) {
 	if len(out.Domains) != 1 || out.Domains[0] != want {
 		t.Fatalf("domains %v", out.Domains)
 	}
-	expectAttempt(t, d.attempt(t, ctx), audit.CodeOrganizationDomainsChanged, audit.OutcomeSuccess, "", active)
+	ev := d.attempt(t, ctx)
+	expectAttempt(t, ev, audit.CodeOrganizationDomainsChanged, audit.OutcomeSuccess, "", active)
+	if ev.Params["target_organization_id"] != active.String() {
+		t.Fatalf("success params %v", ev.Params)
+	}
 	if n := d.count(t, "SELECT count(*) FROM outbox WHERE organization_id = $1 AND NOT payload ? 'code'", active); n == 0 {
 		t.Fatal("the change queued no state change of the organization")
+	}
+}
+
+// TestOrganizationSetDomainsFailuresInPlatform (PDK-1053 fix round 1): every failed domain change, also of an active
+// organization, is recorded once in the platform pseudo-organization with the organization in target_organization_id,
+// and writes no action or outbox row of the organization: the record is written after the rollback released the row
+// lock, when the organization may already be deleting.
+func TestOrganizationSetDomainsFailuresInPlatform(t *testing.T) {
+	d := newDeletionWorld(t)
+	owner := d.otherOrg(t)
+	claimed := "claimed-" + owner.String()[24:] + ".example"
+	d.exec(t, "UPDATE organization SET domains = $2 WHERE id = $1", owner, []string{claimed})
+	org := d.otherOrg(t)
+	for name, tc := range map[string]struct {
+		domains []string
+		code    string
+		status  int
+	}{
+		"invalid domain":   {domains: []string{"Not A Domain"}, code: "invalid_request", status: 400},
+		"domain of others": {domains: []string{claimed}, code: "domain_taken", status: 409},
+	} {
+		actions, outbox := d.rowsOf(t, org)
+		ctx := d.root(false)
+		_, err := d.orgs.SetDomains(ctx, org, tc.domains)
+		expectUninstallProblem(t, err, tc.code, tc.status, "")
+		ev := d.attempt(t, ctx)
+		expectAttempt(t, ev, audit.CodeOrganizationDomainsChanged, audit.OutcomeFailure, tc.code, audit.PlatformOrganizationID)
+		if ev.Target == nil || ev.Target.ID != org.String() || ev.Params["target_organization_id"] != org.String() {
+			t.Fatalf("%s: target %+v, params %v", name, ev.Target, ev.Params)
+		}
+		if a, o := d.rowsOf(t, org); a != actions || o != outbox {
+			t.Fatalf("%s: the failure wrote rows of the organization: action %d→%d, outbox %d→%d", name, actions, a, outbox, o)
+		}
+	}
+}
+
+// await returns the result of a call running in a goroutine and fails the test if it does not finish in time.
+func await(t *testing.T, errs <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-errs:
+		return err
+	case <-time.After(30 * time.Second):
+		t.Fatal("the call did not finish within 30 s")
+		return nil
 	}
 }
 
@@ -141,7 +190,7 @@ func TestOrganizationSetDomainsRacesDeletionStart(t *testing.T) {
 	d.awaitBlockedBy(t, pid)
 	commit()
 
-	expectUninstallProblem(t, <-errs, "invalid_state", 409, "the organization is deleting: its domains cannot be changed")
+	expectUninstallProblem(t, await(t, errs), "invalid_state", 409, "the organization is deleting: its domains cannot be changed")
 	expectAttempt(t, d.attempt(t, ctx), audit.CodeOrganizationDomainsChanged, audit.OutcomeFailure, "invalid_state",
 		audit.PlatformOrganizationID)
 	if a, o := d.rowsOf(t, org); a != actions || o != outbox {
@@ -177,7 +226,7 @@ func TestOrganizationReprovisionRacesDeletionStart(t *testing.T) {
 	d.awaitBlockedBy(t, pid)
 	commit()
 
-	expectUninstallProblem(t, <-errs, "slug_taken", 409, "")
+	expectUninstallProblem(t, await(t, errs), "slug_taken", 409, "")
 	expectAttempt(t, d.attempt(t, ctx), audit.CodeOrganizationCreated, audit.OutcomeFailure, "slug_taken", audit.PlatformOrganizationID)
 	var status string
 	if err := d.super.QueryRow(context.Background(), "SELECT status FROM organization WHERE id = $1", org).Scan(&status); err != nil {

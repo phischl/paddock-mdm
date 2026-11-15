@@ -198,9 +198,9 @@ func (o *Organizations) Create(ctx context.Context, slug, name string) (org pgst
 	return org, reprovisioned, err
 }
 
-// SetDomains replaces the domains of an organization (plan M3a decision 1, audited in the organization:
-// organization.domains_changed). A domain of another organization is 409 domain_taken. The organization's devices
-// are recompiled (the primary domain is part of the login resource).
+// SetDomains replaces the domains of an organization (plan M3a decision 1, audited as organization.domains_changed:
+// a success in the organization, a failure in the platform pseudo-organization). A domain of another organization is
+// 409 domain_taken. The organization's devices are recompiled (the primary domain is part of the login resource).
 func (o *Organizations) SetDomains(ctx context.Context, id uuid.UUID, domains []string) (pgstore.Organization, error) {
 	spec := SpecOrganizationSetDomains
 	spec.Target = &audit.Target{Type: "organization", ID: id.String()}
@@ -220,12 +220,10 @@ func (o *Organizations) SetDomains(ctx context.Context, id uuid.UUID, domains []
 		}
 		rec.SetTarget(audit.Target{Type: "organization", ID: cur.ID.String(), Display: cur.Slug})
 		rec.SetParam("slug", cur.Slug)
+		rec.SetParam("target_organization_id", cur.ID.String())
 		if organization.Offboarding(cur.Status) {
-			// Refused before SetOrganization: the refusal is recorded in the platform pseudo-organization, never in an
-			// organization whose rows the offboarding deletes or has deleted.
 			return errOffboarding(cur.Status, "its domains cannot be changed")
 		}
-		rec.SetOrganization(cur.ID)
 		rec.SetParam("domains", normalized)
 		rec.SetParam("old_domains", cur.Domains)
 		if err := organization.ValidateDomains(normalized); err != nil {
@@ -248,6 +246,10 @@ func (o *Organizations) SetDomains(ctx context.Context, id uuid.UUID, domains []
 		if err != nil {
 			return err
 		}
+		// Only a success is recorded in the organization, inside this transaction under the row lock. A failure is
+		// recorded after the rollback has released the lock, when the organization may already be deleting, so it
+		// stays in the platform pseudo-organization (PDK-1053).
+		rec.SetOrganization(cur.ID)
 		rec.StateChanged(statechange.ScopeOrg, id)
 		return nil
 	})
