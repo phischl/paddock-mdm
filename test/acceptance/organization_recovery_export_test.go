@@ -293,9 +293,13 @@ func (o *recoveryExportOrg) secrets() []string {
 func (o *recoveryExportOrg) startDeletion(t *testing.T, root *env.Portal) {
 	t.Helper()
 	path := "/api/platform/v1/organizations/" + o.id.String()
+	stepUp(t, root, env.PlatformAdmin, true)
 	expectStatus(t, call(t, root, http.MethodPost, path+"/delete",
 		map[string]any{"confirm_slug": o.slug, "reason": "PDK-1073 isolation", "grace_days": 30}), http.StatusAccepted, "")
-	t.Cleanup(func() { call(t, root, http.MethodPost, path+"/cancel-deletion", nil) })
+	t.Cleanup(func() {
+		stepUp(t, root, env.PlatformAdmin, true)
+		call(t, root, http.MethodPost, path+"/cancel-deletion", nil)
+	})
 }
 
 // exportWithHeaders is call for POST /api/v1/recovery-export in the administrator's session with extra headers.
@@ -322,7 +326,6 @@ func exportWithHeaders(t *testing.T, admin *mfaUser, path string, headers map[st
 func TestRecoveryExportIsolation(t *testing.T) {
 	g := newGPGHome(t)
 	root := login(t, env.PlatformAdmin)
-	stepUp(t, root, env.PlatformAdmin, true)
 	a, b := newRecoveryExportOrg(t, "iso-a-admin"), newRecoveryExportOrg(t, "iso-b-admin")
 	b.startDeletion(t, root)
 	const export = "/api/v1/recovery-export"
