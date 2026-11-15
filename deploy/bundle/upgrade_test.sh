@@ -104,6 +104,11 @@ setup() {
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
   for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
+  # The item reads the running object store; a stub shows that ./paddock check calls it where the host has one.
+  # shellcheck disable=SC2016 # the stub expands FIXTURE_CALLS when it runs
+  printf '#!/usr/bin/env bash\necho "offboard-users-check" >>"$FIXTURE_CALLS"\necho "PASS  object store: one organization deletion user per policy"\n' \
+    >"$work/t/new/scripts/offboard-users-check.sh"
+  chmod +x "$work/t/new/scripts/offboard-users-check.sh"
   for s in gen-prod-secrets.sh wait-healthy.sh openbao-configure.sh rustfs-bundles-bootstrap.sh; do
     # shellcheck disable=SC2016 # the stub expands its arguments when it runs
     printf '#!/usr/bin/env bash\necho "script %s $*" >>"$FIXTURE_CALLS"\n' "$s" >"$work/t/new/scripts/$s"
@@ -798,6 +803,11 @@ before "the lab backup completes before up" "$BACKUP" "$UP"
 called "the lab with backups runs the online check" '^docker run .*prod-check .*--online'
 before "the lab with backups checks online before up" '^docker run .*prod-check .*--online' "$UP"
 before "the lab adds the missing object-store users after up" "$UP" '^script rustfs-bundles-bootstrap.sh --add-missing$'
+# PDK-1054d: the pre-up check runs with the old store (no such users yet) and skips the item; the post-check, after the
+# bucket step, runs it.
+if [[ "$(grep -c '^offboard-users-check$' "$calls")" == 1 ]]; then pass "the object-store users item runs once, in the post-check"; else
+  fail "offboard-users-check ran $(grep -c '^offboard-users-check$' "$calls") times"; fi
+before "the object-store users item runs after the bucket step" '^script rustfs-bundles-bootstrap.sh --add-missing$' '^offboard-users-check$'
 before "the lab with backups reads the targets' revisions only after up" "$UP" 'admin backup-targets revisions'
 
 # Usage and preconditions.

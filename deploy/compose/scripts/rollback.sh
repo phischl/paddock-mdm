@@ -75,6 +75,23 @@ rb_check_schema() {
   done
 }
 
+# rb_carry_offboard_keys <new dir> <old dir>: copies the four rustfs_*_offboard_* key files of the new release's .secrets/
+# into the old directory's, where the old release ignores them. A later ./paddock upgrade copies .secrets/ from the old
+# directory again; without these files its `secrets` step would generate new keys and the bucket bootstrap would add two
+# more users beside the two this upgrade created (PDK-1054d). Only absent files are copied, so a key the old directory
+# holds is never replaced. Best effort: the rollback does not fail on it, the bootstrap removes stale users anyway.
+rb_carry_offboard_keys() {
+  local f name
+  for f in "$1"/.secrets/rustfs_*_offboard_*; do
+    [[ -f "$f" ]] || continue
+    name="$(basename "$f")"
+    [[ ! -e "$2/.secrets/$name" ]] || continue
+    # Through a temporary name, so that an interrupted copy never leaves half a key behind.
+    (umask 077 && cp -- "$f" "$2/.secrets/.$name.tmp" && mv -- "$2/.secrets/.$name.tmp" "$2/.secrets/$name") ||
+      echo "rollback: could not carry $name into $2/.secrets; a later upgrade creates new organization deletion keys and its bucket bootstrap removes the users of these" >&2
+  done
+}
+
 # rb_restore <old dir> <new dir> <at> <yes> <components…>: in a subshell with the old directory's libraries. Every
 # precondition of the old release's restore (the key, its preflight: schema versions, stanzas, the oldest backup, the
 # OpenBao snapshot and the Fleet dump at the point) and its confirmation run before anything stops (Agent design
@@ -357,6 +374,7 @@ rollback_main() {
     }
   fi
   rm -f "$RB_PHASE"
+  rb_carry_offboard_keys "$new" "$old"
   # The record is retired before the old release starts: the data is the pre-upgrade state now, and a second rollback
   # must not restore it again. A later ./paddock upgrade starts again at the check and copies .env and .secrets/ again:
   # the old release runs in between and may be reconfigured.

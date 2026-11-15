@@ -248,6 +248,113 @@ rc_remove_policy() {
   echo "removed the former policy $name"
 }
 
+# rc_policy_holders <rc function> <alias> <policy>: the access keys of the users that hold the policy, one per line, from
+# `rc admin user list --json`; aborts when the listing fails. Only access keys leave this function. With a fourth
+# argument `detail`, each line is `<access key><TAB><all policies of the user, comma separated>`.
+rc_policy_holders() {
+  local rcf="$1" alias="$2" policy="$3" detail="${4:-}" out
+  out="$("$rcf" "rc admin user list $alias --json" </dev/null)" || {
+    echo "rc admin user list failed" >&2
+    exit 1
+  }
+  awk -v want="\"$policy\"" -v detail="$detail" '
+    /"accessKey":/ { split($0, f, "\""); key = f[4] }
+    /"policies":/ {
+      collecting = 1
+      text = substr($0, index($0, "[") + 1)
+    }
+    collecting && !/"policies":/ { text = text " " $0 }
+    collecting && /\]/ {
+      collecting = 0
+      sub(/\].*/, "", text)
+      n = split(text, names, ",")
+      all = ""
+      hit = 0
+      for (i = 1; i <= n; i++) {
+        gsub(/[ \t\r\n]/, "", names[i])
+        if (names[i] == want) hit = 1
+        gsub(/"/, "", names[i])
+        all = all (i > 1 ? "," : "") names[i]
+      }
+      if (hit) print detail == "" ? key : key "\t" all
+    }
+  ' <<<"$out"
+}
+
+# rc_prune_policy_holders <rc function> <alias> <policy> <current access key> [<protected access key>…]: leaves exactly
+# one user with the policy, the current one, and takes it from every other holder (PDK-1054d). A stale holder whose only
+# policy this is is removed; one that holds another policy too keeps its account and loses only this policy (detach,
+# which leaves the others attached), with a warning, so that nothing else's access is taken away. It changes nothing
+# unless the current key is listed as a holder, so a listing it cannot read never empties the store, and never touches a
+# protected key (the other policy's current user). Matches by the policy name only. Prints the access key ID of an
+# affected user, never a secret; rc output stays out of the log because a listing names keys. The rc commands name the
+# key as $STALE_ACCESS_KEY, which the rc function must pass into its container.
+rc_prune_policy_holders() {
+  local rcf="$1" alias="$2" policy="$3" current="$4" out line h pols seen="" p protected holders=()
+  shift 4
+  out="$(rc_policy_holders "$rcf" "$alias" "$policy" detail)" || exit 1
+  # An array, not a here-string loop: the rc container reads stdin and would swallow the remaining holders.
+  mapfile -t holders <<<"$out"
+  for line in "${holders[@]}"; do
+    [[ "${line%%$'\t'*}" != "$current" ]] || seen=1
+  done
+  if [[ -z "$seen" ]]; then
+    echo "cannot confirm the current holder of $policy in the user listing: no stale user was changed" >&2
+    exit 1
+  fi
+  for line in "${holders[@]}"; do
+    h="${line%%$'\t'*}" pols="${line#*$'\t'}"
+    [[ -n "$h" && "$h" != "$current" ]] || continue
+    protected=""
+    for p in "$@"; do [[ "$h" != "$p" ]] || protected=1; done
+    [[ -z "$protected" ]] || continue
+    if [[ "$pols" == "$policy" ]]; then
+      STALE_ACCESS_KEY="$h" "$rcf" "rc admin user rm -- $alias \"\$STALE_ACCESS_KEY\" >/dev/null" </dev/null || {
+        echo "rc admin user rm failed for a stale holder of $policy" >&2
+        exit 1
+      }
+      echo "removed the stale $policy user $h (its key is in no key file)"
+    else
+      STALE_ACCESS_KEY="$h" "$rcf" "rc admin policy detach $alias $policy --user=\"\$STALE_ACCESS_KEY\" >/dev/null" </dev/null || {
+        echo "rc admin policy detach $policy failed for a stale holder" >&2
+        exit 1
+      }
+      echo "warning: the user $h holds $policy and other policies: kept its account, detached $policy only"
+    fi
+  done
+}
+
+# offboard_users_check <rc function> <alias> <bundles offboard access key> <escrow offboard access key>: the
+# `./paddock check` item for the organization deletion's users (PDK-1054d), in the checklist's format. FAIL when a
+# policy is held by more than one user or by a key that is not the key file's, or by none; WARN when the store cannot be
+# listed (the stack is down). Returns 1 on FAIL. Only access key IDs are printed.
+offboard_users_check() {
+  local rcf="$1" alias="$2" pair policy key holders h n problems=()
+  for pair in "paddock-bundles-offboard $3" "paddock-escrow-offboard $4"; do
+    policy="${pair%% *}" key="${pair#* }"
+    if ! holders="$(rc_policy_holders "$rcf" "$alias" "$policy" 2>/dev/null)"; then
+      echo "WARN  object store: one organization deletion user per policy"
+      echo "      - not checked: listing the users of the object store failed"
+      return 0
+    fi
+    n=0
+    while IFS= read -r h; do
+      [[ -n "$h" ]] || continue
+      n=$((n + 1))
+      [[ "$h" == "$key" ]] || problems+=("$policy is held by the access key $h, which is not the key file's")
+    done <<<"$holders"
+    ((n > 0)) || problems+=("no user holds $policy: run ./paddock bootstrap buckets")
+    ((n < 2)) || problems+=("$n users hold $policy: run ./paddock bootstrap buckets --add-missing to remove the stale ones")
+  done
+  if ((${#problems[@]} == 0)); then
+    echo "PASS  object store: one organization deletion user per policy"
+    return 0
+  fi
+  echo "FAIL  object store: one organization deletion user per policy"
+  printf '      - %s\n' "${problems[@]}"
+  return 1
+}
+
 # offboard_bundles_statements <bucket>, offboard_escrow_statements <bucket>: the policy statements of the organization
 # deletion's credentials (plan M17 amendment k point 1). List and delete only, each limited to the organizations'
 # prefixes; no s3:GetObject, so a leaked credential destroys but never discloses (RR-140). rustfs-offboard_test.sh

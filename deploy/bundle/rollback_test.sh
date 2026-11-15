@@ -213,6 +213,32 @@ if grep -qx "rolled-back=$ATTEMPT" "$work/t/new/.upgrade-state" && ! grep -q '^d
   pass "a later upgrade starts again at the check and copies .env and .secrets/ again"
 else fail ".upgrade-state: $(cat "$work/t/new/.upgrade-state" 2>&1)"; fi
 
+# PDK-1054d: the four offboarding key files of the new release's .secrets/ reach the old directory, so that a later
+# upgrade (which copies .secrets/ again) reuses the users instead of creating two more.
+offboard_files=(rustfs_bundles_offboard_access_key rustfs_bundles_offboard_secret_key rustfs_escrow_offboard_access_key
+  rustfs_escrow_offboard_secret_key)
+setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
+mkdir -p "$work/t/new/.secrets"
+for f in "${offboard_files[@]}" rustfs_root_user; do printf 'new-%s' "$f" >"$work/t/new/.secrets/$f"; done
+run 0 "rollback with the new release's offboarding key files" "$work/t/old" --yes
+carried=1
+for f in "${offboard_files[@]}"; do
+  [[ "$(cat "$work/t/old/.secrets/$f" 2>/dev/null)" == "new-$f" ]] || carried=""
+done
+if [[ -n "$carried" ]]; then pass "the four offboarding key files are carried into the old directory"; else fail "the offboarding key files did not reach the old directory"; fi
+if [[ "$(stat -c %a "$work/t/old/.secrets/${offboard_files[1]}")" == 600 ]]; then pass "the carried key files are private"; else fail "the carried key files are not mode 0600"; fi
+if [[ ! -e "$work/t/old/.secrets/rustfs_root_user" ]]; then pass "no other key file is carried"; else fail "the rollback carried a file that is no offboarding key"; fi
+# A key the old directory holds already is kept, and a new release without the files is no failure.
+setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
+mkdir -p "$work/t/new/.secrets"
+for f in "${offboard_files[@]}"; do printf 'new-%s' "$f" >"$work/t/new/.secrets/$f"; done
+printf 'old-held' >"$work/t/old/.secrets/${offboard_files[0]}"
+run 0 "rollback with an offboarding key the old directory holds" "$work/t/old" --yes
+if [[ "$(cat "$work/t/old/.secrets/${offboard_files[0]}")" == old-held ]]; then pass "a key the old directory holds is not replaced"; else fail "the old directory's key was replaced"; fi
+setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
+run 0 "rollback of a release without offboarding key files" "$work/t/old" --yes
+if compgen -G "$work/t/old/.secrets/rustfs_*" >/dev/null; then fail "key files appeared from nothing"; else pass "nothing is carried when the new release has no offboarding key files"; fi
+
 # Across a schema change (decisions-alpha10 item 62): the manifest names the new release's schema, the restored point
 # has the one the upgrade recorded before its `up`. The old restore.sh sees the recorded schema in both of its reads.
 setup controlplane "Schema: migrations 00113–00125"

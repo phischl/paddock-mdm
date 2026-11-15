@@ -449,6 +449,18 @@ case "$cmd" in
       echo "WARN  postgres: connection budget"
       echo "      - not checked: rendering the Compose configuration failed"
     fi
+    # The organization deletion's object-store users (PDK-1054d): one per policy, the key file's. The control plane's
+    # object store only, and only online, because the listing needs the running store.
+    offboard_failed=""
+    if [[ -n "$online" && ("$PADDOCK_HOST" == controlplane || "$PADDOCK_HOST" == lab) ]]; then
+      if [[ -n "${PADDOCK_CHECK_SKIP_CONTAINERS:-}" ]]; then
+        # The old release's store holds no such users yet; the post-checks after the buckets step check them.
+        echo "WARN  object store: one organization deletion user per policy"
+        echo "      - not checked: the old release still runs; the checks after up compare the users"
+      else
+        "$BUNDLE_DIR/scripts/offboard-users-check.sh" || offboard_failed=1
+      fi
+    fi
     rc=0
     PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
       docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" "${containers_mount[@]}" \
@@ -457,6 +469,7 @@ case "$cmd" in
         "${docker_networks[@]}" "${containers[@]}" || rc=$?
     ((rc == 0)) || exit "$rc"
     [[ -z "$budget_failed" ]] || exit 1
+    [[ -z "$offboard_failed" ]] || exit 1
     ;;
   up)
     profiles=(--profile paddock --profile observability)
