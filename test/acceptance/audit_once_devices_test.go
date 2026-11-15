@@ -257,7 +257,7 @@ var deviceAuditCases = func() map[string][]auditCase {
 			{"success", func(t *testing.T, w *auditWorld) {
 				user := w.admins.take()
 				admin := login(t, user)
-				d, _ := escrowedDevice(t, admin)
+				d, _, _ := escrowedDevice(t, admin)
 				stepUp(t, admin, user, true)
 				res := call(t, admin, http.MethodPost, reveal(d.DeviceID), map[string]any{"confirm_hostname": getDevice(t, admin, d.DeviceID).Hostname})
 				expectStatus(t, res, http.StatusOK, "")

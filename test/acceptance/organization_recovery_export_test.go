@@ -14,7 +14,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
@@ -79,8 +78,7 @@ func TestOrganizationRecoveryExport(t *testing.T) {
 	g := newGPGHome(t)
 	slug, org := gateOrganization(t)
 	admin := steppedUpTempUser(t, "of9-admin", env.RoleGroup(slug, "admins"))
-	d, password := escrowedDevice(t, admin.Portal)
-	b := latestBundle(t, d, time.Minute, func(b *bundle.Bundle) bool { return b.Keys != nil && b.Keys.EscrowWrap != nil })
+	d, b, password := escrowedDevice(t, admin.Portal)
 	pub, version := escrowWrap(t, b)
 	key := "recovery-" + uniqueSuffix()
 	ct, err := escrow.Encrypt(pub, []byte(key))
