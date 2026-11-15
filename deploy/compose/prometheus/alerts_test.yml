@@ -857,6 +857,11 @@ tests:
         values: "0x20 1x10 0x10"
       - series: 'paddock_worker_offboarding_consumer_connected{job="paddock", role="paddock-worker", instance="paddock-worker-2:9090"}'
         values: "1x40"
+      # Another role's target at 0 (a gauge registered where it does not belong) never fires (main §46).
+      - series: 'paddock_worker_offboarding_consumer_connected{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x40"
+      - series: 'paddock_worker_offboarding_consumer_connected{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x40"
     alert_rule_test:
       - eval_time: 14m
         alertname: PaddockWorkerOffboardingConsumerDisconnected
@@ -873,4 +878,27 @@ tests:
         exp_alerts: []
       - eval_time: 40m
         alertname: PaddockWorkerOffboardingConsumerDisconnected
+        exp_alerts: []
+
+  - name: one audit.event_after_retirement warns for the following hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_events_after_retirement_total{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 0 0 1x180"
+      # The counter of another target (a registration where it does not belong) is ignored.
+      - series: 'paddock_audit_events_after_retirement_total{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0 5 10x180"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: PaddockAuditEventAfterRetirement
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: PaddockAuditEventAfterRetirement
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "Events arrived for an organization whose audit log is closed"
+              description: "The audit writer recorded events of a retired organization as audit.event_after_retirement in the last hour. Check in the platform audit log (code audit.event_after_retirement, param organization_id) whether that organization is really deleted."
+      - eval_time: 2h
+        alertname: PaddockAuditEventAfterRetirement
         exp_alerts: []

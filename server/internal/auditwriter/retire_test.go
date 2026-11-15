@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
@@ -132,9 +134,22 @@ func (s stack) pending(t *testing.T, org uuid.UUID) int {
 // lands in the platform pseudo-organization as audit.event_after_retirement, once, while the exporter's own evidence
 // keeps its code and params there; the nightly cycle no longer lists the organization; the sealer seals through the
 // final day with the retired mark and never after it; and a manifest after the retired day fails the verification.
+// paddock_audit_events_after_retirement_total counts the late event's deliveries, not the exporter's evidence (main §46).
 func TestRetirement(t *testing.T) {
 	s := newStack(t)
 	ctx := context.Background()
+	reg := prometheus.NewRegistry()
+	if err := s.writer.CountAfterRetirement(reg); err != nil {
+		t.Fatal(err)
+	}
+	afterRetirement := func() float64 {
+		t.Helper()
+		families, err := reg.Gather()
+		if err != nil || len(families) != 1 || len(families[0].GetMetric()) != 1 {
+			t.Fatalf("after-retirement counter: %v %v", families, err)
+		}
+		return families[0].GetMetric()[0].GetCounter().GetValue()
+	}
 	org := uuid.Must(uuid.NewV7())
 	day1 := time.Now().UTC().AddDate(0, 0, -4).Truncate(24 * time.Hour)
 	day3 := day1.AddDate(0, 0, 2)
@@ -200,6 +215,9 @@ func TestRetirement(t *testing.T) {
 		t.Fatalf("after a redelivery: %d final verifications, %d acknowledgements", n, acks.of(org))
 	}
 
+	if v := afterRetirement(); v != 0 {
+		t.Fatalf("after-retirement counter before a late event: %v", v)
+	}
 	late := event(org, time.Now(), audit.CodeDeviceGroupDeleted)
 	for range 2 {
 		if _, err := s.writer.WriteBatch(ctx, []audit.Event{late}); err != nil {
@@ -227,6 +245,12 @@ func TestRetirement(t *testing.T) {
 		AND code = 'audit.export_completed' AND params->>'organization_id' = $3 AND params->>'package_sha256' = 'abc123'
 		AND params->>'verify_ok' = 'true'`, completed.EventID, audit.PlatformOrganizationID, org.String()); n != 1 {
 		t.Fatal("the exporter's evidence of a retired organization lost its code or params")
+	}
+	if v := afterRetirement(); v != 2 {
+		t.Fatalf("after-retirement counter = %v, want 2 (the late event delivered twice, the exporter's evidence not counted)", v)
+	}
+	if n, err := testutil.GatherAndCount(prometheus.DefaultGatherer, "paddock_audit_events_after_retirement_total"); err != nil || n != 0 {
+		t.Fatalf("the default registry holds the after-retirement counter (%d, %v); only the audit-writer role registers it", n, err)
 	}
 
 	_, _, _, list := auditwriter.PoolIndex(s.pool)

@@ -212,3 +212,31 @@ func TestDeletedOrgAuditDownloadNotReady(t *testing.T) {
 		t.Fatalf("event = %+v", ev)
 	}
 }
+
+// TestDeletedOrgAuditForeignExport (main §46): the export of another organization is not reachable through a deleted
+// organization's path; it is not_found (the same organization's pending export answers export_not_ready, see
+// TestDeletedOrgAuditDownloadNotReady), recorded as a failed attempt with export_id.
+func TestDeletedOrgAuditForeignExport(t *testing.T) {
+	d := newDeletedHarness(t)
+	d.seal(t, exportDay(2), exportDay(1))
+	foreign, err := d.exports.Request(d.steppedUp(principal.RoleOrgAuditor),
+		app.AuditExportRequest{FromDay: exportDay(2), ToDay: exportDay(1), Purpose: "auditor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.super.Exec(context.Background(), "DELETE FROM action WHERE correlation_id = $1", "corr-"+t.Name()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.super.Exec(context.Background(), "DELETE FROM outbox WHERE payload->>'correlation_id' = $1", "corr-"+t.Name()); err != nil {
+		t.Fatal(err)
+	}
+	err = d.audit.Download(deletedOrgReader(false), d.deleted, foreign.ID, func(app.ExportPackage) { t.Error("begin called") },
+		func([]byte) error { return nil })
+	if !errors.Is(err, problem.NotFound) {
+		t.Fatalf("another organization's export: %v, want not_found", err)
+	}
+	ev := expectRead(t, d, audit.OutcomeFailure, "not_found", app.DeletedOrgAuditExportDownload, d.deleted)
+	if ev.Params["export_id"] != foreign.ID.String() {
+		t.Fatalf("event = %+v", ev)
+	}
+}

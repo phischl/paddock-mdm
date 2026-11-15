@@ -72,6 +72,23 @@ type Writer struct {
 	rowInserted   func(day time.Time)  // nil; tests seal here to race the sealer's audit-day lock
 	beforeInsert  func(ev audit.Event) // nil; tests index ev from another connection to race the insert
 	ensured       func()               // nil; tests drop a partition here to race the index purge
+	afterRetired  prometheus.Counter   // nil until CountAfterRetirement
+}
+
+// CountAfterRetirement registers paddock_audit_events_after_retirement_total with reg: the events of a retired
+// organization the writer recorded as audit.event_after_retirement. A closure requested for an organization that is
+// still live shows up as these, and PaddockAuditEventAfterRetirement alerts on them
+// (main §46). Only the audit-writer role registers it.
+func (w *Writer) CountAfterRetirement(reg prometheus.Registerer) error {
+	c := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "paddock_audit_events_after_retirement_total",
+		Help: "Events of a retired organization recorded as audit.event_after_retirement in the platform log (a redelivered event counts again).",
+	})
+	if err := reg.Register(c); err != nil {
+		return fmt.Errorf("auditwriter: register the after-retirement counter: %w", err)
+	}
+	w.afterRetired = c
+	return nil
 }
 
 // NewWriter creates a writer. retentionDays below MinRetentionDays is an error.
@@ -132,7 +149,11 @@ func (w *Writer) WriteBatch(ctx context.Context, events []audit.Event) (int, err
 		n, err := w.writeGroup(ctx, org, groups[org], false)
 		var closed *retiredError
 		if errors.As(err, &closed) {
-			n, err = w.writeGroup(ctx, audit.PlatformOrganizationID, afterRetirement(org, closed.events), false)
+			after := afterRetirement(org, closed.events)
+			n, err = w.writeGroup(ctx, audit.PlatformOrganizationID, after, false)
+			if err == nil && w.afterRetired != nil {
+				w.afterRetired.Add(float64(countCode(after, audit.CodeAuditEventAfterRetirement)))
+			}
 		}
 		if err != nil {
 			return written, err
@@ -159,6 +180,17 @@ func exporterEvidence(ev audit.Event) bool {
 		return store == storeAuditExports
 	}
 	return false
+}
+
+// countCode is the number of events with code.
+func countCode(events []audit.Event, code audit.Code) int {
+	n := 0
+	for _, ev := range events {
+		if ev.Code == code {
+			n++
+		}
+	}
+	return n
 }
 
 // retiredError refuses the new events of a retired organization; events holds them.
