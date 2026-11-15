@@ -247,7 +247,7 @@ Pool modes (`db.openPool`; pinned by `TestPoolQueryExecModes`):
 
 | Pool | Roles | Mode |
 | --- | --- | --- |
-| `OrgPool` (incl. `NotifierPool`) | api, worker incl. ingest, compiler, notifier, escrow-reader, revocation-issuer, the `paddock-server admin` commands (the gateway opens no PostgreSQL pool) | per execution (`CacheDescribe`) |
+| `OrgPool` (incl. `NotifierPool`) | api, worker incl. ingest, compiler, notifier, escrow-reader, revocation-issuer, the `paddock-server admin` commands (the gateway opens no PostgreSQL pool) | per execution (`CacheDescribe`), `jit = off` |
 | `PlatformPool` and its lock pool | platform endpoints, leader locks | statement cache |
 | `AuditReader`, `AuditWriterPool` | audit reader and writer | statement cache |
 | `RelayPool`, `UnsealerPool`, `BackupPool` | outbox relay, unsealer, backup and restore | statement cache |
@@ -261,8 +261,14 @@ catastrophic queries to 1 s in the large organization after six runs in a small 
 
 Ingest CPU per event with and without per-execution planning (N2 method, ADR 0055 decision 3): TODO-LEAD.
 
-At 70 000 devices with status rows, the attention view's plan costs more than PostgreSQL's `jit_above_cost`, and the
-JIT compilation took about 2.3 s per execution in the test database, independent of the plan cache (PDK-1081).
+The organization pools also open their connections with `jit = off` (connection runtime parameter, no statement per
+transaction; ADR 0055 amendment 2026-11-15, PDK-1081); the other pools keep the server's default. At 70 000 active
+devices that all have a status row, the attention view's plan costs about 630 000, above PostgreSQL's
+`jit_above_cost` (100 000) and `jit_optimize_above_cost`/`jit_inline_above_cost` (500 000). With JIT, every execution
+spent about 2.3 s compiling (2.7 s in total, 0.3 to 0.4 s without JIT), whatever the plan cache does, and the worker's
+findings loop would pay it in every round. The organization roles run short, index-driven queries where compilation
+does not pay off. `TestOrganizationPoolPlansPerExecution` runs with that data and the production pool configuration,
+and `TestPoolQueryExecModes` asserts `jit = off` on the organization pools and the default on the others.
 
 ## Authentik web workers
 

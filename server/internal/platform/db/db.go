@@ -46,11 +46,12 @@ type Options struct {
 	// connection runtime parameter so it costs no statement per transaction (plan M17 amendment r point 2). The
 	// organization pools pass OrgTransactionTimeout; a transaction may lower it with SET LOCAL, never raise it.
 	TransactionTimeout time.Duration
-	// planPerExecution, set by the organization pool constructors only, runs every statement as an unnamed one with a
+	// organizationPool, set by the organization pool constructors only, runs every statement as an unnamed one with a
 	// cached description (pgx.QueryExecModeCacheDescribe), so PostgreSQL plans each execution for the organization of
-	// the transaction instead of reusing a plan built for another one (ADR 0055). The other pools keep pgx's statement
-	// cache.
-	planPerExecution bool
+	// the transaction instead of reusing a plan built for another one, and switches JIT compilation off, which cost
+	// seconds per execution of the attention view at 70 000 devices (ADR 0055 decisions 1 and 6). The other pools
+	// keep pgx's statement cache and the server's JIT setting.
+	organizationPool bool
 }
 
 // newPool opens the query pool and, with o.HealthConn, the health pool of one connection.
@@ -91,8 +92,9 @@ func openPool(ctx context.Context, dsn string, o Options) (*pgxpool.Pool, error)
 	if o.TransactionTimeout > 0 {
 		cfg.ConnConfig.RuntimeParams[runtimeTransactionTimeout] = transactionTimeoutParam(o.TransactionTimeout)
 	}
-	if o.planPerExecution {
+	if o.organizationPool {
 		cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
+		cfg.ConnConfig.RuntimeParams["jit"] = "off"
 	}
 	cfg.MaxConnIdleTime = 5 * time.Minute
 	return pgxpool.NewWithConfig(ctx, cfg)
@@ -223,13 +225,13 @@ type OrgPool struct {
 	beforeGate func(org uuid.UUID)
 }
 
-// NewOrgPool opens the paddock_api pool. Its statements are planned per execution (ADR 0055).
+// NewOrgPool opens the paddock_api pool. Its statements are planned per execution, without JIT (ADR 0055).
 func NewOrgPool(ctx context.Context, dsn string, o Options) (*OrgPool, error) {
 	return newOrgPool(ctx, dsn, o, monotonicSince(), slog.Default())
 }
 
 func newOrgPool(ctx context.Context, dsn string, o Options, since func() time.Duration, log *slog.Logger) (*OrgPool, error) {
-	o.planPerExecution = true
+	o.organizationPool = true
 	p, err := newPool(ctx, dsn, o)
 	if err != nil {
 		return nil, err

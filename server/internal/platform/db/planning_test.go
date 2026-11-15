@@ -15,10 +15,13 @@ import (
 )
 
 // TestPoolQueryExecModes: the pools that open organization transactions plan every execution
-// (pgx.QueryExecModeCacheDescribe); every other pool, and the health and lock pools, keep pgx's statement cache
-// (ADR 0055 decisions 1 and 2). A new pool type has to be added here, so it cannot take the wrong mode silently.
+// (pgx.QueryExecModeCacheDescribe) and run without JIT; every other pool, and the health and lock pools, keep pgx's
+// statement cache and the server's JIT setting (ADR 0055 decisions 1, 2 and 6). The test covers the pool types of
+// this package as of PDK-1079 (org, notifier, platform, relay, unsealer, backup, audit reader and writer); a new type
+// needs an entry here and in connPools (export_test.go), which panics on a type it does not know.
 func TestPoolQueryExecModes(t *testing.T) {
 	env, audit := sharedPaddock(t), sharedAudit(t)
+	f := newFixture(t)
 	ctx := context.Background()
 	opts := db.Options{MaxConns: 1, HealthConn: true, LockConns: 1}
 	open := map[string]func() (any, error){
@@ -52,6 +55,26 @@ func TestPoolQueryExecModes(t *testing.T) {
 		if name == "platform" && modes["locks"] != pgx.QueryExecModeCacheStatement {
 			t.Errorf("platform pool: lock mode %s, want %s", modes["locks"], pgx.QueryExecModeCacheStatement)
 		}
+		for pool, jit := range db.RuntimeParams(p, "jit") {
+			wantJIT := ""
+			if pool == "query" && (name == "org" || name == "notifier") {
+				wantJIT = "off"
+			}
+			if jit != wantJIT {
+				t.Errorf("%s pool, %s connections: jit %q, want %q (empty: the server's default)", name, pool, jit, wantJIT)
+			}
+		}
+		if org, ok := p.(*db.OrgPool); ok {
+			var jit string
+			if err := db.InOrgTx(org, orgCtx(f.orgA), func(tx pgx.Tx) error {
+				return tx.QueryRow(ctx, "SHOW jit").Scan(&jit)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if jit != "off" {
+				t.Errorf("SHOW jit on an organization pool connection: %s, want off", jit)
+			}
+		}
 	}
 }
 
@@ -77,10 +100,15 @@ func planOrgs(t *testing.T) (small, large, smallDevice, largeDevice uuid.UUID) {
 	small, large = uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 	orgs := []uuid.UUID{small, large}
 	t.Cleanup(func() {
-		for _, table := range []string{"device_event_seen", "bundle", "device_status", "device"} {
+		// The settings rows come from the organization insert triggers (migrations 00007, 00074, 00130).
+		for _, table := range []string{"device_event_seen", "bundle", "device_status", "device",
+			"organization_login_settings", "organization_privacy_settings", "organization_patch_sla"} {
 			if _, err := super.Exec(ctx, "DELETE FROM "+table+" WHERE organization_id = ANY($1)", orgs); err != nil {
 				t.Errorf("remove the seeded %s rows: %v", table, err)
 			}
+		}
+		if _, err := super.Exec(ctx, "DELETE FROM organization WHERE id = ANY($1)", orgs); err != nil {
+			t.Errorf("remove the seeded organizations: %v", err)
 		}
 		if _, err := super.Exec(ctx, "ANALYZE device; ANALYZE device_status; ANALYZE bundle; ANALYZE device_event_seen"); err != nil {
 			t.Errorf("analyze after removing the seed: %v", err)
@@ -128,18 +156,16 @@ func planOrgs(t *testing.T) (small, large, smallDevice, largeDevice uuid.UUID) {
 // connection, each query that was catastrophic with a plan built for a small organization runs six times in a small
 // organization and then once in an organization of 70 000 devices, and that run stays within 1 s. Afterwards no
 // statement of the connection holds a generic plan, and a parameterless statement run six times in the small
-// organization is planned for the large one when it runs there.
+// organization is planned for the large one when it runs there. Every device has a status row, so the attention
+// view's plan in the large organization costs more than PostgreSQL's JIT thresholds: the pools run as in production,
+// and the 1 s bound also proves that organization pools do not JIT-compile (ADR 0055 decision 7).
 func TestOrganizationPoolPlansPerExecution(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds 70 000 devices")
 	}
 	small, large, smallDevice, largeDevice := planOrgs(t)
 	ctx := context.Background()
-	// JIT off: at 70 000 devices with status rows the attention view's plan costs more than jit_above_cost, and
-	// compiling it took about 2.3 s per execution whatever the plan cache does (PDK-1081). This test bounds the plan
-	// choice, not the compile time.
-	noJIT := func(dsn string) string { return dsn + "&jit=off" }
-	pool, err := db.NewOrgPool(ctx, noJIT(sharedPaddock(t).Worker), db.Options{ApplicationName: "paddock-test-plan", MaxConns: 1})
+	pool, err := db.NewOrgPool(ctx, sharedPaddock(t).Worker, db.Options{ApplicationName: "paddock-test-plan", MaxConns: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +174,7 @@ func TestOrganizationPoolPlansPerExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	// ListDevicesWithOutdatedSchema is the compiler's; the worker role has no right on bundle.
-	compilerPool, err := db.NewOrgPool(ctx, noJIT(sharedPaddock(t).Compiler), db.Options{ApplicationName: "paddock-test-plan", MaxConns: 1})
+	compilerPool, err := db.NewOrgPool(ctx, sharedPaddock(t).Compiler, db.Options{ApplicationName: "paddock-test-plan", MaxConns: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
