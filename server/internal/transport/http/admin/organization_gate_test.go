@@ -24,6 +24,9 @@ func TestDeletingOrganizationRefused(t *testing.T) {
 		delete_after = now(), offboarding_step = 'database' WHERE id = $1`, org); err != nil {
 		t.Fatal(err)
 	}
+	if err := e.orgPool.RefreshOrganizationStatus(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []call{
 		{method: "GET", path: "/api/v1/device-groups", cookie: alice},
 		{method: "POST", path: "/api/v1/device-groups", cookie: alice, body: map[string]any{"name": "Late"}},
