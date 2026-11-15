@@ -31,6 +31,14 @@ type auditWorld struct {
 
 	// admins are the acme administrators the cases step up as (TestAuditExactlyOnce only).
 	admins *adminPool
+
+	// sem holds the slots of the parallel cases (TestAuditExactlyOnce only, see withoutSlot).
+	sem chan struct{}
+
+	// deleted is the deleted organization the audit evidence cases share (deletedAuditOrganization).
+	deletedMu     sync.Mutex
+	deleted       *deletedAuditOrg
+	deletedFailed bool
 }
 
 // auditCase is one request against a privileged operation and the single audit event it must produce.
@@ -571,6 +579,7 @@ func TestAuditExactlyOnce(t *testing.T) {
 	w := newAuditWorld(t)
 	sem := parallelCases(t)
 	w.admins = newAdminPool(t, "a3-admin", cap(sem), env.RoleGroup("acme", "admins"))
+	w.sem = sem
 	var ops []string
 	for path, item := range doc.Paths.Map() {
 		for method, op := range item.Operations() {
@@ -583,6 +592,14 @@ func TestAuditExactlyOnce(t *testing.T) {
 	if len(ops) < 5 {
 		t.Fatalf("only %d privileged operations in the contract", len(ops))
 	}
+	// The deleted organization's evidence cases run last: its deletion, requested here, has then long reached its
+	// tombstone, and no case holds one of go test's parallel slots while waiting for it (PDK-1075).
+	w.startDeletedAuditOrg(t)
+	sort.SliceStable(ops, func(i, j int) bool {
+		_, a := deletedOrgAuditCases[ops[i]]
+		_, b := deletedOrgAuditCases[ops[j]]
+		return !a && b
+	})
 	for _, op := range ops {
 		cases, ok := auditCases[op]
 		if !ok {
@@ -628,13 +645,16 @@ func TestAuditExactlyOnce(t *testing.T) {
 		if !ok {
 			cases, ok = organizationDeletionAuditCases[op]
 		}
+		if !ok {
+			cases, ok = deletedOrgAuditCases[op]
+		}
 		// The operator roots are one value per organization that other gates rely on: its cases run one after
 		// another and write under operatorRootsMu (see ensureOperatorRoots).
 		if op == "PUT /api/v1/settings/managed-files" {
 			serial = true
 		}
 		if !ok {
-			t.Errorf("privileged operation %s has no cases in audit_once_test.go, audit_once_devices_test.go, audit_once_releases_test.go, audit_once_identity_test.go, audit_once_notifications_test.go, audit_once_software_test.go, software_requests_test.go, audit_once_backup_test.go, audit_once_backupkey_test.go, audit_once_accessreview_test.go, patch_compliance_test.go, audit_once_diagnostics_test.go or audit_once_orgdeletion_test.go", op)
+			t.Errorf("privileged operation %s has no cases in audit_once_test.go, audit_once_devices_test.go, audit_once_releases_test.go, audit_once_identity_test.go, audit_once_notifications_test.go, audit_once_software_test.go, software_requests_test.go, audit_once_backup_test.go, audit_once_backupkey_test.go, audit_once_accessreview_test.go, patch_compliance_test.go, audit_once_diagnostics_test.go, audit_once_orgdeletion_test.go or audit_once_deletedaudit_test.go", op)
 			continue
 		}
 		for _, c := range cases {

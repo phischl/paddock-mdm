@@ -200,14 +200,16 @@ func recoveryExportAuditCases(platform bool) []auditCase {
 			expectOneEvent(t, w.alice, res.RequestID, "organization.recovery_exported", "denied")
 		}},
 		{"validation failure", func(t *testing.T, w *auditWorld) {
-			// A body the binder refuses is recorded by the route's spec: in the platform log for the platform path.
-			viewer := w.alice
-			if platform {
-				viewer = w.root
-			}
-			res := call(t, viewer, http.MethodPost, target(w, w.acme), map[string]any{"recipient": 5})
+			// The step-up check precedes the binder, so the case steps up right before its request: a session signed in
+			// at the start of the gate is minutes past the step-up window by now (PDK-1075). A body the binder refuses
+			// is recorded by the route's spec: in the platform log for the platform path.
+			res := call(t, steppedUp(t, w), http.MethodPost, target(w, w.acme), map[string]any{"recipient": 5})
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
-			expectOneEvent(t, viewer, res.RequestID, "organization.recovery_exported", "failure")
+			if platform {
+				expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.recovery_exported", "failure", auditPollTimeout)
+				return
+			}
+			expectOneEvent(t, w.alice, res.RequestID, "organization.recovery_exported", "failure")
 		}},
 		{"conflict", func(t *testing.T, w *auditWorld) {
 			res := call(t, steppedUp(t, w), http.MethodPost, target(w, w.acme), body)
@@ -219,7 +221,9 @@ func recoveryExportAuditCases(platform bool) []auditCase {
 		cases = append(cases, auditCase{"not found", func(t *testing.T, w *auditWorld) {
 			res := call(t, steppedUp(t, w), http.MethodPost, target(w, uuid.New()), body)
 			expectStatus(t, res, http.StatusNotFound, "not_found")
-			expectOneEvent(t, w.root, res.RequestID, "organization.recovery_exported", "failure")
+			// An unknown organization has no log of its own: the attempt is in the platform pseudo-organization, which
+			// no portal session reads.
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.recovery_exported", "failure", auditPollTimeout)
 		}})
 	}
 	return cases
