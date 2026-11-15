@@ -433,3 +433,42 @@ Binding; where it contradicts decision 7 or the amendments above, it wins.
    records the attempt as a failure. Reason: an organization administrator must not control how a platform account gets
    its second factor; the host command stays the only path for platform administrators. In **PDK-1027**, with an
    acceptance case.
+
+### Addendum 2026-11-15 to amendment f point 2 — hand-created platform administrators (architect decision after PDK-1052 review 1)
+
+Binding; it refines point 2. The problem: the operator creates the first platform administrators by hand in Authentik
+(install §9 step 1). Those accounts carry no `paddock_managed`, so since point 2 their setup link only enrolled a
+passkey. A hand-created account without a password could then never sign in to the portal, because the sign-in asks
+for the password first.
+
+1. **The host command marks the account (main's option b, with a dedicated attribute).**
+   - `paddock-server admin enrolment-link --username <name>` sets the Authentik attribute
+     `paddock_password_by_link: true` on the account before it issues the link.
+   - Exception: the account has an upstream source connection (Authentik's user source connections list an entry for
+     it). Then the command sets nothing, issues a passkey-only link, and prints that the password stays with the
+     upstream source.
+   - The command's audit event `platform.enrolment_link_created` gains the param `password_allowed` (boolean).
+   - *Rejected:* setting `paddock_managed` itself. That attribute means "Paddock created this account" and drives the
+     identity sync's managed/synced distinction (`ports.IdentityUser.Managed`); reusing it would change how other
+     rounds treat the account.
+2. **The flow rule.** The password prompt of `paddock-recovery` runs when the account has no usable password **and**
+   either `paddock_managed` or `paddock_password_by_link` is true. The attribute stays on the account; a later link
+   with an existing password still skips the prompt, because it is then usable.
+3. **The portal endpoint is unchanged.** `POST /api/v1/users/{id}/enrolment-link`:
+   - accounts Paddock created get a password prompt;
+   - synced accounts get the passkey only;
+   - platform administrators are refused (point 4).
+
+   It never sets `paddock_password_by_link`.
+4. **Wording.** Texts, help and documents say "an account Paddock created" (or "a Paddock-managed account") where
+   they said "local user", wherever the meaning is `paddock_managed`.
+5. **install.md §9 step 1** gains one sentence: create the platform administrator in Authentik without a password and
+   without an authenticator, add it to `paddock.platform.admins`, then run `./paddock compose run --rm --no-deps paddock-worker admin
+   enrolment-link --username <name>` (the pattern of the other `admin` host commands) and hand over the link; it sets
+   the password and the passkey.
+6. **Tests (PDK-1052):**
+   - the host command on a hand-created account without a password sets the attribute, and the link shows the password
+     prompt and then the passkey setup;
+   - the same command on an account with a source connection sets nothing, and the link shows no password prompt;
+   - the portal endpoint never sets the attribute;
+   - the audit param `password_allowed` matches each case.
