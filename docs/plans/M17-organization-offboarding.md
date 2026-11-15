@@ -1351,7 +1351,7 @@ never approved has never received a bundle, so it cannot verify an uninstall, wh
   administrators to approve and then delete them, or to remove the packages.
 - `organization.deleted` gains the param `devices_pending_dropped`.
 - **This narrows the maintainer's promise "every device receives an uninstall" to every device that was ever approved.
-  Main confirms it with the maintainer before #PR merges.**
+  Main confirms it with the maintainer before PR #671 merges.**
 
 ### 2. Kept uninstalls that would expire (PDK-1062, alpha.11, medium; folded into PDK-1016's fix round)
 
