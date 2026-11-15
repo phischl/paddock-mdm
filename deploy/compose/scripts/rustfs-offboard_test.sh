@@ -348,10 +348,23 @@ add_user "$stale_b1" paddock-bundles-offboard
 add_user "$stale_b2" paddock-bundles-offboard
 add_user "$stale_e1" paddock-escrow-offboard
 add_user "$other" paddock-bundles-gateway
+# A stale holder that also holds an unrelated policy (both attached in one call: attach replaces).
+stale_m="stale-multi-$$"
+K="$stale_m" S="stale-secret-$$-$RANDOM" rcx 'rc admin user add -- t "$K" "$S" >/dev/null && rc admin policy attach t paddock-bundles-offboard,paddock-bundles-gateway --user="$K" >/dev/null'
 [[ "$(holders paddock-bundles-offboard)" == *"$stale_b1"* && "$(holders paddock-escrow-offboard)" == *"$stale_e1"* ]] &&
   ok "the stale users hold the offboarding policies" || fail "the test setup did not create the stale users"
 gateway_before="$(holders paddock-bundles-gateway)"
 if bootstrap --add-missing; then ok "--add-missing with stale offboard users"; else fail "--add-missing with stale offboard users: $(shown 4)"; fi
+m_info="$(K="$stale_m" S="" rcx 'rc admin user info --json -- t "$K"' 2>&1 || true)"
+if [[ "$m_info" == *'"paddock-bundles-gateway"'* && "$m_info" != *'"paddock-bundles-offboard"'* ]]; then
+  ok "a stale holder with another policy keeps its account and that policy, and loses only the offboarding policy"
+else
+  fail "the multi-policy stale holder after the cleanup: $(sed 's/"secret[^,]*,//' <<<"$m_info" | tr -d '\n ')"
+fi
+grep -qF "warning: the user $stale_m holds paddock-bundles-offboard and other policies" "$work/out" &&
+  ok "the run warns about the kept account" || fail "no warning for the kept account"
+[[ -z "$(K="$stale_b1" S="" rcx 'rc admin user info --json -- t "$K"' 2>/dev/null || true)" ]] &&
+  ok "a sole-policy stale holder is deleted" || fail "the sole-policy stale holder still exists"
 [[ "$(holders paddock-bundles-offboard)" == "$cur_b" ]] && ok "the bundles policy keeps only the key file's user" ||
   fail "the bundles policy is held by: $(holders paddock-bundles-offboard)"
 [[ "$(holders paddock-escrow-offboard)" == "$cur_e" ]] && ok "the escrow policy keeps only the key file's user" ||

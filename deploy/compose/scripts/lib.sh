@@ -249,14 +249,15 @@ rc_remove_policy() {
 }
 
 # rc_policy_holders <rc function> <alias> <policy>: the access keys of the users that hold the policy, one per line, from
-# `rc admin user list --json`; aborts when the listing fails. Only access keys leave this function.
+# `rc admin user list --json`; aborts when the listing fails. Only access keys leave this function. With a fourth
+# argument `detail`, each line is `<access key><TAB><all policies of the user, comma separated>`.
 rc_policy_holders() {
-  local rcf="$1" alias="$2" policy="$3" out
+  local rcf="$1" alias="$2" policy="$3" detail="${4:-}" out
   out="$("$rcf" "rc admin user list $alias --json" </dev/null)" || {
     echo "rc admin user list failed" >&2
     exit 1
   }
-  awk -v want="\"$policy\"" '
+  awk -v want="\"$policy\"" -v detail="$detail" '
     /"accessKey":/ { split($0, f, "\""); key = f[4] }
     /"policies":/ {
       collecting = 1
@@ -267,43 +268,59 @@ rc_policy_holders() {
       collecting = 0
       sub(/\].*/, "", text)
       n = split(text, names, ",")
+      all = ""
+      hit = 0
       for (i = 1; i <= n; i++) {
         gsub(/[ \t\r\n]/, "", names[i])
-        if (names[i] == want) print key
+        if (names[i] == want) hit = 1
+        gsub(/"/, "", names[i])
+        all = all (i > 1 ? "," : "") names[i]
       }
+      if (hit) print detail == "" ? key : key "\t" all
     }
   ' <<<"$out"
 }
 
 # rc_prune_policy_holders <rc function> <alias> <policy> <current access key> [<protected access key>…]: leaves exactly
-# one user with the policy, the current one, and removes every other holder of it (PDK-1054d). It removes nothing unless
-# the current key is listed as a holder, so a listing it cannot read never empties the store, and never removes a
-# protected key (the other policy's current user). Matches by the policy name only. Prints the access key ID of a removed
-# user, never a secret; rc output stays out of the log because a listing names keys. The rc commands name the key as
-# $STALE_ACCESS_KEY, which the rc function must pass into its container.
+# one user with the policy, the current one, and takes it from every other holder (PDK-1054d). A stale holder whose only
+# policy this is is removed; one that holds another policy too keeps its account and loses only this policy (detach,
+# which leaves the others attached), with a warning, so that nothing else's access is taken away. It changes nothing
+# unless the current key is listed as a holder, so a listing it cannot read never empties the store, and never touches a
+# protected key (the other policy's current user). Matches by the policy name only. Prints the access key ID of an
+# affected user, never a secret; rc output stays out of the log because a listing names keys. The rc commands name the
+# key as $STALE_ACCESS_KEY, which the rc function must pass into its container.
 rc_prune_policy_holders() {
-  local rcf="$1" alias="$2" policy="$3" current="$4" out h seen="" p protected holders=()
+  local rcf="$1" alias="$2" policy="$3" current="$4" out line h pols seen="" p protected holders=()
   shift 4
-  out="$(rc_policy_holders "$rcf" "$alias" "$policy")" || exit 1
+  out="$(rc_policy_holders "$rcf" "$alias" "$policy" detail)" || exit 1
   # An array, not a here-string loop: the rc container reads stdin and would swallow the remaining holders.
   mapfile -t holders <<<"$out"
-  for h in "${holders[@]}"; do
-    [[ "$h" != "$current" ]] || seen=1
+  for line in "${holders[@]}"; do
+    [[ "${line%%$'\t'*}" != "$current" ]] || seen=1
   done
   if [[ -z "$seen" ]]; then
-    echo "cannot confirm the current holder of $policy in the user listing: no stale user was removed" >&2
+    echo "cannot confirm the current holder of $policy in the user listing: no stale user was changed" >&2
     exit 1
   fi
-  for h in "${holders[@]}"; do
+  for line in "${holders[@]}"; do
+    h="${line%%$'\t'*}" pols="${line#*$'\t'}"
     [[ -n "$h" && "$h" != "$current" ]] || continue
     protected=""
     for p in "$@"; do [[ "$h" != "$p" ]] || protected=1; done
     [[ -z "$protected" ]] || continue
-    STALE_ACCESS_KEY="$h" "$rcf" "rc admin user rm -- $alias \"\$STALE_ACCESS_KEY\" >/dev/null" </dev/null || {
-      echo "rc admin user rm failed for a stale holder of $policy" >&2
-      exit 1
-    }
-    echo "removed the stale $policy user $h (its key is in no key file)"
+    if [[ "$pols" == "$policy" ]]; then
+      STALE_ACCESS_KEY="$h" "$rcf" "rc admin user rm -- $alias \"\$STALE_ACCESS_KEY\" >/dev/null" </dev/null || {
+        echo "rc admin user rm failed for a stale holder of $policy" >&2
+        exit 1
+      }
+      echo "removed the stale $policy user $h (its key is in no key file)"
+    else
+      STALE_ACCESS_KEY="$h" "$rcf" "rc admin policy detach $alias $policy --user=\"\$STALE_ACCESS_KEY\" >/dev/null" </dev/null || {
+        echo "rc admin policy detach $policy failed for a stale holder" >&2
+        exit 1
+      }
+      echo "warning: the user $h holds $policy and other policies: kept its account, detached $policy only"
+    fi
   done
 }
 

@@ -63,6 +63,14 @@ rc() {
       awk -v k="${!#}" '$1 != k' "$users" >"$users.new"
       mv "$users.new" "$users"
       ;;
+    "admin policy detach t "*)
+      [[ -z "${FAKE_RM_FAILS:-}" ]] || return 1
+      echo "detach ${!#}" >>"$removed"
+      local k="${!#}" pol="$5"
+      k="${k#--user=}"
+      awk -v k="$k" -v pol="$pol" '$1 == k { n = split($2, a, ","); out = ""; for (i = 1; i <= n; i++) if (a[i] != pol) out = out (out == "" ? "" : ",") a[i]; print $1, out; next } { print }' "$users" >"$users.new"
+      mv "$users.new" "$users"
+      ;;
     *) return 99 ;;
   esac
 }
@@ -95,6 +103,18 @@ grep -q '^other-user ' "$users" && grep -q '^paddock-offboard-lookalike ' "$user
 : >"$removed"
 out="$(rc_prune_policy_holders fake_rcf t "$BP" cur-b cur-e 2>&1)"
 [[ ! -s "$removed" && -z "$out" ]] && ok "a second run removes and prints nothing" || fail "a second run: $out / $(cat "$removed")"
+
+# 2b. A stale holder of another policy too keeps its account and loses only the offboarding policy.
+setup "cur-b $BP" "stale-sole $BP" "stale-multi $BP,paddock-bundles-gateway" "cur-e $EP"
+out="$(rc_prune_policy_holders fake_rcf t "$BP" cur-b cur-e 2>&1)" && ok "pruning with a multi-policy stale holder" || fail "pruning failed: $out"
+grep -q '^stale-sole ' "$users" && fail "the sole-policy stale user stays" || ok "the sole-policy stale user is removed"
+[[ "$(grep '^stale-multi ' "$users")" == "stale-multi paddock-bundles-gateway" ]] &&
+  ok "the multi-policy stale user keeps its account and its other policy" || fail "stale-multi: $(grep '^stale-multi ' "$users" || echo gone)"
+[[ "$out" == *"warning: the user stale-multi holds $BP and other policies"* && "$out" != *"removed the stale $BP user stale-multi"* ]] &&
+  ok "the output warns about the kept account, naming its access key" || fail "output: $out"
+[[ "$(holders_of "$BP")" == cur-b ]] && ok "afterwards only the current user holds the policy" || fail "holders: $(holders_of "$BP")"
+setup "cur-b $BP" "stale-multi $BP,paddock-bundles-gateway"
+if (FAKE_RM_FAILS=1 rc_prune_policy_holders fake_rcf t "$BP" cur-b) >/dev/null 2>&1; then fail "a failed detach passed"; else ok "a failed detach fails"; fi
 
 # 3. A protected key (the other policy's current user) is never removed, even when it holds this policy too.
 setup "cur-b $BP" "cur-e $BP,$EP"
