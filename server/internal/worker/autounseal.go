@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
@@ -26,15 +25,15 @@ const AutoUnsealInterval = 30 * time.Second
 const autoUnsealLockKey = 0x7061646420617573
 
 var (
-	metricAutoUnsealEnabled = promauto.NewGauge(prometheus.GaugeOpts{
+	metricAutoUnsealEnabled = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_auto_unseal_enabled",
 		Help: "1 while the platform setting of the automatic unseal of OpenBao is enabled, else 0.",
 	})
-	metricAutoUnsealSharesPresent = promauto.NewGauge(prometheus.GaugeOpts{
+	metricAutoUnsealSharesPresent = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_auto_unseal_shares_present",
 		Help: "1 when a running unsealer reports three shares on the host, else 0.",
 	})
-	metricAutoUnsealUnsealerUp = promauto.NewGauge(prometheus.GaugeOpts{
+	metricAutoUnsealUnsealerUp = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_auto_unseal_unsealer_up",
 		Help: "1 when the unsealer reported within the last 60 s, else 0.",
 	})

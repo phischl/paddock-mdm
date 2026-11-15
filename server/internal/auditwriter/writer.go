@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -33,15 +32,15 @@ const MinRetentionDays = 400
 var latencyBuckets = prometheus.ExponentialBuckets(0.005, 2, 14)
 
 var (
-	metricWritten = promauto.NewCounter(prometheus.CounterOpts{
+	metricWritten = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "paddock_audit_events_written_total", Help: "Audit events written to the index and the WORM store.",
 	})
-	metricTransaction = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	metricTransaction = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "paddock_audit_writer_transaction_seconds",
 		Help:    "Duration of one audit writer transaction (one organization of a batch), WORM put included, by result.",
 		Buckets: latencyBuckets,
 	}, []string{"result"})
-	metricPut = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	metricPut = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "paddock_audit_worm_put_seconds",
 		Help:    "Duration of a WORM put (PutLocked) to the audit bucket, by object kind and result.",
 		Buckets: latencyBuckets,

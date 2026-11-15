@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -19,7 +18,7 @@ import (
 
 // metricUnknownEvents counts device events of a type this server does not know, once per (device, event_seq); the
 // type is in the log line only, because a device chooses it (label cardinality).
-var metricUnknownEvents = promauto.NewCounter(prometheus.CounterOpts{
+var metricUnknownEvents = prometheus.NewCounter(prometheus.CounterOpts{
 	Name: "paddock_device_events_unknown_total",
 	Help: "Device events of an unknown type, from a newer agent, that were skipped; each counted once.",
 })

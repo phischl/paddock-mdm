@@ -253,6 +253,9 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	}
 	runner := app.NewActionRunner(pool, platformPool, httpx.RequestID)
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
+	if err := worker.RegisterMetrics(prometheus.DefaultRegisterer); err != nil {
+		return err
+	}
 	offboardingConnected, err := worker.NewAuditRetirementsGauge(prometheus.DefaultRegisterer)
 	if err != nil {
 		return err

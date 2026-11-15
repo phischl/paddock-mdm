@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -28,17 +27,17 @@ const retentionLockKey = 0x7061646420726574
 const legacyLoginHistoryLockKey = 0x70616464206c6f67
 
 var (
-	metricRetentionLastSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	metricRetentionLastSuccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "paddock_retention_last_success_timestamp_seconds",
 		Help: "When the retention round last purged a store in every organization without an error.",
 	}, []string{"store"})
-	metricRetentionDeleted = promauto.NewCounterVec(prometheus.CounterOpts{
+	metricRetentionDeleted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "paddock_retention_deleted_total",
 		Help: "Rows the retention round deleted, per store; devices whose inventory it purged for store retired_inventory.",
 	}, []string{"store"})
 	// metricRetentionStores lets an alert notice stores whose last success is never exported, e.g. because a pass
 	// fails from the start (PaddockRetentionPurgeMissing).
-	metricRetentionStores = promauto.NewGauge(prometheus.GaugeOpts{
+	metricRetentionStores = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_retention_stores",
 		Help: "Number of stores the retention round purges.",
 	})

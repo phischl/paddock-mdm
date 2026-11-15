@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
@@ -44,19 +43,19 @@ const offboardingLeaderCheck = 5 * time.Second
 const OffboardingBackoffCap = 30 * time.Minute
 
 var (
-	metricOffboardingStepFailing = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	metricOffboardingStepFailing = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "paddock_offboarding_step_failing",
 		Help: "Organizations whose deletion step failed at the last round, by step and error code.",
 	}, []string{"step", "error_code"})
-	metricOffboardingRetryCapped = promauto.NewGauge(prometheus.GaugeOpts{
+	metricOffboardingRetryCapped = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_offboarding_retry_capped",
 		Help: "Organizations whose failing deletion step is retried at the longest backoff.",
 	})
-	metricOffboardingCapReached = promauto.NewCounter(prometheus.CounterOpts{
+	metricOffboardingCapReached = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "paddock_offboarding_retry_cap_reached_total",
 		Help: "Times a failing deletion step reached the longest backoff.",
 	})
-	metricOffboardingFinalizeBusy = promauto.NewCounter(prometheus.CounterOpts{
+	metricOffboardingFinalizeBusy = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "paddock_offboarding_finalize_busy_total",
 		Help: "Rounds in which an organization's tombstone waited for organization transactions older than the deletion.",
 	})

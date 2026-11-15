@@ -23,7 +23,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/pkg/auditevidence"
 	"github.com/phischl/paddock-mdm/pkg/canonicaljson"
@@ -82,14 +81,14 @@ const exportMaxDecodedObject = 256 << 20
 const exportMaxDecoderWindow = 8 << 20
 
 var (
-	metricExport = promauto.NewCounterVec(prometheus.CounterOpts{
+	metricExport = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "paddock_audit_export_total", Help: "Evidence exports finished per result (ready, failed, expired).",
 	}, []string{"result"})
-	metricExportPendingAge = promauto.NewGauge(prometheus.GaugeOpts{
+	metricExportPendingAge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_audit_export_pending_age_seconds",
 		Help: "Age of the oldest pending evidence export in seconds; 0 when none is pending.",
 	})
-	metricExportBuild = promauto.NewHistogram(prometheus.HistogramOpts{
+	metricExportBuild = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name: "paddock_audit_export_build_seconds", Help: "Duration of building one evidence package.",
 		Buckets: prometheus.ExponentialBuckets(0.1, 2, 16),
 	})

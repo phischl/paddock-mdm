@@ -261,7 +261,7 @@ tests:
       - eval_time: 65m
         alertname: PaddockOpenBaoHealthMissing
         exp_alerts:
-          - exp_labels: { severity: critical }
+          - exp_labels: { severity: critical, role: paddock-worker }
             exp_annotations:
               summary: "OpenBao's seal status is unknown"
               description: "The worker runs but exports no OpenBao health."
@@ -901,4 +901,111 @@ tests:
               description: "The audit writer recorded events of a retired organization as audit.event_after_retirement in the last hour. Check in the platform audit log (code audit.event_after_retirement, param organization_id) whether that organization is really deleted."
       - eval_time: 2h
         alertname: PaddockAuditEventAfterRetirement
+        exp_alerts: []
+
+  # Main §46: a role that does not own a metric must not fire its alert, whatever default it exports.
+  - name: OpenBao is unreachable only when the worker says so, not through another role's default 0
+    interval: 1m
+    input_series:
+      - series: 'paddock_openbao_reachable{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "1x20"
+      - series: 'paddock_openbao_reachable{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x20"
+      - series: 'paddock_openbao_reachable{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PaddockOpenBaoUnreachable
+        exp_alerts: []
+
+  - name: OpenBao is unreachable when the worker reports 0 for 5 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_openbao_reachable{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x20"
+      - series: 'paddock_openbao_reachable{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PaddockOpenBaoUnreachable
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: PaddockOpenBaoUnreachable
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "OpenBao is unreachable"
+              description: "The worker cannot reach OpenBao's health endpoint."
+
+  - name: another role's openbao series does not hide that the worker exports none
+    interval: 1m
+    input_series:
+      - series: 'up{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "1x70"
+      - series: 'paddock_openbao_reachable{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PaddockOpenBaoHealthMissing
+        exp_alerts:
+          - exp_labels: { severity: critical, role: paddock-worker }
+            exp_annotations:
+              summary: "OpenBao's seal status is unknown"
+              description: "The worker runs but exports no OpenBao health."
+
+  - name: automatic unseal alerts ignore another role reporting an enabled unsealer that is not up
+    interval: 1m
+    input_series:
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_unsealer_up{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "1x70"
+      - series: 'paddock_auto_unseal_unsealer_up{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PaddockAutoUnsealerDown
+        exp_alerts: []
+
+  - name: automatic unseal alerts ignore another role reporting shares on the host
+    interval: 1m
+    input_series:
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "1x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PaddockAutoUnsealWithdrawn
+        exp_alerts: []
+
+  - name: the audit staleness alerts ignore another role's default 0
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0+60x3100"
+      - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0+60x3100"
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x3100"
+      - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x3100"
+      - series: 'paddock_audit_verify_last_run_timestamp_seconds{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x3100"
+      - series: 'paddock_audit_index_purge_last_success_timestamp_seconds{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x3100"
+    alert_rule_test:
+      - eval_time: 50h
+        alertname: PaddockAuditVerifyStale
+        exp_alerts: []
+      - eval_time: 50h
+        alertname: PaddockAuditIndexPurgeStale
         exp_alerts: []

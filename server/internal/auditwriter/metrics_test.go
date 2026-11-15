@@ -3,11 +3,13 @@ package auditwriter_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -20,10 +22,27 @@ func (failingStore) PutLocked(context.Context, string, string, []byte, time.Time
 	return errors.New("rustfs unavailable")
 }
 
+var (
+	testRegistryOnce sync.Once
+	testRegistry     = prometheus.NewRegistry()
+)
+
+// testGatherer exposes the writer's metrics through a registry of its own: the default registry stays free of them
+// (TestMetricsOnlyWhereRegistered), as in every role but the writer.
+func testGatherer(t *testing.T) prometheus.Gatherer {
+	t.Helper()
+	testRegistryOnce.Do(func() {
+		if err := auditwriter.RegisterMetrics(testRegistry); err != nil {
+			t.Fatal(err)
+		}
+	})
+	return testRegistry
+}
+
 // histogramCount is the number of observations of the histogram series name{labels} in the default registry.
 func histogramCount(t *testing.T, name string, labels map[string]string) uint64 {
 	t.Helper()
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := testGatherer(t).Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,4 +178,33 @@ func TestWriterLatencyMetrics(t *testing.T) {
 			t.Fatalf("%d manifest puts observed, want %d (one per sealed manifest)", got[4], sealed)
 		}
 	})
+}
+
+// TestMetricsOnlyWhereRegistered (main §46): the package alone puts none of its metrics into the default registry,
+// which every role serves; the staleness alerts read paddock_audit_verify_last_run_timestamp_seconds and
+// paddock_audit_index_purge_last_success_timestamp_seconds, whose default 0 would fire them in each role.
+func TestMetricsOnlyWhereRegistered(t *testing.T) {
+	names := []string{
+		"paddock_audit_verify_last_run_timestamp_seconds",
+		"paddock_audit_index_purge_last_success_timestamp_seconds",
+		"paddock_audit_verify_failed_organizations",
+		"paddock_audit_export_pending_age_seconds",
+	}
+	for _, name := range names {
+		if n, err := testutil.GatherAndCount(prometheus.DefaultGatherer, name); err != nil || n != 0 {
+			t.Errorf("default registry: %d series of %s (%v), want none", n, name, err)
+		}
+	}
+	reg := prometheus.NewRegistry()
+	if err := auditwriter.RegisterMetrics(reg); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if n, err := testutil.GatherAndCount(reg, name); err != nil || n != 1 {
+			t.Errorf("writer registry: %d series of %s (%v), want 1", n, name, err)
+		}
+	}
+	if err := auditwriter.RegisterMetrics(reg); err == nil {
+		t.Error("a second registration in the same registry succeeded")
+	}
 }

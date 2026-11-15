@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/gowebpki/jcs"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
@@ -28,7 +27,7 @@ const ManifestSchema = "paddock.audit-manifest.v1"
 // SigningKey is the OpenBao Transit key of the hash chain.
 const SigningKey = "audit-chain"
 
-var metricSeal = promauto.NewCounterVec(prometheus.CounterOpts{
+var metricSeal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "paddock_audit_seal_total", Help: "Daily manifests sealed per result.",
 }, []string{"result"})
 
