@@ -141,6 +141,9 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 	if err := prometheus.Register(recorder.Collector()); err != nil {
 		return err
 	}
+	if err := auditwriter.RegisterMetrics(prometheus.DefaultRegisterer); err != nil {
+		return err
+	}
 	if err := deps.writer.CountAfterRetirement(prometheus.DefaultRegisterer); err != nil {
 		return err
 	}

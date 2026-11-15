@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -50,11 +49,11 @@ const (
 var ErrPurgeLocked = errors.New("auditwriter: another replica holds the index purge lock")
 
 var (
-	metricPurgeLastSuccess = promauto.NewGauge(prometheus.GaugeOpts{
+	metricPurgeLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_audit_index_purge_last_success_timestamp_seconds",
 		Help: "End of the last index purge without a failed or timed-out partition (at start: the start time).",
 	})
-	metricPartitionsDropped = promauto.NewCounter(prometheus.CounterOpts{
+	metricPartitionsDropped = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "paddock_audit_index_partitions_dropped_total",
 		Help: "Monthly audit index partitions dropped by the index purge.",
 	})

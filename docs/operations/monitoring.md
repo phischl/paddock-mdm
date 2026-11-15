@@ -49,8 +49,8 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockAuditChainBroken` | the last nightly chain verification found a broken or unreadable audit chain of at least one organization (`docs/operations/audit-bucket.md` section 3) | critical |
 | `PaddockAuditEventAfterRetirement` | the audit writer recorded at least one event of a retired organization as `audit.event_after_retirement` in the last hour (`paddock_audit_events_after_retirement_total`). Rare during a deletion; otherwise the audit log of an organization that is still in use was closed, and its later events are kept without their params. Check in the platform audit log (param `organization_id`) whether the organization is really deleted. The SIEM content alerts on the code as well | warning |
 | `PaddockAuditFinalVerificationFailed` | the final verification of a deleted organization's audit chain (step `audit_final`, ADR 0052 decision 6) failed in the last hour; the deletion went on, and the organization's detail and `organization.deleted` show `audit_final_outcome` `failed`. Run `paddock-server audit verify` for that organization's days and keep its evidence export with the result | critical |
-| `PaddockAuditVerifyStale` | no nightly chain verification has finished for 36 hours, for one hour | warning |
-| `PaddockAuditIndexPurgeStale` | no complete audit index purge (01:15 UTC) has finished for 48 hours, for one hour; a purge with a failed or timed-out partition is not complete (`docs/operations/audit-bucket.md` section 4) | warning |
+| `PaddockAuditVerifyStale` | no nightly chain verification has finished for 36 hours, for one hour; selects the audit writer's targets (`role="paddock-audit-writer"`, the only role that exports the gauge) | warning |
+| `PaddockAuditIndexPurgeStale` | no complete audit index purge (01:15 UTC) has finished for 48 hours, for one hour; a purge with a failed or timed-out partition is not complete (`docs/operations/audit-bucket.md` section 4); selects `role="paddock-audit-writer"` like `PaddockAuditVerifyStale` | warning |
 | `PaddockAuditExportFailed` | an evidence export was marked failed in the last hour (the export's `error` and the audit writer's log name the cause; the requester requests again) | warning |
 | `PaddockAuditExportStuck` | the oldest pending evidence export has waited more than an hour, for 10 minutes: no audit writer builds exports | warning |
 | `PaddockAuditWriterTransactionSlow` | the audit writer's transaction p95 is above 5 s for 5 minutes (see [Attributing a slow audit writer](#attributing-a-slow-audit-writer)) | warning |
@@ -59,8 +59,8 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockCompileLatencyHigh` | bundle compilation p95 above 30 s for 10 minutes | warning |
 | `PaddockGateway5xx` | more than 5 % of the device API's responses are 5xx for 10 minutes | warning |
 | `PaddockOpenBaoSealed` | OpenBao is sealed (`docs/operations/openbao.md` section 2) | critical |
-| `PaddockOpenBaoUnreachable` | the worker cannot reach OpenBao for 5 minutes | critical |
-| `PaddockAutoUnsealWithdrawn` | automatic unseal was disabled in the portal, but the unsealer has reported shares on the host for an hour: run `./paddock auto-unseal disable` there (`docs/operations/openbao.md` section 6) | warning |
+| `PaddockOpenBaoUnreachable` | the worker (`role="paddock-worker"`, the only role that exports `paddock_openbao_reachable`) cannot reach OpenBao for 5 minutes | critical |
+| `PaddockAutoUnsealWithdrawn` | automatic unseal was disabled in the portal, but the unsealer has reported shares on the host for an hour (read from the worker's gauges, `role="paddock-worker"`): run `./paddock auto-unseal disable` there (`docs/operations/openbao.md` section 6) | warning |
 | `PaddockAutoUnsealerDown` | automatic unseal is enabled, but the unsealer has not reported for 10 minutes: OpenBao stays sealed after the next restart until it runs or three custodians unseal it | warning |
 | `PaddockOSVStale` | Ubuntu's vulnerability data has not been updated for 3 days (`docs/operations/vulnerability-data.md`) | warning |
 | `PaddockIPAllowlistBypassed` | an api runs with `PADDOCK_IP_ALLOWLIST_BYPASS=true` for 15 minutes: the application IP allow list is not enforced (`docs/operations/ip-allowlist.md`) | warning |
@@ -77,7 +77,7 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockCertificateProbeFailing` | the certificate of a public hostname cannot be read or does not verify (expired, untrusted, wrong name) for an hour | warning |
 | `PaddockBackupAgeMissing` | the backup role exports the age of fewer kinds and targets than `paddock_backup_age_series` says it should for an hour (e.g. a target that never received the set) | critical |
 | `PaddockWALArchiveLagMissing` | the backup role exports the WAL archive age of fewer stanzas than `paddock_backup_wal_stanzas` for 30 minutes | critical |
-| `PaddockOpenBaoHealthMissing` | the worker is up but exports no `paddock_openbao_reachable` for an hour | critical |
+| `PaddockOpenBaoHealthMissing` | the worker is up but its target (`role="paddock-worker"`) exports no `paddock_openbao_reachable` for an hour | critical |
 | `PaddockCertificateExpiryMissing` | fewer certificate expiries than `paddock_tls_probe_hosts` for an hour | warning |
 | `PaddockRetentionPurgeStale` | the retention round has not purged a store (`device_login_event`, `device_user_seen`, `retired_inventory`) in every organization for 48 hours, for an hour: personal data is kept beyond its retention period (ADR 0032); the worker logs `retention round failed` with the failing organization and store | critical |
 | `PaddockRetentionPurgeMissing` | the worker exports the last success of fewer stores than `paddock_retention_stores` for an hour (e.g. a pass fails from the start) | warning |

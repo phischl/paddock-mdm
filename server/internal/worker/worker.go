@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
@@ -53,7 +52,7 @@ func systemContext(ctx context.Context, org uuid.UUID, messageID string) context
 	return httpx.WithRequestID(ctx, messageID)
 }
 
-var metricDropped = promauto.NewCounterVec(prometheus.CounterOpts{
+var metricDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "paddock_worker_dropped_total",
 	Help: "Ingest messages the worker acknowledged without processing them, by reason.",
 }, []string{"reason"})

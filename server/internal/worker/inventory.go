@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/inventory"
@@ -30,7 +29,7 @@ const inventoryFullEvery = 12
 // inventorySyncLockKey is the advisory lock of the sync round ("padd inv").
 const inventorySyncLockKey = 0x7061646420696e76
 
-var metricUnmappedHosts = promauto.NewGauge(prometheus.GaugeOpts{
+var metricUnmappedHosts = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "paddock_inventory_unmapped_hosts",
 	Help: "Hosts of the inventory system of the last sync round that map to no device or to more than one; never stored.",
 })

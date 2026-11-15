@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/osv"
@@ -28,15 +27,15 @@ const osvMaxAge = 24 * time.Hour
 const osvLockKey = 0x70616464206f7376
 
 var (
-	metricOSVLastSuccess = promauto.NewGauge(prometheus.GaugeOpts{
+	metricOSVLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_osv_last_success_timestamp_seconds",
 		Help: "When Ubuntu's vulnerability data was last downloaded, confirmed unchanged or imported; 0 before the first time.",
 	})
-	metricOSVStale = promauto.NewGauge(prometheus.GaugeOpts{
+	metricOSVStale = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_osv_stale",
 		Help: "1 while Ubuntu's vulnerability data has not been updated successfully for 3 days, else 0.",
 	})
-	metricOSVEntries = promauto.NewGauge(prometheus.GaugeOpts{
+	metricOSVEntries = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_osv_entries",
 		Help: "Entries (CVE, release, source package) of Ubuntu's vulnerability data in use.",
 	})

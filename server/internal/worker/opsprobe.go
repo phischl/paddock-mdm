@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 // Probe intervals of the operations probe.
@@ -20,24 +19,24 @@ const (
 )
 
 var (
-	metricOpenBaoSealed = promauto.NewGauge(prometheus.GaugeOpts{
+	metricOpenBaoSealed = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_openbao_sealed",
 		Help: "1 while OpenBao reports sealed, 0 while unsealed; unchanged while it is unreachable.",
 	})
-	metricOpenBaoReachable = promauto.NewGauge(prometheus.GaugeOpts{
+	metricOpenBaoReachable = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_openbao_reachable",
 		Help: "1 when the last health request to OpenBao succeeded, else 0.",
 	})
-	metricTLSExpiry = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	metricTLSExpiry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "paddock_tls_certificate_expiry_timestamp_seconds",
 		Help: "Expiry (notAfter) of the certificate each public hostname serves.",
 	}, []string{"host"})
-	metricTLSProbeSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	metricTLSProbeSuccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "paddock_tls_probe_success",
 		Help: "1 when the last TLS handshake with the public hostname returned a certificate that verifies for the hostname against the trust store, else 0.",
 	}, []string{"host"})
 	// metricTLSProbeHosts lets an alert notice expiries that are never exported (PaddockCertificateExpiryMissing).
-	metricTLSProbeHosts = promauto.NewGauge(prometheus.GaugeOpts{
+	metricTLSProbeHosts = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_tls_probe_hosts",
 		Help: "Number of public hostnames whose certificate expiry the worker probes.",
 	})
