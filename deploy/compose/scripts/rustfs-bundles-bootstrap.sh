@@ -9,8 +9,23 @@
 # presigned URLs with it), and a user for the revocation-issuer that may list and delete header versions only (plan
 # M4c decision 9), and a user for the api that writes, reads and deletes the packages stored in Paddock below apt/ of
 # bundles and presigns their GETs, nothing else (plan M13c decision 12, ADR 0050), and a user for the worker that writes
-# the repositories' signed index below apt/*/dists/ of bundles, nothing else (plan M13c decision 13). Idempotent.
+# the repositories' signed index below apt/*/dists/ of bundles, nothing else (plan M13c decision 13), and the two users of
+# the organization deletion (plan M17 amendment k). Idempotent.
+#   rustfs-bundles-bootstrap.sh [--add-missing]
+# --add-missing (./paddock upgrade) only adds what is missing: an existing bucket keeps its versioning and bucket
+# policy, an existing policy its statements and an existing user its secret and policies, so an upgrade never rewrites
+# what an installation already holds (the escrowed headers above all). Without it, every policy and secret is set again.
 set -euo pipefail
+
+ADD_MISSING=
+case "${1:-}" in
+  "") ;;
+  --add-missing) ADD_MISSING=1 ;;
+  *)
+    echo "usage: $0 [--add-missing]" >&2
+    exit 2
+    ;;
+esac
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
@@ -42,11 +57,16 @@ ESCROW_REVOCATION_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_revocation_acces
 ESCROW_REVOCATION_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_revocation_secret_key")"
 ESCROW_BACKUP_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_backup_access_key")"
 ESCROW_BACKUP_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_backup_secret_key")"
+BUNDLES_OFFBOARD_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_bundles_offboard_access_key")"
+BUNDLES_OFFBOARD_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_bundles_offboard_secret_key")"
+ESCROW_OFFBOARD_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_offboard_access_key")"
+ESCROW_OFFBOARD_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_offboard_secret_key")"
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY COMPILER_ACCESS_KEY COMPILER_SECRET_KEY GATEWAY_ACCESS_KEY GATEWAY_SECRET_KEY \
   BUNDLES_API_ACCESS_KEY BUNDLES_API_SECRET_KEY BUNDLES_WORKER_ACCESS_KEY BUNDLES_WORKER_SECRET_KEY \
   ARTIFACTS_ACCESS_KEY ARTIFACTS_SECRET_KEY ESCROW_WORKER_ACCESS_KEY ESCROW_WORKER_SECRET_KEY ESCROW_API_ACCESS_KEY \
   ESCROW_API_SECRET_KEY ESCROW_REVOCATION_ACCESS_KEY ESCROW_REVOCATION_SECRET_KEY ESCROW_BACKUP_ACCESS_KEY \
-  ESCROW_BACKUP_SECRET_KEY
+  ESCROW_BACKUP_SECRET_KEY BUNDLES_OFFBOARD_ACCESS_KEY BUNDLES_OFFBOARD_SECRET_KEY ESCROW_OFFBOARD_ACCESS_KEY \
+  ESCROW_OFFBOARD_SECRET_KEY
 export_rc_host bundles "$ENDPOINT" AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 
 # Credentials travel as inherited environment variables, never as command-line arguments.
@@ -60,7 +80,8 @@ rc() {
     -e BUNDLES_API_ACCESS_KEY -e BUNDLES_API_SECRET_KEY -e BUNDLES_WORKER_ACCESS_KEY -e BUNDLES_WORKER_SECRET_KEY \
     -e ARTIFACTS_ACCESS_KEY -e ARTIFACTS_SECRET_KEY -e ESCROW_WORKER_ACCESS_KEY -e ESCROW_WORKER_SECRET_KEY \
     -e ESCROW_API_ACCESS_KEY -e ESCROW_API_SECRET_KEY -e ESCROW_REVOCATION_ACCESS_KEY -e ESCROW_REVOCATION_SECRET_KEY \
-    -e ESCROW_BACKUP_ACCESS_KEY -e ESCROW_BACKUP_SECRET_KEY --entrypoint sh "$RC_IMAGE" -c "$1"
+    -e ESCROW_BACKUP_ACCESS_KEY -e ESCROW_BACKUP_SECRET_KEY -e BUNDLES_OFFBOARD_ACCESS_KEY -e BUNDLES_OFFBOARD_SECRET_KEY \
+    -e ESCROW_OFFBOARD_ACCESS_KEY -e ESCROW_OFFBOARD_SECRET_KEY --entrypoint sh "$RC_IMAGE" -c "$1"
 }
 
 for _ in $(seq 1 30); do
@@ -68,17 +89,25 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
+declare -A created=()
 for b in "$BUCKET" "$ARTIFACTS_BUCKET" "$ESCROW_BUCKET"; do
   if aws s3api head-bucket --bucket "$b" >/dev/null 2>&1; then
     echo "bucket $b exists"
   else
     aws s3api create-bucket --bucket "$b" >/dev/null
+    created[$b]=1
     echo "created bucket $b"
   fi
 done
+# configure <bucket>: whether this run sets the bucket's own configuration (versioning, bucket policy).
+configure() { [[ -z "$ADD_MISSING" || -n "${created[$1]:-}" ]]; }
 
-# policy <name> <statements>: create or replace a policy.
+# policy <name> <statements>: create or replace a policy; with --add-missing create it only when it is missing.
 policy() {
+  if [[ -n "$ADD_MISSING" ]] && ! rc_policy_missing rc bundles "$1"; then
+    echo "policy $1 exists, left as it is"
+    return
+  fi
   printf '{"Version":"2012-10-17","Statement":%s}' "$2" |
     rc "cat >/tmp/policy.json && rc admin policy create bundles $1 /tmp/policy.json >/dev/null"
 }
@@ -90,6 +119,9 @@ user() {
   if rc_user_absent rc "rc admin user info -- bundles \"\$$1\""; then
     rc "rc admin user add -- bundles \"\$$1\" \"\$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')\" >/dev/null"
     echo "created bundles user for $2"
+  elif [[ -n "$ADD_MISSING" ]]; then
+    echo "bundles user for $2 exists, left as it is"
+    return
   fi
   rc "rc admin user passwd --password-from-env ${1/ACCESS/SECRET} -- bundles \"\$$1\" >/dev/null"
   rc "rc admin policy attach bundles $2 --user=\"\$$1\" >/dev/null"
@@ -105,14 +137,18 @@ policy paddock-artifacts-api "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\",\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ARTIFACTS_BUCKET/*\"]}]"
 # Escrowed headers keep every version (an overwritten generation stays recoverable); no Object Lock, so a Destroy can
 # delete them (architecture §12.4).
-aws s3api put-bucket-versioning --bucket "$ESCROW_BUCKET" --versioning-configuration Status=Enabled
-echo "versioning of $ESCROW_BUCKET enabled"
+if configure "$ESCROW_BUCKET"; then
+  aws s3api put-bucket-versioning --bucket "$ESCROW_BUCKET" --versioning-configuration Status=Enabled
+  echo "versioning of $ESCROW_BUCKET enabled"
+fi
 
 # Agent packages are public-read (plan M4b decision 1): anonymous GetObject below packages/ only; listing and every
 # other prefix still need credentials or a presigned URL.
-printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/packages/*"]}]}' \
-  "$ARTIFACTS_BUCKET" | aws s3api put-bucket-policy --bucket "$ARTIFACTS_BUCKET" --policy file:///dev/stdin
-echo "packages/ of $ARTIFACTS_BUCKET is public-read"
+if configure "$ARTIFACTS_BUCKET"; then
+  printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/packages/*"]}]}' \
+    "$ARTIFACTS_BUCKET" | aws s3api put-bucket-policy --bucket "$ARTIFACTS_BUCKET" --policy file:///dev/stdin
+  echo "packages/ of $ARTIFACTS_BUCKET is public-read"
+fi
 
 # The packages stored in Paddock (plan M13c decision 12): the api uploads and deletes them and presigns the GET apt is
 # redirected to, below apt/ only; the worker's repository build (PDK-813) has its own grant.
@@ -143,8 +179,8 @@ policy paddock-escrow-api "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]}]"
 user ESCROW_API_ACCESS_KEY paddock-escrow-api
 # Installations bootstrapped before carry the former policy paddock-escrow-read (GetObject on the whole bucket); left
-# attached, it would void the scope above.
-rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY
+# attached, it would void the scope above. An upgrade (--add-missing) removes nothing.
+[[ -n "$ADD_MISSING" ]] || rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY
 # The revocation-issuer deletes every version of the headers of a destroyed device (plan M4c decision 9).
 policy paddock-escrow-destroy "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},
@@ -156,4 +192,25 @@ policy paddock-escrow-backup "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},
   {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\"]}]"
 user ESCROW_BACKUP_ACCESS_KEY paddock-escrow-backup
+# Organization deletion (plan M17 amendment k): a credential of its own, used only by the offboarding step, that lists
+# and deletes what an organization left below org/ and apt/ of bundles and every version of its escrowed headers and
+# diagnostics bundles. It reads nothing (no GetObject), and the worker's and the revocation-issuer's grants stay as they
+# are (agent contract 7: offboarding is not a revocation). Residual risk RR-140.
+policy paddock-bundles-offboard "$(offboard_bundles_statements "$BUCKET")"
+user BUNDLES_OFFBOARD_ACCESS_KEY paddock-bundles-offboard
+policy paddock-escrow-offboard "$(offboard_escrow_statements "$ESCROW_BUCKET")"
+user ESCROW_OFFBOARD_ACCESS_KEY paddock-escrow-offboard
+# A user left from an interrupted run, or one --add-missing kept with an outdated secret, must not pass as ready: the
+# offboarding step would fail only when an organization is deleted. Each credential lists org/ of its bucket; only the
+# outcome is printed, never a key.
+offboard_probe() {
+  if ! AWS_ACCESS_KEY_ID="${!1}" AWS_SECRET_ACCESS_KEY="${!2}" aws s3api list-objects-v2 --bucket "$3" --prefix org/ \
+    --max-keys 1 >/dev/null 2>&1; then
+    echo "the organization deletion's credential cannot list org/ of $3: run ./paddock bootstrap buckets" >&2
+    exit 1
+  fi
+  echo "organization deletion credential of $3 verified"
+}
+offboard_probe BUNDLES_OFFBOARD_ACCESS_KEY BUNDLES_OFFBOARD_SECRET_KEY "$BUCKET"
+offboard_probe ESCROW_OFFBOARD_ACCESS_KEY ESCROW_OFFBOARD_SECRET_KEY "$ESCROW_BUCKET"
 echo "bundles, agent artifacts and escrow bucket bootstrap complete"

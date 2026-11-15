@@ -20,7 +20,8 @@ usage: ./paddock <command> [arguments]
   compose <args...>               docker compose with this host's files
   bao <args...>                   the bao CLI inside the openbao container (BAO_TOKEN from the environment)
   bootstrap openbao|buckets|audit-bucket|fleet
-                                  configure OpenBao, the buckets or Fleet (docs/operations/install.md)
+                                  configure OpenBao, the buckets or Fleet (docs/operations/install.md);
+                                  buckets --add-missing only adds missing users and policies (./paddock upgrade)
   agent-release <version> <dir>   upload and publish signed agent artifacts (control plane)
   agent-rollout <version> [--waves 1,10,50,100] [--min-wave-minutes N] [--failure-threshold-percent P]
                 [--failure-threshold-min M]
@@ -514,7 +515,8 @@ case "$cmd" in
         ;;
       buckets)
         require_host controlplane lab "bootstrap buckets"
-        "$BUNDLE_DIR/scripts/rustfs-bundles-bootstrap.sh"
+        [[ $# -eq 1 || ($# -eq 2 && "$2" == --add-missing) ]] || die "usage: ./paddock bootstrap buckets [--add-missing]" 2
+        "$BUNDLE_DIR/scripts/rustfs-bundles-bootstrap.sh" "${@:2}"
         ;;
       audit-bucket)
         require_host audit lab "bootstrap audit-bucket"

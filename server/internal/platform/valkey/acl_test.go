@@ -310,6 +310,10 @@ func TestACLRoleMatrix(t *testing.T) {
 			{"DeleteUpdateRequest", func(ctx context.Context) error { return wkCache.DeleteUpdateRequest(ctx, dev) }},
 			{"DeleteCommand", func(ctx context.Context) error { return wkCache.DeleteCommand(ctx, dev, cmdID) }},
 			{"PutOffer nil", func(ctx context.Context) error { return wkCache.PutOffer(ctx, nil) }},
+			// Organization deletion deletes the bundle pointers and the time ticket (plan M17 amendment k point 5).
+			{"DEL bp: and tt: (organization deletion)", func(ctx context.Context) error {
+				return worker.Do(ctx, worker.B().Del().Key("bp:x", "tt:x").Build()).Error()
+			}},
 		}},
 	}
 	for _, r := range roles {
@@ -330,6 +334,13 @@ func TestACLRoleMatrix(t *testing.T) {
 		{"api", []string{"HGETALL", "dk:x"}},
 		{"api", []string{"GET", "revocation-jti:x"}},
 		{"worker", []string{"GET", "stepup:x"}},
+		// Write-only for the worker (%W~bp:* %W~tt:*, plan M17 amendment k): it deletes them and reads neither; the
+		// gateway still cannot write them (ADR 0051 AZ-4).
+		{"worker", []string{"GET", "bp:x"}},
+		{"worker", []string{"GET", "tt:x"}},
+		{"worker", []string{"HGETALL", "bp:x"}},
+		{"gateway", []string{"DEL", "bp:x"}},
+		{"gateway", []string{"SET", "tt:x", "v"}},
 		{"compiler", []string{"HGETALL", "cmd:x"}},
 		{"escrow_reader", []string{"GET", "stepup:x"}},
 		{"escrow_reader", []string{"SET", "stepup:x", "v"}},

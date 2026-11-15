@@ -77,7 +77,8 @@ RM='1||✗ Failed to remove policy: Network error: HTTP 500: <Error><Code>Intern
 expect "$(run)" "info,userinfo,rm abort" "rm refused (policy in use)"
 
 bootstrap="$here/rustfs-bundles-bootstrap.sh"
-if grep -q '^rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY$' "$bootstrap" &&
+# Only --add-missing (./paddock upgrade, plan M17 amendment k) skips the removal: it changes nothing that exists.
+if grep -qE '^(\[\[ -n "\$ADD_MISSING" \]\] \|\| )?rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY$' "$bootstrap" &&
   ! grep -q 'rc admin policy \(info\|detach\|rm\)' "$bootstrap"; then
   echo "ok   rustfs-bundles-bootstrap.sh removes paddock-escrow-read only through rc_remove_policy"
 else

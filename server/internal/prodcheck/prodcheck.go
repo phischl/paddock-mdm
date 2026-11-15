@@ -271,7 +271,7 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		results = append(results, checkRetentionInterval(c))
 	}
 	if _, ok := c.Services["paddock-worker"]; ok {
-		results = append(results, checkAuditIndexRetention(c))
+		results = append(results, checkAuditIndexRetention(c), checkOffboardCredentials(c))
 	}
 	if _, ok := c.Services["paddock-notifier"]; ok {
 		results = append(results, checkSMTPPresence(c))
@@ -1612,6 +1612,56 @@ func checkBackupSecretsConfined(c Config) Result {
 		}
 	}
 	return result("backup: no S3 credentials or encryption key on the worker", f)
+}
+
+// offboardService is the only service that holds the organization deletion's object-store credentials (plan M17
+// amendment k point 2): the full worker, not the ingest workers.
+const offboardService = "paddock-worker"
+
+// offboardCredentials maps the organization deletion's secrets to the variables naming their files.
+var offboardCredentials = map[string]string{
+	"rustfs_bundles_offboard_access_key": "PADDOCK_OFFBOARD_BUNDLES_S3_ACCESS_KEY_FILE",
+	"rustfs_bundles_offboard_secret_key": "PADDOCK_OFFBOARD_BUNDLES_S3_SECRET_KEY_FILE",
+	"rustfs_escrow_offboard_access_key":  "PADDOCK_OFFBOARD_ESCROW_S3_ACCESS_KEY_FILE",
+	"rustfs_escrow_offboard_secret_key":  "PADDOCK_OFFBOARD_ESCROW_S3_SECRET_KEY_FILE",
+}
+
+// checkOffboardCredentials fails when the full worker lacks one of the organization deletion's credentials or its
+// variable (the step objects would fail closed and deleting an organization would stall), or when any other service
+// holds one: they may delete every organization's escrowed headers (RR-140). Whether the files exist is the secret
+// files item's.
+func checkOffboardCredentials(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		s := c.Services[name]
+		for _, m := range s.Secrets {
+			if _, ok := offboardCredentials[m.Source]; ok && name != offboardService {
+				f = append(f, name+": holds the organization deletion's secret "+m.Source)
+			}
+		}
+		for v := range s.Environment {
+			if strings.HasPrefix(v, "PADDOCK_OFFBOARD_") && name != offboardService {
+				f = append(f, name+": "+v+" is set")
+			}
+		}
+	}
+	w := c.Services[offboardService]
+	for _, secret := range slices.Sorted(maps.Keys(offboardCredentials)) {
+		v := offboardCredentials[secret]
+		target := ""
+		for _, m := range w.Secrets {
+			if m.Source == secret {
+				target = m.Target
+			}
+		}
+		switch {
+		case target == "":
+			f = append(f, offboardService+": does not mount the secret "+secret)
+		case env(w, v) != target:
+			f = append(f, fmt.Sprintf("%s: %s is %q, want %q", offboardService, v, env(w, v), target))
+		}
+	}
+	return result("offboarding: object-store credentials on paddock-worker only, and complete there", f)
 }
 
 // checkRetentionInterval fails on a retention round shorter than the production minimum or longer than the maximum,
