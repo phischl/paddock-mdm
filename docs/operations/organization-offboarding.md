@@ -3,7 +3,7 @@
 How a platform administrator deletes an organization, what its users and devices experience, what each failure of the
 deletion means and what to do, and how to repeat a deletion after a restore (ADR 0052, plan M17). What is deleted,
 what is kept and on which basis: [retention.md](../compliance/retention.md), section "Organization offboarding".
-Residual risks: [residual-risks.md](../compliance/residual-risks.md) RR-137, RR-138, RR-140, RR-142, RR-143.
+Residual risks: [residual-risks.md](../compliance/residual-risks.md) RR-137, RR-138, RR-140, RR-142 to RR-144.
 
 Sentences marked **(PDK-1017)** describe the audit retirement, the reading of retained evidence and the host command
 `paddock-server audit deletions`, which arrive with PDK-1017; they follow plan M17 amendment o.
@@ -141,6 +141,10 @@ step waits for that acknowledgement.
   manifest after a retired one. Do not read the missing days of a deleted organization as a missing-evidence finding.
 - Events of the organization that arrive after the retirement are not lost: they are written to the platform
   pseudo-organization as `audit.event_after_retirement` with their original code.
+- An `audit.event_after_retirement` for an organization that is **not** being deleted means that something requested
+  its audit retirement without a deletion (RR-144). Investigate a compromised control plane: find the
+  `organization.audit_retirement_requested` event in the platform audit log, check which role wrote it and rotate
+  that role's credentials. The alert on `audit.event_after_retirement` is defined by PDK-1017.
 
 ## Reading the retained evidence (PDK-1017)
 
