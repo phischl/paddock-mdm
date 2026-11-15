@@ -472,3 +472,29 @@ for the password first.
    - the same command on an account with a source connection sets nothing, and the link shows no password prompt;
    - the portal endpoint never sets the attribute;
    - the audit param `password_allowed` matches each case.
+
+### Addendum 2026-11-15 b to amendment f — hand-created organization administrators (architect decision; ticket PDK-1055)
+
+Binding; it refines the addendum above for organization accounts.
+
+1. **Supported sources of an organization administrator.** An organization administrator either comes from the
+   organization's identity source, or is created in Paddock (portal *Users* → create, which sets `paddock_managed`) and
+   then added to a role group. Both kinds already get a working link from the portal: the source account gets the
+   passkey only, the Paddock-created account gets password and passkey. An account created by hand in Authentik is
+   outside that model. `docs/operations/getting-started.md` step 3 and `install.md` §9 say so.
+2. **Operator path for a hand-created account.** `paddock-server admin enrolment-link --username <name>` also accepts
+   an account that is a direct member of an organization's `admins`, `operators` or `auditors` group, not only of
+   `paddock.platform.admins`. Everything else is as in the addendum above: it marks `paddock_password_by_link: true`
+   unless the account has an upstream source connection, and the link then sets the password and the passkey.
+   - The event `platform.enrolment_link_created` gains `organization_id` (the account's organization, or none for a
+     platform administrator).
+   - The event is recorded in the platform pseudo-organization: the operator acts on the host, outside any
+     organization.
+   - The command refuses an account that is in no portal role group.
+3. **The portal stays unchanged.** It never marks accounts. An organization administrator must not be able to give a
+   local password to an account Paddock did not create; that remains an operator decision on the host.
+4. **Priority: alpha.11**, small (one command check, one audit param, documentation). Risk medium, Sonnet. Tests:
+   - a hand-created organization admin without a password gets a link with password and passkey through the host
+     command;
+   - an account in no role group is refused;
+   - the portal endpoint still never sets the attribute.
