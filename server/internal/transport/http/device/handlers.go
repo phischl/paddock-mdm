@@ -190,7 +190,7 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	outside := g.d.AgentOutsideWindow != nil && g.d.AgentOutsideWindow(req.AgentVersion)
 	switch {
 	case dev.key.Status == devicecache.KeyOffboarded:
-		if out.Commands, delivered, err = g.commands(r, dev, leavingCommand); err != nil {
+		if out.Commands, _, err = g.commands(r, dev, leavingCommand); err != nil {
 			fail(err)
 			return
 		}

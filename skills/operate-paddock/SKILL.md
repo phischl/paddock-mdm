@@ -196,6 +196,8 @@ Decline, say why in one sentence, and name the portal page:
 | Generate, confirm or discard a backup key (a new key while one is active is a rotation) | `generateBackupKey`, `confirmBackupKey`, `discardBackupKey` | *Platform › Backups* |
 | Approve, cancel or abandon a restore plan (approving needs the typed word `restore`, abandoning a running plan the word `abandon`; the host executes it) | `createBackupRestorePlan`, `cancelBackupRestorePlan`, `abandonBackupRestorePlan` | *Platform › Backups* |
 | Request the deletion of an organization (needs the typed organization slug and a reason; it can be cancelled during the grace period) | `deleteOrganization` | the admin API (no portal page yet) |
+| Export the recovery keys and local administrator passwords of an organization before its deletion (encrypted to a public key or passphrase; only during the grace period) | `exportRecoveryKeys`, `exportOrganizationRecoveryKeys` | *Export recovery keys* (organization banner; platform: the organization's row in *Platform › Organizations*) |
+| Request the signed evidence package of a deleted organization for its auditors | `createDeletedOrganizationAuditExport` | *Platform › Organizations › <deleted organization> › Retained audit* |
 
 The complete, generated list is in [`references/tools.md`](references/tools.md) under *Step-up operations*. A change
 that needs a step-up only in some cases (an effectively Full profile, a file on a sensitive path) answers
