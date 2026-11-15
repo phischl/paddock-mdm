@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -30,6 +31,8 @@ type fakeOffboarder struct {
 	advance  func(org uuid.UUID) error
 	// done decides whether an Advance completes the deletion; nil means every Advance does, so one call ends an organization.
 	done func(org uuid.UUID) bool
+	// deadline is the round deadline the last Advance got.
+	deadline time.Time
 }
 
 func (f *fakeOffboarder) StartDue(context.Context) ([]uuid.UUID, error) {
@@ -41,8 +44,9 @@ func (f *fakeOffboarder) Pending(context.Context) ([]pgstore.Organization, error
 	return f.pending, nil
 }
 
-func (f *fakeOffboarder) Advance(_ context.Context, org uuid.UUID) (bool, error) {
+func (f *fakeOffboarder) AdvanceWithin(_ context.Context, org uuid.UUID, deadline time.Time) (bool, error) {
 	f.attempts[org] = append(f.attempts[org], f.now())
+	f.deadline = deadline
 	err := f.advance(org)
 	return err == nil && (f.done == nil || f.done(org)), err
 }
@@ -374,6 +378,54 @@ func TestOffboardingRoundBetweenSteps(t *testing.T) {
 	}
 	if len(s.log) != 1 {
 		t.Fatalf("%d steps after one that used the whole budget, want 1", len(s.log))
+	}
+}
+
+// TestOffboardingRoundLargeDatabaseStep (plan M17 amendment 2026-11-16 q points 6 and 9): the database step gets the
+// round's deadline, works in batches up to it and yields without completing; the large organization continues next
+// round, and the other organization still takes a step in every round instead of waiting behind one unbounded step.
+func TestOffboardingRoundLargeDatabaseStep(t *testing.T) {
+	large, small := uuid.New(), uuid.New()
+	s, now := newStepper(time.Second, map[uuid.UUID]int{large: 1_000_000, small: 4})
+	f := s.fake(large, small)
+	inner := f.advance
+	var deadlines []time.Time
+	f.advance = func(org uuid.UUID) error {
+		if org != large {
+			return inner(org)
+		}
+		s.log = append(s.log, org)
+		deadlines = append(deadlines, f.deadline)
+		for now.Before(f.deadline) {
+			*now = now.Add(2 * time.Second)
+			s.left[org]--
+		}
+		return nil
+	}
+	r := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return *now })
+	for round := range 5 {
+		start := *now
+		before := s.left[small]
+		s.log = nil
+		if err := r.Round(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := deadlines[len(deadlines)-1]; !got.Equal(start.Add(OffboardingRoundBudget)) {
+			t.Fatalf("round %d: the database step got deadline %v, want the round's %v", round, got, start.Add(OffboardingRoundBudget))
+		}
+		if over := now.Sub(start) - OffboardingRoundBudget; over < 0 || over > 3*time.Second {
+			t.Fatalf("round %d took %v, want the budget %v plus at most one batch and one step", round, now.Sub(start), OffboardingRoundBudget)
+		}
+		if n := slices.Index(s.log, large); n < 0 || slices.Index(s.log[n+1:], large) >= 0 {
+			t.Fatalf("round %d ran %v, want the large deletion exactly once, yielding at the budget", round, s.log)
+		}
+		if round > 0 && s.left[small] == before && before > 0 {
+			t.Fatalf("round %d ran %v: the small deletion took no step behind the large database step", round, s.log)
+		}
+		*now = now.Add(OffboardingInterval)
+	}
+	if s.left[small] != 0 || s.left[large] <= 0 {
+		t.Fatalf("steps left: small %d, large %d; want the small deletion done and the large one still running", s.left[small], s.left[large])
 	}
 }
 

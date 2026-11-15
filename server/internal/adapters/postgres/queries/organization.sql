@@ -161,12 +161,15 @@ SET offboarding_error_code = @error_code, updated_at = now(),
 WHERE id = @id AND status = 'deleting' AND offboarding_step = @step
 RETURNING *;
 
--- Progress of a step that removes in batches, stored per batch, so a crash does not lose the count of what is gone.
--- name: AddOrganizationOffboardingCount :exec
+-- Progress of the database step, stored per batch with the delete_order it reached (plan M17 amendment 2026-11-16 q
+-- point 6), so neither a crash nor a yield at the round budget loses the count of what is gone or where the step
+-- continues; a NULL position starts at the first registered table.
+-- name: SaveOrganizationOffboardingDatabaseBatch :exec
 UPDATE organization
-SET offboarding_counts = offboarding_counts || jsonb_build_object(@step::text,
-      coalesce((offboarding_counts ->> @step::text)::bigint, 0) + @added::bigint)
-WHERE id = @id AND status = 'deleting' AND offboarding_step = @step;
+SET offboarding_counts = offboarding_counts || jsonb_build_object('database',
+      coalesce((offboarding_counts ->> 'database')::bigint, 0) + @added::bigint),
+    offboarding_db_order = sqlc.narg(db_order)::int
+WHERE id = @id AND status = 'deleting' AND offboarding_step = 'database';
 
 -- Step audit_final (plan M17 amendment o point 1): the claim of the one organization.audit_retirement_requested,
 -- which also starts the step's wait.

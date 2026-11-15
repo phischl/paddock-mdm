@@ -29,7 +29,8 @@ import (
 // point 5): a transaction open for an hour is an anomaly an operator must see.
 const FinalizeWaitAlert = time.Hour
 
-// offboardingBatch is the max_rows of one paddock_offboard_delete_batch call (plan M17 decision 7).
+// offboardingBatch is the max_rows of one paddock_offboard_delete_batch_from call (plan M17 decision 7, amendment
+// 2026-11-16 q point 6).
 const offboardingBatch = 1000
 
 // AuditFinalWaitAlert is how long step audit_final waits for the audit writer's acknowledgement before it records
@@ -39,6 +40,10 @@ const AuditFinalWaitAlert = time.Hour
 // errAuditFinalPending means step audit_final waits for the audit writer's acknowledgement; the step is retried next
 // round without a failure.
 var errAuditFinalPending = errors.New("offboarding: the audit writer has not acknowledged the final verification yet")
+
+// errDatabaseYield means the database step spent the round's budget between two batches and stored its position; the
+// step stays current and continues from there in the next pass or round, without a failure (amendment q point 6).
+var errDatabaseYield = errors.New("offboarding: the database step yields at the round budget")
 
 // ErrOffboardingWaiting means the tombstone waits for organization transactions that started before the deletion was
 // visible to every process (paddock_offboard_quiesce returned false); the job asks again next round. It is no failure.
@@ -145,8 +150,17 @@ func (o *Offboarding) Pending(ctx context.Context) ([]pgstore.Organization, erro
 // checkpoint is written with its organization.deletion_step_completed event, so a crash between two steps repeats at
 // most the step that was running. A failed step returns an *OffboardingError with its code, stored on the
 // organization; organization.deletion_step_failed is recorded only when the code differs from the stored one. While
-// the tombstone waits for older transactions Advance returns ErrOffboardingWaiting.
+// the tombstone waits for older transactions Advance returns ErrOffboardingWaiting. Advance has no round budget: the
+// database step runs until nothing is left; the round uses AdvanceWithin.
 func (o *Offboarding) Advance(ctx context.Context, org uuid.UUID) (done bool, err error) {
+	return o.AdvanceWithin(ctx, org, time.Time{})
+}
+
+// AdvanceWithin is Advance inside a round whose shared budget ends at deadline (plan M17 amendment 2026-11-16 q point
+// 6): the database step checks it between batches and, once it is reached, stores its position and returns without
+// completing; the step continues from that position at the next call. The other steps are not cut short. A zero
+// deadline means no budget.
+func (o *Offboarding) AdvanceWithin(ctx context.Context, org uuid.UUID, deadline time.Time) (done bool, err error) {
 	row, err := o.organization(ctx, org)
 	if err != nil {
 		return false, err
@@ -173,12 +187,12 @@ func (o *Offboarding) Advance(ctx context.Context, org uuid.UUID) (done bool, er
 		count, err = o.devices(ctx, row)
 		totals = map[string]string{"uninstalls_reissued": countUninstallsReissued, "disarms_issued": countDisarmsIssued}
 	} else {
-		count, err = o.run(ctx, row, step)
+		count, err = o.run(ctx, row, step, deadline)
 	}
 	if errors.Is(err, ErrOffboardingWaiting) {
 		return false, err
 	}
-	if errors.Is(err, errAuditFinalPending) {
+	if errors.Is(err, errAuditFinalPending) || errors.Is(err, errDatabaseYield) {
 		return false, nil
 	}
 	if err != nil {
@@ -212,7 +226,7 @@ func stepError(code string, err error) error {
 }
 
 // run executes one step and returns what it removed, also when it fails after partial progress.
-func (o *Offboarding) run(ctx context.Context, row pgstore.Organization, step string) (int, error) {
+func (o *Offboarding) run(ctx context.Context, row pgstore.Organization, step string, deadline time.Time) (int, error) {
 	switch step {
 	case offboarding.StepSessions:
 		return o.sessions(ctx, row.ID)
@@ -230,7 +244,7 @@ func (o *Offboarding) run(ctx context.Context, row pgstore.Organization, step st
 	case offboarding.StepAuditFinal:
 		return 0, o.auditFinal(ctx, row)
 	case offboarding.StepDatabase:
-		return o.database(ctx, row.ID)
+		return o.database(ctx, row, deadline)
 	}
 	return 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("step %q has no implementation", step))
 }
@@ -555,29 +569,51 @@ func (o *Offboarding) valkey(ctx context.Context, org uuid.UUID) (int, error) {
 	return int(n), stepError(offboarding.ErrorValkeyUnavailable, err)
 }
 
-// database deletes the organization's rows in batches until paddock_offboard_delete_batch reports nothing left (plan
-// M17 decision 7). Each batch is its own transaction and its count is stored right after it, so neither a failure nor
-// a crash loses the count of what is gone; it returns 0, as nothing is left to add.
-func (o *Offboarding) database(ctx context.Context, org uuid.UUID) (int, error) {
+// database deletes the organization's rows in batches until paddock_offboard_delete_batch_from reports nothing left
+// (plan M17 decision 7, amendment 2026-11-16 q point 6). Each batch is its own transaction; its count and the
+// delete_order it reached are stored right after it, so neither a failure, a crash nor a yield loses the count of
+// what is gone or where the step continues. It starts at the stored position and, once deadline is reached, yields
+// between two batches (errDatabaseYield); at least one batch runs per call, so the step always progresses. When nothing
+// is left the position is cleared, so a return from the tombstone (40001 on a straggler row in a table the step had
+// passed) starts again at the first table. A batch from a stored position that fails on a foreign key starts again at
+// the first table once per call: a row written into a table the step had passed can reference a row of the table it
+// deletes now, and only a pass in registry order removes the referencing row first, as paddock_offboard_delete_batch
+// did on every call. It returns 0, as nothing is left to add.
+func (o *Offboarding) database(ctx context.Context, row pgstore.Organization, deadline time.Time) (int, error) {
+	from := row.OffboardingDbOrder
+	restarted := false
 	for {
-		var n int64
-		err := o.deps.Worker.InOrgOffboarding(offboardingContext(ctx, org), func(ctx context.Context, q *pgstore.Queries) error {
+		var b pgstore.OffboardDeleteBatchFromRow
+		err := o.deps.Worker.InOrgOffboarding(offboardingContext(ctx, row.ID), func(ctx context.Context, q *pgstore.Queries) error {
 			var err error
-			n, err = q.OffboardDeleteBatch(ctx, offboardingBatch)
+			b, err = q.OffboardDeleteBatchFrom(ctx, pgstore.OffboardDeleteBatchFromParams{MaxRows: offboardingBatch, FromOrder: from})
 			return err
 		})
+		if err != nil && from != nil && !restarted && db.IsForeignKeyViolation(err) {
+			slog.InfoContext(ctx, "organization deletion found a row referencing the table it deletes; starting again at the first table",
+				"organization", row.ID, "delete_order", *from)
+			from, restarted = nil, true
+			continue
+		}
 		if err != nil {
 			return 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("delete a batch of rows: %w", err))
 		}
-		if n == 0 {
-			return 0, nil
+		from = nil
+		if b.Deleted > 0 {
+			from = &b.AtOrder
 		}
 		err = o.deps.Platform.InPlatform(offboardingSystem(ctx), func(ctx context.Context, q *pgstore.Queries) error {
-			return q.AddOrganizationOffboardingCount(ctx, pgstore.AddOrganizationOffboardingCountParams{
-				ID: org, Step: offboarding.StepDatabase, Added: n})
+			return q.SaveOrganizationOffboardingDatabaseBatch(ctx, pgstore.SaveOrganizationOffboardingDatabaseBatchParams{
+				ID: row.ID, Added: b.Deleted, DbOrder: from})
 		})
 		if err != nil {
 			return 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("store the deleted rows: %w", err))
+		}
+		if b.Deleted == 0 {
+			return 0, nil
+		}
+		if !deadline.IsZero() && !o.now().Before(deadline) {
+			return 0, errDatabaseYield
 		}
 	}
 }

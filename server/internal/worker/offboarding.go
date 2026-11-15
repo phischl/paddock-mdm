@@ -27,10 +27,11 @@ const offboardingLockKey = 0x706164646f666662
 const OffboardingInterval = time.Minute
 
 // OffboardingRoundBudget is the wall-clock time one round spends on all deletions together (plan M17 amendment p): it
-// ends after the step that was running when the budget ran out. The budget is checked only before a step, so the last
-// step may overrun it; nothing overlaps then: the ticker drops the missed tick, the next round starts at once, and
-// other replicas skip while the leader lock is held. The budget never cuts a step short (it is idempotent but may have
-// reached an external system); only a lost leadership does.
+// ends after the step that was running when the budget ran out. The budget is checked before a step and, inside the
+// database step, between its batches (amendment 2026-11-16 q point 6), where the step yields and resumes from its
+// stored position; any other step may overrun it; nothing overlaps then: the ticker drops the missed tick, the next
+// round starts at once, and other replicas skip while the leader lock is held. The budget never cuts another step
+// short (it is idempotent but may have reached an external system); only a lost leadership does.
 const OffboardingRoundBudget = 45 * time.Second
 
 // offboardingLeaderCheck is how often the leader connection is asked whether it still answers; when it does not, the
@@ -65,7 +66,7 @@ var (
 type offboarder interface {
 	StartDue(ctx context.Context) ([]uuid.UUID, error)
 	Pending(ctx context.Context) ([]pgstore.Organization, error)
-	Advance(ctx context.Context, org uuid.UUID) (bool, error)
+	AdvanceWithin(ctx context.Context, org uuid.UUID, deadline time.Time) (bool, error)
 }
 
 // leaderLocker runs a function under a leader lock whose context ends when the lock is lost (db.PlatformPool).
@@ -156,7 +157,7 @@ func (o *Offboarding) Round(ctx context.Context) error {
 				if ctx.Err() != nil || !o.now().Before(deadline) {
 					break
 				}
-				if o.advance(ctx, id) {
+				if o.advance(ctx, id, deadline) {
 					next = append(next, id)
 				}
 			}
@@ -199,16 +200,17 @@ func (o *Offboarding) observe(orgs []pgstore.Organization) {
 	}
 }
 
-// advance runs one step of org unless its backoff has not elapsed and reports whether the organization may take
-// another step in this round: only after a step that completed and left the deletion unfinished.
-func (o *Offboarding) advance(ctx context.Context, org uuid.UUID) bool {
+// advance runs one step of org within the round's deadline unless its backoff has not elapsed and reports whether the
+// organization may take another step in this round: only after a step that completed or yielded at the budget and left
+// the deletion unfinished.
+func (o *Offboarding) advance(ctx context.Context, org uuid.UUID, deadline time.Time) bool {
 	now := o.now()
 	r := o.retries[org]
 	if r != nil && now.Before(r.next) {
 		return false
 	}
 	o.advanced[org] = now
-	done, err := o.job.Advance(ctx, org)
+	done, err := o.job.AdvanceWithin(ctx, org, deadline)
 	switch {
 	case err == nil:
 		delete(o.retries, org)

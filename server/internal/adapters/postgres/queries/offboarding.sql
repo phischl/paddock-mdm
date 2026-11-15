@@ -5,6 +5,13 @@
 -- name: OffboardDeleteBatch :one
 SELECT paddock_offboard_delete_batch(@max_rows::int)::bigint AS deleted;
 
+-- Deletes at most max_rows rows of the context organization from the first registered table with delete_order >=
+-- from_order that still has rows (NULL: from the first table) and returns how many and that table's delete_order;
+-- deleted 0 means nothing is left from there on (plan M17 amendment 2026-11-16 q point 5); its at_order is then NULL,
+-- read as 0. Only paddock_worker may call it, inside InOrgOffboarding of an organization in status deleting.
+-- name: OffboardDeleteBatchFrom :one
+SELECT deleted::bigint, coalesce(at_order, 0)::int AS at_order FROM paddock_offboard_delete_batch_from(@max_rows::int, sqlc.narg(from_order)::int);
+
 -- True once every transaction that could have passed the gate before it saw the organization deleting has ended; false
 -- while waiting (plan M17 amendment 2026-11-15 j and its addendum). The step tombstone calls it every round and calls
 -- OffboardFinalize once it is true. Only paddock_worker may call it, inside InOrgOffboarding of an organization in

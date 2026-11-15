@@ -898,6 +898,7 @@ type Organization struct {
 	AuditRetirementRequestedAt *time.Time
 	AuditFinalVerifiedAt       *time.Time
 	AuditFinalOutcome          *string
+	OffboardingDbOrder         *int32
 }
 
 type OrganizationDmsSetting struct {
