@@ -85,3 +85,47 @@ Earlier fixes (PDK-094, PDK-1071) rewrote single queries.
     result.
 - Re-evaluate if PostgreSQL gains a way to re-plan generic plans per RLS context, or if planning cost becomes visible
   in N1/N2.
+
+## Amendment 2026-11-15 — JIT compilation is off on the organization pools (PDK-1081; main §72)
+
+### Finding
+
+The PDK-1079 regression test seeds 70 000 active devices in one organization, each with a `device_status` row. With
+that data the attention view's plan costs about 630 000, above PostgreSQL's JIT thresholds (`jit_above_cost` 100 000,
+`jit_optimize_above_cost` and `jit_inline_above_cost` 500 000). Every execution then spends about 2.3 s compiling: 2.7 s
+in total, against 0.3–0.4 s without JIT. This is independent of plan caching, so per-execution planning (decision 1)
+does not help; it would hit every planning mode. The worker's findings loop of a large organization would pay it in
+every round.
+
+### Options
+
+- **A — `jit = off` on the organization pools.** + The standard setting for OLTP workloads; the organization roles run
+  short, index-driven queries where compilation never pays off. One setting in one place, covering future queries.
+  − A future organization query that genuinely benefits from JIT would not get it. **Chosen.**
+- **B — Raise the JIT thresholds.** + Keeps JIT for very expensive plans. − The threshold is a guess that moves with
+  data size; the next large organization crosses it again.
+- **C — Only make the attention view cheaper.** + Fixes the cause for this query. − Leaves every other expensive
+  organization query exposed; it stays planned as a later improvement (0.1.0-alpha.12), not as the fix.
+
+### Decision
+
+6. **Organization pools open their connections with `jit = off`.** It applies to the same pools as decision 1:
+   `db.NewOrgPool` and `db.NewNotifierPool` (the organization pools of api, gateway, worker, compiler, notifier,
+   escrow-reader and revocation-issuer).
+   - It is set as a connection runtime parameter in `ConnConfig.RuntimeParams`, the same way as the planned
+     `transaction_timeout` of M17 amendment r. It costs no statement per transaction, so M17 amendment j's rule
+     ("no extra statement per transaction") still holds.
+   - The other pools keep PostgreSQL's default: the platform, audit and backup pools may run analytical scans where
+     JIT can help. The rule of decision 2 applies here too: a pool that starts running organization-scoped queries
+     MUST take `jit = off` with the organization mode.
+7. **Proof.** A regression test seeds status rows for all 70 000 devices and asserts that the attention view stays
+   under 1 s on an organization pool. The pool-mode test of decision 5 also asserts `jit = off` on the organization
+   pools and the default on the others.
+
+### Consequences
+
+- + The attention view and the findings loop no longer pay seconds of compilation per execution at the target scale.
+- − Should an organization query ever need JIT, it must be a deliberate exception via an architect decision.
+- Follow-up: the "Query planning" section in `docs/operations/capacity.md` (see Consequences above) also states that
+  the organization pools run with `jit = off`, and why.
+- A cheaper attention view is a later improvement (0.1.0-alpha.12).
