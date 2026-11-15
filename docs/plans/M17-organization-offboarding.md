@@ -1375,3 +1375,43 @@ That contradicts agent contract 8 and the maintainer's promise that devices of a
 
 Priority: alpha.11, folded into PDK-1016's fix round. The device contract note on both 401 reasons (amendment m point
 3.3) belongs to the same fix round.
+
+## Amendment 2026-11-15 p — the deletion advances several steps per round (architect decision after PDK-946's review; ticket PDK-946c)
+
+Binding; it replaces decision 5's "one step per organization per round".
+
+**Finding.** The round runs once a minute and advances each organization by one step, so the ten steps take 9–10
+minutes. The plan's gates (OF3, OF6, OF8, §7 step 7) assume about 5 minutes.
+
+**Options.** (a) A faster tick or more steps per round only under `PADDOCK_ENV=development`. Rejected: the gates would
+then prove a schedule that production never runs, and development switches belong in configuration only for reasons
+that cannot hold in production. (b) Longer gate waits. Rejected alone: a ten-minute deletion is slow for operators too,
+and it would also be the time a production deletion holds its intermediate states.
+
+**Decision (production behaviour, no development switch).**
+1. In one round, the worker advances an organization step after step while the previous step completed.
+2. It stops for that organization when one of these happens:
+   - a step has to wait (`outbox` pending, `quiesce` false, the audit acknowledgement missing);
+   - a step fails;
+   - the round has used **45 s** for that organization (constant `OffboardingRoundBudget`, below the 1-minute
+     interval).
+3. Each completed step is still committed and recorded on its own (`organization.deletion_step_completed`), so a crash
+   resumes at the next step exactly as before. Organizations are processed one after another under the round's leader
+   lock; an organization that hits the budget continues next round.
+4. Expected duration of a grace-0 deletion of a small gate organization, end to end: 2–4 rounds. The waits that span
+   rounds are the quiescence cutoff of 6 s, the audit writer's final verification and acknowledgement (amendment o),
+   and the outbox drain.
+
+**Gates.**
+- OF3, OF6 and OF8 and the per-gate cleanup wait at most **5 minutes**, as planned.
+- The implementing ticket records the measured duration of OF3 on the development stack in its result document.
+- If OF3 exceeds 5 minutes after this change, that is a stop condition (report the slow step), not a reason to raise
+  the timeout.
+- PDK-1022's 10-minute wait on the VMs may stay: it includes device check-ins.
+
+**Ticket:** PDK-946c (alpha.11, medium, Sonnet) implements points 1–3 in `server/internal/worker/offboarding.go` with a
+test:
+- a deletion with no waits finishes in one round;
+- a step that waits stops the organization for that round;
+- the budget hands over to the next round;
+- a crash between two steps of one round resumes at the next step.
