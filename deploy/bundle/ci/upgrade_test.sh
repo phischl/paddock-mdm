@@ -244,24 +244,44 @@ done
 
 # --- upgrade_hosts ---------------------------------------------------------------------------------------------------
 # The upgrade again after the rollback (step 8): the same candidate directories, the previous release's as <old dir>,
-# the root token for bootstrap openbao, and the step names and log phase of that run.
+# the root token for bootstrap openbao, and the step names and log phase of that run. The object store is snapshotted
+# before the upgrade and asserted after it (PDK-1054b): the upgrade's own --add-missing, then a second run that changes
+# nothing; the job runs no full bucket bootstrap and no ./paddock up of its own, which would hide a broken upgrade path.
 out="$(lib eval '
   printf "{\"root_token\": \"s.root\"}" >"$W/init.json"
   start_unsealer() { :; }
   use_prev
   cp_paddock() { printf "cp %s %s token=%s\n" "$CP_DIR" "$*" "${BAO_TOKEN:-}"; }
   audit_paddock() { printf "audit %s %s\n" "$AUDIT_DIR" "$*"; }
+  buckets() { printf "buckets %s\n" "$*"; }
   orphans() { echo orphans; }
   upgrade_hosts 8 upgrade-again
   echo "phase=$phase"' 2>&1)"
-order="*8.1 upgrade-again: control plane*cp $work/w/cand/cp upgrade $work/w/prev/cp --yes token=s.root*"
+b="$work/w/buckets-upgrade-again"
+order="*8.1 upgrade-again: control plane*buckets $work/w/prev/cp plant*buckets $work/w/prev/cp snapshot $b/before*"
+order+="cp $work/w/cand/cp upgrade $work/w/prev/cp --yes token=s.root*"
 order+="8.2 upgrade-again: audit host*audit $work/w/cand/audit upgrade $work/w/prev/audit --yes*"
-order+="8.3 upgrade-again: the release's bootstrap and orphans*cp $work/w/cand/cp bootstrap buckets*"
-order+="cp $work/w/cand/cp up*orphans*phase=upgrade-again*"
+order+="8.3 upgrade-again: the upgrade's bucket bootstrap and orphans*"
+order+="buckets $work/w/cand/cp upgraded $b/before $b/after*"
+order+="cp $work/w/cand/cp bootstrap buckets --add-missing token=*buckets $work/w/cand/cp unchanged $b/after $b/again*"
+order+="orphans*phase=upgrade-again*"
 # shellcheck disable=SC2053
 if [[ "$out" == $order ]]; then
   pass "the upgrade again runs from the previous release's directories into the candidate's"
 else failed "upgrade_hosts: $out"; fi
+if grep -Eq '^cp [^ ]+ (bootstrap buckets token=|up )' <<<"$out"; then
+  failed "the job runs a full bucket bootstrap or ./paddock up of its own after the upgrade: $out"
+else pass "the job runs no full bucket bootstrap and no ./paddock up of its own after the upgrade"; fi
+# The helper hands the control plane's project and stdin /dev/null to assert-buckets.sh.
+out="$(lib eval '
+  here="$W/fake"
+  mkdir -p "$here"
+  printf "#!/usr/bin/env bash\nprintf \"args=%%s stdin=[%%s]\\\\n\" \"\$*\" \"\$(cat)\"\n" >"$here/assert-buckets.sh"
+  chmod +x "$here/assert-buckets.sh"
+  echo typed | buckets /b snapshot /s' 2>&1)"
+if [[ "$out" == "args=paddock-cp /b snapshot /s stdin=[]" ]]; then
+  pass "buckets runs assert-buckets.sh on paddock-cp without stdin"
+else failed "buckets: $out"; fi
 
 # --- seq_high_water_carried ------------------------------------------------------------------------------------------
 # Step 8.4 (PDK-980): the candidate's high-water file holds at least the previous release's value read before step 8.
