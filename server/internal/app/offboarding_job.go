@@ -438,7 +438,7 @@ func (o *Offboarding) fleet(ctx context.Context, org uuid.UUID) (int, error) {
 			continue
 		}
 		seen[r.ExternalID] = true
-		use, err := o.deps.Platform.FleetHostInUse(offboardingSystem(ctx), r.DeviceID, r.ExternalID)
+		use, err := o.deps.Platform.FleetHostInUseOutside(offboardingSystem(ctx), org, r.ExternalID)
 		if err != nil {
 			return deleted, stepError(offboarding.ErrorDatabase, err)
 		}

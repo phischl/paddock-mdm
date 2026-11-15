@@ -415,6 +415,26 @@ func (p *PlatformPool) FleetHostInUse(ctx context.Context, retiredDevice uuid.UU
 	return "", fmt.Errorf("check the Fleet host's other devices: unexpected answer %q", use)
 }
 
+// FleetHostInUseOutside is FleetHostInUse for the deletion of a whole organization (plan M17 amendment l point 1): it
+// ignores every device of org, so two of its devices on one host do not keep each other's host alive, and answers
+// FleetHostUsedByRef or FleetHostUsedByHardware only for a device of another organization.
+func (p *PlatformPool) FleetHostInUseOutside(ctx context.Context, org uuid.UUID, host string) (string, error) {
+	var use string
+	err := p.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		use, err = q.FleetHostInUseOutside(ctx, pgstore.FleetHostInUseOutsideParams{Org: org, Host: host})
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("check the Fleet host's devices outside the organization: %w", err)
+	}
+	switch use {
+	case FleetHostUsedByRef, FleetHostUsedByHardware, FleetHostUnused:
+		return use, nil
+	}
+	return "", fmt.Errorf("check the Fleet host's devices outside the organization: unexpected answer %q", use)
+}
+
 // WithLeaderLock runs fn while holding the session advisory lock key on a dedicated connection (from the lock pool if
 // the pool has one, Options.LockConns), so that only one replica of a role runs a periodic job at a time. It reports
 // false (and does not call fn) when another session holds the lock.
