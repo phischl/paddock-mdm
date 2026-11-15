@@ -96,7 +96,8 @@ no configuration, agent update or time ticket; its final report `agent.uninstall
 - **Devices still pending approval get no removal** (RR-141): they never received a bundle and cannot verify a command.
   Before the deletion, approve and then delete them (they then receive the removal), or have their owners run
   `sudo apt purge paddock-agent paddock-supervisor`; the grace-period banner counts them. After the deletion their
-  enrollment status answers `rejected` and the agent stays inert. The number is `devices_pending_dropped` in
+  enrollment status answers `pending` until the step `valkey` removes the device's `enr:` entry, then 404 `not_found`;
+  the agent keeps polling at its maximum interval, harmlessly and inert, until the packages are purged. The number is `devices_pending_dropped` in
   `organization.deleted` (PDK-1061).
 - Monitor `platform.offboarded_device_uninstalled` in the platform audit log to see devices return.
 
