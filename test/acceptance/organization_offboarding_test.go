@@ -331,13 +331,15 @@ func readOrgDeletion(t *testing.T, p *env.Portal, id uuid.UUID) orgDeletionView 
 }
 
 // deleteNow requests the deletion of a gate organization with grace 0 (a development stack allows it, ADR 0052) and
-// returns the time its 202 arrived.
+// returns the time the request was sent.
 func deleteNow(t *testing.T, id uuid.UUID, slug, reason string) time.Time {
 	t.Helper()
-	res := call(t, steppedUpRoot(t), http.MethodPost, orgPath+id.String()+"/delete",
+	root := steppedUpRoot(t)
+	start := time.Now()
+	res := call(t, root, http.MethodPost, orgPath+id.String()+"/delete",
 		map[string]any{"confirm_slug": slug, "reason": reason, "grace_days": 0})
 	expectStatus(t, res, http.StatusAccepted, "")
-	return time.Now()
+	return start
 }
 
 // awaitTombstone waits for the status deleted and returns the time from requested to the first read that saw it. It
@@ -394,7 +396,10 @@ func TestOrganizationDeletionRequestAndCancel(t *testing.T) {
 	expectStatus(t, res, http.StatusForbidden, "step_up_required")
 	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_requested", "denied", auditPollTimeout)
 
+	// The dev stack's step-up window is 30 s and every audit lookup settles for 5 to 10 s, so the requests that need the
+	// step-up go out back to back and their events are looked up afterwards.
 	root := steppedUpRoot(t)
+	var refused []string
 	for _, b := range []map[string]any{
 		body(slug+"-x", "of1 gate", 30),
 		body(slug, "x", 30),
@@ -404,7 +409,10 @@ func TestOrganizationDeletionRequestAndCancel(t *testing.T) {
 	} {
 		res := call(t, root, http.MethodPost, path+"/delete", b)
 		expectStatus(t, res, http.StatusBadRequest, "invalid_request")
-		expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_requested", "failure", auditPollTimeout)
+		refused = append(refused, res.RequestID)
+	}
+	for _, id := range refused {
+		expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", id, "organization.deletion_requested", "failure", auditPollTimeout)
 	}
 	if o := readOrgDeletion(t, root, orgID); o.Status != "active" || o.Deletion != nil {
 		t.Fatalf("after the refused requests: %+v, want active without a deletion", o)
@@ -414,10 +422,14 @@ func TestOrganizationDeletionRequestAndCancel(t *testing.T) {
 	expectStatus(t, res, http.StatusConflict, "invalid_state")
 	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_cancelled", "failure", auditPollTimeout)
 
+	// stepUp waits out Authentik's maximum auth age since the previous step-up, so this one is a fresh login.
+	stepUp(t, root, env.PlatformAdmin, true)
 	res = call(t, root, http.MethodPost, path+"/delete", body(slug, "of1 gate", 30))
 	expectStatus(t, res, http.StatusAccepted, "")
 	// Registered after the organization's own cleanup, so it runs first and leaves an active organization to delete.
 	t.Cleanup(func() { call(t, root, http.MethodPost, path+"/cancel-deletion", nil) })
+	duplicate := call(t, root, http.MethodPost, path+"/delete", body(slug, "of1 gate", 30))
+	expectStatus(t, duplicate, http.StatusConflict, "invalid_state")
 	var requested orgDeletionView
 	if err := res.JSON(&requested); err != nil {
 		t.Fatal(err)
@@ -434,9 +446,7 @@ func TestOrganizationDeletionRequestAndCancel(t *testing.T) {
 	if o := readOrgDeletion(t, root, orgID); o.Status != "active" || o.Deletion == nil || !o.Deletion.DeleteAfter.Equal(requested.Deletion.DeleteAfter) {
 		t.Fatalf("pending deletion: %+v", o)
 	}
-	res = call(t, root, http.MethodPost, path+"/delete", body(slug, "of1 gate", 30))
-	expectStatus(t, res, http.StatusConflict, "invalid_state")
-	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_requested", "failure", auditPollTimeout)
+	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", duplicate.RequestID, "organization.deletion_requested", "failure", auditPollTimeout)
 
 	res = call(t, root, http.MethodPost, path+"/cancel-deletion", nil)
 	expectStatus(t, res, http.StatusOK, "")
@@ -522,16 +532,28 @@ func TestOrganizationDeletedWithinFiveMinutes(t *testing.T) {
 	if err := ak.Get(ctx, "/core/applications/"+app+"/", &struct{}{}); err != nil {
 		t.Fatalf("application %s before the deletion: %v", app, err)
 	}
+	var providers struct {
+		Results []struct{} `json:"results"`
+	}
+	providersPath := "/providers/oauth2/?" + url.Values{"name": {app}}.Encode()
+	if err := ak.Get(ctx, providersPath, &providers); err != nil || len(providers.Results) != 1 {
+		t.Fatalf("provider %s before the deletion: %v, %d found, want 1", app, err, len(providers.Results))
+	}
 
 	requested := deleteNow(t, orgID, slug, "of3 gate")
 	root := login(t, env.PlatformAdmin)
 	o, took := awaitTombstone(t, root, orgID, slug, requested)
 	t.Logf("OF3: request to tombstone of %s in %s (bound %s)", slug, took.Round(time.Second), orgTombstoneWithin)
-	if o.Deletion != nil && o.Deletion.DeletedAt != nil {
-		t.Logf("OF3: server-side requested_at to deleted_at %s", o.Deletion.DeletedAt.Sub(o.Deletion.RequestedAt).Round(time.Second))
-	}
 	if took > orgTombstoneWithin {
 		t.Fatalf("OF3: deletion took %s, bound %s", took, orgTombstoneWithin)
+	}
+	if o.Deletion == nil || o.Deletion.DeletedAt == nil {
+		t.Fatalf("OF3: tombstone without deletion.deleted_at: %+v", o)
+	}
+	server := o.Deletion.DeletedAt.Sub(o.Deletion.RequestedAt)
+	t.Logf("OF3: server-side requested_at to deleted_at %s", server.Round(time.Second))
+	if server > orgTombstoneWithin {
+		t.Fatalf("OF3: server-side deletion took %s, bound %s", server, orgTombstoneWithin)
 	}
 
 	var groups struct {
@@ -548,13 +570,14 @@ func TestOrganizationDeletedWithinFiveMinutes(t *testing.T) {
 			t.Errorf("group %s left in Authentik after the deletion", g.Name)
 		}
 	}
+	if pk, err := ak.GroupPK(ctx, rootGroup); err != nil || pk != "" {
+		t.Errorf("group %s after the deletion: %v, pk %q, want none", rootGroup, err, pk)
+	}
 	if err := ak.Get(ctx, "/core/applications/"+app+"/", &struct{}{}); !env.IsNotFound(err) {
 		t.Errorf("application %s after the deletion: %v, want HTTP 404", app, err)
 	}
-	var providers struct {
-		Results []struct{} `json:"results"`
-	}
-	if err := ak.Get(ctx, "/providers/oauth2/?"+url.Values{"name": {app}}.Encode(), &providers); err != nil || len(providers.Results) != 0 {
+	providers.Results = nil
+	if err := ak.Get(ctx, providersPath, &providers); err != nil || len(providers.Results) != 0 {
 		t.Errorf("provider %s after the deletion: %v, %d left", app, err, len(providers.Results))
 	}
 
