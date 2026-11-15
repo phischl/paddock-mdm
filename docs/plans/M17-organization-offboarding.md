@@ -1564,3 +1564,28 @@ test:
 - two organizations share the budget in least-recently-advanced passes, and the budget hands over to the next round;
 - a crash between two steps of one round resumes at the next step;
 - losing the lead cancels the running step and writes nothing further.
+
+## Addendum 2026-11-15 to decision 10 — the Authentik rights for deleting an organization's objects (main's decision §56)
+
+Binding; it completes decision 10, which named the objects to delete but not the rights needed to delete them.
+
+1. **Rights.** The Authentik role of Paddock's service account (`paddock-service`, set by the blueprint) gains
+   `delete_policybinding`, `delete_application`, `delete_oauth2provider`, `delete_expressionpolicy` and
+   `delete_scopemapping`. Without them the `authentik` step got 403 against a live Authentik.
+2. **Why this is a small step.**
+   - The role already holds `add_*` and `change_*` on exactly these object types, and `delete_group` and `delete_user`.
+   - The maintainer decided that offboarding removes the organization's Authentik objects (§3).
+   - No other right is added. The adapter deletes only objects named after the organization's slug (decision 10's
+     list).
+3. **Residual risk.** A stolen service token could now also delete any organization's device login application,
+   provider, policy and mappings. That breaks device sign-in, an availability loss rather than a disclosure. The same
+   token could already change those objects and delete groups and users, so the exposure grows only slightly.
+   - PDK-1019 records this as a sentence in RR-140, next to the object-store risk of amendment k.
+   - The worker's identity rounds (`EnsureOrganization`) recreate deleted objects of a live organization within one
+     reconcile interval (at most 6 h plus jitter after amendment-era caching, or at once after an Authentik error).
+4. **Rule for every new Authentik write path.** It needs:
+   - a live test against the pinned Authentik with the service account's own token (`TestLiveAuthentik`; here it runs
+     `DeleteOrganization`);
+   - a static test that maps each object kind the adapter writes or deletes to the right the blueprint grants.
+
+   A fake alone does not prove rights.
