@@ -149,7 +149,7 @@ lint-shell:
 		deploy/bundle/ci/assert-broker_test.sh deploy/compose/scripts/rabbitmq-definitions_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade.sh deploy/compose/scripts/rollback.sh deploy/bundle/upgrade_test.sh \
 		deploy/bundle/rollback_test.sh deploy/compose/scripts/legacy-alpha8.sh
-	shellcheck -x -s bash deploy/compose/scripts/offboard-users-check.sh deploy/compose/scripts/offboard-prune_test.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/offboard-users-check.sh deploy/compose/scripts/offboard-prune_test.sh
 	shellcheck -x -s bash deploy/bundle/ci/lib-smoke.sh deploy/bundle/ci/upgrade.sh deploy/bundle/ci/upgrade_test.sh \
 		deploy/bundle/ci/seed.sh deploy/bundle/ci/fetch-previous.sh deploy/bundle/ci/fetch-previous_test.sh \
 		deploy/bundle/ci/smoke.sh deploy/bundle/ci/assert-buckets.sh deploy/bundle/ci/assert-buckets_test.sh

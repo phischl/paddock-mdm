@@ -5,6 +5,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
 . "$here/lib.sh"
 
 NETWORK="${NETWORK:-${PADDOCK_PROJECT}_data}"
