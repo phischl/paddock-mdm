@@ -6,7 +6,10 @@
 #   3. --add-missing (./paddock upgrade) adds the two users to an installation that predates them and changes nothing
 #      else: every other policy, every other user's secret and policies, and every escrowed object version stay as
 #      they were; a second run changes nothing at all;
-#   4. no key is ever printed.
+#   4. no key is ever printed;
+#   5. --add-missing leaves one user per offboarding policy, the key file's (PDK-1054d): a stale user of either policy is
+#      removed after the current user's probe passed, a user of another policy is untouched, a second run changes
+#      nothing, and a broken current key file fails loudly and removes nothing.
 # Needs Docker and python3, like the rest of `make test`; it fails rather than skips without them.
 # The rc commands name keys as $VARIABLES that only the container expands (SC2016); ok never fails (SC2015).
 # shellcheck disable=SC2016,SC2015
@@ -330,6 +333,74 @@ else
   fail "--add-missing failed differently: $(shown 3)"
 fi
 if bootstrap; then ok "a full bootstrap repairs it"; else fail "a full bootstrap: $(shown 3)"; fi
+
+# --- 5. One user per offboarding policy -------------------------------------------------------------------------------
+
+rc_root() { rcx "$1"; }
+holders() { rc_policy_holders rc_root t "$1" | sort | paste -sd, -; }
+# add_user <access key> <policy>: a user holding only that policy (rc replaces a user's policies on attach).
+add_user() {
+  K="$1" S="stale-secret-$$-$RANDOM-$RANDOM" rcx 'rc admin user add -- t "$K" "$S" >/dev/null && rc admin policy attach t '"$2"' --user="$K" >/dev/null'
+}
+cur_b="$(key rustfs_bundles_offboard_access_key)" cur_e="$(key rustfs_escrow_offboard_access_key)"
+stale_b1="stale-bundles-one-$$" stale_b2="stale-bundles-two-$$" stale_e1="stale-escrow-one-$$" other="unrelated-user-$$"
+add_user "$stale_b1" paddock-bundles-offboard
+add_user "$stale_b2" paddock-bundles-offboard
+add_user "$stale_e1" paddock-escrow-offboard
+add_user "$other" paddock-bundles-gateway
+[[ "$(holders paddock-bundles-offboard)" == *"$stale_b1"* && "$(holders paddock-escrow-offboard)" == *"$stale_e1"* ]] &&
+  ok "the stale users hold the offboarding policies" || fail "the test setup did not create the stale users"
+gateway_before="$(holders paddock-bundles-gateway)"
+if bootstrap --add-missing; then ok "--add-missing with stale offboard users"; else fail "--add-missing with stale offboard users: $(shown 4)"; fi
+[[ "$(holders paddock-bundles-offboard)" == "$cur_b" ]] && ok "the bundles policy keeps only the key file's user" ||
+  fail "the bundles policy is held by: $(holders paddock-bundles-offboard)"
+[[ "$(holders paddock-escrow-offboard)" == "$cur_e" ]] && ok "the escrow policy keeps only the key file's user" ||
+  fail "the escrow policy is held by: $(holders paddock-escrow-offboard)"
+[[ "$(holders paddock-bundles-gateway)" == "$gateway_before" && "$gateway_before" == *"$other"* ]] &&
+  ok "a user of another policy is untouched" || fail "a user of another policy changed: $(holders paddock-bundles-gateway)"
+for k in "$stale_b1" "$stale_b2" "$stale_e1"; do
+  grep -qF "removed the stale" "$work/out" && grep -qF -- " $k " "$work/out" && continue
+  fail "the output does not name the removed access key $k"
+  k=""
+done
+[[ -z "${k:-}" ]] || ok "the output names each removed access key"
+if grep -qF "$other" "$work/out"; then fail "the output names the unrelated user"; else ok "the output does not name an unrelated user"; fi
+if grep -q "stale-secret" "$work/out" || name="$(leaked "$work/out")"; then fail "the pruning run printed a secret"; else ok "the pruning run prints no secret"; fi
+expect_allowed "the kept bundles user lists org/" "${ob[@]}" s3api list-objects-v2 --bucket paddock-bundles --prefix org/
+expect_allowed "the kept escrow user lists org/" "${oe[@]}" s3api list-object-versions --bucket paddock-escrow --prefix org/
+# The listing's order is not stable, its content is.
+user_lines() { rc_root 'rc admin user list t' | sort; }
+users_before="$(user_lines)"
+if bootstrap --add-missing && ! grep -q "removed the stale" "$work/out" &&
+    [[ "$(user_lines)" == "$users_before" && "$users_before" == *"$other"* ]]; then
+  ok "a second --add-missing removes and changes nothing"
+else
+  fail "a second --add-missing changed state: $(shown 4)"
+fi
+
+# The order: a broken current key file fails the probe, and no stale user is removed (never zero working users).
+add_user "$stale_b1" paddock-bundles-offboard
+add_user "$stale_e1" paddock-escrow-offboard
+K="$cur_e" S="not-the-file-$$" rcx 'rc admin user passwd --password-from-env S -- t "$K" >/dev/null'
+if bootstrap --add-missing; then
+  fail "--add-missing passed with a broken current key file"
+elif grep -q "cannot list org/ of paddock-escrow: run ./paddock bootstrap buckets" "$work/out"; then
+  ok "a broken current key file fails the bootstrap loudly"
+else
+  fail "--add-missing failed differently: $(shown 3)"
+fi
+if [[ "$(holders paddock-bundles-offboard)" == *"$stale_b1"* && "$(holders paddock-escrow-offboard)" == *"$stale_e1"* ]] &&
+    ! grep -q "removed the stale" "$work/out"; then
+  ok "the failed probe removed no stale user"
+else
+  fail "a stale user was removed before the probe passed"
+fi
+if bootstrap; then ok "a full bootstrap repairs the current user"; else fail "a full bootstrap: $(shown 3)"; fi
+if [[ "$(holders paddock-bundles-offboard)" == "$cur_b" && "$(holders paddock-escrow-offboard)" == "$cur_e" ]]; then
+  ok "after the repair the stale users are gone and the current ones stay"
+else
+  fail "after the repair: $(holders paddock-bundles-offboard) / $(holders paddock-escrow-offboard)"
+fi
 
 if ((failures > 0)); then
   echo "$failures failure(s)"

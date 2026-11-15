@@ -147,6 +147,7 @@ lint-shell:
 	shellcheck -s bash deploy/compose/scripts/upgrade-check.sh deploy/bundle/upgrade-check_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade.sh deploy/compose/scripts/rollback.sh deploy/bundle/upgrade_test.sh \
 		deploy/bundle/rollback_test.sh deploy/compose/scripts/legacy-alpha8.sh
+	shellcheck -x -s bash deploy/compose/scripts/offboard-users-check.sh deploy/compose/scripts/offboard-prune_test.sh
 	shellcheck -x -s bash deploy/bundle/ci/lib-smoke.sh deploy/bundle/ci/upgrade.sh deploy/bundle/ci/upgrade_test.sh \
 		deploy/bundle/ci/seed.sh deploy/bundle/ci/fetch-previous.sh deploy/bundle/ci/fetch-previous_test.sh \
 		deploy/bundle/ci/smoke.sh deploy/bundle/ci/assert-buckets.sh deploy/bundle/ci/assert-buckets_test.sh
@@ -277,6 +278,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/openbao-configure_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-policy-removal_test.sh
+	bash $(COMPOSE_DIR)/scripts/offboard-prune_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-offboard_test.sh
 	bash $(COMPOSE_DIR)/scripts/gen-secrets-upgrade_test.sh
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh

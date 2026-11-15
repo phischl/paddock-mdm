@@ -10,7 +10,8 @@
 # M4c decision 9), and a user for the api that writes, reads and deletes the packages stored in Paddock below apt/ of
 # bundles and presigns their GETs, nothing else (plan M13c decision 12, ADR 0050), and a user for the worker that writes
 # the repositories' signed index below apt/*/dists/ of bundles, nothing else (plan M13c decision 13), and the two users of
-# the organization deletion (plan M17 amendment k). Idempotent.
+# the organization deletion (plan M17 amendment k), of which only the one whose key is in the key file survives
+# (PDK-1054d). Idempotent.
 #   rustfs-bundles-bootstrap.sh [--add-missing]
 # --add-missing (./paddock upgrade) only adds what is missing: an existing bucket keeps its versioning and bucket
 # policy, an existing policy its statements and an existing user its secret and policies, so an upgrade never rewrites
@@ -82,7 +83,7 @@ rc() {
     -e ARTIFACTS_ACCESS_KEY -e ARTIFACTS_SECRET_KEY -e ESCROW_WORKER_ACCESS_KEY -e ESCROW_WORKER_SECRET_KEY \
     -e ESCROW_API_ACCESS_KEY -e ESCROW_API_SECRET_KEY -e ESCROW_REVOCATION_ACCESS_KEY -e ESCROW_REVOCATION_SECRET_KEY \
     -e ESCROW_BACKUP_ACCESS_KEY -e ESCROW_BACKUP_SECRET_KEY -e BUNDLES_OFFBOARD_ACCESS_KEY -e BUNDLES_OFFBOARD_SECRET_KEY \
-    -e ESCROW_OFFBOARD_ACCESS_KEY -e ESCROW_OFFBOARD_SECRET_KEY --entrypoint sh "$RC_IMAGE" -c "$1"
+    -e ESCROW_OFFBOARD_ACCESS_KEY -e ESCROW_OFFBOARD_SECRET_KEY -e STALE_ACCESS_KEY --entrypoint sh "$RC_IMAGE" -c "$1"
 }
 
 for _ in $(seq 1 30); do
@@ -217,4 +218,10 @@ offboard_probe() {
 }
 offboard_probe BUNDLES_OFFBOARD_ACCESS_KEY BUNDLES_OFFBOARD_SECRET_KEY "$BUCKET"
 offboard_probe ESCROW_OFFBOARD_ACCESS_KEY ESCROW_OFFBOARD_SECRET_KEY "$ESCROW_BUCKET"
+# Only now, with both current users created and their probes passed, are the other holders of the two policies removed:
+# a rollback and a second upgrade (or keys generated again by hand) leave users whose keys no key file holds any more
+# (PDK-1054d). A broken current key file fails the probe above and removes nothing, so there is never a moment without a
+# working user.
+rc_prune_policy_holders rc bundles paddock-bundles-offboard "$BUNDLES_OFFBOARD_ACCESS_KEY" "$ESCROW_OFFBOARD_ACCESS_KEY"
+rc_prune_policy_holders rc bundles paddock-escrow-offboard "$ESCROW_OFFBOARD_ACCESS_KEY" "$BUNDLES_OFFBOARD_ACCESS_KEY"
 echo "bundles, agent artifacts and escrow bucket bootstrap complete"
