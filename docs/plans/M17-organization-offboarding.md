@@ -1332,6 +1332,71 @@ Binding; where it contradicts decisions 11 and 13 or amendment k, it wins.
 4. **Order.** PDK-1058 and PDK-1059 are small follow-ups to PDK-1015. They merge after it and before the alpha.11
    release regression.
 
+## Amendment 2026-11-15 m — devices still pending approval, kept uninstalls that would expire, PDK-1016's contract details (architect decision; tickets PDK-1061, PDK-1062; main reviews)
+
+**Approved by the maintainer as §47 (2026-11-15)**, including point 1's narrowing to devices that were ever approved.
+
+Binding; where it contradicts decision 15 or amendments e and l, it wins.
+
+### 1. Devices still pending approval (PDK-1061, alpha.11, medium, Sonnet)
+
+**The leave cannot reach them.** The agent verifies every command with the command-signing keys from its signed
+bundle (`agent/internal/commands/commands.go`: without `keys.CommandSigning` it returns `ErrNoKeys`). A device that was
+never approved has never received a bundle, so it cannot verify an uninstall, whatever the gateway answers. Answering
+`active` on the enrollment status would only move it to a check-in it cannot act on. An agent change is out of scope.
+
+**Decision.**
+- Step `devices` does not hand over devices in state `pending`: they get no `offboarded_device` row and no uninstall.
+- The deletion request (`RequestDeletion`) changes nothing about them. When the deletion runs, they are deleted with
+  the organization, and their enrollment status answers `rejected` as for any unknown or rejected device; the agent
+  stops polling and stays inert.
+- Such a device never had anything applied except the Paddock packages: no bundle, no login, no sudo, no disk
+  configuration. Contract 8 holds.
+- PDK-1019 records the residual risk RR-141: an unapproved device keeps the inert Paddock packages and needs `apt purge
+  paddock-agent paddock-supervisor` by hand. The grace-period banner (OFB-7) counts pending devices and tells
+  administrators to approve and then delete them, or to remove the packages.
+- `organization.deleted` gains the param `devices_pending_dropped`.
+- This narrows the maintainer's promise "every device receives an uninstall" to every device that was ever approved;
+  the maintainer approved it (§47).
+
+### 2. Kept uninstalls that would expire (PDK-1062, alpha.11, medium; folded into PDK-1016's fix round)
+
+- Step `devices` already keeps an open uninstall whose command is `pending`, `delivered` or `succeeded`
+  (amendment e point 10).
+- New: a kept command in status `pending` (the device has not fetched it) whose `expires_at` is earlier than
+  `now() + OffboardedDeviceRetention` is replaced in the same transaction:
+  - the old command is cancelled;
+  - a new `uninstall` with **the same mode and params** gets `expires_at = now() + OffboardedDeviceRetention`, is
+    signed, and becomes the device's open uninstall and the `offboarded_device` envelope.
+  - The mode is kept, so an administrator's `reset` stays a `reset`.
+- `delivered` and `succeeded` commands stay unchanged: the device already holds them.
+- No reissue on contact is needed: every handed-over device now holds or will fetch a command valid for the whole
+  retention.
+- **Threshold (main, §40).** A kept `pending` command is renewed only when its `expires_at` lies **more than 30 days**
+  before `now() + OffboardedDeviceRetention`. The deletion's own leave, which is always only minutes short of the
+  365 days, is therefore never re-issued, and no device gets two leaves. An administrator's uninstall with 7 days left
+  is always renewed.
+- Tests:
+  - a kept administrator `reset` with 7 days left is replaced by a `reset` valid for 365 days;
+  - the deletion's own leave (expiring 364 days and 23 hours from now) is kept as it is;
+  - a delivered command is untouched.
+
+### 3. PDK-1016's deviations, accepted (main reviews the contract changes)
+
+1. **`api/openapi/device.yaml` documents 200 for `POST /v1/events` of an offboarded device.** This is decision 15's
+   rule ("other events: 200 with the batch dropped"), now written into the public device contract. It is additive:
+   older agents already treat 200 as delivered.
+2. **The uninstall's own command result is accepted with 202 and not published.** The agent waits for that result
+   before it removes itself, so a 401 there would stall the removal. There is no organization to record it in; the
+   final `agent.uninstalled` event remains the record (`platform.offboarded_device_uninstalled`).
+3. **A check-in after the removal report gets 401 `invalid_signature`, not `identity_revoked`.** Amendment l point 3
+   deletes `dk:` at the final event. The device has removed Paddock at that point, and any 401 ends its loop. The
+   device contract documents both 401 reasons for an offboarded identity.
+
+### 4. The offboarding system gate is mandatory for alpha.11 (main)
+
+PDK-1022 (gate OS1, including amendment n's dead man's switch case) MUST be green on both VMs before the alpha.11 tag.
+
 ## Amendment 2026-11-15 n — no dead man's switch lock on an offboarded device (architect decision after PDK-1016 review, minor 5; contract 8)
 
 Binding; it refines decision 15 and amendment m point 2.
