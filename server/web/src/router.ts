@@ -72,6 +72,7 @@ export const router = createRouter({
     { path: '/audit/integrity', name: 'audit-integrity', component: () => import('./views/AuditIntegrity.vue') },
     { path: '/audit/exports', name: 'audit-exports', component: () => import('./views/AuditExports.vue') },
     { path: '/platform/organizations', name: 'organizations', component: () => import('./views/Organizations.vue') },
+    { path: '/platform/organizations/:id/audit', name: 'organization-audit', component: () => import('./views/DeletedOrganizationAudit.vue') },
     { path: '/platform/agent-releases', name: 'agent-releases', component: () => import('./views/AgentReleases.vue') },
     { path: '/platform/agent-releases/:version', name: 'agent-release', component: () => import('./views/AgentReleaseDetail.vue') },
     { path: '/platform/ip-allowlist', name: 'ip-allowlist', component: () => import('./views/IpAllowlist.vue') },

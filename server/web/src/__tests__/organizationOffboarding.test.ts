@@ -16,6 +16,7 @@ import { pendingConfirm, settleConfirm } from '../composables/useConfirm'
 const deletion = {
   requested_at: '2026-11-01T00:00:00Z', requested_by: 'pat', reason: 'contract ended', delete_after: '2026-12-01T00:00:00Z',
   step: null, last_error_code: null, deleted_at: null, uninstalls_issued: 3, uninstalls_skipped: 0,
+  audit_final_verified_at: null, audit_final_outcome: null,
 }
 const active: Organization = {
   id: 'o1', slug: 'acme', name: 'Acme', status: 'active', domains: [], created_at: '2026-10-01T00:00:00Z', deletion: null,
@@ -32,9 +33,12 @@ vi.mock('../lib/organizations', async (original) => ({
 }))
 
 const startStepUp = vi.fn()
+let resumed: { failed: false; payload: OrganizationDeletionInput } | { failed: true } | null = null
 vi.mock('../lib/stepUp', async (original) => ({
   ...(await original<typeof import('../lib/stepUp')>()),
   startStepUp: (...args: unknown[]) => startStepUp(...args),
+  resumeStepUp: (action: string) => (action === 'organization-delete' ? resumed : null),
+  withoutStepUpParam: () => '/platform/organizations',
 }))
 
 let wrapper: VueWrapper | null = null
@@ -44,6 +48,7 @@ beforeEach(() => {
   requestDeletion.mockReset()
   cancelDeletion.mockReset()
   startStepUp.mockReset()
+  resumed = null
 })
 
 afterEach(() => {
@@ -54,7 +59,10 @@ afterEach(() => {
 async function mountView(): Promise<VueWrapper> {
   const pinia = createPinia()
   setActivePinia(pinia)
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/platform/organizations', component: Organizations }] })
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/platform/organizations', component: Organizations },
+    { path: '/platform/organizations/:id/audit', name: 'organization-audit', component: { render: () => null } },
+  ] })
   await router.push('/platform/organizations')
   await router.isReady()
   wrapper = mount(() => h(VApp, null, { default: () => h(RouterView) }),
@@ -156,6 +164,21 @@ describe('requesting the deletion of an organization', () => {
       { id: 'o1', slug: 'acme', reason: 'contract ended', graceDays: 30 })
   })
 
+  it('repeats the request once after the step-up without starting another', async () => {
+    requestDeletion.mockResolvedValue('step_up_required')
+    resumed = { failed: false, payload: { id: 'o1', slug: 'acme', reason: 'contract ended', graceDays: 14 } }
+    await mountView()
+    expect(requestDeletion).toHaveBeenCalledExactlyOnceWith({ id: 'o1', slug: 'acme', reason: 'contract ended', graceDays: 14 })
+    expect(startStepUp).not.toHaveBeenCalled()
+  })
+
+  it('shows a problem and sends nothing when the step-up was refused', async () => {
+    resumed = { failed: true }
+    const w = await mountView()
+    expect(requestDeletion).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="organization-deletion-problem"]').exists()).toBe(true)
+  })
+
   it('shows the problem of a refused request', async () => {
     requestDeletion.mockResolvedValue('invalid_state')
     const w = await mountView()
@@ -252,5 +275,23 @@ describe('the deletion banner for organization administrators', () => {
   it('is absent for a platform administrator', () => {
     const w = mountBanner({ ...me, role: 'platform_admin', organization: null })
     expect(w.find('[data-testid="organization-deletion-banner"]').exists()).toBe(false)
+  })
+})
+
+describe('deleted organizations in the list', () => {
+  it('links a deleted organization to its retained audit and flags a failed final verification', async () => {
+    rows = [{
+      ...active, status: 'deleted',
+      deletion: { ...deletion, deleted_at: '2026-12-01T01:00:00Z', audit_final_verified_at: '2026-12-01T00:30:00Z', audit_final_outcome: 'failed' },
+    }]
+    const w = await mountView()
+    expect(w.find('[data-testid="org-audit-acme"]').exists()).toBe(true)
+    expect(w.get('[data-testid="org-audit-failed-acme"]').text()).toContain('Audit verification failed')
+    expect(w.find('[data-testid="org-delete-acme"]').exists()).toBe(false)
+  })
+
+  it('offers no retained audit for an active organization', async () => {
+    const w = await mountView()
+    expect(w.find('[data-testid="org-audit-acme"]').exists()).toBe(false)
   })
 })

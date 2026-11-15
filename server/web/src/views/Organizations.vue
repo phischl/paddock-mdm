@@ -232,6 +232,12 @@ async function saveDomains(): Promise<void> {
           :label="t('organizations.deletion.pending', { date: formatDateTime(item.deletion.delete_after, locale) })"
           :data-testid="'org-deletion-pending-' + item.slug"
         />
+        <StatusChip
+          v-if="item.deletion?.audit_final_outcome === 'failed'"
+          status="critical"
+          :label="t('organizations.audit.finalFailedChip')"
+          :data-testid="'org-audit-failed-' + item.slug"
+        />
         <p
           v-if="item.deletion && item.status === 'deleting'"
           class="org-step"
@@ -262,6 +268,15 @@ async function saveDomains(): Promise<void> {
           @click="deleting = item"
         >
           {{ t('organizations.delete.action') }}
+        </v-btn>
+        <v-btn
+          v-if="item.status === 'deleted'"
+          size="small"
+          variant="tonal"
+          :to="{ name: 'organization-audit', params: { id: item.id } }"
+          :data-testid="'org-audit-' + item.slug"
+        >
+          {{ t('organizations.audit.open') }}
         </v-btn>
         <v-btn
           v-if="deletionPending(item)"

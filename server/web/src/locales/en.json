@@ -794,6 +794,17 @@
     "banner": {
       "message": "The organization is scheduled for deletion on {date}. All its data is deleted for good then.",
       "advice": "Secure what you still need before: the recovery keys of the encrypted disks (ask your platform administrator for the encrypted recovery-key export) and the passwords of the local administrators."
+    },
+    "audit": {
+      "open": "Retained audit",
+      "title": "Retained audit of {name}",
+      "back": "Back to organizations",
+      "intro": "The audit log of the deleted organization {slug} stays readable here. Every read is recorded in the platform audit log.",
+      "logTitle": "Audit log",
+      "finalVerified": "The audit chain of the organization was verified before its deletion, on {date}.",
+      "finalFailed": "The final verification of the audit chain on {date} failed: the retained audit evidence did not verify. Do not rely on it as evidence before the cause is clear.",
+      "finalNone": "The audit chain has not been verified at deletion yet.",
+      "finalFailedChip": "Audit verification failed"
     }
   },
   "agentReleases": {
@@ -1454,7 +1465,8 @@
         "skipped_in_use": "not cleared (the disk unlocks with it)",
         "not_requested": "not requested",
         "failed": "clearing failed"
-      }
+      },
+      "offboarding": "Removal for the organization's deletion: the device removes Paddock because its organization is being deleted. Only cancelling the deletion of the organization withdraws it."
     },
     "components": {
       "title": "Components",
