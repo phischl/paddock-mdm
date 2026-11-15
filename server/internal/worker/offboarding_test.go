@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -9,10 +10,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/offboarding"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 )
 
 // fakeOffboarder records the round's calls; advance decides each Advance's answer.
@@ -158,16 +162,76 @@ func TestOffboardingRoundWaiting(t *testing.T) {
 	}
 }
 
-// TestOffboardingRoundLeaderLock: a replica without the leader lock neither starts nor advances a deletion.
+// TestOffboardingRoundLeaderLock: a replica without the leader lock neither starts nor advances a deletion, and resets
+// the gauges it exported while it led (review 1 nit 6).
 func TestOffboardingRoundLeaderLock(t *testing.T) {
 	org := uuid.New()
 	f := &fakeOffboarder{attempts: map[uuid.UUID][]time.Time{}, now: time.Now,
 		pending: []pgstore.Organization{deletingOrg(org, offboarding.StepSessions, "")},
 		advance: func(uuid.UUID) error { return nil }}
-	if err := NewOffboarding(f, &fakeLock{held: true}).Round(context.Background()); err != nil {
+	lock := &fakeLock{}
+	f.advance = func(uuid.UUID) error {
+		return &app.OffboardingError{Code: offboarding.ErrorAuthentikUnavailable, Err: errors.New("down")}
+	}
+	f.pending[0] = deletingOrg(org, offboarding.StepAuthentik, offboarding.ErrorAuthentikUnavailable)
+	r := NewOffboarding(f, lock)
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	metricOffboardingRetryCapped.Set(1)
+	lock.held = true
+	f.started, f.attempts = 0, map[uuid.UUID][]time.Time{}
+	if err := r.Round(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if f.started != 0 || len(f.attempts[org]) != 0 {
 		t.Fatalf("started %d, attempts %d without the lock", f.started, len(f.attempts[org]))
+	}
+	failing := testutil.ToFloat64(metricOffboardingStepFailing.WithLabelValues(offboarding.StepAuthentik, offboarding.ErrorAuthentikUnavailable))
+	if testutil.ToFloat64(metricOffboardingRetryCapped) != 0 || failing != 0 || len(r.retries) != 0 {
+		t.Fatalf("after losing the lock: capped %v, failing %v, retries %d; want all reset",
+			testutil.ToFloat64(metricOffboardingRetryCapped), failing, len(r.retries))
+	}
+}
+
+// TestMessagesOfDeletedOrganizationDropped (PDK-1015 review 1, amendment l point 3): an offboarded device keeps its
+// keys after the tombstone, so its heartbeats and events may still reach the worker; they are acknowledged and
+// dropped without writing anything into the deleted organization.
+func TestMessagesOfDeletedOrganizationDropped(t *testing.T) {
+	f := newFixture(t)
+	runner := app.NewActionRunner(f.pool, nil, httpx.RequestID)
+	reports := NewReports(app.NewDeviceReports(runner, f.pool), app.NewDeviceCommands(runner, f.pool), f.cache)
+	ctx := context.Background()
+	dev := f.device(t, "active")
+	now := time.Now().UTC()
+	actions := f.count(t, "SELECT count(*) FROM action WHERE organization_id = $1", f.org)
+	if _, err := f.super.Exec(ctx, `UPDATE organization SET status = 'deleted', deleted_at = now(), deletion_requested_at = now(),
+		deletion_requested_by = 'platform admin', deletion_reason = 'contract ended', delete_after = now() WHERE id = $1`, f.org); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.RefreshOrganizationStatus(ctx); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat, _ := json.Marshal(ingest.Heartbeat{DeviceID: dev, OrganizationID: f.org, ReceivedAt: now,
+		AppliedBundleVersion: 2, AgentVersion: "0.1.0", Health: json.RawMessage(`{"reconcile":"ok"}`), Seq: 1})
+	events, _ := json.Marshal(ingest.Events{DeviceID: dev, OrganizationID: f.org, ReceivedAt: now, Events: []protocol.Event{
+		{EventSeq: 1, Type: protocol.EventBundleApplied, OccurredAt: now, Data: json.RawMessage(`{"bundle_version":3}`)},
+	}})
+	dropped := func() float64 { return testutil.ToFloat64(metricDropped.WithLabelValues("organization_unavailable")) }
+	before := dropped()
+	if o := reports.heartbeat(ctx, "hb", heartbeat); o != ack {
+		t.Errorf("heartbeat: %v, want ack", o)
+	}
+	if o := reports.events(ctx, "batch", events); o != ack {
+		t.Errorf("events: %v, want ack", o)
+	}
+	if got := dropped() - before; got != 2 {
+		t.Errorf("dropped counter rose by %v, want 2", got)
+	}
+	if n := f.count(t, "SELECT count(*) FROM device_status WHERE device_id = $1", dev); n != 0 {
+		t.Errorf("%d status rows written for a deleted organization", n)
+	}
+	if n := f.count(t, "SELECT count(*) FROM action WHERE organization_id = $1", f.org); n != actions {
+		t.Errorf("%d actions, want %d: something was recorded for a deleted organization", n, actions)
 	}
 }

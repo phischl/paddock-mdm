@@ -108,7 +108,7 @@ func (o *Offboarding) Run(ctx context.Context) error {
 // others. The lock is held only while the round runs (amendment c point 3).
 func (o *Offboarding) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
-	_, err := o.lock.WithLeaderLock(sys, offboardingLockKey, func(ctx context.Context) error {
+	leader, err := o.lock.WithLeaderLock(sys, offboardingLockKey, func(ctx context.Context) error {
 		started, err := o.job.StartDue(ctx)
 		if err != nil {
 			return err
@@ -137,6 +137,12 @@ func (o *Offboarding) Round(ctx context.Context) error {
 		metricOffboardingRetryCapped.Set(float64(capped))
 		return nil
 	})
+	if err == nil && !leader {
+		// Another replica leads now and exports the deletions' state; this one's last values would keep the alert firing.
+		metricOffboardingRetryCapped.Set(0)
+		metricOffboardingStepFailing.Reset()
+		clear(o.retries)
+	}
 	return err
 }
 

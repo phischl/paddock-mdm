@@ -36,7 +36,7 @@ func Next(step string) (next string, ok bool) {
 }
 
 // The error codes a failed step stores in organization.offboarding_error_code and records as error_code of
-// organization.deletion_step_failed (plan M17 §6, amendment 2026-11-15 k addendum point 3, amendment j point 5).
+// organization.deletion_step_failed (plan M17 §6, amendment 2026-11-15 k addendum point 3, amendment j point 5, main §37).
 const (
 	ErrorAuthentikUnavailable   = "authentik_unavailable"
 	ErrorFleetUnavailable       = "fleet_unavailable"
@@ -46,6 +46,9 @@ const (
 	ErrorOutboxPending          = "outbox_pending"
 	ErrorAuditWriterPending     = "audit_writer_pending"
 	ErrorDatabase               = "database_error"
+	// ErrorDevicesPending: devices of the organization have not reported their removal, and the step devices that
+	// records them as offboarded devices is not in place yet (main's decision §37 until PDK-1016).
+	ErrorDevicesPending = "devices_pending"
 	// ErrorFinalizeWaiting: the tombstone has waited longer than FinalizeWaitAlert for organization transactions that
 	// were open when the deletion started.
 	ErrorFinalizeWaiting = "finalize_waiting"
@@ -54,5 +57,5 @@ const (
 // ErrorCodes is the closed set of step error codes.
 func ErrorCodes() []string {
 	return []string{ErrorAuthentikUnavailable, ErrorFleetUnavailable, ErrorObjectStoreUnavailable, ErrorObjectRetained,
-		ErrorValkeyUnavailable, ErrorOutboxPending, ErrorAuditWriterPending, ErrorDatabase, ErrorFinalizeWaiting}
+		ErrorValkeyUnavailable, ErrorOutboxPending, ErrorAuditWriterPending, ErrorDatabase, ErrorDevicesPending, ErrorFinalizeWaiting}
 }

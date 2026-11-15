@@ -13,6 +13,20 @@ import (
 	"github.com/google/uuid"
 )
 
+const countOffboardingPendingDevices = `-- name: CountOffboardingPendingDevices :one
+SELECT count(*) FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('retired', 'rejected')
+`
+
+// Devices of the context organization that may still contact the server: no reported removal and neither retired nor
+// rejected (plan M17 decision 15). Until PDK-1016 records them as offboarded devices, the step devices waits while any
+// exists, so the deletion never takes away the path their uninstall needs.
+func (q *Queries) CountOffboardingPendingDevices(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countOffboardingPendingDevices)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteOffboardedDevice = `-- name: DeleteOffboardedDevice :one
 DELETE FROM offboarded_device WHERE device_id = $1 RETURNING device_id, organization_id, keys, command_id, command_envelope, offboarded_at
 `
@@ -74,6 +88,32 @@ func (q *Queries) InsertOffboardedDevice(ctx context.Context, arg InsertOffboard
 		arg.CommandEnvelope,
 	)
 	return err
+}
+
+const listOffboardedDeviceIDs = `-- name: ListOffboardedDeviceIDs :many
+SELECT device_id FROM offboarded_device WHERE organization_id = $1 ORDER BY device_id
+`
+
+// The offboarded devices of an organization, whose identity, command and sequence keys outlive it (plan M17 amendment l
+// point 3).
+func (q *Queries) ListOffboardedDeviceIDs(ctx context.Context, organizationID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listOffboardedDeviceIDs, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var device_id uuid.UUID
+		if err := rows.Scan(&device_id); err != nil {
+			return nil, err
+		}
+		items = append(items, device_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listOffboardedDevices = `-- name: ListOffboardedDevices :many

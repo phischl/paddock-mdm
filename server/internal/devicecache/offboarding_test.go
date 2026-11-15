@@ -11,22 +11,28 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/valkeytest"
 )
 
-// TestDeleteOrganizationKeys (plan M17 decision 13, amendment k addendum point 2): under the worker's real ACL user the
-// deletion removes every device key of the organization and its time ticket, bp: and tt: included, and leaves another
-// organization's keys alone. A single DEL that mixes bp: with dk: is refused for the worker, which is why the two go in
-// calls of their own.
+// TestDeleteOrganizationKeys (plan M17 decision 13, amendment k addendum point 2, amendment l point 3): under the
+// worker's real ACL user the deletion removes every key of a device that is not offboarded and the organization's time
+// ticket, bp: and tt: included. An offboarded device loses only bp:, hb: and au:; its dk:, cmd:, seq:, sd: and nonce:
+// stay for its uninstall. Another organization's keys stay. A single DEL that mixes bp: with dk: is refused for the
+// worker, which is why the two go in calls of their own.
 func TestDeleteOrganizationKeys(t *testing.T) {
 	srv := valkeytest.StartACL(t)
 	admin, worker := srv.Client(t, "acceptance"), srv.Client(t, "worker")
 	ctx := context.Background()
 	org, other := uuid.New(), uuid.New()
-	dev, otherDev := uuid.New(), uuid.New()
-	keysOf := func(o, d uuid.UUID, keyID string) []string {
-		return []string{"cmd:" + d.String(), "seq:" + d.String(), "sd:" + d.String(), "bp:" + d.String(), "hb:" + d.String(),
-			"au:" + d.String(), "dk:" + keyID, "tt:" + o.String()}
+	dev, leaving, otherDev := uuid.New(), uuid.New(), uuid.New()
+	perDevice := func(d uuid.UUID, keyID string) (gone, kept []string) {
+		return []string{"bp:" + d.String(), "hb:" + d.String(), "au:" + d.String()},
+			[]string{"cmd:" + d.String(), "seq:" + d.String(), "sd:" + d.String(), "dk:" + keyID, "nonce:" + d.String() + ":n1"}
 	}
-	mine, theirs := keysOf(org, dev, "key-a"), keysOf(other, otherDev, "key-b")
-	for _, k := range append(append([]string{}, mine...), theirs...) {
+	devGone, devRest := perDevice(dev, "key-a")
+	mine := append(append(devGone, devRest...), "tt:"+org.String())
+	leavingGone, leavingKept := perDevice(leaving, "key-l")
+	theirsGone, theirsRest := perDevice(otherDev, "key-b")
+	theirs := append(append(theirsGone, theirsRest...), "tt:"+other.String())
+	all := append(append(append(append([]string{}, mine...), leavingGone...), leavingKept...), theirs...)
+	for _, k := range all {
 		if err := admin.Do(ctx, admin.B().Set().Key(k).Value("x").Build()).Error(); err != nil {
 			t.Fatal(err)
 		}
@@ -37,9 +43,12 @@ func TestDeleteOrganizationKeys(t *testing.T) {
 		t.Fatalf("a mixed DEL of the worker: %v, want NOPERM", err)
 	}
 
-	n, err := devicecache.New(worker).DeleteOrganization(ctx, org, []uuid.UUID{dev}, []string{"key-a"})
-	if err != nil || n != int64(len(mine)) {
-		t.Fatalf("DeleteOrganization = %d, %v; want %d", n, err, len(mine))
+	devices := []devicecache.OffboardDevice{{ID: dev, KeyIDs: []string{"key-a"}}, {ID: leaving, KeyIDs: []string{"key-l"}, Offboarded: true}}
+	// nonce: is outside the worker's ACL and expires by itself (amendment l point 2): it is not deleted.
+	want := int64(len(mine) - 1 + len(leavingGone))
+	n, err := devicecache.New(worker).DeleteOrganization(ctx, org, devices)
+	if err != nil || n != want {
+		t.Fatalf("DeleteOrganization = %d, %v; want %d", n, err, want)
 	}
 	count := func(keys []string) int64 {
 		n, err := admin.Do(ctx, admin.B().Exists().Key(keys...).Build()).AsInt64()
@@ -48,13 +57,19 @@ func TestDeleteOrganizationKeys(t *testing.T) {
 		}
 		return n
 	}
-	if left := count(mine); left != 0 {
-		t.Fatalf("%d keys of the organization remain", left)
+	if left := count(mine); left != 1 {
+		t.Fatalf("%d keys of the device remain, want only its nonce", left)
+	}
+	if left := count(leavingGone); left != 0 {
+		t.Fatalf("%d of bp:, hb:, au: of the offboarded device remain", left)
+	}
+	if kept := count(leavingKept); kept != int64(len(leavingKept)) {
+		t.Fatalf("the offboarded device kept %d of %d keys (dk:, cmd:, seq:, sd:, nonce:)", kept, len(leavingKept))
 	}
 	if kept := count(theirs); kept != int64(len(theirs)) {
 		t.Fatalf("another organization kept %d of %d keys", kept, len(theirs))
 	}
-	if n, err := devicecache.New(worker).DeleteOrganization(ctx, org, []uuid.UUID{dev}, []string{"key-a"}); err != nil || n != 0 {
+	if n, err := devicecache.New(worker).DeleteOrganization(ctx, org, devices); err != nil || n != 0 {
 		t.Fatalf("second deletion = %d, %v", n, err)
 	}
 }

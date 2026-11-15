@@ -12,6 +12,25 @@ import (
 	"github.com/google/uuid"
 )
 
+const addOrganizationOffboardingCount = `-- name: AddOrganizationOffboardingCount :exec
+UPDATE organization
+SET offboarding_counts = offboarding_counts || jsonb_build_object($1::text,
+      coalesce((offboarding_counts ->> $1::text)::bigint, 0) + $2::bigint)
+WHERE id = $3 AND status = 'deleting' AND offboarding_step = $1
+`
+
+type AddOrganizationOffboardingCountParams struct {
+	Step  string
+	Added int64
+	ID    uuid.UUID
+}
+
+// Progress of a step that removes in batches, stored per batch, so a crash does not lose the count of what is gone.
+func (q *Queries) AddOrganizationOffboardingCount(ctx context.Context, arg AddOrganizationOffboardingCountParams) error {
+	_, err := q.db.Exec(ctx, addOrganizationOffboardingCount, arg.Step, arg.Added, arg.ID)
+	return err
+}
+
 const advanceOrganizationOffboardingStep = `-- name: AdvanceOrganizationOffboardingStep :one
 UPDATE organization SET offboarding_step = $1, offboarding_error_code = NULL, updated_at = now()
 WHERE id = $2 AND status = 'deleting' AND offboarding_step = $3

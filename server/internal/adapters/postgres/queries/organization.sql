@@ -159,6 +159,13 @@ SET offboarding_error_code = @error_code, updated_at = now(),
 WHERE id = @id AND status = 'deleting' AND offboarding_step = @step
 RETURNING *;
 
+-- Progress of a step that removes in batches, stored per batch, so a crash does not lose the count of what is gone.
+-- name: AddOrganizationOffboardingCount :exec
+UPDATE organization
+SET offboarding_counts = offboarding_counts || jsonb_build_object(@step::text,
+      coalesce((offboarding_counts ->> @step::text)::bigint, 0) + @added::bigint)
+WHERE id = @id AND status = 'deleting' AND offboarding_step = @step;
+
 -- organization.deleted is recorded exactly once, together with this: the tombstone no longer waits for its event.
 -- name: CloseOrganizationOffboarding :one
 UPDATE organization SET offboarding_step = NULL, updated_at = now()

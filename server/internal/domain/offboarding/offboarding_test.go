@@ -25,16 +25,17 @@ func TestSteps(t *testing.T) {
 	}
 }
 
-// TestErrorCodes: the closed set of §6 plus object_retained (amendment k addendum) and finalize_waiting (amendment j).
+// TestErrorCodes: the closed set of §6 plus object_retained (amendment k addendum), finalize_waiting (amendment j)
+// and devices_pending (main §37).
 func TestErrorCodes(t *testing.T) {
 	codes := offboarding.ErrorCodes()
 	sorted := slices.Clone(codes)
 	slices.Sort(sorted)
-	if len(slices.Compact(sorted)) != len(codes) || len(codes) != 9 {
+	if len(slices.Compact(sorted)) != len(codes) || len(codes) != 10 {
 		t.Fatalf("error codes %v", codes)
 	}
 	for _, c := range []string{"authentik_unavailable", "fleet_unavailable", "object_store_unavailable", "object_retained",
-		"valkey_unavailable", "outbox_pending", "audit_writer_pending", "database_error", "finalize_waiting"} {
+		"valkey_unavailable", "outbox_pending", "audit_writer_pending", "database_error", "devices_pending", "finalize_waiting"} {
 		if !slices.Contains(codes, c) {
 			t.Fatalf("%s missing", c)
 		}

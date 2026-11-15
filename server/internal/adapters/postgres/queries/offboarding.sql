@@ -42,6 +42,12 @@ ORDER BY d.id, k.key_id;
 -- name: ListOffboardingInventoryRefs :many
 SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id;
 
+-- Devices of the context organization that may still contact the server: no reported removal and neither retired nor
+-- rejected (plan M17 decision 15). Until PDK-1016 records them as offboarded devices, the step devices waits while any
+-- exists, so the deletion never takes away the path their uninstall needs.
+-- name: CountOffboardingPendingDevices :one
+SELECT count(*) FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('retired', 'rejected');
+
 -- name: ListOffboardingTables :many
 SELECT table_name, delete_order FROM offboarding_table ORDER BY delete_order;
 
@@ -51,6 +57,11 @@ SELECT table_name, delete_order FROM offboarding_table ORDER BY delete_order;
 INSERT INTO offboarded_device (device_id, organization_id, keys, command_id, command_envelope)
 VALUES (@device_id, @organization_id, @keys, @command_id, @command_envelope)
 ON CONFLICT (device_id) DO NOTHING;
+
+-- The offboarded devices of an organization, whose identity, command and sequence keys outlive it (plan M17 amendment l
+-- point 3).
+-- name: ListOffboardedDeviceIDs :many
+SELECT device_id FROM offboarded_device WHERE organization_id = @organization_id ORDER BY device_id;
 
 -- name: GetOffboardedDevice :one
 SELECT * FROM offboarded_device WHERE device_id = @device_id;

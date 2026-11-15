@@ -8,12 +8,12 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/offboarding"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
@@ -47,7 +47,7 @@ type OffboardingInventory interface {
 
 // OffboardingCache deletes the organization's device keys in Valkey (devicecache.Cache).
 type OffboardingCache interface {
-	DeleteOrganization(ctx context.Context, org uuid.UUID, devices []uuid.UUID, keyIDs []string) (int64, error)
+	DeleteOrganization(ctx context.Context, org uuid.UUID, devices []devicecache.OffboardDevice) (int64, error)
 }
 
 // OffboardingSessions ends the portal and MCP sessions of an administrator account (sessions.Store).
@@ -201,6 +201,9 @@ func stepError(code string, err error) error {
 
 // run executes one step and returns what it removed, also when it fails after partial progress.
 func (o *Offboarding) run(ctx context.Context, row pgstore.Organization, step string) (int, error) {
+	if step == offboarding.StepDevices && o.stubbed[step] {
+		return 0, o.devicesGone(ctx, row.ID)
+	}
 	if o.stubbed[step] {
 		return 0, nil
 	}
@@ -257,6 +260,25 @@ func (o *Offboarding) sessions(ctx context.Context, org uuid.UUID) (int, error) 
 	return ended + int(revoked), nil
 }
 
+// devicesGone is the stubbed step devices until PDK-1016 (main's decision §37): without offboarded-device records the
+// later steps would take away the keys and rows a device needs to fetch its uninstall, so the step waits with
+// devices_pending while any device of the organization has neither reported its removal nor been retired or rejected.
+func (o *Offboarding) devicesGone(ctx context.Context, org uuid.UUID) error {
+	var pending int64
+	err := o.deps.Worker.InOrgOffboarding(offboardingContext(ctx, org), func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		pending, err = q.CountOffboardingPendingDevices(ctx)
+		return err
+	})
+	if err != nil {
+		return stepError(offboarding.ErrorDatabase, fmt.Errorf("count the devices without reported removal: %w", err))
+	}
+	if pending > 0 {
+		return stepError(offboarding.ErrorDevicesPending, fmt.Errorf("%d devices of organization %s have not reported their removal", pending, org))
+	}
+	return nil
+}
+
 // outbox completes only when the organization has no unpublished outbox row (plan M17 decision 9): no audit event of
 // the organization may be lost, so unpublished rows are waited for, never deleted.
 func (o *Offboarding) outbox(ctx context.Context, org uuid.UUID) error {
@@ -311,7 +333,8 @@ func (o *Offboarding) fleet(ctx context.Context, org uuid.UUID) (int, error) {
 	return deleted, nil
 }
 
-// valkey deletes the cached keys of the organization's devices and its time ticket (plan M17 decision 13).
+// valkey deletes the cached keys of the organization's devices and its time ticket (plan M17 decision 13). A device
+// with an offboarded_device record keeps what its uninstall needs (amendment l point 3, devicecache.DeleteOrganization).
 func (o *Offboarding) valkey(ctx context.Context, org uuid.UUID) (int, error) {
 	var rows []pgstore.ListOffboardingDeviceKeysRow
 	err := o.deps.Worker.InOrgOffboarding(offboardingContext(ctx, org), func(ctx context.Context, q *pgstore.Queries) error {
@@ -322,24 +345,38 @@ func (o *Offboarding) valkey(ctx context.Context, org uuid.UUID) (int, error) {
 	if err != nil {
 		return 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("list the device keys: %w", err))
 	}
-	var devices []uuid.UUID
-	var keyIDs []string
+	var offboarded []uuid.UUID
+	err = o.deps.Platform.InPlatform(offboardingSystem(ctx), func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		offboarded, err = q.ListOffboardedDeviceIDs(ctx, org)
+		return err
+	})
+	if err != nil {
+		return 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("list the offboarded devices: %w", err))
+	}
+	keep := make(map[uuid.UUID]bool, len(offboarded))
+	for _, id := range offboarded {
+		keep[id] = true
+	}
+	// The rows are ordered by device, so a device's keys follow each other.
+	var devices []devicecache.OffboardDevice
 	for _, r := range rows {
-		if !slices.Contains(devices, r.DeviceID) {
-			devices = append(devices, r.DeviceID)
+		if len(devices) == 0 || devices[len(devices)-1].ID != r.DeviceID {
+			devices = append(devices, devicecache.OffboardDevice{ID: r.DeviceID, Offboarded: keep[r.DeviceID]})
 		}
 		if r.KeyID != "" {
-			keyIDs = append(keyIDs, r.KeyID)
+			last := &devices[len(devices)-1]
+			last.KeyIDs = append(last.KeyIDs, r.KeyID)
 		}
 	}
-	n, err := o.deps.Cache.DeleteOrganization(ctx, org, devices, keyIDs)
+	n, err := o.deps.Cache.DeleteOrganization(ctx, org, devices)
 	return int(n), stepError(offboarding.ErrorValkeyUnavailable, err)
 }
 
 // database deletes the organization's rows in batches until paddock_offboard_delete_batch reports nothing left (plan
-// M17 decision 7). Each batch is its own transaction, so a failure keeps what was deleted.
+// M17 decision 7). Each batch is its own transaction and its count is stored right after it, so neither a failure nor
+// a crash loses the count of what is gone; it returns 0, as nothing is left to add.
 func (o *Offboarding) database(ctx context.Context, org uuid.UUID) (int, error) {
-	total := 0
 	for {
 		var n int64
 		err := o.deps.Worker.InOrgOffboarding(offboardingContext(ctx, org), func(ctx context.Context, q *pgstore.Queries) error {
@@ -348,12 +385,18 @@ func (o *Offboarding) database(ctx context.Context, org uuid.UUID) (int, error) 
 			return err
 		})
 		if err != nil {
-			return total, stepError(offboarding.ErrorDatabase, fmt.Errorf("delete a batch of rows: %w", err))
+			return 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("delete a batch of rows: %w", err))
 		}
 		if n == 0 {
-			return total, nil
+			return 0, nil
 		}
-		total += int(n)
+		err = o.deps.Platform.InPlatform(offboardingSystem(ctx), func(ctx context.Context, q *pgstore.Queries) error {
+			return q.AddOrganizationOffboardingCount(ctx, pgstore.AddOrganizationOffboardingCountParams{
+				ID: org, Step: offboarding.StepDatabase, Added: n})
+		})
+		if err != nil {
+			return 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("store the deleted rows: %w", err))
+		}
 	}
 }
 
@@ -414,9 +457,8 @@ func (o *Offboarding) waiting(ctx context.Context, org uuid.UUID) error {
 	if row.OffboardingWaitTakenAt != nil && o.now().Sub(*row.OffboardingWaitTakenAt) > FinalizeWaitAlert {
 		waited := stepError(offboarding.ErrorFinalizeWaiting,
 			fmt.Errorf("organization transactions open since %s still run", row.OffboardingWaitTakenAt.UTC().Format(time.RFC3339)))
-		if err := o.fail(ctx, row, offboarding.StepTombstone, 0, waited); !errors.As(err, new(*OffboardingError)) {
-			return err
-		}
+		// fail logs a failure to record; the code then stays unstored and the next round records it.
+		_ = o.fail(ctx, row, offboarding.StepTombstone, 0, waited)
 	}
 	return ErrOffboardingWaiting
 }
@@ -462,6 +504,8 @@ func (o *Offboarding) fail(ctx context.Context, row pgstore.Organization, step s
 			return stepErr
 		}
 		if err := o.deps.Platform.InPlatform(sys, write); err != nil {
+			slog.WarnContext(ctx, "storing the progress of a failed organization deletion step failed", "organization", row.ID,
+				"step", step, "error", err)
 			return errors.Join(stepErr, fmt.Errorf("store the step's progress: %w", err))
 		}
 		return stepErr
@@ -472,6 +516,8 @@ func (o *Offboarding) fail(ctx context.Context, row pgstore.Organization, step s
 	err := o.deps.Runner.RunTxRefusal(sys, ScopePlatform, spec, refusal,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error { return write(ctx, q) })
 	if err != nil && !errors.Is(err, refusal) {
+		slog.WarnContext(ctx, "recording a failed organization deletion step failed; retried next round", "organization", row.ID,
+			"step", step, "error_code", code, "error", err)
 		return errors.Join(stepErr, fmt.Errorf("record the failed step: %w", err))
 	}
 	slog.WarnContext(ctx, "organization deletion step failed; retried", "organization", row.ID, "step", step,
@@ -486,17 +532,21 @@ func (o *Offboarding) complete(ctx context.Context, row pgstore.Organization, st
 	if !ok {
 		return fmt.Errorf("step %q has no successor", step)
 	}
-	total := counts(row)[step] + int64(count)
 	spec := ActionSpec{Code: audit.CodeOrganizationDeletionStepCompleted, Target: orgTarget(row),
-		Params: map[string]any{"slug": row.Slug, "step": step, "count": total}}
+		Params: map[string]any{"slug": row.Slug, "step": step}}
 	_, err := o.deps.Runner.RecordOnceInScope(offboardingSystem(ctx), ScopePlatform, spec,
-		func(ctx context.Context, q *pgstore.Queries, _ Recorder) (bool, error) {
-			_, err := q.CompleteOrganizationOffboardingStep(ctx, pgstore.CompleteOrganizationOffboardingStepParams{
+		func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error) {
+			done, err := q.CompleteOrganizationOffboardingStep(ctx, pgstore.CompleteOrganizationOffboardingStepParams{
 				ID: row.ID, CurrentStep: step, NextStep: &next, Added: int64(count)})
 			if db.IsNoRows(err) {
 				return false, nil
 			}
-			return err == nil, err
+			if err != nil {
+				return false, err
+			}
+			// The total includes what earlier attempts and batches stored, read in the checkpoint's own statement.
+			rec.SetParam("count", counts(done)[step])
+			return true, nil
 		})
 	if err != nil {
 		return fmt.Errorf("complete step %s: %w", step, err)

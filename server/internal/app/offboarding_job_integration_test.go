@@ -16,6 +16,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/offboarding"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
@@ -62,24 +63,23 @@ func (f *fakeOffboardFleet) DeleteHost(_ context.Context, ref ports.HostRef) err
 	return nil
 }
 
-// fakeOffboardCache is the device keys in Valkey, by organization.
+// fakeOffboardCache is the device keys in Valkey, by organization; it records the devices of every deletion.
 type fakeOffboardCache struct {
-	mu   sync.Mutex
-	keys map[uuid.UUID]int
-	err  error
+	mu      sync.Mutex
+	keys    map[uuid.UUID]int
+	err     error
+	devices []devicecache.OffboardDevice
 }
 
-func (f *fakeOffboardCache) DeleteOrganization(_ context.Context, org uuid.UUID, devices []uuid.UUID, _ []string) (int64, error) {
+func (f *fakeOffboardCache) DeleteOrganization(_ context.Context, org uuid.UUID, devices []devicecache.OffboardDevice) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return 0, f.err
 	}
+	f.devices = devices
 	n := f.keys[org]
 	delete(f.keys, org)
-	if n == 0 {
-		return int64(0 * len(devices)), nil
-	}
 	return int64(n), nil
 }
 
@@ -223,9 +223,16 @@ func (w *offboardWorld) job() *app.Offboarding {
 		})
 }
 
-// requestDue requests the deletion with grace 0, publishes the organization's outbox (no relay runs here) and starts
-// the deletion.
+// requestDue requests the deletion with grace 0, publishes the organization's outbox (no relay runs here), starts the
+// deletion, and lets every device report its removal, as the devices do during the grace period.
 func (w *offboardWorld) requestDue(t *testing.T, job *app.Offboarding) {
+	t.Helper()
+	w.requestDueWithDevices(t, job)
+	w.exec(t, "UPDATE device SET uninstalled_at = now() WHERE organization_id = $1", w.org)
+}
+
+// requestDueWithDevices is requestDue with the devices still unreported.
+func (w *offboardWorld) requestDueWithDevices(t *testing.T, job *app.Offboarding) {
 	t.Helper()
 	if _, err := w.devOrgs.RequestDeletion(w.root(true), w.org, w.input(0)); err != nil {
 		t.Fatal(err)
@@ -668,4 +675,119 @@ func TestOffboardingDefinerFunctions(t *testing.T) {
 // offboardingTestContext is the system principal of org for InOrgOffboarding.
 func offboardingTestContext(org uuid.UUID) context.Context {
 	return principal.With(context.Background(), principal.Principal{Kind: principal.KindSystem, Display: "test", OrganizationID: org})
+}
+
+// TestOffboardingWaitsForDevices (main's decision §37, until PDK-1016): the stubbed step devices does not complete
+// while a device of the organization has neither reported its removal nor been retired or rejected; it stores
+// devices_pending and records one failure event. Once every device is retired, rejected or reported, it completes.
+func TestOffboardingWaitsForDevices(t *testing.T) {
+	w := newOffboardWorld(t)
+	job := w.job()
+	rejected, _ := w.newDevice(t, w.org, "rejected")
+	retired, _ := w.newDevice(t, w.org, "retired")
+	w.requestDueWithDevices(t, job)
+	w.advanceTo(t, job, offboarding.StepDevices)
+	for range 3 {
+		_, err := job.Advance(context.Background(), w.org)
+		var oe *app.OffboardingError
+		if !errors.As(err, &oe) || oe.Code != offboarding.ErrorDevicesPending {
+			t.Fatalf("Advance with an unreported active device: %v", err)
+		}
+	}
+	if _, step, code := w.state(t); step != offboarding.StepDevices || code != offboarding.ErrorDevicesPending {
+		t.Fatalf("at %s with %q", step, code)
+	}
+	failed := w.stepEvents(t, audit.CodeOrganizationDeletionStepFailed)
+	if len(failed) != 1 || failed[0].Params["error_code"] != offboarding.ErrorDevicesPending || failed[0].Params["step"] != offboarding.StepDevices {
+		t.Fatalf("failure events %+v, want one devices_pending", failed)
+	}
+	quarantined, _ := w.newDevice(t, w.org, "quarantined")
+	w.exec(t, "UPDATE device SET uninstalled_at = now() WHERE id = $1", w.device)
+	if _, err := job.Advance(context.Background(), w.org); err == nil {
+		t.Fatal("a quarantined unreported device did not hold the step")
+	}
+	w.exec(t, "UPDATE device SET state = 'retired' WHERE id = $1", quarantined)
+	w.advanceTo(t, job, offboarding.StepOutbox)
+	if n := w.count(t, "SELECT count(*) FROM device WHERE id = ANY($1)", []uuid.UUID{rejected, retired}); n != 2 {
+		t.Fatalf("the step deleted devices: %d left", n)
+	}
+}
+
+// TestOffboardingKeepsOffboardedDeviceKeys (amendment l point 3): the valkey step hands every device to the cache
+// deletion, marking the devices with an offboarded_device record, whose identity, command and sequence keys stay.
+func TestOffboardingKeepsOffboardedDeviceKeys(t *testing.T) {
+	w := newOffboardWorld(t)
+	job := w.job()
+	leaving, _ := w.newDevice(t, w.org, "retired")
+	w.exec(t, `INSERT INTO device_identity_key (key_id, organization_id, device_id, public_key, key_protection, status)
+		VALUES ($1, $2, $3, '\x00', 'file', 'active'), ($4, $2, $5, '\x00', 'file', 'active')`,
+		"k-"+leaving.String(), w.org, leaving, "k-"+w.device.String(), w.device)
+	w.exec(t, `INSERT INTO offboarded_device (device_id, organization_id, keys, command_id, command_envelope)
+		VALUES ($1, $2, '[]', $3, '\x00')`, leaving, w.org, uuid.Must(uuid.NewV7()))
+	t.Cleanup(func() { w.exec(t, "DELETE FROM offboarded_device WHERE device_id = $1", leaving) })
+	w.requestDue(t, job)
+	w.advanceTo(t, job, offboarding.StepAuditFinal)
+	got := map[uuid.UUID]devicecache.OffboardDevice{}
+	for _, d := range w.cache.devices {
+		got[d.ID] = d
+	}
+	if len(got) != 2 || !got[leaving].Offboarded || got[w.device].Offboarded ||
+		!slices.Equal(got[leaving].KeyIDs, []string{"k-" + leaving.String()}) ||
+		!slices.Equal(got[w.device].KeyIDs, []string{"k-" + w.device.String()}) {
+		t.Fatalf("devices handed to the cache: %+v", w.cache.devices)
+	}
+}
+
+// TestOffboardingCountsEveryBatch (review 1 minor 2): the database step stores its count after every batch, so a
+// worker that stops in the middle of the step (here: its context ends while a later batch waits) keeps the count of
+// the rows already gone, and the completion event reports all of them.
+func TestOffboardingCountsEveryBatch(t *testing.T) {
+	w := newOffboardWorld(t)
+	job := w.job()
+	w.requestDue(t, job)
+	w.advanceTo(t, job, offboarding.StepDatabase)
+	w.exec(t, `INSERT INTO api_token (id, organization_id, name, role, secret_sha256, prefix, created_by, expires_at)
+		SELECT gen_random_uuid(), $1::uuid, 'bulk-' || i, 'org_admin', sha256(convert_to($1::text || i, 'UTF8')), 'pdk_' || lpad(i::text, 8, '0'), $2,
+		  now() + interval '1 day'
+		FROM generate_series(1, 1500) i`, w.org, w.account)
+	slow, _ := w.newDevice(t, w.org, "retired")
+	w.exec(t, "UPDATE device SET hostname = $2 WHERE id = $1", slow, "slow-"+slow.String())
+	w.exec(t, `CREATE OR REPLACE FUNCTION offboarding_test_slow() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN PERFORM pg_sleep(3); RETURN OLD; END $$`)
+	trigger := "offboarding_slow_" + strings.ReplaceAll(slow.String()[:8], "-", "")
+	w.exec(t, fmt.Sprintf(`CREATE TRIGGER %s BEFORE DELETE ON device FOR EACH ROW WHEN (OLD.hostname = 'slow-%s')
+		EXECUTE FUNCTION offboarding_test_slow()`, trigger, slow))
+	t.Cleanup(func() { w.exec(t, "DROP TRIGGER IF EXISTS "+trigger+" ON device") })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan error, 1)
+	go func() {
+		_, err := job.Advance(ctx, w.org)
+		stopped <- err
+	}()
+	stored := func() int {
+		return w.count(t, "SELECT coalesce((offboarding_counts ->> 'database')::int, 0) FROM organization WHERE id = $1", w.org)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for stored() < 1500 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the step stored %d deleted rows while running, want at least 1500", stored())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-stopped; err == nil {
+		t.Fatal("the stopped step reported success")
+	}
+	before := stored()
+	if n := len(w.stepEvents(t, audit.CodeOrganizationDeletionStepFailed)); n != 0 {
+		t.Fatalf("%d failure events for a stopped worker", n)
+	}
+	w.exec(t, "DROP TRIGGER "+trigger+" ON device")
+	w.advanceTo(t, job, offboarding.StepTombstone)
+	completed := w.stepEvents(t, audit.CodeOrganizationDeletionStepCompleted)
+	last := completed[len(completed)-1]
+	if last.Params["step"] != offboarding.StepDatabase || last.Params["count"].(float64) <= float64(before) || before < 1500 {
+		t.Fatalf("database completed with %v after %d stored before the stop", last.Params, before)
+	}
 }
