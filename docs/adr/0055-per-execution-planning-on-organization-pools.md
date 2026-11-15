@@ -132,7 +132,7 @@ every round.
 
 ## Amendment 2026-11-15 (2) — The heartbeat and event ingest keeps cached statements (main §76)
 
-Status of this amendment: Proposed (architect, 2026-11-15); it replaces decision 3. Decisions 1, 2 and 4 to 7 stay.
+Status of this amendment: Accepted (architect, 2026-11-15; approved by main, main §77); it replaces decision 3. Decisions 1, 2 and 4 to 7 stay.
 
 ### Finding
 
