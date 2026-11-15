@@ -1276,8 +1276,13 @@ Binding; where it contradicts decisions 11 and 13 or amendment k, it wins.
    - `esc:<id>` of its escrow records.
 
    All three are already in the worker's Valkey ACL, so no ACL change is needed. Keys outside the worker's ACL are
-   **not** added to the ACL: `cres:<command>`, `diag:<command>` and `nonce:<device>:*` all carry a TTL of at most 24 h
-   and expire by themselves, and `retention.md` (PDK-1019) records that bound. OFB-4 is read with that bound.
+   **not** added to it; they all carry a TTL and expire by themselves:
+   - `nonce:<device>:*`: 10 minutes;
+   - `diag:<command>`: 24 hours;
+   - `cres:<command>`: 30 days (`devicecache.ResultTTL`).
+
+   They hold IDs and a status, no personal data. `retention.md` (PDK-1019) records these bounds, and OFB-4 is read with
+   them.
 3. **Keys of offboarded devices stay (main's decision).** For a device that gets an `offboarded_device` row
    (decision 15), the `valkey` step deletes only `bp:<device>`, `hb:<device>` and `au:<device>`. It keeps:
    - `dk:<key_id>`, rewritten with status `offboarded`;
