@@ -1796,6 +1796,8 @@ but both must land before OF3 is re-measured.
 
 ## Amendment 2026-11-16 s — every large step yields, and the caches a deletion leaves stay affordable (architect decision; main §79/§80, alpha.11 blocker)
 
+Status: Accepted (approved by main, §81).
+
 Binding; it refines amendment p (round, passes, budget), amendment q point 6 (the database step's yield) and decision
 15 (offboarded devices in Valkey), and corrects the Valkey line of `docs/operations/capacity.md`. OF3's bound stays at
 5 minutes.
@@ -1953,7 +1955,7 @@ with 110 000 devices; both requests were sent at the same second with grace 0.
 - This also closes today's gaps:
   - a code that comes back after progress cleared it (the database step since §61);
   - a sequence A → B → A.
-- The rule is literally main's: per code, not per step and code. The step of a later failure with an
+- The rule is per code, not per step and code (confirmed by main, §81). The step of a later failure with an
   already-recorded code is visible in the gauge `paddock_offboarding_step_failing{step,error_code}` and on the
   organization, not as a second event.
 
@@ -1978,9 +1980,12 @@ with 110 000 devices; both requests were sent at the same second with grace 0.
    - **Why read-compare and not a process-local fingerprint:** other paths write `dk:` too (enrolment, the `devices`
      step, notifications). A fingerprint that misses one of them could skip a needed write, and a stale `active` key
      is a security defect. Reading costs about 300 B per live key per minute, and nothing is written to the AOF.
-   - **ACL:** the worker's Valkey user gains `+hgetall`. It already reads and writes `dk:*` and `cmd:*` with other
-     commands, so it can see no new data. ADR 0051's amendment of 2026-11-15 makes the template the reference for
-     the worker's commands.
+   - **ACL (main §81):** `+hgetall` is **not** added to the worker's root permissions. The worker's user gains a
+     read-only selector: `(%R~dk:* %R~cmd:* -@all +hgetall)`.
+     - Within the selector the worker may run `HGETALL` on `dk:` and `cmd:` keys only.
+     - Every other key and every other command stays as before. `HGETALL` on any other key is refused with NOPERM.
+     - The worker already writes these keys from PostgreSQL, so it sees no data it could not already reconstruct.
+     - ADR 0051's amendment of 2026-11-16 records the selector.
      - A running devstack needs `docker compose up -d --force-recreate valkey` (the ACL is rendered at start, §58).
      - An upgrade recreates the container.
 2. **`Restore` pages and runs less often.**
@@ -2178,7 +2183,6 @@ func (s *Syncer) SyncOffboardedDevices(ctx context.Context, devices []Offboarded
 
 **ADR check.**
 - ADR 0052 is unchanged: steps, order and idempotency stay.
-- ADR 0051: the worker's `+hgetall` is within its 2026-11-15 amendment (the template is the reference).
-- Section 4 points 4–5 (Valkey `maxmemory` at 60 % with `noeviction`, and the sizing rule) bind every future Valkey
-  user beyond M17. They belong in an ADR amendment of the Valkey configuration (plan M2a decision 2 / ADR 0051), which
-  is a follow-up and not part of this plan.
+- ADR 0051 amendment 2026-11-16 (Accepted, main §81) records the worker's read-only `HGETALL` selector, and the
+  Valkey memory policy of section 4 points 4–5: `maxmemory` at 60 % with `noeviction`, the sizing rule and the 1g
+  default. These bind every future Valkey user beyond M17.
