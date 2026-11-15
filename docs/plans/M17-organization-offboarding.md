@@ -1419,7 +1419,7 @@ main required: the worker gets no connection to the audit database, and audit mi
 6. The worker consumes `worker.offboarding` and, through `PlatformPool`, sets `organization.audit_final_verified_at` and
    `organization.audit_final_outcome`. These are new columns, written only while the status is `deleting`. Step
    `audit_final` completes when `audit_final_verified_at` is set; until then it waits.
-   - The step recorded `organization.deletion_step_failed` with `error_code: audit_writer_pending` only after more than
+   - The step records `organization.deletion_step_failed` with `error_code: audit_writer_pending` only after more than
      1 h of waiting (one event).
    - A `failed` outcome does not block the deletion (decision 16) and is carried into `organization.deleted` as param
      `audit_final_outcome`.
