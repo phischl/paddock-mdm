@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,11 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -59,9 +63,8 @@ func noop(context.Context, *pgstore.Queries) error { return nil }
 func wantUnavailable(t *testing.T, what string, err error) {
 	t.Helper()
 	if !errors.Is(err, problem.OrganizationInactive) || !db.IsOrganizationUnavailable(err) {
-		t.Errorf("%s: %v, want organization_inactive (PD001)", what, err)
+		t.Errorf("%s: %v, want organization_inactive", what, err)
 	}
-	wantSQLState(t, what, err, "PD001")
 	if p := problem.From(err); p.Status != 403 || p.Code != "organization_inactive" {
 		t.Errorf("%s: problem %d %s, want 403 organization_inactive", what, p.Status, p.Code)
 	}
@@ -70,6 +73,13 @@ func wantUnavailable(t *testing.T, what string, err error) {
 // deleteAll runs the delete batch through the offboarding bypass until it reports 0.
 func deleteAll(t *testing.T, worker *db.OrgPool, org uuid.UUID) {
 	t.Helper()
+	if err := tryDeleteAll(worker, org); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// tryDeleteAll is deleteAll returning the first error of a batch.
+func tryDeleteAll(worker *db.OrgPool, org uuid.UUID) error {
 	for calls := 0; ; calls++ {
 		var n int64
 		err := worker.InOrgOffboarding(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
@@ -78,13 +88,29 @@ func deleteAll(t *testing.T, worker *db.OrgPool, org uuid.UUID) {
 			return err
 		})
 		if err != nil {
-			t.Fatalf("delete batch %d: %v", calls+1, err)
+			return fmt.Errorf("delete batch %d: %w", calls+1, err)
 		}
 		if n == 0 {
-			return
+			return nil
 		}
 		if calls > 100 {
-			t.Fatal("the deletion does not end")
+			return errors.New("the deletion does not end")
+		}
+	}
+}
+
+// deleteAllRetrying is deleteAll that retries a batch's serialization failure up to tries times: a writer that read
+// active just before the status change may still commit while the delete loop runs.
+func deleteAllRetrying(t *testing.T, worker *db.OrgPool, org uuid.UUID, tries int) {
+	t.Helper()
+	for i := 1; ; i++ {
+		err := tryDeleteAll(worker, org)
+		var pgErr *pgconn.PgError
+		if err == nil {
+			return
+		}
+		if !errors.As(err, &pgErr) || pgErr.Code != "40001" || i >= tries {
+			t.Fatalf("delete loop, try %d: %v", i, err)
 		}
 	}
 }
@@ -124,8 +150,6 @@ func orgStatus(ctx context.Context, t *testing.T, super *pgx.Conn, org uuid.UUID
 	return status, deletedAt
 }
 
-// TestOffboardingLockKey: the lock key has one derivation, identical in Go and SQL (plan M17 amendment 2026-11-14 d
-// point 1).
 func TestOrganizationUnavailableStatusOfOtherErrors(t *testing.T) {
 	for _, err := range []error{nil, errors.New("boom"), problem.OrganizationInactive} {
 		if got := db.OrganizationUnavailableStatus(err); got != "" {
@@ -134,6 +158,8 @@ func TestOrganizationUnavailableStatusOfOtherErrors(t *testing.T) {
 	}
 }
 
+// TestOffboardingLockKey: the lock key has one derivation, identical in Go and SQL (plan M17 amendment 2026-11-14 d
+// point 1).
 func TestOffboardingLockKey(t *testing.T) {
 	ctx := context.Background()
 	g := newGateEnv(ctx, t)
@@ -159,16 +185,18 @@ func TestOffboardingLockKey(t *testing.T) {
 }
 
 // TestOrgEnterGate: every role that enters organizations passes the gate of an active organization; once deleting
-// or deleted is committed, InOrg and InOrgSnapshot of every role fail with PD001 before fn runs, other organizations
-// are unaffected, and only the offboarding bypass still enters (plan M17 amendment 2026-11-14 d points 1, 2 and 7).
+// or deleted is committed, InOrg and InOrgSnapshot of every role are refused with the status before fn runs, other
+// organizations are unaffected, and only the offboarding bypass still enters (plan M17 amendment 2026-11-14 d points
+// 1, 2 and 7, amendment i). A role whose status read found no row for its own organization would pass the gate and
+// fail here.
 func TestOrgEnterGate(t *testing.T) {
 	ctx := context.Background()
 	g := newGateEnv(ctx, t)
 	gone := offboardingFixture(ctx, t, g.super, 0)
 	kept := offboardingFixture(ctx, t, g.super, 0)
 
-	t.Run("definer functions owned by paddock_owner with a pinned search path", func(t *testing.T) {
-		for _, fn := range []string{"paddock_org_enter", "paddock_offboard_finalize"} {
+	t.Run("finalize is a definer function owned by paddock_owner with a pinned search path and lock timeout", func(t *testing.T) {
+		for _, fn := range []string{"paddock_offboard_finalize"} {
 			var owner string
 			var definer bool
 			var config []string
@@ -176,8 +204,8 @@ func TestOrgEnterGate(t *testing.T) {
 				FROM pg_proc WHERE proname = $1`, fn).Scan(&owner, &definer, &config); err != nil {
 				t.Fatal(err)
 			}
-			if owner != "paddock_owner" || !definer || len(config) != 1 ||
-				config[0] != "search_path=pg_catalog, public, pg_temp" {
+			if owner != "paddock_owner" || !definer || len(config) != 2 ||
+				config[0] != "search_path=pg_catalog, public, pg_temp" || config[1] != "lock_timeout=1s" {
 				t.Errorf("%s: owner %q, security definer %v, config %v", fn, owner, definer, config)
 			}
 		}
@@ -194,10 +222,17 @@ func TestOrgEnterGate(t *testing.T) {
 		}
 	})
 
-	t.Run("roles without organization data may not execute the gate", func(t *testing.T) {
+	t.Run("the gate has no function of its own", func(t *testing.T) {
+		var n int
+		if err := g.super.QueryRow(ctx, "SELECT count(*) FROM pg_proc WHERE proname = 'paddock_org_enter'").Scan(&n); err != nil ||
+			n != 0 {
+			t.Errorf("paddock_org_enter exists: %d, %v", n, err)
+		}
+	})
+
+	t.Run("escrow reader and revocation issuer read only their own organization's id and status", func(t *testing.T) {
 		env := sharedPaddock(t)
-		for name, dsn := range map[string]string{"paddock_platform": env.Platform, "paddock_relay": env.Relay,
-			"paddock_backup": env.Backup} {
+		for name, dsn := range map[string]string{"paddock_escrow_reader": env.EscrowReader, "paddock_revocation": env.Revocation} {
 			conn, err := pgx.Connect(ctx, dsn)
 			if err != nil {
 				t.Fatal(err)
@@ -209,8 +244,17 @@ func TestOrgEnterGate(t *testing.T) {
 			if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", gone.String()); err != nil {
 				t.Fatal(err)
 			}
-			_, err = tx.Exec(ctx, "SELECT paddock_org_enter()")
-			wantDenied(t, name, err)
+			var status string
+			if err := tx.QueryRow(ctx, "SELECT status FROM organization WHERE id = $1", gone).Scan(&status); err != nil ||
+				status != "active" {
+				t.Errorf("%s: own status %q, %v", name, status, err)
+			}
+			var n int
+			if err := tx.QueryRow(ctx, "SELECT count(*) FROM organization WHERE id <> $1", gone).Scan(&n); err != nil || n != 0 {
+				t.Errorf("%s: %d other organizations visible, %v", name, n, err)
+			}
+			_, err = tx.Exec(ctx, "SELECT slug FROM organization WHERE id = $1", gone)
+			wantDenied(t, name+" SELECT slug", err)
 			_ = tx.Rollback(ctx)
 			_ = conn.Close(ctx)
 		}
@@ -227,7 +271,11 @@ func TestOrgEnterGate(t *testing.T) {
 			if got := db.OrganizationUnavailableStatus(err); got != "deleting" {
 				t.Errorf("%s: refused status %q, want deleting", name, got)
 			}
-			wantUnavailable(t, name+" InOrgSnapshot", p.InOrgSnapshot(orgCtx(gone), fn))
+			err = p.InOrgSnapshot(orgCtx(gone), fn)
+			wantUnavailable(t, name+" InOrgSnapshot", err)
+			if got := db.OrganizationUnavailableStatus(err); got != "deleting" {
+				t.Errorf("%s InOrgSnapshot: refused status %q, want deleting", name, got)
+			}
 			if called {
 				t.Errorf("%s: fn ran in a deleting organization", name)
 			}
@@ -278,19 +326,25 @@ func TestOrgEnterGate(t *testing.T) {
 
 	t.Run("a deleted organization is refused for every role", func(t *testing.T) {
 		for name, p := range g.pools {
-			err := p.InOrg(orgCtx(gone), noop)
-			wantUnavailable(t, name+" InOrg", err)
-			if got := db.OrganizationUnavailableStatus(err); got != "deleted" {
-				t.Errorf("%s: refused status %q, want deleted", name, got)
+			for path, enter := range map[string]func(context.Context, func(context.Context, *pgstore.Queries) error) error{
+				"InOrg": p.InOrg, "InOrgSnapshot": p.InOrgSnapshot} {
+				err := enter(orgCtx(gone), noop)
+				wantUnavailable(t, name+" "+path, err)
+				if got := db.OrganizationUnavailableStatus(err); got != "deleted" {
+					t.Errorf("%s %s: refused status %q, want deleted", name, path, got)
+				}
 			}
 		}
 	})
 }
 
 // TestOffboardFinalize: finalize refuses an organization that is not deleting and every role but the worker; it
-// raises 40001 while rows remain; it waits for a transaction that entered before deleting, and when that transaction
-// inserts a row after the delete loop finished, finalize raises 40001 and the next round deletes the row and
-// finalizes (plan M17 amendment 2026-11-14 d points 3 and 7).
+// raises 40001 while rows remain; it waits at most its lock_timeout: while a transaction that entered the organization
+// stays open it raises 55P03 and writes nothing; when that transaction inserts a row after the delete loop finished,
+// the next finalize raises 40001, and the round after it deletes the row and finalizes. A transaction that enters
+// while finalize holds the lock waits only until finalize ends and is then refused as deleted, and writers that keep
+// entering the organization do not starve finalize (plan M17 amendment 2026-11-14 d points 3 and 7, amendment i points
+// 2 and 4; the bounded wait is PDK-1038 fix round 2's deviation from the try-lock).
 func TestOffboardFinalize(t *testing.T) {
 	ctx := context.Background()
 	g := newGateEnv(ctx, t)
@@ -336,7 +390,7 @@ func TestOffboardFinalize(t *testing.T) {
 		wantSQLState(t, "second finalize", finalize(g.worker, org), "42501")
 	})
 
-	t.Run("waits for a writer that entered before deleting", func(t *testing.T) {
+	t.Run("a writer that entered before deleting holds finalize off", func(t *testing.T) {
 		org := offboardingFixture(ctx, t, g.super, 0)
 		entered, insert := make(chan struct{}), make(chan struct{})
 		writerDone := make(chan error, 1)
@@ -356,32 +410,26 @@ func TestOffboardFinalize(t *testing.T) {
 			t.Fatalf("%d rows left after the delete loop", got)
 		}
 
-		finalized := make(chan error, 1)
-		go func() { finalized <- finalize(g.worker, org) }()
-		waitForAdvisoryLockWait(ctx, t, g.super, "paddock_worker")
-
-		// While finalize waits, a new transaction of the organization fails at once instead of queueing behind it,
-		// and other organizations are entered as usual.
 		start := time.Now()
-		wantUnavailable(t, "InOrg while finalize waits", g.pools["paddock_api"].InOrg(orgCtx(org), noop))
-		if d := time.Since(start); d > 2*time.Second {
-			t.Errorf("the refused InOrg took %v; it queued behind finalize", d)
+		wantSQLState(t, "finalize with a writer open", finalize(g.worker, org), "55P03")
+		if d := time.Since(start); d > 3*time.Second {
+			t.Errorf("the refused finalize took %v; its wait is not bounded by lock_timeout", d)
 		}
+		if status, _ := orgStatus(ctx, t, g.super, org); status != "deleting" {
+			t.Fatalf("status %q after the refused finalize, want deleting", status)
+		}
+		// A new transaction of the organization is refused at once, and other organizations are entered as usual.
+		wantUnavailable(t, "InOrg while a writer is open", g.pools["paddock_api"].InOrg(orgCtx(org), noop))
 		other := offboardingFixture(ctx, t, g.super, 0)
 		if err := g.pools["paddock_api"].InOrg(orgCtx(other), noop); err != nil {
-			t.Errorf("InOrg of another organization while finalize waits: %v", err)
-		}
-		select {
-		case err := <-finalized:
-			t.Fatalf("finalize did not wait for the writer: %v", err)
-		default:
+			t.Errorf("InOrg of another organization: %v", err)
 		}
 
 		close(insert)
 		if err := <-writerDone; err != nil {
 			t.Fatalf("writer that entered before deleting: %v", err)
 		}
-		wantSQLState(t, "finalize after the late insert", <-finalized, "40001")
+		wantSQLState(t, "finalize after the late insert", finalize(g.worker, org), "40001")
 		if status, _ := orgStatus(ctx, t, g.super, org); status != "deleting" {
 			t.Fatalf("status %q after the refused finalize, want deleting", status)
 		}
@@ -398,6 +446,106 @@ func TestOffboardFinalize(t *testing.T) {
 		}
 		if got := offboardingRows(ctx, t, g.super, org); got != 0 {
 			t.Errorf("%d rows of the tombstone", got)
+		}
+	})
+
+	t.Run("a transaction entering while finalize holds the lock is refused as deleted", func(t *testing.T) {
+		org := offboardingFixture(ctx, t, g.super, 0)
+		setDeleting(ctx, t, g.super, org)
+		deleteAll(t, g.worker, org)
+		finalized, release := make(chan struct{}), make(chan struct{})
+		finalizeDone := make(chan error, 1)
+		go func() {
+			finalizeDone <- g.worker.InOrgOffboarding(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
+				if err := q.OffboardFinalize(ctx); err != nil {
+					return err
+				}
+				close(finalized)
+				<-release
+				return nil
+			})
+		}()
+		select {
+		case <-finalized:
+		case err := <-finalizeDone:
+			t.Fatalf("finalize: %v", err)
+		}
+		entered := make(chan error, 1)
+		go func() { entered <- g.pools["paddock_api"].InOrg(orgCtx(org), noop) }()
+		waitForAdvisoryLockWait(ctx, t, g.super, "paddock_api")
+		close(release)
+		if err := <-finalizeDone; err != nil {
+			t.Fatalf("finalize commit: %v", err)
+		}
+		err := <-entered
+		wantUnavailable(t, "InOrg that waited for finalize", err)
+		if got := db.OrganizationUnavailableStatus(err); got != "deleted" {
+			t.Errorf("refused status %q, want deleted", got)
+		}
+	})
+
+	t.Run("continuous writers do not starve finalize", func(t *testing.T) {
+		org := offboardingFixture(ctx, t, g.super, 0)
+		wctx, stop := context.WithCancel(ctx)
+		var wg sync.WaitGroup
+		var refused, written atomic.Int64
+		for range continuousWriters {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for wctx.Err() == nil {
+					err := g.pools["paddock_api"].InOrg(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
+						_, err := q.InsertDeviceGroup(ctx, pgstore.InsertDeviceGroupParams{ID: uuid.New(), OrganizationID: org,
+							Name: uuid.NewString()})
+						return err
+					})
+					switch {
+					case err == nil:
+						written.Add(1)
+					case errors.Is(err, problem.OrganizationInactive):
+						refused.Add(1)
+					default:
+						t.Errorf("writer: %v", err)
+						return
+					}
+				}
+			}()
+		}
+		defer func() { stop(); wg.Wait() }()
+		time.Sleep(200 * time.Millisecond)
+		setDeleting(ctx, t, g.super, org)
+
+		attempts, busy := 0, 0
+		for {
+			attempts++
+			deleteAllRetrying(t, g.worker, org, 5)
+			err := finalize(g.worker, org)
+			if err == nil {
+				break
+			}
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || (pgErr.Code != "55P03" && pgErr.Code != "40001") {
+				t.Fatalf("finalize attempt %d: %v", attempts, err)
+			}
+			if pgErr.Code == "55P03" {
+				busy++
+			}
+			if attempts >= finalizeAttempts {
+				t.Fatalf("finalize did not succeed in %d attempts (%d busy) against %d continuous writers (%d refused)",
+					attempts, busy, continuousWriters, refused.Load())
+			}
+			time.Sleep(finalizePause)
+		}
+		t.Logf("finalize succeeded at attempt %d (%d busy) against %d continuous writers: %d written, %d refused",
+			attempts, busy, continuousWriters, written.Load(), refused.Load())
+		if status, _ := orgStatus(ctx, t, g.super, org); status != "deleted" {
+			t.Errorf("status %q, want deleted", status)
+		}
+		if got := offboardingRows(ctx, t, g.super, org); got != 0 {
+			t.Errorf("%d rows of the tombstone", got)
+		}
+		if refused.Load() == 0 {
+			t.Error("no writer was refused: the writers stopped before the deletion")
 		}
 	})
 
@@ -451,7 +599,7 @@ func TestOffboardFinalize(t *testing.T) {
 				if err == nil {
 					return nil
 				}
-				if !strings.Contains(err.Error(), "40001") || round > 5 {
+				if !strings.Contains(err.Error(), "40001") && !strings.Contains(err.Error(), "55P03") || round > 20 {
 					return err
 				}
 			}
@@ -470,6 +618,18 @@ func TestOffboardFinalize(t *testing.T) {
 		}
 	})
 }
+
+// The continuous-writers test: continuousWriters goroutines enter the organization in a tight loop, more than the
+// consumer concurrency of two ingest workers, so the shared lock is held almost all the time. finalizeAttempts is 3:
+// the first finalize may meet a writer that entered before deleting and still inserts (40001) or stays open past the
+// lock timeout (55P03); refused writers hold the lock only for one round trip and queue behind a waiting finalize, so
+// the second attempt has nothing left to wait for, and the third is margin. A pure try-lock failed 50 of 50 attempts in
+// this test.
+const (
+	continuousWriters = 16
+	finalizeAttempts  = 3
+	finalizePause     = 20 * time.Millisecond
+)
 
 // identRefs lists the positions of the identifier name in the Go files under root, skipping the directories skip.
 func identRefs(t *testing.T, root, name string, skip ...string) []string {
@@ -565,7 +725,7 @@ func TestInOrgOffboardingCallersDetectsUse(t *testing.T) {
 }
 
 // BenchmarkInOrgGate measures the gate (plan M17 amendment 2026-11-14 d point 5): InOrg against InOrgOffboarding,
-// which is the transaction without paddock_org_enter, empty, with one read and with one committed insert, serially
+// which is the transaction without the gate, empty, with one read and with one committed insert, serially
 // and in parallel on one organization (the shared lock of one key).
 func BenchmarkInOrgGate(b *testing.B) {
 	ctx := context.Background()

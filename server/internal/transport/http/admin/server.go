@@ -141,6 +141,9 @@ type Deps struct {
 	// LoginMFAOptional accepts a portal ID token without a second factor (development only,
 	// PADDOCK_LOGIN_MFA_OPTIONAL).
 	LoginMFAOptional bool
+	// Passkeys tells a refused sign-in of an account without a passkey apart (reason mfa_enrolment_required, ADR 0053
+	// amendment c); nil keeps the factor reasons.
+	Passkeys PasskeyLookup
 	// TrustedProxies may name the client through X-Paddock-Client-IP (plan M7a decision 5).
 	TrustedProxies []netip.Prefix
 	// RateLimiter limits /api/auth/* per client address and the admin API per principal (plan M12h decision 7); nil
@@ -349,7 +352,7 @@ func NewHandler(d Deps) http.Handler {
 	}
 	s := &server{d: d, bff: &bff{oidc: d.OIDC, stepUp: d.StepUp, keys: d.Keys, accounts: d.Accounts, now: d.Now,
 		maxAuthAge: d.StepUpMaxAuthAge, mfaClass: d.StepUpMFAClass, tokens: d.StepUpTokens, tokenTTL: tokenTTL, sessions: d.Sessions,
-		roles: d.StepUpAccounts, loginMFAOptional: d.LoginMFAOptional}, mcpLimit: newMCPLimiter(d.Now)}
+		roles: d.StepUpAccounts, loginMFAOptional: d.LoginMFAOptional, passkeys: d.Passkeys}, mcpLimit: newMCPLimiter(d.Now)}
 
 	api := http.NewServeMux()
 	h := &handlers{

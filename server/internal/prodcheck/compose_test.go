@@ -615,14 +615,64 @@ func logRotationResult(t *testing.T, cfg prodcheck.Config, host string) prodchec
 	return prodcheck.Result{}
 }
 
-// TestStepUpBlueprintWebAuthnOnly (plan M8s decision 40): the shipped step-up flow validates with WebAuthn only; only
-// the development blueprint adds a stage that accepts TOTP.
+// blueprintEntries returns every entry of a blueprint text (from "  - model:" to the next one) that contains all of
+// markers, in file order.
+func blueprintEntries(text string, markers ...string) []string {
+	var out []string
+	parts := strings.Split(text, "\n  - model:")
+	for _, e := range parts[1:] {
+		// The split takes the line break before the next entry; every line of an entry ends with one again.
+		e += "\n"
+		ok := true
+		for _, m := range markers {
+			ok = ok && strings.Contains(e, m)
+		}
+		if ok {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// policyBinding returns the one policy binding of policy (its blueprint id) to the stage binding target, failing the
+// test when there is none or more than one.
+func policyBinding(t *testing.T, text, policy, target string) string {
+	t.Helper()
+	e := blueprintEntries(text, "authentik_policies.policybinding", "policy: !KeyOf "+policy+"\n", "target: !KeyOf "+target+"\n")
+	if len(e) != 1 {
+		t.Errorf("%d policy bindings of %s to %s, want exactly one", len(e), policy, target)
+		return ""
+	}
+	return e[0]
+}
+
+// expectDistinctOrders fails when two policy bindings of policy share an order: the bindings are identified by policy
+// and order, so a shared order would make one re-apply overwrite the other's target.
+func expectDistinctOrders(t *testing.T, text, file, policy string) {
+	t.Helper()
+	seen := map[string]bool{}
+	order := regexp.MustCompile(`\n      order: (\d+)\n`)
+	for _, e := range blueprintEntries(text, "authentik_policies.policybinding", "policy: !KeyOf "+policy+"\n") {
+		m := order.FindStringSubmatch(e)
+		if m == nil {
+			t.Errorf("%s: a policy binding of %s has no order in its identifiers:\n%s", file, policy, e)
+			continue
+		}
+		if seen[m[1]] {
+			t.Errorf("%s: two policy bindings of %s share order %s", file, policy, m[1])
+		}
+		seen[m[1]] = true
+	}
+}
+
 // TestPortalBlueprintBindsMFAOnTheDefaultFlow: the portal blueprint adds a second factor at order 31 of Authentik's
-// default authentication flow and the development blueprint skips it (plan M8x decisions 5 and 7a). The stage is
-// skipped only when order 30 has validated a WebAuthn or TOTP device in this sign-in, because a last_auth_threshold
-// cannot skip a stage after another stage's validation (PDK-324). Owning such a device does not skip it, so a sign-in
-// with a recovery code, e-mail, SMS or Duo is asked again (where Authentik also accepts a further recovery code), and
-// an expression error keeps the stage.
+// default authentication flow and the development blueprint skips it (plan M8x decisions 5 and 7a). Since ADR 0053
+// (plan M12h-2 decision 7, amendment c) the stage denies an administrator without a factor and without the enrolment
+// mark, and a sibling at the same order enrols everyone else (policy paddock-mfa-enrol-at-login). Both are skipped
+// only when order 30 has validated a WebAuthn or TOTP device in this sign-in, because a last_auth_threshold cannot skip
+// a stage after another stage's validation (PDK-324). Owning such a device does not skip them, so a sign-in with a
+// recovery code, e-mail, SMS or Duo is asked again (where Authentik also accepts a further recovery code), and an
+// expression error keeps the stage.
 func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 	read := func(path string) string {
 		b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", path))
@@ -645,39 +695,71 @@ func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 		return portal[start : start+end]
 	}
 	for _, c := range []struct{ marker, want string }{
-		{"name: paddock-default-login-mfa\n", "not_configured_action: configure"},
+		{"name: paddock-default-login-mfa\n", "\n      not_configured_action: deny\n"},
 		{"name: paddock-default-login-mfa\n", "last_auth_threshold: seconds=0"},
-		{"id: default-flow-mfa-binding\n", "slug, default-authentication-flow"},
-		{"id: default-flow-mfa-binding\n", "order: 31"},
-		{"id: default-flow-mfa-binding\n", "evaluate_on_plan: false"},
-		{"id: default-flow-mfa-binding\n", "re_evaluate_policies: true"},
-		{"id: default-flow-mfa-binding\n", "policy_engine_mode: all"},
+		{"name: paddock-default-login-mfa-enrol\n", "\n      not_configured_action: configure\n"},
+		{"name: paddock-default-login-mfa-enrol\n", "last_auth_threshold: seconds=0"},
+		{"name: paddock-default-login-mfa-enrol\n", "\n      device_classes: [webauthn, totp]\n"},
+		{"id: default-flow-mfa-binding\n", "stage: !KeyOf default-flow-mfa\n"},
+		{"id: default-flow-mfa-enrol-binding\n", "stage: !KeyOf default-flow-mfa-enrol\n"},
 		{"name: paddock-default-login-mfa-missing\n",
 			`method_args = request.context.get("auth_method_args") or {}`},
 		{"name: paddock-default-login-mfa-missing\n",
 			`return not any(d.__class__.__name__ in ("TOTPDevice", "WebAuthnDevice") for d in method_args.get("mfa_devices") or [])`},
-		{"policy: !KeyOf default-flow-mfa-missing\n", "target: !KeyOf default-flow-mfa-binding"},
-		{"policy: !KeyOf default-flow-mfa-missing\n", "failure_result: true"},
 	} {
 		if !strings.Contains(block(c.marker), c.want) {
 			t.Errorf("the entry with %q lacks %q", strings.TrimSpace(c.marker), c.want)
 		}
 	}
+	for _, binding := range []string{"default-flow-mfa-binding", "default-flow-mfa-enrol-binding"} {
+		for _, want := range []string{"slug, default-authentication-flow", "order: 31", "evaluate_on_plan: false",
+			"re_evaluate_policies: true", "policy_engine_mode: all"} {
+			if !strings.Contains(block("id: "+binding+"\n"), want) {
+				t.Errorf("the entry with %q lacks %q", "id: "+binding, want)
+			}
+		}
+		// Both stages skip only after a validation at order 30 in this sign-in; an expression error keeps them.
+		if pb := policyBinding(t, portal, "default-flow-mfa-missing", binding); !strings.Contains(pb, "failure_result: true") {
+			t.Errorf("default-flow-mfa-missing on %s does not fail closed:\n%s", binding, pb)
+		}
+	}
+	// The deny stage: an administrator (an error counts as one) without the enrolment mark (an error counts as
+	// unmarked).
+	for _, policy := range []string{"enrol-at-login-absent", "webauthn-administrator"} {
+		if pb := policyBinding(t, portal, policy, "default-flow-mfa-binding"); !strings.Contains(pb, "failure_result: true") {
+			t.Errorf("%s on the deny stage does not fail closed:\n%s", policy, pb)
+		}
+	}
+	// The enrolment sibling: marked or not an administrator; an error never opens it.
+	if pb := policyBinding(t, portal, "enrol-at-login", "default-flow-mfa-enrol-binding"); strings.Contains(pb, "failure_result: true") {
+		t.Errorf("the enrolment policy opens the enrolment on an error:\n%s", pb)
+	}
+	if n := len(blueprintEntries(portal, "authentik_policies.policybinding", "target: !KeyOf default-flow-mfa-binding\n")); n != 3 {
+		t.Errorf("the deny stage has %d policy bindings, want 3 (missing factor, administrator, mark absent)", n)
+	}
+	if n := len(blueprintEntries(portal, "authentik_policies.policybinding", "target: !KeyOf default-flow-mfa-enrol-binding\n")); n != 2 {
+		t.Errorf("the enrolment stage has %d policy bindings, want 2 (missing factor, enrolment)", n)
+	}
 	if strings.Contains(block("name: paddock-default-login-mfa-missing\n"), "ak_user_has_authenticator") {
 		t.Error("paddock-default-login-mfa-missing decides by the devices the user owns, not by the factor of this sign-in")
 	}
 	dev := read(filepath.Join("dev", "paddock-dev.yaml"))
-	if !strings.Contains(dev, "[slug, default-authentication-flow]]], [order, 31]]") {
-		t.Error("paddock-dev.yaml does not skip the stage at order 31 of default-authentication-flow")
+	for _, stage := range []string{"paddock-default-login-mfa", "paddock-default-login-mfa-enrol"} {
+		target := "[slug, default-authentication-flow]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, " + stage + "]]]]"
+		if e := blueprintEntries(dev, "authentik_policies.policybinding", "policy: !KeyOf skip-mfa\n", target); len(e) != 1 {
+			t.Errorf("paddock-dev.yaml skips %s of default-authentication-flow %d times, want once", stage, len(e))
+		}
 	}
 }
 
-// TestPortalBlueprintLoginWebAuthnOnly (plan M8f decision 13 as amended on 2026-10-18): stage A at order 30 validates
-// any existing authenticator and enrols WebAuthn only for an account without one; stage B at order 31 enrols WebAuthn
-// after a TOTP validation (Authentik counts a recovery code as TOTP) and runs only for an account without a WebAuthn
-// device that is a direct member of a portal role group (ADR 0034 amendment 2026-10-29, PDK-498): the flow is also the
-// default brand's, which the device-code page runs for every device user. An expression error keeps the enrolment.
-// The default flow's stage, which serves every Authentik user, keeps accepting TOTP.
+// TestPortalBlueprintLoginWebAuthnOnly (plan M8f decision 13 as amended on 2026-10-18, ADR 0053 with plan M12h-2
+// decision 7 and amendment c): stage A at order 30 validates any existing authenticator; stage B at order 31 asks a
+// direct member of a portal role group for WebAuthn after a TOTP validation (Authentik counts a recovery code as TOTP)
+// when the account has no WebAuthn device (ADR 0034 amendment 2026-10-29, PDK-498): the flow is also the default
+// brand's, which the device-code page runs for every device user. Neither enrols an administrator without the
+// enrolment mark (not_configured_action deny); each has a sibling at the same order that enrols WebAuthn only, for a
+// marked administrator and (stage A) for everyone who is not an administrator. Every error keeps the denial and never
+// opens an enrolment. The default flow's stage, which serves every Authentik user, keeps accepting TOTP.
 func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "blueprints", "paddock-portal.yaml"))
 	if err != nil {
@@ -696,10 +778,10 @@ func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
 		}
 		return portal[start : start+end]
 	}
-	stage := func(name, classes string) {
+	stage := func(name, classes, action string) {
 		t.Helper()
 		s := block("name: " + name + "\n")
-		for _, want := range []string{"\n      device_classes: " + classes + "\n", "\n      not_configured_action: configure\n",
+		for _, want := range []string{"\n      device_classes: " + classes + "\n", "\n      not_configured_action: " + action + "\n",
 			"[name, default-authenticator-webauthn-setup]"} {
 			if !strings.Contains(s, want) {
 				t.Errorf("%s lacks %q", name, want)
@@ -709,28 +791,71 @@ func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
 			t.Errorf("%s has %d configuration stages or enrols TOTP:\n%s", name, n, s)
 		}
 	}
-	stage("paddock-admin-login-mfa", "[webauthn, totp]")
-	stage("paddock-admin-login-webauthn", "[webauthn]")
+	stage("paddock-admin-login-mfa", "[webauthn, totp]", "deny")
+	stage("paddock-admin-login-mfa-enrol", "[webauthn, totp]", "configure")
+	stage("paddock-admin-login-webauthn", "[webauthn]", "deny")
+	stage("paddock-admin-login-webauthn-enrol", "[webauthn]", "configure")
 	for _, c := range []struct{ marker, want string }{
 		{"stage: !KeyOf mfa\n", "order: 30"},
+		{"stage: !KeyOf mfa-enrol\n", "order: 30"},
 		{"stage: !KeyOf mfa-webauthn\n", "order: 31"},
-		{"stage: !KeyOf mfa-webauthn\n", "re_evaluate_policies: true"},
-		{"stage: !KeyOf mfa-webauthn\n", "policy_engine_mode: all"},
+		{"stage: !KeyOf mfa-webauthn-enrol\n", "order: 31"},
 		{"name: paddock-admin-login-webauthn-missing\n", `return not ak_user_has_authenticator(request.user, "webauthn")`},
-		{"policy: !KeyOf webauthn-missing\n", "target: !KeyOf mfa-webauthn-binding"},
 		{"name: paddock-admin-login-webauthn-administrator\n",
 			`len(p) == 3 and p[0] == "paddock" and p[2] in ("admins", "operators", "auditors")`},
 		{"name: paddock-admin-login-webauthn-administrator\n",
 			`for p in (g.name.split(".") for g in request.user.groups.all())`},
-		{"policy: !KeyOf webauthn-administrator\n", "target: !KeyOf mfa-webauthn-binding"},
-		{"policy: !KeyOf webauthn-administrator\n", "failure_result: true"},
+		{"name: paddock-mfa-enrol-at-login-absent\n", `return not bool(request.user.attributes.get("paddock_mfa_enrol_at_login"))`},
+		{"name: paddock-mfa-enrol-at-login\n", `if bool(request.user.attributes.get("paddock_mfa_enrol_at_login")):`},
+		{"name: paddock-mfa-enrol-at-login\n", `administrator = ak_call_policy("paddock-admin-login-webauthn-administrator")`},
+		{"name: paddock-mfa-enrol-at-login\n", "if administrator.messages:\n            return False\n"},
+		{"name: paddock-mfa-enrol-at-login\n", "return not administrator.passing"},
 	} {
 		if !strings.Contains(block(c.marker), c.want) {
 			t.Errorf("the entry with %q lacks %q", strings.TrimSpace(c.marker), c.want)
 		}
 	}
-	if b := block("policy: !KeyOf webauthn-administrator\n"); strings.Contains(b, "order: 0") {
-		t.Errorf("the administrator policy shares order 0 with the WebAuthn-missing policy:\n%s", b)
+	// Every binding of the four stages is evaluated when its stage is reached (on the plan the user is still
+	// anonymous) and in mode "all", so that the development blueprint's skip policy skips it.
+	for _, id := range []string{"mfa-binding", "mfa-enrol-binding", "mfa-webauthn-binding", "mfa-webauthn-enrol-binding"} {
+		binding := block("id: " + id + "\n")
+		for _, want := range []string{"evaluate_on_plan: false", "re_evaluate_policies: true", "policy_engine_mode: all"} {
+			if !strings.Contains(binding, want) {
+				t.Errorf("the stage binding %s lacks %q", id, want)
+			}
+		}
+	}
+	// The policies of each binding, exactly; failClosed are those with failure_result true.
+	for _, c := range []struct {
+		binding    string
+		policies   []string
+		failClosed []string
+	}{
+		{"mfa-binding", []string{"enrol-at-login-absent", "webauthn-administrator"},
+			[]string{"enrol-at-login-absent", "webauthn-administrator"}},
+		{"mfa-enrol-binding", []string{"enrol-at-login"}, nil},
+		{"mfa-webauthn-binding", []string{"webauthn-missing", "webauthn-administrator", "enrol-at-login-absent"},
+			[]string{"webauthn-administrator", "enrol-at-login-absent"}},
+		{"mfa-webauthn-enrol-binding", []string{"webauthn-missing", "webauthn-administrator", "enrol-at-login"}, nil},
+	} {
+		if n := len(blueprintEntries(portal, "authentik_policies.policybinding", "target: !KeyOf "+c.binding+"\n")); n != len(c.policies) {
+			t.Errorf("%s has %d policy bindings, want %d (%v)", c.binding, n, len(c.policies), c.policies)
+		}
+		for _, policy := range c.policies {
+			pb := policyBinding(t, portal, policy, c.binding)
+			if got, want := strings.Contains(pb, "failure_result: true"), slices.Contains(c.failClosed, policy); got != want {
+				t.Errorf("%s on %s: failure_result true %v, want %v", policy, c.binding, got, want)
+			}
+		}
+	}
+	for _, policy := range []string{"webauthn-missing", "webauthn-administrator", "enrol-at-login-absent", "enrol-at-login"} {
+		expectDistinctOrders(t, portal, "paddock-portal.yaml", policy)
+	}
+	// The administrator policy never shares order 0 with the WebAuthn-missing policy.
+	for _, e := range blueprintEntries(portal, "authentik_policies.policybinding", "policy: !KeyOf webauthn-administrator\n") {
+		if strings.Contains(e, "\n      order: 0\n") {
+			t.Errorf("the administrator policy shares order 0 with the WebAuthn-missing policy:\n%s", e)
+		}
 	}
 	// Stage C (ADR 0034 amendment 2026-10-29): the passkey confirmation after an enrolment, for administrators only.
 	confirm := block("name: paddock-admin-login-webauthn-confirm\n")
@@ -750,21 +875,7 @@ func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
 		t.Error("paddock-admin-login-webauthn-unconfirmed does not check the WebAuthn devices validated in the flow")
 	}
 	for _, policy := range []string{"webauthn-administrator", "webauthn-unconfirmed"} {
-		found := false
-		for rest := portal; ; {
-			i := strings.Index(rest, "policy: !KeyOf "+policy+"\n")
-			if i < 0 {
-				break
-			}
-			entry := rest[i:]
-			if end := strings.Index(entry, "\n  - model:"); end >= 0 {
-				entry = entry[:end]
-			}
-			found = found || (strings.Contains(entry, "target: !KeyOf mfa-webauthn-confirm-binding") &&
-				strings.Contains(entry, "failure_result: true"))
-			rest = rest[i+1:]
-		}
-		if !found {
+		if pb := policyBinding(t, portal, policy, "mfa-webauthn-confirm-binding"); !strings.Contains(pb, "failure_result: true") {
 			t.Errorf("stage C is not bound to %s with failure_result true", policy)
 		}
 	}
@@ -774,28 +885,45 @@ func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
 }
 
 // TestDevBlueprintSkipsPortalLoginMFA: the development users have TOTP only, so the development blueprint must skip
-// the portal login stages A, B and C; a missing skip of stage B sends every development sign-in to the WebAuthn
-// enrolment, one of stage C denies it.
+// every second-factor stage of the portal login: stages A and B and their enrolment siblings (ADR 0053) and stage C;
+// a missing skip of an enrolment stage sends every development sign-in to the WebAuthn enrolment, one of a deny stage
+// or stage C denies it. The skip passes only for an account with the test attribute paddock_dev_enforce_mfa, which the
+// acceptance gates of ADR 0053 set on temporary users; for every other account it fails and skips the stage.
 func TestDevBlueprintSkipsPortalLoginMFA(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "dev", "paddock-dev.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	dev := string(b)
-	for _, order := range []string{"30", "31", "32"} {
-		target := "[slug, paddock-admin-login]]], [order, " + order + "]]"
+	for _, stage := range []string{"paddock-admin-login-mfa", "paddock-admin-login-mfa-enrol", "paddock-admin-login-webauthn",
+		"paddock-admin-login-webauthn-enrol", "paddock-admin-login-webauthn-confirm"} {
+		target := "[slug, paddock-admin-login]]], [stage, !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, " + stage + "]]]]"
 		i := strings.Index(dev, target)
 		if i < 0 {
-			t.Errorf("the development blueprint binds no policy to paddock-admin-login's order %s", order)
+			t.Errorf("the development blueprint binds no policy to paddock-admin-login's stage %s", stage)
 			continue
 		}
 		entry := dev[strings.LastIndex(dev[:i], "  - model:"):i]
 		if !strings.Contains(entry, "authentik_policies.policybinding") || !strings.Contains(entry, "policy: !KeyOf skip-mfa") {
-			t.Errorf("paddock-admin-login's order %s is not skipped by skip-mfa:\n%s", order, entry)
+			t.Errorf("paddock-admin-login's stage %s is not skipped by skip-mfa:\n%s", stage, entry)
 		}
+		if n := strings.Count(dev, target); n != 1 {
+			t.Errorf("paddock-admin-login's stage %s is bound %d times, want once", stage, n)
+		}
+	}
+	expectDistinctOrders(t, dev, "paddock-dev.yaml", "skip-mfa")
+	skip := blueprintEntries(dev, "authentik_policies_expression.expressionpolicy", "name: paddock-dev-skip-mfa\n")
+	if len(skip) != 1 {
+		t.Fatalf("%d expression policies paddock-dev-skip-mfa, want one", len(skip))
+	}
+	if strings.Count(skip[0], "return ") != 1 ||
+		!strings.Contains(skip[0], `return bool(request.user.attributes.get("paddock_dev_enforce_mfa"))`) {
+		t.Errorf("paddock-dev-skip-mfa does not fail for every account without the test attribute:\n%s", skip[0])
 	}
 }
 
+// TestStepUpBlueprintWebAuthnOnly (plan M8s decision 40): the shipped step-up flow validates with WebAuthn only; only
+// the development blueprint adds a stage that accepts TOTP.
 func TestStepUpBlueprintWebAuthnOnly(t *testing.T) {
 	read := func(path string) string {
 		b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", path))

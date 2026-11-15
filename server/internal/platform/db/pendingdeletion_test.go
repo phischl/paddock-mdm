@@ -83,7 +83,7 @@ func TestInPendingDeletionOrg(t *testing.T) {
 
 // TestInPendingDeletionOrgRacesDeleting (plan M17 amendment g point 6): when the worker commits deleting after the
 // platform check but before the transaction passes the gate, InPendingDeletionOrg fails closed with
-// problem.OrganizationInactive (PD001) and fn never runs.
+// db.OrganizationUnavailable and fn never runs.
 func TestInPendingDeletionOrgRacesDeleting(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -96,7 +96,7 @@ func TestInPendingDeletionOrgRacesDeleting(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The worker's side: hold the offboarding lock exclusively, as paddock_offboard_finalize does, so the export's
-	// transaction waits in paddock_org_enter after the platform check passed.
+	// transaction waits in the gate (enterOrg) after the platform check passed.
 	worker, err := pgx.Connect(ctx, sharedPaddock(t).Super)
 	if err != nil {
 		t.Fatal(err)

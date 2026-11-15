@@ -462,7 +462,7 @@ func TestPlatformExportOutlivesPending(t *testing.T) {
 }
 
 // TestPlatformExportRacesGate (review 2 finding 6): the worker commits deleting while the export's first transaction
-// waits in paddock_org_enter: 403 organization_inactive, no export bytes, exactly one organization.inactive_denied in
+// waits in the gate (enterOrg): 403 organization_inactive, no export bytes, exactly one organization.inactive_denied in
 // the platform pseudo-organization.
 func TestPlatformExportRacesGate(t *testing.T) {
 	e := newEnv(t)

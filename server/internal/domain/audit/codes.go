@@ -369,6 +369,11 @@ const (
 	// The encrypted recovery export during the grace period (plan M17 amendment b decision 25): in the organization's
 	// own log.
 	CodeOrganizationRecoveryExported Code = "organization.recovery_exported"
+
+	// Second-factor enrolment at sign-in (ADR 0053 decision 4 and amendment d): the worker's marks of administrators who
+	// may enrol a passkey at their next sign-in.
+	CodePlatformMFAEnrolMarksSeeded  Code = "platform.mfa_enrol_marks_seeded"
+	CodePlatformMFAEnrolMarksCleared Code = "platform.mfa_enrol_marks_cleared"
 	// An action refused because its organization is deleting or deleted (plan M17 amendment 2026-11-14 f point 1).
 	CodeOrganizationInactiveDenied Code = "organization.inactive_denied"
 )
@@ -2230,6 +2235,20 @@ var registry = map[Code]Definition{
 		Params:      []string{"organization_id", "original_code", "original_event_id"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Platform pseudo-organization.",
+	},
+	CodePlatformMFAEnrolMarksSeeded: {
+		Code: CodePlatformMFAEnrolMarksSeeded, Emitted: true,
+		Description: "The worker's one-time seed after the upgrade marked the administrators without a passkey (paddock_mfa_enrol_at_login), so that they set one up at their next sign-in instead of being denied (ADR 0053 decision 4).",
+		Params:      []string{"marked", "totp_only", "organizations"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Recorded only when the seed marked at least one account. marked counts the accounts marked, totp_only those of them with only an authenticator app, organizations the organizations with a marked account (the platform group not counted). Failure when a mark failed after others were written: marked is the count written; the unmarked accounts need a sign-in setup link. No usernames; Authentik's event log holds the per-account changes. Actor is the system actor worker. Platform pseudo-organization.",
+	},
+	CodePlatformMFAEnrolMarksCleared: {
+		Code: CodePlatformMFAEnrolMarksCleared, Emitted: true,
+		Description: "The worker removed the enrolment mark of administrators who have set up a passkey (ADR 0053 decision 4).",
+		Params:      []string{"cleared"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Recorded only for a round that removed at least one mark; cleared counts them. Failure when a removal failed after others were written; the next round retries it. No usernames. Actor is the system actor worker. Platform pseudo-organization.",
 	},
 	CodeOrganizationInactiveDenied: {
 		Code: CodeOrganizationInactiveDenied, Emitted: true,

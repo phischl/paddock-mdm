@@ -321,6 +321,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		StepUpMFAClass:   devStepUp.MFAClass,
 		ExposeStepUp:     common.Development(),
 		LoginMFAOptional: loginMFAOptional,
+		Passkeys:         ak,
 		TrustedProxies:   common.TrustedProxies,
 		RateLimiter:      ratelimit.New(ratelimit.NewValkeyStore(vk), nil, rateLimits.Limits),
 		RateLimitExempt:  rateLimits.Exempt,

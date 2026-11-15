@@ -582,7 +582,9 @@
       "restore_failed": "Restore failed on the host ({detail})",
       "restore_abandoned": "Running restore plan abandoned",
       "offboarded_device_uninstalled": "A device of a deleted organization removed Paddock",
-      "deleted_organization_audit_read": "{actor} read the audit log of the deleted organization {slug}"
+      "deleted_organization_audit_read": "{actor} read the audit log of the deleted organization {slug}",
+      "mfa_enrol_marks_seeded": "{marked, plural, one {# administrator without a passkey was} other {# administrators without a passkey were}} marked to set one up at the next sign-in ({totp_only, number} with only an authenticator app, {organizations, number} organizations)",
+      "mfa_enrol_marks_cleared": "{cleared, plural, one {The sign-in setup mark of # administrator with a passkey was} other {The sign-in setup marks of # administrators with a passkey were}} removed"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -851,6 +853,7 @@
     "login_failed": "The sign-in could not be completed.",
     "mfa_required": "Your sign-in did not include a second factor. Sign in again: the portal asks for your password and your authenticator.",
     "passkey_required": "Your sign-in did not use a passkey, and every Paddock portal role requires one (a security key or the authenticator built into your device). Sign out of the identity provider, then sign in again and confirm with your passkey. If you have no passkey yet, the sign-in asks you to set one up.",
+    "mfa_enrolment_required": "Your account has no passkey yet. A new administrator account sets one up only through a one-time sign-in setup link: ask an administrator of your organization (or, for a platform administrator, the operator) for a link, open it, and then sign in again.",
     "key_store_sealed": "The server's key store is sealed, so the portal cannot start sessions. An operator must unseal OpenBao (docs/operations/openbao.md, section 2). Devices keep working.",
     "no_role": "Your account is not in any Paddock role group. Ask your administrator to add you to exactly one of the groups paddock.'<organization>'.admins, .operators or .auditors.",
     "multiple_organizations": "Your account holds roles in several organizations. One account belongs to exactly one organization; ask your administrator to remove the other memberships or to create separate accounts.",

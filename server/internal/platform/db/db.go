@@ -130,26 +130,64 @@ func setOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
 	return err
 }
 
-// enterOrg sets the organization context and passes the gate paddock_org_enter (migration 00131). Both statements
-// go in one batch, so the gate costs no extra round trip. A refusal wraps problem.OrganizationInactive and the
-// PostgreSQL error (SQLSTATE PD001).
+// enterOrg sets the organization context, takes the organization's offboarding lock shared until the transaction
+// ends, and reads the organization's status after the lock (plan M17 amendment 2026-11-14 i). Both statements go in
+// one batch, so the gate costs no extra round trip, and both are plain SQL. The status read is its own statement, so
+// READ COMMITTED reads it with a snapshot taken after the lock was granted: a transaction whose lock waited for a
+// finalize sees the tombstone. An organization that is deleting or deleted is refused with OrganizationUnavailable
+// before fn runs; the caller rolls back at once, which releases the lock. No row (the organization does not exist)
+// passes: RLS still applies, and there is nothing to protect.
 func enterOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
 	b := &pgx.Batch{}
-	b.Queue("SELECT set_config('paddock.org_id', $1, true)", org.String())
-	b.Queue("SELECT paddock_org_enter()")
-	err := tx.SendBatch(ctx, b).Close()
-	if IsOrganizationUnavailable(err) {
-		return fmt.Errorf("db: organization %s is deleting or deleted: %w (%w)", org, problem.OrganizationInactive, err)
+	b.Queue("SELECT set_config('paddock.org_id', $1, true), pg_advisory_xact_lock_shared($2::bigint)", org.String(),
+		OffboardingLockKey(org))
+	b.Queue("SELECT status FROM organization WHERE id = $1::uuid", org)
+	br := tx.SendBatch(ctx, b)
+	if _, err := br.Exec(); err != nil {
+		_ = br.Close()
+		return err
 	}
-	return err
+	var status string
+	err := br.QueryRow().Scan(&status)
+	if cerr := br.Close(); err == nil || errors.Is(err, pgx.ErrNoRows) {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if status == "deleting" || status == "deleted" {
+		return OrganizationUnavailable(org, status)
+	}
+	return nil
 }
+
+// OrganizationUnavailableError is the gate's refusal of an organization that is deleting or deleted. It matches
+// problem.OrganizationInactive (api and MCP 403, worker drop, audit organization.inactive_denied).
+type OrganizationUnavailableError struct {
+	Organization uuid.UUID
+	Status       string
+}
+
+// OrganizationUnavailable returns the gate's refusal of org in status.
+func OrganizationUnavailable(org uuid.UUID, status string) error {
+	return &OrganizationUnavailableError{Organization: org, Status: status}
+}
+
+func (e *OrganizationUnavailableError) Error() string {
+	return fmt.Sprintf("db: organization %s is %s", e.Organization, e.Status)
+}
+
+// Unwrap makes the refusal match problem.OrganizationInactive.
+func (e *OrganizationUnavailableError) Unwrap() error { return problem.OrganizationInactive }
 
 // offboardingLockNamespace is "padd obd", the namespace of the offboarding lock keys.
 const offboardingLockNamespace = 0x70616464206f6264
 
-// OffboardingLockKey is the advisory lock key that paddock_org_enter holds shared and paddock_offboard_finalize
-// exclusively for org; the same derivation as the SQL function paddock_offboarding_lock_key (plan M17 amendment
-// 2026-11-14 d).
+// OffboardingLockKey is the advisory lock key that every organization transaction holds shared and
+// paddock_offboard_finalize takes exclusively for org, waiting at most its lock_timeout of 1 s and otherwise raising
+// 55P03; the same derivation as the SQL function paddock_offboarding_lock_key (plan M17 amendments 2026-11-14 d and
+// i). The key is per organization; two organizations share one only by a 64-bit hash collision, which costs liveness
+// (finalize waits for, or gets 55P03 from, the other organization's transactions), never correctness.
 func OffboardingLockKey(org uuid.UUID) int64 {
 	return int64(binary.BigEndian.Uint64(org[:8]) ^ binary.BigEndian.Uint64(org[8:]) ^ offboardingLockNamespace) //nolint:gosec // a bit pattern, wraps by design
 }
@@ -177,7 +215,7 @@ func NewOrgPool(ctx context.Context, dsn string, o Options) (*OrgPool, error) {
 // InOrg opens a transaction, executes SELECT set_config('paddock.org_id', <principal.OrganizationID>, true) and
 // calls fn. It returns ErrNoOrganization if the principal is missing or has no organization, and an error matching
 // problem.OrganizationInactive (IsOrganizationUnavailable) if the organization is deleting or deleted; until the
-// transaction ends it holds the organization's offboarding lock shared (plan M17 amendment 2026-11-14 d). It commits
+// transaction ends it holds the organization's offboarding lock shared (plan M17 amendments 2026-11-14 d, i). It commits
 // if fn returns nil, otherwise it rolls back and returns fn's error unchanged.
 func (p *OrgPool) InOrg(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	org, err := orgFromContext(ctx)
@@ -221,9 +259,8 @@ func (p *OrgPool) InOrgSnapshot(ctx context.Context, fn func(ctx context.Context
 // administrator, OrganizationUnavailable when platform finds the organization deleting or deleted (plan M17 amendment
 // h point 2), and ErrNotPendingDeletion unless platform confirms that the organization's deletion is pending (status
 // active or provisioning_failed with delete_after set); otherwise it runs fn in the organization's context
-// exactly like InOrg, through the gate paddock_org_enter and never its bypass (plan M17 amendment g point 6): a
-// deleting committed after the platform check refuses with problem.OrganizationInactive (SQLSTATE PD001), and
-// paddock_offboard_finalize waits for a running transaction.
+// exactly like InOrg, through enterOrg and never its bypass (plan M17 amendments g point 6, i point 3): a deleting
+// committed after the platform check refuses with OrganizationUnavailable before fn runs.
 func (p *OrgPool) InPendingDeletionOrg(ctx context.Context, platform *PlatformPool, org uuid.UUID,
 	fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	pr, ok := principal.From(ctx)
@@ -811,29 +848,20 @@ func IsNoPartition(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == ""
 }
 
-// IsOrganizationUnavailable reports whether err is the refusal of paddock_org_enter: the organization is deleting or
-// deleted (SQLSTATE PD001, migration 00131).
+// IsOrganizationUnavailable reports whether err is the gate's refusal: the organization is deleting or deleted.
 func IsOrganizationUnavailable(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "PD001"
+	var u *OrganizationUnavailableError
+	return errors.As(err, &u)
 }
 
-// OrganizationUnavailableStatus is the status (deleting or deleted) of the organization that paddock_org_enter
-// refused in err, and "" when err is no such refusal.
+// OrganizationUnavailableStatus is the status (deleting or deleted) of the organization the gate refused in err, and ""
+// when err is no such refusal.
 func OrganizationUnavailableStatus(err error) string {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "PD001" {
+	var u *OrganizationUnavailableError
+	if !errors.As(err, &u) {
 		return ""
 	}
-	return pgErr.Detail
-}
-
-// OrganizationUnavailable is the refusal paddock_org_enter gives an organization in status deleting or deleted, for a
-// caller that found the status before entering it (the platform path of the recovery export): it wraps
-// problem.OrganizationInactive, and OrganizationUnavailableStatus reads the status from it.
-func OrganizationUnavailable(org uuid.UUID, status string) error {
-	return fmt.Errorf("db: organization %s is %s: %w (%w)", org, status, problem.OrganizationInactive,
-		&pgconn.PgError{Code: "PD001", Detail: status})
+	return u.Status
 }
 
 // IsCheckViolation reports whether err is a check constraint violation.

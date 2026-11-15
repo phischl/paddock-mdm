@@ -315,11 +315,17 @@ saves a policy: `docs/operations/mcp.md`.
    `.secrets/authentik_bootstrap_password`. Create the platform administrator's user, enroll a WebAuthn
    authenticator for it (step-up requires one) and add it to the group `paddock.platform.admins`. Then deactivate
    `akadmin` or give it a new password held by the custodians.
-2. Sign in to `https://admin.<domain>` as the platform administrator (every sign-in asks for the second factor and
-   enrols one when missing) and create the first organization (*Platform* → *Organizations*) **with the domains of its
-   users** (the create dialog takes them; *Domains* in the list changes them). Without a domain the organization's
-   devices get no login management and no managed local administrator. Connect its identity source
-   (`docs/operations/identity-sources.md`) and make its first administrator a member of `paddock.<slug>.admins`.
+2. Sign in to `https://admin.<domain>` as the platform administrator (every sign-in asks for the second factor) and
+   create the first organization (*Platform* → *Organizations*) **with the domains of its users** (the create dialog
+   takes them; *Domains* in the list changes them). Without a domain the organization's devices get no login
+   management and no managed local administrator. Connect its identity source (`docs/operations/identity-sources.md`)
+   and make its first administrator a member of `paddock.<slug>.admins`. The sign-in never sets up a second factor for
+   an administrator (a member of `paddock.platform.admins` or of an organization's `.admins`, `.operators` or
+   `.auditors` group) and denies one without a passkey (ADR 0053): give the new administrator a one-time sign-in setup
+   link, valid 24 hours, with which they set their password if they have none and enrol a passkey. Until an
+   organization has an administrator who can create links in the portal, create it in Authentik's admin interface
+   (*Directory* → *Users* → the user → *Create recovery link*), which opens the same setup. Device users still set up
+   their second factor at their first device sign-in.
 3. One identity may be a member of `paddock.platform.admins` and of one organization's role group: it signs in to
    the organization and switches to platform administration from the user menu (a new sign-in that ends the
    current session; privileged actions then need a new step-up). An identity with role groups of several
