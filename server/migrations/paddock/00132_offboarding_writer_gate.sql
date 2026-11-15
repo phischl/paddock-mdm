@@ -64,7 +64,9 @@ BEGIN
       USING ERRCODE = 'insufficient_privilege';
   END IF;
   IF committed IS NULL THEN
-    UPDATE public.organization SET deleting_committed_at = now() WHERE id = org;
+    -- clock_timestamp, not now(): now() is this transaction's start, which can lie before the deleting commit that the
+    -- locked read above sees; the clock read after that read is certainly after the commit became visible.
+    UPDATE public.organization SET deleting_committed_at = pg_catalog.clock_timestamp() WHERE id = org;
     RETURN false;
   END IF;
   IF waiting IS NULL THEN

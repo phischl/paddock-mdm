@@ -1,7 +1,11 @@
 package db_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -177,5 +181,90 @@ func TestOrgGateBeforeGateHook(t *testing.T) {
 	wantUnavailable(t, "InOrg with deleting committed before the gate", err)
 	if ran || calls != 1 {
 		t.Errorf("fn ran: %v, hook calls %d", ran, calls)
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the poller and the test at once.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestOrgGateRefreshFailures: a failing refresh is counted every time and logged once per failure streak, its
+// recovery once; the gate keeps failing closed meanwhile (plan M17 amendment j point 2, PDK-1038 review v4 minor 1).
+func TestOrgGateRefreshFailures(t *testing.T) {
+	ctx := context.Background()
+	env := sharedPaddock(t)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	exec := func(sql string) {
+		t.Helper()
+		if _, err := super.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const (
+		revoke = "REVOKE EXECUTE ON FUNCTION paddock_inactive_organizations() FROM paddock_api"
+		grant  = "GRANT EXECUTE ON FUNCTION paddock_inactive_organizations() TO paddock_api"
+	)
+	org := offboardingFixture(ctx, t, super, 0)
+	logs := &syncBuffer{}
+	p, err := db.NewOrgPoolWithLogger(ctx, env.API, db.Options{}, slog.New(slog.NewTextHandler(logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	db.StopStatusPoller(p)
+
+	exec(revoke)
+	t.Cleanup(func() { exec(grant) })
+	before := db.GateRefreshFailures()
+	for range 3 {
+		if err := p.RefreshOrganizationStatus(ctx); err == nil {
+			t.Fatal("refresh without EXECUTE succeeded")
+		}
+	}
+	if got := db.GateRefreshFailures() - before; got != 3 {
+		t.Errorf("paddock_org_gate_refresh_failures_total rose by %v, want 3", got)
+	}
+	if n := strings.Count(logs.String(), "status cache refresh failed"); n != 1 {
+		t.Errorf("%d warnings for one failure streak, want 1:\n%s", n, logs.String())
+	}
+	if strings.Contains(logs.String(), "password") {
+		t.Errorf("the warning names a password:\n%s", logs.String())
+	}
+
+	exec(grant)
+	if err := p.RefreshOrganizationStatus(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(logs.String(), "status cache refresh recovered"); n != 1 {
+		t.Errorf("%d recovery lines, want 1:\n%s", n, logs.String())
+	}
+	if err := p.InOrg(orgCtx(org), noop); err != nil {
+		t.Errorf("InOrg after the recovery: %v", err)
+	}
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	before = db.GateRefreshFailures()
+	_ = p.RefreshOrganizationStatus(cancelled)
+	if got := db.GateRefreshFailures() - before; got != 0 {
+		t.Errorf("a refresh ended by its own context counted %v failures, want 0", got)
 	}
 }

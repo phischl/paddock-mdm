@@ -218,8 +218,8 @@ func TestOrgEnterGate(t *testing.T) {
 	gone := offboardingFixture(ctx, t, g.super, 0)
 	kept := offboardingFixture(ctx, t, g.super, 0)
 
-	t.Run("finalize and the cache's read are definer functions owned by paddock_owner with a pinned search path", func(t *testing.T) {
-		for _, fn := range []string{"paddock_offboard_finalize", "paddock_inactive_organizations"} {
+	t.Run("finalize, quiesce and the cache's read are definer functions owned by paddock_owner with a pinned search path", func(t *testing.T) {
+		for _, fn := range []string{"paddock_offboard_finalize", "paddock_offboard_quiesce", "paddock_inactive_organizations"} {
 			var owner string
 			var definer bool
 			var config []string
@@ -566,6 +566,31 @@ func TestOffboardFinalize(t *testing.T) {
 		}
 		if got := offboardingRows(ctx, t, g.super, org); got != 0 {
 			t.Errorf("%d rows of the tombstone", got)
+		}
+	})
+
+	t.Run("the stored cutoff base is not before the deleting commit, even when quiesce's transaction began earlier", func(t *testing.T) {
+		org := offboardingFixture(ctx, t, g.super, 0)
+		var commit time.Time
+		err := g.worker.InOrgOffboarding(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
+			// The transaction has begun (set_config ran); deleting commits only now, from another session.
+			time.Sleep(200 * time.Millisecond)
+			setDeleting(ctx, t, g.super, org)
+			if err := g.super.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&commit); err != nil {
+				return err
+			}
+			ready, err := q.OffboardQuiesce(ctx)
+			if err == nil && ready {
+				t.Error("the first quiesce returned true")
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := orgWait(ctx, t, g.super, org)
+		if w.committedAt == nil || w.committedAt.Before(commit) {
+			t.Errorf("deleting_committed_at %v lies before the deleting commit %v", w.committedAt, commit)
 		}
 	})
 

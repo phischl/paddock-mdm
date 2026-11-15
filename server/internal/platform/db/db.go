@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -203,15 +204,15 @@ type OrgPool struct {
 
 // NewOrgPool opens the paddock_api pool.
 func NewOrgPool(ctx context.Context, dsn string, o Options) (*OrgPool, error) {
-	return newOrgPool(ctx, dsn, o, monotonicSince())
+	return newOrgPool(ctx, dsn, o, monotonicSince(), slog.Default())
 }
 
-func newOrgPool(ctx context.Context, dsn string, o Options, since func() time.Duration) (*OrgPool, error) {
+func newOrgPool(ctx context.Context, dsn string, o Options, since func() time.Duration, log *slog.Logger) (*OrgPool, error) {
 	p, err := newPool(ctx, dsn, o)
 	if err != nil {
 		return nil, err
 	}
-	return &OrgPool{pool: p, gate: newOrgGate(ctx, p.p, since)}, nil
+	return &OrgPool{pool: p, gate: newOrgGate(ctx, p.p, since, log)}, nil
 }
 
 // Close stops the status cache's poller and closes all connections.
@@ -518,7 +519,7 @@ type NotifierPool struct{ OrgPool }
 
 // NewNotifierPool opens the paddock_notifier pool.
 func NewNotifierPool(ctx context.Context, dsn string, o Options) (*NotifierPool, error) {
-	p, err := newOrgPool(ctx, dsn, o, monotonicSince())
+	p, err := newOrgPool(ctx, dsn, o, monotonicSince(), slog.Default())
 	if err != nil {
 		return nil, err
 	}
