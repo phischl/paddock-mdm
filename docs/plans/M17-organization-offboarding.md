@@ -1348,13 +1348,18 @@ never approved has never received a bundle, so it cannot verify an uninstall, wh
 **Decision.**
 - Step `devices` does not hand over devices in state `pending`: they get no `offboarded_device` row and no uninstall.
 - The deletion request (`RequestDeletion`) changes nothing about them. When the deletion runs, they are deleted with
-  the organization, and their enrollment status answers `rejected` as for any unknown or rejected device; the agent
-  stops polling and stays inert.
+  the organization. Their enrollment status answers `pending` until the deletion's `valkey` step removes
+  `enr:<device id>` (or its 7-day TTL ends), then 404 `not_found`. The agent's `waitActive` logs a warning on the 404 and
+  keeps polling every 5 minutes (`MaxPoll`), harmless and inert, until its packages are removed. *(Corrected
+  2026-11-15: an earlier text said "answers `rejected`" and "stops polling".)*
 - Such a device never had anything applied except the Paddock packages: no bundle, no login, no sudo, no disk
   configuration. Contract 8 holds.
 - PDK-1019 records the residual risk RR-141: an unapproved device keeps the inert Paddock packages and needs `apt purge
   paddock-agent paddock-supervisor` by hand. The grace-period banner (OFB-7) counts pending devices and tells
-  administrators to approve and then delete them, or to remove the packages.
+  administrators to approve and then delete them, or to remove the packages. The count comes from the required integer
+  `devices_pending` in `MeOrganizationDeletion` (`GET /api/v1/me`, an additive admin API change). The api fills it
+  with a count of the organization's devices in state `pending` inside `InOrg`. Only organization roles see it; the
+  platform view has no count. *(Added 2026-11-15, PDK-1061.)*
 - `organization.deleted` gains the param `devices_pending_dropped`.
 - This narrows the maintainer's promise "every device receives an uninstall" to every device that was ever approved;
   the maintainer approved it (§47).
