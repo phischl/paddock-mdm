@@ -1249,3 +1249,44 @@ Binding; it refines amendment k.
    - **Runbook:** PDK-1019's runbook names the remedy: let the retention expire, or remove the hold; the deletion then
      continues by itself.
    - PDK-1015 stores and records the code that `Offboarding.DeleteObjects` returns.
+
+## Amendment 2026-11-15 l — shared Fleet hosts, the full Valkey key list, offboarded devices' keys (architect decision after PDK-1015; tickets PDK-1058, PDK-1059)
+
+Binding; where it contradicts decisions 11 and 13 or amendment k, it wins.
+
+1. **Fleet hosts shared inside the deleting organization (PDK-1058, alpha.11, medium, Sonnet).**
+   - **Problem:** decision 11's check `PlatformPool.FleetHostInUse(device, host)` excludes only the device it is asked
+     about. Two devices of the deleting organization on one host (a re-enrolled machine) therefore keep the host
+     forever.
+   - **New check:** the fleet step uses a new check, `PlatformPool.FleetHostInUseOutside(ctx, org, host)`. It is backed
+     by a definer function `paddock_fleet_host_in_use_outside(org uuid, host text)` with the same grants and output as
+     `paddock_fleet_host_in_use` (00076). It ignores **every** device of the given organization, both for the
+     inventory reference and for the `hardware` answer.
+   - **Outcome:** a host is deleted when no device of another organization uses it, and kept (reported as now) when
+     one does.
+   - **Unchanged:** the retention round's rule for retired devices.
+   - **Tests:**
+     - two devices of the deleting organization on host A → A is deleted;
+     - a device of another organization also on host B → B is kept;
+     - an active device of the deleting organization without an inventory reference does not block.
+2. **The full Valkey key list (PDK-1059, alpha.11, low, Sonnet).** Before the `database` step, the `valkey` step reads
+   from the organization's rows, and then deletes, besides decision 13's per-device keys and `tt:<org>`:
+   - `et:<sha256>` of every enrollment token of the organization;
+   - `enr:<id>` of its enrollments;
+   - `esc:<id>` of its escrow records.
+
+   All three are already in the worker's Valkey ACL, so no ACL change is needed. Keys outside the worker's ACL are
+   **not** added to the ACL: `cres:<command>`, `diag:<command>` and `nonce:<device>:*` all carry a TTL of at most 24 h
+   and expire by themselves, and `retention.md` (PDK-1019) records that bound. OFB-4 is read with that bound.
+3. **Keys of offboarded devices stay (main's decision).** For a device that gets an `offboarded_device` row
+   (decision 15), the `valkey` step deletes only `bp:<device>`, `hb:<device>` and `au:<device>`. It keeps:
+   - `dk:<key_id>`, rewritten with status `offboarded`;
+   - `cmd:<device>`, which holds the uninstall command;
+   - `seq:<device>` and `sd:<device>`, which the gateway's request check needs;
+   - `nonce:<device>:*`.
+
+   The worker deletes those keys only on the device's final `agent.uninstalled` or at the 365-day purge (decision 15).
+   The **acceptance gate OF6** (decision 15, §8.7) MUST run its check-in **after** the tombstone, so it proves that an
+   uninstall at the first contact after finalize works.
+4. **Order.** PDK-1058 and PDK-1059 are small follow-ups to PDK-1015. They merge after it and before the alpha.11
+   release regression.
