@@ -1081,3 +1081,67 @@ lands within 5 %, nothing needs deciding; if not, the figures and this assessmen
   Merge order stays as in amendment i: 1038 → 1036.
 - **PDK-1015** may be built stacked on PDK-1038 v3 now. It needs only the `finalize_waiting` event of point 5. It
   merges after 1038 and 1036. Then **PDK-1016 and PDK-1017**, in either order.
+
+### Addendum 2026-11-15 to amendment j — the quiescence check without the transaction-ID variant (after main's objection)
+
+Binding; it replaces amendment j point 4's last bullet (the `pg_read_all_stats` grant to `paddock_owner`). Everything
+else in amendment j stays.
+
+**The objection is valid.** A role that holds `pg_read_all_stats` can read the query text and parameters of every
+session, including other organizations' sessions. `paddock_owner` can already read every table, but adding that view
+to the migration role widens what one credential exposes.
+
+**The transaction-ID variant does not work.** The variant records `pg_current_xact_id()` of the status change and
+waits until `pg_snapshot_xmin(pg_current_snapshot())` has passed it. It misses the case the check exists for:
+
+1. PostgreSQL assigns a transaction ID only at a transaction's **first write**. A transaction that passed the gate just
+   before the change (its cache was fresh and still said `active`) and has not written yet has no ID. Its first write
+   later gets an ID **above** the recorded one, so the snapshot's xmin passes the recorded ID while that transaction is
+   still open. Finalize then commits the tombstone, and the straggler's row lands after it: the guarantee breaks.
+2. Under READ COMMITTED, an open transaction that is idle between statements and has no ID holds no xmin either, so it
+   is invisible to the snapshot as well.
+3. Forcing an ID in `enterOrg` (`pg_current_xact_id()` in every transaction) would close the gap. But it spends a
+   transaction ID on every read-only transaction, which raises ID consumption and anti-wraparound freeze work across
+   the whole database, and it adds back per-transaction cost. Rejected.
+
+**Decision: a dedicated, non-login role that only answers one count.**
+
+1. The migration creates the role `paddock_activity_reader` (`NOLOGIN`, no other grants, member of
+   `pg_read_all_stats`). It owns exactly one function:
+   - `paddock_org_transactions_before(cutoff timestamptz) RETURNS bigint`, `SECURITY DEFINER`, the `search_path`
+     convention of the other definer functions;
+   - it counts the backends in `pg_stat_activity` whose `usename` is one of the organization roles of amendment j point
+     4, whose `xact_start < cutoff`, and whose `pid <> pg_backend_pid()`;
+   - it returns only that number: no query text, no parameters, no PIDs, no user names.
+
+   `EXECUTE` goes to `paddock_owner`, so that `paddock_offboard_finalize` can call it, and to nobody else. No grant
+   goes to `paddock_owner` or to any application role.
+2. `paddock_offboard_finalize` calls it with `deleting_since + 6 s` and raises `55P03` while it returns more than 0.
+   Amendment j point 4's ordering and guarantee are unchanged.
+3. The reason is documented in the migration header and in `docs/operations/` next to the PostgreSQL roles: the only
+   holder of the statistics view is a role that cannot sign in and exposes one count.
+4. **Stop condition (replaces amendment j's):** the hosting refuses `GRANT pg_read_all_stats TO
+   paddock_activity_reader`, or refuses creating the role. Stop and report; do not fall back to the transaction-ID
+   variant.
+
+**Edge cases, checked:**
+
+| Case | Effect on finalize |
+| --- | --- |
+| Transaction-ID wraparound | Not relevant: the check compares `xact_start` with a cutoff, both on the database clock, not transaction IDs. |
+| Hot standby or replicas | Not relevant: Paddock runs one primary; a standby cannot write and is not counted. |
+| Prepared transactions (two-phase commit) | Not used: `max_prepared_transactions` is the default 0 (not set in `deploy/compose`). A prepared transaction would not appear in `pg_stat_activity`. If two-phase commit is ever enabled, this function MUST also check `pg_prepared_xacts` (noted in the migration header). |
+| Autovacuum, pgBackRest, `paddock-migrate`, superuser sessions | Not counted: their `usename` is not an organization role, so they never block. |
+| A long-running organization transaction, of any organization, started before the cutoff | Finalize waits until it ends. Rounds and batches are short. A transaction open for more than 1 h raises the `finalize_waiting` alert of amendment j point 5; the operator finds it in `pg_stat_activity` as the database superuser. |
+| An idle-in-transaction pool connection of an organization role | pgx pools never hand back a connection with an open transaction, so it appears only through a bug or a hung `fn`. It blocks until it ends and then raises the 1 h alert. The runbook (PDK-1019) names it with `pg_terminate_backend` as the remedy. |
+| The cache poll of point 1 | Runs in its own short transactions after the cutoff, so it does not count. |
+
+**Tests (added to amendment j point 7):**
+
+- `paddock_worker` and every other application role cannot read another session's `query` from `pg_stat_activity`
+  (it comes back as `<insufficient privilege>`), and cannot call `paddock_org_transactions_before`;
+- the function returns 1 for an open organization transaction started before the cutoff and 0 after it ends;
+- an autovacuum-like session of a non-organization role is not counted;
+- a transaction that entered before the status change and writes only after the delete loop keeps finalize at `55P03`
+  until it commits; then `40001`, the delete loop, and the tombstone follow. This is the case the transaction-ID variant
+  misses.
