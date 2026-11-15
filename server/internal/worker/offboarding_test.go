@@ -30,6 +30,8 @@ type fakeOffboarder struct {
 	advance  func(org uuid.UUID) error
 	// done decides whether an Advance completes the deletion; nil means every Advance does, so one call ends an organization.
 	done func(org uuid.UUID) bool
+	// deadline is the round deadline the last Advance got.
+	deadline time.Time
 }
 
 func (f *fakeOffboarder) StartDue(context.Context) ([]uuid.UUID, error) {
@@ -41,8 +43,9 @@ func (f *fakeOffboarder) Pending(context.Context) ([]pgstore.Organization, error
 	return f.pending, nil
 }
 
-func (f *fakeOffboarder) Advance(_ context.Context, org uuid.UUID) (bool, error) {
+func (f *fakeOffboarder) AdvanceWithin(_ context.Context, org uuid.UUID, deadline time.Time) (bool, error) {
 	f.attempts[org] = append(f.attempts[org], f.now())
+	f.deadline = deadline
 	err := f.advance(org)
 	return err == nil && (f.done == nil || f.done(org)), err
 }
@@ -374,6 +377,71 @@ func TestOffboardingRoundBetweenSteps(t *testing.T) {
 	}
 	if len(s.log) != 1 {
 		t.Fatalf("%d steps after one that used the whole budget, want 1", len(s.log))
+	}
+}
+
+// largeDatabaseRounds runs rounds until the small deletion (4 steps of 1 s) is done and returns how many it took. With
+// large set, a large deletion is pending too; its database step never finishes and each call costs step(start of the
+// call, round deadline) of fake time. It checks that every call got the round's deadline.
+func largeDatabaseRounds(t *testing.T, large bool, step func(now, deadline time.Time) time.Duration) int {
+	t.Helper()
+	big, small := uuid.New(), uuid.New()
+	left := map[uuid.UUID]int{small: 4}
+	orgs := []uuid.UUID{small}
+	if large {
+		// The large deletion comes first in database order, as in TestOffboardingRoundsRotate.
+		left[big] = 1_000_000
+		orgs = []uuid.UUID{big, small}
+	}
+	s, now := newStepper(time.Second, left)
+	f := s.fake(orgs...)
+	inner := f.advance
+	var start time.Time
+	f.advance = func(org uuid.UUID) error {
+		if org != big {
+			return inner(org)
+		}
+		if want := start.Add(OffboardingRoundBudget); !f.deadline.Equal(want) {
+			t.Fatalf("the database step got deadline %v, want the round's %v", f.deadline, want)
+		}
+		s.log = append(s.log, org)
+		*now = now.Add(step(*now, f.deadline))
+		return nil
+	}
+	r := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return *now })
+	for round := 1; round <= 20; round++ {
+		start = *now
+		if err := r.Round(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if over := now.Sub(start) - OffboardingRoundBudget; over > app.OffboardingDatabaseSlice {
+			t.Fatalf("round %d took %v, more than the budget plus one slice", round, now.Sub(start))
+		}
+		if s.left[small] <= 0 {
+			return round
+		}
+		*now = now.Add(OffboardingInterval)
+	}
+	t.Fatalf("the small deletion did not finish in 20 rounds: %v", s.log)
+	return 0
+}
+
+// TestOffboardingRoundLargeDatabaseStep (plan M17 amendment q point 9, amendment p point 2a, main §61): the database
+// step gets the round's deadline and yields after OffboardingDatabaseSlice, so the round's passes interleave the
+// organizations: with a large deletion running, a small one finishes in as many rounds as alone. The second half shows
+// that the check tells the behaviours apart: a database step that runs to the round deadline (before §61) delays the
+// small deletion by several rounds.
+func TestOffboardingRoundLargeDatabaseStep(t *testing.T) {
+	slice := func(now, deadline time.Time) time.Duration {
+		return min(app.OffboardingDatabaseSlice, max(deadline.Sub(now), time.Second))
+	}
+	alone := largeDatabaseRounds(t, false, slice)
+	if with := largeDatabaseRounds(t, true, slice); with != alone {
+		t.Fatalf("the small deletion took %d rounds next to a large database step, %d alone", with, alone)
+	}
+	toDeadline := func(now, deadline time.Time) time.Duration { return max(deadline.Sub(now), time.Second) }
+	if old := largeDatabaseRounds(t, true, toDeadline); old <= alone {
+		t.Fatalf("a step running to the deadline let the small deletion finish in %d rounds (alone %d): the test does not discriminate", old, alone)
 	}
 }
 
