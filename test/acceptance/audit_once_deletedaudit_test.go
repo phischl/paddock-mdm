@@ -154,7 +154,12 @@ var deletedOrgAuditCases = map[string][]auditCase{
 		}},
 		{"validation failure", func(t *testing.T, w *auditWorld) {
 			d := w.deletedAuditOrganization(t)
-			yesterday := time.Now().UTC().AddDate(0, 0, -1).Format(time.DateOnly)
+			// The day before the sealed one, not before today: across midnight UTC that would be the sealed day itself.
+			day, err := time.Parse(time.DateOnly, d.day)
+			if err != nil {
+				t.Fatal(err)
+			}
+			yesterday := day.AddDate(0, 0, -1).Format(time.DateOnly)
 			res := call(t, steppedUpRoot(t), http.MethodPost, d.path()+"/audit-exports", deletedExportBody(d.day, yesterday))
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 			expectDeletedAuditRead(t, w, res, "failure", "audit_export_request")

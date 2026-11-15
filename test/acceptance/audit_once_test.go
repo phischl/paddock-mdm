@@ -592,8 +592,9 @@ func TestAuditExactlyOnce(t *testing.T) {
 	if len(ops) < 5 {
 		t.Fatalf("only %d privileged operations in the contract", len(ops))
 	}
-	// The deleted organization's evidence cases run last: its deletion, requested here, has then long reached its
-	// tombstone, and no case holds one of go test's parallel slots while waiting for it (PDK-1075).
+	// The deleted organization's evidence cases are registered last. go test starts parallel cases only roughly in
+	// that order, but they then start late in the gate: the deletion requested here has usually reached its tombstone
+	// by then, so few or none of them hold one of go test's parallel slots while waiting for it (PDK-1075).
 	w.startDeletedAuditOrg(t)
 	sort.SliceStable(ops, func(i, j int) bool {
 		_, a := deletedOrgAuditCases[ops[i]]
