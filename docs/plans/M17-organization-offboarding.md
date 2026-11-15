@@ -1681,3 +1681,103 @@ table) they would miss it in production too.
    - a migration test that runs the index files twice after a simulated failed build leaves exactly one valid index.
 
 Ticket: the implementer named by the lead on `alpha11-offboarding-integration` (high, Opus).
+
+## Amendment 2026-11-16 r — organization transactions are short and bounded (architect decision; main §64, alpha.11 blocker)
+
+Binding; it refines amendment j's quiescence wait and amendment p's 5-minute bound. OF3's bound stays at 5 minutes.
+
+**Finding (devstack at 863030ce, 70 000 load devices in one organization).**
+- Step `devices` waited about 8 minutes in `paddock_offboard_quiesce`. The wait set holds every open organization-role
+  transaction in the database, and two of them ran for minutes:
+  - `CacheSync.Reconcile` (worker, one `InOrg` transaction per organization every 60 s) sat more than 7.5 minutes on
+    `ListCachedDeviceKeys` at 79 % CPU. The same query runs ad hoc in 0.2–0.3 s, which suggests a bad cached generic
+    plan on the pooled connection (unconfirmed).
+  - The compiler's `compileOrg` (`InOrgSnapshot`) held 1–2 minutes.
+- Without such a collision a deletion takes about 2 minutes.
+
+### Definition of "short", and the bound
+
+1. **Target.** Every organization-role transaction finishes within **10 s** at the target scale (70 000 devices in one
+   organization). This is measured, not assumed (point 8).
+2. **Hard cap.** Every connection of an organization pool (`OrgPool`, the org pools of api, gateway, worker, compiler,
+   notifier, escrow-reader and revocation-issuer) starts with `transaction_timeout = 45s`.
+   - It is set as a connection runtime parameter: new field `db.Options.TransactionTimeout`, written into
+     `ConnConfig.RuntimeParams` like `application_name`.
+   - So it costs no statement per transaction (amendment j's rule). PostgreSQL 18.6 (pinned) supports it; it exists
+     since 17.
+   - A transaction that needs a different bound sets it itself with `SET LOCAL`, as `InWriterWithTimeout` does. That
+     is allowed only lower, never higher, for organization pools.
+3. **Why 45 s fits the 5 minutes.**
+   - Worst case from the `deleting` commit: up to 66 s until the wait set is captured (one round plus the 6 s cutoff);
+     at most 45 s until every captured transaction has ended; up to 60 s until the next pass sees it.
+   - That is about 2.9 minutes for the wait, plus the measured steps around it.
+   - The gate measurement (point 8) must confirm the total stays under 5 minutes.
+4. **Exceptions (no organization-role cap).** These pools do not get `TransactionTimeout`, and none of them is in
+   quiescence's role filter:
+   - the platform pool and role (`paddock_platform`), including the leader-lock connections;
+   - `paddock-migrate` (owner);
+   - the backup role and restore (`paddock_backup`, pgBackRest, `paddock-server backup …`);
+   - the audit database pools (the audit writer keeps its own 5-minute bound);
+   - the outbox relay's pool, which is not an organization role.
+
+   The offboarding job's own `InOrgOffboarding` delete batches **keep** the cap: they are bounded batches of 1 000 rows
+   (amendment q).
+
+### How a timeout surfaces (no silent data loss)
+
+5. PostgreSQL ends the session and rolls the transaction back, so nothing is written partially. `db` maps the error
+   (SQLSTATE `25P04`, transaction timeout, and the connection loss that follows) to `db.ErrTransactionTimeout`.
+   - **api, gateway:** 503 `transaction_timeout` with `Retry-After: 5`. An `ActionRunner` attempt records its one event
+     with outcome failure and reason `transaction_timeout`.
+   - **worker consumers:** the message is not acknowledged and is redelivered (at-least-once, idempotent consumers).
+   - **rounds:** log at `Error` and retry next round.
+   - **all:** counter `paddock_db_transaction_timeout_total{role, op}` (`op` = the use case or round name) and an alert
+     `PaddockDBTransactionTimeout` (rate > 0 over 15 minutes, warning), with a runbook line in
+     `docs/operations/capacity.md`.
+
+### Root fixes
+
+6. **`CacheSync.Reconcile`.**
+   - Find and record the cause of the 7.5-minute query, with `auto_explain` (allowed on the devstack, never in
+     production configuration) and `EXPLAIN (GENERIC_PLAN)`.
+   - If it is the generic plan, the query gets a plan that does not degrade: rewrite it, or force a custom plan for
+     that statement. The pool-wide `plan_cache_mode` stays unchanged.
+   - The reconcile reads **keyset-paginated batches** (by device ID, 2 000 rows), each in its own short `InOrg`
+     transaction. The Valkey writes happen **outside** the transaction, after it committed. A device that changes
+     between batches is caught by the next reconcile or by the regular cache writes.
+7. **`compileOrg` keeps a consistent snapshot, but only for reading.**
+   - The compiler reads its inputs in one `InOrgSnapshot` transaction that MUST stay within the 10 s target at 70 000
+     devices.
+   - It then **closes** the transaction and computes the bundles outside it. It writes the results in batches of short
+     transactions, each guarded by the bundle sequence (a write applies only if the device's `bundle_seq` still matches
+     what was read, the existing conditional-stamp rule).
+   - A conflict leaves that device for the next compile.
+   - If reading the inputs alone exceeds 10 s at 70 000 devices: stop condition, report the figures. The architect
+     then decides on a paged consistent read (an exported snapshot) instead.
+
+### Proof and tests
+
+8. **On the devstack as it is (with the 70 000 load devices):**
+   - the longest organization-role transaction per role over 30 minutes, from `pg_stat_activity` sampling;
+   - OF3 and OF5 end to end and per step.
+
+   All organization-role transactions must stay ≤ 10 s, and OF3 and OF5 ≤ 5 minutes. Exceeding either is a stop
+   condition.
+9. **Tests:**
+   - a pool with `TransactionTimeout` ends a deliberately long transaction with `db.ErrTransactionTimeout`, and nothing
+     is written;
+   - the api maps it to 503 with `Retry-After`;
+   - a consumer redelivers;
+   - `CacheSync.Reconcile` pages through 70 000 seeded devices with no transaction over 10 s (integration, skipped with
+     `-short`);
+   - `compileOrg`'s read transaction stays under 10 s for 70 000 devices, and a concurrent change makes the guarded
+     write skip that device;
+   - a test asserts which pools carry the timeout and which do not (point 4).
+
+**ADR check.** No conflict. ADR 0052 and amendment j are unchanged: there is still no per-transaction statement, and
+the wait now has a bound. ADR 0005 (bundle compilation) does not prescribe how long the compiler's read transaction
+lasts. The existing guarantee that each organization's inputs come from one snapshot (`InOrgSnapshot`) is kept, and
+only the computation moves outside it.
+
+Ticket: the lead's Opus implementer on `alpha11-offboarding-integration`. Points 6 and 7 MAY be split into two tickets,
+but both must land before OF3 is re-measured.
