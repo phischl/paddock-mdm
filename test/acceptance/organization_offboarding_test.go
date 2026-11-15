@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -294,4 +295,320 @@ func TestDeletedOrganizationAuditEvidence(t *testing.T) {
 	expectStatus(t, call(t, carol, http.MethodPost, exportsPath, body), http.StatusNotFound, "not_found")
 	_, activeID := gateOrganization(t)
 	expectStatus(t, call(t, root, http.MethodGet, orgPath+activeID.String()+"/audit-events", nil), http.StatusNotFound, "not_found")
+}
+
+// orgTombstoneWithin is the bound of plan M17 §8.7 and amendment p for a grace-0 deletion of a small gate
+// organization, from the request's response to the status deleted. Amendment p makes a longer wait a stop condition,
+// not a reason to raise it.
+const orgTombstoneWithin = 5 * time.Minute
+
+// orgDeletionView is the part of a platform organization the offboarding gates read.
+type orgDeletionView struct {
+	ID       string `json:"id"`
+	Slug     string `json:"slug"`
+	Status   string `json:"status"`
+	Deletion *struct {
+		RequestedAt       time.Time  `json:"requested_at"`
+		Reason            string     `json:"reason"`
+		DeleteAfter       time.Time  `json:"delete_after"`
+		Step              *string    `json:"step"`
+		LastErrorCode     *string    `json:"last_error_code"`
+		DeletedAt         *time.Time `json:"deleted_at"`
+		UninstallsIssued  int        `json:"uninstalls_issued"`
+		UninstallsSkipped int        `json:"uninstalls_skipped"`
+	} `json:"deletion"`
+}
+
+func readOrgDeletion(t *testing.T, p *env.Portal, id uuid.UUID) orgDeletionView {
+	t.Helper()
+	res := call(t, p, http.MethodGet, orgPath+id.String(), nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var o orgDeletionView
+	if err := res.JSON(&o); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+// deleteNow requests the deletion of a gate organization with grace 0 (a development stack allows it, ADR 0052) and
+// returns the time its 202 arrived.
+func deleteNow(t *testing.T, id uuid.UUID, slug, reason string) time.Time {
+	t.Helper()
+	res := call(t, steppedUpRoot(t), http.MethodPost, orgPath+id.String()+"/delete",
+		map[string]any{"confirm_slug": slug, "reason": reason, "grace_days": 0})
+	expectStatus(t, res, http.StatusAccepted, "")
+	return time.Now()
+}
+
+// awaitTombstone waits for the status deleted and returns the time from requested to the first read that saw it. It
+// fails once orgTombstoneWithin has passed since requested, naming the step the deletion stands at.
+func awaitTombstone(t *testing.T, root *env.Portal, id uuid.UUID, slug string, requested time.Time) (orgDeletionView, time.Duration) {
+	t.Helper()
+	for {
+		res := call(t, root, http.MethodGet, orgPath+id.String(), nil)
+		var o orgDeletionView
+		var st gateOrgState
+		if res.Status == http.StatusOK && res.JSON(&o) == nil && res.JSON(&st) == nil && o.Status == "deleted" {
+			return o, time.Since(requested)
+		}
+		if elapsed := time.Since(requested); elapsed > orgTombstoneWithin {
+			t.Fatalf("gate organization %s not deleted within %s of the request (%s): HTTP %d, status %q%s", slug,
+				orgTombstoneWithin, elapsed.Round(time.Second), res.Status, st.Status, stepOf(st))
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// uninstallCommand returns the uninstall among the check-in's commands, or nil.
+func uninstallCommand(t *testing.T, out protocol.CheckinResponse) *command.Command {
+	t.Helper()
+	for _, e := range out.Commands {
+		_, payload, err := dsse.Decode(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c command.Command
+		if err := json.Unmarshal(payload, &c); err != nil {
+			t.Fatal(err)
+		}
+		if c.Type == command.TypeUninstall {
+			return &c
+		}
+	}
+	return nil
+}
+
+// TestOrganizationDeletionRequestAndCancel is gate OF1 (plan M17 §8.7, OFB-1, decisions 2, 4 and 19): the deletion
+// request needs a step-up, the typed slug, a reason of 2 to 500 characters and a grace period within range; with all
+// four the organization stays active with a pending deletion. The cancel is accepted only while the deletion is
+// pending and answers 409 invalid_state otherwise. Each attempt is one event in the platform audit log.
+func TestOrganizationDeletionRequestAndCancel(t *testing.T) {
+	slug, orgID := gateOrganization(t)
+	path := orgPath + orgID.String()
+	idx := auditIndex(t)
+	body := func(confirm, reason string, grace int) map[string]any {
+		return map[string]any{"confirm_slug": confirm, "reason": reason, "grace_days": grace}
+	}
+
+	res := call(t, login(t, env.PlatformAdmin), http.MethodPost, path+"/delete", body(slug, "of1 gate", 30))
+	expectStatus(t, res, http.StatusForbidden, "step_up_required")
+	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_requested", "denied", auditPollTimeout)
+
+	root := steppedUpRoot(t)
+	for _, b := range []map[string]any{
+		body(slug+"-x", "of1 gate", 30),
+		body(slug, "x", 30),
+		body(slug, strings.Repeat("r", 501), 30),
+		body(slug, "of1 gate", -1),
+		body(slug, "of1 gate", 91),
+	} {
+		res := call(t, root, http.MethodPost, path+"/delete", b)
+		expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+		expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_requested", "failure", auditPollTimeout)
+	}
+	if o := readOrgDeletion(t, root, orgID); o.Status != "active" || o.Deletion != nil {
+		t.Fatalf("after the refused requests: %+v, want active without a deletion", o)
+	}
+
+	res = call(t, root, http.MethodPost, path+"/cancel-deletion", nil)
+	expectStatus(t, res, http.StatusConflict, "invalid_state")
+	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_cancelled", "failure", auditPollTimeout)
+
+	res = call(t, root, http.MethodPost, path+"/delete", body(slug, "of1 gate", 30))
+	expectStatus(t, res, http.StatusAccepted, "")
+	// Registered after the organization's own cleanup, so it runs first and leaves an active organization to delete.
+	t.Cleanup(func() { call(t, root, http.MethodPost, path+"/cancel-deletion", nil) })
+	var requested orgDeletionView
+	if err := res.JSON(&requested); err != nil {
+		t.Fatal(err)
+	}
+	if d := requested.Deletion; requested.Status != "active" || d == nil || d.Reason != "of1 gate" || d.Step != nil || d.DeletedAt != nil ||
+		d.UninstallsIssued != 0 || d.UninstallsSkipped != 0 || d.DeleteAfter.Sub(d.RequestedAt).Round(time.Hour) != 30*24*time.Hour {
+		t.Fatalf("requested deletion: %s, want active with a deletion after 30 days", res.Body)
+	}
+	ev := expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_requested", "success", auditPollTimeout)
+	if ev.Params["slug"] != slug || ev.Params["reason"] != "of1 gate" || ev.Params["grace_days"] != float64(30) ||
+		ev.Params["uninstalls_issued"] != float64(0) || ev.Params["delete_after"] == nil {
+		t.Fatalf("organization.deletion_requested params: %v", ev.Params)
+	}
+	if o := readOrgDeletion(t, root, orgID); o.Status != "active" || o.Deletion == nil || !o.Deletion.DeleteAfter.Equal(requested.Deletion.DeleteAfter) {
+		t.Fatalf("pending deletion: %+v", o)
+	}
+	res = call(t, root, http.MethodPost, path+"/delete", body(slug, "of1 gate", 30))
+	expectStatus(t, res, http.StatusConflict, "invalid_state")
+	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_requested", "failure", auditPollTimeout)
+
+	res = call(t, root, http.MethodPost, path+"/cancel-deletion", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var cancelled orgDeletionView
+	if err := res.JSON(&cancelled); err != nil || cancelled.Status != "active" || cancelled.Deletion != nil {
+		t.Fatalf("cancelled deletion: %v %s, want active without a deletion", err, res.Body)
+	}
+	ev = expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_cancelled", "success", auditPollTimeout)
+	if ev.Params["slug"] != slug || ev.Params["uninstalls_cancelled"] != float64(0) {
+		t.Fatalf("organization.deletion_cancelled params: %v", ev.Params)
+	}
+	if o := readOrgDeletion(t, root, orgID); o.Status != "active" || o.Deletion != nil {
+		t.Fatalf("after the cancel: %+v", o)
+	}
+
+	res = call(t, root, http.MethodPost, path+"/cancel-deletion", nil)
+	expectStatus(t, res, http.StatusConflict, "invalid_state")
+	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_cancelled", "failure", auditPollTimeout)
+}
+
+// TestOrganizationDeletionUninstallsDevices is gate OF2 (plan M17 §8.7, OFB-2, decision 3): the deletion request
+// issues the uninstall (mode leave) to the organization's active device, its administrator sees it pending, and the
+// device receives it at its next check-in while the deletion is still pending.
+func TestOrganizationDeletionUninstallsDevices(t *testing.T) {
+	slug, orgID := gateOrganization(t)
+	admin := newGateAdmin(t, slug)
+	d := activeDevice(t, admin.portal, "", "of2-"+slug)
+
+	root := steppedUpRoot(t)
+	path := orgPath + orgID.String()
+	res := call(t, root, http.MethodPost, path+"/delete", map[string]any{"confirm_slug": slug, "reason": "of2 gate", "grace_days": 30})
+	expectStatus(t, res, http.StatusAccepted, "")
+	// Registered after the organization's own cleanup, so it runs first and leaves an active organization to delete.
+	t.Cleanup(func() { call(t, root, http.MethodPost, path+"/cancel-deletion", nil) })
+	var o orgDeletionView
+	if err := res.JSON(&o); err != nil || o.Deletion == nil || o.Deletion.UninstallsIssued != 1 || o.Deletion.UninstallsSkipped != 0 {
+		t.Fatalf("requested deletion: %v %s, want one uninstall issued", err, res.Body)
+	}
+
+	s := uninstallOf(t, admin.portal, d.DeviceID)
+	if s.Uninstall == nil || s.Uninstall.Mode != "leave" || s.Uninstall.CommandStatus != "pending" {
+		t.Fatalf("device after the request: %+v, want a pending uninstall (leave)", s.Uninstall)
+	}
+	issued := s.Uninstall.CommandID
+
+	// The worker's command round publishes the offboarding uninstalls within one interval of a minute.
+	var cmd *command.Command
+	checkinUntil(t, d, 3*time.Minute, func(out protocol.CheckinResponse) bool {
+		cmd = uninstallCommand(t, out)
+		return cmd != nil
+	})
+	var params command.UninstallParams
+	if err := json.Unmarshal(cmd.Params, &params); err != nil || cmd.CommandID != issued || cmd.DeviceID != d.DeviceID ||
+		cmd.OrganizationID != orgID.String() || params.Mode != command.UninstallLeave {
+		t.Fatalf("uninstall at the device: %+v (%v), want command %s with mode leave", cmd, err, issued)
+	}
+	if !cmd.ExpiresAt.After(o.Deletion.DeleteAfter) {
+		t.Fatalf("uninstall expires %s, want after the deletion date %s", cmd.ExpiresAt, o.Deletion.DeleteAfter)
+	}
+	eventually(t, "the delivery of the uninstall", time.Minute, func() bool {
+		u := uninstallOf(t, admin.portal, d.DeviceID).Uninstall
+		return u != nil && u.CommandStatus == "delivered"
+	})
+}
+
+// TestOrganizationDeletedWithinFiveMinutes is gate OF3 (plan M17 §8.7, OFB-4, decision 10, amendment p): a deletion
+// with grace 0 reaches the status deleted within 5 minutes of the request, and the organization's identity objects in
+// Authentik are gone: no group paddock.<slug> or paddock.<slug>.*, no application or provider paddock-device-<slug>.
+// The cancel of a deleted organization is refused with 409. The measured duration is logged; the plan's result
+// document records it.
+func TestOrganizationDeletedWithinFiveMinutes(t *testing.T) {
+	slug, orgID := gateOrganization(t)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(t, 10*time.Minute)
+	app := "paddock-device-" + slug
+	// The organization's objects exist before the deletion, so their absence afterwards is the deletion's work.
+	if pk, err := ak.GroupPK(ctx, env.RootGroup(slug)); err != nil || pk == "" {
+		t.Fatalf("group %s before the deletion: %v, pk %q", env.RootGroup(slug), err, pk)
+	}
+	if err := ak.Get(ctx, "/core/applications/"+app+"/", &struct{}{}); err != nil {
+		t.Fatalf("application %s before the deletion: %v", app, err)
+	}
+
+	requested := deleteNow(t, orgID, slug, "of3 gate")
+	root := login(t, env.PlatformAdmin)
+	o, took := awaitTombstone(t, root, orgID, slug, requested)
+	t.Logf("OF3: request to tombstone of %s in %s (bound %s)", slug, took.Round(time.Second), orgTombstoneWithin)
+	if o.Deletion != nil && o.Deletion.DeletedAt != nil {
+		t.Logf("OF3: server-side requested_at to deleted_at %s", o.Deletion.DeletedAt.Sub(o.Deletion.RequestedAt).Round(time.Second))
+	}
+	if took > orgTombstoneWithin {
+		t.Fatalf("OF3: deletion took %s, bound %s", took, orgTombstoneWithin)
+	}
+
+	var groups struct {
+		Results []struct {
+			Name string `json:"name"`
+		} `json:"results"`
+	}
+	rootGroup := env.RootGroup(slug)
+	if err := ak.Get(ctx, "/core/groups/?"+url.Values{"search": {rootGroup}, "include_users": {"false"}, "page_size": {"100"}}.Encode(), &groups); err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range groups.Results {
+		if g.Name == rootGroup || strings.HasPrefix(g.Name, rootGroup+".") {
+			t.Errorf("group %s left in Authentik after the deletion", g.Name)
+		}
+	}
+	if err := ak.Get(ctx, "/core/applications/"+app+"/", &struct{}{}); !env.IsNotFound(err) {
+		t.Errorf("application %s after the deletion: %v, want HTTP 404", app, err)
+	}
+	var providers struct {
+		Results []struct{} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/providers/oauth2/?"+url.Values{"name": {app}}.Encode(), &providers); err != nil || len(providers.Results) != 0 {
+		t.Errorf("provider %s after the deletion: %v, %d left", app, err, len(providers.Results))
+	}
+
+	res := call(t, root, http.MethodPost, orgPath+orgID.String()+"/cancel-deletion", nil)
+	expectStatus(t, res, http.StatusConflict, "invalid_state")
+	expectOneIndexEvent(t, auditIndex(t), platformOrg, "correlation_id = $1", res.RequestID, "organization.deletion_cancelled", "failure", auditPollTimeout)
+}
+
+// TestDeletedOrganizationAPITokenRefused is gate OF4 (plan M17 §8.7, OFB-4): an admin API token of the organization
+// works before the deletion and is refused with 401 once the organization is deleted.
+func TestDeletedOrganizationAPITokenRefused(t *testing.T) {
+	slug, orgID := gateOrganization(t)
+	admin := newGateAdmin(t, slug)
+	admin.stepUp(t)
+	res := postAPIToken(t, admin.portal, apiTokenName("of4"), "org_admin", 2*time.Hour)
+	expectStatus(t, res, http.StatusCreated, "")
+	var created apiTokenCreated
+	if err := res.JSON(&created); err != nil || created.Secret == "" {
+		t.Fatalf("API token: %v", err)
+	}
+	token := tokenPortal(t, created.Secret)
+	paths := []string{"/api/v1/me", "/api/v1/devices?page_size=10"}
+	for _, p := range paths {
+		expectStatus(t, call(t, token, http.MethodGet, p, nil), http.StatusOK, "")
+	}
+
+	requested := deleteNow(t, orgID, slug, "of4 gate")
+	awaitTombstone(t, login(t, env.PlatformAdmin), orgID, slug, requested)
+	for _, p := range paths {
+		if res := call(t, token, http.MethodGet, p, nil); res.Status != http.StatusUnauthorized {
+			t.Errorf("GET %s with the deleted organization's API token: HTTP %d %s, want 401", p, res.Status, res.ProblemCode())
+		}
+	}
+}
+
+// TestDeletedOrganizationSlugReuse is gate OF7 (plan M17 §8.7, decision 17): once an organization is deleted, its slug
+// is free; a new organization with that slug is created and is a different organization, while the tombstone stays.
+func TestDeletedOrganizationSlugReuse(t *testing.T) {
+	slug, orgID := gateOrganization(t)
+	requested := deleteNow(t, orgID, slug, "of7 gate")
+	root := login(t, env.PlatformAdmin)
+	awaitTombstone(t, root, orgID, slug, requested)
+
+	// createOrg registers the new organization for deletion at the end of the gate (PDK-946).
+	res := createOrg(t, root, map[string]string{"slug": slug, "name": "Gate " + slug})
+	expectStatus(t, res, http.StatusCreated, "")
+	reused := responseID(t, res)
+	if reused == orgID {
+		t.Fatalf("the new organization %s has the tombstone's ID", reused)
+	}
+	if o := readOrgDeletion(t, root, reused); o.Slug != slug || o.Status != "active" || o.Deletion != nil {
+		t.Fatalf("new organization with the reused slug: %+v", o)
+	}
+	if o := readOrgDeletion(t, root, orgID); o.Slug != slug || o.Status != "deleted" {
+		t.Fatalf("tombstone after the reuse: %+v", o)
+	}
 }
