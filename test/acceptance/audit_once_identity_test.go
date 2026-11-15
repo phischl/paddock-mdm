@@ -111,7 +111,11 @@ var identityAuditCases = map[string][]auditCase{
 		{"validation failure", func(t *testing.T, w *auditWorld) {
 			res := call(t, w.root, http.MethodPatch, "/api/platform/v1/organizations/"+w.acme.String(), map[string]any{"domains": []string{"Not A Domain"}})
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
-			expectOneIndexEvent(t, w.idx, w.acme, "correlation_id = $1", res.RequestID, "organization.domains_changed", "failure", auditPollTimeout)
+			// A failed domain change is recorded in the platform pseudo-organization, naming the organization (PDK-1053).
+			ev := expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.domains_changed", "failure", auditPollTimeout)
+			if ev.Params["target_organization_id"] != w.acme.String() {
+				t.Fatalf("target_organization_id %v, want %s", ev.Params["target_organization_id"], w.acme)
+			}
 		}},
 		{"wrong role", func(t *testing.T, w *auditWorld) {
 			res := call(t, w.alice, http.MethodPatch, "/api/platform/v1/organizations/"+w.acme.String(), map[string]any{"domains": []string{"acme.test"}})
@@ -126,7 +130,11 @@ var identityAuditCases = map[string][]auditCase{
 		{"conflict", func(t *testing.T, w *auditWorld) {
 			res := call(t, w.root, http.MethodPatch, "/api/platform/v1/organizations/"+w.acme.String(), map[string]any{"domains": []string{"acme.test", "globex.test"}})
 			expectStatus(t, res, http.StatusConflict, "domain_taken")
-			expectOneIndexEvent(t, w.idx, w.acme, "correlation_id = $1", res.RequestID, "organization.domains_changed", "failure", auditPollTimeout)
+			// A failed domain change is recorded in the platform pseudo-organization, naming the organization (PDK-1053).
+			ev := expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.domains_changed", "failure", auditPollTimeout)
+			if ev.Params["target_organization_id"] != w.acme.String() {
+				t.Fatalf("target_organization_id %v, want %s", ev.Params["target_organization_id"], w.acme)
+			}
 		}},
 	},
 

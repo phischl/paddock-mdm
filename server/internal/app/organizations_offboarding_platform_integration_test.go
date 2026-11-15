@@ -13,6 +13,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
@@ -157,6 +158,36 @@ func TestOrganizationSetDomainsFailuresInPlatform(t *testing.T) {
 		if a, o := d.rowsOf(t, org); a != actions || o != outbox {
 			t.Fatalf("%s: the failure wrote rows of the organization: action %d→%d, outbox %d→%d", name, actions, a, outbox, o)
 		}
+	}
+}
+
+// TestOrganizationSetDomainsParamOnEveryAttempt (PDK-1053 fix round 2): a denied attempt and one for an unknown
+// organization name the requested organization in target_organization_id as well; the denial of an organization
+// administrator stays in that administrator's organization, the unknown organization's failure in the platform
+// pseudo-organization.
+func TestOrganizationSetDomainsParamOnEveryAttempt(t *testing.T) {
+	d := newDeletionWorld(t)
+	org := d.otherOrg(t)
+	denied := d.as(d.org, principal.RoleOrgAdmin, false)
+	_, err := d.orgs.SetDomains(denied, org, []string{"denied-" + org.String()[24:] + ".example"})
+	expectUninstallProblem(t, err, "forbidden", 403, "")
+	ev := d.attempt(t, denied)
+	expectAttempt(t, ev, audit.CodeOrganizationDomainsChanged, audit.OutcomeDenied, "forbidden", d.org)
+	if ev.Params["target_organization_id"] != org.String() {
+		t.Fatalf("denied params %v", ev.Params)
+	}
+
+	unknown := uuid.Must(uuid.NewV7())
+	ctx := d.root(false)
+	_, err = d.orgs.SetDomains(ctx, unknown, []string{"unknown-" + unknown.String()[24:] + ".example"})
+	expectUninstallProblem(t, err, "not_found", 404, "")
+	ev = d.attempt(t, ctx)
+	expectAttempt(t, ev, audit.CodeOrganizationDomainsChanged, audit.OutcomeFailure, "not_found", audit.PlatformOrganizationID)
+	if ev.Params["target_organization_id"] != unknown.String() {
+		t.Fatalf("not found params %v", ev.Params)
+	}
+	if a, o := d.rowsOf(t, org); a != 0 || o != 0 {
+		t.Fatalf("rows of the organization: action %d, outbox %d", a, o)
 	}
 }
 

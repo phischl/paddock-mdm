@@ -204,6 +204,7 @@ func (o *Organizations) Create(ctx context.Context, slug, name string) (org pgst
 func (o *Organizations) SetDomains(ctx context.Context, id uuid.UUID, domains []string) (pgstore.Organization, error) {
 	spec := SpecOrganizationSetDomains
 	spec.Target = &audit.Target{Type: "organization", ID: id.String()}
+	spec.Params = map[string]any{"target_organization_id": id.String()}
 	normalized := make([]string, len(domains))
 	for i, d := range domains {
 		normalized[i] = strings.ToLower(strings.TrimSpace(d))
@@ -220,7 +221,6 @@ func (o *Organizations) SetDomains(ctx context.Context, id uuid.UUID, domains []
 		}
 		rec.SetTarget(audit.Target{Type: "organization", ID: cur.ID.String(), Display: cur.Slug})
 		rec.SetParam("slug", cur.Slug)
-		rec.SetParam("target_organization_id", cur.ID.String())
 		if organization.Offboarding(cur.Status) {
 			return errOffboarding(cur.Status, "its domains cannot be changed")
 		}
