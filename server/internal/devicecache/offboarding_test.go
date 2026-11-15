@@ -75,31 +75,42 @@ func TestDeleteOrganizationKeys(t *testing.T) {
 	}
 }
 
-// TestOffboardedDeviceKeys (plan M17 decision 15, amendment l point 3): under the worker's ACL user the devices step
-// replaces cmd:<device> with the uninstall alone and caches the device's keys with status offboarded, keeping a live
-// counter; the device's final report deletes dk:, cmd:, seq: and sd: again.
+// TestOffboardedDeviceKeys (plan M17 decision 15, amendments l point 3 and n point 2): under the worker's ACL user the
+// devices step adds the disarm and the uninstall to cmd:<device>, keeping what is there (a pending disarm stays), and
+// caches the device's keys with status offboarded, keeping a live counter; the device's final report deletes dk:,
+// cmd:, seq: and sd: again.
 func TestOffboardedDeviceKeys(t *testing.T) {
 	srv := valkeytest.StartACL(t)
 	admin, worker := srv.Client(t, "acceptance"), srv.Client(t, "worker")
 	cache, gateway := devicecache.New(worker), devicecache.New(admin)
 	ctx := context.Background()
-	dev, org, uninstall, stale := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	dev, org, uninstall, disarm, pendingDisarm := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	now := time.Now()
-	if err := cache.PutCommand(ctx, dev, stale, devicecache.Command{ExpiresAt: now.Add(time.Hour), Envelope: []byte(`{"stale":1}`)}); err != nil {
+	if err := cache.PutCommand(ctx, dev, pendingDisarm, devicecache.Command{ExpiresAt: now.Add(time.Hour), Envelope: []byte(`{"disarm":0}`)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cache.RestoreSeq(ctx, dev, 41); err != nil {
 		t.Fatal(err)
 	}
-	d := devicecache.OffboardedDevice{ID: dev, OrganizationID: org, CommandID: uninstall,
-		Keys:    []devicecache.OffboardedKey{{KeyID: "key-1", PublicKey: []byte{1}}, {KeyID: "key-2", PublicKey: []byte{2}}},
-		Command: devicecache.Command{ExpiresAt: now.Add(365 * 24 * time.Hour), Envelope: []byte(`{"uninstall":1}`)}}
+	year := now.Add(365 * 24 * time.Hour)
+	d := devicecache.OffboardedDevice{ID: dev, OrganizationID: org,
+		Keys: []devicecache.OffboardedKey{{KeyID: "key-1", PublicKey: []byte{1}}, {KeyID: "key-2", PublicKey: []byte{2}}},
+		Commands: []devicecache.OffboardedCommand{
+			{ID: disarm, Command: devicecache.Command{ExpiresAt: year, Envelope: []byte(`{"disarm":1}`)}},
+			{ID: uninstall, Command: devicecache.Command{ExpiresAt: year, Envelope: []byte(`{"uninstall":1}`)}}}}
 	if err := cache.PutOffboardedDevice(ctx, d, 7); err != nil {
 		t.Fatal(err)
 	}
 	cmds, err := gateway.Commands(ctx, dev, now)
-	if err != nil || len(cmds) != 1 || string(cmds[uninstall].Envelope) != `{"uninstall":1}` {
-		t.Fatalf("commands %v, %v; want the uninstall only", cmds, err)
+	if err != nil || len(cmds) != 3 || string(cmds[uninstall].Envelope) != `{"uninstall":1}` ||
+		string(cmds[disarm].Envelope) != `{"disarm":1}` || string(cmds[pendingDisarm].Envelope) != `{"disarm":0}` {
+		t.Fatalf("commands %v, %v; want the pending disarm, the disarm and the uninstall", cmds, err)
+	}
+	if got, ok, err := gateway.PendingCommand(ctx, dev, uninstall); err != nil || !ok || got.ExpiresAt.Unix() != year.Unix() {
+		t.Fatalf("PendingCommand = %+v, %v, %v", got, ok, err)
+	}
+	if _, ok, err := gateway.PendingCommand(ctx, dev, uuid.New()); ok || err != nil {
+		t.Fatalf("PendingCommand of an unknown command: %v %v", ok, err)
 	}
 	for _, k := range d.Keys {
 		got, ok, err := gateway.DeviceKey(ctx, k.KeyID)

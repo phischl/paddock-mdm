@@ -2,7 +2,6 @@ package devicecache
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -64,29 +63,30 @@ type OffboardedKey struct {
 	PublicKey []byte // SubjectPublicKeyInfo DER
 }
 
-// OffboardedDevice is what the gateway needs to serve a device of a deleted organization its uninstall (plan M17
-// decision 15): its keys, cached with status offboarded, and the signed uninstall as the only command.
+// OffboardedCommand is one signed command an offboarded device keeps in cmd:.
+type OffboardedCommand struct {
+	ID      uuid.UUID
+	Command Command
+}
+
+// OffboardedDevice is what the gateway needs to serve a device of a deleted organization its last commands (plan M17
+// decision 15, amendment n): its keys, cached with status offboarded, and the signed disarm of the dead man's switch
+// and uninstall.
 type OffboardedDevice struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
 	Keys           []OffboardedKey
-	CommandID      uuid.UUID
-	Command        Command
+	Commands       []OffboardedCommand
 }
 
-// PutOffboardedDevice makes cmd:<device> hold the uninstall only and caches every key of the device with status
-// offboarded; a missing seq:<device> is restored from lastSeq (PutDeviceKey). The command goes first, so a check-in
-// that already sees the offboarded key finds the uninstall.
+// PutOffboardedDevice adds the device's commands to cmd:<device> and caches every key of the device with status
+// offboarded; a missing seq:<device> is restored from lastSeq (PutDeviceKey). It never removes a field of cmd:
+// (amendment n point 2): a pending disarm already there stays. The commands go first, so a check-in that already sees
+// the offboarded key finds them.
 func (c *Cache) PutOffboardedDevice(ctx context.Context, d OffboardedDevice, lastSeq int64) error {
-	value, err := json.Marshal(d.Command)
-	if err != nil {
-		return err
-	}
-	for _, r := range c.c.DoMulti(ctx,
-		c.c.B().Del().Key(commandsKey(d.ID)).Build(),
-		c.c.B().Hset().Key(commandsKey(d.ID)).FieldValue().FieldValue(d.CommandID.String(), string(value)).Build()) {
-		if err := r.Error(); err != nil {
-			return fmt.Errorf("devicecache: put the uninstall of offboarded device %s: %w", d.ID, err)
+	for _, cmd := range d.Commands {
+		if err := c.PutCommand(ctx, d.ID, cmd.ID, cmd.Command); err != nil {
+			return fmt.Errorf("devicecache: put the commands of offboarded device %s: %w", d.ID, err)
 		}
 	}
 	for _, k := range d.Keys {

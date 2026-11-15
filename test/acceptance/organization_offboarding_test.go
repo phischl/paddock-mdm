@@ -15,9 +15,9 @@ import (
 
 // TestOffboardedDeviceUninstallsAfterTombstone is gate OF6 (plan M17 §8.7, decision 15, amendment l point 3): a device
 // that is offline from the deletion request until the organization is deleted checks in only after the tombstone. It
-// still receives its uninstall (leave) and nothing else: no bundle, no agent offer, no time ticket, and escrow is
-// refused. The result of its uninstall is accepted (the agent starts the removal only then); a batch of other events is
-// answered 200 and dropped. It reports agent.uninstalled, which the platform records as
+// still receives the disarm of its dead man's switch and then its uninstall (leave), and nothing else: no bundle, no
+// agent offer, no time ticket, and escrow is refused. The results of both are accepted (the agent starts the removal
+// only after the uninstall's); a batch of other events is answered 200 and dropped. It reports agent.uninstalled, which the platform records as
 // platform.offboarded_device_uninstalled; the keys it kept are then deleted (amendment l point 3), so a further
 // check-in is refused with 401 (invalid_signature: the key is unknown).
 func TestOffboardedDeviceUninstallsAfterTombstone(t *testing.T) {
@@ -41,16 +41,23 @@ func TestOffboardedDeviceUninstallsAfterTombstone(t *testing.T) {
 	if err != nil || r.Status != http.StatusOK {
 		t.Fatalf("check-in after the tombstone: %v HTTP %d %s", err, r.Status, r.Body)
 	}
-	if out.Bundle != nil || out.AgentUpdate != nil || out.TimeTicket != nil || len(out.Commands) != 1 {
-		t.Fatalf("check-in after the tombstone: %s, want the uninstall only", r.Body)
+	if out.Bundle != nil || out.AgentUpdate != nil || out.TimeTicket != nil || len(out.Commands) != 2 {
+		t.Fatalf("check-in after the tombstone: %s, want the disarm and the uninstall only", r.Body)
 	}
-	_, payload, err := dsse.Decode(out.Commands[0])
-	if err != nil {
-		t.Fatal(err)
+	cmds := make([]command.Command, len(out.Commands))
+	for i, env := range out.Commands {
+		_, payload, err := dsse.Decode(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(payload, &cmds[i]); err != nil {
+			t.Fatal(err)
+		}
 	}
-	var cmd command.Command
-	if err := json.Unmarshal(payload, &cmd); err != nil || cmd.Type != "uninstall" {
-		t.Fatalf("command %s, want uninstall: %v", payload, err)
+	// The disarm of the dead man's switch comes first (amendment n point 4).
+	disarm, cmd := cmds[0], cmds[1]
+	if disarm.Type != command.TypeDeleteSelfLock || cmd.Type != command.TypeUninstall {
+		t.Fatalf("commands %s and %s, want delete_self_lock then uninstall", disarm.Type, cmd.Type)
 	}
 
 	er, err := d.Escrow(testContext(t, time.Minute), escrow.Request{})
@@ -58,9 +65,11 @@ func TestOffboardedDeviceUninstallsAfterTombstone(t *testing.T) {
 		t.Fatalf("escrow after the tombstone: %v HTTP %d, want 401", err, er.Status)
 	}
 
-	if r, err := d.CommandResult(testContext(t, time.Minute), cmd.CommandID, protocol.CommandSucceeded, json.RawMessage(`{}`)); err != nil ||
-		r.Status != http.StatusAccepted {
-		t.Fatalf("result of the uninstall: %v HTTP %d", err, r.Status)
+	for _, c := range cmds {
+		if r, err := d.CommandResult(testContext(t, time.Minute), c.CommandID, protocol.CommandSucceeded, json.RawMessage(`{}`)); err != nil ||
+			r.Status != http.StatusAccepted {
+			t.Fatalf("result of %s: %v HTTP %d", c.Type, err, r.Status)
+		}
 	}
 	if r, err := d.SendEvents(testContext(t, time.Minute), []protocol.Event{{EventSeq: 1, Type: protocol.EventBundleApplied,
 		OccurredAt: time.Now(), Data: json.RawMessage(`{"bundle_version":1}`)}}); err != nil || r.Status != http.StatusOK {

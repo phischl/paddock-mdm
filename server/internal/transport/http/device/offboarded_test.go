@@ -18,9 +18,10 @@ import (
 )
 
 // TestOffboardedKeyGetsOnlyTheUninstall (plan M17 decision 15, amendment l point 3, PDK-1016): a device whose
-// organization was deleted keeps its dk: (status offboarded), cmd: with the uninstall, seq: and sd:. A check-in carries
-// the uninstall alone: no other command, no bundle, no agent offer, no time ticket, and no heartbeat is published. The
-// uninstall's own result is accepted (the agent starts its removal only then) but not published. An event batch is
+// organization was deleted keeps its dk: (status offboarded), cmd: with the disarm and the uninstall, seq: and sd:. A
+// check-in carries the disarm first and then the uninstall (amendment n): no other command, no bundle, no agent offer,
+// no time ticket, and no heartbeat is published. The results of both are accepted (the agent starts its removal only
+// after the uninstall's) but not published; the result of another command in cmd: is refused. An event batch is
 // published only when it is exactly one agent.uninstalled; any other batch is answered 200 and dropped. Escrow upload
 // and status, diagnostics, catalog icons and the result of another command are refused with 401 identity_revoked.
 func TestOffboardedKeyGetsOnlyTheUninstall(t *testing.T) {
@@ -28,9 +29,10 @@ func TestOffboardedKeyGetsOnlyTheUninstall(t *testing.T) {
 	c := newClient(t)
 	id := e.enrolled(c, devicecache.KeyOffboarded)
 	ctx := context.Background()
-	uninstall, lock := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
-	uninstallEnv := commandEnvelope(t, uninstall, id, command.TypeUninstall)
-	for cmd, env := range map[uuid.UUID]json.RawMessage{uninstall: uninstallEnv, lock: commandEnvelope(t, lock, id, command.TypeRotateAdminPassword)} {
+	uninstall, lock, disarm := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	uninstallEnv, disarmEnv := commandEnvelope(t, uninstall, id, command.TypeUninstall), commandEnvelope(t, disarm, id, command.TypeDeleteSelfLock)
+	for cmd, env := range map[uuid.UUID]json.RawMessage{uninstall: uninstallEnv, disarm: disarmEnv,
+		lock: commandEnvelope(t, lock, id, command.TypeRotateAdminPassword)} {
 		if err := e.cache.PutCommand(ctx, id, cmd, devicecache.Command{ExpiresAt: e.now.Add(365 * 24 * time.Hour), Envelope: env}); err != nil {
 			t.Fatal(err)
 		}
@@ -48,7 +50,9 @@ func TestOffboardedKeyGetsOnlyTheUninstall(t *testing.T) {
 		"escrow status": {method: "GET", path: "/v1/escrow/" + uuid.NewString(), device: id.String()},
 		"diagnostics":   {method: "POST", path: "/v1/diagnostics", device: id.String(), body: diagnosticsBody(lock)},
 		"catalog icon":  {method: "GET", path: "/v1/catalog/" + uuid.NewString() + "/icon", device: id.String()},
-		"command result of another command": {method: "POST", path: "/v1/commands/" + uuid.NewString() + "/result", device: id.String(),
+		"command result of an unknown command": {method: "POST", path: "/v1/commands/" + uuid.NewString() + "/result", device: id.String(),
+			body: protocol.CommandResult{Status: "succeeded", Result: json.RawMessage(`{}`)}},
+		"command result of another pending command": {method: "POST", path: "/v1/commands/" + lock.String() + "/result", device: id.String(),
 			body: protocol.CommandResult{Status: "succeeded", Result: json.RawMessage(`{}`)}},
 	}
 	for name, rq := range refused {
@@ -65,7 +69,7 @@ func TestOffboardedKeyGetsOnlyTheUninstall(t *testing.T) {
 		if err := json.Unmarshal(r.body, &out); err != nil || r.status != http.StatusOK {
 			t.Fatalf("checkin: %d %s", r.status, r.body)
 		}
-		if len(out.Commands) != 1 || string(out.Commands[0]) != string(uninstallEnv) || out.Bundle != nil ||
+		if len(out.Commands) != 2 || string(out.Commands[0]) != string(disarmEnv) || string(out.Commands[1]) != string(uninstallEnv) || out.Bundle != nil ||
 			out.AgentUpdate != nil || out.TimeTicket != nil || out.Seq == 0 {
 			t.Fatalf("an offboarded device's check-in: %s", r.body)
 		}
@@ -74,20 +78,22 @@ func TestOffboardedKeyGetsOnlyTheUninstall(t *testing.T) {
 		}
 	})
 
-	t.Run("result of the uninstall", func(t *testing.T) {
+	t.Run("results of the disarm and the uninstall", func(t *testing.T) {
 		before := published()
-		post := func(status string) result {
-			return e.send(c, request{method: "POST", path: "/v1/commands/" + uninstall.String() + "/result", device: id.String(),
+		post := func(cmd uuid.UUID, status string) result {
+			return e.send(c, request{method: "POST", path: "/v1/commands/" + cmd.String() + "/result", device: id.String(),
 				body: protocol.CommandResult{Status: status, Result: json.RawMessage(`{}`)}})
 		}
-		for range 2 {
-			if r := post("succeeded"); r.status != http.StatusAccepted {
-				t.Fatalf("result of the uninstall: %d %s", r.status, r.body)
+		for _, cmd := range []uuid.UUID{disarm, uninstall} {
+			for range 2 {
+				if r := post(cmd, "succeeded"); r.status != http.StatusAccepted {
+					t.Fatalf("result of %s: %d %s", cmd, r.status, r.body)
+				}
 			}
+			e.expectProblem(post(cmd, "failed"), http.StatusConflict, "conflict")
 		}
-		e.expectProblem(post("failed"), http.StatusConflict, "conflict")
 		if n := published() - before; n != 0 {
-			t.Fatalf("the uninstall's result published %d messages", n)
+			t.Fatalf("the results published %d messages", n)
 		}
 	})
 

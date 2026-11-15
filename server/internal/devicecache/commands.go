@@ -69,6 +69,24 @@ func (c *Cache) Commands(ctx context.Context, device uuid.UUID, now time.Time) (
 	return out, nil
 }
 
+// PendingCommand returns the field command_id of cmd:<device_id> whether or not it has expired: a device may report the
+// result of a command it fetched before the expiry.
+func (c *Cache) PendingCommand(ctx context.Context, device, id uuid.UUID) (Command, bool, error) {
+	m, err := c.c.Do(ctx, c.c.B().Hgetall().Key(commandsKey(device)).Build()).AsStrMap()
+	if err != nil {
+		return Command{}, false, fmt.Errorf("devicecache: command: %w", err)
+	}
+	value, ok := m[id.String()]
+	if !ok {
+		return Command{}, false, nil
+	}
+	var cmd Command
+	if err := json.Unmarshal([]byte(value), &cmd); err != nil {
+		return Command{}, false, fmt.Errorf("devicecache: corrupt command %s: %w", id, err)
+	}
+	return cmd, true, nil
+}
+
 // ResultTTL is how long the gateway remembers the result status of a command (cres:<command_id>), so a repeated
 // result post is answered without the database (plan M4a decision 3).
 const ResultTTL = 30 * 24 * time.Hour

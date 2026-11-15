@@ -174,11 +174,10 @@ func (o *Offboarding) Advance(ctx context.Context, org uuid.UUID) (done bool, er
 		return o.tombstone(ctx, row)
 	}
 	var count int
-	var params map[string]any
+	var totals map[string]string
 	if step == offboarding.StepDevices && !o.stubbed[step] {
-		var reissued int
-		count, reissued, err = o.devices(ctx, row)
-		params = map[string]any{"uninstalls_reissued": reissued}
+		count, err = o.devices(ctx, row)
+		totals = map[string]string{"uninstalls_reissued": countUninstallsReissued, "disarms_issued": countDisarmsIssued}
 	} else {
 		count, err = o.run(ctx, row, step)
 	}
@@ -191,7 +190,7 @@ func (o *Offboarding) Advance(ctx context.Context, org uuid.UUID) (done bool, er
 		}
 		return false, o.fail(ctx, row, step, count, err)
 	}
-	return false, o.complete(ctx, row, step, count, params)
+	return false, o.complete(ctx, row, step, count, totals)
 }
 
 func (o *Offboarding) organization(ctx context.Context, org uuid.UUID) (pgstore.Organization, error) {
@@ -273,50 +272,49 @@ func (o *Offboarding) sessions(ctx context.Context, org uuid.UUID) (int, error) 
 	return ended + int(revoked), nil
 }
 
+// The counts of the step devices that paddock_offboard_reissue_uninstalls adds to offboarding_counts on every call
+// (migration 00135): organization.deletion_step_completed reports the totals of all attempts.
+const (
+	countUninstallsReissued = "devices.uninstalls_reissued"
+	countDisarmsIssued      = "devices.disarms_issued"
+)
+
 // devices hands every device of the organization that may still contact the server over to offboarded_device (plan
-// M17 decision 15, amendment e point 10) and returns how many it recorded and how many got a fresh uninstall. It first
-// waits, like the tombstone, until no transaction that passed the gate on a stale status is open (amendment j
-// addendum): such a transaction may still insert or approve a device, which then gets its record too. The devices are
-// locked and their uninstalls issued by paddock_offboard_reissue_uninstalls (migration 00135) in one transaction with a
-// constant number of statements. Signing, the cache and
-// the platform record follow outside it, each idempotent: a repeated step keeps the commands it issued, rewrites the
-// cache and adds only missing records, so the count never grows twice. The cache is written before the record, so a
-// device's final report, which deletes both, cannot run before the keys it deletes exist. Nothing here waits for a
-// device: a device that never comes back is purged with its record after OffboardedDeviceRetention.
-func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization) (handed, reissued int, err error) {
+// M17 decision 15, amendments e point 10, m point 2 and n) and returns how many it recorded. It first waits, like the
+// tombstone, until no transaction that passed the gate on a stale status is open (amendment j addendum): such a
+// transaction may still insert or approve a device, which then gets its record too. paddock_offboard_reissue_uninstalls
+// (migration 00135) locks the devices, gives each the disarm of its dead man's switch and an uninstall valid for the
+// retention, in one transaction with a constant number of statements. Signing, the cache and the platform record
+// follow outside it, each idempotent: a repeated step keeps the commands it issued, re-adds them to the cache and adds
+// only missing records, so the count never grows twice. The cache is written before the record, so a device's final
+// report, which deletes both, cannot run before the keys it deletes exist. Nothing here waits for a device: a device
+// that never comes back is purged with its record after OffboardedDeviceRetention.
+func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization) (int, error) {
 	orgCtx := offboardingContext(ctx, row.ID)
 	var ready bool
-	err = o.deps.Worker.InOrgOffboarding(orgCtx, func(ctx context.Context, q *pgstore.Queries) error {
+	err := o.deps.Worker.InOrgOffboarding(orgCtx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
 		ready, err = q.OffboardQuiesce(ctx)
 		return err
 	})
 	if err != nil {
-		return 0, 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("wait for older organization transactions: %w", err))
+		return 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("wait for older organization transactions: %w", err))
 	}
 	if !ready {
-		return 0, 0, o.waiting(ctx, row.ID, offboarding.StepDevices)
+		return 0, o.waiting(ctx, row.ID, offboarding.StepDevices)
 	}
-	params, err := json.Marshal(command.UninstallParams{Mode: command.UninstallLeave})
-	if err != nil {
-		return 0, 0, err
-	}
-	now := o.now().UTC()
 	var cmds []pgstore.DeviceCommand
 	var keys []pgstore.ListOffboardingDeviceIdentitiesRow
 	err = o.deps.Worker.InOrgOffboarding(orgCtx, func(ctx context.Context, q *pgstore.Queries) error {
-		n, err := q.OffboardReissueUninstalls(ctx, pgstore.OffboardReissueUninstallsParams{Params: params,
-			IssuedAt: now.Truncate(time.Second), ExpiresAt: now.Add(organization.OffboardedDeviceRetention)})
-		if err != nil {
-			return fmt.Errorf("issue uninstalls: %w", err)
+		if _, err := q.OffboardReissueUninstalls(ctx); err != nil {
+			return fmt.Errorf("issue the disarms and uninstalls: %w", err)
 		}
-		reissued = int(n)
 		locked, err := q.ListOffboardingHandedDevices(ctx)
 		if err != nil || len(locked) == 0 {
 			return err
 		}
-		if cmds, err = q.ListOffboardingUninstallCommands(ctx, locked); err != nil {
-			return fmt.Errorf("list uninstall commands: %w", err)
+		if cmds, err = q.ListOffboardingHandoverCommands(ctx, locked); err != nil {
+			return fmt.Errorf("list the commands: %w", err)
 		}
 		if keys, err = q.ListOffboardingDeviceIdentities(ctx, locked); err != nil {
 			return fmt.Errorf("list identity keys: %w", err)
@@ -324,10 +322,10 @@ func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization) (ha
 		return nil
 	})
 	if err != nil {
-		return 0, 0, stepError(offboarding.ErrorDatabase, err)
+		return 0, stepError(offboarding.ErrorDatabase, err)
 	}
 	if len(cmds) == 0 {
-		return 0, reissued, nil
+		return 0, nil
 	}
 	payloads := make([]command.Command, len(cmds))
 	for i, c := range cmds {
@@ -335,34 +333,49 @@ func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization) (ha
 	}
 	envelopes, err := commandsign.SignAll(ctx, o.deps.Signer, payloads)
 	if err != nil {
-		return 0, reissued, stepError(offboarding.ErrorSigningUnavailable, err)
+		return 0, stepError(offboarding.ErrorSigningUnavailable, err)
 	}
 	byDevice := map[uuid.UUID][]pgstore.ListOffboardingDeviceIdentitiesRow{}
 	for _, k := range keys {
 		byDevice[k.DeviceID] = append(byDevice[k.DeviceID], k)
 	}
 	in := pgstore.InsertOffboardedDevicesParams{OrganizationID: row.ID}
-	for i, c := range cmds {
-		d := devicecache.OffboardedDevice{ID: c.DeviceID, OrganizationID: row.ID, CommandID: c.ID,
-			Command: devicecache.Command{ExpiresAt: c.ExpiresAt, Envelope: envelopes[i]}}
+	// The commands are ordered by device, so a device's commands follow each other.
+	for start := 0; start < len(cmds); {
+		end := start
+		for end < len(cmds) && cmds[end].DeviceID == cmds[start].DeviceID {
+			end++
+		}
+		dev := cmds[start].DeviceID
+		d := devicecache.OffboardedDevice{ID: dev, OrganizationID: row.ID}
+		var stored []offboardedCommand
+		for i := start; i < end; i++ {
+			d.Commands = append(d.Commands, devicecache.OffboardedCommand{ID: cmds[i].ID,
+				Command: devicecache.Command{ExpiresAt: cmds[i].ExpiresAt, Envelope: envelopes[i]}})
+			stored = append(stored, offboardedCommand{CommandID: cmds[i].ID, Envelope: envelopes[i]})
+		}
 		var lastSeq int64
-		stored := []offboardedKey{}
-		for _, k := range byDevice[c.DeviceID] {
+		storedKeys := []offboardedKey{}
+		for _, k := range byDevice[dev] {
 			d.Keys = append(d.Keys, devicecache.OffboardedKey{KeyID: k.KeyID, PublicKey: k.PublicKey})
-			stored = append(stored, offboardedKey{KeyID: k.KeyID, PublicKey: k.PublicKey})
+			storedKeys = append(storedKeys, offboardedKey{KeyID: k.KeyID, PublicKey: k.PublicKey})
 			lastSeq = k.LastSeq
 		}
 		if err := o.deps.Cache.PutOffboardedDevice(ctx, d, lastSeq); err != nil {
-			return 0, reissued, stepError(offboarding.ErrorValkeyUnavailable, err)
+			return 0, stepError(offboarding.ErrorValkeyUnavailable, err)
 		}
-		raw, err := json.Marshal(stored)
+		rawKeys, err := json.Marshal(storedKeys)
 		if err != nil {
-			return 0, reissued, err
+			return 0, err
 		}
-		in.DeviceIds = append(in.DeviceIds, c.DeviceID)
-		in.Keys = append(in.Keys, string(raw))
-		in.CommandIds = append(in.CommandIds, c.ID)
-		in.CommandEnvelopes = append(in.CommandEnvelopes, envelopes[i])
+		rawCmds, err := json.Marshal(stored)
+		if err != nil {
+			return 0, err
+		}
+		in.DeviceIds = append(in.DeviceIds, dev)
+		in.Keys = append(in.Keys, string(rawKeys))
+		in.CommandEnvelopes = append(in.CommandEnvelopes, string(rawCmds))
+		start = end
 	}
 	var n int64
 	err = o.deps.Platform.InPlatform(offboardingSystem(ctx), func(ctx context.Context, q *pgstore.Queries) error {
@@ -371,9 +384,9 @@ func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization) (ha
 		return err
 	})
 	if err != nil {
-		return 0, reissued, stepError(offboarding.ErrorDatabase, fmt.Errorf("record the offboarded devices: %w", err))
+		return 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("record the offboarded devices: %w", err))
 	}
-	return int(n), reissued, nil
+	return int(n), nil
 }
 
 // outbox completes only when the organization has no unpublished outbox row (plan M17 decision 9): no audit event of
@@ -623,15 +636,15 @@ func (o *Offboarding) fail(ctx context.Context, row pgstore.Organization, step s
 }
 
 // complete writes the step's checkpoint together with organization.deletion_step_completed (count: everything the step
-// removed over its attempts; params: the step's own, uninstalls_reissued of devices), exactly once.
-func (o *Offboarding) complete(ctx context.Context, row pgstore.Organization, step string, count int, params map[string]any) error {
+// removed over its attempts; totals: further params of the step, each read from its key in offboarding_counts, such as
+// uninstalls_reissued and disarms_issued of devices), exactly once.
+func (o *Offboarding) complete(ctx context.Context, row pgstore.Organization, step string, count int, totals map[string]string) error {
 	next, ok := offboarding.Next(step)
 	if !ok {
 		return fmt.Errorf("step %q has no successor", step)
 	}
 	spec := ActionSpec{Code: audit.CodeOrganizationDeletionStepCompleted, Target: orgTarget(row),
 		Params: map[string]any{"slug": row.Slug, "step": step}}
-	maps.Copy(spec.Params, params)
 	_, err := o.deps.Runner.RecordOnceInScope(offboardingSystem(ctx), ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error) {
 			done, err := q.CompleteOrganizationOffboardingStep(ctx, pgstore.CompleteOrganizationOffboardingStepParams{
@@ -643,7 +656,11 @@ func (o *Offboarding) complete(ctx context.Context, row pgstore.Organization, st
 				return false, err
 			}
 			// The total includes what earlier attempts and batches stored, read in the checkpoint's own statement.
-			rec.SetParam("count", counts(done)[step])
+			c := counts(done)
+			rec.SetParam("count", c[step])
+			for param, key := range totals {
+				rec.SetParam(param, c[key])
+			}
 			return true, nil
 		})
 	if err != nil {

@@ -721,8 +721,8 @@ func TestOffboardingKeepsOffboardedDeviceKeys(t *testing.T) {
 	w.exec(t, `INSERT INTO device_identity_key (key_id, organization_id, device_id, public_key, key_protection, status)
 		VALUES ($1, $2, $3, '\x00', 'file', 'active'), ($4, $2, $5, '\x00', 'file', 'active')`,
 		"k-"+leaving.String(), w.org, leaving, "k-"+w.device.String(), w.device)
-	w.exec(t, `INSERT INTO offboarded_device (device_id, organization_id, keys, command_id, command_envelope)
-		VALUES ($1, $2, '[]', $3, '\x00')`, leaving, w.org, uuid.Must(uuid.NewV7()))
+	w.exec(t, `INSERT INTO offboarded_device (device_id, organization_id, keys, command_envelopes)
+		VALUES ($1, $2, '[]', '[]')`, leaving, w.org)
 	t.Cleanup(func() { w.exec(t, "DELETE FROM offboarded_device WHERE device_id = $1", leaving) })
 	w.requestDue(t, job)
 	w.advanceTo(t, job, offboarding.StepAuditFinal)

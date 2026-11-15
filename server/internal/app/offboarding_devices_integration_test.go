@@ -25,17 +25,17 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
-// offboardedRow is a record of offboarded_device.
+// offboardedRow is a record of offboarded_device: its uninstall and disarm by command ID, with their envelopes.
 type offboardedRow struct {
-	command  uuid.UUID
-	envelope []byte
-	keys     []map[string]any
+	uninstall, disarm uuid.UUID
+	envelopes         map[uuid.UUID][]byte
+	keys              []map[string]any
 }
 
 func (w *offboardWorld) offboardedRows(t *testing.T) map[uuid.UUID]offboardedRow {
 	t.Helper()
 	rows, err := w.super.Query(context.Background(),
-		"SELECT device_id, command_id, command_envelope, keys FROM offboarded_device WHERE organization_id = $1", w.org)
+		"SELECT device_id, command_envelopes, keys FROM offboarded_device WHERE organization_id = $1", w.org)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,10 +43,29 @@ func (w *offboardWorld) offboardedRows(t *testing.T) map[uuid.UUID]offboardedRow
 	out := map[uuid.UUID]offboardedRow{}
 	for rows.Next() {
 		var id uuid.UUID
-		var r offboardedRow
-		var keys []byte
-		if err := rows.Scan(&id, &r.command, &r.envelope, &keys); err != nil {
+		var cmds, keys []byte
+		if err := rows.Scan(&id, &cmds, &keys); err != nil {
 			t.Fatal(err)
+		}
+		r := offboardedRow{envelopes: map[uuid.UUID][]byte{}}
+		var stored []struct {
+			CommandID uuid.UUID `json:"command_id"`
+			Envelope  []byte    `json:"envelope"`
+		}
+		if err := json.Unmarshal(cmds, &stored); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range stored {
+			r.envelopes[c.CommandID] = c.Envelope
+			switch decodeCommand(t, c.Envelope).Type {
+			case command.TypeUninstall:
+				r.uninstall = c.CommandID
+			case command.TypeDeleteSelfLock:
+				r.disarm = c.CommandID
+			}
+		}
+		if len(stored) != 2 || r.uninstall == uuid.Nil || r.disarm == uuid.Nil {
+			t.Fatalf("device %s: commands %s, want one uninstall and one disarm", id, cmds)
 		}
 		if err := json.Unmarshal(keys, &r.keys); err != nil {
 			t.Fatal(err)
@@ -71,6 +90,19 @@ func (w *offboardWorld) uninstallCommand(t *testing.T, device uuid.UUID) (uuid.U
 	return id, status
 }
 
+// adminUninstall gives device an administrator's own open uninstall with params, status and 7 days left, as the
+// deletion request finds it (amendment e point 8).
+func (w *offboardWorld) adminUninstall(t *testing.T, device uuid.UUID, params, status string) uuid.UUID {
+	t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	w.exec(t, `INSERT INTO device_command (id, organization_id, device_id, type, params, status, issued_at, expires_at, issued_by)
+		VALUES ($1, $2, $3, 'uninstall', $4::jsonb, $5, date_trunc('second', now()), date_trunc('second', now()) + interval '7 days', $6)`,
+		id, w.org, device, params, status, uuid.Must(uuid.NewV7()))
+	w.exec(t, `UPDATE device SET uninstall_requested_at = now(), uninstall_mode = $2::jsonb ->> 'mode', uninstall_command_id = $3
+		WHERE id = $1`, device, params, id)
+	return id
+}
+
 func decodeCommand(t *testing.T, env []byte) command.Command {
 	t.Helper()
 	_, payload, err := dsse.Decode(env)
@@ -84,13 +116,36 @@ func decodeCommand(t *testing.T, env []byte) command.Command {
 	return c
 }
 
-// TestOffboardingHandsDevicesOver (plan M17 decision 15, amendment e point 10, PDK-1016): the step devices records
-// every device that has not reported its removal and is neither retired nor rejected in offboarded_device. A device
-// whose offboarding uninstall is pending or delivered keeps that command; a device enrolled during the grace period, one
-// the request skipped for an open Lock, one whose command failed (conversion_pending), expired or lapsed while pending,
-// a quarantined and a pending device each get a fresh leave, also with the Lock open. The cache receives each device's
-// active keys and the signed uninstall; the completion event carries uninstalls_reissued. The deletion then finishes
-// without any failure although no device reported (main's requirement: waiting devices never hold the deletion).
+// expiresInRetention fails unless the command expires about OffboardedDeviceRetention from now.
+func expiresInRetention(t *testing.T, what string, c command.Command) {
+	t.Helper()
+	if d := time.Until(c.ExpiresAt) - organization.OffboardedDeviceRetention; d > time.Minute || d < -time.Minute {
+		t.Fatalf("%s expires at %s", what, c.ExpiresAt)
+	}
+}
+
+// devicesStepEvent is the completion event of the step devices.
+func (w *offboardWorld) devicesStepEvent(t *testing.T) audit.Event {
+	t.Helper()
+	for _, ev := range w.stepEvents(t, audit.CodeOrganizationDeletionStepCompleted) {
+		if ev.Params["step"] == offboarding.StepDevices {
+			return ev
+		}
+	}
+	t.Fatal("no completion event of the step devices")
+	return audit.Event{}
+}
+
+// TestOffboardingHandsDevicesOver (plan M17 decision 15, amendments e point 10, m point 2 and n, PDK-1016): the step
+// devices records every device that has not reported its removal and is neither retired nor rejected in
+// offboarded_device, each with the disarm of its dead man's switch (delete_self_lock, valid for the retention) and an
+// uninstall. A device whose offboarding uninstall is pending or delivered keeps that command, as does a delivered
+// administrator reset; an administrator's pending reset with 7 days left is cancelled and replaced by a reset valid for
+// the retention; a device enrolled during the grace period, one the request skipped for an open Lock, one whose command
+// failed (conversion_pending), expired or lapsed while pending, a quarantined and a pending device each get a fresh
+// leave, also with the Lock open. The cache receives each device's active keys and both signed commands; the
+// completion event carries uninstalls_reissued and disarms_issued. The deletion then finishes without any failure
+// although no device reported (main's requirement: waiting devices never hold the deletion).
 func TestOffboardingHandsDevicesOver(t *testing.T) {
 	w := newOffboardWorld(t)
 	job := w.job()
@@ -100,6 +155,8 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	failed, _ := w.newDevice(t, w.org, "active")
 	expired, _ := w.newDevice(t, w.org, "active")
 	lapsed, _ := w.newDevice(t, w.org, "active")
+	reset, _ := w.newDevice(t, w.org, "active")
+	resetDelivered, _ := w.newDevice(t, w.org, "active")
 	quarantined, _ := w.newDevice(t, w.org, "quarantined")
 	pending, _ := w.newDevice(t, w.org, "pending")
 	retired, _ := w.newDevice(t, w.org, "retired")
@@ -110,6 +167,9 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	w.exec(t, `INSERT INTO device_identity_key (key_id, organization_id, device_id, public_key, key_protection, status)
 		VALUES ('k-active-'||$3::text, $1, $2, '\x01', 'file', 'active'), ('k-revoked-'||$3::text, $1, $2, '\x02', 'file', 'revoked'),
 		('k-quarantined-'||$3::text, $1, $4, '\x03', 'file', 'active')`, w.org, delivered, delivered.String(), quarantined)
+	resetParams := `{"mode":"reset","clear_tpm":true}`
+	oldReset := w.adminUninstall(t, reset, resetParams, "pending")
+	keptReset := w.adminUninstall(t, resetDelivered, resetParams, "delivered")
 	t.Cleanup(func() { w.exec(t, "DELETE FROM offboarded_device WHERE organization_id = $1", w.org) })
 
 	if _, err := w.devOrgs.RequestDeletion(w.root(true), w.org, w.input(0)); err != nil {
@@ -133,7 +193,7 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	}
 	w.advanceTo(t, job, offboarding.StepOutbox)
 
-	handed := []uuid.UUID{w.device, delivered, locked, failed, expired, lapsed, quarantined, pending, graceEnrolled}
+	handed := []uuid.UUID{w.device, delivered, locked, failed, expired, lapsed, reset, resetDelivered, quarantined, pending, graceEnrolled}
 	rows := w.offboardedRows(t)
 	if len(rows) != len(handed) {
 		t.Fatalf("%d offboarded devices, want %d: %v", len(rows), len(handed), rows)
@@ -143,42 +203,69 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 			t.Fatalf("device %s was handed over", id)
 		}
 	}
-	if rows[w.device].command != keptPending || rows[delivered].command != keptDelivered {
-		t.Fatal("a pending or delivered offboarding uninstall was replaced")
+	kept := map[uuid.UUID]uuid.UUID{w.device: keptPending, delivered: keptDelivered, resetDelivered: keptReset}
+	for id, cmd := range kept {
+		if rows[id].uninstall != cmd {
+			t.Fatalf("device %s: the kept uninstall %s was replaced by %s", id, cmd, rows[id].uninstall)
+		}
 	}
+	unusable := []uuid.UUID{oldFailed, oldExpired, oldLapsed, oldReset}
 	for _, id := range handed {
 		row, ok := rows[id]
 		if !ok {
 			t.Fatalf("device %s has no record", id)
 		}
 		cur, status := w.uninstallCommand(t, id)
-		c := decodeCommand(t, row.envelope)
-		if cur != row.command || c.CommandID != row.command.String() || c.DeviceID != id.String() || c.Type != command.TypeUninstall {
-			t.Fatalf("device %s: record %s, current %s (%s), envelope %+v", id, row.command, cur, status, c)
+		c := decodeCommand(t, row.envelopes[row.uninstall])
+		if cur != row.uninstall || c.CommandID != row.uninstall.String() || c.DeviceID != id.String() || c.Type != command.TypeUninstall {
+			t.Fatalf("device %s: record %s, current %s (%s), envelope %+v", id, row.uninstall, cur, status, c)
 		}
+		disarm := decodeCommand(t, row.envelopes[row.disarm])
+		if disarm.Type != command.TypeDeleteSelfLock || disarm.DeviceID != id.String() || string(disarm.Params) != "{}" {
+			t.Fatalf("device %s: disarm %+v", id, disarm)
+		}
+		expiresInRetention(t, "disarm of "+id.String(), disarm)
 		var p command.UninstallParams
-		if err := json.Unmarshal(c.Params, &p); err != nil || p.Mode != command.UninstallLeave {
+		if err := json.Unmarshal(c.Params, &p); err != nil {
 			t.Fatalf("device %s: params %s", id, c.Params)
 		}
-		if w.count(t, "SELECT count(*) FROM device WHERE id = $1 AND uninstall_reason = 'organization_offboarding'", id) != 1 {
-			t.Fatalf("device %s: the uninstall is not marked as the organization's", id)
-		}
 		cached := w.cache.offboarded[id]
-		if cached.CommandID != row.command || string(cached.Command.Envelope) != string(row.envelope) || cached.OrganizationID != w.org {
+		if cached.OrganizationID != w.org || len(cached.Commands) != 2 {
 			t.Fatalf("device %s: cached %+v", id, cached)
 		}
-		if id == w.device || id == delivered {
-			continue
+		for _, cc := range cached.Commands {
+			if string(cc.Command.Envelope) != string(row.envelopes[cc.ID]) {
+				t.Fatalf("device %s: cached command %s differs from the record", id, cc.ID)
+			}
 		}
-		if !slices.Contains([]uuid.UUID{oldFailed, oldExpired, oldLapsed}, row.command) && status != "pending" {
-			t.Fatalf("device %s: fresh command in status %s", id, status)
-		}
-		if slices.Contains([]uuid.UUID{oldFailed, oldExpired, oldLapsed}, row.command) {
+		if slices.Contains(unusable, row.uninstall) {
 			t.Fatalf("device %s kept its unusable command", id)
 		}
-		if d := time.Until(c.ExpiresAt) - organization.OffboardedDeviceRetention; d > time.Minute || d < -time.Minute {
-			t.Fatalf("device %s: fresh command expires at %s", id, c.ExpiresAt)
+		switch {
+		case id == reset:
+			if p.Mode != command.UninstallReset || !p.ClearTPM || status != "pending" {
+				t.Fatalf("the replaced reset: %s %+v", status, p)
+			}
+			expiresInRetention(t, "the replaced reset", c)
+		case id == resetDelivered:
+			if p.Mode != command.UninstallReset || status != "delivered" {
+				t.Fatalf("the delivered reset: %s %+v", status, p)
+			}
+		case kept[id] != uuid.Nil:
+			if p.Mode != command.UninstallLeave {
+				t.Fatalf("device %s: kept params %s", id, c.Params)
+			}
+		default:
+			if p.Mode != command.UninstallLeave || status != "pending" ||
+				w.count(t, "SELECT count(*) FROM device WHERE id = $1 AND uninstall_reason = 'organization_offboarding'", id) != 1 {
+				t.Fatalf("device %s: fresh command %s %+v", id, status, p)
+			}
+			expiresInRetention(t, "fresh uninstall of "+id.String(), c)
 		}
+	}
+	var oldStatus string
+	if err := w.super.QueryRow(ctx, "SELECT status FROM device_command WHERE id = $1", oldReset).Scan(&oldStatus); err != nil || oldStatus != "cancelled" {
+		t.Fatalf("the replaced reset is %q (%v), want cancelled", oldStatus, err)
 	}
 	if keys := w.cache.offboarded[delivered].Keys; len(keys) != 1 || keys[0].KeyID != "k-active-"+delivered.String() ||
 		len(rows[delivered].keys) != 1 || rows[delivered].keys[0]["key_id"] != "k-active-"+delivered.String() {
@@ -187,14 +274,10 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	if keys := w.cache.offboarded[quarantined].Keys; len(keys) != 1 {
 		t.Fatalf("keys of the quarantined device: %+v", keys)
 	}
-	var stepEvent *audit.Event
-	for _, ev := range w.stepEvents(t, audit.CodeOrganizationDeletionStepCompleted) {
-		if ev.Params["step"] == offboarding.StepDevices {
-			stepEvent = &ev
-		}
-	}
-	if stepEvent == nil || stepEvent.Params["count"] != float64(len(handed)) || stepEvent.Params["uninstalls_reissued"] != float64(7) {
-		t.Fatalf("devices step event %+v", stepEvent)
+	ev := w.devicesStepEvent(t)
+	if ev.Params["count"] != float64(len(handed)) || ev.Params["uninstalls_reissued"] != float64(8) ||
+		ev.Params["disarms_issued"] != float64(len(handed)) {
+		t.Fatalf("devices step event %+v", ev.Params)
 	}
 
 	w.advanceTo(t, job, "")
@@ -218,8 +301,9 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	}
 }
 
-// TestOffboardingDevicesRepeatable: a step that fails after its transaction (here: signing) keeps the commands it
-// issued; the repeated step re-signs them, records every device once and reissues nothing again.
+// TestOffboardingDevicesRepeatable (review 1 minor 3): a step that fails after its transaction (here: signing) keeps
+// the commands it issued; the repeated step re-signs them, records every device once and issues nothing again, and the
+// completion event counts what all attempts issued.
 func TestOffboardingDevicesRepeatable(t *testing.T) {
 	w := newOffboardWorld(t)
 	t.Cleanup(func() { w.exec(t, "DELETE FROM offboarded_device WHERE organization_id = $1", w.org) })
@@ -242,19 +326,21 @@ func TestOffboardingDevicesRepeatable(t *testing.T) {
 		}
 		break
 	}
-	if n := len(w.offboardedRows(t)); n != 0 {
+	if n := w.count(t, "SELECT count(*) FROM offboarded_device WHERE organization_id = $1", w.org); n != 0 {
 		t.Fatalf("%d records after a failed signing", n)
 	}
 	issued, _ := w.uninstallCommand(t, enrolled)
 	w.advanceTo(t, job, offboarding.StepOutbox)
 	rows := w.offboardedRows(t)
-	if len(rows) != 2 || rows[enrolled].command != issued {
+	if len(rows) != 2 || rows[enrolled].uninstall != issued {
 		t.Fatalf("records %v; want both devices, the enrolled one with %s", rows, issued)
 	}
-	for _, ev := range w.stepEvents(t, audit.CodeOrganizationDeletionStepCompleted) {
-		if ev.Params["step"] == offboarding.StepDevices && (ev.Params["count"] != float64(2) || ev.Params["uninstalls_reissued"] != float64(0)) {
-			t.Fatalf("devices step event %+v", ev)
-		}
+	if n := w.count(t, `SELECT count(*) FROM device_command WHERE organization_id = $1 AND type = 'delete_self_lock'`, w.org); n != 2 {
+		t.Fatalf("%d disarms after the repeated step, want one per device", n)
+	}
+	ev := w.devicesStepEvent(t)
+	if ev.Params["count"] != float64(2) || ev.Params["uninstalls_reissued"] != float64(1) || ev.Params["disarms_issued"] != float64(2) {
+		t.Fatalf("devices step event %+v; want the first attempt's uninstall and disarms counted", ev.Params)
 	}
 }
 
@@ -329,9 +415,9 @@ func TestOffboardedDevicesPurge(t *testing.T) {
 	o := app.NewOffboardedDevices(w.runner, w.platform, cache)
 	old, young := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 	now := time.Now()
-	w.exec(t, `INSERT INTO offboarded_device (device_id, organization_id, keys, command_id, command_envelope, offboarded_at)
-		VALUES ($1, $3, '[{"key_id":"k-old","public_key":"AQ=="}]', $4, '\x00', $5), ($2, $3, '[]', $4, '\x00', $6)`,
-		old, young, w.org, uuid.Must(uuid.NewV7()), now.Add(-organization.OffboardedDeviceRetention-time.Hour),
+	w.exec(t, `INSERT INTO offboarded_device (device_id, organization_id, keys, command_envelopes, offboarded_at)
+		VALUES ($1, $3, '[{"key_id":"k-old","public_key":"AQ=="}]', '[]', $4), ($2, $3, '[]', '[]', $5)`,
+		old, young, w.org, now.Add(-organization.OffboardedDeviceRetention-time.Hour),
 		now.Add(-organization.OffboardedDeviceRetention+time.Hour))
 	t.Cleanup(func() { w.exec(t, "DELETE FROM offboarded_device WHERE organization_id = $1", w.org) })
 	sys := principal.With(context.Background(), principal.Principal{Kind: principal.KindSystem})
@@ -377,15 +463,15 @@ func TestOffboardedDevicesPurge(t *testing.T) {
 	}
 }
 
-// TestOffboardReissueUninstallsDefiner (migration 00135): the worker's function refuses an organization that is not
-// being deleted, and for a deleting organization it changes only that organization's devices.
+// TestOffboardReissueUninstallsDefiner (migration 00135, review 1 minor 4): the worker's function refuses an
+// organization that is not being deleted; it takes no params from its caller, so the worker can issue only a leave, and
+// a caller passing params of its own finds no such function. For a deleting organization it changes only that
+// organization's devices, and a second call issues nothing more.
 func TestOffboardReissueUninstallsDefiner(t *testing.T) {
 	w := newOffboardWorld(t)
-	params := pgstore.OffboardReissueUninstallsParams{Params: []byte(`{"mode":"leave"}`), IssuedAt: time.Now().Truncate(time.Second),
-		ExpiresAt: time.Now().Add(time.Hour)}
 	call := func(org uuid.UUID) (n int64, err error) {
 		err = w.worker.InOrgOffboarding(offboardingTestContext(org), func(ctx context.Context, q *pgstore.Queries) error {
-			n, err = q.OffboardReissueUninstalls(ctx, params)
+			n, err = q.OffboardReissueUninstalls(ctx)
 			return err
 		})
 		return n, err
@@ -397,11 +483,37 @@ func TestOffboardReissueUninstallsDefiner(t *testing.T) {
 		w.exec(t, "UPDATE organization SET status = 'deleting' WHERE id = $1", org)
 		t.Cleanup(func() { w.exec(t, "UPDATE organization SET status = 'active' WHERE id = $1", org) })
 	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, pgtest.SharedPaddock(t).Worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(ctx) })
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", w.org.String()); err != nil {
+		t.Fatal(err)
+	}
+	_, err = tx.Exec(ctx, `SELECT paddock_offboard_reissue_uninstalls('{"mode":"reset"}'::jsonb, now(), now() + interval '1 year')`)
+	if err == nil || !strings.Contains(err.Error(), "42883") {
+		t.Fatalf("a call with params of its own: %v, want undefined_function", err)
+	}
+	_ = tx.Rollback(ctx)
 	if n, err := call(w.org); err != nil || n != 1 {
 		t.Fatalf("own organization: %d, %v; want 1", n, err)
 	}
+	var params string
+	if err := w.super.QueryRow(ctx, `SELECT c.params::text FROM device d JOIN device_command c ON c.id = d.uninstall_command_id
+		WHERE d.id = $1`, w.device).Scan(&params); err != nil || params != `{"mode": "leave"}` {
+		t.Fatalf("params of the fresh uninstall: %s %v", params, err)
+	}
 	if n, err := call(w.org); err != nil || n != 0 {
 		t.Fatalf("again: %d, %v; want 0, the fresh command is kept", n, err)
+	}
+	if n := w.count(t, "SELECT count(*) FROM device_command WHERE device_id = $1 AND type = 'delete_self_lock'", w.device); n != 1 {
+		t.Fatalf("%d disarms after two calls, want 1", n)
 	}
 	if n := w.count(t, "SELECT count(*) FROM device_command WHERE device_id = $1", w.otherDevice); n != 0 {
 		t.Fatalf("the other organization's device got %d commands", n)

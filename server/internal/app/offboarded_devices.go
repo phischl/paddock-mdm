@@ -33,6 +33,13 @@ type offboardedKey struct {
 	PublicKey []byte `json:"public_key"`
 }
 
+// offboardedCommand is one element of offboarded_device.command_envelopes: [{"command_id": "...", "envelope":
+// "<base64 DSSE envelope>"}] (migration 00135, amendment n point 2).
+type offboardedCommand struct {
+	CommandID uuid.UUID `json:"command_id"`
+	Envelope  []byte    `json:"envelope"`
+}
+
 // OffboardedDeviceCache is what a device of a deleted organization keeps in Valkey (devicecache.Cache).
 type OffboardedDeviceCache interface {
 	PutOffboardedDevice(ctx context.Context, d devicecache.OffboardedDevice, lastSeq int64) error
@@ -171,22 +178,29 @@ func (o *OffboardedDevices) Restore(ctx context.Context) (int, error) {
 	return len(present), nil
 }
 
-// cachedOffboardedDevice is the cache entry of a record; the command's expiry is read from its signed payload.
+// cachedOffboardedDevice is the cache entry of a record; each command's expiry is read from its signed payload.
 func cachedOffboardedDevice(r pgstore.OffboardedDevice) (devicecache.OffboardedDevice, error) {
 	var keys []offboardedKey
 	if err := json.Unmarshal(r.Keys, &keys); err != nil {
 		return devicecache.OffboardedDevice{}, fmt.Errorf("keys: %w", err)
 	}
-	_, payload, err := dsse.Decode(r.CommandEnvelope)
-	if err != nil {
-		return devicecache.OffboardedDevice{}, fmt.Errorf("envelope: %w", err)
+	var cmds []offboardedCommand
+	if err := json.Unmarshal(r.CommandEnvelopes, &cmds); err != nil {
+		return devicecache.OffboardedDevice{}, fmt.Errorf("commands: %w", err)
 	}
-	var c command.Command
-	if err := json.Unmarshal(payload, &c); err != nil {
-		return devicecache.OffboardedDevice{}, fmt.Errorf("command: %w", err)
+	d := devicecache.OffboardedDevice{ID: r.DeviceID, OrganizationID: r.OrganizationID}
+	for _, oc := range cmds {
+		_, payload, err := dsse.Decode(oc.Envelope)
+		if err != nil {
+			return devicecache.OffboardedDevice{}, fmt.Errorf("envelope of %s: %w", oc.CommandID, err)
+		}
+		var c command.Command
+		if err := json.Unmarshal(payload, &c); err != nil {
+			return devicecache.OffboardedDevice{}, fmt.Errorf("command %s: %w", oc.CommandID, err)
+		}
+		d.Commands = append(d.Commands, devicecache.OffboardedCommand{ID: oc.CommandID,
+			Command: devicecache.Command{ExpiresAt: c.ExpiresAt, Envelope: oc.Envelope}})
 	}
-	d := devicecache.OffboardedDevice{ID: r.DeviceID, OrganizationID: r.OrganizationID, CommandID: r.CommandID,
-		Command: devicecache.Command{ExpiresAt: c.ExpiresAt, Envelope: r.CommandEnvelope}}
 	for _, k := range keys {
 		d.Keys = append(d.Keys, devicecache.OffboardedKey{KeyID: k.KeyID, PublicKey: k.PublicKey})
 	}

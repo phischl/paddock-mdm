@@ -36,11 +36,11 @@ func platformPool(t *testing.T) *db.PlatformPool {
 	return p
 }
 
-// offboardedEnvelope is a signed-looking uninstall envelope of device.
-func offboardedEnvelope(t *testing.T, cmd, device, org uuid.UUID) []byte {
+// offboardedEnvelope is a signed-looking envelope of device's command of typ, valid for the retention.
+func offboardedEnvelope(t *testing.T, cmd, device, org uuid.UUID, typ, params string) []byte {
 	t.Helper()
 	payload, err := command.Encode(command.Command{CommandID: cmd.String(), DeviceID: device.String(), OrganizationID: org.String(),
-		Type: command.TypeUninstall, Params: json.RawMessage(`{"mode":"leave"}`), IssuedAt: time.Now().UTC().Truncate(time.Second),
+		Type: typ, Params: json.RawMessage(params), IssuedAt: time.Now().UTC().Truncate(time.Second),
 		ExpiresAt: time.Now().UTC().Add(organization.OffboardedDeviceRetention).Truncate(time.Second)})
 	if err != nil {
 		t.Fatal(err)
@@ -52,19 +52,23 @@ func offboardedEnvelope(t *testing.T, cmd, device, org uuid.UUID) []byte {
 	return env
 }
 
-// offboard inserts the record of a device of the fixture's organization with one key and returns its command.
-func (f fixture) offboard(t *testing.T, device uuid.UUID, keyID string) uuid.UUID {
+// offboard inserts the record of a device of the fixture's organization with one key and returns its disarm and
+// uninstall.
+func (f fixture) offboard(t *testing.T, device uuid.UUID, keyID string) (disarm, uninstall uuid.UUID) {
 	t.Helper()
-	cmd := uuid.Must(uuid.NewV7())
+	disarm, uninstall = uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 	keys, _ := json.Marshal([]map[string]any{{"key_id": keyID, "public_key": []byte{1}}})
-	if _, err := f.super.Exec(context.Background(), `INSERT INTO offboarded_device (device_id, organization_id, keys, command_id, command_envelope)
-		VALUES ($1, $2, $3, $4, $5)`, device, f.org, keys, cmd, offboardedEnvelope(t, cmd, device, f.org)); err != nil {
+	cmds, _ := json.Marshal([]map[string]any{
+		{"command_id": disarm, "envelope": offboardedEnvelope(t, disarm, device, f.org, command.TypeDeleteSelfLock, `{}`)},
+		{"command_id": uninstall, "envelope": offboardedEnvelope(t, uninstall, device, f.org, command.TypeUninstall, `{"mode":"leave"}`)}})
+	if _, err := f.super.Exec(context.Background(), `INSERT INTO offboarded_device (device_id, organization_id, keys, command_envelopes)
+		VALUES ($1, $2, $3, $4)`, device, f.org, keys, cmds); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_, _ = f.super.Exec(context.Background(), "DELETE FROM offboarded_device WHERE device_id = $1", device)
 	})
-	return cmd
+	return disarm, uninstall
 }
 
 func (f fixture) markDeleted(t *testing.T) {
@@ -97,10 +101,11 @@ func TestOffboardedDeviceRemovalReport(t *testing.T) {
 		WithOffboardedDevices(app.NewOffboardedDevices(runner, platform, f.cache))
 	ctx := context.Background()
 	dev, unrecorded := f.device(t, "active"), f.device(t, "active")
-	cmd := f.offboard(t, dev, "k-"+dev.String())
-	if err := f.cache.PutOffboardedDevice(ctx, devicecache.OffboardedDevice{ID: dev, OrganizationID: f.org, CommandID: cmd,
-		Keys:    []devicecache.OffboardedKey{{KeyID: "k-" + dev.String(), PublicKey: []byte{1}}},
-		Command: devicecache.Command{ExpiresAt: time.Now().Add(time.Hour), Envelope: []byte(`{}`)}}, 5); err != nil {
+	_, cmd := f.offboard(t, dev, "k-"+dev.String())
+	if err := f.cache.PutOffboardedDevice(ctx, devicecache.OffboardedDevice{ID: dev, OrganizationID: f.org,
+		Keys: []devicecache.OffboardedKey{{KeyID: "k-" + dev.String(), PublicKey: []byte{1}}},
+		Commands: []devicecache.OffboardedCommand{{ID: cmd,
+			Command: devicecache.Command{ExpiresAt: time.Now().Add(time.Hour), Envelope: []byte(`{}`)}}}}, 5); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.cache.MarkDelivered(ctx, dev, 5); err != nil {
@@ -146,14 +151,15 @@ func TestOffboardedDeviceRemovalReport(t *testing.T) {
 	}
 }
 
-// TestCacheSyncRestoresOffboardedDevices (plan M17 decision 15): after Valkey lost its data, the cache sync rewrites
-// an offboarded device's key with status offboarded, its counter and its uninstall from the platform record.
+// TestCacheSyncRestoresOffboardedDevices (plan M17 decision 15, amendment n): after Valkey lost its data, the cache
+// sync rewrites an offboarded device's key with status offboarded, its counter, its disarm and its uninstall from the
+// platform record.
 func TestCacheSyncRestoresOffboardedDevices(t *testing.T) {
 	f := newFixture(t)
 	platform := platformPool(t)
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	dev := f.device(t, "active")
-	cmd := f.offboard(t, dev, "k-"+dev.String())
+	disarm, cmd := f.offboard(t, dev, "k-"+dev.String())
 	f.markDeleted(t)
 	sync := NewCacheSync(f.pool, f.cache).WithOffboardedDevices(app.NewOffboardedDevices(runner, platform, f.cache))
 	if err := sync.ReconcileAll(context.Background()); err != nil && strings.Contains(err.Error(), "offboarded devices") {
@@ -165,7 +171,8 @@ func TestCacheSyncRestoresOffboardedDevices(t *testing.T) {
 		t.Fatalf("restored key %+v %v %v", key, ok, err)
 	}
 	cmds, err := f.cache.Commands(ctx, dev, time.Now())
-	if err != nil || len(cmds) != 1 || cmds[cmd].ExpiresAt.Before(time.Now().Add(300*24*time.Hour)) {
+	if err != nil || len(cmds) != 2 || cmds[cmd].ExpiresAt.Before(time.Now().Add(300*24*time.Hour)) ||
+		cmds[disarm].ExpiresAt.Before(time.Now().Add(300*24*time.Hour)) {
 		t.Fatalf("restored commands %v %v", cmds, err)
 	}
 	if seq, err := f.cache.NextSeq(ctx, dev); err != nil || seq != 1 {
@@ -209,12 +216,18 @@ func (constSigner) SignBatch(_ context.Context, _ string, messages [][]byte) ([]
 // TestOffboardingUnreportedDevicesNeverStall (main's requirement for PDK-1016): devices that never report their
 // removal, offline or pending approval, do not hold the deletion. The round hands them over and deletes the
 // organization without a failing step, so neither the backoff nor PaddockOrganizationDeletionStuck
-// (paddock_offboarding_retry_capped) nor paddock_offboarding_step_failing ever shows it.
+// (paddock_offboarding_retry_capped) nor paddock_offboarding_step_failing ever shows it. The hand-over adds the
+// disarm and the uninstall to cmd: and keeps a disarm that was pending there (amendment n point 2).
 func TestOffboardingUnreportedDevicesNeverStall(t *testing.T) {
 	f := newFixture(t)
 	platform := platformPool(t)
 	ctx := context.Background()
 	offline, pending := f.device(t, "active"), f.device(t, "pending")
+	pendingDisarm := uuid.Must(uuid.NewV7())
+	if err := f.cache.PutCommand(ctx, offline, pendingDisarm, devicecache.Command{ExpiresAt: time.Now().Add(time.Hour),
+		Envelope: offboardedEnvelope(t, pendingDisarm, offline, f.org, command.TypeDeleteSelfLock, `{}`)}); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _, _ = f.super.Exec(ctx, "DELETE FROM offboarded_device WHERE organization_id = $1", f.org) })
 	if _, err := f.super.Exec(ctx, `UPDATE organization SET deletion_requested_at = now(), deletion_requested_by = 'platform admin',
 		deletion_reason = 'contract ended', delete_after = now(), deletion_uninstalls_issued = 0, deletion_uninstalls_skipped = 0
@@ -258,5 +271,21 @@ func TestOffboardingUnreportedDevicesNeverStall(t *testing.T) {
 	}
 	if n := f.count(t, "SELECT count(*) FROM offboarded_device WHERE device_id = ANY($1)", []uuid.UUID{offline, pending}); n != 2 {
 		t.Fatalf("%d of the 2 unreported devices were handed over", n)
+	}
+	cmds, err := f.cache.Commands(ctx, offline, time.Now())
+	if err != nil || len(cmds) != 3 {
+		t.Fatalf("cmd: of the offline device: %v %v; want the pending disarm, the disarm and the uninstall", cmds, err)
+	}
+	types := map[string]int{}
+	for _, c := range cmds {
+		_, payload, err := dsse.Decode(c.Envelope)
+		var cc command.Command
+		if err != nil || json.Unmarshal(payload, &cc) != nil {
+			t.Fatalf("envelope %s: %v", c.Envelope, err)
+		}
+		types[cc.Type]++
+	}
+	if _, ok := cmds[pendingDisarm]; !ok || types[command.TypeDeleteSelfLock] != 2 || types[command.TypeUninstall] != 1 {
+		t.Fatalf("command types %v, pending disarm kept %v", types, ok)
 	}
 }

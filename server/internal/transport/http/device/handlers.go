@@ -190,10 +190,15 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	outside := g.d.AgentOutsideWindow != nil && g.d.AgentOutsideWindow(req.AgentVersion)
 	switch {
 	case dev.key.Status == devicecache.KeyOffboarded:
-		if out.Commands, delivered, err = g.commands(r, dev, uninstallCommand); err != nil {
+		if out.Commands, delivered, err = g.commands(r, dev, leavingCommand); err != nil {
 			fail(err)
 			return
 		}
+		// The disarm runs before the uninstall, so a refused or failed uninstall leaves a device that can no longer lock
+		// itself (amendment n point 4).
+		slices.SortStableFunc(out.Commands, func(a, b json.RawMessage) int {
+			return cmpBool(commandType(b) == command.TypeDeleteSelfLock, commandType(a) == command.TypeDeleteSelfLock)
+		})
 		// The organization is gone: no bundle, no agent offer, no time ticket, and no heartbeat to record (plan M17
 		// decision 15).
 		g.markDelivered(r, dev.id, seq)
@@ -302,17 +307,38 @@ func safetyCommand(envelope []byte) bool {
 	return json.Unmarshal(payload, &c) == nil && c.Type == command.TypeDeleteSelfLock
 }
 
-// uninstallCommand reports whether an envelope is an uninstall command, the only command a device of a deleted
-// organization receives; like safetyCommand it reads the unverified payload type of the server's own envelope.
-func uninstallCommand(envelope []byte) bool {
+// commandType is the type of a command envelope, "" for anything else; like safetyCommand it reads the unverified
+// payload of the server's own envelope.
+func commandType(envelope []byte) string {
 	env, payload, err := dsse.Decode(envelope)
 	if err != nil || env.PayloadType != command.PayloadType {
-		return false
+		return ""
 	}
 	var c struct {
 		Type string `json:"type"`
 	}
-	return json.Unmarshal(payload, &c) == nil && c.Type == command.TypeUninstall
+	if json.Unmarshal(payload, &c) != nil {
+		return ""
+	}
+	return c.Type
+}
+
+// leavingCommand reports whether an envelope is one of the commands a device of a deleted organization receives: the
+// disarm of its dead man's switch and the uninstall (plan M17 decision 15, amendment n).
+func leavingCommand(envelope []byte) bool {
+	t := commandType(envelope)
+	return t == command.TypeUninstall || t == command.TypeDeleteSelfLock
+}
+
+// cmpBool compares two booleans with false before true.
+func cmpBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case a:
+		return 1
+	}
+	return -1
 }
 
 // maxCommands bounds the commands of one check-in response; the rest follow with the next check-ins.
@@ -411,17 +437,18 @@ func (g *gateway) commandResult(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// offboardedResult accepts the result of the uninstall a device of a deleted organization holds, and refuses every
-// other command with 401 identity_revoked (plan M17 decision 15). The agent starts its removal only after the server
-// accepted that result, so it must be answered 2xx; it is claimed for idempotency but not published, because nothing
-// of the organization is recorded any more (its removal report is, through agent.uninstalled).
+// offboardedResult accepts the result of the uninstall or the disarm a device of a deleted organization holds, and
+// refuses every other command with 401 identity_revoked (plan M17 decision 15, amendments m point 3.2 and n point 3).
+// The agent starts its removal only after the server accepted the uninstall's result, so it must be answered 2xx; it
+// is claimed for idempotency but not published, because nothing of the organization is recorded any more (its removal
+// report is, through agent.uninstalled).
 func (g *gateway) offboardedResult(w http.ResponseWriter, r *http.Request, dev device, id uuid.UUID, req protocol.CommandResult) {
-	pending, err := g.d.Cache.HasCommand(r.Context(), dev.id, id)
+	cmd, pending, err := g.d.Cache.PendingCommand(r.Context(), dev.id, id)
 	if err != nil {
 		g.fail(w, r, err)
 		return
 	}
-	if !pending {
+	if !pending || !leavingCommand(cmd.Envelope) {
 		g.fail(w, r, errIdentityRevoked.with("the device identity is not active"))
 		return
 	}

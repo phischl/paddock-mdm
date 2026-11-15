@@ -42,20 +42,24 @@ ORDER BY d.id, k.key_id;
 -- name: ListOffboardingInventoryRefs :many
 SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id;
 
--- Locks the devices of the context organization that may still contact the server and gives each without a usable
--- open uninstall a fresh one (plan M17 decision 15, amendment e point 10, migration 00135); returns how many.
+-- Locks the devices of the context organization that may still contact the server, disarms their dead man's switch and
+-- gives each without a usable open uninstall a fresh one (plan M17 decision 15, amendments e, m and n, migration
+-- 00135); returns how many uninstalls this call issued.
 -- name: OffboardReissueUninstalls :one
-SELECT paddock_offboard_reissue_uninstalls(@params::jsonb, @issued_at::timestamptz, @expires_at::timestamptz)::bigint;
+SELECT paddock_offboard_reissue_uninstalls()::bigint;
 
 -- The devices the step devices hands over to offboarded_device: no reported removal, neither retired nor rejected.
 -- name: ListOffboardingHandedDevices :many
 SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('retired', 'rejected') ORDER BY id;
 
--- The uninstall commands of the handed-over devices, kept or fresh.
--- name: ListOffboardingUninstallCommands :many
-SELECT c.* FROM device_command c JOIN device d ON d.uninstall_command_id = c.id
+-- The commands the handed-over devices keep: the uninstall, kept or fresh, and the hand-over's delete_self_lock (the only
+-- disarm that lives longer than the type's 30 days).
+-- name: ListOffboardingHandoverCommands :many
+SELECT c.* FROM device_command c JOIN device d ON d.id = c.device_id
 WHERE d.id = ANY(@device_ids::uuid[])
-ORDER BY d.id;
+  AND (c.id = d.uninstall_command_id OR (c.type = 'delete_self_lock' AND c.status IN ('pending', 'delivered', 'succeeded')
+    AND c.expires_at > now() + interval '31 days'))
+ORDER BY c.device_id, c.id;
 
 -- The active identity keys of the handed-over devices with their check-in counters.
 -- name: ListOffboardingDeviceIdentities :many
@@ -71,9 +75,8 @@ SELECT table_name, delete_order FROM offboarding_table ORDER BY delete_order;
 
 -- A device handed over again (a repeated step) keeps its row; only new rows count.
 -- name: InsertOffboardedDevices :execrows
-INSERT INTO offboarded_device (device_id, organization_id, keys, command_id, command_envelope)
-SELECT unnest(@device_ids::uuid[]), @organization_id::uuid, unnest(@keys::text[])::jsonb, unnest(@command_ids::uuid[]),
-       unnest(@command_envelopes::bytea[])
+INSERT INTO offboarded_device (device_id, organization_id, keys, command_envelopes)
+SELECT unnest(@device_ids::uuid[]), @organization_id::uuid, unnest(@keys::text[])::jsonb, unnest(@command_envelopes::text[])::jsonb
 ON CONFLICT (device_id) DO NOTHING;
 
 -- The offboarded devices of an organization, whose identity, command and sequence keys outlive it (plan M17 amendment l
