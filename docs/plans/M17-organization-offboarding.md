@@ -1775,8 +1775,9 @@ Binding; it refines amendment j's quiescence wait and amendment p's 5-minute bou
    - a test asserts which pools carry the timeout and which do not (point 4).
 
 **ADR check.** No conflict. ADR 0052 and amendment j are unchanged: there is still no per-transaction statement, and
-the wait now has a bound. ADR 0005 (bundle compilation) keeps "bundles from a consistent read": inputs are still read
-from one snapshot, and only the computation moves outside it.
+the wait now has a bound. ADR 0005 (bundle compilation) does not prescribe how long the compiler's read transaction
+lasts. The existing guarantee that each organization's inputs come from one snapshot (`InOrgSnapshot`) is kept, and
+only the computation moves outside it.
 
 Ticket: the lead's Opus implementer on `alpha11-offboarding-integration`. Points 6 and 7 MAY be split into two tickets,
 but both must land before OF3 is re-measured.
