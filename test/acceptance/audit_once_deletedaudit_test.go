@@ -73,8 +73,9 @@ func (w *auditWorld) deletedAuditOrganization(t *testing.T) *deletedAuditOrg {
 // pseudo-organization, the only log a read of a deleted organization's evidence lands in.
 func expectDeletedAuditRead(t *testing.T, w *auditWorld, res env.Response, outcome, resource string) env.IndexEvent {
 	t.Helper()
-	ev := expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.deleted_organization_audit_read",
-		outcome, auditPollTimeout)
+	// The export job's audit.export_completed carries the request's correlation ID too, so events are counted per code.
+	ev := expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1 AND code = 'platform.deleted_organization_audit_read'", res.RequestID,
+		"platform.deleted_organization_audit_read", outcome, auditPollTimeout)
 	if ev.Params["resource"] != resource {
 		t.Fatalf("event params %v, want resource %s", ev.Params, resource)
 	}
