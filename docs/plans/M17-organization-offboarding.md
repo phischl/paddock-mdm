@@ -1081,3 +1081,80 @@ lands within 5 %, nothing needs deciding; if not, the figures and this assessmen
   Merge order stays as in amendment i: 1038 → 1036.
 - **PDK-1015** may be built stacked on PDK-1038 v3 now. It needs only the `finalize_waiting` event of point 5. It
   merges after 1038 and 1036. Then **PDK-1016 and PDK-1017**, in either order.
+
+### Addendum 2026-11-15 to amendment j — the quiescence wait without a statistics grant (after main's objection)
+
+Binding. It replaces amendment j point 4's quiescence bullet and its `pg_read_all_stats` grant, and the "55P03" wording
+of points 4 and 5. Everything else in amendment j stays: the status cache, the fail-closed fallback and the removal of
+the advisory locks are independent of this addendum and proceed unchanged.
+
+**Isolation is the criterion.** A role with `pg_read_all_stats` can read every session's query text, including other
+organizations' sessions. No Paddock role gets it. A non-login role holding it is not needed either (see the decision).
+
+**The transaction-ID variant is disproven (PDK-1038 v4, PostgreSQL 18.6).** PostgreSQL assigns a transaction ID only
+at a transaction's first write, and `pg_snapshot_xmin` sees only transactions that have one. A gated transaction that
+reads first and writes later is therefore invisible. Reproduced: W began and selected; the deletion start got ID 754;
+finalize saw xmin 756 > 754 while W was open; W then got ID 756 and inserted a row that survived the tombstone. Forcing
+an ID in the gate would spend an ID on every read transaction and bring back per-transaction cost. Rejected, as is
+making `paddock_owner` a member of the organization roles: it would still see their query text.
+
+**Decision: wait on virtual transaction IDs, as `CREATE INDEX CONCURRENTLY` does.** Every open transaction, including a
+read-only one, holds an exclusive lock on its own virtual transaction ID (`pg_locks.locktype = 'virtualxid'`).
+`pg_locks` and the `pid`, `usename` and `datname` columns of `pg_stat_activity` are readable by every role without a
+grant; query text, state and timestamps of other roles are not exposed. Nothing new becomes visible.
+
+1. **The cutoff is taken after the commit.** The worker commits the status `deleting`. In a new transaction it then
+   stores `organization.deleting_committed_at = now()`, replacing `deleting_since` of amendment j. The cutoff is
+   `deleting_committed_at + 6 s`: the 5 s cache staleness bound plus 1 s of margin, counted from a moment at which the
+   status was certainly visible.
+2. **`paddock_offboard_quiesce() RETURNS boolean`** (`SECURITY DEFINER`, owner `paddock_owner`, `EXECUTE` for
+   `paddock_worker` only, context organization, status `deleting` required):
+   - It captures the wait set **only when the database's `now()` is at or after the cutoff**
+     (`deleting_committed_at + 6 s`). Before that it returns `false` and stores nothing.
+     Reason: a set captured earlier would miss a transaction that starts between the capture and the cutoff, because
+     that transaction's cache can still say `active`.
+   - At the first call after the cutoff it stores the **wait set** in `organization.offboarding_wait_vxids text[]` and
+     `offboarding_wait_taken_at` and commits. The wait set is every `virtualxid` lock held by a backend whose `usename`
+     is an organization role (amendment j point 4) and whose `datname` is the current database, excluding its own
+     backend. Taken at or after the cutoff, it is a superset of every transaction that could still have passed the gate
+     on a stale cache.
+   - On later calls it returns `true` once none of the stored virtual IDs is still present in `pg_locks`, otherwise
+     `false`. The set is never taken again for the same deletion.
+3. **`paddock_offboard_finalize()`** requires a stored wait set and that `quiesce` returns `true` in the same
+   transaction. It then runs the `EXISTS` check per registered table (`40001` when rows remain) and writes the
+   tombstone, clearing the wait columns. It no longer raises `55P03`.
+4. **PDK-1015's reaction (replaces amendment j point 5's first sentence).** In step `tombstone`, each round calls
+   `quiesce`. On `false` it stays in the step. On `true` it calls `finalize`. On `40001` it returns to `database`; the
+   stored wait set stays and is not needed again, because new transactions are refused by the gate.
+5. **The 1 h alert and the counter live in PDK-1015's job**, the only caller.
+   - `organization.deletion_step_failed` with `error_code: finalize_waiting` is recorded once, when `quiesce` has
+     returned `false` for more than 1 h after the wait set was taken.
+   - `paddock_offboarding_finalize_busy_total` counts the `false` answers.
+   - PDK-1038 delivers the two functions, the columns and their tests; it has no job and no alert.
+6. **Edge cases.**
+
+   | Case | Effect on the wait |
+   | --- | --- |
+   | Transaction-ID wraparound, hot standby | Not relevant: virtual IDs are per server and never wrap within a server's lifetime in a way that matters here; Paddock runs one primary, and a standby cannot write. |
+   | Prepared transactions | Not used (`max_prepared_transactions` 0). If two-phase commit is ever enabled, `quiesce` MUST also wait on `pg_prepared_xacts` (noted in the migration header). |
+   | Autovacuum, pgBackRest, `paddock-migrate`, superuser sessions | Not in the set: their `usename` is not an organization role. |
+   | A long-running transaction of an organization role, of any organization, open at the cutoff | Waited for until it ends; it is in the set by construction. More than 1 h raises the alert. The operator finds it in `pg_stat_activity` as the database superuser; the remedy is `pg_terminate_backend` (runbook, PDK-1019). |
+   | An idle pool connection, not in a transaction | Not in the set: a session outside a transaction holds no virtual-ID lock. pgx pool connections between transactions are of this kind. |
+   | Backup and monitoring sessions (pgBackRest, Prometheus exporters, `psql` as the superuser) | Not in the set: excluded by the `usename` filter on organization roles. |
+   | An idle-in-transaction pool connection | Possible only through a bug or a hung `fn`, since pgx never hands back an open transaction. Same as the previous row. |
+   | A backend reusing a PID | Harmless: a virtual ID includes the backend's local transaction counter, so a new transaction on the same PID has a different virtual ID. |
+7. **Tests** (they replace the ones of the earlier text of this addendum):
+   - The reproduction above: W begins and reads before the status change and writes after the delete loop. `quiesce`
+     returns `false` until W ends; then `finalize` raises `40001`; the next delete loop and `finalize` write the
+     tombstone.
+   - `quiesce` called before the cutoff stores no wait set and returns `false`. Test the boundary with the
+     database's `now()` just below and just at the cutoff.
+   - A read-only transaction open at the cutoff blocks `quiesce`.
+   - Cache staleness (amendment j point 2) is measured on the **process's monotonic clock**, never on wall time or on
+     the database's clock. The 5 s bound therefore holds as an elapsed duration whatever the drift between the process
+     and the database, and stays below the 6 s margin of the cutoff. The cache takes an injectable monotonic clock. A
+     test advances it past 5 s without a successful refresh and asserts the fallback status read. A second test moves
+     the wall clock (not the monotonic one) and asserts that nothing changes.
+   - Sessions of a non-organization role do not block.
+   - The wait set survives a failed `finalize` and is not re-taken.
+   - Application roles still see `<insufficient privilege>` for other sessions' query text: no grant was added.
