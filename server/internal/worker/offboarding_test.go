@@ -16,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/offboarding"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 )
 
@@ -26,6 +27,8 @@ type fakeOffboarder struct {
 	attempts map[uuid.UUID][]time.Time
 	now      func() time.Time
 	advance  func(org uuid.UUID) error
+	// done decides whether an Advance completes the deletion; nil means every Advance does, so one call ends an organization.
+	done func(org uuid.UUID) bool
 }
 
 func (f *fakeOffboarder) StartDue(context.Context) ([]uuid.UUID, error) {
@@ -39,16 +42,24 @@ func (f *fakeOffboarder) Pending(context.Context) ([]pgstore.Organization, error
 
 func (f *fakeOffboarder) Advance(_ context.Context, org uuid.UUID) (bool, error) {
 	f.attempts[org] = append(f.attempts[org], f.now())
-	return false, f.advance(org)
+	err := f.advance(org)
+	return err == nil && (f.done == nil || f.done(org)), err
 }
 
 // fakeLock grants the leader lock unless held.
-type fakeLock struct{ held bool }
+type fakeLock struct {
+	held bool
+	lose func()
+}
 
-func (l *fakeLock) WithLeaderLock(ctx context.Context, _ int64, fn func(context.Context) error) (bool, error) {
+func (l *fakeLock) Lead(ctx context.Context, _ int64, _ time.Duration, fn func(context.Context) error) (bool, error) {
 	if l.held {
 		return false, nil
 	}
+	var cancel context.CancelCauseFunc
+	ctx, cancel = context.WithCancelCause(ctx)
+	defer cancel(nil)
+	l.lose = func() { cancel(db.ErrLeadershipLost) }
 	return true, fn(ctx)
 }
 
@@ -233,5 +244,224 @@ func TestMessagesOfDeletedOrganizationDropped(t *testing.T) {
 	}
 	if n := f.count(t, "SELECT count(*) FROM action WHERE organization_id = $1", f.org); n != actions {
 		t.Errorf("%d actions, want %d: something was recorded for a deleted organization", n, actions)
+	}
+}
+
+// stepper is a fake deletion of several steps: each Advance takes one step and costs cost of fake time.
+type stepper struct {
+	left map[uuid.UUID]int
+	now  *time.Time
+	cost time.Duration
+	log  []uuid.UUID
+}
+
+func (s *stepper) fake(orgs ...uuid.UUID) *fakeOffboarder {
+	f := &fakeOffboarder{attempts: map[uuid.UUID][]time.Time{}, now: func() time.Time { return *s.now }}
+	for _, o := range orgs {
+		f.pending = append(f.pending, deletingOrg(o, offboarding.StepSessions, ""))
+	}
+	f.advance = func(org uuid.UUID) error {
+		s.log = append(s.log, org)
+		s.left[org]--
+		*s.now = s.now.Add(s.cost)
+		return nil
+	}
+	f.done = func(org uuid.UUID) bool { return s.left[org] <= 0 }
+	return f
+}
+
+func newStepper(cost time.Duration, steps map[uuid.UUID]int) (*stepper, *time.Time) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	return &stepper{left: steps, now: &now, cost: cost}, &now
+}
+
+// TestOffboardingRoundCarriesThroughSteps (PDK-946c): with no step waiting, one round takes an organization through
+// all ten steps.
+func TestOffboardingRoundCarriesThroughSteps(t *testing.T) {
+	org := uuid.New()
+	s, now := newStepper(time.Second, map[uuid.UUID]int{org: len(offboarding.Steps())})
+	r := NewOffboarding(s.fake(org), &fakeLock{}).WithClock(func() time.Time { return *now })
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.log) != len(offboarding.Steps()) || s.left[org] != 0 {
+		t.Fatalf("%d steps in one round, want %d", len(s.log), len(offboarding.Steps()))
+	}
+}
+
+// TestOffboardingRoundStopsAtWaitingStep: a waiting or failing step ends the organization's round; the others go on
+// and the organization is asked again next round.
+func TestOffboardingRoundStopsAtWaitingStep(t *testing.T) {
+	waits, failing, healthy := uuid.New(), uuid.New(), uuid.New()
+	s, now := newStepper(time.Second, map[uuid.UUID]int{waits: 10, failing: 10, healthy: 4})
+	f := s.fake(waits, failing, healthy)
+	inner := f.advance
+	f.advance = func(org uuid.UUID) error {
+		_ = inner(org)
+		switch {
+		case org == waits && s.left[org] == 7:
+			return app.ErrOffboardingWaiting
+		case org == failing && s.left[org] == 7:
+			return &app.OffboardingError{Code: offboarding.ErrorOutboxPending, Err: errors.New("outbox")}
+		}
+		return nil
+	}
+	r := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return *now })
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.left[waits] != 7 || s.left[failing] != 7 || s.left[healthy] != 0 {
+		t.Fatalf("steps left: waiting %d, failing %d, healthy %d; want 7, 7, 0", s.left[waits], s.left[failing], s.left[healthy])
+	}
+}
+
+// TestOffboardingRoundBudgetHandsOver: when the wall-clock budget is used the round ends after the running step and
+// the next round continues at the next step; the budget is time, not a step count.
+func TestOffboardingRoundBudgetHandsOver(t *testing.T) {
+	org := uuid.New()
+	s, now := newStepper(10*time.Second, map[uuid.UUID]int{org: 10})
+	r := NewOffboarding(s.fake(org), &fakeLock{}).WithClock(func() time.Time { return *now })
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(s.log); got != 5 {
+		t.Fatalf("%d steps in a 45 s round of 10 s steps, want 5", got)
+	}
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.left[org] != 0 || len(s.log) != 10 {
+		t.Fatalf("second round left %d steps (%d run)", s.left[org], len(s.log))
+	}
+}
+
+// TestOffboardingRoundFairness (main's condition 1): one large deletion whose steps use the whole budget does not
+// starve the others; every organization takes a step before any takes a second.
+func TestOffboardingRoundFairness(t *testing.T) {
+	a, b, c := uuid.New(), uuid.New(), uuid.New()
+	s, now := newStepper(20*time.Second, map[uuid.UUID]int{a: 10, b: 10, c: 10})
+	r := NewOffboarding(s.fake(a, b, c), &fakeLock{}).WithClock(func() time.Time { return *now })
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.log) < 3 || s.log[0] != a || s.log[1] != b || s.log[2] != c {
+		t.Fatalf("order of steps %v, want every organization once first", s.log)
+	}
+	s.log = nil
+	s.cost = OffboardingRoundBudget
+	for _, want := range []uuid.UUID{a, b, c} {
+		*now = now.Add(OffboardingInterval)
+		if err := r.Round(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(s.log) != 1 || s.log[0] != want {
+			t.Fatalf("round ran %v, want the organization that waited longest (%v) alone", s.log, want)
+		}
+		s.log = nil
+	}
+}
+
+// TestOffboardingRoundBetweenSteps (main's condition 2, clock part): every step is its own Advance call and the budget
+// is checked against the clock between them. That the round holds no transaction between steps follows from Advance
+// taking its own transactions; this test cannot observe connections.
+func TestOffboardingRoundBetweenSteps(t *testing.T) {
+	org := uuid.New()
+	s, now := newStepper(OffboardingRoundBudget, map[uuid.UUID]int{org: 3})
+	r := NewOffboarding(s.fake(org), &fakeLock{}).WithClock(func() time.Time { return *now })
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.log) != 1 {
+		t.Fatalf("%d steps after one that used the whole budget, want 1", len(s.log))
+	}
+}
+
+// TestOffboardingRoundWithinLease (main's condition 3): the round budget ends before the next round and with it the
+// lock, and a round whose leadership is lost starts no further step.
+func TestOffboardingRoundWithinLease(t *testing.T) {
+	if OffboardingRoundBudget >= OffboardingInterval {
+		t.Fatalf("round budget %v must stay below the interval %v", OffboardingRoundBudget, OffboardingInterval)
+	}
+	org := uuid.New()
+	s, now := newStepper(time.Second, map[uuid.UUID]int{org: 10})
+	f := s.fake(org)
+	lock := &fakeLock{}
+	inner := f.advance
+	f.advance = func(o uuid.UUID) error {
+		err := inner(o)
+		if len(s.log) == 2 {
+			lock.lose()
+		}
+		return err
+	}
+	r := NewOffboarding(f, lock).WithClock(func() time.Time { return *now })
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.log) != 2 {
+		t.Fatalf("%d steps ran, want 2: none after the leadership was lost", len(s.log))
+	}
+}
+
+// TestOffboardingRoundCrashResumes: a crash (the context ends) after a step ends the round there; a new round, as of a
+// restarted worker, takes the next step of the same organization, not the first.
+func TestOffboardingRoundCrashResumes(t *testing.T) {
+	org := uuid.New()
+	s, now := newStepper(time.Second, map[uuid.UUID]int{org: 10})
+	f := s.fake(org)
+	lock := &fakeLock{}
+	inner := f.advance
+	f.advance = func(o uuid.UUID) error {
+		err := inner(o)
+		if len(s.log) == 4 {
+			lock.lose()
+		}
+		return err
+	}
+	if err := NewOffboarding(f, lock).WithClock(func() time.Time { return *now }).Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.left[org] != 6 {
+		t.Fatalf("%d steps left after the crash, want 6", s.left[org])
+	}
+	f.advance = inner
+	if err := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return *now }).Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.left[org] != 0 || len(s.log) != 10 {
+		t.Fatalf("after resume %d steps left, %d run; want 0 and 10 (no step repeated)", s.left[org], len(s.log))
+	}
+}
+
+// TestOffboardingRoundsRotate (main's condition 1, review 1 blocker): with the slow organization first in database
+// order, every organization still advances within a bounded number of rounds.
+func TestOffboardingRoundsRotate(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cost   time.Duration
+		orgs   int
+		rounds int
+	}{{"steps of the whole budget", OffboardingRoundBudget, 2, 2}, {"25 s steps", 25 * time.Second, 3, 3}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ids := make([]uuid.UUID, tc.orgs)
+			steps := map[uuid.UUID]int{}
+			for i := range ids {
+				ids[i] = uuid.New()
+				steps[ids[i]] = 100
+			}
+			s, now := newStepper(tc.cost, steps)
+			r := NewOffboarding(s.fake(ids...), &fakeLock{}).WithClock(func() time.Time { return *now })
+			for range tc.rounds {
+				if err := r.Round(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				*now = now.Add(OffboardingInterval)
+			}
+			for _, id := range ids {
+				if steps[id] == 100 {
+					t.Fatalf("an organization took no step in %d rounds: %v", tc.rounds, s.log)
+				}
+			}
+		})
 	}
 }

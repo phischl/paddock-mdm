@@ -518,7 +518,8 @@ func (p *PlatformPool) WithLeaderLocks(ctx context.Context, keys []int64, fn fun
 var ErrLeadershipLost = errors.New("db: leader lock lost with its connection")
 
 // Lead holds the advisory lock key on one dedicated connection for as long as fn runs, for a role that leads for its
-// whole process life rather than per round (the backup role, decisions-alpha10 §50). Every check it asks that
+// whole process life (the backup role, decisions-alpha10 §50) or for a round that must stop when leadership is lost
+// (the deletion round, plan M17 amendment p). Every check it asks that
 // connection whether it still answers; when it does not, fn's context ends with the cause ErrLeadershipLost, Lead
 // waits for fn, discards the connection and returns ErrLeadershipLost. It reports false without calling fn when
 // another session holds the key.

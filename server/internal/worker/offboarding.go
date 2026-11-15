@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,17 @@ const offboardingLockKey = 0x706164646f666662
 
 // OffboardingInterval is the interval of the deletion round (plan M17 decision 5).
 const OffboardingInterval = time.Minute
+
+// OffboardingRoundBudget is the wall-clock time one round spends on all deletions together (plan M17 amendment p): it
+// ends after the step that was running when the budget ran out. The budget is checked only before a step, so the last
+// step may overrun it; nothing overlaps then: the ticker drops the missed tick, the next round starts at once, and
+// other replicas skip while the leader lock is held. The budget never cuts a step short (it is idempotent but may have
+// reached an external system); only a lost leadership does.
+const OffboardingRoundBudget = 45 * time.Second
+
+// offboardingLeaderCheck is how often the leader connection is asked whether it still answers; when it does not, the
+// round's context ends and no further step starts (db.PlatformPool.Lead).
+const offboardingLeaderCheck = 5 * time.Second
 
 // OffboardingBackoffCap is the longest wait between two attempts of a failing step. The wait doubles from the round
 // interval up to it; reaching it raises PaddockOrganizationDeletionStuck (requirement of main, 2026-11-14): the job
@@ -53,9 +65,9 @@ type offboarder interface {
 	Advance(ctx context.Context, org uuid.UUID) (bool, error)
 }
 
-// leaderLocker runs a function under a leader lock (db.PlatformPool).
+// leaderLocker runs a function under a leader lock whose context ends when the lock is lost (db.PlatformPool).
 type leaderLocker interface {
-	WithLeaderLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (bool, error)
+	Lead(ctx context.Context, key int64, check time.Duration, fn func(ctx context.Context) error) (bool, error)
 }
 
 // offboardingRetry is the backoff of one organization's failing step, kept in memory: a new leader retries at once,
@@ -66,20 +78,24 @@ type offboardingRetry struct {
 	capped   bool
 }
 
-// Offboarding is the round worker.Offboarding (plan M17 decision 5): under its leader lock it starts every due
-// deletion and runs one step of every organization being deleted.
+// Offboarding is the round worker.Offboarding (plan M17 decision 5 and amendment p): under its leader lock it starts
+// every due deletion and carries the organizations being deleted through consecutive steps.
 type Offboarding struct {
 	job      offboarder
 	lock     leaderLocker
 	interval time.Duration
 	now      func() time.Time
 	retries  map[uuid.UUID]*offboardingRetry
+	// advanced is when an organization last took a step, kept in memory: the next round serves the longest-waiting
+	// organizations first, so a slow deletion that uses the whole budget cannot starve the others. A new leader starts
+	// again in database order.
+	advanced map[uuid.UUID]time.Time
 }
 
 // NewOffboarding creates the round; lock is the worker's platform pool, whose lock pool holds the leader lock.
 func NewOffboarding(job offboarder, lock leaderLocker) *Offboarding {
 	return &Offboarding{job: job, lock: lock, interval: OffboardingInterval, now: time.Now,
-		retries: map[uuid.UUID]*offboardingRetry{}}
+		retries: map[uuid.UUID]*offboardingRetry{}, advanced: map[uuid.UUID]time.Time{}}
 }
 
 // WithClock replaces time.Now (tests).
@@ -104,11 +120,13 @@ func (o *Offboarding) Run(ctx context.Context) error {
 	}
 }
 
-// Round starts the due deletions and advances each pending one by one step; a failing organization does not stop the
-// others. The lock is held only while the round runs (amendment c point 3).
+// Round starts the due deletions and advances the pending ones step by step, one step per organization in turn, until
+// every organization is done, waits or fails, or OffboardingRoundBudget is used; a failing organization does not stop
+// the others, and a long deletion cannot starve them. Every step is its own transaction: the round holds only the
+// leader connection between steps. The lock is held only while the round runs (amendment c point 3).
 func (o *Offboarding) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
-	leader, err := o.lock.WithLeaderLock(sys, offboardingLockKey, func(ctx context.Context) error {
+	leader, err := o.lock.Lead(sys, offboardingLockKey, offboardingLeaderCheck, func(ctx context.Context) error {
 		started, err := o.job.StartDue(ctx)
 		if err != nil {
 			return err
@@ -122,11 +140,31 @@ func (o *Offboarding) Round(ctx context.Context) error {
 		}
 		o.observe(orgs)
 		pending := map[uuid.UUID]bool{}
+		active := make([]uuid.UUID, 0, len(orgs))
 		for _, org := range orgs {
 			pending[org.ID] = true
-			o.advance(ctx, org.ID)
+			active = append(active, org.ID)
+		}
+		sort.SliceStable(active, func(i, j int) bool { return o.advanced[active[i]].Before(o.advanced[active[j]]) })
+		deadline := o.now().Add(OffboardingRoundBudget)
+		for len(active) > 0 && ctx.Err() == nil && o.now().Before(deadline) {
+			next := active[:0]
+			for _, id := range active {
+				if ctx.Err() != nil || !o.now().Before(deadline) {
+					break
+				}
+				if o.advance(ctx, id) {
+					next = append(next, id)
+				}
+			}
+			active = next
 		}
 		capped := 0
+		for id := range o.advanced {
+			if !pending[id] {
+				delete(o.advanced, id)
+			}
+		}
 		for id, r := range o.retries {
 			if !pending[id] {
 				delete(o.retries, id)
@@ -142,6 +180,7 @@ func (o *Offboarding) Round(ctx context.Context) error {
 		metricOffboardingRetryCapped.Set(0)
 		metricOffboardingStepFailing.Reset()
 		clear(o.retries)
+		clear(o.advanced)
 	}
 	return err
 }
@@ -157,17 +196,20 @@ func (o *Offboarding) observe(orgs []pgstore.Organization) {
 	}
 }
 
-// advance runs one step of org unless its backoff has not elapsed.
-func (o *Offboarding) advance(ctx context.Context, org uuid.UUID) {
+// advance runs one step of org unless its backoff has not elapsed and reports whether the organization may take
+// another step in this round: only after a step that completed and left the deletion unfinished.
+func (o *Offboarding) advance(ctx context.Context, org uuid.UUID) bool {
 	now := o.now()
 	r := o.retries[org]
 	if r != nil && now.Before(r.next) {
-		return
+		return false
 	}
-	_, err := o.job.Advance(ctx, org)
+	o.advanced[org] = now
+	done, err := o.job.Advance(ctx, org)
 	switch {
 	case err == nil:
 		delete(o.retries, org)
+		return !done
 	case errors.Is(err, app.ErrOffboardingWaiting):
 		metricOffboardingFinalizeBusy.Inc()
 		delete(o.retries, org)
@@ -187,6 +229,7 @@ func (o *Offboarding) advance(ctx context.Context, org uuid.UUID) {
 				"organization", org, "failures", r.failures, "backoff", delay, "error", err)
 		}
 	}
+	return false
 }
 
 // backoff is the wait after the n-th consecutive failure: the round interval, doubled per failure, at most the cap.
