@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 )
 
 // RecordWarningsAt records warnings with codes for device as a compile that saw bundle seq would, so a test can
@@ -37,4 +38,21 @@ func (c *Compiler) SetNow(now func() time.Time) { c.now = now }
 // WithheldForApproval is withheldForApproval for the tests of the approval gate.
 func WithheldForApproval(intent, approval, agent, gate string) bool {
 	return withheldForApproval(intent, approval, agent, gate)
+}
+
+// MaxConflictRounds is maxConflictRounds for the tests of the guarded write.
+const MaxConflictRounds = maxConflictRounds
+
+// SetWriteBatch makes c record its compile results in transactions of n devices, so a test crosses batch boundaries
+// with few devices.
+func (c *Compiler) SetWriteBatch(n int) { c.writeBatch = n }
+
+// SetAfterRead makes c run fn after each snapshot read of a compile, before rendering, so a test can change a device
+// between the read and the write.
+func (c *Compiler) SetAfterRead(fn func()) { c.afterRead = fn }
+
+// ReadInputs runs only the snapshot read of a compile of events in org and returns the number of devices it read.
+func (c *Compiler) ReadInputs(ctx context.Context, org uuid.UUID, events []statechange.Event) (int, error) {
+	in, err := c.readInputs(systemContext(ctx, org), org, events, v2Trust{}, c.now())
+	return len(in.targets), err
 }

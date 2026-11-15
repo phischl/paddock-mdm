@@ -43,7 +43,7 @@ import (
 
 var (
 	metricBundles = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "paddock_compiler_bundles_total", Help: "Compiled devices by result (new, unchanged, forced, failed).",
+		Name: "paddock_compiler_bundles_total", Help: "Compiled devices by result (new, unchanged, forced, failed, conflict).",
 	}, []string{"result"})
 	metricLatency = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name: "paddock_compiler_latency_seconds", Help: "Time from the oldest state change of a batch to its published bundles.",
@@ -120,13 +120,17 @@ type Compiler struct {
 	// approvalAgent is the constant approvalAgent; tests of the approval flow set the gate it will have once PDK-811
 	// ships.
 	approvalAgent string
+	// writeBatch is writeBatchSize; tests lower it to cross batch boundaries with few devices.
+	writeBatch int
+	// afterRead runs between a compile's snapshot read and its render; tests use it to change a device concurrently.
+	afterRead func()
 }
 
 // New creates a compiler.
 func New(pool *db.OrgPool, signer Signer, store Store, cache *devicecache.Cache, cfg Config) *Compiler {
 	cfg.AuthentikURL = strings.TrimRight(cfg.AuthentikURL, "/")
 	return &Compiler{pool: pool, signer: signer, store: store, cache: cache, cfg: cfg, now: time.Now, iconsStored: map[string]bool{},
-		approvalAgent: approvalAgent}
+		approvalAgent: approvalAgent, writeBatch: writeBatchSize}
 }
 
 // ObjectKey is the object of a bundle version (architecture §7.1).
@@ -199,7 +203,7 @@ type compileTarget struct {
 	osID, versionID, arch string
 }
 
-// identityLoader loads the organization's identity data at most once per transaction.
+// identityLoader loads the organization's identity data at most once per snapshot.
 type identityLoader struct {
 	q  *pgstore.Queries
 	id *app.Identity
@@ -214,7 +218,137 @@ func (l *identityLoader) get(ctx context.Context) (*app.Identity, error) {
 	return l.id, err
 }
 
+// orgInputs are everything a compile of an organization reads from PostgreSQL, taken in one snapshot (ADR 0005), so
+// rendering and publishing run after that transaction closed (plan M17 amendment r point 7).
+type orgInputs struct {
+	targets []compileTarget
+	defs    app.ManagedDefinitions
+	overlay *rolloutOverlay
+	// identity is nil unless a target renders schema 2 or an event named a user.
+	identity *app.Identity
+	keys     v2Trust
+	// groups are the device groups of each target; latest is the content digest of each target's latest bundle (no
+	// entry without a bundle).
+	groups map[uuid.UUID][]uuid.UUID
+	latest map[uuid.UUID][]byte
+}
+
+// readInputs reads the inputs of the devices in the scopes of events in one read-only snapshot and closes it before it
+// returns: nothing is rendered, signed or written inside it, which keeps the transaction within the 10 s target for
+// 70 000 devices (plan M17 amendment r point 7). keys carries the Transit key material read before.
+func (c *Compiler) readInputs(ctx context.Context, org uuid.UUID, events []statechange.Event, keys v2Trust, renderAt time.Time) (orgInputs, error) {
+	in := orgInputs{keys: keys}
+	// One snapshot for every read of the round: a change set and its rollout commit together, so the definitions, the
+	// update settings and the overlay never come from different sides of a staged apply or of a rollout's revert.
+	err := c.pool.InOrgSnapshot(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		identity := &identityLoader{q: q}
+		ids, forced, err := expand(ctx, q, events, identity)
+		if err != nil || len(ids) == 0 {
+			return err
+		}
+		if in.keys.DMS, err = loadDMS(ctx, q); err != nil {
+			return err
+		}
+		if in.keys.Inventory, err = c.inventory(ctx, q); err != nil {
+			return err
+		}
+		if in.keys.Supervisor, err = supervisorPackages(ctx, q); err != nil {
+			return err
+		}
+		if in.keys.Updates, err = loadUpdates(ctx, q); err != nil {
+			return err
+		}
+		if in.keys.Disk, err = loadDisk(ctx, q); err != nil {
+			return err
+		}
+		if in.keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
+			return err
+		}
+		if in.keys.Software, err = loadSoftware(ctx, q, org, c.cfg.Credentials, renderAt); err != nil {
+			return err
+		}
+		in.keys.Software.approvalGate = c.approvalAgent
+		rows, err := q.ListCompileTargets(ctx, ids)
+		if err != nil {
+			return err
+		}
+		if in.defs, err = app.LoadManagedDefinitions(ctx, q); err != nil {
+			return err
+		}
+		if in.overlay, err = loadOverlay(ctx, q); err != nil {
+			return err
+		}
+		memberships, err := q.ListDeviceGroupIDsOfDevices(ctx, ids)
+		if err != nil {
+			return err
+		}
+		in.groups = make(map[uuid.UUID][]uuid.UUID, len(ids))
+		for _, m := range memberships {
+			in.groups[m.DeviceID] = append(in.groups[m.DeviceID], m.DeviceGroupID)
+		}
+		latest, err := q.ListLatestBundleContents(ctx, ids)
+		if err != nil {
+			return err
+		}
+		in.latest = make(map[uuid.UUID][]byte, len(latest))
+		for _, b := range latest {
+			in.latest[b.DeviceID] = b.ContentSha256
+		}
+		v2 := false
+		for _, row := range rows {
+			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
+				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion,
+				request: updateRequest{version: row.AgentUpdateRequestedVersion, at: row.AgentUpdateRequestedAt}}
+			t.name, t.reportOnly = row.Name, row.ConfigMode == device.ConfigModeReportOnly
+			t.osID, t.versionID, t.arch = row.OsID, row.OsVersionID, row.Arch
+			v2 = v2 || (t.v2 && device.Compiled(t.state))
+			in.targets = append(in.targets, t)
+		}
+		if v2 {
+			if _, err := identity.get(ctx); err != nil {
+				return err
+			}
+		}
+		in.identity = identity.id
+		return nil
+	})
+	return in, err
+}
+
+// maxConflictRounds bounds how often one compile reads again for the devices whose guarded write met a concurrent
+// change; beyond it the compile fails, so the consumer requeues its batch and nothing is lost.
+const maxConflictRounds = 3
+
+// writeBatchSize is the number of devices whose compile results one short write transaction records (plan M17
+// amendment r point 7).
+const writeBatchSize = 500
+
+// errSeqConflict reports a device whose bundle_seq moved on between the compile's snapshot and its write.
+var errSeqConflict = errors.New("bundle_seq changed concurrently")
+
+// compileOrg compiles the devices in the scopes of events. A device whose guarded write met a concurrent change was
+// left alone by that write; it is compiled again from a new snapshot, so its bundle reflects the latest inputs and no
+// update is lost (plan M17 amendment r point 7).
 func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []statechange.Event) error {
+	for round := 1; ; round++ {
+		conflicts, err := c.compileOrgOnce(ctx, org, events)
+		if err != nil || len(conflicts) == 0 {
+			return err
+		}
+		if round == maxConflictRounds {
+			return fmt.Errorf("%d devices after %d rounds: %w", len(conflicts), round, errSeqConflict)
+		}
+		slog.InfoContext(ctx, "recompiling devices a concurrent compile moved on", "organization_id", org, "devices", len(conflicts))
+		// Not forced: the concurrent writer already published a new version, so only the content must catch up.
+		events = make([]statechange.Event, len(conflicts))
+		for i, d := range conflicts {
+			events[i] = statechange.Event{OrganizationID: org, Scope: statechange.ScopeDevice, ID: d}
+		}
+	}
+}
+
+// compileOrgOnce reads, renders and publishes once and returns the devices whose guarded write met a concurrent change.
+func (c *Compiler) compileOrgOnce(ctx context.Context, org uuid.UUID, events []statechange.Event) ([]uuid.UUID, error) {
 	var todo []rendered
 	var failures []renderFailure
 	var seen []pgstore.SetDeviceCompiledPlatformParams
@@ -224,85 +358,41 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 	warnings := map[uuid.UUID]deviceWarnings{}
 	keys, err := c.keys(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// One snapshot for every read of the round: a change set and its rollout commit together, so the definitions, the
-	// update settings and the overlay never come from different sides of a staged apply or of a rollout's revert.
-	err = c.pool.InOrgSnapshot(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		identity := &identityLoader{q: q}
-		ids, forced, err := expand(ctx, q, events, identity)
-		if err != nil || len(ids) == 0 {
-			return err
-		}
-		if keys.DMS, err = loadDMS(ctx, q); err != nil {
-			return err
-		}
-		if keys.Inventory, err = c.inventory(ctx, q); err != nil {
-			return err
-		}
-		if keys.Supervisor, err = supervisorPackages(ctx, q); err != nil {
-			return err
-		}
-		if keys.Updates, err = loadUpdates(ctx, q); err != nil {
-			return err
-		}
-		if keys.Disk, err = loadDisk(ctx, q); err != nil {
-			return err
-		}
-		if keys.Watch, err = loadWatchedUnits(ctx, q); err != nil {
-			return err
-		}
-		if keys.Software, err = loadSoftware(ctx, q, org, c.cfg.Credentials, renderAt); err != nil {
-			return err
-		}
-		keys.Software.approvalGate = c.approvalAgent
-		rows, err := q.ListCompileTargets(ctx, ids)
-		if err != nil {
-			return err
-		}
-		defs, err := app.LoadManagedDefinitions(ctx, q)
-		if err != nil {
-			return err
-		}
-		overlay, err := loadOverlay(ctx, q)
-		if err != nil {
-			return err
-		}
-		for _, row := range rows {
-			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
-				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion,
-				request: updateRequest{version: row.AgentUpdateRequestedVersion, at: row.AgentUpdateRequestedAt}}
-			t.name, t.reportOnly = row.Name, row.ConfigMode == device.ConfigModeReportOnly
-			t.osID, t.versionID, t.arch = row.OsID, row.OsVersionID, row.Arch
-			r, changed, failure, err := c.render(ctx, q, org, t, defs, overlay, identity, keys)
-			if err != nil {
-				return fmt.Errorf("render %s: %w", t.id, err)
-			}
-			if failure != nil {
-				failures = append(failures, *failure)
-			} else {
-				warnings[row.ID] = deviceWarnings{seq: row.BundleSeq, warnings: r.warnings}
-			}
-			// A blocked device is recorded too: its compile was attempted with these values, and the failure is
-			// recorded once, not on every reconcile round.
-			seen = append(seen, pgstore.SetDeviceCompiledPlatformParams{ID: row.ID, Arch: row.Arch, OsID: row.OsID, OsVersionID: row.OsVersionID,
-				AgentVersion: row.AgentVersion})
-			// Like seen, a blocked device is recorded too: otherwise the reconcile would select it every round.
-			checked = append(checked, pgstore.MarkDenialLockCheckedParams{ID: row.ID, BundleSeq: row.BundleSeq, CheckedAt: renderAt})
-			if changed {
-				todo = append(todo, r)
-			}
-		}
-		return nil
-	})
+	in, err := c.readInputs(ctx, org, events, keys, renderAt)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if c.afterRead != nil {
+		c.afterRead()
+	}
+	for _, t := range in.targets {
+		r, changed, failure, err := c.render(ctx, org, t, in.defs, in.overlay, in.identity, in.keys, in.groups[t.id], in.latest[t.id])
+		if err != nil {
+			return nil, fmt.Errorf("render %s: %w", t.id, err)
+		}
+		if failure != nil {
+			failures = append(failures, *failure)
+		} else {
+			warnings[t.id] = deviceWarnings{seq: t.seq, warnings: r.warnings}
+		}
+		// A blocked device is recorded too: its compile was attempted with these values, and the failure is
+		// recorded once, not on every reconcile round.
+		seen = append(seen, pgstore.SetDeviceCompiledPlatformParams{ID: t.id, Arch: t.arch, OsID: t.osID, OsVersionID: t.versionID,
+			AgentVersion: t.agent, BundleSeq: t.seq})
+		// Like seen, a blocked device is recorded too: otherwise the reconcile would select it every round.
+		checked = append(checked, pgstore.MarkDenialLockCheckedParams{ID: t.id, BundleSeq: t.seq, CheckedAt: renderAt})
+		if changed {
+			todo = append(todo, r)
+		}
 	}
 	c.recordFailures(ctx, failures)
 	var publishErr error
+	var conflicts []uuid.UUID
 	if len(todo) > 0 {
 		var committed []uuid.UUID
-		committed, publishErr = c.publish(ctx, org, todo)
+		committed, conflicts, publishErr = c.publish(ctx, org, todo)
 		// A device whose bundle was not committed is retried by the reconcile loop: it keeps its old inputs.
 		seen = slices.DeleteFunc(seen, func(p pgstore.SetDeviceCompiledPlatformParams) bool {
 			return slices.ContainsFunc(todo, func(r rendered) bool { return r.device == p.ID }) && !slices.Contains(committed, p.ID)
@@ -315,6 +405,11 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 				checked[i].BundleSeq++
 			}
 		}
+		for i, p := range seen {
+			if slices.Contains(committed, p.ID) {
+				seen[i].BundleSeq++
+			}
+		}
 		for _, r := range todo {
 			if slices.Contains(committed, r.device) {
 				warnings[r.device] = deviceWarnings{seq: r.oldSeq + 1, warnings: r.warnings}
@@ -323,7 +418,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			}
 		}
 	}
-	return errors.Join(publishErr, c.recordPlatform(ctx, seen), c.recordDenialLocks(ctx, checked),
+	return conflicts, errors.Join(publishErr, c.recordPlatform(ctx, seen), c.recordDenialLocks(ctx, checked),
 		c.recordWarnings(ctx, org, warnings))
 }
 
@@ -331,36 +426,43 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 // the committed bundle, or the unchanged or blocked one it kept. Every denial lock that ended before the render time is
 // reflected in that bundle, so the reconcile selects only locks that end later (architect decision A10-27). The render
 // time counts, not the publish time: a render before a lock's end that commits after it still names the denial. A
-// device a concurrent compile moved on is skipped; that compile records its own render time.
+// device a concurrent compile moved on is skipped; that compile records its own render time. It writes in short
+// transactions of writeBatchSize devices (plan M17 amendment r point 7).
 func (c *Compiler) recordDenialLocks(ctx context.Context, checked []pgstore.MarkDenialLockCheckedParams) error {
-	if len(checked) == 0 {
-		return nil
-	}
-	return c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		for _, p := range checked {
-			if _, err := q.MarkDenialLockChecked(ctx, p); err != nil {
-				return err
+	for batch := range slices.Chunk(checked, c.writeBatch) {
+		if err := c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			for _, p := range batch {
+				if _, err := q.MarkDenialLockChecked(ctx, p); err != nil {
+					return err
+				}
 			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // recordPlatform stores the architecture, os-release and agent version the compile of each device read, after its
 // bundle is published, so that a failed publish is retried by the reconcile loop (PDK-695, PDK-799). They are the values of the
-// compile's snapshot, not the current ones: a change after the snapshot stays visible to the next reconcile.
+// compile's snapshot, not the current ones: a change after the snapshot stays visible to the next reconcile. A device
+// a concurrent compile moved on is skipped; that compile records its own values. It writes in short transactions of
+// writeBatchSize devices (plan M17 amendment r point 7).
 func (c *Compiler) recordPlatform(ctx context.Context, seen []pgstore.SetDeviceCompiledPlatformParams) error {
-	if len(seen) == 0 {
-		return nil
-	}
-	return c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		for _, p := range seen {
-			if err := q.SetDeviceCompiledPlatform(ctx, p); err != nil {
-				return err
+	for batch := range slices.Chunk(seen, c.writeBatch) {
+		if err := c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			for _, p := range batch {
+				if err := q.SetDeviceCompiledPlatform(ctx, p); err != nil {
+					return err
+				}
 			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // specRenderFailed is the privileged action device.bundle_render_failed (actor: system).
@@ -461,9 +563,11 @@ func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event,
 // M3a decision 14a). A sudo entry that fails the server-side check blocks the device's bundle (failure); one with an
 // invalid command is omitted and recorded once the bundle is published. A device outside the wave of the open
 // rollout (overlay, nil without one) renders the before-state of the staged keys; a report-only device is never inside a
-// wave (plan M11 decision 30), so it never carries a rollout and never counts.
-func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID, t compileTarget,
-	defs app.ManagedDefinitions, overlay *rolloutOverlay, identity *identityLoader, keys v2Trust) (rendered, bool, *renderFailure, error) {
+// wave (plan M11 decision 30), so it never carries a rollout and never counts. It reads nothing from PostgreSQL: groups
+// are the device's groups and latest the content digest of its latest bundle (nil without one), both from the
+// compile's snapshot.
+func (c *Compiler) render(ctx context.Context, org uuid.UUID, t compileTarget, defs app.ManagedDefinitions,
+	overlay *rolloutOverlay, id *app.Identity, keys v2Trust, groups []uuid.UUID, latest []byte) (rendered, bool, *renderFailure, error) {
 	if !device.Compiled(t.state) {
 		return rendered{}, false, nil, nil
 	}
@@ -481,10 +585,6 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 			keys.Software = overlay.applySoftware(keys.Software)
 		}
 	}
-	groups, err := q.ListDeviceGroupIDsOfDevice(ctx, t.id)
-	if err != nil {
-		return rendered{}, false, nil, err
-	}
 	resources, err := managedconfig.Resources(defs.Resolve(groups))
 	if err != nil {
 		return rendered{}, false, nil, err
@@ -499,9 +599,8 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	agent := bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}
 	if t.v2 {
 		v2 = keys
-		id, err := identity.get(ctx)
-		if err != nil {
-			return rendered{}, false, nil, err
+		if id == nil {
+			return rendered{}, false, nil, errors.New("identity not read for a schema 2 device")
 		}
 		extra, omits, failure, err := c.renderV2(ctx, id, t)
 		if err != nil || failure != nil {
@@ -553,14 +652,10 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	if err != nil {
 		return rendered{}, false, nil, err
 	}
-	latest, err := q.GetLatestBundle(ctx, t.id)
-	unchanged := err == nil && bytes.Equal(latest.ContentSha256, content[:])
-	switch {
-	case unchanged && !t.forced:
+	unchanged := latest != nil && bytes.Equal(latest, content[:])
+	if unchanged && !t.forced {
 		metricBundles.WithLabelValues("unchanged").Inc()
 		return rendered{device: t.id, warnings: warnings}, false, nil, nil
-	case err != nil && !db.IsNoRows(err):
-		return rendered{}, false, nil, err
 	}
 	payload, err := bundle.Encode(b)
 	if err != nil {
@@ -626,18 +721,18 @@ func (c *Compiler) keys(ctx context.Context) (v2Trust, error) {
 
 // publish signs all bundles in one batch, then per device increments bundle_seq, records the bundle row and uploads
 // the envelope in one transaction, and finally points bp: at it. An upload failure rolls the transaction back, so
-// the version is reused on retry and bp: only ever points to uploaded bundles.
-func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) ([]uuid.UUID, error) {
+// the version is reused on retry and bp: only ever points to uploaded bundles. It returns the committed devices and,
+// apart from the errors, the conflicts: devices whose bundle_seq moved on since the snapshot, which it left alone.
+func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) (committed, conflicts []uuid.UUID, err error) {
 	pae := make([][]byte, len(todo))
 	for i, r := range todo {
 		pae[i] = dsse.PAE(bundle.PayloadType, r.payload)
 	}
 	sigs, err := c.signer.SignBatch(ctx, bundlesign.KeyName, pae)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var errs []error
-	var committed []uuid.UUID
 	iconErrs := c.uploadIcons(ctx, org, todo)
 	for i, r := range todo {
 		env, err := dsse.New(bundle.PayloadType, r.payload, dsse.Signature{
@@ -650,6 +745,11 @@ func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) 
 		}
 		if err == nil {
 			err = c.commit(ctx, org, r, env)
+		}
+		if errors.Is(err, errSeqConflict) {
+			metricBundles.WithLabelValues("conflict").Inc()
+			conflicts = append(conflicts, r.device)
+			continue
 		}
 		if err != nil {
 			metricBundles.WithLabelValues("failed").Inc()
@@ -664,7 +764,7 @@ func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) 
 		}
 		c.recordOmissions(ctx, r)
 	}
-	return committed, errors.Join(errs...)
+	return committed, conflicts, errors.Join(errs...)
 }
 
 // uploadIcons writes each catalog icon the bundles of todo name once to the bundles bucket, content-addressed, so that
@@ -724,7 +824,7 @@ func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelo
 			return err
 		}
 		if n != 1 {
-			return errors.New("bundle_seq changed concurrently")
+			return errSeqConflict
 		}
 		if err := q.InsertBundle(ctx, pgstore.InsertBundleParams{
 			DeviceID: r.device, Version: version, OrganizationID: org, ContentSha256: r.content[:],
