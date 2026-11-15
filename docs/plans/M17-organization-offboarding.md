@@ -1375,3 +1375,73 @@ That contradicts agent contract 8 and the maintainer's promise that devices of a
 
 Priority: alpha.11, folded into PDK-1016's fix round. The device contract note on both 401 reasons (amendment m point
 3.3) belongs to the same fix round.
+
+## Amendment 2026-11-15 o — the hand-over to the audit domain and its acknowledgement (architect decision after the PDK-1017 stop; main's constraint)
+
+Binding; it replaces decision 16's transport and the step `audit_final`'s wait. The audit domain stays isolated, as
+main required: the worker gets no connection to the audit database, and audit migration 00011's grants and
+`TestOffboardingGrants` stay as they are. Options (1a) and (1b) of the PDK-1017 stop are rejected for that reason, and
+(1c) is rejected because it would let the tombstone come before the final verification (ADR 0052 decision 6).
+
+### Forward: the request goes through `ActionRunner` and the outbox
+
+1. Step `audit_final` records one system action through `ActionRunner` in the **platform pseudo-organization**
+   (platform scope, as every step event):
+   - code `organization.audit_retirement_requested`;
+   - params `organization_id` and `slug`;
+   - nothing else.
+
+   It is a valid `audit.Event` and reaches the audit writer through the outbox (routing key `audit.platform.<platform
+   org>`), like every platform event. No new outbox writer and no new message type are introduced.
+2. The audit writer writes that event as usual. **After** writing it, it intercepts this one code and starts the final
+   verification of `params.organization_id`, as decision 16 describes:
+   - full chain verification;
+   - one `audit.chain_verified` (or `audit.chain_verification_failed`) with `final: true` in the organization's log;
+   - a row in `audit_org_retired`;
+   - then it refuses further events of that organization, writing them to the platform pseudo-organization as
+     `audit.event_after_retirement`.
+3. Events of the organization still in flight in the audit queue when the request arrives are not lost. Decision 16's
+   rule writes them to the platform pseudo-organization with their original code. The step `outbox` has already
+   drained the organization's outbox, so only messages published but not yet consumed can arrive late.
+
+### Back: the audit writer acknowledges on its own channel
+
+4. New RabbitMQ exchange `paddock.offboarding` (topic), provisioned in `deploy/compose/rabbitmq/definitions.json.tmpl`.
+   - User `audit_writer` gets `write` on `^paddock\.offboarding$` only.
+   - Queue `worker.offboarding` is bound to it with routing key `audit_retired.*`; user `worker` gets `read` on it.
+   - No other permission changes.
+5. After the row in `audit_org_retired` is committed, the writer publishes, with publisher confirms, the message
+   `{"organization_id": uuid, "final_outcome": "verified"|"failed", "final_verified_at": RFC3339}` with routing key
+   `audit_retired.<organization_id>`.
+   - It is not an audit event and carries no personal data.
+   - Until the broker confirms, the writer records `audit_org_retired.ack_published_at = NULL` (new column, audit
+     migration 00012) and republishes at start and every 5 minutes. The worker handles repeats idempotently.
+6. The worker consumes `worker.offboarding` and, through `PlatformPool`, sets `organization.audit_final_verified_at` and
+   `organization.audit_final_outcome`. These are new columns, written only while the status is `deleting`. Step
+   `audit_final` completes when `audit_final_verified_at` is set; until then it waits.
+   - The step recorded `organization.deletion_step_failed` with `error_code: audit_writer_pending` only after more than
+     1 h of waiting (one event).
+   - A `failed` outcome does not block the deletion (decision 16) and is carried into `organization.deleted` as param
+     `audit_final_outcome`.
+
+### The sealer stops after the final day (question 3)
+
+7. The sealer seals a retired organization up to and including the day of its final `audit.chain_verified` and then
+   never again. That day's manifest gains the additive field `"retired": true`, and the nightly verification and the
+   evidence-export verifier (`pkg/auditevidence`, `paddockctl audit verify`) accept that no manifest follows a
+   `retired` manifest. Older verifiers ignore the field and verify the days they are given, so the export format stays
+   compatible.
+
+### Ticket and tests
+
+8. All of this is in **PDK-1017** (high, Opus), including the RabbitMQ definitions, audit migration 00012 and the
+   control migration for the two `organization` columns. Required tests:
+   - the request event leads to exactly one final verification and one acknowledgement;
+   - a lost confirm leads to a republish, and the worker applies it once;
+   - the worker never opens an audit-database connection (a wiring test asserts that no audit DSN is read);
+   - the writer's RabbitMQ user can publish only to `paddock.offboarding`, and the worker can read only its queue;
+   - the sealer writes no manifest for a retired organization after the final day;
+   - an export spanning the retirement verifies offline, and a forged manifest after a `retired` one is rejected.
+
+**Main reviews this amendment before it merges:** it adds a channel from the audit domain to the worker (acknowledgement
+only) and an additive manifest field.
