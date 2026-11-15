@@ -107,6 +107,9 @@ func TestOrganizationIsolation(t *testing.T) {
 				if res.Status < 400 || res.Status >= 500 || res.Status == http.StatusNotFound {
 					t.Fatalf("HTTP %d, want a refusal of the request's own content: %s", res.Status, res.Body)
 				}
+				if fx.refusal != "" && res.ProblemCode() != fx.refusal {
+					t.Fatalf("problem %q, want %q: %s", res.ProblemCode(), fx.refusal, res.Body)
+				}
 			}
 			checked := res.Body
 			if fx.ownAttempts {
