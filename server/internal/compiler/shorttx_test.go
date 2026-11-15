@@ -2,6 +2,7 @@ package compiler_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -225,5 +226,72 @@ func TestSnapshotReadOf70000Devices(t *testing.T) {
 	t.Logf("snapshot read of %d devices: %s", n, elapsed)
 	if elapsed > 10*time.Second {
 		t.Fatalf("snapshot read of %d devices took %s, over the 10 s target", n, elapsed)
+	}
+}
+
+// TestStalledUploadRollsBackTheCommit: a bundle upload that stalls is given up after UploadTimeout, so the commit
+// transaction, which holds the device's row lock, rolls back within the 10 s target instead of running on; bundle_seq
+// is unchanged and the next compile reuses that version (plan M17 amendment r points 1 and 7).
+func TestStalledUploadRollsBackTheCommit(t *testing.T) {
+	w := newWorld(t)
+	d := w.device("active")
+	w.mustCompile(statechange.ScopeDevice, d)
+	w.exec("INSERT INTO managed_unit (id, organization_id, unit, enabled, active) VALUES ($1, $2, 'chrony.service', true, true)",
+		uuid.Must(uuid.NewV7()), w.org)
+	w.store.stall.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		done <- w.comp.Compile(ctx, []statechange.Event{{OrganizationID: w.org, Scope: statechange.ScopeDevice, ID: d}})
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("compile error %v, want the upload timeout", err)
+		}
+	case <-time.After(15 * time.Second):
+		// Ending the compile releases its connection, so the pool's cleanup does not wait on it.
+		cancel()
+		<-done
+		t.Fatal("the stalled upload held the commit transaction beyond the upload timeout")
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("the commit with a stalled upload took %s, over the 10 s target", elapsed)
+	}
+	if v := w.version(d); v != 1 {
+		t.Fatalf("bundle_seq %d after the rolled back commit, want 1", v)
+	}
+	if got := w.bundleVersions(d); len(got) != 1 {
+		t.Fatalf("bundle versions %v after the rolled back commit", got)
+	}
+
+	w.store.stall.Store(false)
+	w.mustCompile(statechange.ScopeDevice, d)
+	if b := w.fetch(d); b.BundleVersion != 2 || resourceIDs(b) != "time,unit:chrony.service" {
+		t.Fatalf("the next compile: v%d %s, want v2 with the unit", b.BundleVersion, resourceIDs(b))
+	}
+}
+
+// TestWarningsWrittenInBatchesReachEveryDevice: the compile warnings are recorded in transactions of the batch size,
+// and a device in the last, partial batch gets its warning too.
+func TestWarningsWrittenInBatchesReachEveryDevice(t *testing.T) {
+	w := newWorld(t)
+	w.comp.SetWriteBatch(2)
+	flathub := w.flathub(loadSoftwareKey(t, "ed25519.asc"))
+	w.assign(w.flatpakEntry("GIMP", flathub, "org.gimp.GIMP"), nil, "required", "latest", nil)
+	w.assign(w.entry("Flatpak", nil, [4]string{"ubuntu", "*", "*", "flatpak"}), nil, "forbid", "latest", nil)
+	var devices []uuid.UUID
+	for range 5 {
+		d := w.v2Device("{1,2}", w.g1)
+		w.ubuntu(d, "amd64")
+		devices = append(devices, d)
+	}
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for _, d := range devices {
+		if got := w.warnings(d); len(got) != 1 || got[0].code != compiler.WarningFlatpakForbidden {
+			t.Fatalf("device %s: warnings %+v, want flatpak_forbidden", d, got)
+		}
 	}
 }

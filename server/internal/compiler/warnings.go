@@ -66,7 +66,8 @@ type deviceWarnings struct {
 // compile keeps its rows too: a concurrent compile published a newer bundle and owns its warnings, which an outdated
 // compile must neither overwrite nor delete.
 func (c *Compiler) recordWarnings(ctx context.Context, org uuid.UUID, warnings map[uuid.UUID]deviceWarnings) error {
-	// Row locks in id order, the order recordPlatform's ORDER BY d.id takes them, so two compiles cannot deadlock.
+	// Row locks in id order, the order of ListCompileTargets that recordPlatform and recordDenialLocks follow, so two
+	// compiles cannot deadlock.
 	devices := slices.SortedFunc(maps.Keys(warnings), func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
 	// Short transactions of writeBatch devices (plan M17 amendment r point 7); each device's write stands alone.
 	for batch := range slices.Chunk(devices, c.writeBatch) {

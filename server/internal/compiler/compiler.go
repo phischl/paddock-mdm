@@ -323,6 +323,12 @@ const maxConflictRounds = 3
 // amendment r point 7).
 const writeBatchSize = 500
 
+// UploadTimeout bounds the bundle upload inside a commit's transaction, which holds the device's row lock: an
+// organization-role transaction must end within 10 s (plan M17 amendment r points 1 and 7). A commit covers one
+// device, so one upload at most this long keeps it within that target. A timeout rolls the transaction back, and the
+// version is reused by the next compile.
+const UploadTimeout = 5 * time.Second
+
 // errSeqConflict reports a device whose bundle_seq moved on between the compile's snapshot and its write.
 var errSeqConflict = errors.New("bundle_seq changed concurrently")
 
@@ -805,7 +811,7 @@ func (c *Compiler) uploadIcon(ctx context.Context, key string, ic catalogIcon) e
 	return nil
 }
 
-// commit records and uploads one bundle and updates its pointer.
+// commit records and uploads one bundle and updates its pointer, in a transaction of its own for this one device.
 func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelope []byte) error {
 	version := r.oldSeq + 1
 	key := ObjectKey(org, r.device, version)
@@ -833,7 +839,11 @@ func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelo
 		}); err != nil {
 			return err
 		}
-		return c.store.Put(ctx, key, "application/vnd.dsse.envelope.v1+json", "private, max-age=120", envelope)
+		// The upload stays inside the transaction: the row lock on bundle_seq is what keeps a concurrent compile from
+		// writing the same versioned key. It is bounded so a stalling store cannot hold the transaction.
+		putCtx, cancel := context.WithTimeout(ctx, UploadTimeout)
+		defer cancel()
+		return c.store.Put(putCtx, key, "application/vnd.dsse.envelope.v1+json", "private, max-age=120", envelope)
 	})
 	if err != nil {
 		return err
