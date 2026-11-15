@@ -1327,3 +1327,47 @@ Binding; where it contradicts decisions 11 and 13 or amendment k, it wins.
    uninstall at the first contact after finalize works.
 4. **Order.** PDK-1058 and PDK-1059 are small follow-ups to PDK-1015. They merge after it and before the alpha.11
    release regression.
+
+## Amendment 2026-11-15 n — no dead man's switch lock on an offboarded device (architect decision after PDK-1016 review, minor 5; contract 8)
+
+Binding; it refines decision 15 and amendment m point 2.
+
+**Finding.** The hand-over replaces a device's whole `cmd:` hash with the uninstall, which drops a pending
+`delete_self_lock` (the disarm of the dead man's switch). An offboarded device receives no time tickets (`tt:<org>` is
+deleted, decision 13). A device whose leave is refused or fails therefore keeps an armed self-lock and can lock itself.
+That contradicts agent contract 8 and the maintainer's promise that devices of a deleted organization keep working
+(§3).
+
+**Options.**
+- (a) Keep a pending disarm next to the uninstall. − It covers only devices that already had one pending.
+- (b) Disarm every handed-over device as part of the hand-over. + It does not depend on what was pending, and it uses
+  the existing command, signed with command-signing by the worker. It is not the revocation path: the agent's
+  `deleteSelfLock` lives in `agent/internal/agent`, not in `paddock-revoke`.
+- (c) Keep serving time tickets to offboarded devices until they report the uninstall. − It needs a compiler or ticket
+  path for an organization that no longer exists, and it keeps the switch armed for up to a year.
+
+**Decision: (b), and the hand-over never drops a command.**
+1. Step `devices` issues, in the same set-based transaction and **before** the uninstall (UUIDv7 order makes the gateway
+   deliver it first), one `delete_self_lock` per handed-over device with `expires_at = now() +
+   OffboardedDeviceRetention`.
+   - It is issued for every handed-over device, whether or not its organization had the switch enabled: on a device
+     without a self-lock the command succeeds with `deleted: false`.
+   - Unlike decision 3's uninstalls, it is recorded only as a count: `organization.deletion_step_completed` for step
+     `devices` gains `disarms_issued`.
+2. `offboarded_device` holds both envelopes (`command_envelopes jsonb` replaces the single `command_id`/
+   `command_envelope` before PDK-1016 merges; the migration is not merged yet). The cache **merges** them into `cmd:`;
+   it never replaces the whole hash. A pending `delete_self_lock` already in `cmd:` is kept.
+3. The gateway's offboarded check-in (decision 15) answers with both commands. It accepts the command results of both
+   with 202 without publishing them, as amendment m point 3.2 does for the uninstall.
+4. Order of effects on the device: the disarm runs first, so a later refused or failed uninstall leaves a device that
+   can no longer lock itself. Contract 8 holds in every case.
+5. **Tests (PDK-1016 fix round):**
+   - a device with an armed self-lock and a refused uninstall (the agent's `revocationWindow`) runs the disarm, keeps
+     working, and never locks;
+   - an existing pending `delete_self_lock` survives the hand-over;
+   - `cmd:` holds both commands after the cache sync rebuild;
+   - the system gate OS1 gains a case with the dead man's switch enabled before the deletion: the VM that was off
+     during the deletion comes back, disarms, uninstalls, and never locks.
+
+Priority: alpha.11, folded into PDK-1016's fix round. The device contract note on both 401 reasons (amendment m point
+3.3) belongs to the same fix round.
