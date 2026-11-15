@@ -109,13 +109,17 @@ func TestGateOrganizationsAreDeleted(t *testing.T) {
 		t.Fatal("the case created no organization")
 	}
 
-	// The cleanup logs instead of failing, so this gate is where a stuck deletion becomes a failure.
-	res := call(t, root, http.MethodGet, orgPath+id.String(), nil)
-	var org struct {
-		Status string `json:"status"`
-	}
-	if res.Status != http.StatusOK || res.JSON(&org) != nil || org.Status != "deleted" {
-		t.Fatalf("gate organization %s after its case: HTTP %d %s, want status deleted", slug, res.Status, res.Body)
+	// The cleanup only requests the deletion, so this gate is where a stuck deletion becomes a failure.
+	var last gateOrgState
+	for deadline := time.Now().Add(orgDeletedWithin); ; time.Sleep(2 * time.Second) {
+		res := call(t, root, http.MethodGet, orgPath+id.String(), nil)
+		last = gateOrgState{}
+		if res.Status == http.StatusOK && res.JSON(&last) == nil && last.Status == "deleted" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("gate organization %s not deleted within %s: status %q%s", slug, orgDeletedWithin, last.Status, stepOf(last))
+		}
 	}
 
 	for _, c := range []struct {

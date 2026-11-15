@@ -13,8 +13,13 @@ import (
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
-// orgCleanupWait bounds how long a gate waits for the worker to delete its organization (plan M17 §7 step 7).
-const orgCleanupWait = 5 * time.Minute
+// orgDeletedWithin bounds how long the gate OF8 waits for the worker to delete an organization. The worker runs one
+// of the ten deletion steps per round of a minute, so a deletion takes about ten minutes; plan M17 amendment p
+// (PDK-946c) makes a round run several steps, and the bound then returns to 5 minutes.
+const orgDeletedWithin = 12 * time.Minute
+
+// orgCleanupTimeout bounds one cleanup request, step-up included.
+const orgCleanupTimeout = 10 * time.Minute
 
 // orgCleanupStepUpAge is below the shortest step-up window of the admin API (5 minutes), so a deletion request never
 // runs on an expired step-up.
@@ -79,12 +84,13 @@ func readGateOrg(ctx context.Context, p *env.Portal, id string) (gateOrgState, i
 // development stack allows it, ADR 0052). Leftover organizations make the identity provider's periodic rounds cost
 // CPU on a long-lived stack (PDK-946), so every organization a gate creates is deleted again. A cleanup that fails
 // is logged and never fails the gate: the case's verdict is already in, and `make dev-prune-gate-orgs` removes what
-// is left.
+// is left. The cleanup only requests the deletion and does not wait: the worker needs minutes per organization, and
+// a wait per case would exceed the shard budget; the gate OF8 waits for its own organization.
 func deleteGateOrgAtEnd(t *testing.T, id, slug string) {
 	t.Helper()
 	t.Cleanup(func() {
 		// Not testContext: its cancel is registered as a cleanup of its own and would run before this one.
-		ctx, cancel := context.WithTimeout(context.Background(), orgCleanupWait+10*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), orgCleanupTimeout)
 		defer cancel()
 		if err := cleanupGateOrg(ctx, id, slug); err != nil {
 			t.Logf("cleanup of gate organization %s (%s): %v; make dev-prune-gate-orgs removes it", slug, id, err)
@@ -120,32 +126,7 @@ func cleanupGateOrg(ctx context.Context, id, slug string) error {
 	if err != nil {
 		return err
 	}
-	if skip != nil {
-		return skip
-	}
-
-	deadline := time.Now().Add(orgCleanupWait)
-	var last gateOrgState
-	for {
-		var code int
-		err := withCleanupSession(ctx, func(p *env.Portal) error {
-			var err error
-			last, code, err = readGateOrg(ctx, p, id)
-			return err
-		})
-		if err == nil && (code == http.StatusNotFound || (code == http.StatusOK && last.Status == "deleted")) {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			// Until audit_final is implemented (PDK-1017) the step completes at once; afterwards a stuck step shows here.
-			return fmt.Errorf("not deleted within %s: status %q%s", orgCleanupWait, last.Status, stepOf(last))
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
+	return skip
 }
 
 func stepOf(st gateOrgState) string {

@@ -35,9 +35,15 @@ type gateAdmin struct {
 // gateOrganization creates an organization and returns its slug and ID.
 func gateOrganization(t *testing.T) (string, uuid.UUID) {
 	t.Helper()
+	return gateOrganizationFor(t, t)
+}
+
+// gateOrganizationFor is gateOrganization with the deletion registered on owner (see createOrgFor).
+func gateOrganizationFor(owner, t *testing.T) (string, uuid.UUID) {
+	t.Helper()
 	root := login(t, env.PlatformAdmin)
 	org := newOrg()
-	res := createOrg(t, root, org)
+	res := createOrgFor(owner, t, root, org)
 	expectStatus(t, res, http.StatusCreated, "")
 	return org["slug"], responseID(t, res)
 }
@@ -533,7 +539,8 @@ func (w *auditWorld) sharedGateOrganization(t *testing.T) string {
 	w.gateOrgMu.Lock()
 	defer w.gateOrgMu.Unlock()
 	if w.gateOrgSlug == "" {
-		w.gateOrgSlug, _ = gateOrganization(t)
+		// The parent test owns it: the first case to need it must not delete it for the others.
+		w.gateOrgSlug, _ = gateOrganizationFor(w.owner, t)
 	}
 	return w.gateOrgSlug
 }

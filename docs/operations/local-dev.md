@@ -151,17 +151,19 @@ export is built within seconds.
 ## Acceptance gates on a long-lived stack
 
 The acceptance gates (`make acceptance`) run against this stack and leave some data behind: every run creates new
-`gate-*` organizations, enrolled devices, tokens and audit events. Each gate deletes the organizations it created when
-its case ends (the platform deletion with `grace_days` 0, which a development stack allows; the case waits up to
-5 minutes for the status `deleted` and only logs a failed cleanup). What an aborted run left, or a cleanup that failed,
-is removed with
+`gate-*` organizations, enrolled devices, tokens and audit events. Each gate requests the deletion of the organizations it created when its case ends (the platform deletion with
+`grace_days` 0, which a development stack allows; a failed request is only logged). The worker then removes them in the
+background, one deletion step per minute, so an organization is gone about ten minutes later. What an aborted run left,
+or a request that failed, is removed with
 
 ```sh
 make dev-prune-gate-orgs   # deletes every organization named "Gate gate-…" through the admin API
 ```
 
-The target refuses to run unless the api reports `PADDOCK_ENV=development`. The devices, tokens and audit events of
-other gates are not removed. A gate must
+The target refuses to run unless the api reports `PADDOCK_ENV=development`. It requests all deletions first and then
+waits up to 12 minutes for them; it exits non-zero only for an organization it could not delete or that is still not
+deleted at the limit. Do not run it while a gate run is in progress: it also deletes that run's organizations, after
+cancelling their pending deletions. The devices, tokens and audit events of other gates are not removed. A gate must
 therefore not depend on the number of organizations, devices or any other state that accumulates across runs: it asserts
 on the objects it created itself, scopes its lists and audit queries to them, and does not size a timeout on how fast
 the stack works through all organizations or devices. A gate that passes on a fresh stack and fails on a long-used one

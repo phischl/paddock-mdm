@@ -110,6 +110,13 @@ const orgCreateTimeout = 90 * time.Second
 // p's transport and session cookies.
 func createOrg(t *testing.T, p *env.Portal, body any) env.Response {
 	t.Helper()
+	return createOrgFor(t, t, p, body)
+}
+
+// createOrgFor is createOrg with the deletion of the organization registered on owner instead of t, for an
+// organization that outlives the case that creates it.
+func createOrgFor(owner, t *testing.T, p *env.Portal, body any) env.Response {
+	t.Helper()
 	const path = "/api/platform/v1/organizations"
 	client := *p.Client
 	client.Timeout = orgCreateTimeout
@@ -125,7 +132,7 @@ func createOrg(t *testing.T, p *env.Portal, body any) env.Response {
 	if res.Status == http.StatusCreated || res.Status == http.StatusOK {
 		var org struct{ ID, Slug string }
 		if res.JSON(&org) == nil && org.ID != "" {
-			deleteGateOrgAtEnd(t, org.ID, org.Slug)
+			deleteGateOrgAtEnd(owner, org.ID, org.Slug)
 		}
 	}
 	return res

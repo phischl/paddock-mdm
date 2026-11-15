@@ -24,6 +24,8 @@ type auditWorld struct {
 	acme             uuid.UUID
 	idx              *env.AuditIndex
 
+	// owner is the test that runs the cases (TestAuditExactlyOnce), the end of which deletes the shared organization.
+	owner       *testing.T
 	gateOrgMu   sync.Mutex
 	gateOrgSlug string
 
@@ -555,7 +557,7 @@ func newOrg() map[string]string {
 
 func newAuditWorld(t *testing.T) *auditWorld {
 	t.Helper()
-	w := &auditWorld{alice: login(t, env.Alice), bob: login(t, env.Bob), root: login(t, env.PlatformAdmin), idx: auditIndex(t)}
+	w := &auditWorld{owner: t, alice: login(t, env.Alice), bob: login(t, env.Bob), root: login(t, env.PlatformAdmin), idx: auditIndex(t)}
 	w.acme = orgOf(t, w.alice)
 	acmeOperatorRoots(t)
 	return w

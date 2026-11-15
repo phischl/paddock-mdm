@@ -20,7 +20,9 @@ const (
 	gateNamePrefix = "Gate gate-"
 	orgPath        = "/api/platform/v1/organizations"
 	pageSize       = 100
-	deleteWait     = 5 * time.Minute
+	// The worker runs one of the ten deletion steps per round of a minute, so a deletion takes about ten minutes; plan
+	// M17 amendment p (PDK-946c) makes a round run several steps, and the wait then returns to 5 minutes.
+	deleteWait = 12 * time.Minute
 	// Below the admin API's step-up window of 5 minutes.
 	stepUpAge = 3 * time.Minute
 )
@@ -43,6 +45,9 @@ type org struct {
 	} `json:"deletion"`
 }
 
+// doFunc is Portal.Do; the tests replace it.
+type doFunc func(ctx context.Context, method, path string, body any) (env.Response, error)
+
 func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
@@ -51,10 +56,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("login as %s: %w (is the stack up and seeded?)", env.PlatformAdmin, err)
 	}
-	if err := requireDevelopment(ctx, admin); err != nil {
+	if err := requireDevelopment(ctx, admin.Do); err != nil {
 		return err
 	}
-	orgs, err := listGateOrgs(ctx, admin)
+	orgs, err := listGateOrgs(ctx, admin.Do)
 	if err != nil {
 		return err
 	}
@@ -97,9 +102,10 @@ func run() error {
 		pending = append(pending, o)
 	}
 
+	// All deletions are requested first: the worker advances them side by side, so the wait is one for all.
 	deadline := time.Now().Add(deleteWait)
 	for _, o := range pending {
-		last, err := await(ctx, admin, o.ID, deadline)
+		last, err := await(ctx, admin.Do, o.ID, deadline)
 		if err != nil {
 			fmt.Printf("%s (%s): %v\n", o.Slug, o.ID, err)
 			failed++
@@ -114,8 +120,8 @@ func run() error {
 	return nil
 }
 
-func requireDevelopment(ctx context.Context, admin *env.Portal) error {
-	res, err := admin.Do(ctx, http.MethodGet, "/api/v1/me", nil)
+func requireDevelopment(ctx context.Context, do doFunc) error {
+	res, err := do(ctx, http.MethodGet, "/api/v1/me", nil)
 	if err != nil {
 		return err
 	}
@@ -128,12 +134,14 @@ func requireDevelopment(ctx context.Context, admin *env.Portal) error {
 	return nil
 }
 
+func isGateOrg(o org) bool { return strings.HasPrefix(o.Name, gateNamePrefix) }
+
 // listGateOrgs pages through the organizations that match the search; the list leaves out deleted ones.
-func listGateOrgs(ctx context.Context, admin *env.Portal) ([]org, error) {
+func listGateOrgs(ctx context.Context, do doFunc) ([]org, error) {
 	var out []org
 	for page := 1; ; page++ {
 		q := url.Values{"q": {"gate-"}, "page": {fmt.Sprint(page)}, "page_size": {fmt.Sprint(pageSize)}, "sort": {"slug"}}
-		res, err := admin.Do(ctx, http.MethodGet, orgPath+"?"+q.Encode(), nil)
+		res, err := do(ctx, http.MethodGet, orgPath+"?"+q.Encode(), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -144,7 +152,7 @@ func listGateOrgs(ctx context.Context, admin *env.Portal) ([]org, error) {
 			return nil, fmt.Errorf("list organizations: HTTP %d %s", res.Status, res.Body)
 		}
 		for _, o := range body.Items {
-			if strings.HasPrefix(o.Name, gateNamePrefix) {
+			if isGateOrg(o) {
 				out = append(out, o)
 			}
 		}
@@ -154,10 +162,12 @@ func listGateOrgs(ctx context.Context, admin *env.Portal) ([]org, error) {
 	}
 }
 
-func await(ctx context.Context, admin *env.Portal, id string, deadline time.Time) (org, error) {
+// await polls until the organization is deleted or the deadline passes; a deletion that reports an error code of its
+// last step while it is still running is reported at the deadline, not earlier, because the worker retries it.
+func await(ctx context.Context, do doFunc, id string, deadline time.Time) (org, error) {
 	var last org
 	for {
-		res, err := admin.Do(ctx, http.MethodGet, orgPath+"/"+id, nil)
+		res, err := do(ctx, http.MethodGet, orgPath+"/"+id, nil)
 		if err == nil && res.Status == http.StatusNotFound {
 			return org{Status: "deleted"}, nil
 		}
