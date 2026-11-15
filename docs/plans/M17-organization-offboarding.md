@@ -1136,6 +1136,8 @@ grant; query text, state and timestamps of other roles are not exposed. Nothing 
    | Prepared transactions | Not used (`max_prepared_transactions` 0). If two-phase commit is ever enabled, `quiesce` MUST also wait on `pg_prepared_xacts` (noted in the migration header). |
    | Autovacuum, pgBackRest, `paddock-migrate`, superuser sessions | Not in the set: their `usename` is not an organization role. |
    | A long-running transaction of an organization role, of any organization, open at the cutoff | Waited for until it ends; it is in the set by construction. More than 1 h raises the alert. The operator finds it in `pg_stat_activity` as the database superuser; the remedy is `pg_terminate_backend` (runbook, PDK-1019). |
+   | An idle pool connection, not in a transaction | Not in the set: a session outside a transaction holds no virtual-ID lock. pgx pool connections between transactions are of this kind. |
+   | Backup and monitoring sessions (pgBackRest, Prometheus exporters, `psql` as the superuser) | Not in the set: excluded by the `usename` filter on organization roles. |
    | An idle-in-transaction pool connection | Possible only through a bug or a hung `fn`, since pgx never hands back an open transaction. Same as the previous row. |
    | A backend reusing a PID | Harmless: a virtual ID includes the backend's local transaction counter, so a new transaction on the same PID has a different virtual ID. |
 7. **Tests** (they replace the ones of the earlier text of this addendum):
