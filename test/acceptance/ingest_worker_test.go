@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -74,12 +75,63 @@ func rabbitmqctlJSON(ctx context.Context, broker string, out any, args ...string
 	return nil
 }
 
+// rmqPeerHost decodes the peer_host column of rabbitmqctl's JSON output. Depending on version and setup it is an
+// address string, a 4-element IPv4 tuple or an 8-element tuple of 16-bit IPv6 words (an IPv4-mapped address on a
+// dual-stack listener); any other shape fails the decode instead of being skipped.
+type rmqPeerHost net.IP
+
+func (h *rmqPeerHost) UnmarshalJSON(b []byte) error {
+	var str string
+	if json.Unmarshal(b, &str) == nil {
+		ip := net.ParseIP(str)
+		if ip == nil {
+			return fmt.Errorf("peer_host %q is not an IP address", str)
+		}
+		*h = rmqPeerHost(ip)
+		return nil
+	}
+	var nums []int
+	if err := json.Unmarshal(b, &nums); err != nil {
+		return fmt.Errorf("peer_host %s is neither a string nor a number array", b)
+	}
+	switch len(nums) {
+	case 4:
+		ip := make(net.IP, 4)
+		for i, n := range nums {
+			if n < 0 || n > 255 {
+				return fmt.Errorf("peer_host %s: octet %d out of range", b, n)
+			}
+			ip[i] = byte(n)
+		}
+		*h = rmqPeerHost(ip)
+	case 8:
+		ip := make(net.IP, 16)
+		for i, n := range nums {
+			if n < 0 || n > 0xffff {
+				return fmt.Errorf("peer_host %s: word %d out of range", b, n)
+			}
+			ip[2*i], ip[2*i+1] = byte(n>>8), byte(n)
+		}
+		*h = rmqPeerHost(ip)
+	default:
+		return fmt.Errorf("peer_host %s has %d elements, want 4 or 8", b, len(nums))
+	}
+	return nil
+}
+
+// Equal compares after normalizing IPv4-mapped IPv6 addresses.
+func (h rmqPeerHost) Equal(ip net.IP) bool { return net.IP(h).Equal(ip) }
+
 // ingestConsumerQueues returns the ingest queues on which a connection from peer holds a consumer, and the broker's
 // numbers (see channelNumber) of the channels that carry them.
 func ingestConsumerQueues(ctx context.Context, broker, peer string) (map[string]bool, map[string]bool, error) {
 	var conns []struct {
-		Pid      string `json:"pid"`
-		PeerHost string `json:"peer_host"`
+		Pid      string      `json:"pid"`
+		PeerHost rmqPeerHost `json:"peer_host"`
+	}
+	peerIP := net.ParseIP(peer)
+	if peerIP == nil {
+		return nil, nil, fmt.Errorf("peer %q is not an IP address", peer)
 	}
 	var channels []struct {
 		Pid        string `json:"pid"`
@@ -100,8 +152,8 @@ func ingestConsumerQueues(ctx context.Context, broker, peer string) (map[string]
 	}
 	connOf := map[string]string{}
 	for _, c := range conns {
-		if c.PeerHost == peer {
-			connOf[c.Pid] = c.PeerHost
+		if c.PeerHost.Equal(peerIP) {
+			connOf[c.Pid] = peer
 		}
 	}
 	chanOK := map[string]bool{}
