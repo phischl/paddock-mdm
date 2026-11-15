@@ -292,6 +292,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		AuditLog:         app.NewAuditLog(auditReader, orgPool),
 		AuditIntegrity:   app.NewAuditIntegrity(auditReader),
 		AuditExports:     app.NewAuditExports(runner, auditReader),
+		DeletedOrgAudit:  app.NewDeletedOrgAudit(runner, auditReader, platformPool),
 		ServerVersion:    buildinfo.Version,
 		IPAllowlist:      ipAllowlist,
 		IPGuard:          ipGuard,

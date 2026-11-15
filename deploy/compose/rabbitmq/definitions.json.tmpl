@@ -12,9 +12,9 @@
   "permissions": [
     { "user": "provisioner", "vhost": "paddock", "configure": ".*", "write": ".*", "read": ".*" },
     { "user": "relay", "vhost": "paddock", "configure": "^$", "write": "^paddock\\.(audit|state|command|revocation)$", "read": "^$" },
-    { "user": "audit_writer", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^audit\\.writer$" },
+    { "user": "audit_writer", "vhost": "paddock", "configure": "^$", "write": "^paddock\\.offboarding$", "read": "^audit\\.writer$" },
     { "user": "gateway", "vhost": "paddock", "configure": "^$", "write": "^paddock\\.ingest$", "read": "^$" },
-    { "user": "worker", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^(ingest\\.(enroll|heartbeat|event|command_result|escrow)|command\\.issued)$" },
+    { "user": "worker", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^(ingest\\.(enroll|heartbeat|event|command_result|escrow)|command\\.issued|worker\\.offboarding)$" },
     { "user": "compiler", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^state\\.(p[0-9]{2}|priority)$" },
     { "user": "revocation_issuer", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^revocation\\.approved$" }
   ]

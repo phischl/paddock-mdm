@@ -252,12 +252,11 @@ func newOffboardWorld(t *testing.T) *offboardWorld {
 	return w
 }
 
-// job is the deletion as the worker wires it, with the stubbed step of PDK-1017.
+// job is the deletion as the worker wires it.
 func (w *offboardWorld) job() *app.Offboarding {
 	return app.NewOffboarding(app.OffboardingObjects{Bundles: w.bundles, Escrow: w.escrow}).
 		WithDeps(app.OffboardingDeps{Runner: w.runner, Worker: w.worker, Platform: w.platform, Identity: w.idp,
 			Inventory: w.fleet, Cache: w.cache, Sessions: w.sessions, Signer: w.signer}).
-		WithStubbedSteps(offboarding.StepAuditFinal).
 		WithClock(func() time.Time {
 			w.clockMu.Lock()
 			defer w.clockMu.Unlock()
@@ -343,12 +342,29 @@ func (w *offboardWorld) passCutoff(t *testing.T) {
 		WHERE id = $1 AND offboarding_wait_vxids IS NULL`, w.org)
 }
 
+// acknowledgeAudit applies the audit writer's acknowledgement once the final verification was requested, as the worker's
+// consumer of worker.offboarding would; no audit writer runs here.
+func (w *offboardWorld) acknowledgeAudit(t *testing.T, job *app.Offboarding, outcome string) {
+	t.Helper()
+	if w.count(t, "SELECT count(*) FROM organization WHERE id = $1 AND audit_retirement_requested_at IS NOT NULL", w.org) == 0 {
+		return
+	}
+	if err := job.RecordAuditFinal(context.Background(), offboarding.AuditRetired{OrganizationID: w.org,
+		FinalOutcome: outcome, FinalVerifiedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // advanceTo advances until the organization is at step (or done when step is ""), failing on a step error.
 func (w *offboardWorld) advanceTo(t *testing.T, job *app.Offboarding, step string) {
 	t.Helper()
 	for range 60 {
-		if _, cur, _ := w.state(t); cur == step {
+		_, cur, _ := w.state(t)
+		if cur == step {
 			return
+		}
+		if cur == offboarding.StepAuditFinal {
+			w.acknowledgeAudit(t, job, offboarding.AuditFinalVerified)
 		}
 		done, err := job.Advance(context.Background(), w.org)
 		switch {
@@ -799,5 +815,72 @@ func TestOffboardingCountsEveryBatch(t *testing.T) {
 	last := completed[len(completed)-1]
 	if last.Params["step"] != offboarding.StepDatabase || last.Params["count"].(float64) <= float64(before) || before < 1500 {
 		t.Fatalf("database completed with %v after %d stored before the stop", last.Params, before)
+	}
+}
+
+// TestOffboardingAuditFinal (plan M17 amendment 2026-11-15 o points 1 and 6): step audit_final records one
+// organization.audit_retirement_requested and waits without failing; after AuditFinalWaitAlert it records
+// audit_writer_pending once; the acknowledgement completes it, a failed outcome included, and a repeated or late
+// acknowledgement changes nothing; organization.deleted carries the outcome. An acknowledgement of an organization that
+// is not deleting is ignored.
+func TestOffboardingAuditFinal(t *testing.T) {
+	w := newOffboardWorld(t)
+	job := w.job()
+	ctx := context.Background()
+	w.requestDue(t, job)
+	w.advanceTo(t, job, offboarding.StepAuditFinal)
+	for range 3 {
+		if done, err := job.Advance(ctx, w.org); done || err != nil {
+			t.Fatalf("waiting step: done %v, %v", done, err)
+		}
+	}
+	requests := w.stepEvents(t, audit.CodeOrganizationAuditRetirementRequested)
+	if len(requests) != 1 || requests[0].Params["organization_id"] != w.org.String() ||
+		requests[0].OrganizationID != audit.PlatformOrganizationID || requests[0].Params["slug"] == "" {
+		t.Fatalf("retirement requests %+v", requests)
+	}
+	if _, step, code := w.state(t); step != offboarding.StepAuditFinal || code != "" {
+		t.Fatalf("waiting step at %s with error %q", step, code)
+	}
+
+	w.clockMu.Lock()
+	w.clock = time.Now().Add(app.AuditFinalWaitAlert + time.Minute)
+	w.clockMu.Unlock()
+	for range 2 {
+		var oe *app.OffboardingError
+		if _, err := job.Advance(ctx, w.org); !errors.As(err, &oe) || oe.Code != offboarding.ErrorAuditWriterPending {
+			t.Fatalf("after the wait alert: %v", err)
+		}
+	}
+	failed := w.stepEvents(t, audit.CodeOrganizationDeletionStepFailed)
+	if len(failed) != 1 || failed[0].Params["error_code"] != offboarding.ErrorAuditWriterPending {
+		t.Fatalf("failed step events %+v", failed)
+	}
+
+	if err := job.RecordAuditFinal(ctx, offboarding.AuditRetired{OrganizationID: w.other,
+		FinalOutcome: offboarding.AuditFinalVerified, FinalVerifiedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(t, "SELECT count(*) FROM organization WHERE id = $1 AND audit_final_verified_at IS NULL", w.other); n != 1 {
+		t.Fatal("an acknowledgement changed an organization that is not deleting")
+	}
+	w.acknowledgeAudit(t, job, offboarding.AuditFinalFailed)
+	w.acknowledgeAudit(t, job, offboarding.AuditFinalVerified)
+	if n := w.count(t, "SELECT count(*) FROM organization WHERE id = $1 AND audit_final_outcome = 'failed'", w.org); n != 1 {
+		t.Fatal("a repeated acknowledgement replaced the first outcome")
+	}
+	if done, err := job.Advance(ctx, w.org); done || err != nil {
+		t.Fatalf("acknowledged step: done %v, %v", done, err)
+	}
+	if _, step, code := w.state(t); step != offboarding.StepDatabase || code != "" {
+		t.Fatalf("after the acknowledgement at %s with error %q", step, code)
+	}
+	w.advanceTo(t, job, "")
+	deleted := w.stepEvents(t, audit.CodeOrganizationDeleted)
+	if len(deleted) != 1 || deleted[0].Params["audit_final_outcome"] != offboarding.AuditFinalFailed {
+		t.Fatalf("organization.deleted %+v", deleted)
+	}
+	if len(w.stepEvents(t, audit.CodeOrganizationAuditRetirementRequested)) != 1 {
+		t.Fatal("the retirement was requested more than once")
 	}
 }

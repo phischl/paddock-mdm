@@ -235,3 +235,42 @@ func TestMessagesOfDeletedOrganizationDropped(t *testing.T) {
 		t.Errorf("%d actions, want %d: something was recorded for a deleted organization", n, actions)
 	}
 }
+
+type fakeAuditFinal struct {
+	got []offboarding.AuditRetired
+	err error
+}
+
+func (f *fakeAuditFinal) RecordAuditFinal(_ context.Context, ack offboarding.AuditRetired) error {
+	f.got = append(f.got, ack)
+	return f.err
+}
+
+// TestAuditRetirementsProcess: a valid acknowledgement is applied and acknowledged, a failure to apply it is retried,
+// and a message that is no valid acknowledgement is dead-lettered without being applied.
+func TestAuditRetirementsProcess(t *testing.T) {
+	ctx := context.Background()
+	org := uuid.New()
+	valid, _ := json.Marshal(offboarding.AuditRetired{OrganizationID: org, FinalOutcome: offboarding.AuditFinalFailed,
+		FinalVerifiedAt: time.Now()})
+	f := &fakeAuditFinal{}
+	a := NewAuditRetirements(f)
+	if o := a.process(ctx, valid); o != ack || len(f.got) != 1 || f.got[0].OrganizationID != org ||
+		f.got[0].FinalOutcome != offboarding.AuditFinalFailed {
+		t.Fatalf("valid acknowledgement: outcome %v, applied %+v", o, f.got)
+	}
+	f.err = errors.New("database down")
+	if o := a.process(ctx, valid); o != retry {
+		t.Fatalf("failed apply: outcome %v, want retry", o)
+	}
+	f.got, f.err = nil, nil
+	for _, body := range []string{`not json`, `{}`, `{"organization_id":"` + org.String() + `","final_outcome":"maybe","final_verified_at":"2026-11-15T00:00:00Z"}`,
+		`{"organization_id":"` + org.String() + `","final_outcome":"verified"}`} {
+		if o := a.process(ctx, []byte(body)); o != poison {
+			t.Errorf("%s: outcome %v, want poison", body, o)
+		}
+	}
+	if len(f.got) != 0 {
+		t.Fatalf("invalid messages were applied: %+v", f.got)
+	}
+}

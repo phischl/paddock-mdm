@@ -90,6 +90,9 @@ var lists = map[string]struct {
 	"listProfileAssignments": {profileAssignmentList, "postgres/queries/privilege.sql", "ListProfileAssignments", "id"},
 	// Authentik groups, listed from the identity provider and sorted in memory: no query.
 	"listUpstreamGroups": {upstreamGroupList, "", "", ""},
+	// The retained log of a deleted organization reads the same queries (ADR 0052 decision 7).
+	"listDeletedOrganizationAuditEvents":  {auditEventList, "auditpg/queries/audit.sql", "ListAuditEvents", "event_id"},
+	"listDeletedOrganizationAuditExports": {auditExportList, "auditpg/queries/export.sql", "ListAuditExports", "id"},
 }
 
 // sortColumns names the column a sort value orders by where it is not the column of that name: releases sort by

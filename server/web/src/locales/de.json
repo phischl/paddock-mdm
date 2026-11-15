@@ -412,6 +412,7 @@
       "deletion_step_completed": "Löschung von {slug}: Schritt {step} abgeschlossen",
       "deletion_step_failed": "Löschung von {slug}: Schritt {step} fehlgeschlagen",
       "deleted": "Die Organisation {slug} wurde gelöscht",
+      "audit_retirement_requested": "Löschung von {slug}: die abschließende Prüfung des Audit-Protokolls wurde angefordert",
       "inactive_denied": "{actor} wurde abgewiesen: Die Organisation {organization_id} {status, select, deleted {ist gelöscht} other {wird gelöscht}} ({attempted_code})"
     },
     "device_group": {

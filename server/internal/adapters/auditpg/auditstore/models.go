@@ -82,6 +82,7 @@ type AuditOrgRetired struct {
 	RetiredAt       time.Time
 	FinalVerifiedAt *time.Time
 	FinalOutcome    *string
+	AckPublishedAt  *time.Time
 }
 
 type AuditOrgSeq struct {

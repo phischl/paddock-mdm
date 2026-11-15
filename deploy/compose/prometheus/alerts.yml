@@ -69,6 +69,18 @@ groups:
         annotations:
           summary: "The audit hash chain failed its nightly verification"
           description: "{{ $value }} organization(s) have a broken or unreadable audit chain; see the evidence integrity page and paddock-server audit verify."
+      # The final verification of a deleted organization's chain (ADR 0052 decision 6, plan M17 amendment
+      # 2026-11-15 o) is not repeated: the nightly cycle skips the retired organization, so PaddockAuditChainBroken never
+      # sees it. The counter is read from audit_verification_run, so a writer restart does not raise it again; the
+      # alert fires for the hour after the failed run, and the deleted organization's detail keeps the outcome.
+      - alert: PaddockAuditFinalVerificationFailed
+        expr: increase(paddock_audit_verify_runs_total{trigger="final", result="failed"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The final audit verification of a deleted organization failed"
+          description: "The audit chain of an organization being deleted did not verify; its retained evidence is incomplete or altered. The organization detail and organization.deleted show audit_final_outcome failed."
       # 36 h leave one missed night of slack; the writer seeds the gauge at start, so a fresh writer does not fire,
       # but leaves it unset (0, fires) while the audit index is unreadable (plan M8b amendment 2026-10-25). A replica
       # that loses the audit-verify lock takes the gauge from the recorded run, so the rule stays per instance

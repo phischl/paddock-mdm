@@ -35,6 +35,8 @@ type handlers struct {
 	imports *app.ReleaseImports
 	// exports are the evidence exports of the audit log (plan M10 decision 29).
 	exports *app.AuditExports
+	// deletedAudit is the retained audit evidence of deleted organizations (ADR 0052 decision 7).
+	deletedAudit *app.DeletedOrgAudit
 	// API tokens and the declarative configuration (plan M6c).
 	apiTokens   *app.APITokens
 	declarative *app.Declarative
@@ -546,6 +548,11 @@ func toOrganizationDeletion(o pgstore.Organization) *adminapi.OrganizationDeleti
 	}
 	if o.DeletionUninstallsSkipped != nil {
 		d.UninstallsSkipped = int(*o.DeletionUninstallsSkipped)
+	}
+	if o.AuditFinalVerifiedAt != nil && o.AuditFinalOutcome != nil {
+		at := o.AuditFinalVerifiedAt.UTC()
+		outcome := adminapi.OrganizationDeletionAuditFinalOutcome(*o.AuditFinalOutcome)
+		d.AuditFinalVerifiedAt, d.AuditFinalOutcome = &at, &outcome
 	}
 	return d
 }

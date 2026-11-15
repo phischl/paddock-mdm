@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -25,10 +27,16 @@ const (
 // requeue=true; the quorum queue's delivery limit dead-letters poison messages. Messages that are not valid audit
 // events are rejected without requeue (dead-lettered immediately).
 func (w *Writer) Handle(ctx context.Context, ch *amqp.Channel, deliveries <-chan amqp.Delivery) error {
+	return w.consume(ctx, deliveries, nil)
+}
+
+// consume is Handle; retire, when set, runs for every organization.audit_retirement_requested of a batch after the
+// batch is written and before it is acknowledged, so a failed retirement is retried with the redelivered batch.
+func (w *Writer) consume(ctx context.Context, deliveries <-chan amqp.Delivery, retire func(ctx context.Context, org uuid.UUID) error) error {
 	for {
 		batch, open := collect(ctx, deliveries)
 		if len(batch) > 0 {
-			if err := w.process(ctx, batch); err != nil {
+			if err := w.process(ctx, batch, retire); err != nil {
 				return err
 			}
 		}
@@ -68,7 +76,7 @@ func collect(ctx context.Context, deliveries <-chan amqp.Delivery) ([]amqp.Deliv
 	return batch, true
 }
 
-func (w *Writer) process(ctx context.Context, batch []amqp.Delivery) error {
+func (w *Writer) process(ctx context.Context, batch []amqp.Delivery, retire func(ctx context.Context, org uuid.UUID) error) error {
 	events := make([]audit.Event, 0, len(batch))
 	valid := make([]amqp.Delivery, 0, len(batch))
 	for _, d := range batch {
@@ -95,6 +103,9 @@ func (w *Writer) process(ctx context.Context, batch []amqp.Delivery) error {
 	}
 	last := valid[len(valid)-1]
 	n, err := w.WriteBatch(ctx, events)
+	if err == nil && retire != nil {
+		err = retireRequested(ctx, events, retire)
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "audit batch failed; requeueing", "events", len(events), "error", err)
 		select {
@@ -126,6 +137,29 @@ func ackUpTo(valid []amqp.Delivery, last amqp.Delivery) error {
 	for _, d := range valid {
 		if err := d.Ack(false); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// retireRequested calls retire for the organization of every organization.audit_retirement_requested in events. Only
+// the platform pseudo-organization's successful request counts: an organization's own events reach the platform
+// pseudo-organization only through the platform scope of ActionRunner. A request without a valid organization_id is
+// logged and skipped, so it does not block the queue.
+func retireRequested(ctx context.Context, events []audit.Event, retire func(ctx context.Context, org uuid.UUID) error) error {
+	for _, ev := range events {
+		if ev.Code != audit.CodeOrganizationAuditRetirementRequested || ev.OrganizationID != audit.PlatformOrganizationID ||
+			ev.Outcome != audit.OutcomeSuccess {
+			continue
+		}
+		raw, _ := ev.Params["organization_id"].(string)
+		org, err := uuid.Parse(raw)
+		if err != nil || org == uuid.Nil || org == audit.PlatformOrganizationID {
+			slog.ErrorContext(ctx, "audit retirement request without a valid organization_id skipped", "event_id", ev.EventID)
+			continue
+		}
+		if err := retire(ctx, org); err != nil {
+			return fmt.Errorf("retire organization %s: %w", org, err)
 		}
 	}
 	return nil

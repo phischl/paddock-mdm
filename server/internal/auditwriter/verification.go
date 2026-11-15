@@ -150,7 +150,7 @@ var (
 			"(audit_verification_run, the CLI included); error and record_error count this process's runs that could "+
 			"not be verified or recorded.",
 		[]string{"trigger", "result"}, nil)
-	verifyTriggers = []string{TriggerNightly, TriggerSample, TriggerCLI}
+	verifyTriggers = []string{TriggerNightly, TriggerSample, TriggerCLI, TriggerFinal}
 )
 
 type verifySeries struct{ trigger, result string }

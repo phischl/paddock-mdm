@@ -36,7 +36,16 @@ const (
 	ExchangeRevocation      = "paddock.revocation"
 	QueueRevocationApproved = "revocation.approved"
 	RevocationApprovedKey   = "approved"
+	// ExchangeOffboarding carries the audit writer's acknowledgement of a retired organization to the worker, the only
+	// channel from the audit domain back to the control plane (plan M17 amendment 2026-11-15 o point 4): the audit
+	// writer may publish only here, and only the worker reads QueueWorkerOffboarding.
+	ExchangeOffboarding    = "paddock.offboarding"
+	QueueWorkerOffboarding = "worker.offboarding"
+	AuditRetiredBindingKey = "audit_retired.*"
 )
+
+// AuditRetiredRoutingKey is the routing key of the acknowledgement of org's retirement.
+func AuditRetiredRoutingKey(org uuid.UUID) string { return "audit_retired." + org.String() }
 
 // Ingest kinds (M2a, M4a); each has the queue ingest.<kind> and routing keys ingest.<kind>.<organization_id>.
 const (
@@ -332,6 +341,7 @@ func Provision(ctx context.Context, cfg Config, o ProvisionOptions) error {
 		{ExchangeAudit, amqp.ExchangeTopic}, {ExchangeIngest, amqp.ExchangeTopic},
 		{ExchangeState, amqp.ExchangeDirect}, {ExchangeCommand, amqp.ExchangeDirect},
 		{ExchangeRevocation, amqp.ExchangeDirect}, {ExchangeDLX, amqp.ExchangeTopic},
+		{ExchangeOffboarding, amqp.ExchangeTopic},
 	}
 	for _, ex := range exchanges {
 		if err := ch.ExchangeDeclare(ex.name, ex.kind, true, false, false, false, nil); err != nil {
@@ -395,7 +405,8 @@ func topology(o ProvisionOptions) []queueSpec {
 	}
 	return append(qs, queueSpec{name: QueueCommandIssued, exchange: ExchangeCommand, keys: []string{CommandIssuedKey}},
 		queueSpec{name: QueueRevocationApproved, exchange: ExchangeRevocation, keys: []string{RevocationApprovedKey},
-			args: amqp.Table{"x-single-active-consumer": true}})
+			args: amqp.Table{"x-single-active-consumer": true}},
+		queueSpec{name: QueueWorkerOffboarding, exchange: ExchangeOffboarding, keys: []string{AuditRetiredBindingKey}})
 }
 
 func declare(ch *amqp.Channel, q queueSpec) error {

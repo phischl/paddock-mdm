@@ -53,7 +53,9 @@ func (r *Report) addf(format string, args ...any) {
 
 // Verify checks, for org and every day in [from, to]: a manifest exists (a missing day breaks the chain), its
 // stored copy matches the index, its signature verifies with the audit-chain public key, it links to the previous
-// day's manifest, it lists exactly the indexed objects, and every object's SHA-256 matches.
+// day's manifest, it lists exactly the indexed objects, and every object's SHA-256 matches. A manifest marked retired
+// is the organization's last (plan M17 amendment 2026-11-15 o point 7): a later day has no manifest, and one that has
+// is a problem.
 func (v *Verifier) Verify(ctx context.Context, org uuid.UUID, from, to time.Time) (*Report, error) {
 	from, to = dayOf(from), dayOf(to)
 	if to.Before(from) {
@@ -82,10 +84,18 @@ func (v *Verifier) Verify(ctx context.Context, org uuid.UUID, from, to time.Time
 			return err
 		}
 		first := true
+		retiredDay := ""
 		for day := from; !day.After(to); day = day.AddDate(0, 0, 1) {
-			report.Days++
 			name := day.Format(time.DateOnly)
 			m, ok := byDay[name]
+			if retiredDay != "" {
+				if ok {
+					report.Days++
+					report.addf("%s: manifest after the retired day %s", name, retiredDay)
+				}
+				continue
+			}
+			report.Days++
 			if !ok {
 				report.addf("%s: no manifest (chain broken)", name)
 				prev = nil
@@ -96,8 +106,12 @@ func (v *Verifier) Verify(ctx context.Context, org uuid.UUID, from, to time.Time
 				report.addf("%s: prev_manifest_sha256 does not link to the previous day", name)
 			}
 			first = false
-			if err := v.verifyManifest(ctx, q, report, org, day, m, keys); err != nil {
+			retired, err := v.verifyManifest(ctx, q, report, org, day, m, keys)
+			if err != nil {
 				return err
+			}
+			if retired {
+				retiredDay = name
 			}
 			prev = m.Sha256
 		}
@@ -106,24 +120,25 @@ func (v *Verifier) Verify(ctx context.Context, org uuid.UUID, from, to time.Time
 	return report, err
 }
 
+// verifyManifest reports whether the manifest is marked retired.
 func (v *Verifier) verifyManifest(ctx context.Context, q *auditstore.Queries, report *Report, org uuid.UUID, day time.Time,
-	m auditstore.AuditManifest, keys map[int][]byte) error {
+	m auditstore.AuditManifest, keys map[int][]byte) (bool, error) {
 	name := day.Format(time.DateOnly)
 	var buf bytes.Buffer
 	if _, _, err := streamObject(ctx, v.store, m.ObjectKey, v.maxObject, &buf); err != nil {
 		report.addf("%s: manifest object %s unreadable: %v", name, m.ObjectKey, err)
-		return nil
+		return false, nil
 	}
 	raw := buf.Bytes()
 	var file ManifestFile
 	if err := json.Unmarshal(raw, &file); err != nil {
 		report.addf("%s: manifest object is not valid JSON", name)
-		return nil
+		return false, nil
 	}
 	canonical, err := jcs.Transform(file.Manifest)
 	if err != nil {
 		report.addf("%s: manifest cannot be canonicalized", name)
-		return nil
+		return false, nil
 	}
 	sum := sha256.Sum256(canonical)
 	if !bytes.Equal(sum[:], m.Sha256) {
@@ -138,7 +153,7 @@ func (v *Verifier) verifyManifest(ctx context.Context, q *auditstore.Queries, re
 	var manifest Manifest
 	if err := json.Unmarshal(canonical, &manifest); err != nil {
 		report.addf("%s: manifest does not parse", name)
-		return nil
+		return false, nil
 	}
 	if manifest.OrganizationID != org.String() || manifest.Day != name || manifest.Schema != ManifestSchema {
 		report.addf("%s: manifest belongs to %s/%s", name, manifest.OrganizationID, manifest.Day)
@@ -153,7 +168,7 @@ func (v *Verifier) verifyManifest(ctx context.Context, q *auditstore.Queries, re
 
 	indexed, err := q.ListAuditObjectsForDay(ctx, auditstore.ListAuditObjectsForDayParams{OrganizationID: org, Day: day})
 	if err != nil {
-		return err
+		return false, err
 	}
 	listed := map[string]ManifestObject{}
 	for _, o := range manifest.Objects {
@@ -178,7 +193,7 @@ func (v *Verifier) verifyManifest(ctx context.Context, q *auditstore.Queries, re
 			report.addf("%s: object %s was modified (SHA-256 mismatch)", name, o.Key)
 		}
 	}
-	return nil
+	return manifest.Retired, nil
 }
 
 // verifySignature checks an OpenBao Transit ed25519 signature "vault:v<N>:<base64>".
