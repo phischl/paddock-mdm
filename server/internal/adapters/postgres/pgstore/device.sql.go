@@ -439,14 +439,16 @@ func (q *Queries) ListAgentUpdateRequests(ctx context.Context) ([]ListAgentUpdat
 	return items, nil
 }
 
-const listCachedDeviceKeys = `-- name: ListCachedDeviceKeys :many
-SELECT k.key_id, k.public_key, k.status AS key_status, d.id AS device_id, d.state, coalesce(s.last_seq, 0)::bigint AS last_seq
-FROM device_identity_key k JOIN device d ON d.id = k.device_id LEFT JOIN device_status s ON s.device_id = d.id
-WHERE d.state <> 'pending' AND ($1::uuid IS NULL OR d.id = $1::uuid)
+const listCachedDeviceKeysOfDevice = `-- name: ListCachedDeviceKeysOfDevice :many
+SELECT k.key_id, k.public_key, k.status AS key_status, k.device_id,
+       coalesce((SELECT d.state FROM device d WHERE d.id = k.device_id), 'pending')::text AS state,
+       coalesce((SELECT s.last_seq FROM device_status s WHERE s.device_id = k.device_id), 0)::bigint AS last_seq
+FROM device_identity_key k
+WHERE k.device_id = $1
 ORDER BY k.key_id
 `
 
-type ListCachedDeviceKeysRow struct {
+type ListCachedDeviceKeysOfDeviceRow struct {
 	KeyID     string
 	PublicKey []byte
 	KeyStatus string
@@ -455,18 +457,74 @@ type ListCachedDeviceKeysRow struct {
 	LastSeq   int64
 }
 
-// Worker cache sync: identity keys with the state of their device; pending devices are not cached (plan M2a
-// decision 10).
-// last_seq restores the device's check-in counter together with its key (0 = never checked in).
-func (q *Queries) ListCachedDeviceKeys(ctx context.Context, deviceID uuid.NullUUID) ([]ListCachedDeviceKeysRow, error) {
-	rows, err := q.db.Query(ctx, listCachedDeviceKeys, deviceID)
+// The identity keys of one device, as ListCachedDeviceKeysPage (a change notification).
+func (q *Queries) ListCachedDeviceKeysOfDevice(ctx context.Context, deviceID uuid.UUID) ([]ListCachedDeviceKeysOfDeviceRow, error) {
+	rows, err := q.db.Query(ctx, listCachedDeviceKeysOfDevice, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListCachedDeviceKeysRow{}
+	items := []ListCachedDeviceKeysOfDeviceRow{}
 	for rows.Next() {
-		var i ListCachedDeviceKeysRow
+		var i ListCachedDeviceKeysOfDeviceRow
+		if err := rows.Scan(
+			&i.KeyID,
+			&i.PublicKey,
+			&i.KeyStatus,
+			&i.DeviceID,
+			&i.State,
+			&i.LastSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCachedDeviceKeysPage = `-- name: ListCachedDeviceKeysPage :many
+SELECT k.key_id, k.public_key, k.status AS key_status, k.device_id,
+       coalesce((SELECT d.state FROM device d WHERE d.id = k.device_id), 'pending')::text AS state,
+       coalesce((SELECT s.last_seq FROM device_status s WHERE s.device_id = k.device_id), 0)::bigint AS last_seq
+FROM device_identity_key k
+WHERE (k.device_id, k.key_id) > ($1::uuid, $2::text)
+ORDER BY k.device_id, k.key_id
+LIMIT $3
+`
+
+type ListCachedDeviceKeysPageParams struct {
+	AfterDevice uuid.UUID
+	AfterKey    string
+	PageSize    int32
+}
+
+type ListCachedDeviceKeysPageRow struct {
+	KeyID     string
+	PublicKey []byte
+	KeyStatus string
+	DeviceID  uuid.UUID
+	State     string
+	LastSeq   int64
+}
+
+// Worker cache sync: identity keys with the state of their device; the caller skips pending devices (plan M2a
+// decision 10). One page of at most @page_size keys after (@after_device, @after_key), keyset-paged by device ID (plan
+// M17 amendment r point 6). The device and its status are scalar subqueries on their primary keys, so no cached
+// generic plan can join them by the organization's rows: a plan built while the worker reconciled a small
+// organization and reused for one of 70 000 devices joined every key with every device (7.5 minutes, PDK-1071).
+// last_seq restores the device's check-in counter together with its key (0 = never checked in).
+func (q *Queries) ListCachedDeviceKeysPage(ctx context.Context, arg ListCachedDeviceKeysPageParams) ([]ListCachedDeviceKeysPageRow, error) {
+	rows, err := q.db.Query(ctx, listCachedDeviceKeysPage, arg.AfterDevice, arg.AfterKey, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCachedDeviceKeysPageRow{}
+	for rows.Next() {
+		var i ListCachedDeviceKeysPageRow
 		if err := rows.Scan(
 			&i.KeyID,
 			&i.PublicKey,

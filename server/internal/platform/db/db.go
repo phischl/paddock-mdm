@@ -42,6 +42,10 @@ type Options struct {
 	// rounds that hold a lock connection for their whole duration cannot take the connections their own queries need
 	// (PDK-1010). Zero keeps the locks in the query pool.
 	LockConns int32
+	// TransactionTimeout, when positive, is the transaction_timeout of every connection of the query pool, set as a
+	// connection runtime parameter so it costs no statement per transaction (plan M17 amendment r point 2). The
+	// organization pools pass OrgTransactionTimeout; a transaction may lower it with SET LOCAL, never raise it.
+	TransactionTimeout time.Duration
 }
 
 // newPool opens the query pool and, with o.HealthConn, the health pool of one connection.
@@ -79,6 +83,9 @@ func openPool(ctx context.Context, dsn string, o Options) (*pgxpool.Pool, error)
 	if o.ApplicationName != "" {
 		cfg.ConnConfig.RuntimeParams["application_name"] = o.ApplicationName
 	}
+	if o.TransactionTimeout > 0 {
+		cfg.ConnConfig.RuntimeParams[runtimeTransactionTimeout] = transactionTimeoutParam(o.TransactionTimeout)
+	}
 	cfg.MaxConnIdleTime = 5 * time.Minute
 	return pgxpool.NewWithConfig(ctx, cfg)
 }
@@ -102,13 +109,16 @@ func (p pool) Close() {
 	}
 }
 
-// inTx runs setup and fn in one transaction. fn's error is returned unchanged; the transaction is rolled back.
+// inTx runs setup and fn in one transaction. fn's error is returned unchanged, except that a transaction PostgreSQL
+// ended for exceeding transaction_timeout returns an error matching ErrTransactionTimeout that still wraps it; the
+// transaction is rolled back.
 func inTx(ctx context.Context, p *pgxpool.Pool, setup func(pgx.Tx) error, fn func(pgx.Tx) error) error {
 	return inTxWith(ctx, p, pgx.TxOptions{}, setup, fn)
 }
 
 // inTxWith is inTx with transaction options.
 func inTxWith(ctx context.Context, p *pgxpool.Pool, opts pgx.TxOptions, setup func(pgx.Tx) error, fn func(pgx.Tx) error) error {
+	start := time.Now()
 	tx, err := p.BeginTx(ctx, opts)
 	if err != nil {
 		return err
@@ -116,13 +126,13 @@ func inTxWith(ctx context.Context, p *pgxpool.Pool, opts pgx.TxOptions, setup fu
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if setup != nil {
 		if err := setup(tx); err != nil {
-			return err
+			return timedOut(ctx, tx.Conn(), start, err)
 		}
 	}
 	if err := fn(tx); err != nil {
-		return err
+		return timedOut(ctx, tx.Conn(), start, err)
 	}
-	return tx.Commit(ctx)
+	return timedOut(ctx, tx.Conn(), start, tx.Commit(ctx))
 }
 
 func setOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {

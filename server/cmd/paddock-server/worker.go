@@ -22,6 +22,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
+	"github.com/phischl/paddock-mdm/server/internal/platform/op"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
@@ -290,12 +291,12 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 					consumersReady(wc.ready()))
 			})
 		},
-		func(ctx context.Context) error { return wc.enroll.Run(ctx, enroll.Handle) },
-		func(ctx context.Context) error { return wc.heartbeat.Run(ctx, reports.HandleHeartbeats) },
-		func(ctx context.Context) error { return wc.event.Run(ctx, reports.HandleEvents) },
-		func(ctx context.Context) error { return wc.issued.Run(ctx, commands.HandleIssued) },
-		func(ctx context.Context) error { return wc.result.Run(ctx, commands.HandleResults) },
-		func(ctx context.Context) error { return wc.escrow.Run(ctx, escrowStore.Handle) },
+		named("ingest.enroll", func(ctx context.Context) error { return wc.enroll.Run(ctx, enroll.Handle) }),
+		named("ingest.heartbeat", func(ctx context.Context) error { return wc.heartbeat.Run(ctx, reports.HandleHeartbeats) }),
+		named("ingest.event", func(ctx context.Context) error { return wc.event.Run(ctx, reports.HandleEvents) }),
+		named("command.issued", func(ctx context.Context) error { return wc.issued.Run(ctx, commands.HandleIssued) }),
+		named("ingest.command_result", func(ctx context.Context) error { return wc.result.Run(ctx, commands.HandleResults) }),
+		named("ingest.escrow", func(ctx context.Context) error { return wc.escrow.Run(ctx, escrowStore.Handle) }),
 	}
 	consumers = append(consumers, auditRetirementJobs(mode, wc.offboarding, func() *worker.AuditRetirements {
 		return worker.NewAuditRetirements(s.offboarding.WithDeps(app.OffboardingDeps{Runner: runner, Worker: pool,
@@ -327,31 +328,37 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 			Platform: platformPool, Identity: ak, Inventory: fleetClient, Cache: cache, Sessions: sessions.NewStore(vk),
 			Signer: signer}), platformPool)
 		return []func(context.Context) error{
-			worker.NewOpsProbe(signer, worker.DialCertExpiry(s.tlsAddr, nil), s.tlsHosts).Run,
-			worker.NewAutoUnsealObserver(platformPool, runner).Run,
-			commands.Run,
-			escrowStore.Run,
-			diagnostics.Run,
-			cacheSync.Run,
-			dms.Run,
-			staleness.Run,
-			eventGaps.Run,
-			retention.Run,
-			rollouts.Run,
-			configRollouts.Run,
-			softwareRequests.Run,
-			softwareRepositories.Run,
-			identity.RunSync,
-			identity.RunReconcile,
-			identity.RunAdminAccounts,
-			identity.RunPlatformAdmins,
-			identity.RunBrandFlows,
-			inventory.RunSettings,
-			inventory.RunSync,
-			osvSync.Run,
-			offboard.Run,
+			named("ops-probe", worker.NewOpsProbe(signer, worker.DialCertExpiry(s.tlsAddr, nil), s.tlsHosts).Run),
+			named("auto-unseal", worker.NewAutoUnsealObserver(platformPool, runner).Run),
+			named("commands", commands.Run),
+			named("escrow", escrowStore.Run),
+			named("diagnostics", diagnostics.Run),
+			named("cache-sync", cacheSync.Run),
+			named("dms", dms.Run),
+			named("staleness", staleness.Run),
+			named("event-gaps", eventGaps.Run),
+			named("retention", retention.Run),
+			named("rollouts", rollouts.Run),
+			named("config-rollouts", configRollouts.Run),
+			named("software-requests", softwareRequests.Run),
+			named("software-repositories", softwareRepositories.Run),
+			named("identity-sync", identity.RunSync),
+			named("identity-reconcile", identity.RunReconcile),
+			named("identity-admin-accounts", identity.RunAdminAccounts),
+			named("identity-platform-admins", identity.RunPlatformAdmins),
+			named("identity-brand-flows", identity.RunBrandFlows),
+			named("inventory-settings", inventory.RunSettings),
+			named("inventory-sync", inventory.RunSync),
+			named("osv-sync", osvSync.Run),
+			named("offboarding", offboard.Run),
 		}
 	}
 	slog.InfoContext(ctx, "worker starting", "mode", mode)
 	return runAll(ctx, workerJobs(mode, consumers, rounds)...)
+}
+
+// named runs job with its context named name, the label op of the metrics of its database work (plan M17 amendment r
+// point 5); an audited action inside replaces it with its code.
+func named(name string, job func(context.Context) error) func(context.Context) error {
+	return func(ctx context.Context) error { return job(op.With(ctx, name)) }
 }

@@ -42,6 +42,8 @@ func TestOutcomeOf(t *testing.T) {
 		{"mcp write not enabled", problem.MCPWriteNotEnabled, audit.OutcomeDenied, "mcp_write_not_enabled"},
 		{"rate limited", problem.RateLimited, audit.OutcomeDenied, "rate_limited"},
 		{"mcp login required", problem.MCPLoginRequired, audit.OutcomeFailure, "mcp_login_required"},
+		{"transaction timeout", fmt.Errorf("x: %w: %w", db.ErrTransactionTimeout, errors.New("25P04")),
+			audit.OutcomeFailure, "transaction_timeout"},
 		{"organization deleting", fmt.Errorf("x: %w", db.OrganizationUnavailable(uuid.New(), "deleting")),
 			audit.OutcomeDenied, "organization_inactive"},
 	}
