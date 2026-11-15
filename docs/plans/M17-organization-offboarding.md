@@ -1751,7 +1751,19 @@ Binding; it refines amendment j's quiescence wait and amendment p's 5-minute bou
    - It then **closes** the transaction and computes the bundles outside it. It writes the results in batches of short
      transactions, each guarded by the bundle sequence (a write applies only if the device's `bundle_seq` still matches
      what was read, the existing conditional-stamp rule).
-   - A conflict leaves that device for the next compile.
+   - A conflict leaves that device for the next compile. *(Superseded by the note of 2026-11-16 below.)*
+   - **Note 2026-11-16 (PDK-1072 review).** Leaving a conflicted device is not safe: an older snapshot can commit
+     first (`TestStaleConcurrentCommitIsRecompiled`), and the newer inputs would then be lost.
+     - **Rule:** a device whose guarded write conflicts is recompiled from a **fresh snapshot**, as a device-scope
+       compile event without force, for at most 3 rounds. If it still conflicts after that, the compile fails and the
+       consumer requeues the batch (at-least-once). Nothing is skipped silently.
+     - **The bundle upload stays inside the guarded commit transaction.** The row lock protects the versioned object key
+       from an overwrite race.
+     - **Bound:** the upload is limited to about 5 s (`UploadTimeout`). A guarded commit transaction covers the uploads
+       of so few devices that it stays within the 10 s target of point 1, even when every upload in it takes the full
+       timeout; the 45 s cap still applies.
+     - **Test:** a commit whose uploads all hit the timeout ends within the target and requeues; it does not hold the
+       transaction open.
    - If reading the inputs alone exceeds 10 s at 70 000 devices: stop condition, report the figures. The architect
      then decides on a paged consistent read (an exported snapshot) instead.
 
