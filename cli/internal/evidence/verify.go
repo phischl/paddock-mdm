@@ -388,15 +388,23 @@ func (v *verifier) checkDays(doc *auditevidence.Export, keys map[int][]byte) ([]
 	used := map[string]bool{}
 	var prev day
 	events := 0
+	retiredDay := ""
 	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
 		name := d.Format(time.DateOnly)
 		cur := day{name: name}
 		entry, inDoc := listed[name]
 		delete(listed, name)
+		raw, present := v.manifestBytes(name)
+		// The organization's log ended with a retired manifest: no later day may have one.
+		if retiredDay != "" {
+			if present || inDoc {
+				v.add("%s: manifest after the retired day %s", name, retiredDay)
+			}
+			continue
+		}
 		if !inDoc {
 			v.add("%s: day is missing from days[] of export.json", name)
 		}
-		raw, present := v.manifestBytes(name)
 		if !present {
 			v.add("%s: no manifest (chain broken)", name)
 			v.res.Days++
@@ -405,6 +413,9 @@ func (v *verifier) checkDays(doc *auditevidence.Export, keys map[int][]byte) ([]
 		}
 		v.res.Days++
 		manifest, digest, ok := v.checkManifest(name, raw, keys)
+		if ok && manifest.Retired {
+			retiredDay = name
+		}
 		if ok {
 			cur.digest, cur.have = digest, true
 			if inDoc {

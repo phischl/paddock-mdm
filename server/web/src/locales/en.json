@@ -414,6 +414,7 @@
       "deletion_step_failed": "Deletion of {slug}: step {step} failed",
       "deleted": "The organization {slug} was deleted",
       "recovery_exported": "{actor} exported the recovery keys and local administrator passwords of {devices, plural, one {# device} other {# devices}}, encrypted to a {recipient, select, public_key {public key} other {passphrase}}",
+      "audit_retirement_requested": "Deletion of {slug}: the final verification of the audit log was requested",
       "inactive_denied": "{actor} was refused: organization {organization_id} is {status, select, deleted {deleted} other {being deleted}} ({attempted_code})"
     },
     "device_group": {

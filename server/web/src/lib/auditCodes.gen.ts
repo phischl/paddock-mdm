@@ -163,6 +163,7 @@ export const auditCodes = [
   'notification.replayed',
   'notification.test_requested',
   'notification.test_sent',
+  'organization.audit_retirement_requested',
   'organization.created',
   'organization.deleted',
   'organization.deletion_cancelled',

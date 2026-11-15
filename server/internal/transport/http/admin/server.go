@@ -160,6 +160,9 @@ type Deps struct {
 	BackupRuns     *app.BackupRuns
 	// BackupRestorePlans are the restore plans (plan M15 decisions 25–26).
 	BackupRestorePlans *app.BackupRestorePlans
+
+	// DeletedOrgAudit reads the retained audit evidence of deleted organizations (ADR 0052 decision 7).
+	DeletedOrgAudit *app.DeletedOrgAudit
 }
 
 // privileged maps route patterns of privileged actions to their audit spec, so that requests rejected before
@@ -326,6 +329,12 @@ var privileged = map[string]struct {
 	"POST /api/platform/v1/backup/restore-plans":                           {app.ScopePlatform, app.SpecRestorePlan},
 	"POST /api/platform/v1/backup/restore-plans/{id}/cancel":               {app.ScopePlatform, app.SpecRestoreCancel},
 	"POST /api/platform/v1/backup/restore-plans/{id}/abandon":              {app.ScopePlatform, app.SpecRestoreAbandon},
+
+	// The retained audit evidence of deleted organizations (ADR 0052 decision 7).
+	"GET /api/platform/v1/organizations/{id}/audit-events":                       {app.ScopePlatform, app.SpecDeletedOrgAuditRead},
+	"GET /api/platform/v1/organizations/{id}/audit-exports":                      {app.ScopePlatform, app.SpecDeletedOrgAuditRead},
+	"POST /api/platform/v1/organizations/{id}/audit-exports":                     {app.ScopePlatform, app.SpecDeletedOrgAuditExport},
+	"GET /api/platform/v1/organizations/{id}/audit-exports/{export_id}/download": {app.ScopePlatform, app.SpecDeletedOrgAuditRead},
 }
 
 // ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the
@@ -356,7 +365,7 @@ func NewHandler(d Deps) http.Handler {
 
 	api := http.NewServeMux()
 	h := &handlers{
-		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, exports: d.AuditExports, tokens: d.Tokens,
+		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, exports: d.AuditExports, deletedAudit: d.DeletedOrgAudit, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, recoveryExports: d.RecoveryExports, revocations: d.Revocations, dms: d.DMS,

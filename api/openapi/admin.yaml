@@ -6294,6 +6294,175 @@ paths:
         "409": { $ref: "#/components/responses/Problem" }
         "502": { $ref: "#/components/responses/Problem" }
 
+  /api/platform/v1/organizations/{id}/audit-events:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeletedOrganizationAuditEvents
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The retained audit log of a deleted organization (ADR 0052 decision 7), with the sort,
+        search and filters of /api/v1/audit-events. Its last event is audit.chain_verified or
+        audit.chain_verification_failed with param final true. 404 not_found unless the organization exists and is
+        deleted, and for every caller who is no platform administrator. Every attempt is recorded as
+        platform.deleted_organization_audit_read (resource audit_events) in the platform audit log.
+      x-paddock-audit: platform.deleted_organization_audit_read
+      x-paddock-mcp: { expose: false }
+      x-paddock-list:
+        sort: [occurred_at, code, outcome]
+        default_sort: -occurred_at
+        search: [code, actor.display, target.display]
+        filters: [from, to, code, outcome, actor_type, target_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AuditEventSort"
+        - $ref: "#/components/parameters/Search"
+        - name: target_id
+          in: query
+          description: Exact target id (for example a device id).
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          description: RFC 3339; default to - 7 days.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: RFC 3339; default now. The range may span at most 92 days (400 range_too_large).
+          schema: { type: string, format: date-time }
+        - name: code
+          in: query
+          description: Exact event code; repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: outcome
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AuditOutcome" }
+        - name: actor_type
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AuditActorType" }
+      responses:
+        "200":
+          description: One page of the deleted organization's audit events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditEventPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/platform/v1/organizations/{id}/audit-exports:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeletedOrganizationAuditExports
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The evidence exports of a deleted organization, as /api/v1/audit/exports. 404 not_found
+        unless the organization is deleted, and for every caller who is no platform administrator. Every attempt is
+        recorded as platform.deleted_organization_audit_read (resource audit_exports).
+      x-paddock-audit: platform.deleted_organization_audit_read
+      x-paddock-mcp: { expose: false }
+      x-paddock-list:
+        sort: [requested_at, status, from_day, to_day]
+        default_sort: -requested_at
+        search: [purpose, requested_by.display]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AuditExportSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AuditExportStatus" }
+      responses:
+        "200":
+          description: One page of exports.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditExportPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createDeletedOrganizationAuditExport
+      x-paddock-step-up: true
+      tags: [platform]
+      description: |
+        Roles: platform_admin, with a step-up within the last 300 s (403 step_up_required). Requests the signed
+        evidence package of a deleted organization for its auditors, with the body, checks and answers of
+        POST /api/v1/audit/exports; the package verifies offline with paddockctl audit verify-export. 404 not_found
+        unless the organization is deleted, and for every caller who is no platform administrator. Recorded as
+        platform.deleted_organization_audit_read (resource audit_export_request) in the platform audit log.
+      x-paddock-audit: platform.deleted_organization_audit_read
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuditExportCreate" }
+      responses:
+        "202":
+          description: The pending export.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditExport" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /api/platform/v1/organizations/{id}/audit-exports/{export_id}/download:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - name: export_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: downloadDeletedOrganizationAuditExport
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Streams the package of a ready export of a deleted organization, with the headers and
+        answers of GET /api/v1/audit/exports/{id}/download (409 export_not_ready). 404 not_found for an unknown export,
+        unless the organization is deleted, and for every caller who is no platform administrator. Recorded as
+        platform.deleted_organization_audit_read (resource audit_export_download) before the first byte is sent.
+      x-paddock-audit: platform.deleted_organization_audit_read
+      responses:
+        "200":
+          description: The package.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+            X-Paddock-Package-SHA256: { schema: { type: string } }
+          content:
+            application/x-tar:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /api/platform/v1/ip-allowlist:
     get:
       operationId: listIpAllowlist
@@ -9009,7 +9178,7 @@ components:
     OrganizationDeletion:
       type: object
       required: [requested_at, requested_by, reason, delete_after, recovery_export_until, step, last_error_code,
-        deleted_at, uninstalls_issued, uninstalls_skipped]
+        deleted_at, uninstalls_issued, uninstalls_skipped, audit_final_verified_at, audit_final_outcome]
       properties:
         requested_at: { type: string, format: date-time }
         requested_by: { type: string, description: The platform administrator who requested the deletion. }
@@ -9032,6 +9201,18 @@ components:
         uninstalls_skipped:
           type: integer
           description: Active devices skipped because of an open uninstall or an open Lock or Destroy.
+        audit_final_verified_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the audit writer verified the organization's audit chain for the last time (step audit_final).
+        audit_final_outcome:
+          type: string
+          nullable: true
+          enum: [verified, failed]
+          description: |
+            The outcome of that final verification; failed means the retained audit evidence did not verify
+            (PaddockAuditFinalVerificationFailed). The deletion continues either way. null before step audit_final.
     OrganizationDeleteRequest:
       type: object
       required: [confirm_slug, reason, grace_days]

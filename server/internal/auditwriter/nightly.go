@@ -287,19 +287,31 @@ func (p poolIndex) organizations(ctx context.Context) ([]auditOrganization, erro
 	return orgs, err
 }
 
-// listOrganizations returns every organization of the index with its first audit day.
+// listOrganizations returns every organization of the index with its first audit day, except the retired ones: their
+// chain had its final verification and is no longer verified (plan M17 decision 16).
 func listOrganizations(ctx context.Context, q *auditstore.Queries) ([]auditOrganization, error) {
 	ids, err := q.ListAuditOrganizations(ctx)
 	if err != nil {
 		return nil, err
 	}
-	orgs := make([]auditOrganization, len(ids))
-	for i, id := range ids {
+	retiredIDs, err := q.ListAuditOrgRetiredIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	retired := make(map[uuid.UUID]bool, len(retiredIDs))
+	for _, id := range retiredIDs {
+		retired[id] = true
+	}
+	orgs := make([]auditOrganization, 0, len(ids))
+	for _, id := range ids {
+		if retired[id] {
+			continue
+		}
 		first, err := q.FirstAuditDay(ctx, id)
 		if err != nil {
 			return nil, err
 		}
-		orgs[i] = auditOrganization{ID: id, FirstDay: first}
+		orgs = append(orgs, auditOrganization{ID: id, FirstDay: first})
 	}
 	return orgs, nil
 }

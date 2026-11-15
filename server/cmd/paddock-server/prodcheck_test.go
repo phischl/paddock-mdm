@@ -110,3 +110,44 @@ func TestCheckContainers(t *testing.T) {
 		t.Fatalf("offline with --containers:\n%s", out.String())
 	}
 }
+
+// TestCheckBroker (PDK-1017, main §44): check-broker compares rabbitmqctl's listing on stdin with the definitions and
+// fails (exit 1) on a missing permission; prod-check --online --broker-permissions prints the same item, offline not.
+func TestCheckBroker(t *testing.T) {
+	dir := t.TempDir()
+	defs := filepath.Join(dir, "definitions.json.tmpl")
+	if err := os.WriteFile(defs, []byte(`{"users":[{"name":"worker","password":"@WORKER_PASSWORD@"}],
+		"permissions":[{"user":"worker","vhost":"paddock","configure":"^$","write":"^$","read":"^worker\\.offboarding$"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const item = "rabbitmq: permissions match the definitions"
+	ok := `[{"user":"worker","configure":"^$","write":"^$","read":"^worker\\.offboarding$"}]`
+	var out bytes.Buffer
+	if err := runCheckBroker([]string{"--definitions", defs}, strings.NewReader(ok), &out); err != nil || !strings.Contains(out.String(), "PASS  "+item) {
+		t.Fatalf("matching: %v\n%s", err, out.String())
+	}
+	out.Reset()
+	if err := runCheckBroker([]string{"--definitions", defs}, strings.NewReader(`[]`), &out); !errors.Is(err, errProdCheckFailed) ||
+		!strings.Contains(out.String(), "FAIL  "+item) || !strings.Contains(out.String(), "worker: missing") ||
+		strings.Contains(out.String(), "WORKER_PASSWORD") {
+		t.Fatalf("missing: %v\n%s", err, out.String())
+	}
+	if err := runCheckBroker([]string{"extra"}, strings.NewReader(ok), io.Discard); !errors.Is(err, errUsage) {
+		t.Fatalf("positional argument: %v", err)
+	}
+	listing := filepath.Join(dir, "broker.json")
+	if err := os.WriteFile(listing, []byte(`[]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	_ = runProdCheck(context.Background(), []string{"--online", "--broker-permissions", listing, "--broker-definitions", defs},
+		strings.NewReader(`{}`), &out)
+	if !strings.Contains(out.String(), "FAIL  "+item) {
+		t.Fatalf("prod-check --online --broker-permissions:\n%s", out.String())
+	}
+	out.Reset()
+	_ = runProdCheck(context.Background(), []string{"--broker-permissions", listing, "--broker-definitions", defs}, strings.NewReader(`{}`), &out)
+	if strings.Contains(out.String(), item) {
+		t.Fatalf("offline with --broker-permissions:\n%s", out.String())
+	}
+}

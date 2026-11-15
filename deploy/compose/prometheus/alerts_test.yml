@@ -444,6 +444,28 @@ tests:
               summary: "The audit hash chain failed its nightly verification"
               description: "2 organization(s) have a broken or unreadable audit chain; see the evidence integrity page and paddock-server audit verify."
 
+  - name: a failed final verification of a deleted organization fires for the following hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_verify_runs_total{trigger="final", result="failed", job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 0 1x180"
+      - series: 'paddock_audit_verify_runs_total{trigger="final", result="ok", job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 1 2x180"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PaddockAuditFinalVerificationFailed
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: PaddockAuditFinalVerificationFailed
+        exp_alerts:
+          - exp_labels: { severity: critical, trigger: final, result: failed, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "The final audit verification of a deleted organization failed"
+              description: "The audit chain of an organization being deleted did not verify; its retained evidence is incomplete or altered. The organization detail and organization.deleted show audit_final_outcome failed."
+      - eval_time: 2h
+        alertname: PaddockAuditFinalVerificationFailed
+        exp_alerts: []
+
   - name: a chain verification older than 36 hours warns after one more hour
     interval: 1m
     input_series:
@@ -827,3 +849,56 @@ tests:
             exp_annotations:
               summary: "An organization deletion keeps failing"
               description: "1 organization deletion(s) retry a failing step at the longest backoff; see the organization's deletion step and error code."
+
+  - name: a worker that does not consume worker.offboarding for 15 minutes warns
+    interval: 1m
+    input_series:
+      - series: 'paddock_worker_offboarding_consumer_connected{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x20 1x10 0x10"
+      - series: 'paddock_worker_offboarding_consumer_connected{job="paddock", role="paddock-worker", instance="paddock-worker-2:9090"}'
+        values: "1x40"
+      # Another role's target at 0 (a gauge registered where it does not belong) never fires (main §46).
+      - series: 'paddock_worker_offboarding_consumer_connected{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0x40"
+      - series: 'paddock_worker_offboarding_consumer_connected{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: PaddockWorkerOffboardingConsumerDisconnected
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: PaddockWorkerOffboardingConsumerDisconnected
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock, role: paddock-worker, instance: "paddock-worker:9090" }
+            exp_annotations:
+              summary: "A worker does not consume worker.offboarding"
+              description: "paddock-worker:9090 has not consumed worker.offboarding for 15 minutes; organization deletions wait in step audit_final. Check the worker's log and the broker's permissions (./paddock check --online, ./paddock bootstrap broker)."
+      - eval_time: 25m
+        alertname: PaddockWorkerOffboardingConsumerDisconnected
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: PaddockWorkerOffboardingConsumerDisconnected
+        exp_alerts: []
+
+  - name: one audit.event_after_retirement warns for the following hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_events_after_retirement_total{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 0 0 1x180"
+      # The counter of another target (a registration where it does not belong) is ignored.
+      - series: 'paddock_audit_events_after_retirement_total{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0 5 10x180"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: PaddockAuditEventAfterRetirement
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: PaddockAuditEventAfterRetirement
+        exp_alerts:
+          - exp_labels: { severity: warning, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "Events arrived for an organization whose audit log is closed"
+              description: "The audit writer recorded events of a retired organization as audit.event_after_retirement in the last hour. Check in the platform audit log (code audit.event_after_retirement, param organization_id) whether that organization is really deleted."
+      - eval_time: 2h
+        alertname: PaddockAuditEventAfterRetirement
+        exp_alerts: []

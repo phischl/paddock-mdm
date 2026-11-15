@@ -220,3 +220,26 @@ func TestAuditKeysRejectsArguments(t *testing.T) {
 		t.Fatalf("audit keys extra = %v, want usage error", err)
 	}
 }
+
+// TestPrintDeletions: one tab-separated line per deletion, occurred_at, organization_id, slug (plan M17 §7 step 5).
+func TestPrintDeletions(t *testing.T) {
+	var out strings.Builder
+	printDeletions(&out, []auditwriter.Deletion{
+		{OccurredAt: time.Date(2026, 11, 15, 9, 30, 0, 123000000, time.UTC), OrganizationID: "0190e7a0-0000-7000-8000-000000000001", Slug: "acme"},
+		{OccurredAt: time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC), OrganizationID: "0190e7a0-0000-7000-8000-000000000002", Slug: "beta"},
+	})
+	want := "2026-11-15T09:30:00.123Z\t0190e7a0-0000-7000-8000-000000000001\tacme\n" +
+		"2026-11-15T10:00:00Z\t0190e7a0-0000-7000-8000-000000000002\tbeta\n"
+	if out.String() != want {
+		t.Fatalf("output:\n%q\nwant\n%q", out.String(), want)
+	}
+}
+
+// TestAuditDeletionsUsage: --since must be an RFC 3339 time.
+func TestAuditDeletionsUsage(t *testing.T) {
+	for _, args := range [][]string{{"deletions"}, {"deletions", "--since", "2026-11-15"}, {"deletions", "--since", "2026-11-15T00:00:00Z", "x"}} {
+		if err := runAudit(context.Background(), config.NewLoaderFrom(nil), config.Common{}, args); !errors.Is(err, errUsage) {
+			t.Errorf("%v: %v, want usage", args, err)
+		}
+	}
+}

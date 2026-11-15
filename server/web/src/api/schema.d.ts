@@ -4123,6 +4123,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/organizations/{id}/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The retained audit log of a deleted organization (ADR 0052 decision 7), with the sort,
+         *     search and filters of /api/v1/audit-events. Its last event is audit.chain_verified or
+         *     audit.chain_verification_failed with param final true. 404 not_found unless the organization exists and is
+         *     deleted, and for every caller who is no platform administrator. Every attempt is recorded as
+         *     platform.deleted_organization_audit_read (resource audit_events) in the platform audit log.
+         */
+        get: operations["listDeletedOrganizationAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/organizations/{id}/audit-exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The evidence exports of a deleted organization, as /api/v1/audit/exports. 404 not_found
+         *     unless the organization is deleted, and for every caller who is no platform administrator. Every attempt is
+         *     recorded as platform.deleted_organization_audit_read (resource audit_exports).
+         */
+        get: operations["listDeletedOrganizationAuditExports"];
+        put?: never;
+        /**
+         * @description Roles: platform_admin, with a step-up within the last 300 s (403 step_up_required). Requests the signed
+         *     evidence package of a deleted organization for its auditors, with the body, checks and answers of
+         *     POST /api/v1/audit/exports; the package verifies offline with paddockctl audit verify-export. 404 not_found
+         *     unless the organization is deleted, and for every caller who is no platform administrator. Recorded as
+         *     platform.deleted_organization_audit_read (resource audit_export_request) in the platform audit log.
+         */
+        post: operations["createDeletedOrganizationAuditExport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/organizations/{id}/audit-exports/{export_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                export_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. Streams the package of a ready export of a deleted organization, with the headers and
+         *     answers of GET /api/v1/audit/exports/{id}/download (409 export_not_ready). 404 not_found for an unknown export,
+         *     unless the organization is deleted, and for every caller who is no platform administrator. Recorded as
+         *     platform.deleted_organization_audit_read (resource audit_export_download) before the first byte is sent.
+         */
+        get: operations["downloadDeletedOrganizationAuditExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/ip-allowlist": {
         parameters: {
             query?: never;
@@ -5663,6 +5743,17 @@ export interface components {
             uninstalls_issued: number;
             /** @description Active devices skipped because of an open uninstall or an open Lock or Destroy. */
             uninstalls_skipped: number;
+            /**
+             * Format: date-time
+             * @description When the audit writer verified the organization's audit chain for the last time (step audit_final).
+             */
+            audit_final_verified_at: string | null;
+            /**
+             * @description The outcome of that final verification; failed means the retained audit evidence did not verify
+             *     (PaddockAuditFinalVerificationFailed). The deletion continues either way. null before step audit_final.
+             * @enum {string|null}
+             */
+            audit_final_outcome: "verified" | "failed" | null;
         };
         OrganizationDeleteRequest: {
             /** @description The organization's slug, typed by the administrator. */
@@ -17158,6 +17249,148 @@ export interface operations {
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
+        };
+    };
+    listDeletedOrganizationAuditEvents: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The event_id is the tie-breaker. */
+                sort?: components["parameters"]["AuditEventSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Exact target id (for example a device id). */
+                target_id?: string;
+                /** @description RFC 3339; default to - 7 days. */
+                from?: string;
+                /** @description RFC 3339; default now. The range may span at most 92 days (400 range_too_large). */
+                to?: string;
+                /** @description Exact event code; repeatable. */
+                code?: string[];
+                /** @description Repeatable. */
+                outcome?: components["schemas"]["AuditOutcome"][];
+                /** @description Repeatable. */
+                actor_type?: components["schemas"]["AuditActorType"][];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the deleted organization's audit events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeletedOrganizationAuditExports: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["AuditExportSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["AuditExportStatus"][];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of exports. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditExportPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    createDeletedOrganizationAuditExport: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuditExportCreate"];
+            };
+        };
+        responses: {
+            /** @description The pending export. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditExport"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    downloadDeletedOrganizationAuditExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                export_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The package. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    "X-Paddock-Package-SHA256"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-tar": string;
+                };
+            };
+            401: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     listIpAllowlist: {

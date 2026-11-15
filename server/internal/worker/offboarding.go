@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"time"
@@ -10,9 +12,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/offboarding"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
@@ -239,4 +243,65 @@ func (o *Offboarding) backoff(n int) time.Duration {
 		d *= 2
 	}
 	return min(d, OffboardingBackoffCap)
+}
+
+// auditFinalRecorder applies the audit writer's acknowledgements (app.Offboarding).
+type auditFinalRecorder interface {
+	RecordAuditFinal(ctx context.Context, ack offboarding.AuditRetired) error
+}
+
+// AuditRetirements consumes worker.offboarding, the audit writer's acknowledgements of retired organizations (plan M17
+// amendment 2026-11-15 o point 6). The worker never connects to the audit database: this queue is how step audit_final
+// learns the outcome of the final verification. Only the audit writer may publish to paddock.offboarding, so a message
+// here is the writer's (the broker's permissions are the guarantee).
+type AuditRetirements struct {
+	job   auditFinalRecorder
+	pause time.Duration
+}
+
+// NewAuditRetirements creates the consumer.
+func NewAuditRetirements(job auditFinalRecorder) *AuditRetirements {
+	return &AuditRetirements{job: job, pause: RetryPause}
+}
+
+// NewAuditRetirementsGauge registers paddock_worker_offboarding_consumer_connected with reg and returns the
+// mq.Consumer OnConnection hook of queue worker.offboarding that sets it. The worker's readiness does not wait for this
+// consumer (main §45), so the gauge and PaddockWorkerOffboardingConsumerDisconnected are what reports a consumer the
+// broker keeps refusing. Only the worker role calls it: every role serves the default registry, and a gauge at 0 in
+// the others would raise the alert without a consumer (main §46).
+func NewAuditRetirementsGauge(reg prometheus.Registerer) (func(connected bool), error) {
+	g := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "paddock_worker_offboarding_consumer_connected",
+		Help: "1 while the worker consumes worker.offboarding (the audit writer's acknowledgements of retired organizations), else 0.",
+	})
+	if err := reg.Register(g); err != nil {
+		return nil, fmt.Errorf("worker: register the offboarding consumer gauge: %w", err)
+	}
+	return func(connected bool) {
+		if connected {
+			g.Set(1)
+		} else {
+			g.Set(0)
+		}
+	}, nil
+}
+
+// Handle is the mq.ConsumeFunc of queue worker.offboarding.
+func (a *AuditRetirements) Handle(ctx context.Context, _ *amqp.Channel, deliveries <-chan amqp.Delivery) error {
+	return consume(ctx, deliveries, a.pause, func(ctx context.Context, d amqp.Delivery) outcome {
+		return a.process(ctx, d.Body)
+	})
+}
+
+func (a *AuditRetirements) process(ctx context.Context, body []byte) outcome {
+	var m offboarding.AuditRetired
+	if err := json.Unmarshal(body, &m); err != nil || m.Validate() != nil {
+		return poison
+	}
+	if err := a.job.RecordAuditFinal(ctx, m); err != nil {
+		slog.WarnContext(ctx, "recording the final audit verification failed; retrying", "organization", m.OrganizationID,
+			"error", err)
+		return retry
+	}
+	return ack
 }

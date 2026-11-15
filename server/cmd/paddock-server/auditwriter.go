@@ -38,10 +38,7 @@ type auditDeps struct {
 func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 	dsn := l.SecretFile("PADDOCK_AUDIT_DB_WRITER_URL_FILE")
 	baoCfg := config.LoadOpenBao(l)
-	endpoint := l.Required("PADDOCK_AUDIT_S3_ENDPOINT")
-	accessKey := l.SecretFile("PADDOCK_AUDIT_S3_ACCESS_KEY_FILE")
-	secretKey := l.SecretFile("PADDOCK_AUDIT_S3_SECRET_KEY_FILE")
-	bucket := l.String("PADDOCK_AUDIT_S3_BUCKET", "paddock-audit")
+	store := loadAuditStore(l)
 	retention, indexRetention := auditRetention(l)
 	if err := l.Err(); err != nil {
 		return nil, err
@@ -50,7 +47,6 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := objectstore.New(endpoint, accessKey, secretKey, bucket)
 	baoClient, err := bao.New(baoCfg.Addr, baoCfg.RoleID, baoCfg.SecretID)
 	if err != nil {
 		pool.Close()
@@ -62,6 +58,15 @@ func loadAuditDeps(ctx context.Context, l *config.Loader) (*auditDeps, error) {
 		return nil, err
 	}
 	return &auditDeps{pool: pool, store: store, bao: baoClient, writer: writer, indexRetention: indexRetention}, nil
+}
+
+// loadAuditStore reads the audit bucket's configuration; l.Err reports what is missing.
+func loadAuditStore(l *config.Loader) *objectstore.Store {
+	endpoint := l.Required("PADDOCK_AUDIT_S3_ENDPOINT")
+	accessKey := l.SecretFile("PADDOCK_AUDIT_S3_ACCESS_KEY_FILE")
+	secretKey := l.SecretFile("PADDOCK_AUDIT_S3_SECRET_KEY_FILE")
+	bucket := l.String("PADDOCK_AUDIT_S3_BUCKET", "paddock-audit")
+	return objectstore.New(endpoint, accessKey, secretKey, bucket)
 }
 
 // auditRetention reads the audit writer's WORM retention and audit index retention in days.
@@ -126,15 +131,21 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 		return err
 	}
 	defer deps.pool.Close()
-	consumer := mq.NewConsumer(mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password},
-		mq.QueueAudit, auditwriter.Prefetch)
+	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
+	consumer := mq.NewConsumer(mqCfg, mq.QueueAudit, auditwriter.Prefetch)
+	acks := mq.NewPublisher(mqCfg)
+	defer acks.Close()
 	publisher := auditwriter.NewKeyPublisher(deps.publicKeys)
 	sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao, publisher)
 	recorder := auditwriter.NewRecorder(deps.pool, deps.writer, time.Now)
 	if err := prometheus.Register(recorder.Collector()); err != nil {
 		return err
 	}
+	if err := deps.writer.CountAfterRetirement(prometheus.DefaultRegisterer); err != nil {
+		return err
+	}
 	nightly := auditwriter.NewNightly(deps.pool, deps.verifier(), recorder, time.Now)
+	retirement := auditwriter.NewRetirement(deps.pool, deps.writer, deps.verifier(), sealer, recorder, acks)
 	purger := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention)
 	exporter := auditwriter.NewExporter(deps.pool, deps.writer, deps.store, deps.bao, deps.publicKeys, deps.verifier(),
 		buildinfo.Version, poll, maxBytes)
@@ -150,7 +161,9 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 				return errors.Join(deps.pool.Ping(ctx), deps.store.Ping(ctx), deps.bao.Ping(ctx), notConnected)
 			})
 		},
-		func(ctx context.Context) error { return consumer.Run(ctx, deps.writer.Handle) },
+		func(ctx context.Context) error { return consumer.Run(ctx, retirement.Handle) },
+		func(ctx context.Context) error { retirement.RunAcks(ctx); return nil },
+		func(ctx context.Context) error { retirement.RunRetirements(ctx); return nil },
 		func(ctx context.Context) error { publishCurrentKey(ctx, publisher, deps.pool); return nil },
 		func(ctx context.Context) error { sealer.RunDaily(ctx); return nil },
 		func(ctx context.Context) error { nightly.RunNightly(ctx); return nil },
@@ -195,8 +208,8 @@ func exportMaxBytes(l *config.Loader) int64 {
 	return n
 }
 
-// runAudit implements `audit seal [--day YYYY-MM-DD]`, `audit verify --org <id> --from <day> --to <day>` and
-// `audit keys` and `audit purge [--dry-run]`.
+// runAudit implements `audit seal [--day YYYY-MM-DD]`, `audit verify --org <id> --from <day> --to <day>`,
+// `audit keys`, `audit purge [--dry-run]` and `audit deletions --since <RFC3339>`.
 func runAudit(ctx context.Context, l *config.Loader, common config.Common, args []string) error {
 	if len(args) == 0 {
 		return errUsage
@@ -308,6 +321,27 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 		}
 		printAuditKeys(os.Stdout, keys)
 		return nil
+	case "deletions":
+		fs := flag.NewFlagSet("audit deletions", flag.ContinueOnError)
+		sinceFlag := fs.String("since", "", "first moment, RFC 3339")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
+			return errUsage
+		}
+		since, err := time.Parse(time.RFC3339, *sinceFlag)
+		if err != nil {
+			return errUsage
+		}
+		// Only the audit bucket is read: after a restore the databases may lag behind the WORM objects (RR-138).
+		store := loadAuditStore(l)
+		if err := l.Err(); err != nil {
+			return err
+		}
+		deletions, err := auditwriter.Deletions(ctx, store, since, time.Now())
+		if err != nil {
+			return err
+		}
+		printDeletions(os.Stdout, deletions)
+		return nil
 	case "purge":
 		fs := flag.NewFlagSet("audit purge", flag.ContinueOnError)
 		dryRun := fs.Bool("dry-run", false, "only report which partitions would be dropped")
@@ -339,6 +373,14 @@ func printAuditKeys(w io.Writer, keys map[int][]byte) {
 	slices.Sort(versions)
 	for _, v := range versions {
 		fmt.Fprintf(w, "%s v%d %s\n", auditwriter.SigningKey, v, auditevidence.Fingerprint(keys[v]))
+	}
+}
+
+// printDeletions prints one line per organization.deleted: occurred_at, organization_id and slug, tab-separated, so
+// the operator repeats each deletion after a restore to a point before it (plan M17 §12, RR-138).
+func printDeletions(w io.Writer, deletions []auditwriter.Deletion) {
+	for _, d := range deletions {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", d.OccurredAt.Format(time.RFC3339Nano), d.OrganizationID, d.Slug)
 	}
 }
 

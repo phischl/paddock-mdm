@@ -168,6 +168,20 @@ SET offboarding_counts = offboarding_counts || jsonb_build_object(@step::text,
       coalesce((offboarding_counts ->> @step::text)::bigint, 0) + @added::bigint)
 WHERE id = @id AND status = 'deleting' AND offboarding_step = @step;
 
+-- Step audit_final (plan M17 amendment o point 1): the claim of the one organization.audit_retirement_requested,
+-- which also starts the step's wait.
+-- name: ClaimOrganizationAuditRetirement :one
+UPDATE organization SET audit_retirement_requested_at = now(), updated_at = now()
+WHERE id = @id AND status = 'deleting' AND offboarding_step = 'audit_final' AND audit_retirement_requested_at IS NULL
+RETURNING *;
+
+-- The audit writer's acknowledgement (amendment o point 6), applied once and only while the organization is deleting;
+-- a repeated acknowledgement changes nothing.
+-- name: SetOrganizationAuditFinal :execrows
+UPDATE organization SET audit_final_verified_at = @final_verified_at, audit_final_outcome = @final_outcome,
+    updated_at = now()
+WHERE id = @id AND status = 'deleting' AND audit_final_verified_at IS NULL;
+
 -- organization.deleted is recorded exactly once, together with this: the tombstone no longer waits for its event.
 -- name: CloseOrganizationOffboarding :one
 UPDATE organization SET offboarding_step = NULL, updated_at = now()

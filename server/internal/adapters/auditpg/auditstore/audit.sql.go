@@ -364,6 +364,17 @@ func (q *Queries) GetAuditManifest(ctx context.Context, arg GetAuditManifestPara
 	return i, err
 }
 
+const getAuditVerificationRunOK = `-- name: GetAuditVerificationRunOK :one
+SELECT ok FROM audit_verification_run WHERE id = $1
+`
+
+func (q *Queries) GetAuditVerificationRunOK(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, getAuditVerificationRunOK, id)
+	var ok bool
+	err := row.Scan(&ok)
+	return ok, err
+}
+
 const getEventByCommitSeq = `-- name: GetEventByCommitSeq :one
 SELECT event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, object_key, commit_seq FROM audit_event WHERE commit_seq = $1 LIMIT 1
 `
@@ -579,6 +590,49 @@ type InsertAuditVerificationRunParams struct {
 
 func (q *Queries) InsertAuditVerificationRun(ctx context.Context, arg InsertAuditVerificationRunParams) error {
 	_, err := q.db.Exec(ctx, insertAuditVerificationRun,
+		arg.ID,
+		arg.OrganizationID,
+		arg.Trigger,
+		arg.FromDay,
+		arg.ToDay,
+		arg.StartedAt,
+		arg.FinishedAt,
+		arg.Days,
+		arg.Objects,
+		arg.Ok,
+		arg.Problems,
+		arg.EventID,
+	)
+	return err
+}
+
+const insertAuditVerificationRunOnce = `-- name: InsertAuditVerificationRunOnce :exec
+INSERT INTO audit_verification_run (id, organization_id, trigger, from_day, to_day, started_at, finished_at, days,
+                                    objects, ok, problems, event_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        $11, $12)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertAuditVerificationRunOnceParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Trigger        string
+	FromDay        time.Time
+	ToDay          time.Time
+	StartedAt      time.Time
+	FinishedAt     time.Time
+	Days           int32
+	Objects        int32
+	Ok             bool
+	Problems       json.RawMessage
+	EventID        uuid.UUID
+}
+
+// The final verification of a retired organization (plan M17 amendment o point 2) has a fixed run ID, so a retry after
+// a crash keeps the first run.
+func (q *Queries) InsertAuditVerificationRunOnce(ctx context.Context, arg InsertAuditVerificationRunOnceParams) error {
+	_, err := q.db.Exec(ctx, insertAuditVerificationRunOnce,
 		arg.ID,
 		arg.OrganizationID,
 		arg.Trigger,

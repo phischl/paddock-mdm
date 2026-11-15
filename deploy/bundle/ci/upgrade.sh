@@ -10,7 +10,9 @@
 #    3  ./paddock upgrade-check on both hosts: no FAIL, no WARN but the known ones;
 #    4  the previous release's object store given the obsolete paddock-escrow-read beside the api's grant and two
 #       escrowed header versions (assert-buckets.sh plant), then ./paddock upgrade --yes on the control plane, then on
-#       the audit host; its bucket bootstrap (--add-missing) added the users of organization deletion and changed
+#       the audit host; its step broker (before up) gave the audit writer and the worker exactly the permissions of
+#       this tree's definitions, without a broker restart, so that the new worker became healthy in up
+#       (assert-broker.sh); its bucket bootstrap (--add-missing) added the users of organization deletion and changed
 #       nothing else but removing paddock-escrow-read, and a second run of it changes nothing (snapshots of
 #       assert-buckets.sh, checksums only);
 #    5  probes: the hosts, the hardening, every seeded object with its ID, the audit count, the chain verification, the
@@ -336,6 +338,9 @@ upgrade_hosts() {
   BAO_TOKEN="$(sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p' "$W/init.json")" cp_paddock upgrade "$W/prev/cp" --yes </dev/null
   step "$1.2 $2: audit host"
   audit_paddock upgrade "$W/prev/audit" --yes </dev/null
+  # After both hosts' upgrade and before anything of the job's own, so that only the upgrade's step broker can have
+  # applied them.
+  "$here/assert-broker.sh" paddock-cp </dev/null
   step "$1.3 $2: the upgrade's bucket bootstrap and orphans"
   buckets "$W/cand/cp" upgraded "$W/buckets-$2/before" "$W/buckets-$2/after"
   # The upgrade's buckets step again, as a rerun of ./paddock upgrade after a failure later on would run it.

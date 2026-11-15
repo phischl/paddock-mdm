@@ -16,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/offboarding"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
@@ -237,8 +238,7 @@ func TestOffboardingUnreportedDevicesNeverStall(t *testing.T) {
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	job := app.NewOffboarding(app.OffboardingObjects{Bundles: nopBucket{}, Escrow: nopBucket{}}).
 		WithDeps(app.OffboardingDeps{Runner: runner, Worker: f.pool, Platform: platform, Identity: nopIdentity{},
-			Inventory: nopInventory{}, Cache: f.cache, Sessions: nopSessions{}, Signer: constSigner{}}).
-		WithStubbedSteps("audit_final")
+			Inventory: nopInventory{}, Cache: f.cache, Sessions: nopSessions{}, Signer: constSigner{}})
 	r := NewOffboarding(job, platform)
 	for round := 0; ; round++ {
 		if round == 40 {
@@ -258,6 +258,19 @@ func TestOffboardingUnreportedDevicesNeverStall(t *testing.T) {
 		}
 		if status == organization.StatusDeleted {
 			break
+		}
+		// No audit writer runs here: its acknowledgement of the requested final verification is applied as the
+		// worker's consumer of worker.offboarding would.
+		var requested bool
+		if err := f.super.QueryRow(ctx, "SELECT audit_retirement_requested_at IS NOT NULL FROM organization WHERE id = $1",
+			f.org).Scan(&requested); err != nil {
+			t.Fatal(err)
+		}
+		if requested {
+			if err := job.RecordAuditFinal(ctx, offboarding.AuditRetired{OrganizationID: f.org,
+				FinalOutcome: offboarding.AuditFinalVerified, FinalVerifiedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
 		}
 		// The test need not wait the gate's 6 s margin of the quiescence cutoff.
 		if _, err := f.super.Exec(ctx, `UPDATE organization SET deleting_committed_at = deleting_committed_at - interval '7 seconds'

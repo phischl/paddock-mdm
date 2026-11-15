@@ -414,6 +414,7 @@
       "deletion_step_failed": "Löschung von {slug}: Schritt {step} fehlgeschlagen",
       "deleted": "Die Organisation {slug} wurde gelöscht",
       "recovery_exported": "{actor} hat die Wiederherstellungsschlüssel und lokalen Administratorpasswörter von {devices, plural, one {# Gerät} other {# Geräten}} exportiert, verschlüsselt mit {recipient, select, public_key {einem öffentlichen Schlüssel} other {einer Passphrase}}",
+      "audit_retirement_requested": "Löschung von {slug}: die abschließende Prüfung des Audit-Protokolls wurde angefordert",
       "inactive_denied": "{actor} wurde abgewiesen: Die Organisation {organization_id} {status, select, deleted {ist gelöscht} other {wird gelöscht}} ({attempted_code})"
     },
     "device_group": {

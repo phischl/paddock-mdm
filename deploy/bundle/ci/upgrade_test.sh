@@ -247,7 +247,14 @@ done
 # the root token for bootstrap openbao, and the step names and log phase of that run. The object store is snapshotted
 # before the upgrade and asserted after it (PDK-1054b): the upgrade's own --add-missing, then a second run that changes
 # nothing; the job runs no full bucket bootstrap and no ./paddock up of its own, which would hide a broken upgrade path.
+# The broker's permissions are asserted after both hosts' upgrade and before anything of the job's own (PDK-1017); the
+# stub replaces assert-broker.sh, which assert-broker_test.sh covers.
+mkdir -p "$work/ci-stubs"
+printf '#!/usr/bin/env bash\necho "assert-broker $*"\n' >"$work/ci-stubs/assert-broker.sh"
+chmod +x "$work/ci-stubs/assert-broker.sh"
+export CI_STUBS="$work/ci-stubs"
 out="$(lib eval '
+  here="$CI_STUBS"
   printf "{\"root_token\": \"s.root\"}" >"$W/init.json"
   start_unsealer() { :; }
   use_prev
@@ -260,7 +267,7 @@ out="$(lib eval '
 b="$work/w/buckets-upgrade-again"
 order="*8.1 upgrade-again: control plane*buckets $work/w/prev/cp plant*buckets $work/w/prev/cp snapshot $b/before*"
 order+="cp $work/w/cand/cp upgrade $work/w/prev/cp --yes token=s.root*"
-order+="8.2 upgrade-again: audit host*audit $work/w/cand/audit upgrade $work/w/prev/audit --yes*"
+order+="8.2 upgrade-again: audit host*audit $work/w/cand/audit upgrade $work/w/prev/audit --yes*assert-broker paddock-cp*"
 order+="8.3 upgrade-again: the upgrade's bucket bootstrap and orphans*"
 order+="buckets $work/w/cand/cp upgraded $b/before $b/after*"
 order+="cp $work/w/cand/cp bootstrap buckets --add-missing token=*buckets $work/w/cand/cp unchanged $b/after $b/again*"

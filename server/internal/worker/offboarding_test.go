@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -463,5 +464,81 @@ func TestOffboardingRoundsRotate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type fakeAuditFinal struct {
+	got []offboarding.AuditRetired
+	err error
+}
+
+func (f *fakeAuditFinal) RecordAuditFinal(_ context.Context, ack offboarding.AuditRetired) error {
+	f.got = append(f.got, ack)
+	return f.err
+}
+
+// TestAuditRetirementsProcess: a valid acknowledgement is applied and acknowledged, a failure to apply it is retried,
+// and a message that is no valid acknowledgement is dead-lettered without being applied.
+func TestAuditRetirementsProcess(t *testing.T) {
+	ctx := context.Background()
+	org := uuid.New()
+	valid, _ := json.Marshal(offboarding.AuditRetired{OrganizationID: org, FinalOutcome: offboarding.AuditFinalFailed,
+		FinalVerifiedAt: time.Now()})
+	f := &fakeAuditFinal{}
+	a := NewAuditRetirements(f)
+	if o := a.process(ctx, valid); o != ack || len(f.got) != 1 || f.got[0].OrganizationID != org ||
+		f.got[0].FinalOutcome != offboarding.AuditFinalFailed {
+		t.Fatalf("valid acknowledgement: outcome %v, applied %+v", o, f.got)
+	}
+	f.err = errors.New("database down")
+	if o := a.process(ctx, valid); o != retry {
+		t.Fatalf("failed apply: outcome %v, want retry", o)
+	}
+	f.got, f.err = nil, nil
+	for _, body := range []string{`not json`, `{}`, `{"organization_id":"` + org.String() + `","final_outcome":"maybe","final_verified_at":"2026-11-15T00:00:00Z"}`,
+		`{"organization_id":"` + org.String() + `","final_outcome":"verified"}`} {
+		if o := a.process(ctx, []byte(body)); o != poison {
+			t.Errorf("%s: outcome %v, want poison", body, o)
+		}
+	}
+	if len(f.got) != 0 {
+		t.Fatalf("invalid messages were applied: %+v", f.got)
+	}
+}
+
+// TestAuditRetirementsGaugeOnlyWhereRegistered (main §46): the package alone puts no
+// paddock_worker_offboarding_consumer_connected into the default registry, which every role serves; the worker's
+// registry gets it at 0, and the hook follows the consumer's state.
+func TestAuditRetirementsGaugeOnlyWhereRegistered(t *testing.T) {
+	const name = "paddock_worker_offboarding_consumer_connected"
+	if n, err := testutil.GatherAndCount(prometheus.DefaultGatherer, name); err != nil || n != 0 {
+		t.Fatalf("default registry: %d series of %s (%v), want none", n, name, err)
+	}
+	reg := prometheus.NewRegistry()
+	connected, err := NewAuditRetirementsGauge(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := func() float64 {
+		t.Helper()
+		families, err := reg.Gather()
+		if err != nil || len(families) != 1 || families[0].GetName() != name || len(families[0].GetMetric()) != 1 {
+			t.Fatalf("worker registry: %v %v", families, err)
+		}
+		return families[0].GetMetric()[0].GetGauge().GetValue()
+	}
+	if v := value(); v != 0 {
+		t.Fatalf("before the first session: %v, want 0", v)
+	}
+	connected(true)
+	if v := value(); v != 1 {
+		t.Fatalf("connected: %v, want 1", v)
+	}
+	connected(false)
+	if v := value(); v != 0 {
+		t.Fatalf("disconnected: %v, want 0", v)
+	}
+	if _, err := NewAuditRetirementsGauge(reg); err == nil {
+		t.Fatal("a second registration in the same registry succeeded")
 	}
 }
