@@ -1589,3 +1589,95 @@ Binding; it completes decision 10, which named the objects to delete but not the
    - a static test that maps each object kind the adapter writes or deletes to the right the blueprint grants.
 
    A fake alone does not prove rights.
+
+## Amendment 2026-11-16 q — organization indexes for the deletion, and a database step that respects the round budget (architect decision; main §59, alpha.11 blocker)
+
+Binding; it refines decision 7, the addendum to decision 8 (registry test) and amendment p.
+
+**Finding (devstack, integration head 40a50255).** Several registry tables have no index that leads with
+`organization_id`, so every `EXISTS (… organization_id = $1)` of `paddock_offboard_delete_batch` and
+`paddock_offboard_finalize` scans the whole table:
+
+| Table | Rows | Measured cost of one EXISTS (seq scan) |
+| --- | --- | --- |
+| `outbox` | 7.3 M, 7 GB | 4.4 s |
+| `action` | 7.06 M (only the partial `action_org_finished_idx WHERE status = 'finished'`) | 2.3 s |
+| `device_event_seen` | 1.86 M | not measured |
+| `bundle` | 254 k | not measured |
+| `device_identity_key` | 73 k | not measured |
+| `admin_account`, `revocation_approval` | small | not measured |
+
+That comes to about 13 s per call and (tables with rows + 1) calls per organization. In addition, the `database` step
+is one unbounded `Advance`, so one large organization holds the whole round (against amendment p's shared budget).
+OF3 and OF5 miss the 5 minutes, and at the target scale (70 000 devices, 7-day outbox retention, a growing `action`
+table) they would miss it in production too.
+
+### Indexes
+
+1. **One concurrent index per table that lacks one.** For every registered table without a valid, non-partial index
+   whose first key column is `organization_id`, a migration adds `CREATE INDEX CONCURRENTLY <table>_org_idx ON <table>
+   (organization_id)`.
+   - **One migration file per index**, marked `-- +goose NO TRANSACTION`. `CREATE INDEX CONCURRENTLY` cannot run
+     inside a transaction, and one file per index keeps each step small and individually resumable.
+   - Each file contains exactly two statements, in this order: `DROP INDEX CONCURRENTLY IF EXISTS <table>_org_idx;`
+     then `CREATE INDEX CONCURRENTLY <table>_org_idx ON <table> (organization_id);`.
+   - **Failed or INVALID index:** a concurrent build that fails leaves an INVALID index, and goose does not record the
+     version. The re-run therefore drops the leftover and builds it again. A valid index never exists before its own
+     migration, so the drop removes only a failed attempt.
+   - Stop condition: if goose 3.29 sends the two statements of a NO TRANSACTION file in one `Exec` (an implicit
+     transaction, which `CONCURRENTLY` rejects), split into one statement per file and report.
+   - The table list is computed at implementation time from the registry and `pg_index` on a database with all
+     migrations, not copied from the finding above. `action` gets a full index next to its partial one.
+2. **Upgrade.** The indexes are built while the database serves no writes from Paddock roles, or with them; both are
+   correct because the build is concurrent.
+   - The changelog fragment carries an `Upgrade:` line: on large installations the first start after the upgrade can
+     take several minutes longer, mostly for `outbox` and `action`. The line names the devstack figure measured in
+     step 4, and states that the upgrade must not be interrupted. If it is, a re-run completes it.
+   - `docs/operations/upgrade.md` gets the same note.
+   - No ADR conflict: the indexes are additive (ADR 0047), and frozen migrations are not changed.
+3. **Ingest cost of the `outbox` index.** One more B-tree entry per audit event. The implementer records CPU per event
+   and p99 of one N2 ingest run in the result document, as information. A rise above 5 % goes to the architect before
+   merge (amendment j's budget).
+
+### Registry test (extends decision 8)
+
+4. A database test fails when any table in `offboarding_table` lacks a **valid, non-partial** index whose **first key
+   column** is `organization_id` (`pg_index.indisvalid`, `indpred IS NULL`, `indkey[0]` = the column's `attnum`). New
+   organization tables therefore cannot regress. `offboarded_device` stays outside the registry (amendment c).
+
+### The database step inside the round budget (refines amendment p, §42 fairness)
+
+5. A new function `paddock_offboard_delete_batch_from(max_rows int, from_order int) RETURNS TABLE (deleted bigint,
+   at_order int)` (same owner, grants and status check as `paddock_offboard_delete_batch`, which stays for
+   compatibility).
+   - It starts at the first registered table with `delete_order >= from_order` and returns the number deleted and the
+     `delete_order` it worked on.
+   - `deleted = 0` with `at_order = NULL` means nothing is left.
+6. The `database` step keeps its position in the new column `organization.offboarding_db_order int` (NULL = start). It
+   calls the function batch by batch (1 000 rows) and **checks the round's shared budget between batches**. When the
+   budget is spent, it stores the position and yields; the step stays current and continues in the next pass or round
+   from that position.
+   - A later straggler row in an earlier table is still found: `paddock_offboard_finalize` re-checks every table and
+     raises `40001`, after which the step restarts from position NULL.
+7. `paddock_offboard_finalize`'s pass over all tables uses the new indexes; it needs no change.
+
+### Proof (main)
+
+8. On the devstack **as it is**, with its load data and without deleting any of it, the implementer re-runs OF3 and OF5
+   after the migrations and records per run:
+   - the end-to-end duration;
+   - the duration per step;
+   - the number of database batches;
+   - the time of the index builds during the upgrade.
+
+   Both MUST finish within amendment p's 5 minutes. A run above that is a stop condition: report the slow step; do not
+   raise the timeout.
+9. **Tests:**
+   - the registry index test (point 4);
+   - the function with `from_order` (resume in the middle, empty tail, a straggler in an earlier table caught by
+     finalize);
+   - the database step yields at the budget and resumes at its position;
+   - two organizations share the budget fairly while one has a large `database` step;
+   - a migration test that runs the index files twice after a simulated failed build leaves exactly one valid index.
+
+Ticket: the implementer named by the lead on `alpha11-offboarding-integration` (high, Opus).
