@@ -69,8 +69,10 @@ SELECT id, slug FROM organization WHERE domains && @domains::text[] AND id <> @i
 
 -- A domain change clears idp_ensured_at, so the next identity round checks the Authentik objects in full (plan M17
 -- decision 20).
+-- An organization in an offboarding status keeps its domains: a tombstone's were cleared by finalize (PDK-1053).
 -- name: UpdateOrganizationDomains :one
-UPDATE organization SET domains = @domains, idp_ensured_at = NULL, updated_at = now() WHERE id = @id RETURNING *;
+UPDATE organization SET domains = @domains, idp_ensured_at = NULL, updated_at = now()
+WHERE id = @id AND status NOT IN ('deleting', 'deleted') RETURNING *;
 
 -- Organization offboarding (plan M17 decisions 1, 5, 6, 17; ADR 0052 decision 1). A deletion is pending while the
 -- organization is active (or provisioning_failed) with delete_after set. Each transition is conditional on the state

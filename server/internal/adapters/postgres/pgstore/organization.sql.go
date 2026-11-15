@@ -777,7 +777,8 @@ func (q *Queries) TombstoneOrganization(ctx context.Context, id uuid.UUID) (Orga
 }
 
 const updateOrganizationDomains = `-- name: UpdateOrganizationDomains :one
-UPDATE organization SET domains = $1, idp_ensured_at = NULL, updated_at = now() WHERE id = $2 RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+UPDATE organization SET domains = $1, idp_ensured_at = NULL, updated_at = now()
+WHERE id = $2 AND status NOT IN ('deleting', 'deleted') RETURNING id, slug, name, status, created_at, updated_at, domains, deletion_requested_at, deletion_requested_by, deletion_reason, delete_after, offboarding_step, offboarding_error_code, deleted_at, idp_ensured_at, idp_ensure_revision, deletion_uninstalls_issued, deletion_uninstalls_skipped, deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
 `
 
 type UpdateOrganizationDomainsParams struct {
@@ -787,6 +788,7 @@ type UpdateOrganizationDomainsParams struct {
 
 // A domain change clears idp_ensured_at, so the next identity round checks the Authentik objects in full (plan M17
 // decision 20).
+// An organization in an offboarding status keeps its domains: a tombstone's were cleared by finalize (PDK-1053).
 func (q *Queries) UpdateOrganizationDomains(ctx context.Context, arg UpdateOrganizationDomainsParams) (Organization, error) {
 	row := q.db.QueryRow(ctx, updateOrganizationDomains, arg.Domains, arg.ID)
 	var i Organization

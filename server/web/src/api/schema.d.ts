@@ -4004,7 +4004,8 @@ export interface paths {
         /**
          * @description Roles: platform_admin. Replaces the domains of the organization (plan M3a decision 1): lowercase DNS names,
          *     each belonging to one organization only (409 domain_taken); the first is the primary domain of device logins
-         *     and local usernames must use one of them.
+         *     and local usernames must use one of them. An organization that is deleting or deleted keeps its domains
+         *     (409 invalid_state, recorded in the platform pseudo-organization).
          */
         patch: operations["updateOrganization"];
         trace?: never;

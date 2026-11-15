@@ -141,6 +141,11 @@ func (o *Organizations) Create(ctx context.Context, slug, name string) (org pgst
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
 			existing, err := q.GetOrganizationBySlug(ctx, slug)
+			if err == nil && existing.Status == organization.StatusProvisioningFailed {
+				// A provisioning_failed organization with a due deletion can become deleting meanwhile; re-read under the
+				// row lock, so the reprovisioning never sets a deleting organization back to provisioning (PDK-1053).
+				existing, err = q.LockOrganization(ctx, existing.ID)
+			}
 			switch {
 			case err == nil && existing.Status == organization.StatusProvisioningFailed:
 				reprovisioned = true
@@ -205,13 +210,22 @@ func (o *Organizations) SetDomains(ctx context.Context, id uuid.UUID, domains []
 	}
 	var out pgstore.Organization
 	err := o.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		cur, err := q.GetOrganization(ctx, id)
+		// The row lock orders this change against the worker's start of a deletion: neither the organization writer
+		// gate nor the offboarding's quiesce covers paddock_platform, so a change that passed the check below commits
+		// its action and outbox rows before the organization becomes deleting, where the delete loop removes them
+		// (PDK-1053).
+		cur, err := q.LockOrganization(ctx, id)
 		if err != nil {
 			return notFound(err)
 		}
-		rec.SetOrganization(cur.ID)
 		rec.SetTarget(audit.Target{Type: "organization", ID: cur.ID.String(), Display: cur.Slug})
 		rec.SetParam("slug", cur.Slug)
+		if organization.Offboarding(cur.Status) {
+			// Refused before SetOrganization: the refusal is recorded in the platform pseudo-organization, never in an
+			// organization whose rows the offboarding deletes or has deleted.
+			return errOffboarding(cur.Status, "its domains cannot be changed")
+		}
+		rec.SetOrganization(cur.ID)
 		rec.SetParam("domains", normalized)
 		rec.SetParam("old_domains", cur.Domains)
 		if err := organization.ValidateDomains(normalized); err != nil {
@@ -227,7 +241,11 @@ func (o *Organizations) SetDomains(ctx context.Context, id uuid.UUID, domains []
 		if len(others) > 0 {
 			return problem.DomainTaken.WithDetail("a domain belongs to another organization")
 		}
-		if out, err = q.UpdateOrganizationDomains(ctx, pgstore.UpdateOrganizationDomainsParams{ID: id, Domains: normalized}); err != nil {
+		out, err = q.UpdateOrganizationDomains(ctx, pgstore.UpdateOrganizationDomainsParams{ID: id, Domains: normalized})
+		if db.IsNoRows(err) {
+			return errOffboarding("deleting or deleted", "its domains cannot be changed")
+		}
+		if err != nil {
 			return err
 		}
 		rec.StateChanged(statechange.ScopeOrg, id)
@@ -356,6 +374,12 @@ func errNotDeletable(cur pgstore.Organization) error {
 		return problem.InvalidState.WithDetail("a deletion is already requested")
 	}
 	return problem.InvalidState.WithDetail("an organization in status " + cur.Status + " cannot be deleted")
+}
+
+// errOffboarding is the refusal of a platform action on an organization in an offboarding status, the same 409
+// invalid_state as a deletion request on such an organization.
+func errOffboarding(status, what string) error {
+	return problem.InvalidState.WithDetail("the organization is " + status + ": " + what)
 }
 
 // offboardingContext is the organization context in which a deletion request and its cancel issue and withdraw the
