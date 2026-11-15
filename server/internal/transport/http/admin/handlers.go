@@ -254,7 +254,7 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 			Domains: domains}
 		if organization.DeletionPending(me.Organization.Status, me.Organization.DeleteAfter) {
 			out.OrganizationDeletion = &adminapi.MeOrganizationDeletion{DeleteAfter: me.Organization.DeleteAfter.UTC(),
-				RecoveryExportUntil: app.RecoveryExportUntil(*me.Organization.DeleteAfter).UTC()}
+				RecoveryExportUntil: app.RecoveryExportUntil(*me.Organization.DeleteAfter).UTC(), DevicesPending: me.PendingDevices}
 		}
 	}
 	if me.MCPWriteEnabledAt != nil {

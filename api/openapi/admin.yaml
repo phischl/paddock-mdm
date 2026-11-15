@@ -8669,7 +8669,7 @@ components:
           items: { type: string }
     MeOrganizationDeletion:
       type: object
-      required: [delete_after, recovery_export_until]
+      required: [delete_after, recovery_export_until, devices_pending]
       properties:
         delete_after: { type: string, format: date-time, description: When the organization's data is deleted. }
         recovery_export_until:
@@ -8678,6 +8678,12 @@ components:
           description: |
             delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
             amendment h).
+        devices_pending:
+          type: integer
+          minimum: 0
+          description: |
+            Devices still pending approval. They never received a bundle and cannot verify an uninstall, so the deletion
+            drops them without one; the portal tells administrators to approve and delete them or to remove the packages.
     Me:
       type: object
       required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,

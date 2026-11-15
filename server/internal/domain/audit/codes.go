@@ -2215,9 +2215,9 @@ var registry = map[Code]Definition{
 	CodeOrganizationDeleted: {
 		Code: CodeOrganizationDeleted, Emitted: true,
 		Description: "The worker deleted an organization's data and left its tombstone in status deleted (actor: system).",
-		Params:      []string{"slug", "devices_offboarded", "rows_deleted", "objects_deleted", "authentik_objects_deleted", "fleet_hosts_deleted", "audit_final_outcome"},
+		Params:      []string{"slug", "devices_offboarded", "devices_pending_dropped", "rows_deleted", "objects_deleted", "authentik_objects_deleted", "fleet_hosts_deleted", "audit_final_outcome"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "Platform pseudo-organization. The audit evidence of the organization is kept until its retention ends. The counts are the sums of the steps' counts (organization.deletion_step_completed), lower bounds when a worker stopped inside a step. audit_final_outcome is verified or failed, the outcome of the final verification of the organization's audit chain (ADR 0052 decision 6); failed does not stop the deletion and raises PaddockAuditFinalVerificationFailed.",
+		Note:        "Platform pseudo-organization. The audit evidence of the organization is kept until its retention ends. The counts are the sums of the steps' counts (organization.deletion_step_completed), lower bounds when a worker stopped inside a step. audit_final_outcome is verified or failed, the outcome of the final verification of the organization's audit chain (ADR 0052 decision 6); failed does not stop the deletion and raises PaddockAuditFinalVerificationFailed. devices_pending_dropped counts the devices still pending approval that were deleted without an uninstall: they never received a bundle and cannot verify one (plan M17 amendment m point 1).",
 	},
 	CodePlatformOffboardedDeviceUninstalled: {
 		Code: CodePlatformOffboardedDeviceUninstalled, Emitted: true,

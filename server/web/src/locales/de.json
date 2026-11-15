@@ -795,7 +795,8 @@
     },
     "banner": {
       "message": "Die Organisation ist zur Löschung am {date} vorgemerkt. Alle ihre Daten werden dann endgültig gelöscht.",
-      "advice": "Sichern Sie vorher, was Sie noch brauchen: die Wiederherstellungsschlüssel der verschlüsselten Festplatten (fragen Sie Ihre Plattform-Administration nach dem verschlüsselten Export) und die Passwörter der lokalen Administratoren."
+      "advice": "Sichern Sie vorher, was Sie noch brauchen: die Wiederherstellungsschlüssel der verschlüsselten Festplatten (fragen Sie Ihre Plattform-Administration nach dem verschlüsselten Export) und die Passwörter der lokalen Administratoren.",
+      "pending": "{count, plural, one {# Gerät wartet} other {# Geräte warten}} noch auf die Freigabe und {count, plural, one {kann} other {können}} keine Deinstallation erhalten: Die inaktiven Paddock-Pakete bleiben darauf. Geben Sie sie frei und löschen Sie sie, oder entfernen Sie die Pakete von Hand mit apt purge paddock-agent paddock-supervisor."
     },
     "audit": {
       "open": "Aufbewahrtes Audit",

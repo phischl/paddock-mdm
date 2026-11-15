@@ -5280,6 +5280,11 @@ export interface components {
              *     amendment h).
              */
             recovery_export_until: string;
+            /**
+             * @description Devices still pending approval. They never received a bundle and cannot verify an uninstall, so the deletion
+             *     drops them without one; the portal tells administrators to approve and delete them or to remove the packages.
+             */
+            devices_pending: number;
         };
         Me: {
             /** Format: uuid */

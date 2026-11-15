@@ -272,6 +272,7 @@ func (o *Offboarding) sessions(ctx context.Context, org uuid.UUID) (int, error) 
 // (migration 00135): organization.deletion_step_completed reports the totals of all attempts.
 const (
 	countUninstallsReissued = "devices.uninstalls_reissued"
+	countPendingDropped     = "devices.pending_dropped"
 	countDisarmsIssued      = "devices.disarms_issued"
 )
 
@@ -749,7 +750,8 @@ func (o *Offboarding) recordDeleted(ctx context.Context, row pgstore.Organizatio
 		{Code: audit.CodeOrganizationDeletionStepCompleted, Target: orgTarget(row),
 			Params: map[string]any{"slug": row.Slug, "step": offboarding.StepTombstone, "count": 0}},
 		{Code: audit.CodeOrganizationDeleted, Target: orgTarget(row), Params: map[string]any{
-			"slug": row.Slug, "devices_offboarded": c[offboarding.StepDevices], "rows_deleted": c[offboarding.StepDatabase],
+			"slug": row.Slug, "devices_offboarded": c[offboarding.StepDevices], "devices_pending_dropped": c[countPendingDropped],
+			"rows_deleted":    c[offboarding.StepDatabase],
 			"objects_deleted": c[offboarding.StepObjects], "authentik_objects_deleted": c[offboarding.StepAuthentik],
 			"fleet_hosts_deleted": c[offboarding.StepFleet], "audit_final_outcome": deref(row.AuditFinalOutcome, "")}},
 	}

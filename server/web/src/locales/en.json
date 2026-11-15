@@ -795,7 +795,8 @@
     },
     "banner": {
       "message": "The organization is scheduled for deletion on {date}. All its data is deleted for good then.",
-      "advice": "Secure what you still need before: the recovery keys of the encrypted disks (ask your platform administrator for the encrypted recovery-key export) and the passwords of the local administrators."
+      "advice": "Secure what you still need before: the recovery keys of the encrypted disks (ask your platform administrator for the encrypted recovery-key export) and the passwords of the local administrators.",
+      "pending": "{count, plural, one {# device is} other {# devices are}} still pending approval and cannot receive an uninstall: they keep the inert Paddock packages. Approve and delete them, or remove the packages by hand with apt purge paddock-agent paddock-supervisor."
     },
     "audit": {
       "open": "Retained audit",
