@@ -4,8 +4,13 @@
 -- transaction of the application (db.OrgPool.InOrg, InOrgSnapshot) passes the gate: db keeps a per-process set of
 -- inactive organizations, re-read every second through paddock_inactive_organizations, refuses an organization that
 -- is deleting or deleted from it, and reads the status in the transaction when the set is older than 5 s (amendment j
--- points 1 to 3). No advisory lock is involved. paddock_offboard_finalize re-counts every registered table and writes
--- the tombstone in the same transaction. Only the offboarding job enters without the gate (db.OrgPool.InOrgOffboarding).
+-- points 1 to 3). No advisory lock is involved. paddock_offboard_quiesce waits on virtual transaction IDs, as CREATE
+-- INDEX CONCURRENTLY does, until every transaction that could have passed the gate on a stale set has ended;
+-- paddock_offboard_finalize then re-counts every registered table and writes the tombstone in the same transaction
+-- (amendment j's addendum). It needs no statistics grant: pg_locks and the usename and datname columns of
+-- pg_stat_activity are readable by every role. Prepared transactions are not used (max_prepared_transactions 0); if
+-- two-phase commit is ever enabled, quiesce MUST also wait on pg_prepared_xacts. Only the offboarding job enters
+-- without the gate (db.OrgPool.InOrgOffboarding).
 -- The plan's file name is 00132 (amendment i: PDK-1026 takes 00131 and merges first). Forward-only: there is no Down
 -- migration.
 -- +goose Up
@@ -29,10 +34,65 @@ GRANT SELECT (id, status) ON organization TO paddock_escrow_reader, paddock_revo
 CREATE POLICY org_gate_self ON organization FOR SELECT TO paddock_escrow_reader, paddock_revocation
   USING (id = current_setting('paddock.org_id')::uuid);
 
--- The tombstone is written in the same transaction as the count. EXISTS per table stops at the first row; a remaining
--- row raises the retryable serialization_failure, and the job returns to its database step. The columns set are those
--- of the query TombstoneOrganization. Not yet sufficient on its own: the wait for transactions that passed the gate on
--- a set taken before the status change (amendment j's addendum, PR #663) is still to be added before PDK-1038 merges.
+-- The wait of quiesce: deleting_committed_at is a moment at which the status deleting was certainly committed; the wait
+-- set is the virtual transaction IDs of organization-role transactions open at or after deleting_committed_at + 6 s
+-- (the gate's 5 s staleness bound plus 1 s of margin), taken once per deletion.
+ALTER TABLE organization
+  ADD COLUMN deleting_committed_at timestamptz,
+  ADD COLUMN offboarding_wait_vxids text[],
+  ADD COLUMN offboarding_wait_taken_at timestamptz;
+
+-- Every transaction that could still have passed the gate on a set read before the status change started before the
+-- cutoff; a transaction started later reads a set taken after the change (amendment j point 2). The wait set is taken
+-- after the cutoff, so it holds every such transaction still open, and it only shrinks: new traffic cannot starve the
+-- wait. The first call after the status change stores deleting_committed_at in its own transaction, after the commit of
+-- the change. Returns false while waiting; it commits what it stored, so the job keeps it across rounds. The row lock
+-- is FOR NO KEY UPDATE: an open writer's foreign-key share lock must not make quiesce block instead of answering.
+-- +goose StatementBegin
+CREATE FUNCTION paddock_offboard_quiesce() RETURNS boolean
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+  org       uuid := current_setting('paddock.org_id')::uuid;
+  org_state text;
+  committed timestamptz;
+  waiting   text[];
+BEGIN
+  SELECT o.status, o.deleting_committed_at, o.offboarding_wait_vxids INTO org_state, committed, waiting
+  FROM public.organization o WHERE o.id = org FOR NO KEY UPDATE;
+  IF org_state IS DISTINCT FROM 'deleting' THEN
+    RAISE EXCEPTION 'paddock_offboard_quiesce: organization % is not being deleted', org
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF committed IS NULL THEN
+    UPDATE public.organization SET deleting_committed_at = now() WHERE id = org;
+    RETURN false;
+  END IF;
+  IF waiting IS NULL THEN
+    IF now() < committed + interval '6 seconds' THEN
+      RETURN false;
+    END IF;
+    waiting := ARRAY(
+      SELECT l.virtualxid FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_stat_activity a ON a.pid = l.pid
+      WHERE l.locktype = 'virtualxid' AND l.granted AND l.pid <> pg_catalog.pg_backend_pid()
+        AND a.datname = pg_catalog.current_database()
+        AND a.usename IN ('paddock_api', 'paddock_gateway', 'paddock_worker', 'paddock_compiler', 'paddock_notifier',
+                          'paddock_escrow_reader', 'paddock_revocation')
+      ORDER BY 1);
+    UPDATE public.organization SET offboarding_wait_vxids = waiting, offboarding_wait_taken_at = now() WHERE id = org;
+  END IF;
+  RETURN NOT EXISTS (SELECT 1 FROM pg_catalog.pg_locks l
+                     WHERE l.locktype = 'virtualxid' AND l.granted AND l.virtualxid = ANY (waiting));
+END $$;
+-- +goose StatementEnd
+REVOKE ALL ON FUNCTION paddock_offboard_quiesce() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paddock_offboard_quiesce() TO paddock_worker;
+
+-- The tombstone is written in the same transaction as the count, and only once quiesce has nothing left to wait for:
+-- every row a transaction that passed the gate could write is committed by then, so the count sees it. EXISTS per
+-- table stops at the first row; a remaining row raises the retryable serialization_failure, and the job returns to its
+-- database step, keeping the wait set. A call before the wait has ended is a caller error
+-- (object_not_in_prerequisite_state). The columns set are those of the query TombstoneOrganization, plus the wait
+-- columns.
 -- +goose StatementBegin
 CREATE FUNCTION paddock_offboard_finalize() RETURNS void
   LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
@@ -47,6 +107,10 @@ BEGIN
     RAISE EXCEPTION 'paddock_offboard_finalize: organization % is not being deleted', org
       USING ERRCODE = 'insufficient_privilege';
   END IF;
+  IF NOT public.paddock_offboard_quiesce() THEN
+    RAISE EXCEPTION 'paddock_offboard_finalize: organization % still waits for open transactions', org
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
   FOR reg IN SELECT r.table_name FROM public.offboarding_table r ORDER BY r.delete_order LOOP
     EXECUTE format('SELECT EXISTS (SELECT 1 FROM public.%I WHERE organization_id = $1)', reg.table_name)
       INTO remaining USING org;
@@ -57,7 +121,7 @@ BEGIN
   END LOOP;
   UPDATE public.organization
   SET status = 'deleted', deleted_at = now(), domains = '{}', offboarding_error_code = NULL, idp_ensured_at = NULL,
-      idp_ensure_revision = NULL, updated_at = now()
+      idp_ensure_revision = NULL, offboarding_wait_vxids = NULL, offboarding_wait_taken_at = NULL, updated_at = now()
   WHERE id = org;
 END $$;
 -- +goose StatementEnd
