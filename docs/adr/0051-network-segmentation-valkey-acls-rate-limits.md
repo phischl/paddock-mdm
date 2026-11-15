@@ -209,3 +209,12 @@ broke hiding the local administrator from the login screen. A group-writable par
 and it carries no access ACL (with an ACL the group bits are the ACL mask, which may grant write to a named user or
 group); a world-writable parent (outside the sticky `/tmp` and `/var/tmp`), a parent writable by another group and a
 parent not owned by root stay refused with `parent_not_trusted`. Confirmed by the lead as a regression fix (A10-22).
+
+## Amendment 2026-11-15 — the worker's Valkey keys (plan M17 amendment k)
+
+The decision text above lists `~dk:* ~bp:* ~cache:* …` for the worker. The template
+`deploy/compose/valkey/users.acl.tmpl` never granted `bp:`; the template is the reference for the worker's read and
+write keys. For organization deletion the worker additionally gets `%W~bp:* %W~tt:*`: write-only patterns used only to
+delete the bundle pointers of the organization's devices and the organization's time ticket. It still cannot read
+either key. The gateway's restrictions (AZ-4) are unchanged.
+

@@ -124,13 +124,13 @@ controlplane_secrets() {
 
   secret rustfs_root_user
   secret rustfs_root_password
-  for role in compiler gateway api worker; do
+  for role in compiler gateway api worker offboard; do
     secret "rustfs_bundles_${role}_access_key"
     secret "rustfs_bundles_${role}_secret_key"
   done
   secret rustfs_artifacts_api_access_key
   secret rustfs_artifacts_api_secret_key
-  for role in worker api revocation backup; do
+  for role in worker api revocation backup offboard; do
     secret "rustfs_escrow_${role}_access_key"
     secret "rustfs_escrow_${role}_secret_key"
   done

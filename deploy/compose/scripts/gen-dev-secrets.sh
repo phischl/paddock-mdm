@@ -130,7 +130,7 @@ secret rustfs_audit_writer_secret_key
 # Control-plane object store (bundles)
 secret rustfs_root_user
 secret rustfs_root_password
-for role in compiler gateway api worker; do
+for role in compiler gateway api worker offboard; do
   secret "rustfs_bundles_${role}_access_key"
   secret "rustfs_bundles_${role}_secret_key"
 done
@@ -140,8 +140,9 @@ secret rustfs_artifacts_api_secret_key
 # Disk escrow (plan M4b decision 13): the worker verifies uploaded headers, the api reads them for a recovery; the
 # gateway presigns header uploads with its bundles credential.
 # The revocation-issuer deletes every header version of a destroyed device (plan M4c decision 9); the backup role
-# reads the headers into the backup set (plan M15 decision 15).
-for role in worker api revocation backup; do
+# reads the headers into the backup set (plan M15 decision 15). The offboard credentials of bundles and escrow delete an
+# organization's objects when it is deleted, without reading them (plan M17 amendment k).
+for role in worker api revocation backup offboard; do
   secret "rustfs_escrow_${role}_access_key"
   secret "rustfs_escrow_${role}_secret_key"
 done

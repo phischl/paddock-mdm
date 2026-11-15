@@ -98,6 +98,8 @@ type workerSettings struct {
 	indexRetention                       int
 	tlsHosts                             []string
 	tlsAddr                              string
+	// offboarding holds the organization deletion's object-store credentials; PDK-1015's round runs its steps.
+	offboarding *app.Offboarding
 }
 
 func loadWorkerSettings(l *config.Loader, common config.Common, retentionDay time.Duration) workerSettings {
@@ -142,7 +144,33 @@ func loadWorkerSettings(l *config.Loader, common config.Common, retentionDay tim
 		}
 	}
 	s.tlsAddr = l.String("PADDOCK_TLS_PROBE_ADDR", "caddy:443")
+	s.offboarding = app.NewOffboarding(loadOffboardingObjects(l))
 	return s
+}
+
+// loadOffboardingObjects builds the organization deletion's two object-store clients from their own credentials,
+// which list and delete but never read (plan M17 amendment k point 2). They go to app.NewOffboarding and nowhere else
+// (TestOffboardingCredentialsOnlyForOffboarding). A missing credential file leaves its client nil: the step objects
+// then fails closed with object_store_unavailable and the rest of the worker runs.
+func loadOffboardingObjects(l *config.Loader) app.OffboardingObjects {
+	var o app.OffboardingObjects
+	bundlesAccess, ok1 := l.OptionalSecretFile("PADDOCK_OFFBOARD_BUNDLES_S3_ACCESS_KEY_FILE")
+	bundlesSecret, ok2 := l.OptionalSecretFile("PADDOCK_OFFBOARD_BUNDLES_S3_SECRET_KEY_FILE")
+	if ok1 && ok2 {
+		o.Bundles = objectstore.New(l.Required("PADDOCK_BUNDLES_S3_ENDPOINT"), bundlesAccess, bundlesSecret,
+			l.String("PADDOCK_BUNDLES_S3_BUCKET", "paddock-bundles"))
+	}
+	escrowAccess, ok1 := l.OptionalSecretFile("PADDOCK_OFFBOARD_ESCROW_S3_ACCESS_KEY_FILE")
+	escrowSecret, ok2 := l.OptionalSecretFile("PADDOCK_OFFBOARD_ESCROW_S3_SECRET_KEY_FILE")
+	if ok1 && ok2 {
+		o.Escrow = objectstore.New(l.Required("PADDOCK_ESCROW_S3_ENDPOINT"), escrowAccess, escrowSecret,
+			l.String("PADDOCK_ESCROW_S3_BUCKET", "paddock-escrow"))
+	}
+	if o.Bundles == nil || o.Escrow == nil {
+		slog.Warn("organization deletion: its object-store credentials are missing; deleting an organization's objects fails until ./paddock secrets and ./paddock bootstrap buckets have run",
+			"bundles", o.Bundles != nil, "escrow", o.Escrow != nil)
+	}
+	return o
 }
 
 func serveWorker(ctx context.Context, l *config.Loader, common config.Common) error {

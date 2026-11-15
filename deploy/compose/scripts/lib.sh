@@ -202,6 +202,27 @@ rc_policy_absent() {
   exit 1
 }
 
+# rc_policy_missing <rc function> <alias> <policy>: whether the policy does not exist; aborts on any other rc error.
+rc_policy_missing() { rc_policy_absent "$1" "rc admin policy info $2 $3"; }
+
+# rc_require_successor <rc function> <alias> <obsolete policy> <access key variable> <successor policy>: when the obsolete
+# policy still exists, aborts unless the user also holds the successor, so that removing the obsolete one cannot leave
+# the user without the grant it needs; nothing when the obsolete policy is gone.
+rc_require_successor() {
+  local rcf="$1" alias="$2" name="$3" key="$4" successor="$5" info
+  if rc_policy_absent "$rcf" "rc admin policy info $alias $name"; then
+    return 0
+  fi
+  info="$("$rcf" "rc admin user info --json -- $alias \"\$$key\"")" || {
+    echo "rc admin user info failed for the holder of $name" >&2
+    exit 1
+  }
+  if [[ "$info" != *"\"$successor\""* ]]; then
+    echo "refusing to remove the former policy $name: its holder lacks $successor; run ./paddock bootstrap buckets" >&2
+    exit 1
+  fi
+}
+
 # rc_remove_policy <rc function> <alias> <policy> <access key variable>: detaches the policy from the user, if attached,
 # and removes it; nothing when the policy is absent, so a rerun after a partial removal completes it. RustFS refuses
 # to remove a policy still attached ("policy in use"), and every rc error aborts the script.
@@ -225,6 +246,19 @@ rc_remove_policy() {
     exit 1
   }
   echo "removed the former policy $name"
+}
+
+# offboard_bundles_statements <bucket>, offboard_escrow_statements <bucket>: the policy statements of the organization
+# deletion's credentials (plan M17 amendment k point 1). List and delete only, each limited to the organizations'
+# prefixes; no s3:GetObject, so a leaked credential destroys but never discloses (RR-140). rustfs-offboard_test.sh
+# parses them.
+offboard_bundles_statements() {
+  printf '[{"Effect":"Allow","Action":["s3:ListBucket"],"Resource":["arn:aws:s3:::%s"],"Condition":{"StringLike":{"s3:prefix":["org/*","apt/*"]}}},{"Effect":"Allow","Action":["s3:DeleteObject"],"Resource":["arn:aws:s3:::%s/org/*","arn:aws:s3:::%s/apt/*"]}]' \
+    "$1" "$1" "$1"
+}
+offboard_escrow_statements() {
+  printf '[{"Effect":"Allow","Action":["s3:ListBucket","s3:ListBucketVersions"],"Resource":["arn:aws:s3:::%s"],"Condition":{"StringLike":{"s3:prefix":["org/*"]}}},{"Effect":"Allow","Action":["s3:DeleteObject","s3:DeleteObjectVersion"],"Resource":["arn:aws:s3:::%s/org/*/devices/*/luks-header/*","arn:aws:s3:::%s/org/*/devices/*/diagnostics/*"]}]' \
+    "$1" "$1" "$1"
 }
 
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-$(env_value PADDOCK_PROJECT)}"

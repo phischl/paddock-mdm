@@ -1158,3 +1158,64 @@ grant; query text, state and timestamps of other roles are not exposed. Nothing 
    - Sessions of a non-organization role do not block.
    - The wait set survives a failed `finalize` and is not re-taken.
    - Application roles still see `<insufficient privilege>` for other sessions' query text: no grant was added.
+
+## Amendment 2026-11-15 k — the offboarding job's object-store and Valkey rights (architect decision after the PDK-1015 stop; main's guidance; ticket PDK-1054)
+
+Binding. It resolves the two stop conditions PDK-1015 hit (decisions 12 and 13), and where it contradicts those
+decisions it wins.
+
+### Object store (decision 12)
+
+1. **A dedicated offboarding credential, used only by the offboarding step.** The worker policies stay as they are:
+   `paddock-bundles-worker` and `paddock-escrow-worker` are not widened. The revocation-issuer's escrow-destroy
+   credential is never used, read or changed (agent contract 7: the revocation path stays separate). Offboarding is not
+   a revocation (`decisions-alpha11.md` §3); it deletes what remains of an organization that is being deleted.
+   `deploy/compose/scripts/rustfs-bundles-bootstrap.sh` creates two users with these policies:
+   - `paddock-bundles-offboard` on the bundles bucket (unversioned):
+     - `s3:ListBucket` with condition `s3:prefix` limited to `org/` and `apt/`;
+     - `s3:DeleteObject` on `arn:aws:s3:::<bundles>/org/*` and `arn:aws:s3:::<bundles>/apt/*`.
+   - `paddock-escrow-offboard` on the escrow bucket (versioned):
+     - `s3:ListBucket` and `s3:ListBucketVersions` with `s3:prefix` limited to `org/`;
+     - `s3:DeleteObject` and `s3:DeleteObjectVersion` on `arn:aws:s3:::<escrow>/org/*/devices/*/luks-header/*` and
+       `arn:aws:s3:::<escrow>/org/*/devices/*/diagnostics/*`;
+     - no `GetObject` on either bucket.
+2. **Secrets.** `rustfs_bundles_offboard_access_key`, `rustfs_bundles_offboard_secret_key`,
+   `rustfs_escrow_offboard_access_key`, `rustfs_escrow_offboard_secret_key` are Docker secrets of `paddock-worker` only
+   (not of `paddock-worker-ingest`). They are read through `PADDOCK_OFFBOARD_BUNDLES_S3_ACCESS_KEY_FILE`,
+   `…_SECRET_KEY_FILE`, `PADDOCK_OFFBOARD_ESCROW_S3_ACCESS_KEY_FILE` and `…_SECRET_KEY_FILE`. The worker builds two
+   object-store clients from them and hands them **only** to `app.Offboarding` (constructor injection). A test fails
+   when another package receives them. Without the files, the step `objects` fails with `object_store_unavailable`
+   (fail closed) and the rest of the worker runs.
+3. **Generation and upgrade, without anyone reading `.secrets`.**
+   - `make dev-secrets` (`gen-dev-secrets`) and the bundle's secret generation (`gen-prod-secrets`) create the four
+     files when missing, with the same generator and file modes as the other RustFS user keys.
+   - `./paddock up` and `./paddock upgrade` run the bootstrap. It is idempotent and creates the two users and policies
+     on existing installations.
+   - `./paddock upgrade` generates missing secret files before `up`, as it does for earlier added secrets.
+   - `./paddock check` fails when the files or the RustFS users are missing.
+   - Changelog fragment: an `Upgrade:` line saying that the upgrade adds two object-store users for organization
+     deletion, with no operator action.
+4. **Residual risk (added to PDK-1019's register work as RR-140).**
+   - A compromised worker process can permanently delete escrowed LUKS header copies and diagnostics of any
+     organization. Object-store policies cannot test whether an organization is being deleted.
+   - It cannot read them: there is no `GetObject`.
+   - Mitigation: the backup set keeps copies of escrow objects until their retention ends (ADR 0046; restore with
+     `backup restore-escrow`). Each deletion by the step is counted in `organization.deletion_step_completed`
+     (`count`). The credential is mounted only in the full worker.
+
+### Valkey (decision 13)
+
+5. **The worker needs `bp:` and `tt:` only to delete them.** The worker user in `deploy/compose/valkey/users.acl.tmpl`
+   gains `%W~bp:* %W~tt:*`: write-only key patterns, which cover `DEL` and give no read. No new command is needed
+   (`+del` is already granted).
+6. **ADR 0051 amendment (in this PR).** ADR 0051's decision text listed `~bp:*` in full for the worker, which the
+   template never had. The amendment records the worker's actual key list as in the template, plus the write-only
+   `%W~bp:* %W~tt:*`, so ADR and template agree. AZ-4 is unchanged: the gateway still cannot write `bp:*` or `tt:*`.
+
+### Ticket
+
+7. **Prerequisite ticket PDK-1054** ("offboarding infrastructure: object-store users, Valkey ACL, secrets, wiring",
+   high risk, Opus) carries points 1–6, its changelog fragment and its tests. PDK-1015 depends on it and uses the two
+   clients and the ACL. The non-blocking findings of the PDK-1015 stop stand as the implementer described them:
+   session revocation per administrator account, child groups before the parent, the outbox function in the next free
+   migration.
