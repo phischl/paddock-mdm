@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -42,4 +43,39 @@ func InOrgTx(p *OrgPool, ctx context.Context, fn func(tx pgx.Tx) error) error {
 		return err
 	}
 	return inTx(ctx, p.p, func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) }, fn)
+}
+
+// QueryExecModes returns the default query execution mode of the query pool behind p, keyed "query", and of its health
+// ("health") and lock ("locks") pools where it has them. p is one of the pool types of this package.
+func QueryExecModes(p any) map[string]pgx.QueryExecMode {
+	var base pool
+	var locks *pgxpool.Pool
+	switch v := p.(type) {
+	case *OrgPool:
+		base = v.pool
+	case *NotifierPool:
+		base = v.pool
+	case *PlatformPool:
+		base, locks = v.pool, v.locks
+	case *RelayPool:
+		base = v.pool
+	case *UnsealerPool:
+		base = v.pool
+	case *BackupPool:
+		base = v.pool
+	case *AuditReader:
+		base = v.pool
+	case *AuditWriterPool:
+		base = v.pool
+	default:
+		panic("db: QueryExecModes: unknown pool type")
+	}
+	modes := map[string]pgx.QueryExecMode{"query": base.p.Config().ConnConfig.DefaultQueryExecMode}
+	if base.health != nil {
+		modes["health"] = base.health.Config().ConnConfig.DefaultQueryExecMode
+	}
+	if locks != nil {
+		modes["locks"] = locks.Config().ConnConfig.DefaultQueryExecMode
+	}
+	return modes
 }

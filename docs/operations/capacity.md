@@ -227,6 +227,43 @@ including the last, `q`, one and two kinds, a kind without matches, `device_id`)
 no table scan refers to a query parameter. The HTTP figures after this change are still to be measured once it is
 merged and deployed.
 
+*Note, 2026-11-16 (PDK-1079, ADR 0055):* the organization pools now plan every execution, so they no longer run
+generic plans and the trap described above no longer applies to them (see Query planning). The rewrite stays as
+defence in depth, and `TestAttentionDevicesGenericPlan` still pins its plan property.
+
+## Query planning
+
+Since PDK-1079 (ADR 0055) the pools that open organization transactions run pgx's `QueryExecModeCacheDescribe`: pgx
+caches only a statement's description and sends every execution as an unnamed statement, so PostgreSQL plans it with
+the real parameter values and the organization of the transaction. A reused plan built for another organization was
+catastrophic before: a statement prepared by pgx's default statement cache keeps a generic plan, and a statement
+without parameters (the organization comes from `paddock.org_id`, not from a parameter) never gets a custom plan. On
+the development stack (PostgreSQL 18.6, one organization of 70 000 devices next to about 400 small ones), a plan built
+for a small organization took more than 5 s for the large one in the attention list and count, the outdated-schema
+and the config rollout device lists, and 300 to 430 ms instead of 0.03 to 0.06 ms in the event-gap lookups; 29 more
+queries were 150 to 1 700 times slower in one direction or the other.
+
+Pool modes (`db.openPool`; pinned by `TestPoolQueryExecModes`):
+
+| Pool | Roles | Mode |
+| --- | --- | --- |
+| `OrgPool` (incl. `NotifierPool`) | api, worker incl. ingest, compiler, notifier, escrow-reader, revocation-issuer, the `paddock-server admin` commands (the gateway opens no PostgreSQL pool) | per execution (`CacheDescribe`) |
+| `PlatformPool` and its lock pool | platform endpoints, leader locks | statement cache |
+| `AuditReader`, `AuditWriterPool` | audit reader and writer | statement cache |
+| `RelayPool`, `UnsealerPool`, `BackupPool` | outbox relay, unsealer, backup and restore | statement cache |
+| health pools (`Options.HealthConn`) | readiness pings | statement cache |
+| migrations | `paddock-server migrate` (own connection) | unchanged |
+
+Planning cost, measured read-only on the development stack for PDK-1079: median 0.11 ms per query, p99 3.9 ms,
+maximum 5.6 ms. The round trips are unchanged (one per query), so plan M17 amendment j's "no extra statement per
+transaction" still holds. `TestOrganizationPoolPlansPerExecution` seeds 70 000 devices and bounds each of the former
+catastrophic queries to 1 s in the large organization after six runs in a small one on the same connection.
+
+Ingest CPU per event with and without per-execution planning (N2 method, ADR 0055 decision 3): TODO-LEAD.
+
+At 70 000 devices with status rows, the attention view's plan costs more than PostgreSQL's `jit_above_cost`, and the
+JIT compilation took about 2.3 s per execution in the test database, independent of the plan cache (PDK-1081).
+
 ## Authentik web workers
 
 Every portal login, step-up, device login and every call of the worker's identity rounds is a request to
