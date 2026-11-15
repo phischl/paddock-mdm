@@ -450,7 +450,8 @@ restore_wait_recovered() {
   local deadline=$((SECONDS + ${RESTORE_RECOVERY_TIMEOUT:-1800})) state paused=0 excerpt param
   while ((SECONDS < deadline)); do
     state="$(compose exec -T "$1" psql -U "$2" -d "$3" -Atc \
-      "select case when pg_is_in_recovery() then pg_get_wal_replay_pause_state() else 'f' end" </dev/null 2>/dev/null)"
+      "select case when pg_is_in_recovery() then pg_get_wal_replay_pause_state() else 'f' end" </dev/null 2>/dev/null)" ||
+      state="" # PostgreSQL refuses connections while it starts up or replays WAL; the poll retries until the deadline.
     if [[ "$state" == f ]]; then
       return 0
     fi
