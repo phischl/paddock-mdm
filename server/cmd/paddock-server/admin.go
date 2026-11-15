@@ -263,7 +263,7 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 		return runUpgradeCheck(ctx, cmd, pool, platformPool, vkCfg, baoAddr, os.Stdout)
 	case "enrolment-link":
 		ak := authentik.New(akCfg.URL, akCfg.Token)
-		links := app.NewPlatformEnrolmentLinks(admin.Runner(), ak, ak)
+		links := app.NewPlatformEnrolmentLinks(admin.Runner(), platformPool, ak, ak)
 		return runEnrolmentLink(ctx, links, cmd.user, os.Stdout)
 	}
 	return nil
@@ -274,10 +274,11 @@ type enrolmentLinkCreator interface {
 	CreateCLI(ctx context.Context, username string) (app.EnrolmentLink, error)
 }
 
-// runEnrolmentLink is paddock-server admin enrolment-link (ADR 0053 decision 1): it prints the platform
-// administrator's one-time sign-in setup link once, on stdout only; the link is never logged or audited. Creating it
-// ended every older link of the account (plan M12h-2 amendment f). For an account connected to an upstream source it
-// says why the link sets up only the passkey.
+// runEnrolmentLink is paddock-server admin enrolment-link (ADR 0053 decision 1, plan M12h-2 amendment f addendum b):
+// it prints the one-time sign-in setup link of a platform administrator or of an organization account with a portal
+// role once, on stdout only; the link is never logged or audited. Creating it ended every older link of the account
+// (plan M12h-2 amendment f). For an account connected to an upstream source it says why the link sets up only the
+// passkey.
 func runEnrolmentLink(ctx context.Context, links enrolmentLinkCreator, username string, out io.Writer) error {
 	l, err := links.CreateCLI(ctx, username)
 	if err != nil {

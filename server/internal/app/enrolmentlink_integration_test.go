@@ -36,6 +36,33 @@ type linkDirectory struct {
 	connected map[string]bool
 	connFail  error
 	attrs     map[string]map[string]any
+	// groups are the direct groups of each username besides its role groups (dir.roleGroups); lookupFail makes
+	// finding an account fail.
+	groups     map[string][]string
+	lookupFail error
+}
+
+func (d *linkDirectory) UserByUsername(_ context.Context, username string) (ports.IdentityUser, []string, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lookupFail != nil {
+		return ports.IdentityUser{}, nil, false, d.lookupFail
+	}
+	var u ports.IdentityUser
+	groups := slices.Clone(d.groups[username])
+	found := len(groups) > 0
+	for name, members := range d.roleGroups {
+		for _, m := range members {
+			if m.Username == username {
+				u, found = m, true
+				groups = append(groups, name)
+			}
+		}
+	}
+	if u.PK == "" {
+		u = ports.IdentityUser{PK: "pk-" + username, Username: username, Active: true}
+	}
+	return u, groups, found, nil
 }
 
 func (d *linkDirectory) HasSourceConnection(_ context.Context, pk string) (bool, error) {
@@ -91,6 +118,9 @@ type linkWorld struct {
 	dir   *linkDirectory
 	links *app.PlatformEnrolmentLinks
 	corr  string
+	// org is the organization of the role groups of slug; ghost is a slug no Paddock organization has.
+	org         uuid.UUID
+	slug, ghost string
 }
 
 func newLinkWorld(t *testing.T) *linkWorld {
@@ -112,20 +142,47 @@ func newLinkWorld(t *testing.T) *linkWorld {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = super.Close(ctx) })
+	org := uuid.New()
+	slug, ghost := "l"+org.String()[24:], "g"+org.String()[24:]
+	if _, err := super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Links', 'active')", org, slug); err != nil {
+		t.Fatal(err)
+	}
 	dir := &linkDirectory{directory: newDirectory(), inactive: map[string]bool{}, open: map[string]int{},
-		connected: map[string]bool{}, attrs: map[string]map[string]any{}}
+		connected: map[string]bool{}, attrs: map[string]map[string]any{}, groups: map[string][]string{}}
+	both := ports.IdentityUser{PK: "7", Username: "both@acme.test", Active: true}
 	dir.roleGroups = map[string][]ports.IdentityUser{
 		organization.PlatformAdminsGroup(): {{PK: "1", Username: "root@example.test", Active: true}, {PK: "2", Username: "off@example.test"},
-			{PK: "4", Username: "synced@example.test", Active: true}},
-		organization.RoleGroup("acme", organization.GroupAdmins): {{PK: "3", Username: "alice@acme.test", Active: true}},
+			{PK: "4", Username: "synced@example.test", Active: true}, both},
+		organization.RoleGroup(slug, organization.GroupAdmins): {{PK: "3", Username: "alice@acme.test", Active: true}, both,
+			{PK: "8", Username: "twice@acme.test", Active: true}, {PK: "9", Username: "scim@acme.test", Active: true}},
+		organization.RoleGroup(slug, organization.GroupOperators): {{PK: "5", Username: "olga@acme.test", Active: true},
+			{PK: "8", Username: "twice@acme.test", Active: true}},
+		organization.RoleGroup(slug, organization.GroupAuditors): {{PK: "6", Username: "audrey@acme.test", Active: true},
+			{PK: "11", Username: "offaudit@acme.test"}},
+		organization.RoleGroup(ghost, organization.GroupAdmins): {{PK: "10", Username: "ghost@acme.test", Active: true}},
 	}
+	dir.groups["plain@acme.test"] = []string{organization.RootGroup(slug), organization.LockedGroup(slug),
+		organization.LocalUserGroup(slug, "staff")}
 	dir.inactive["2"] = true
+	dir.inactive["11"] = true
 	corr := "corr-link-" + uuid.NewString()
 	runner := app.NewActionRunner(worker, platform, func(context.Context) string { return corr })
 	dir.connected["4"] = true
-	links := app.NewPlatformEnrolmentLinks(runner, dir, dir)
+	dir.connected["9"] = true
+	links := app.NewPlatformEnrolmentLinks(runner, platform, dir, dir)
 	links.SetClock(func() time.Time { return time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC) })
-	return &linkWorld{super: super, dir: dir, links: links, corr: corr}
+	return &linkWorld{super: super, dir: dir, links: links, corr: corr, org: org, slug: slug, ghost: ghost}
+}
+
+// target returns the target type of the one platform.enrolment_link_created event of the world.
+func (w *linkWorld) target(t *testing.T) string {
+	t.Helper()
+	var typ string
+	if err := w.super.QueryRow(context.Background(), `SELECT target->>'type' FROM action
+		WHERE code = 'platform.enrolment_link_created' AND correlation_id = $1`, w.corr).Scan(&typ); err != nil {
+		t.Fatal(err)
+	}
+	return typ
 }
 
 // event returns the one platform.enrolment_link_created event of the world as "outcome error_code actor org", its
@@ -243,30 +300,55 @@ func TestPlatformEnrolmentLinkPasswordByLink(t *testing.T) {
 	})
 }
 
-// TestPlatformEnrolmentLinkRefusals (ADR 0053 decision 1): no link for an account that is not a direct member of
-// paddock.platform.admins (an organization administrator, an unknown name), nor for a deactivated platform
-// administrator; each attempt records exactly one failure.
+// TestPlatformEnrolmentLinkRefusals (ADR 0053 decision 1, plan M12h-2 amendment f addendum b): no link for an account
+// that holds no portal role (an unknown name, an account in no role group, or in the role group of an organization
+// Paddock does not have), for an account whose role assignment is ambiguous (role groups of two organizations, also
+// for a platform administrator, or two roles of one organization; the refusal names the reason and the fix), nor for
+// a deactivated administrator; nothing is marked and each attempt records exactly one failure.
 func TestPlatformEnrolmentLinkRefusals(t *testing.T) {
+	deactivated := problem.InvalidState.WithDetail("the user is deactivated in the identity provider")
 	for name, c := range map[string]struct {
 		username string
 		want     error
 		code     string
 	}{
-		"organization administrator": {"alice@acme.test", app.ErrNotPlatformAdministrator, "invalid_state"},
-		"unknown account":            {"nobody@example.test", app.ErrNotPlatformAdministrator, "invalid_state"},
-		"deactivated":                {"off@example.test", problem.InvalidState, "invalid_state"},
-		"identity provider fails":    {"root@example.test", problem.UpstreamUnavailable, "upstream_unavailable"},
+		"unknown account":                             {"nobody@example.test", app.ErrNoPortalRole, "invalid_state"},
+		"in no role group":                            {"plain@acme.test", app.ErrNoPortalRole, "invalid_state"},
+		"organization unknown":                        {"ghost@acme.test", app.ErrNoPortalRole, "invalid_state"},
+		"blank name":                                  {" ", app.ErrNoPortalRole, "invalid_state"},
+		"two roles of one organization":               {"twice@acme.test", app.ErrAmbiguousPortalRole, "invalid_state"},
+		"two organizations":                           {"alice@acme.test", app.ErrAmbiguousPortalRole, "invalid_state"},
+		"platform administrator in two organizations": {"both@acme.test", app.ErrAmbiguousPortalRole, "invalid_state"},
+		"deactivated":                                 {"off@example.test", deactivated, "invalid_state"},
+		"deactivated organization user":               {"offaudit@acme.test", deactivated, "invalid_state"},
+		"identity provider fails":                     {"root@example.test", problem.UpstreamUnavailable, "upstream_unavailable"},
+		"account lookup fails":                        {"alice@acme.test", problem.UpstreamUnavailable, "upstream_unavailable"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newLinkWorld(t)
-			if name == "identity provider fails" {
+			switch name {
+			case "identity provider fails":
 				w.dir.linkFail = problem.UpstreamUnavailable
+			case "account lookup fails":
+				w.dir.lookupFail = problem.UpstreamUnavailable
+			case "two organizations":
+				w.dir.groups["alice@acme.test"] = []string{organization.RoleGroup("other-org", organization.GroupAdmins)}
+			case "platform administrator in two organizations":
+				w.dir.groups["both@acme.test"] = []string{organization.RoleGroup("other-org", organization.GroupAdmins)}
 			}
-			if _, err := w.links.CreateCLI(context.Background(), c.username); !errors.Is(err, c.want) {
+			_, err := w.links.CreateCLI(context.Background(), c.username)
+			if !errors.Is(err, c.want) {
 				t.Fatalf("CreateCLI(%s): %v, want %v", c.username, err, c.want)
+			}
+			// errors.Is matches a problem by its code alone: the detail tells the refusals apart.
+			if c.code == "invalid_state" && err.Error() != c.want.Error() {
+				t.Fatalf("CreateCLI(%s): %q, want %q", c.username, err, c.want)
 			}
 			if len(w.dir.links) != 0 {
 				t.Fatalf("links created for %v", w.dir.links)
+			}
+			if c.code == "invalid_state" && len(w.dir.attrs) != 0 {
+				t.Fatalf("attributes set %v on a refused account", w.dir.attrs)
 			}
 			ev, _, n := w.event(t)
 			if n != 1 || ev != "failure "+c.code+" system:paddock-server admin "+platformOrg {
@@ -274,14 +356,98 @@ func TestPlatformEnrolmentLinkRefusals(t *testing.T) {
 			}
 		})
 	}
-	t.Run("platform group missing", func(t *testing.T) {
-		w := newLinkWorld(t)
-		w.dir.roleGroupFail = map[string]error{organization.PlatformAdminsGroup(): ports.ErrGroupNotFound}
-		if _, err := w.links.CreateCLI(context.Background(), "root@example.test"); !errors.Is(err, app.ErrNotPlatformAdministrator) {
-			t.Fatalf("CreateCLI: %v", err)
+}
+
+// TestPlatformEnrolmentLinkRefusalDetails: the ambiguity refusal names its reason and the fix, and differs from the
+// refusal of an account without a portal role.
+func TestPlatformEnrolmentLinkRefusalDetails(t *testing.T) {
+	amb := app.ErrAmbiguousPortalRole.Error()
+	for _, want := range []string{"ambiguous", "several organizations", "several role groups", "remove the extra group memberships"} {
+		if !strings.Contains(amb, want) {
+			t.Fatalf("ambiguity refusal %q lacks %q", amb, want)
 		}
-		if ev, _, n := w.event(t); n != 1 || ev != "failure invalid_state system:paddock-server admin "+platformOrg {
-			t.Fatalf("%d events, %q, want one failure invalid_state", n, ev)
+	}
+	if none := app.ErrNoPortalRole.Error(); none == amb || !strings.Contains(none, "holds no portal role") {
+		t.Fatalf("no-role refusal %q, want its own detail", none)
+	}
+}
+
+// TestPlatformEnrolmentLinkOrganizationAccount (plan M12h-2 amendment f addendum b, PDK-1055): the host command also
+// creates the link of a direct member of an organization's admins, operators or auditors group. A hand-created account
+// is marked so the link sets a password and the passkey (passkey_only false); an account an upstream source (here
+// SCIM) provisioned is not marked, loses an earlier mark and gets a passkey-only link. The event stays in the platform
+// pseudo-organization and names the account's organization in organization_id.
+func TestPlatformEnrolmentLinkOrganizationAccount(t *testing.T) {
+	for _, c := range []struct{ username, pk string }{
+		{"alice@acme.test", "3"}, {"olga@acme.test", "5"}, {"audrey@acme.test", "6"},
+	} {
+		t.Run(c.username, func(t *testing.T) {
+			w := newLinkWorld(t)
+			l, err := w.links.CreateCLI(context.Background(), c.username)
+			if err != nil || l.PasskeyOnly || !slices.Equal(w.dir.links, []string{c.pk}) {
+				t.Fatalf("CreateCLI: %+v %v, links %v, want a link for %s that may set a password", l, err, w.dir.links, c.pk)
+			}
+			if got := w.dir.attrs[c.pk][ports.AttrPasswordByLink]; got != true {
+				t.Fatalf("attribute %v, want true", got)
+			}
+			ev, params, n := w.event(t)
+			if n != 1 || ev != "success - system:paddock-server admin "+platformOrg ||
+				!strings.Contains(params, `"organization_id": "`+w.org.String()+`"`) ||
+				!strings.Contains(params, `"passkey_only": false`) {
+				t.Fatalf("%d events, %q %s, want one success in the platform pseudo-organization naming %s", n, ev, params, w.org)
+			}
+			if typ := w.target(t); typ != "user" {
+				t.Fatalf("target type %q, want user", typ)
+			}
+		})
+	}
+	t.Run("SCIM-provisioned account", func(t *testing.T) {
+		w := newLinkWorld(t)
+		l, err := w.links.CreateCLI(context.Background(), "scim@acme.test")
+		if err != nil || !l.PasskeyOnly {
+			t.Fatalf("CreateCLI: %+v %v, want a passkey-only link", l, err)
+		}
+		if v, ok := w.dir.attrs["9"][ports.AttrPasswordByLink]; ok {
+			t.Fatalf("attribute %v, want none", v)
+		}
+		if _, params, n := w.event(t); n != 1 || !strings.Contains(params, `"passkey_only": true`) ||
+			!strings.Contains(params, `"organization_id": "`+w.org.String()+`"`) {
+			t.Fatalf("%d events, params %s, want passkey_only true and the organization", n, params)
+		}
+	})
+	t.Run("SCIM-claimed after an earlier mark", func(t *testing.T) {
+		w := newLinkWorld(t)
+		w.dir.attrs["9"] = map[string]any{ports.AttrPasswordByLink: true}
+		l, err := w.links.CreateCLI(context.Background(), "scim@acme.test")
+		if err != nil || !l.PasskeyOnly {
+			t.Fatalf("CreateCLI: %+v %v, want a passkey-only link", l, err)
+		}
+		if v, ok := w.dir.attrs["9"][ports.AttrPasswordByLink]; ok {
+			t.Fatalf("attribute %v, want the earlier mark removed", v)
+		}
+	})
+	t.Run("platform and organization role", func(t *testing.T) {
+		w := newLinkWorld(t)
+		if _, err := w.links.CreateCLI(context.Background(), "both@acme.test"); err != nil {
+			t.Fatal(err)
+		}
+		if _, params, n := w.event(t); n != 1 || !strings.Contains(params, `"organization_id": "`+w.org.String()+`"`) {
+			t.Fatalf("%d events, params %s, want the organization", n, params)
+		}
+		if typ := w.target(t); typ != "platform_admin" {
+			t.Fatalf("target type %q, want platform_admin", typ)
+		}
+	})
+	t.Run("platform administrator", func(t *testing.T) {
+		w := newLinkWorld(t)
+		if _, err := w.links.CreateCLI(context.Background(), "root@example.test"); err != nil {
+			t.Fatal(err)
+		}
+		if _, params, n := w.event(t); n != 1 || strings.Contains(params, "organization_id") {
+			t.Fatalf("%d events, params %s, want no organization", n, params)
+		}
+		if typ := w.target(t); typ != "platform_admin" {
+			t.Fatalf("target type %q, want platform_admin", typ)
 		}
 	})
 }

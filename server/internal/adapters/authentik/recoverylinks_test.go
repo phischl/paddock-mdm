@@ -178,6 +178,59 @@ func TestHasSourceConnection(t *testing.T) {
 	}
 }
 
+// TestHasSourceConnectionSCIM (PDK-1055): an account a SCIM source provisioned or claimed has no user source
+// connection in Authentik, only a SCIM source user; it is reported as connected all the same, also when Authentik
+// ignores the user__id filter, and a failed SCIM listing is an error, never "not connected".
+func TestHasSourceConnectionSCIM(t *testing.T) {
+	f, c, dave, erin := recoveryLinkWorld(t)
+	ctx := context.Background()
+	f.scimUsers = []int{mustAtoi(t, erin)}
+	for _, ignore := range []bool{false, true} {
+		f.ignoreFilters = ignore
+		if got, err := c.HasSourceConnection(ctx, erin); err != nil || !got {
+			t.Fatalf("erin (ignore filter %v): %v %v, want connected through SCIM", ignore, got, err)
+		}
+		if got, err := c.HasSourceConnection(ctx, dave); err != nil || got {
+			t.Fatalf("dave (ignore filter %v): %v %v, want not connected", ignore, got, err)
+		}
+	}
+	f.ignoreFilters = false
+	scim := 0
+	for _, r := range f.served {
+		if r.method == http.MethodGet && r.path == "/api/v3/sources/scim_users/" {
+			scim++
+			if r.query.Get("user__id") == "" {
+				t.Fatalf("SCIM listing %v without the user__id filter", r.query)
+			}
+		}
+	}
+	if scim == 0 {
+		t.Fatal("no SCIM source user listing")
+	}
+	f.failOnce = map[string]int{"GET /api/v3/sources/scim_users/": http.StatusForbidden}
+	if _, err := c.HasSourceConnection(ctx, dave); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("SCIM listing fails: %v, want upstream_unavailable", err)
+	}
+}
+
+// TestUserByUsername (PDK-1055): the host command finds the account by its exact username with its direct groups; an
+// unknown name is not found, and a failed read is upstream_unavailable.
+func TestUserByUsername(t *testing.T) {
+	f, c, dave, _ := recoveryLinkWorld(t)
+	ctx := context.Background()
+	u, groups, found, err := c.UserByUsername(ctx, "dave@acme.test")
+	if err != nil || !found || u.PK != dave || u.Username != "dave@acme.test" || !slices.Contains(groups, "paddock.acme") {
+		t.Fatalf("UserByUsername: %+v %v %v %v", u, groups, found, err)
+	}
+	if _, _, found, err := c.UserByUsername(ctx, "nobody@acme.test"); err != nil || found {
+		t.Fatalf("unknown name: %v %v, want not found", found, err)
+	}
+	f.failOnce = map[string]int{"GET /api/v3/core/users/": http.StatusForbidden}
+	if _, _, _, err := c.UserByUsername(ctx, "dave@acme.test"); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("read fails: %v, want upstream_unavailable", err)
+	}
+}
+
 // TestRevokeRecoveryLinksFailures: a failed listing or deletion is upstream_unavailable (the caller then issues no
 // link); a token gone meanwhile is not counted and not an error; an unknown account fails.
 func TestRevokeRecoveryLinksFailures(t *testing.T) {

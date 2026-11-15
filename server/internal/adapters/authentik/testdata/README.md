@@ -28,3 +28,7 @@ of an account, identifier `<uid>-password-reset`, intent `verification` (the mod
 none). `get_sources_user_connections_all.json` was written by hand the same way from the user source connection
 serializer (`pk`, `user`, `source`, `source_obj`, `identifier`, `created`, `last_updated`). Neither is recorded:
 replace them with recorded ones at the next `TestLiveAuthentik` run with `PADDOCK_AUTHENTIK_RECORD=1`.
+
+`get_sources_scim_users.json` was written by hand on 2026-11-15 (PDK-1055) from the SCIM source user serializer of
+Authentik 2026.8.5 (`id`, `external_id`, `user`, `user_obj`, `source`, `attributes`). It is not recorded either: a
+recording needs a SCIM source with a provisioned user, which the development stack does not have.
