@@ -1445,3 +1445,52 @@ main required: the worker gets no connection to the audit database, and audit mi
 
 **Main reviews this amendment before it merges:** it adds a channel from the audit domain to the worker (acknowledgement
 only) and an additive manifest field.
+
+## Amendment 2026-11-15 p — the deletion advances several steps per round (architect decision after PDK-946's review; ticket PDK-946c)
+
+Binding; it replaces decision 5's "one step per organization per round".
+
+**Finding.** The round runs once a minute and advances each organization by one step, so the ten steps take 9–10
+minutes. The plan's gates (OF3, OF6, OF8, §7 step 7) assume about 5 minutes.
+
+**Options.** (a) A faster tick or more steps per round only under `PADDOCK_ENV=development`. Rejected: the gates would
+then prove a schedule that production never runs, and development switches belong in configuration only for reasons
+that cannot hold in production. (b) Longer gate waits. Rejected alone: a ten-minute deletion is slow for operators too,
+and it would also be the time a production deletion holds its intermediate states.
+
+**Decision (production behaviour, no development switch).**
+1. In one round, the worker advances an organization step after step while the previous step completed.
+2. It stops for that organization when one of these happens:
+   - a step has to wait (`outbox` pending, `quiesce` false, the audit acknowledgement missing);
+   - a step fails;
+   - the round's budget is used up (point 2a).
+
+   2a. **Confirmed by main (§43): one shared budget per round.** `OffboardingRoundBudget` (45 s, below the 1-minute
+   interval) is shared by all organizations in the round, not granted per organization. The round makes passes over
+   the `deleting` organizations ordered by least recently advanced: each pass gives every organization one step, and
+   passes repeat until no organization can advance or the budget is used up. One large organization therefore cannot
+   starve the others.
+3. Each completed step is still committed and recorded on its own (`organization.deletion_step_completed`), so a crash
+   resumes at the next step exactly as before. An organization the budget did not reach continues next round.
+3a. **Confirmed by main (§43): leadership through `db.PlatformPool.Lead`.** The offboarding round holds its leader lock
+   with `Lead` (the backup role's mechanism, decisions-alpha10 §50). When the lock's connection is lost, the running
+   step's context is cancelled before any further write, and the step is resumed by the next leader. The other
+   `WithLeaderLock` users of the worker are unchanged.
+4. Expected duration of a grace-0 deletion of a small gate organization, end to end: 2–4 rounds. The waits that span
+   rounds are the quiescence cutoff of 6 s, the audit writer's final verification and acknowledgement (amendment o),
+   and the outbox drain.
+
+**Gates.**
+- OF3, OF6 and OF8 and the per-gate cleanup wait at most **5 minutes**, as planned.
+- The implementing ticket records the measured duration of OF3 on the development stack in its result document.
+- If OF3 exceeds 5 minutes after this change, that is a stop condition (report the slow step), not a reason to raise
+  the timeout.
+- PDK-1022's 10-minute wait on the VMs may stay: it includes device check-ins.
+
+**Ticket:** PDK-946c (alpha.11, medium, Sonnet) implements points 1–3 in `server/internal/worker/offboarding.go` with a
+test:
+- a deletion with no waits finishes in one round;
+- a step that waits stops the organization for that round;
+- two organizations share the budget in least-recently-advanced passes, and the budget hands over to the next round;
+- a crash between two steps of one round resumes at the next step;
+- losing the lead cancels the running step and writes nothing further.
