@@ -215,3 +215,35 @@ Checked in the code:
   acceptable.
 - Follow-up: the "Query planning" section of `docs/operations/capacity.md` names the view, its consumers and both N2
   results.
+
+### Clarification 2026-11-15 (within main §77): the view caches only listed statements
+
+Before implementation started, the call graph of the two consumers turned out to reach far more queries than the four
+files decision 11 named: device transitions and tamper findings (clone quarantine, uninstall retirement), disk
+conversion and configuration status events, and the software-request handling of request events. Several of them
+touch tables whose organization-led indexes lack the lookup key, so they fail the rule of decision 11:
+- `device_group_member`, `user_group_member` and `device_identity_key` have organization-only indexes;
+- `device_owner` has `(organization_id, user_id)`, `app_user` has `(organization_id, created_at)`;
+- `software_request`, `device_command`, `device_resource_status`, `device_bundle_report`, `escrow_secret` and
+  `device_software_status` have organization-led indexes without the device key.
+
+Decisions 8 and 11 are therefore made precise, so that the guarantee holds by construction, not by a closed file list:
+
+- **8 (precise).** The view runs a `pgstore` statement with `pgx.QueryExecModeCacheStatement` only if its sqlc name
+  (the `-- name:` line that starts each generated SQL text) is on an allow list in `server/internal/platform/db`.
+  Every other statement on the view runs in the pool's mode, per execution. The view's own `set_config` stays cached.
+  An unlisted or newly reached query is thus planned per execution, which is safe; it can only cost CPU, which N2
+  shows.
+- **11 (precise).** The allow list replaces the call-graph registry; nothing has to follow the call graph. A name may
+  be listed only if it passes the rule of decision 11, or it is a plain `INSERT … VALUES` without a subquery. The first
+  list holds the common heartbeat and event path:
+  - lookups and updates of `device` by `id` and of `device_status` by `device_id`;
+  - the queries on `device_event_seen`, `device_event_gap` and `device_event_dropped` (after migration 00158);
+  - `InsertAction`, `FinishAction`, `InsertOutbox`;
+  - plain inserts.
+  Software-request handling, disk conversion, configuration status, device transitions, tamper findings, device
+  commands, escrow and software status stay unlisted and run per execution. They only run for their own event types,
+  and adding indexes for them would grow 00158 for little benefit. No index is added beyond decision 10.
+- **12 (precise).** The plan test covers every listed name that reads or updates a table (not the plain inserts).
+  Further tests check that every listed name exists among the generated queries, and that on the view a listed
+  statement is cached while an unlisted one is not.
