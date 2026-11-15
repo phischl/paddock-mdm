@@ -214,7 +214,8 @@ parent not owned by root stay refused with `parent_not_trusted`. Confirmed by th
 
 The decision text above lists `~dk:* ~bp:* ~cache:* …` for the worker. The template
 `deploy/compose/valkey/users.acl.tmpl` never granted `bp:`; the template is the reference for the worker's read and
-write keys. For organization deletion the worker additionally gets `%W~bp:* %W~tt:*`: write-only patterns used only to
-delete the bundle pointers of the organization's devices and the organization's time ticket. It still cannot read
-either key. The gateway's restrictions (AZ-4) are unchanged.
+write keys. For organization deletion the worker additionally gets the selector `(%W~bp:* %W~tt:* -@all +del)`: within it the
+worker may only delete the bundle pointers of the organization's devices and the organization's time ticket. It can
+neither read nor write either key (corrected 2026-11-15: a bare `%W~` would also have allowed `SET`, `HSET` and
+`PEXPIREAT`). The gateway's restrictions (AZ-4) are unchanged.
 
