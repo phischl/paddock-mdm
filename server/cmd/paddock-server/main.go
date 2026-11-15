@@ -74,6 +74,7 @@ commands:
         [--docker-networks [--docker-network <name>=<subnet>[,<subnet>...]]...]
         [--containers <docker inspect file> [--hardening-exceptions FILE]] < config.json
   check-containers [--exceptions FILE] < inspect.json   (the online container matrix of prod-check)
+  check-broker [--definitions FILE] < permissions.json   (the RabbitMQ permissions against the definitions)
   healthcheck
   version
 
@@ -151,6 +152,8 @@ func runOne(ctx context.Context, args []string) int {
 		err = runProdCheck(ctx, args[1:], os.Stdin, os.Stdout)
 	case "check-containers":
 		err = runCheckContainers(args[1:], os.Stdin, os.Stdout)
+	case "check-broker":
+		err = runCheckBroker(args[1:], os.Stdin, os.Stdout)
 	case "admin":
 		err = runAdmin(ctx, l, args[1:])
 	case "provision":

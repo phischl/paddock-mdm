@@ -985,9 +985,9 @@ var registry = map[Code]Definition{
 	CodeRetentionPurged: {
 		Code: CodeRetentionPurged, Emitted: true,
 		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), device_command (finished commands no disk conversion or uninstall still references), device_alert (cleared alerts), device_event_gap (filled event gaps), device_diagnostics (with cutoff the round's time: stored diagnostics bundles whose 7-day retention ended, their objects deleted and their key material cleared, counted in deleted; with index_days: the rows of ended bundles), offboarded_device (platform pseudo-organization, once per round with expired records: the records of devices of deleted organizations older than 365 days, with the keys they kept in Valkey) or action (finished actions), each recorded in the organization only when rows were deleted (action also once per round in the platform pseudo-organization), with index_days the audit index retention their cutoff follows, audit_index (one event per dropped partition, platform pseudo-organization), audit_exports (one event per expired export, in its organization) or retired_inventory (only as failure, once per organization and round: upstream_unavailable when the round skipped the organization's retired devices because the Fleet step failed three times in a row with upstream_unavailable, or the error of loading the privacy settings or listing the first page of retired devices; their evidence is otherwise device.inventory_purged).",
-		Params:      []string{"store", "deleted", "cutoff", "index_days", "partition", "export_id"},
+		Params:      []string{"store", "deleted", "cutoff", "index_days", "partition", "export_id", "organization_id"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
+		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032. store audit_exports of an organization whose log was closed for its deletion is recorded in the platform pseudo-organization with organization_id (plan M17 decision 16).",
 	},
 	CodeDeviceInventoryPurged: {
 		Code: CodeDeviceInventoryPurged, Emitted: true,
@@ -1567,7 +1567,7 @@ var registry = map[Code]Definition{
 		Description: "The audit writer verified the organization's hash chain for from_day..to_day: every manifest exists, is signed by audit-chain, links to the previous day and lists exactly the indexed objects, and every object's SHA-256 matches (actor: system audit-writer).",
 		Params:      []string{"run_id", "trigger", "from_day", "to_day", "days", "objects", "final"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "trigger is nightly (the last 7 sealed days), sample (one random older day), cli (paddock-server audit verify) or final. final is true, and trigger final, on the last verification before the organization is deleted (ADR 0052 decision 6): every sealed day of the organization; it is the last event of the organization's own log, and the day it is filed under is the organization's last sealed day.",
+		Note:        "trigger is nightly (the last 7 sealed days), sample (one random older day), cli (paddock-server audit verify) or final. final is true, and trigger final, on the last verification before the organization is deleted (ADR 0052 decision 6): the days that may be sealed are sealed first, then from_day..to_day (the first through the newest sealed day) are verified as a chain and every object of the later, still open days against its index checksum (counted in objects). It is the last event of the organization's own log; its own object and the day it is filed under, sealed afterwards with the retired mark, are checked by paddockctl audit verify-export.",
 	},
 	CodeAuditChainVerificationFailed: {
 		Code: CodeAuditChainVerificationFailed, Emitted: true,
@@ -1804,8 +1804,9 @@ var registry = map[Code]Definition{
 	CodeAuditExportCompleted: {
 		Code: CodeAuditExportCompleted, Emitted: true,
 		Description: "The audit writer finished building an evidence package (actor: system). verify_ok tells whether the chain of the range verified; a package with problems is still delivered so that the auditor sees them. failure carries the error and error_code export_failed; reason export_too_large marks a build whose events.jsonl or package exceeded PADDOCK_AUDIT_EXPORT_MAX_BYTES.",
-		Params:      []string{"export_id", "from_day", "to_day", "days", "objects", "events", "size", "package_sha256", "verify_ok", "key_version", "error", "reason"},
+		Params:      []string{"export_id", "from_day", "to_day", "days", "objects", "events", "size", "package_sha256", "verify_ok", "key_version", "error", "reason", "organization_id"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "An export of an organization whose log was closed for its deletion (a platform administrator's evidence export, ADR 0052 decision 7) is recorded in the platform pseudo-organization with organization_id, so the package's checksum stays in an audit log.",
 	},
 	CodeNotificationDelivered: {
 		Code: CodeNotificationDelivered, Emitted: true,
@@ -2227,7 +2228,7 @@ var registry = map[Code]Definition{
 		Description: "The audit writer received an event of an organization whose log was closed for its deletion and recorded it here instead of dropping it (actor: system audit-writer).",
 		Params:      []string{"organization_id", "original_code", "original_event_id"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "Platform pseudo-organization. Written instead of an event of a retired organization (plan M17 decision 16): the event's own params are not kept. The event ID is derived from original_event_id, so a redelivery is recorded once.",
+		Note:        "Platform pseudo-organization. Written instead of an event of a retired organization (plan M17 decision 16): the event's own params are not kept; the audit writer's own records of an evidence export (audit.export_completed, retention.purged of store audit_exports) keep their code and params instead. The event ID is derived from original_event_id, so a redelivery is recorded once.",
 	},
 	CodeOrganizationAuditRetirementRequested: {
 		Code: CodeOrganizationAuditRetirementRequested, Emitted: true,

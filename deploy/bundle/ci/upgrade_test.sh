@@ -244,8 +244,15 @@ done
 
 # --- upgrade_hosts ---------------------------------------------------------------------------------------------------
 # The upgrade again after the rollback (step 8): the same candidate directories, the previous release's as <old dir>,
-# the root token for bootstrap openbao, and the step names and log phase of that run.
+# the root token for bootstrap openbao, and the step names and log phase of that run. The broker's permissions are
+# asserted after both hosts' upgrade and before the job's own bootstrap and up (PDK-1017); the stub replaces
+# assert-broker.sh, which assert-broker_test.sh covers.
+mkdir -p "$work/ci-stubs"
+printf '#!/usr/bin/env bash\necho "assert-broker $*"\n' >"$work/ci-stubs/assert-broker.sh"
+chmod +x "$work/ci-stubs/assert-broker.sh"
+export CI_STUBS="$work/ci-stubs"
 out="$(lib eval '
+  here="$CI_STUBS"
   printf "{\"root_token\": \"s.root\"}" >"$W/init.json"
   start_unsealer() { :; }
   use_prev
@@ -255,7 +262,7 @@ out="$(lib eval '
   upgrade_hosts 8 upgrade-again
   echo "phase=$phase"' 2>&1)"
 order="*8.1 upgrade-again: control plane*cp $work/w/cand/cp upgrade $work/w/prev/cp --yes token=s.root*"
-order+="8.2 upgrade-again: audit host*audit $work/w/cand/audit upgrade $work/w/prev/audit --yes*"
+order+="8.2 upgrade-again: audit host*audit $work/w/cand/audit upgrade $work/w/prev/audit --yes*assert-broker paddock-cp*"
 order+="8.3 upgrade-again: the release's bootstrap and orphans*cp $work/w/cand/cp bootstrap buckets*"
 order+="cp $work/w/cand/cp up*orphans*phase=upgrade-again*"
 # shellcheck disable=SC2053

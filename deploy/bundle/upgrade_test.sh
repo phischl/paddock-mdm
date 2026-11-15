@@ -104,11 +104,13 @@ setup() {
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
   for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
-  for s in gen-prod-secrets.sh wait-healthy.sh openbao-configure.sh rustfs-bundles-bootstrap.sh; do
+  for s in gen-prod-secrets.sh wait-healthy.sh openbao-configure.sh rustfs-bundles-bootstrap.sh rabbitmq-definitions.sh; do
     # shellcheck disable=SC2016 # the stub expands its arguments when it runs
     printf '#!/usr/bin/env bash\necho "script %s $*" >>"$FIXTURE_CALLS"\n' "$s" >"$work/t/new/scripts/$s"
     chmod +x "$work/t/new/scripts/$s"
   done
+  # shellcheck disable=SC2016 # the stub expands the variable when it runs
+  echo '[[ "${1:-}" != --import ]] || exit "${FIXTURE_BROKER_IMPORT_EXIT:-0}"' >>"$work/t/new/scripts/rabbitmq-definitions.sh"
   sed -i 's/^version=.*/version=0.1.0-alpha.10/' "$work/t/new/VERSION"
   echo 0.1.0-alpha.10 >>"$work/t/new/RELEASES"
   printf '%s\nUpgrade: from 0.1.0-alpha.9: automatic\nAgents: supports 0.1.0-alpha.8, 0.1.0-alpha.9, 0.1.0-alpha.10\n' \
@@ -185,6 +187,22 @@ before "the bucket bootstrap adds the missing users after up" "$UP" '^script rus
 before "and before the post-checks" '^script rustfs-bundles-bootstrap.sh --add-missing$' '^docker compose .*admin upgrade-check --target-version 0.1.0-alpha.10'
 not_called "the upgrade never runs the full bucket bootstrap" '^script rustfs-bundles-bootstrap.sh$'
 has "the plan names the bucket step" 'buckets +\./paddock bootstrap buckets --add-missing'
+# PDK-1017, main §45: the broker's users and permissions are imported into the running broker before up, once the
+# secrets step has rendered them and the backup has completed, so that the new services find them when up waits for
+# them; the exact comparison runs after up, before the buckets.
+BROKER_IMPORT='^script rabbitmq-definitions.sh --import$'
+BROKER_CHECK='^script rabbitmq-definitions.sh --check$'
+before "the broker import follows the secrets step" '^script gen-prod-secrets.sh controlplane' "$BROKER_IMPORT"
+before "and the backup" "$BACKUP" "$BROKER_IMPORT"
+before "the broker definitions are imported before up" "$BROKER_IMPORT" "$UP"
+before "the broker's permissions are compared after up" "$UP" "$BROKER_CHECK"
+before "and before the bucket bootstrap" "$BROKER_CHECK" '^script rustfs-bundles-bootstrap.sh --add-missing$'
+not_called "the upgrade never runs the broker's apply-and-check in one" '^script rabbitmq-definitions.sh $'
+has "the plan names the broker import before up" 'broker +\./paddock bootstrap broker --import \(imports the RabbitMQ users and permissions of this release into the running broker before up'
+has "the plan names the broker check after up" 'broker-check +\./paddock bootstrap broker --check'
+if grep -nE '^  (broker|up|broker-check) ' <<<"$out" | cut -d: -f2 | awk '{print $1}' | paste -sd ' ' - | grep -qx 'broker up broker-check'; then
+  pass "the plan lists broker, up, broker-check in this order"
+else fail "plan order: $(grep -E '^  (broker|up|broker-check) ' <<<"$out")"; fi
 not_called "only an upgrade from 0.1.0-alpha.8 stops the old pgBackRest" 'compose stop pgbackrest'
 if [[ -f "$work/t/new/.env" && -d "$work/t/new/.secrets" ]]; then pass "migrate-from copied .env and .secrets/"; else fail "no .env or .secrets/ here"; fi
 if [[ ! -e "$work/t/new/.upgrade-state" ]]; then pass "success deletes .upgrade-state"; else fail ".upgrade-state is left"; fi
@@ -762,6 +780,8 @@ before "the audit host lists its containers only after up" "$UP" '^docker ps -q'
 before "the audit host checks the container matrix only after up" "$UP" '^docker run .*prod-check .*--containers '
 not_called "the audit host asks no server report" '^docker compose .*admin upgrade-check'
 not_called "the audit host runs no bucket bootstrap" 'rustfs-bundles-bootstrap'
+not_called "the audit host applies no broker definitions" 'rabbitmq-definitions'
+not_called "the audit host lists no broker permissions" 'list_permissions'
 setup audit "Schema: migrations 00105 (control-plane database); audit unchanged"
 run 0 "audit host without audit migrations" "$work/t/old" --yes
 not_called "no audit writer stop without audit migrations" 'paddock-audit-writer'
@@ -796,9 +816,31 @@ run 0 "lab with backups" "$work/t/old" --yes
 has "a lab with backups names the rollback" '^Rollback afterwards: \./paddock rollback '
 before "the lab backup completes before up" "$BACKUP" "$UP"
 called "the lab with backups runs the online check" '^docker run .*prod-check .*--online'
+# PDK-1017: the old broker keeps the old permissions until the step broker; only the post-checks compare them.
+has "the lab's check before up does not compare the old broker" 'not checked: the old release still runs; the upgrade checks them in its step broker-check'
+before "the lab lists the broker's permissions only after up" "$UP" 'rabbitmqctl -q list_permissions -p paddock --formatter json'
+called "the lab's post-check compares the broker's permissions" '^docker run .*prod-check .*--broker-permissions '
+before "the lab imports the broker definitions before up" '^script rabbitmq-definitions.sh --import$' "$UP"
+before "the lab compares the broker's permissions after up" "$UP" '^script rabbitmq-definitions.sh --check$'
 before "the lab with backups checks online before up" '^docker run .*prod-check .*--online' "$UP"
 before "the lab adds the missing object-store users after up" "$UP" '^script rustfs-bundles-bootstrap.sh --add-missing$'
 before "the lab with backups reads the targets' revisions only after up" "$UP" 'admin backup-targets revisions'
+
+# A failed broker import (main §45): up does not run, the old release runs on, and the next run continues at the import.
+setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
+FIXTURE_BROKER_IMPORT_EXIT=1 run 1 "a failed broker import stops before up" "$work/t/old" --yes
+not_called "no up after a failed broker import" "$UP"
+has "the failed import names the state" '\./paddock up did not run: 0\.1\.0-alpha\.9 still runs from'
+hasnt "a failed import does not claim the new release runs" 'may be partly running|runs on the migrated data'
+if grep -qx 'done=backup' "$work/t/new/.upgrade-state" && ! grep -qx 'done=broker' "$work/t/new/.upgrade-state"; then
+  pass "the failed import is not recorded as done"
+else fail ".upgrade-state after a failed import: $(cat "$work/t/new/.upgrade-state" 2>&1)"; fi
+run 0 "the run after a failed broker import" "$work/t/old" --yes
+has "the second run continues at the import" '^== backup: done in an earlier run$'
+if [[ "$(grep -cE "$BACKUP" "$calls")" == 1 && "$(grep -cE '^script rabbitmq-definitions.sh --import$' "$calls")" == 2 ]]; then
+  pass "the import runs again, the backup does not"
+else fail "backups $(grep -cE "$BACKUP" "$calls"), imports $(grep -cE '^script rabbitmq-definitions.sh --import$' "$calls")"; fi
+before "the repeated import precedes up" '^script rabbitmq-definitions.sh --import$' "$UP"
 
 # Usage and preconditions.
 setup controlplane "Schema: unchanged"

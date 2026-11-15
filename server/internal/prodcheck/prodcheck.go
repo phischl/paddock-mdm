@@ -165,6 +165,9 @@ type Options struct {
 	// Containers are the running containers of the project (docker inspect) and the exceptions file; nil means not
 	// checked (offline).
 	Containers *ContainerMatrix
+	// Broker are the RabbitMQ permissions of the definitions and of the running broker; nil means not checked
+	// (offline, or a host without RabbitMQ).
+	Broker *BrokerPermissions
 }
 
 // DockerNetwork is an existing Docker network of the host and its subnets.
@@ -213,6 +216,9 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	}
 	if o.Containers != nil {
 		results = append(results, CheckContainerMatrix(*o.Containers))
+	}
+	if o.Broker != nil {
+		results = append(results, CheckBrokerPermissions(*o.Broker))
 	}
 	lab := o.Host == HostLab
 	if lab {
