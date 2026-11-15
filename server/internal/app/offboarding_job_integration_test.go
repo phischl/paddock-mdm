@@ -748,6 +748,68 @@ func TestOffboardingKeepsOffboardedDeviceKeys(t *testing.T) {
 	}
 }
 
+// TestOffboardingFleetHostSharedWithinOrganization (PDK-1058, plan M17 amendment l point 1): two devices of the deleted
+// organization on one Fleet host do not keep each other's host alive, whereas a device of another organization on a
+// second shared host keeps that host.
+func TestOffboardingFleetHostSharedWithinOrganization(t *testing.T) {
+	w := newOffboardWorld(t)
+	job := w.job()
+	reenrolled, _ := w.newDevice(t, w.org, "active")
+	sharedOwn := "host-" + w.device.String()
+	w.exec(t, "INSERT INTO device_inventory_ref (device_id, organization_id, external_id) VALUES ($1, $2, $3)",
+		reenrolled, w.org, sharedOwn)
+	second, _ := w.newDevice(t, w.org, "active")
+	foreign, _ := w.newDevice(t, w.other, "active")
+	const sharedForeign = "shared-with-other-org"
+	for _, r := range []struct{ device, org uuid.UUID }{{second, w.org}, {foreign, w.other}} {
+		w.exec(t, "INSERT INTO device_inventory_ref (device_id, organization_id, external_id) VALUES ($1, $2, $3)",
+			r.device, r.org, sharedForeign)
+	}
+	w.fleet.hosts[sharedForeign] = true
+	w.requestDue(t, job)
+	w.advanceTo(t, job, offboarding.StepObjects)
+
+	if !slices.Equal(w.fleet.deleted, []string{sharedOwn}) || w.fleet.hosts[sharedOwn] {
+		t.Fatalf("deleted hosts %v, want only %s", w.fleet.deleted, sharedOwn)
+	}
+	if !w.fleet.hosts[sharedForeign] || !w.fleet.hosts["host-"+w.otherDevice.String()] {
+		t.Fatalf("a host another organization uses was deleted: %v", w.fleet.hosts)
+	}
+}
+
+// TestFleetHostInUseOutsideHardware (PDK-1058 review 1): the hardware answer ignores the deleting organization's own
+// devices without a reference, counts another organization's, and does not count one that already has a reference.
+func TestFleetHostInUseOutsideHardware(t *testing.T) {
+	w := newOffboardWorld(t)
+	const host, hw = "hw-host", "0A1B2C3D-0000-4000-8000-000000000001"
+	holder, _ := w.newDevice(t, w.org, "active")
+	w.exec(t, "INSERT INTO device_inventory_ref (device_id, organization_id, external_id) VALUES ($1, $2, $3)",
+		holder, w.org, host)
+	w.exec(t, "UPDATE device SET hardware_uuid = $2 WHERE id = $1", holder, hw)
+	check := func(want string) {
+		t.Helper()
+		sys := principal.With(context.Background(), principal.Principal{Kind: principal.KindSystem})
+		if got, err := w.platform.FleetHostInUseOutside(sys, w.org, host); err != nil || got != want {
+			t.Fatalf("FleetHostInUseOutside = %q, %v; want %q", got, err, want)
+		}
+	}
+	withHardware := func(org uuid.UUID) uuid.UUID {
+		id, _ := w.newDevice(t, org, "active")
+		w.exec(t, "UPDATE device SET hardware_uuid = lower($2) WHERE id = $1", id, hw)
+		return id
+	}
+
+	withHardware(w.org)
+	check(db.FleetHostUnused)
+
+	foreign := withHardware(w.other)
+	check(db.FleetHostUsedByHardware)
+
+	w.exec(t, "INSERT INTO device_inventory_ref (device_id, organization_id, external_id) VALUES ($1, $2, 'foreign-host')",
+		foreign, w.other)
+	check(db.FleetHostUnused)
+}
+
 // TestOffboardingCountsEveryBatch (review 1 minor 2): the database step stores its count after every batch, so a
 // worker that stops in the middle of the step (here: its context ends while a later batch waits) keeps the count of
 // the rows already gone, and the completion event reports all of them.

@@ -334,6 +334,24 @@ func (q *Queries) FleetHostInUse(ctx context.Context, arg FleetHostInUseParams) 
 	return column_1, err
 }
 
+const fleetHostInUseOutside = `-- name: FleetHostInUseOutside :one
+SELECT paddock_fleet_host_in_use_outside($1::uuid, $2::text)::text
+`
+
+type FleetHostInUseOutsideParams struct {
+	Org  uuid.UUID
+	Host string
+}
+
+// Like FleetHostInUse for the deletion of a whole organization: every device of org is ignored, so only another
+// organization's reference or hardware keeps the host (platform pool, plan M17 amendment l point 1).
+func (q *Queries) FleetHostInUseOutside(ctx context.Context, arg FleetHostInUseOutsideParams) (string, error) {
+	row := q.db.QueryRow(ctx, fleetHostInUseOutside, arg.Org, arg.Host)
+	var column_1 string
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const getDeviceHardware = `-- name: GetDeviceHardware :one
 SELECT hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes
 FROM device_inventory_ref WHERE device_id = $1
