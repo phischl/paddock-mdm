@@ -120,6 +120,14 @@ func createOrg(t *testing.T, p *env.Portal, body any) env.Response {
 	if res.RequestID == "" {
 		t.Fatalf("POST %s: response without X-Request-Id", path)
 	}
+	// newOrg has no *testing.T and the ID exists only here, so every gate's organization is registered for deletion
+	// at this one place (PDK-946).
+	if res.Status == http.StatusCreated || res.Status == http.StatusOK {
+		var org struct{ ID, Slug string }
+		if res.JSON(&org) == nil && org.ID != "" {
+			deleteGateOrgAtEnd(t, org.ID, org.Slug)
+		}
+	}
 	return res
 }
 

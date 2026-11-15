@@ -150,9 +150,18 @@ export is built within seconds.
 
 ## Acceptance gates on a long-lived stack
 
-The acceptance gates (`make acceptance`) run against this stack and leave their data behind: every run creates new
-`gate-*` organizations, enrolled devices, tokens and audit events, and none of it is removed. Organizations cannot be
-deleted (the admin API has no delete operation for organizations), so there is no cleanup after a gate. A gate must
+The acceptance gates (`make acceptance`) run against this stack and leave some data behind: every run creates new
+`gate-*` organizations, enrolled devices, tokens and audit events. Each gate deletes the organizations it created when
+its case ends (the platform deletion with `grace_days` 0, which a development stack allows; the case waits up to
+5 minutes for the status `deleted` and only logs a failed cleanup). What an aborted run left, or a cleanup that failed,
+is removed with
+
+```sh
+make dev-prune-gate-orgs   # deletes every organization named "Gate gate-…" through the admin API
+```
+
+The target refuses to run unless the api reports `PADDOCK_ENV=development`. The devices, tokens and audit events of
+other gates are not removed. A gate must
 therefore not depend on the number of organizations, devices or any other state that accumulates across runs: it asserts
 on the objects it created itself, scopes its lists and audit queries to them, and does not size a timeout on how fast
 the stack works through all organizations or devices. A gate that passes on a fresh stack and fails on a long-used one

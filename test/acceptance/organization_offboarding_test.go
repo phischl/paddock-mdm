@@ -7,10 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/phischl/paddock-mdm/pkg/command"
 	"github.com/phischl/paddock-mdm/pkg/dsse"
 	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // TestOffboardedDeviceUninstallsAfterTombstone is gate OF6 (plan M17 §8.7, decision 15, amendment l point 3): a device
@@ -88,4 +91,53 @@ func TestOffboardedDeviceUninstallsAfterTombstone(t *testing.T) {
 		_, r, err := d.Checkin(testContext(t, time.Minute))
 		return err == nil && r.Status == http.StatusUnauthorized && strings.Contains(string(r.Body), "invalid_signature")
 	})
+}
+
+// TestGateOrganizationsAreDeleted is gate OF8 (plan M17 §7 step 7, OFB-8, PDK-946): an organization a gate creates is
+// deleted when its case ends. The organization of the subtest has the status deleted once the subtest returned, so it
+// is absent from the default list, which leaves out tombstones, and present in the list filtered by status deleted.
+// Other gates' organizations are deleted by the same cleanup but may still be in progress while this gate runs, so the
+// gate looks at its own only.
+func TestGateOrganizationsAreDeleted(t *testing.T) {
+	root := login(t, env.PlatformAdmin)
+	var slug string
+	var id uuid.UUID
+	t.Run("case", func(t *testing.T) {
+		slug, id = gateOrganization(t)
+	})
+	if slug == "" {
+		t.Fatal("the case created no organization")
+	}
+
+	// The cleanup logs instead of failing, so this gate is where a stuck deletion becomes a failure.
+	res := call(t, root, http.MethodGet, orgPath+id.String(), nil)
+	var org struct {
+		Status string `json:"status"`
+	}
+	if res.Status != http.StatusOK || res.JSON(&org) != nil || org.Status != "deleted" {
+		t.Fatalf("gate organization %s after its case: HTTP %d %s, want status deleted", slug, res.Status, res.Body)
+	}
+
+	for _, c := range []struct {
+		query string
+		want  bool
+	}{{"", false}, {"&status=deleted", true}} {
+		res := call(t, root, http.MethodGet, "/api/platform/v1/organizations?page_size=100&q="+slug+c.query, nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var page struct {
+			Items []struct {
+				Slug string `json:"slug"`
+			} `json:"items"`
+		}
+		if err := res.JSON(&page); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, it := range page.Items {
+			found = found || it.Slug == slug
+		}
+		if found != c.want {
+			t.Fatalf("list %q: organization %s listed = %v, want %v", c.query, slug, found, c.want)
+		}
+	}
 }
