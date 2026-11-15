@@ -34,6 +34,7 @@ func (x recoveryExportResponse) visit(w http.ResponseWriter) error {
 		started = true
 		h := w.Header()
 		h.Set("Content-Type", recoveryexport.ContentType)
+		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": f.Name()}))
 		w.WriteHeader(http.StatusOK)
 		return w

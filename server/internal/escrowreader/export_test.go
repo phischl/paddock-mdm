@@ -13,6 +13,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -113,9 +115,29 @@ func TestExport(t *testing.T) {
 		VALUES ($1, $2, $3, 'luks_recovery_key', 1, 'stored', 'old-key', 1), ($4, $2, $3, 'admin_password', 1, 'superseded', 'old-pw', 1)`,
 		uuid.New(), w.orgs[0], w.devices[0], uuid.New())
 
+	// A proxy in front of the escrow-reader records the response headers the client does not hand on.
+	var header http.Header
+	target, err := url.Parse(w.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		header = resp.Header.Clone()
+		return nil
+	}
+	front := httptest.NewServer(proxy)
+	t.Cleanup(front.Close)
+	w.client = escrowreader.NewClient(front.URL, secret)
+
 	msg, counts, opened, err := w.export(w.call(0, app.RequesterOrganization, w.token(0, "org_admin")))
 	if err != nil || !opened || counts != (app.RecoveryExportCounts{Devices: 1, Secrets: 2}) {
 		t.Fatalf("export: %v opened %v counts %+v", err, opened, counts)
+	}
+	if header.Get("Content-Type") != recoveryexport.ContentType || header.Get("Cache-Control") != "no-store" ||
+		header.Get("X-Content-Type-Options") != "nosniff" ||
+		header.Get("Content-Disposition") != `attachment; filename="paddock-recovery-export.asc"` {
+		t.Fatalf("export headers: %v", header)
 	}
 	if bytes.Contains(msg, []byte("plain-")) || !bytes.HasSuffix(bytes.TrimSpace(msg), []byte("-----END PGP MESSAGE-----")) {
 		t.Fatalf("not a complete encrypted message:\n%s", msg)

@@ -44,6 +44,10 @@ const (
 	bodyMacHeader = "X-Paddock-Escrow-Reader-Body-Mac"
 )
 
+// exportDisposition marks the export as a download under a fixed name: the api names the requester's file itself, and
+// no value of the request reaches a header a browser would interpret.
+const exportDisposition = `attachment; filename="paddock-recovery-export.asc"`
+
 // refusedState: the organization's deletion is not pending.
 const refusedState = "not_pending"
 
@@ -165,6 +169,8 @@ func (s *Service) export(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", recoveryexport.ContentType)
 	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Disposition", exportDisposition)
 	h.Set("Trailer", bodyMacHeader)
 	h.Set(devicesHeader, strconv.Itoa(len(devices)))
 	h.Set(secretsHeader, strconv.Itoa(secrets))
