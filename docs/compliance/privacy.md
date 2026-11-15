@@ -260,6 +260,23 @@ session (the session record in Valkey, `admin.login` with `channel: mcp`) plus t
 audit events of its changes (`actor.client`); reads through the MCP are not recorded per call (RR-89). The session
 file on the workstation holds Authentik tokens of the administrator, not data of devices or users.
 
+## Organization offboarding
+
+When an organization is deleted (ADR 0052), Paddock deletes the personal data it holds for that organization:
+administrator accounts' sessions and tokens, device records, the login traces, inventory and software data, escrowed
+secrets, configuration and change history, notification destinations, and the organization's objects in Authentik,
+Fleet and object storage (full list and legal basis: [retention.md](retention.md), section "Organization
+offboarding"). This is the processor's duty under GDPR Art. 28(3)(g) at the end of the service. Paddock keeps, on
+the legal basis of Art. 17(3)(b) and (e), the organization's audit evidence (actor display names, IP addresses,
+usernames and hostnames as in the audit log) until the audit retention you configured ends; only platform
+administrators read it, every read is recorded, and it can be handed to the customer's auditors as an evidence export.
+A tombstone (ID, slug, name, deletion reason and counts, no personal data) and, for devices that were offline, a record
+without personal data for at most 365 days are also kept. Backup sets taken before the deletion keep their copies until
+their retention ends. Nothing on the devices is deleted: local accounts, home directories and the disk encryption stay,
+Paddock removes itself, and the agent never locks or wipes. Before the deletion, administrators can export the device
+recovery keys and local administrator passwords once, encrypted to a key or passphrase they supply; Paddock stores no
+copy of that export.
+
 ## What leaves the server
 
 Paddock's server sends data to a third party only where the operator or an administrator configured it. Besides the
