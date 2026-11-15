@@ -129,3 +129,121 @@ every round.
 - Follow-up: the "Query planning" section in `docs/operations/capacity.md` (see Consequences above) also states that
   the organization pools run with `jit = off`, and why.
 - A cheaper attention view is a later improvement (0.1.0-alpha.12).
+
+## Amendment 2026-11-15 (2) — The heartbeat and event ingest keeps cached statements (main §76)
+
+Status of this amendment: Accepted (architect, 2026-11-15; approved by main, main §77); it replaces decision 3. Decisions 1, 2 and 4 to 7 stay.
+
+### Finding
+
+The N2 ingest measurement of decision 3 (5 000 events/s, one full worker and two ingest workers, worker plus postgres
+CPU per 1 000 events, A = the integration head without this ADR, B = with decisions 1 and 6) came out far above the 5 %
+limit: median +28.3 % (postgres +35.8 %, workers +9.3 %); the clean pair +31.6 % (postgres +40.9 %), the second pair
++24.2 %. Transactions per event were unchanged. The cost is planning: the event path runs a handful of short, keyed
+statements per event, and planning each of them is a large share of their total cost.
+
+Checked in the code:
+- The gateway opens no PostgreSQL pool; it publishes to RabbitMQ. All database work of the ingest happens in the
+  worker's queue consumers.
+- `ingest.heartbeat` and `ingest.event` are consumed by the full worker and by every ingest worker
+  (`PADDOCK_WORKER_MODE=ingest`), so at N2 the full worker carries about a third of the events. Both reach the database
+  through the worker's single organization pool and its `ActionRunner` (`app.DeviceReports`, `app.DeviceCommands`,
+  `app.ActionRunner`).
+- Of the catastrophic queries only `MaxDeviceEventSeenBefore` is on that path (heartbeat). `ListDeviceEventSeenAbove`
+  runs only in the event-gap round.
+- The cause of both is not the SQL but an index. `EXPLAIN` of the generic plan, built in a 43-row organization and
+  executed in the 3 million-row one, reads the whole organization through `device_event_seen_org_idx`
+  (`organization_id` only, migration 00145 of M17 amendment q): 30 000 buffers, 3 014 900 rows removed by the filter,
+  380–510 ms, where the primary key `(device_id, event_seq)` needs a few buffers. Every query on that table carries the
+  RLS predicate on `organization_id`, so a rewrite of the SQL cannot take that path away from the planner.
+- The connection budget is used up exactly at `max_connections` 100 (81 for the long-running roles,
+  `docs/operations/capacity.md`). A further pool in the full worker would break `./paddock check`.
+
+### Options
+
+- **A — Statement cache for the whole ingest worker role only.** + One pool option. − The full worker still runs a
+  third of the events per execution, so the measured cost stays well above 5 %.
+- **B — A separate pool for the ingest consumers in every worker.** + Clear boundary. − Adds connections to the full
+  worker, which the budget does not have; resizing the existing pool starves the rounds (PDK-1010).
+- **C — Statement cache by default, per-execution planning only for a named list of heavy queries.** + Cheapest
+  everywhere. − Inverts the guarantee of decision 1: a new heavy query is unsafe until someone lists it.
+- **D — A statement-cache view of the organization pool for the heartbeat and event consumers, plus organization
+  indexes that cannot capture device-keyed lookups.** The view shares the pool's connections, role, organization gate
+  and `jit = off`; only the execution mode of its statements differs. + No extra connection; per-execution planning
+  stays the default for everything else, including future queries; the root cause of the two event-gap queries is
+  removed for every mode. − Two execution modes on one pool; the queries on the view need a review list. **Chosen.**
+
+### Decision
+
+8. **Statement-cache view.** `(*db.OrgPool).WithStatementCache() *db.OrgPool` returns a view of the same pool. Its
+   transactions (`InOrg`, `InOrgSnapshot`, `InOrgOffboarding`, `InPendingDeletionOrg`) hand the `pgstore.Queries` a
+   wrapper of the transaction that passes `pgx.QueryExecModeCacheStatement` as the first query argument of every
+   `Exec`, `Query` and `QueryRow`, and its `set_config` of the organization runs the same way (the gate's rare batch with a stale status cache keeps the pool's mode). pgx keeps the statement
+   and the description cache side by side on each connection, so the view and the per-execution default share
+   connections safely. `Close` of a view does nothing; only the pool that was opened closes.
+9. **Who uses the view.** The worker's `ingest.heartbeat` and `ingest.event` consumers, in the full and in the ingest
+   mode, through their own `ActionRunner`, `DeviceReports` and `DeviceCommands` on the view. Every other consumer, every
+   round, and every other role keep per-execution planning (decision 1). Decision 3 is replaced by this.
+10. **Organization indexes that keep the device key.** Migration 00158 replaces the single-column organization indexes
+    of `device_event_seen`, `device_event_gap` and `device_event_dropped` (00143–00145) by indexes on
+    `(organization_id, device_id)`, built and dropped concurrently. The organization deletion keeps an index led by
+    `organization_id` (M17 amendment q), and a plan that takes the organization index now still reads only one
+    device's rows. The SQL of `MaxDeviceEventSeenBefore` and `ListDeviceEventSeenAbove` stays as it is.
+11. **Review list for the view.** A test keeps a closed list of the `pgstore` queries the view's code calls. A query
+    may join the list only if every table it touches is reached by its primary key or by a device key that every
+    index led by `organization_id` on that table contains. A new call fails the test until it is reviewed and listed.
+12. **Proof.**
+    - A plan test on a connection with `plan_cache_mode = force_generic_plan` runs every listed query that reads or
+      writes a device-keyed table, plus `ListDeviceEventSeenAbove` and `CountDeviceEventSeenInRanges` of the event-gap
+      round, six times in a small organization and then once in a 70 000-device organization through the view, and
+      asserts at most 100 shared buffers for the large-organization execution. Without migration 00158 it fails for
+      `MaxDeviceEventSeenBefore` and `ListDeviceEventSeenAbove`.
+    - The pool-mode test of decision 5 also asserts that the view runs statements cached and still with `jit = off`.
+    - N2 re-measurement (method of main §16): three clean alternating A/B pairs against A = the integration head
+      7e23f0ca, CPU seconds per event of worker plus postgres, median of B at most 5 % above A. Migration 00158 is
+      applied before the series, so A and B run on the same schema. The cost of the new indexes is measured in the
+      second series together with the pending `outbox` index series of PDK-1068: organization-only against
+      `(organization_id, device_id)` indexes, at most 5 %.
+
+### Consequences
+
+- + The ingest hot path costs what it cost before ADR 0055; plan stability stays the default for all other queries.
+- + Device-keyed lookups on the event tables are safe in every planning mode, also in the event-gap round.
+- − The heartbeat and event path keeps generic plans. Its review list (decision 11) is the guard; a heavy query on that
+  path must not be added without an architect decision.
+- − The composite indexes are larger than the organization-only ones; the second N2 series decides whether that is
+  acceptable.
+- Follow-up: the "Query planning" section of `docs/operations/capacity.md` names the view, its consumers and both N2
+  results.
+
+### Clarification 2026-11-15 (within main §77): the view caches only listed statements
+
+Before implementation started, the call graph of the two consumers turned out to reach far more queries than the four
+files decision 11 named: device transitions and tamper findings (clone quarantine, uninstall retirement), disk
+conversion and configuration status events, and the software-request handling of request events. Several of them
+touch tables whose organization-led indexes lack the lookup key, so they fail the rule of decision 11:
+- `device_group_member`, `user_group_member` and `device_identity_key` have organization-only indexes;
+- `device_owner` has `(organization_id, user_id)`, `app_user` has `(organization_id, created_at)`;
+- `software_request`, `device_command`, `device_resource_status`, `device_bundle_report`, `escrow_secret` and
+  `device_software_status` have organization-led indexes without the device key.
+
+Decisions 8 and 11 are therefore made precise, so that the guarantee holds by construction, not by a closed file list:
+
+- **8 (precise).** The view runs a `pgstore` statement with `pgx.QueryExecModeCacheStatement` only if its sqlc name
+  (the `-- name:` line that starts each generated SQL text) is on an allow list in `server/internal/platform/db`.
+  Every other statement on the view runs in the pool's mode, per execution. The view's own `set_config` stays cached.
+  An unlisted or newly reached query is thus planned per execution, which is safe; it can only cost CPU, which N2
+  shows.
+- **11 (precise).** The allow list replaces the call-graph registry; nothing has to follow the call graph. A name may
+  be listed only if it passes the rule of decision 11, or it is a plain `INSERT … VALUES` without a subquery. The first
+  list holds the common heartbeat and event path:
+  - lookups and updates of `device` by `id` and of `device_status` by `device_id`;
+  - the queries on `device_event_seen`, `device_event_gap` and `device_event_dropped` (after migration 00158);
+  - `InsertAction`, `FinishAction`, `InsertOutbox`;
+  - plain inserts.
+  Software-request handling, disk conversion, configuration status, device transitions, tamper findings, device
+  commands, escrow and software status stay unlisted and run per execution. They only run for their own event types,
+  and adding indexes for them would grow 00158 for little benefit. No index is added beyond decision 10.
+- **12 (precise).** The plan test covers every listed name that reads or updates a table (not the plain inserts).
+  Further tests check that every listed name exists among the generated queries, and that on the view a listed
+  statement is cached while an unlisted one is not.
