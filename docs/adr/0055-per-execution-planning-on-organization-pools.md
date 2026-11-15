@@ -1,5 +1,5 @@
 # 0055 — Per-execution query planning on the organization pools
-Status: Proposed (architect, 2026-11-16; main §68; implementation PDK-1079 after main's approval)
+Status: Accepted (architect, 2026-11-16; approved by main, main §69; implementation PDK-1079)
 
 ## Context
 
