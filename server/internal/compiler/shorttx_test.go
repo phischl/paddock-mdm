@@ -74,12 +74,16 @@ func TestStaleConcurrentCommitIsRecompiled(t *testing.T) {
 	bRelease()
 	if err := <-bDone; err != nil {
 		aRelease()
-		<-aDone
+		if err := <-aDone; err != nil {
+			t.Logf("the newer compile, ended after the failure: %v", err)
+		}
 		t.Fatalf("the stale compile: %v", err)
 	}
 	if got := resourceIDs(w.fetch(d)); w.version(d) != 2 || got != "time,unit:chrony.service" {
 		aRelease()
-		<-aDone
+		if err := <-aDone; err != nil {
+			t.Logf("the newer compile, ended after the failure: %v", err)
+		}
 		t.Fatalf("after the stale compile: v%d %s", w.version(d), got)
 	}
 
@@ -254,7 +258,9 @@ func TestStalledUploadRollsBackTheCommit(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		// Ending the compile releases its connection, so the pool's cleanup does not wait on it.
 		cancel()
-		<-done
+		if err := <-done; err != nil {
+			t.Logf("the cancelled compile: %v", err)
+		}
 		t.Fatal("the stalled upload held the commit transaction beyond the upload timeout")
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
