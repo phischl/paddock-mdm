@@ -16,13 +16,6 @@ metadata:
   labels:
     blueprints.goauthentik.io/description: Authentication and device-code flows with mandatory MFA for device logins
 entries:
-  # The second-factor policies of the portal sign-in, which the MFA bindings below reuse by name.
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-portal.yaml
-      required: true
-
   - model: authentik_flows.flow
     id: authentication-flow
     identifiers:

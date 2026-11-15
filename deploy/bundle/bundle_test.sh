@@ -1034,6 +1034,123 @@ else
     pass "backup-target apply feeds the render through pipes (strace not available)"
 fi
 
+# Plan M12h-2 amendment g: ./paddock up applies the Authentik blueprints one after another in dependency order, after
+# the containers start and before it waits for paddock-api; a file that keeps failing stops up and is named. The
+# stand-in's apply prints what ak apply_blueprint 2026.8.5 prints for an invalid blueprint: each log event followed by
+# the whole entry with its resolved !Env values (the OIDC client secret, the service token's key, a development
+# password), and an exception that quotes a value. No value may reach the output (decisions-alpha11 §71).
+cp -a "$bundle" "$work/bp"
+cp "$work/bp/.env.example" "$work/bp/.env"
+mkdir -p "$work/fakebin-bp"
+cat >"$work/fakebin-bp/docker" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
+case "$*" in
+  *" ps -a --format {{.Service}}|{{.State}}|{{.Health}} authentik-server authentik-worker")
+    printf '%s\n' "authentik-server|running|healthy" "authentik-worker|running|${FAKE_WORKER_HEALTH:-healthy}"
+    ;;
+  *" ps -a --format "*) echo 'paddock-api|paddock-paddock-api-1|running|healthy|0' ;;
+  *" exec -T authentik-worker /bin/sh /paddock/entrypoint.sh apply_blueprint /blueprints/"*)
+    file="${*: -1}"
+    file="${file#/blueprints/}"
+    tries="$(grep -c "apply_blueprint /blueprints/$file\$" "$FAKE_DOCKER_LOG")"
+    if [[ " ${FAKE_APPLY_FAIL:-} " == *" $file "* ]] && ((tries <= ${FAKE_APPLY_FAIL_TIMES:-99})); then
+      echo '{"event": "Booting authentik", "level": "info", "logger": "authentik.lib.config"}'
+      echo "Blueprint invalid"
+      printf '\t%s\n' \
+        "authentik.blueprints.v1.importer: Entry invalid: Serializer errors {'target': [ErrorDetail(string='This field may not be null.', code='null')]}: {'entry': {'model': 'authentik_providers_oauth2.oauth2provider', 'state': 'present', 'conditions': [], 'identifiers': {'name': 'paddock-portal'}, 'attrs': {'client_type': 'confidential', 'client_id': 'paddock-portal', 'client_secret': 'S3cr3tClientValue', 'redirect_uris': []}, 'permissions': [], 'id': 'provider', '_state': {'instance': None}}, 'error': \"Serializer errors\", 'schema_name': 'public', 'domain_url': None}" \
+        "authentik.blueprints.v1.importer: Entry invalid: x: {'entry': {'model': 'authentik_core.token', 'attrs': {'intent': 'api', 'key': 'S3cr3tTokenKey'}, 'permissions': [], 'id': None, '_state': {'instance': None}}}" \
+        "authentik.blueprints.v1.importer: S3cr3tPrefix {'entry': {'model': 'authentik_core.user', 'attrs': {'password': 'S3cr3tDevPassword'}, '_state': {'instance': None}}}" \
+        "authentik.blueprints.v1.importer: Blueprint validation failed: {'schema_name': 'public', 'domain_url': None}" \
+        "S3cr3tLogger.x: Entry invalid: y"
+      echo "S3cr3tModule.QuotedError: z"
+      echo "django.db.utils.IntegrityError: duplicate key value (client_secret)=(S3cr3tClientValue) already exists"
+      exit 1
+    fi
+    if [[ "${FAKE_APPLY_RAW:-}" == "$file" ]]; then
+      echo "unparsed S3cr3tRawLine"
+      exit 1
+    fi
+    if [[ "${FAKE_APPLY_WARN:-}" == "$file" ]]; then
+      echo '{"event": "Entry invalid on retry: {\"key\": \"S3cr3tTokenKey\"}", "level": "warning", "logger": "authentik.blueprints.v1.importer", "entry": "S3cr3tClientValue"}'
+    fi
+    ;;
+  *" exec -T authentik-worker ak shell -c "*)
+    [[ -z "${FAKE_SHELL_FAIL:-}" ]] || exit 1
+    for o in provider/paddock-portal provider/paddock-portal-stepup provider/paddock-mcp application/paddock-portal \
+      application/paddock-portal-stepup application/paddock-mcp flow/paddock-admin-login flow/paddock-device-authentication \
+      flow/paddock-device-code flow/paddock-device-authorization flow/paddock-stepup flow/paddock-recovery; do
+      [[ " ${FAKE_MISSING:-} " == *" $o "* ]] || echo "paddock-object $o"
+    done
+    ;;
+esac
+exit 0
+FAKE
+chmod +x "$work/fakebin-bp/docker"
+prev_docker_log="$FAKE_DOCKER_LOG"
+export FAKE_DOCKER_LOG="$work/docker-bp.log"
+# bp_run <command…>: the command in $work/bp with the stand-in and no retry delay; output in $out, exit code in $rc.
+bp_run() {
+  : >"$FAKE_DOCKER_LOG"
+  set +e
+  out="$(cd "$work/bp" && env -u SECRETS_DIR PATH="$work/fakebin-bp:$PATH" PADDOCK_BLUEPRINT_RETRY_DELAY=0 "$@" 2>&1 </dev/null)"
+  rc=$?
+  set -e
+}
+applied() { sed -n 's#^.* apply_blueprint /blueprints/##p' "$FAKE_DOCKER_LOG" | paste -sd' ' -; }
+bp_line() { grep -nE -- "$1" "$FAKE_DOCKER_LOG" | head -n 1 | cut -d: -f1; }
+order="paddock/paddock-portal.yaml paddock/paddock-device.yaml paddock/paddock-stepup.yaml paddock/paddock-recovery.yaml paddock/paddock-mcp.yaml"
+bp_run ./paddock up
+if [[ $rc == 0 && "$(applied)" == "$order" ]]; then
+  pass "up applies the blueprints once each: portal, device, step-up, recovery, MCP"
+else fail "up blueprint order: exit $rc, $(applied), $out"; fi
+up_line="$(bp_line ' up -d$')" first_apply="$(bp_line 'apply_blueprint')" wait_line="$(bp_line 'ps -a --format \{\{.Service\}\}\|\{\{.Name\}\}')"
+if [[ -n "$up_line" && -n "$first_apply" && -n "$wait_line" ]] && ((up_line < first_apply && first_apply < wait_line)); then
+  pass "up applies the blueprints after the containers start and before it waits for the stack"
+else fail "up order: up -d line ${up_line:-none}, first apply ${first_apply:-none}, wait ${wait_line:-none}"; fi
+[[ "$out" == *"PASS  Authentik objects of the blueprints: 12 providers, applications and flows exist"* ]] &&
+  pass "up checks the blueprints' objects after the applies" || fail "object check: $out"
+FAKE_APPLY_FAIL=paddock/paddock-stepup.yaml bp_run ./paddock up
+if [[ $rc != 0 && "$(applied)" == "paddock/paddock-portal.yaml paddock/paddock-device.yaml paddock/paddock-stepup.yaml paddock/paddock-stepup.yaml paddock/paddock-stepup.yaml" ]] &&
+  [[ "$out" == *"the Authentik blueprint paddock/paddock-stepup.yaml failed 3 times"* && "$out" == *"Blueprint invalid"* ]] &&
+  ! grep -q 'ps -a --format {{.Service}}|{{.Name}}' "$FAKE_DOCKER_LOG"; then
+  pass "a file that fails 3 times stops up, names the file and applies nothing after it"
+else fail "fail-stop: exit $rc, $(applied), $out"; fi
+[[ "$out" != *S3cr3t* && "$out" == *"authentik.blueprints.v1.importer: Entry invalid: Serializer errors"* &&
+  "$out" == *"  django.db.utils.IntegrityError"* && "$out" == *"Blueprint validation failed"* &&
+  "$out" == *"authentik.blueprints.v1.importer: an event this script does not know"* &&
+  "$out" == *"  another logger: Entry invalid"* && "$out" == *"  an exception this script does not know"* ]] &&
+  pass "a failed apply prints the events without the client secret, the token key, a password or the exception text" ||
+  fail "failed apply output: $out"
+FAKE_APPLY_RAW=paddock/paddock-portal.yaml bp_run ./paddock up
+[[ $rc != 0 && "$out" != *S3cr3t* && "$out" == *"no reason recognized; see the log of authentik-worker"* ]] &&
+  pass "an unrecognized output is never printed, a fixed hint is" || fail "raw output: exit $rc, $out"
+FAKE_APPLY_FAIL=paddock/paddock-device.yaml FAKE_APPLY_FAIL_TIMES=2 bp_run ./paddock up
+if [[ $rc == 0 && "$(applied)" == "paddock/paddock-portal.yaml paddock/paddock-device.yaml paddock/paddock-device.yaml $(cut -d' ' -f2- <<<"$order")" ]]; then
+  pass "a file that fails twice is applied on its third try, then the rest follow"
+else fail "retry: exit $rc, $(applied), $out"; fi
+FAKE_APPLY_WARN=paddock/paddock-recovery.yaml bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"paddock/paddock-recovery.yaml failed 3 times"* && "$out" == *"Entry invalid on retry"* && "$out" != *S3cr3t* ]] &&
+  pass "an apply that exits 0 with an importer warning counts as failed" || fail "importer warning: exit $rc, $out"
+FAKE_MISSING="provider/paddock-mcp flow/paddock-recovery" bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"FAIL  Authentik objects of the blueprints: missing"*"- provider/paddock-mcp"*"- flow/paddock-recovery"* ]] &&
+  ! grep -q 'ps -a --format {{.Service}}|{{.Name}}' "$FAKE_DOCKER_LOG" &&
+  pass "a missing object after the applies fails up and is named" || fail "missing objects: exit $rc, $out"
+FAKE_SHELL_FAIL=1 bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"FAIL  Authentik objects of the blueprints: not checked"* ]] &&
+  pass "a failed object listing fails up" || fail "listing failed: exit $rc, $out"
+PADDOCK_ENV=development bp_run scripts/authentik-apply-blueprints.sh
+[[ $rc == 0 && "$(applied)" == "$order paddock-dev/paddock-dev.yaml" ]] &&
+  pass "a development stack applies the development blueprint last" || fail "development: exit $rc, $(applied), $out"
+WAIT_TIMEOUT=0 FAKE_WORKER_HEALTH=starting bp_run scripts/authentik-apply-blueprints.sh
+[[ $rc != 0 && -z "$(applied)" && "$out" == *"Authentik is not healthy: authentik-worker (running, starting)"* ]] &&
+  pass "nothing is applied before Authentik is healthy" || fail "unhealthy: exit $rc, $(applied), $out"
+sed -i 's/^PADDOCK_HOST=.*/PADDOCK_HOST=audit/' "$work/bp/.env"
+bp_run ./paddock up
+[[ $rc == 0 && -z "$(applied)" ]] && ! grep -q 'authentik' "$FAKE_DOCKER_LOG" &&
+  pass "the audit host applies no blueprints" || fail "audit host: exit $rc, $(applied), $out"
+export FAKE_DOCKER_LOG="$prev_docker_log"
+
 # ./paddock pull pulls only the images that are not present by their reference (decisions-alpha9 item 54).
 mkdir -p "$work/fakebin-pull"
 cat >"$work/fakebin-pull/docker" <<'FAKE'

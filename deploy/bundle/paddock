@@ -512,6 +512,11 @@ case "$cmd" in
     fi
     backup_host && remove_seq_leftovers "$BUNDLE_DIR"
     run_redacted compose "${profiles[@]}" up -d
+    # The blueprints in order before the wait: paddock-api becomes ready only once the portal's providers exist (plan
+    # M12h-2 amendment g). The audit host has no Authentik.
+    if [[ "$PADDOCK_HOST" != audit ]]; then
+      "$BUNDLE_DIR/scripts/authentik-apply-blueprints.sh" || die "the Authentik blueprints were not applied (see above); fix the cause, then ./paddock up again"
+    fi
     "$BUNDLE_DIR/scripts/wait-healthy.sh" "${profiles[@]}"
     ;;
   down)

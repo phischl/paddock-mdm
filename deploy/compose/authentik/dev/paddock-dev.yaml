@@ -8,12 +8,6 @@ metadata:
   labels:
     blueprints.goauthentik.io/description: Development users and MFA-less admin login (PADDOCK_ENV=development only)
 entries:
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-portal.yaml
-      required: true
-
   # Skip the authenticator validation stages of paddock-admin-login. A policy that fails is bound to each stage
   # binding, so re-applying the portal blueprint does not bring the stages back. It passes only for an account with the
   # test attribute paddock_dev_enforce_mfa, so that the acceptance gates of ADR 0053 run the shipped deny and enrolment
@@ -83,11 +77,6 @@ entries:
   # The device sign-in flow's second-factor pair at order 30 (plan M12h-2 amendment e). The pair in
   # paddock-device-authorization keeps running on the development stack: every test user has a scripted TOTP
   # authenticator or is a device user, and gate I1 asserts the TOTP setup there (PDK-1047).
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-device.yaml
-      required: true
   - model: authentik_policies.policybinding
     identifiers:
       policy: !KeyOf skip-mfa
@@ -103,12 +92,6 @@ entries:
 
   # The step-up validates with WebAuthn only; the test users have scripted TOTP authenticators. The WebAuthn stage at
   # order 30 is skipped like the login's, and a stage that also accepts TOTP takes its place at order 31.
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-stepup.yaml
-      required: true
-
   - model: authentik_policies_expression.expressionpolicy
     id: skip-stepup-webauthn
     identifiers:

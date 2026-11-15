@@ -53,6 +53,16 @@ jobs:
       - run: make test
       - run: make fuzz
 
+  # Paddock's Authentik blueprints on a fresh Authentik database, applied in order twice (plan M12h-2 amendment g): the
+  # nested blueprints deadlocked Authentik's workers at startup (CI run 43731878343). A job of its own, so the image
+  # pull and Authentik's first start do not lengthen the test job.
+  authentik-blueprints:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: make authentik-blueprints-test
+
   secrets:
     runs-on: ubuntu-24.04
     timeout-minutes: 30 # bounds what an archive bomb in a pull request costs (ADR 0025)

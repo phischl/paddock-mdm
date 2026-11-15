@@ -109,7 +109,8 @@ setup() {
   printf '#!/usr/bin/env bash\necho "offboard-users-check" >>"$FIXTURE_CALLS"\necho "PASS  object store: one organization deletion user per policy"\n' \
     >"$work/t/new/scripts/offboard-users-check.sh"
   chmod +x "$work/t/new/scripts/offboard-users-check.sh"
-  for s in gen-prod-secrets.sh wait-healthy.sh openbao-configure.sh rustfs-bundles-bootstrap.sh rabbitmq-definitions.sh; do
+  for s in gen-prod-secrets.sh wait-healthy.sh openbao-configure.sh rustfs-bundles-bootstrap.sh rabbitmq-definitions.sh \
+    authentik-apply-blueprints.sh; do
     # shellcheck disable=SC2016 # the stub expands its arguments when it runs
     printf '#!/usr/bin/env bash\necho "script %s $*" >>"$FIXTURE_CALLS"\n' "$s" >"$work/t/new/scripts/$s"
     chmod +x "$work/t/new/scripts/$s"
@@ -195,6 +196,9 @@ before "up before the post-check report" "$UP" '^docker compose .*admin upgrade-
 before "the bucket bootstrap adds the missing users after up" "$UP" '^script rustfs-bundles-bootstrap.sh --add-missing$'
 before "and before the post-checks" '^script rustfs-bundles-bootstrap.sh --add-missing$' '^docker compose .*admin upgrade-check --target-version 0.1.0-alpha.10'
 not_called "the upgrade never runs the full bucket bootstrap" '^script rustfs-bundles-bootstrap.sh$'
+# Plan M12h-2 amendment g: the new release's up applies the Authentik blueprints in order before it waits for the stack.
+before "up applies the Authentik blueprints after starting the containers" "$UP" '^script authentik-apply-blueprints.sh $'
+before "and before it waits for paddock-api" '^script authentik-apply-blueprints.sh $' '^script wait-healthy.sh '
 has "the plan names the bucket step" 'buckets +\./paddock bootstrap buckets --add-missing'
 # PDK-1017, main §45: the broker's users and permissions are imported into the running broker before up, once the
 # secrets step has rendered them and the backup has completed, so that the new services find them when up waits for
@@ -791,6 +795,7 @@ not_called "the audit host asks no server report" '^docker compose .*admin upgra
 not_called "the audit host runs no bucket bootstrap" 'rustfs-bundles-bootstrap'
 not_called "the audit host applies no broker definitions" 'rabbitmq-definitions'
 not_called "the audit host lists no broker permissions" 'list_permissions'
+not_called "the audit host applies no Authentik blueprints" 'authentik-apply-blueprints'
 setup audit "Schema: migrations 00105 (control-plane database); audit unchanged"
 run 0 "audit host without audit migrations" "$work/t/old" --yes
 not_called "no audit writer stop without audit migrations" 'paddock-audit-writer'
