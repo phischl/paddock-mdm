@@ -85,7 +85,7 @@ ug_fail() {
       fi
       echo "  Fix the cause (is the broker running? ./paddock ps rabbitmq), then run $again again: it continues at the step $step (.upgrade-state)." >&2
       ;;
-    broker-check | openbao | post-checks)
+    broker-check | buckets | openbao | post-checks)
       echo "  The new release $UG_NEW_VERSION runs on the migrated data." >&2
       echo "  Fix the cause, then run $again again: it continues at the step $step (.upgrade-state). Roll back" >&2
       echo "  (./paddock rollback $UG_OLD) only when the new release cannot be fixed." >&2
