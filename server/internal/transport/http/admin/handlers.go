@@ -252,7 +252,8 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name,
 			Domains: domains}
 		if organization.DeletionPending(me.Organization.Status, me.Organization.DeleteAfter) {
-			out.OrganizationDeletion = &adminapi.MeOrganizationDeletion{DeleteAfter: me.Organization.DeleteAfter.UTC()}
+			out.OrganizationDeletion = &adminapi.MeOrganizationDeletion{DeleteAfter: me.Organization.DeleteAfter.UTC(),
+				DevicesPending: me.PendingDevices}
 		}
 	}
 	if me.MCPWriteEnabledAt != nil {

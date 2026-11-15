@@ -48,9 +48,10 @@ SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id;
 -- name: OffboardReissueUninstalls :one
 SELECT paddock_offboard_reissue_uninstalls()::bigint;
 
--- The devices the step devices hands over to offboarded_device: no reported removal, neither retired nor rejected.
+-- The devices the step devices hands over to offboarded_device: no reported removal, approved at least once (a pending
+-- device cannot verify a command), neither retired nor rejected.
 -- name: ListOffboardingHandedDevices :many
-SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('retired', 'rejected') ORDER BY id;
+SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('pending', 'retired', 'rejected') ORDER BY id;
 
 -- The commands the handed-over devices keep: the uninstall, kept or fresh, and the hand-over's delete_self_lock (the only
 -- disarm that lives longer than the type's 30 days).
@@ -110,3 +111,7 @@ DELETE FROM offboarded_device WHERE device_id = ANY(@device_ids::uuid[]);
 -- that reported its removal meanwhile).
 -- name: ListPresentOffboardedDevices :many
 SELECT device_id FROM offboarded_device WHERE device_id = ANY(@device_ids::uuid[]) ORDER BY device_id;
+
+-- The devices of the context organization still pending approval, for the deletion banner (plan M17 amendment m point 1).
+-- name: CountPendingDevices :one
+SELECT count(*)::bigint FROM device WHERE state = 'pending';

@@ -12,6 +12,18 @@ import (
 	"github.com/google/uuid"
 )
 
+const countPendingDevices = `-- name: CountPendingDevices :one
+SELECT count(*)::bigint FROM device WHERE state = 'pending'
+`
+
+// The devices of the context organization still pending approval, for the deletion banner (plan M17 amendment m point 1).
+func (q *Queries) CountPendingDevices(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countPendingDevices)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const deleteOffboardedDevice = `-- name: DeleteOffboardedDevice :one
 DELETE FROM offboarded_device WHERE device_id = $1 RETURNING device_id, organization_id, keys, offboarded_at, command_envelopes
 `
@@ -310,10 +322,11 @@ func (q *Queries) ListOffboardingDeviceKeys(ctx context.Context) ([]ListOffboard
 }
 
 const listOffboardingHandedDevices = `-- name: ListOffboardingHandedDevices :many
-SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('retired', 'rejected') ORDER BY id
+SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('pending', 'retired', 'rejected') ORDER BY id
 `
 
-// The devices the step devices hands over to offboarded_device: no reported removal, neither retired nor rejected.
+// The devices the step devices hands over to offboarded_device: no reported removal, approved at least once (a pending
+// device cannot verify a command), neither retired nor rejected.
 func (q *Queries) ListOffboardingHandedDevices(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, listOffboardingHandedDevices)
 	if err != nil {

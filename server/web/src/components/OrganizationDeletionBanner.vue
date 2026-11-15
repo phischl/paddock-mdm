@@ -23,5 +23,8 @@ const deletion = computed(() => (session.me?.role === 'org_admin' ? session.me.o
   >
     <p>{{ t('organizations.banner.message', { date: formatDateTime(deletion.delete_after, locale) }) }}</p>
     <p>{{ t('organizations.banner.advice') }}</p>
+    <p v-if="deletion.devices_pending > 0" data-testid="organization-deletion-pending">
+      {{ t('organizations.banner.pending', { count: deletion.devices_pending }) }}
+    </p>
   </v-alert>
 </template>

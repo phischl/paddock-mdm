@@ -143,8 +143,9 @@ func (w *offboardWorld) devicesStepEvent(t *testing.T) audit.Event {
 // administrator reset; an administrator's pending reset with 7 days left is cancelled, dropped from the cache and
 // replaced by a reset valid for the retention, while one that has already lapsed gets a fresh leave (review 2 finding
 // 1); a device enrolled during the grace period, one the request skipped for an open Lock, one whose command
-// failed (conversion_pending), expired or lapsed while pending, a quarantined and a pending device each get a fresh
-// leave, also with the Lock open. The cache receives each device's active keys and both signed commands; the
+// failed (conversion_pending), expired or lapsed while pending, a quarantined device each get a fresh
+// leave, also with the Lock open. A device still pending approval is skipped (PDK-1061, amendment m point 1): no
+// command, no record and no cached key, and organization.deleted counts it in devices_pending_dropped. The cache receives each device's active keys and both signed commands; the
 // completion event carries uninstalls_reissued and disarms_issued. The deletion then finishes without any failure
 // although no device reported (main's requirement: waiting devices never hold the deletion).
 func TestOffboardingHandsDevicesOver(t *testing.T) {
@@ -198,13 +199,13 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	}
 	w.advanceTo(t, job, offboarding.StepOutbox)
 
-	handed := []uuid.UUID{w.device, delivered, locked, failed, expired, lapsed, reset, resetDelivered, resetLapsed, quarantined, pending,
+	handed := []uuid.UUID{w.device, delivered, locked, failed, expired, lapsed, reset, resetDelivered, resetLapsed, quarantined,
 		graceEnrolled}
 	rows := w.offboardedRows(t)
 	if len(rows) != len(handed) {
 		t.Fatalf("%d offboarded devices, want %d: %v", len(rows), len(handed), rows)
 	}
-	for _, id := range []uuid.UUID{retired, rejected, reported} {
+	for _, id := range []uuid.UUID{pending, retired, rejected, reported} {
 		if _, ok := rows[id]; ok {
 			t.Fatalf("device %s was handed over", id)
 		}
@@ -285,9 +286,13 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 		t.Fatalf("keys of the quarantined device: %+v", keys)
 	}
 	ev := w.devicesStepEvent(t)
-	if ev.Params["count"] != float64(len(handed)) || ev.Params["uninstalls_reissued"] != float64(9) ||
+	if ev.Params["count"] != float64(len(handed)) || ev.Params["uninstalls_reissued"] != float64(8) ||
 		ev.Params["disarms_issued"] != float64(len(handed)) {
 		t.Fatalf("devices step event %+v", ev.Params)
+	}
+
+	if n := w.count(t, "SELECT count(*) FROM device_command WHERE device_id = $1", pending); n != 0 {
+		t.Fatalf("the pending device got %d commands", n)
 	}
 
 	w.advanceTo(t, job, "")
@@ -300,6 +305,12 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	deleted := w.stepEvents(t, audit.CodeOrganizationDeleted)
 	if len(deleted) != 1 || deleted[0].Params["devices_offboarded"] != float64(len(handed)) {
 		t.Fatalf("organization.deleted %+v", deleted)
+	}
+	if deleted[0].Params["devices_pending_dropped"] != float64(1) {
+		t.Fatalf("organization.deleted %+v, want devices_pending_dropped 1", deleted[0].Params)
+	}
+	if _, ok := w.cache.offboarded[pending]; ok {
+		t.Fatal("the pending device was cached as offboarded")
 	}
 	if got := w.offboardedRows(t); len(got) != len(handed) {
 		t.Fatalf("%d records after the tombstone, want %d", len(got), len(handed))

@@ -13,7 +13,8 @@ ALTER TABLE offboarded_device
   ADD COLUMN command_envelopes jsonb NOT NULL CHECK (jsonb_typeof(command_envelopes) = 'array');
 
 -- Locks every device of the context organization that may still contact the server (no reported removal, neither
--- retired nor rejected) and, in a constant number of statements independent of the device count (amendment e point 5):
+-- retired nor rejected, and approved at least once: a device still pending has no bundle and cannot verify a command,
+-- amendment m point 1, ticket PDK-1061; they are only counted, in devices.pending_dropped) and, in a constant number of statements independent of the device count (amendment e point 5):
 --   1. gives each a delete_self_lock valid for the retention (amendment n point 1), unless the hand-over already gave
 --      it one (a repeated step: only the hand-over issues a disarm living longer than the 30 days of the type);
 --   2. replaces a kept uninstall that is still pending but expires more than 30 days before the retention ends by one
@@ -29,7 +30,7 @@ ALTER TABLE offboarded_device
 --      Destroy, which cannot be served once the organization is gone.
 -- The disarm is inserted first, so its UUIDv7 sorts before a fresh uninstall. The leave's params are built here, never
 -- taken from the caller (least privilege, as 00134). The counts of every call are added to the organization's
--- offboarding_counts (devices.disarms_issued, devices.uninstalls_reissued) in the same transaction, so a repeated step
+-- offboarding_counts (devices.disarms_issued, devices.uninstalls_reissued; devices.pending_dropped is set, not added) in the same transaction, so a repeated step
 -- reports what all its attempts issued; the call returns this call's uninstalls. The organization comes only from the
 -- transaction's paddock.org_id (no missing_ok: no context fails closed); every statement is filtered by it, because
 -- paddock_owner bypasses RLS.
@@ -45,6 +46,7 @@ DECLARE
   disarms    bigint;
   replaced   bigint;
   fresh      bigint;
+  dropped    bigint;
 BEGIN
   SELECT o.status INTO org_state FROM public.organization o WHERE o.id = org;
   IF org_state IS DISTINCT FROM 'deleting' THEN
@@ -53,7 +55,7 @@ BEGIN
   END IF;
   locked := ARRAY(
     SELECT d.id FROM public.device d
-    WHERE d.organization_id = org AND d.uninstalled_at IS NULL AND d.state NOT IN ('retired', 'rejected')
+    WHERE d.organization_id = org AND d.uninstalled_at IS NULL AND d.state NOT IN ('pending', 'retired', 'rejected')
     ORDER BY d.id FOR NO KEY UPDATE);
 
   INSERT INTO public.device_command (id, organization_id, device_id, type, params, status, issued_at, expires_at)
@@ -102,7 +104,10 @@ BEGIN
   )
   SELECT count(*) INTO fresh FROM marked;
 
+  SELECT count(*) INTO dropped FROM public.device d WHERE d.organization_id = org AND d.state = 'pending';
+
   UPDATE public.organization o SET offboarding_counts = o.offboarding_counts
+    || jsonb_build_object('devices.pending_dropped', dropped)
     || jsonb_build_object('devices.disarms_issued', coalesce((o.offboarding_counts ->> 'devices.disarms_issued')::bigint, 0) + disarms,
                           'devices.uninstalls_reissued', coalesce((o.offboarding_counts ->> 'devices.uninstalls_reissued')::bigint, 0) + replaced + fresh)
   WHERE o.id = org;

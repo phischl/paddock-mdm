@@ -8577,9 +8577,15 @@ components:
           items: { type: string }
     MeOrganizationDeletion:
       type: object
-      required: [delete_after]
+      required: [delete_after, devices_pending]
       properties:
         delete_after: { type: string, format: date-time, description: When the organization's data is deleted. }
+        devices_pending:
+          type: integer
+          minimum: 0
+          description: |
+            Devices still pending approval. They never received a bundle and cannot verify an uninstall, so the deletion
+            drops them without one; the portal tells administrators to approve and delete them or to remove the packages.
     Me:
       type: object
       required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,

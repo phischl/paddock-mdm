@@ -260,11 +260,23 @@ describe('the deletion banner for organization administrators', () => {
   }
 
   it('warns with the date and the advice while the deletion is pending', () => {
-    const w = mountBanner({ ...me, organization_deletion: { delete_after: '2026-12-01T00:00:00Z' } })
+    const w = mountBanner({ ...me, organization_deletion: { delete_after: '2026-12-01T00:00:00Z', devices_pending: 0 } })
     const text = w.get('[data-testid="organization-deletion-banner"]').text()
     expect(text).toContain('scheduled for deletion on')
     expect(text).toContain('recovery keys')
     expect(text).toContain('local administrators')
+  })
+
+  it('counts the devices still pending approval when there are some', () => {
+    const w = mountBanner({ ...me, organization_deletion: { delete_after: '2026-12-01T00:00:00Z', devices_pending: 2 } })
+    const text = w.get('[data-testid="organization-deletion-pending"]').text()
+    expect(text).toContain('2 devices are still pending approval')
+    expect(text).toContain('apt purge paddock-agent paddock-supervisor')
+  })
+
+  it('does not mention pending devices when there are none', () => {
+    const w = mountBanner({ ...me, organization_deletion: { delete_after: '2026-12-01T00:00:00Z', devices_pending: 0 } })
+    expect(w.find('[data-testid="organization-deletion-pending"]').exists()).toBe(false)
   })
 
   it('is absent without a pending deletion', () => {
