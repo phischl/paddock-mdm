@@ -2,6 +2,7 @@ package commandsign_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -47,5 +48,22 @@ func TestSignVerifies(t *testing.T) {
 	}
 	if got, err := command.Verify(env, trust, c.DeviceID, c.OrganizationID, now); err != nil || got.CommandID != c.CommandID {
 		t.Fatalf("verify: %+v %v", got, err)
+	}
+
+	// SignAll signs in chunks and keeps the order (the offboarding devices step, PDK-1016).
+	var cs []command.Command
+	for i := range 260 {
+		ci := c
+		ci.CommandID = fmt.Sprintf("0190f000-0000-7000-8000-%012d", i)
+		cs = append(cs, ci)
+	}
+	envs, err := commandsign.SignAll(ctx, signer, cs)
+	if err != nil || len(envs) != len(cs) {
+		t.Fatalf("SignAll: %d envelopes, %v", len(envs), err)
+	}
+	for i, env := range envs {
+		if got, err := command.Verify(env, trust, c.DeviceID, c.OrganizationID, now); err != nil || got.CommandID != cs[i].CommandID {
+			t.Fatalf("envelope %d: %+v %v", i, got, err)
+		}
 	}
 }

@@ -106,6 +106,14 @@ func NewRetention(a *app.Retention, history *app.LoginHistory, pool *db.OrgPool,
 	}
 }
 
+// WithOffboardedDevices adds the purge of the records of devices of deleted organizations (plan M17 decision 15). The
+// records are platform data, so the pass runs once per round, after the organizations.
+func (r *Retention) WithOffboardedDevices(o *app.OffboardedDevices) *Retention {
+	r.passes = append(r.passes, retentionPass{store: app.StoreOffboardedDevice,
+		purge: func(context.Context, time.Time, *app.RetentionRound) (int64, error) { return 0, nil }, platform: o.Purge})
+	return r
+}
+
 // Run runs the round at start and then every interval until ctx ends; only the replica holding the lock acts.
 func (r *Retention) Run(ctx context.Context) error {
 	metricRetentionStores.Set(float64(len(r.passes)))

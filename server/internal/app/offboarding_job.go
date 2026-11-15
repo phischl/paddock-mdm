@@ -12,7 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/command"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/commandsign"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/offboarding"
@@ -45,8 +47,9 @@ type OffboardingInventory interface {
 	DeleteHost(ctx context.Context, ref ports.HostRef) error
 }
 
-// OffboardingCache deletes the organization's device keys in Valkey (devicecache.Cache).
+// OffboardingCache hands devices over in Valkey and deletes the organization's device keys (devicecache.Cache).
 type OffboardingCache interface {
+	PutOffboardedDevice(ctx context.Context, d devicecache.OffboardedDevice, lastSeq int64) error
 	DeleteOrganization(ctx context.Context, org uuid.UUID, devices []devicecache.OffboardDevice) (int64, error)
 }
 
@@ -65,6 +68,8 @@ type OffboardingDeps struct {
 	Inventory OffboardingInventory
 	Cache     OffboardingCache
 	Sessions  OffboardingSessions
+	// Signer signs the uninstall commands of the step devices with command-signing.
+	Signer commandsign.Signer
 }
 
 // WithDeps returns the deletion with the dependencies of its steps; NewOffboarding takes only the object-store
@@ -75,8 +80,8 @@ func (o *Offboarding) WithDeps(d OffboardingDeps) *Offboarding {
 	return &c
 }
 
-// WithStubbedSteps makes steps complete at once without work: devices until PDK-1016 and audit_final until PDK-1017
-// implement them (plan M17 §7 step 3). Those tickets remove the option.
+// WithStubbedSteps makes steps complete at once without work: audit_final until PDK-1017 implements it (plan M17 §7
+// step 3). That ticket removes the option.
 func (o *Offboarding) WithStubbedSteps(steps ...string) *Offboarding {
 	c := *o
 	c.stubbed = maps.Clone(c.stubbed)
@@ -168,14 +173,25 @@ func (o *Offboarding) Advance(ctx context.Context, org uuid.UUID) (done bool, er
 	if step == offboarding.StepTombstone {
 		return o.tombstone(ctx, row)
 	}
-	count, err := o.run(ctx, row, step)
+	var count int
+	var params map[string]any
+	if step == offboarding.StepDevices && !o.stubbed[step] {
+		var reissued int
+		count, reissued, err = o.devices(ctx, row)
+		params = map[string]any{"uninstalls_reissued": reissued}
+	} else {
+		count, err = o.run(ctx, row, step)
+	}
+	if errors.Is(err, ErrOffboardingWaiting) {
+		return false, err
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, err
 		}
 		return false, o.fail(ctx, row, step, count, err)
 	}
-	return false, o.complete(ctx, row, step, count)
+	return false, o.complete(ctx, row, step, count, params)
 }
 
 func (o *Offboarding) organization(ctx context.Context, org uuid.UUID) (pgstore.Organization, error) {
@@ -201,9 +217,6 @@ func stepError(code string, err error) error {
 
 // run executes one step and returns what it removed, also when it fails after partial progress.
 func (o *Offboarding) run(ctx context.Context, row pgstore.Organization, step string) (int, error) {
-	if step == offboarding.StepDevices && o.stubbed[step] {
-		return 0, o.devicesGone(ctx, row.ID)
-	}
 	if o.stubbed[step] {
 		return 0, nil
 	}
@@ -260,23 +273,107 @@ func (o *Offboarding) sessions(ctx context.Context, org uuid.UUID) (int, error) 
 	return ended + int(revoked), nil
 }
 
-// devicesGone is the stubbed step devices until PDK-1016 (main's decision §37): without offboarded-device records the
-// later steps would take away the keys and rows a device needs to fetch its uninstall, so the step waits with
-// devices_pending while any device of the organization has neither reported its removal nor been retired or rejected.
-func (o *Offboarding) devicesGone(ctx context.Context, org uuid.UUID) error {
-	var pending int64
-	err := o.deps.Worker.InOrgOffboarding(offboardingContext(ctx, org), func(ctx context.Context, q *pgstore.Queries) error {
+// devices hands every device of the organization that may still contact the server over to offboarded_device (plan
+// M17 decision 15, amendment e point 10) and returns how many it recorded and how many got a fresh uninstall. It first
+// waits, like the tombstone, until no transaction that passed the gate on a stale status is open (amendment j
+// addendum): such a transaction may still insert or approve a device, which then gets its record too. The devices are
+// locked and their uninstalls issued by paddock_offboard_reissue_uninstalls (migration 00135) in one transaction with a
+// constant number of statements. Signing, the cache and
+// the platform record follow outside it, each idempotent: a repeated step keeps the commands it issued, rewrites the
+// cache and adds only missing records, so the count never grows twice. The cache is written before the record, so a
+// device's final report, which deletes both, cannot run before the keys it deletes exist. Nothing here waits for a
+// device: a device that never comes back is purged with its record after OffboardedDeviceRetention.
+func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization) (handed, reissued int, err error) {
+	orgCtx := offboardingContext(ctx, row.ID)
+	var ready bool
+	err = o.deps.Worker.InOrgOffboarding(orgCtx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
-		pending, err = q.CountOffboardingPendingDevices(ctx)
+		ready, err = q.OffboardQuiesce(ctx)
 		return err
 	})
 	if err != nil {
-		return stepError(offboarding.ErrorDatabase, fmt.Errorf("count the devices without reported removal: %w", err))
+		return 0, 0, stepError(offboarding.ErrorDatabase, fmt.Errorf("wait for older organization transactions: %w", err))
 	}
-	if pending > 0 {
-		return stepError(offboarding.ErrorDevicesPending, fmt.Errorf("%d devices of organization %s have not reported their removal", pending, org))
+	if !ready {
+		return 0, 0, o.waiting(ctx, row.ID, offboarding.StepDevices)
 	}
-	return nil
+	params, err := json.Marshal(command.UninstallParams{Mode: command.UninstallLeave})
+	if err != nil {
+		return 0, 0, err
+	}
+	now := o.now().UTC()
+	var cmds []pgstore.DeviceCommand
+	var keys []pgstore.ListOffboardingDeviceIdentitiesRow
+	err = o.deps.Worker.InOrgOffboarding(orgCtx, func(ctx context.Context, q *pgstore.Queries) error {
+		n, err := q.OffboardReissueUninstalls(ctx, pgstore.OffboardReissueUninstallsParams{Params: params,
+			IssuedAt: now.Truncate(time.Second), ExpiresAt: now.Add(organization.OffboardedDeviceRetention)})
+		if err != nil {
+			return fmt.Errorf("issue uninstalls: %w", err)
+		}
+		reissued = int(n)
+		locked, err := q.ListOffboardingHandedDevices(ctx)
+		if err != nil || len(locked) == 0 {
+			return err
+		}
+		if cmds, err = q.ListOffboardingUninstallCommands(ctx, locked); err != nil {
+			return fmt.Errorf("list uninstall commands: %w", err)
+		}
+		if keys, err = q.ListOffboardingDeviceIdentities(ctx, locked); err != nil {
+			return fmt.Errorf("list identity keys: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0, stepError(offboarding.ErrorDatabase, err)
+	}
+	if len(cmds) == 0 {
+		return 0, reissued, nil
+	}
+	payloads := make([]command.Command, len(cmds))
+	for i, c := range cmds {
+		payloads[i] = Payload(c)
+	}
+	envelopes, err := commandsign.SignAll(ctx, o.deps.Signer, payloads)
+	if err != nil {
+		return 0, reissued, stepError(offboarding.ErrorSigningUnavailable, err)
+	}
+	byDevice := map[uuid.UUID][]pgstore.ListOffboardingDeviceIdentitiesRow{}
+	for _, k := range keys {
+		byDevice[k.DeviceID] = append(byDevice[k.DeviceID], k)
+	}
+	in := pgstore.InsertOffboardedDevicesParams{OrganizationID: row.ID}
+	for i, c := range cmds {
+		d := devicecache.OffboardedDevice{ID: c.DeviceID, OrganizationID: row.ID, CommandID: c.ID,
+			Command: devicecache.Command{ExpiresAt: c.ExpiresAt, Envelope: envelopes[i]}}
+		var lastSeq int64
+		stored := []offboardedKey{}
+		for _, k := range byDevice[c.DeviceID] {
+			d.Keys = append(d.Keys, devicecache.OffboardedKey{KeyID: k.KeyID, PublicKey: k.PublicKey})
+			stored = append(stored, offboardedKey{KeyID: k.KeyID, PublicKey: k.PublicKey})
+			lastSeq = k.LastSeq
+		}
+		if err := o.deps.Cache.PutOffboardedDevice(ctx, d, lastSeq); err != nil {
+			return 0, reissued, stepError(offboarding.ErrorValkeyUnavailable, err)
+		}
+		raw, err := json.Marshal(stored)
+		if err != nil {
+			return 0, reissued, err
+		}
+		in.DeviceIds = append(in.DeviceIds, c.DeviceID)
+		in.Keys = append(in.Keys, string(raw))
+		in.CommandIds = append(in.CommandIds, c.ID)
+		in.CommandEnvelopes = append(in.CommandEnvelopes, envelopes[i])
+	}
+	var n int64
+	err = o.deps.Platform.InPlatform(offboardingSystem(ctx), func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		n, err = q.InsertOffboardedDevices(ctx, in)
+		return err
+	})
+	if err != nil {
+		return 0, reissued, stepError(offboarding.ErrorDatabase, fmt.Errorf("record the offboarded devices: %w", err))
+	}
+	return int(n), reissued, nil
 }
 
 // outbox completes only when the organization has no unpublished outbox row (plan M17 decision 9): no audit event of
@@ -417,7 +514,7 @@ func (o *Offboarding) tombstone(ctx context.Context, row pgstore.Organization) (
 		return false, o.fail(ctx, row, offboarding.StepTombstone, 0, stepError(offboarding.ErrorDatabase, err))
 	}
 	if !ready {
-		return false, o.waiting(ctx, row.ID)
+		return false, o.waiting(ctx, row.ID, offboarding.StepTombstone)
 	}
 	err = o.deps.Worker.InOrgOffboarding(orgCtx, func(ctx context.Context, q *pgstore.Queries) error {
 		return q.OffboardFinalize(ctx)
@@ -436,7 +533,7 @@ func (o *Offboarding) tombstone(ctx context.Context, row pgstore.Organization) (
 			return err
 		})
 	case db.IsNotInPrerequisiteState(err):
-		return false, o.waiting(ctx, row.ID)
+		return false, o.waiting(ctx, row.ID, offboarding.StepTombstone)
 	case err != nil:
 		return false, o.fail(ctx, row, offboarding.StepTombstone, 0, stepError(offboarding.ErrorDatabase, err))
 	}
@@ -447,9 +544,9 @@ func (o *Offboarding) tombstone(ctx context.Context, row pgstore.Organization) (
 	return true, o.recordDeleted(ctx, deleted)
 }
 
-// waiting records finalize_waiting once the wait set has been waited on longer than FinalizeWaitAlert, and returns
-// ErrOffboardingWaiting.
-func (o *Offboarding) waiting(ctx context.Context, org uuid.UUID) error {
+// waiting records finalize_waiting for step once the wait set has been waited on longer than FinalizeWaitAlert, and
+// returns ErrOffboardingWaiting.
+func (o *Offboarding) waiting(ctx context.Context, org uuid.UUID, step string) error {
 	row, err := o.organization(ctx, org)
 	if err != nil {
 		return err
@@ -458,7 +555,7 @@ func (o *Offboarding) waiting(ctx context.Context, org uuid.UUID) error {
 		waited := stepError(offboarding.ErrorFinalizeWaiting,
 			fmt.Errorf("organization transactions open since %s still run", row.OffboardingWaitTakenAt.UTC().Format(time.RFC3339)))
 		// fail logs a failure to record; the code then stays unstored and the next round records it.
-		_ = o.fail(ctx, row, offboarding.StepTombstone, 0, waited)
+		_ = o.fail(ctx, row, step, 0, waited)
 	}
 	return ErrOffboardingWaiting
 }
@@ -526,14 +623,15 @@ func (o *Offboarding) fail(ctx context.Context, row pgstore.Organization, step s
 }
 
 // complete writes the step's checkpoint together with organization.deletion_step_completed (count: everything the step
-// removed over its attempts), exactly once.
-func (o *Offboarding) complete(ctx context.Context, row pgstore.Organization, step string, count int) error {
+// removed over its attempts; params: the step's own, uninstalls_reissued of devices), exactly once.
+func (o *Offboarding) complete(ctx context.Context, row pgstore.Organization, step string, count int, params map[string]any) error {
 	next, ok := offboarding.Next(step)
 	if !ok {
 		return fmt.Errorf("step %q has no successor", step)
 	}
 	spec := ActionSpec{Code: audit.CodeOrganizationDeletionStepCompleted, Target: orgTarget(row),
 		Params: map[string]any{"slug": row.Slug, "step": step}}
+	maps.Copy(spec.Params, params)
 	_, err := o.deps.Runner.RecordOnceInScope(offboardingSystem(ctx), ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error) {
 			done, err := q.CompleteOrganizationOffboardingStep(ctx, pgstore.CompleteOrganizationOffboardingStepParams{

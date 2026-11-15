@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -71,5 +72,53 @@ func TestDeleteOrganizationKeys(t *testing.T) {
 	}
 	if n, err := devicecache.New(worker).DeleteOrganization(ctx, org, devices); err != nil || n != 0 {
 		t.Fatalf("second deletion = %d, %v", n, err)
+	}
+}
+
+// TestOffboardedDeviceKeys (plan M17 decision 15, amendment l point 3): under the worker's ACL user the devices step
+// replaces cmd:<device> with the uninstall alone and caches the device's keys with status offboarded, keeping a live
+// counter; the device's final report deletes dk:, cmd:, seq: and sd: again.
+func TestOffboardedDeviceKeys(t *testing.T) {
+	srv := valkeytest.StartACL(t)
+	admin, worker := srv.Client(t, "acceptance"), srv.Client(t, "worker")
+	cache, gateway := devicecache.New(worker), devicecache.New(admin)
+	ctx := context.Background()
+	dev, org, uninstall, stale := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	now := time.Now()
+	if err := cache.PutCommand(ctx, dev, stale, devicecache.Command{ExpiresAt: now.Add(time.Hour), Envelope: []byte(`{"stale":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.RestoreSeq(ctx, dev, 41); err != nil {
+		t.Fatal(err)
+	}
+	d := devicecache.OffboardedDevice{ID: dev, OrganizationID: org, CommandID: uninstall,
+		Keys:    []devicecache.OffboardedKey{{KeyID: "key-1", PublicKey: []byte{1}}, {KeyID: "key-2", PublicKey: []byte{2}}},
+		Command: devicecache.Command{ExpiresAt: now.Add(365 * 24 * time.Hour), Envelope: []byte(`{"uninstall":1}`)}}
+	if err := cache.PutOffboardedDevice(ctx, d, 7); err != nil {
+		t.Fatal(err)
+	}
+	cmds, err := gateway.Commands(ctx, dev, now)
+	if err != nil || len(cmds) != 1 || string(cmds[uninstall].Envelope) != `{"uninstall":1}` {
+		t.Fatalf("commands %v, %v; want the uninstall only", cmds, err)
+	}
+	for _, k := range d.Keys {
+		got, ok, err := gateway.DeviceKey(ctx, k.KeyID)
+		if err != nil || !ok || got.Status != devicecache.KeyOffboarded || got.DeviceID != dev || got.OrganizationID != org {
+			t.Fatalf("key %s: %+v %v %v", k.KeyID, got, ok, err)
+		}
+	}
+	if seq, err := gateway.NextSeq(ctx, dev); err != nil || seq != 42 {
+		t.Fatalf("NextSeq = %d, %v; the live counter must stay", seq, err)
+	}
+	if err := gateway.MarkDelivered(ctx, dev, 42); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cache.DeleteOffboardedDevice(ctx, dev, []string{"key-1", "key-2"}); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"cmd:" + dev.String(), "seq:" + dev.String(), "sd:" + dev.String(), "dk:key-1", "dk:key-2"}
+	if n, err := admin.Do(ctx, admin.B().Exists().Key(keys...).Build()).AsInt64(); err != nil || n != 0 {
+		t.Fatalf("%d keys of the uninstalled device remain (%v)", n, err)
 	}
 }

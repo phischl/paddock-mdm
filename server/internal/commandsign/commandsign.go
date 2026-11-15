@@ -66,3 +66,41 @@ func Sign(ctx context.Context, s Signer, c command.Command) ([]byte, error) {
 		KeyID: KeyID(sigs[0].KeyVersion), Sig: base64.StdEncoding.EncodeToString(sigs[0].Value),
 	}).Encode()
 }
+
+// signChunk bounds the messages of one SignBatch call.
+const signChunk = 250
+
+// SignAll returns the DSSE envelopes of cs in their order, signed in batches with the current version of the
+// command-signing key.
+func SignAll(ctx context.Context, s Signer, cs []command.Command) ([][]byte, error) {
+	out := make([][]byte, 0, len(cs))
+	for start := 0; start < len(cs); start += signChunk {
+		chunk := cs[start:min(start+signChunk, len(cs))]
+		payloads := make([][]byte, len(chunk))
+		messages := make([][]byte, len(chunk))
+		for i, c := range chunk {
+			payload, err := command.Encode(c)
+			if err != nil {
+				return nil, err
+			}
+			payloads[i], messages[i] = payload, dsse.PAE(command.PayloadType, payload)
+		}
+		sigs, err := s.SignBatch(ctx, KeyName, messages)
+		if err != nil {
+			return nil, fmt.Errorf("sign %d commands: %w", len(chunk), err)
+		}
+		if len(sigs) != len(chunk) {
+			return nil, fmt.Errorf("sign %d commands: %d signatures", len(chunk), len(sigs))
+		}
+		for i, payload := range payloads {
+			env, err := dsse.New(command.PayloadType, payload, dsse.Signature{
+				KeyID: KeyID(sigs[i].KeyVersion), Sig: base64.StdEncoding.EncodeToString(sigs[i].Value),
+			}).Encode()
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, env)
+		}
+	}
+	return out, nil
+}

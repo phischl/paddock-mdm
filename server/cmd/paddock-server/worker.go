@@ -224,7 +224,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	queues := []*mq.Consumer{enrollQueue, heartbeatQueue, eventQueue, issuedQueue, resultQueue, escrowQueue}
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
 	deviceCommands := app.NewDeviceCommands(runner, pool)
-	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache)
+	offboarded := app.NewOffboardedDevices(runner, platformPool, cache)
+	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache).WithOffboardedDevices(offboarded)
 	commands := worker.NewCommands(deviceCommands, app.NewRevocationReports(runner, pool), pool, platformPool, cache, signer)
 	diagnostics := worker.NewDiagnostics(app.NewDiagnostics(runner, pool, escrowObjects, retentionDay), pool, platformPool)
 	escrowStore := worker.NewEscrow(app.NewEscrow(runner, pool, escrowObjects), cache, pool, platformPool).WithDiagnostics(diagnostics)
@@ -248,7 +249,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		func(ctx context.Context) error { return escrowQueue.Run(ctx, escrowStore.Handle) },
 	}
 	rounds := func() []func(context.Context) error {
-		cacheSync := worker.NewCacheSync(pool, cache)
+		cacheSync := worker.NewCacheSync(pool, cache).WithOffboardedDevices(offboarded)
 		dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)
 		staleness := worker.NewStaleness(app.NewStaleness(runner, pool, s.stalenessUnit), pool, platformPool,
 			min(worker.StalenessInterval, s.stalenessUnit/4)).Then(worker.NewFindings(app.NewFindings(runner, pool), pool, platformPool).Round)
@@ -265,14 +266,15 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 			app.NewMFAEnrolment(runner, platformPool, ak, ak), ak, pool, platformPool, s.syncEvery, s.reconcileEvery)
 		fleetClient := fleet.New(s.fleetURL, s.fleetToken, s.fleetPublicURL)
 		retention := worker.NewRetention(app.NewRetention(runner, pool, platformPool, fleetClient, retentionDay, s.indexRetention).WithDiagnosticsObjects(escrowObjects),
-			app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, s.retentionEvery)
+			app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, s.retentionEvery).WithOffboardedDevices(offboarded)
 		inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool),
 			app.NewVulnerabilitySummary(runner), pool, platformPool, s.inventoryEvery).WithSLASummary(app.NewVulnerabilitySLASummary(runner))
 		osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(s.osvURL), pool, platformPool, s.osvEvery)
-		// The steps devices and audit_final complete at once until PDK-1016 and PDK-1017 implement them.
+		// The step audit_final completes at once until PDK-1017 implements it.
 		offboard := worker.NewOffboarding(s.offboarding.WithDeps(app.OffboardingDeps{Runner: runner, Worker: pool,
-			Platform: platformPool, Identity: ak, Inventory: fleetClient, Cache: cache, Sessions: sessions.NewStore(vk)}).
-			WithStubbedSteps(offboarding.StepDevices, offboarding.StepAuditFinal), platformPool)
+			Platform: platformPool, Identity: ak, Inventory: fleetClient, Cache: cache, Sessions: sessions.NewStore(vk),
+			Signer: signer}).
+			WithStubbedSteps(offboarding.StepAuditFinal), platformPool)
 		return []func(context.Context) error{
 			worker.NewOpsProbe(signer, worker.DialCertExpiry(s.tlsAddr, nil), s.tlsHosts).Run,
 			worker.NewAutoUnsealObserver(platformPool, runner).Run,

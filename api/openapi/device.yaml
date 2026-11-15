@@ -320,6 +320,8 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/EventsRequest" }
       responses:
+        "200":
+          description: Dropped. A device whose organization was deleted may only report its removal (exactly one event of type agent.uninstalled); any other batch is answered 200 and discarded, so the agent does not resend it.
         "202":
           description: Accepted for processing; duplicates (same event_seq) are ignored, and an event of an unknown type is skipped (see Event.type).
         "400": { $ref: "#/components/responses/Problem" }

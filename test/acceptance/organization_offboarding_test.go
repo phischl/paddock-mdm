@@ -3,6 +3,7 @@ package acceptance
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,12 +16,11 @@ import (
 // TestOffboardedDeviceUninstallsAfterTombstone is gate OF6 (plan M17 §8.7, decision 15, amendment l point 3): a device
 // that is offline from the deletion request until the organization is deleted checks in only after the tombstone. It
 // still receives its uninstall (leave) and nothing else: no bundle, no agent offer, no time ticket, and escrow is
-// refused. It reports agent.uninstalled, which the platform records as platform.offboarded_device_uninstalled.
+// refused. The result of its uninstall is accepted (the agent starts the removal only then); a batch of other events is
+// answered 200 and dropped. It reports agent.uninstalled, which the platform records as
+// platform.offboarded_device_uninstalled; the keys it kept are then deleted (amendment l point 3), so a further
+// check-in is refused with 401 (invalid_signature: the key is unknown).
 func TestOffboardedDeviceUninstallsAfterTombstone(t *testing.T) {
-	// Until PDK-1016 the deletion waits in its devices step for such a device (main §37), and the gateway does not serve
-	// offboarded keys. PDK-1016 removes this skip.
-	t.Skip("PDK-1016: offboarded devices")
-
 	slug, orgID := gateOrganization(t)
 	admin := newGateAdmin(t, slug)
 	d := activeDevice(t, admin.portal, "", "of6-"+slug)
@@ -58,12 +58,25 @@ func TestOffboardedDeviceUninstallsAfterTombstone(t *testing.T) {
 		t.Fatalf("escrow after the tombstone: %v HTTP %d, want 401", err, er.Status)
 	}
 
+	if r, err := d.CommandResult(testContext(t, time.Minute), cmd.CommandID, protocol.CommandSucceeded, json.RawMessage(`{}`)); err != nil ||
+		r.Status != http.StatusAccepted {
+		t.Fatalf("result of the uninstall: %v HTTP %d", err, r.Status)
+	}
+	if r, err := d.SendEvents(testContext(t, time.Minute), []protocol.Event{{EventSeq: 1, Type: protocol.EventBundleApplied,
+		OccurredAt: time.Now(), Data: json.RawMessage(`{"bundle_version":1}`)}}); err != nil || r.Status != http.StatusOK {
+		t.Fatalf("another event after the tombstone: %v HTTP %d, want 200", err, r.Status)
+	}
+
 	data, _ := json.Marshal(protocol.AgentUninstalled{CommandID: cmd.CommandID, Mode: "leave", Outcome: protocol.UninstallCompleted,
 		LocalAdmin: "kept", TPM: "not_requested", Steps: map[string]string{"stop": "done", "packages": "done"}})
 	if r, err := d.SendEvents(testContext(t, time.Minute), []protocol.Event{{EventSeq: 1, Type: protocol.EventAgentUninstalled,
-		OccurredAt: time.Now(), Data: data}}); err != nil || r.Status >= 300 {
+		OccurredAt: time.Now(), Data: data}}); err != nil || r.Status != http.StatusAccepted {
 		t.Fatalf("agent.uninstalled: %v HTTP %d", err, r.Status)
 	}
 	expectOneIndexEvent(t, auditIndex(t), platformOrg, "code = 'platform.offboarded_device_uninstalled' AND params->>'device_id' = $1",
 		d.DeviceID, "platform.offboarded_device_uninstalled", "success", 2*time.Minute)
+	eventually(t, "the identity of the uninstalled device is gone", time.Minute, func() bool {
+		_, r, err := d.Checkin(testContext(t, time.Minute))
+		return err == nil && r.Status == http.StatusUnauthorized && strings.Contains(string(r.Body), "invalid_signature")
+	})
 }

@@ -2,6 +2,7 @@ package devicecache
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -55,4 +56,57 @@ func (c *Cache) DeleteOrganization(ctx context.Context, org uuid.UUID, devices [
 		}
 	}
 	return total, nil
+}
+
+// OffboardedKey is an identity key of an offboarded device.
+type OffboardedKey struct {
+	KeyID     string
+	PublicKey []byte // SubjectPublicKeyInfo DER
+}
+
+// OffboardedDevice is what the gateway needs to serve a device of a deleted organization its uninstall (plan M17
+// decision 15): its keys, cached with status offboarded, and the signed uninstall as the only command.
+type OffboardedDevice struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Keys           []OffboardedKey
+	CommandID      uuid.UUID
+	Command        Command
+}
+
+// PutOffboardedDevice makes cmd:<device> hold the uninstall only and caches every key of the device with status
+// offboarded; a missing seq:<device> is restored from lastSeq (PutDeviceKey). The command goes first, so a check-in
+// that already sees the offboarded key finds the uninstall.
+func (c *Cache) PutOffboardedDevice(ctx context.Context, d OffboardedDevice, lastSeq int64) error {
+	value, err := json.Marshal(d.Command)
+	if err != nil {
+		return err
+	}
+	for _, r := range c.c.DoMulti(ctx,
+		c.c.B().Del().Key(commandsKey(d.ID)).Build(),
+		c.c.B().Hset().Key(commandsKey(d.ID)).FieldValue().FieldValue(d.CommandID.String(), string(value)).Build()) {
+		if err := r.Error(); err != nil {
+			return fmt.Errorf("devicecache: put the uninstall of offboarded device %s: %w", d.ID, err)
+		}
+	}
+	for _, k := range d.Keys {
+		if err := c.PutDeviceKey(ctx, k.KeyID, DeviceKey{DeviceID: d.ID, OrganizationID: d.OrganizationID, Status: KeyOffboarded,
+			PublicKey: k.PublicKey}, lastSeq); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteOffboardedDevice deletes what an offboarded device kept (amendment l point 3): dk: of its keys, cmd:, seq:
+// and sd:. Its nonce: keys are outside the worker's ACL and expire within NonceTTL (amendment l point 2).
+func (c *Cache) DeleteOffboardedDevice(ctx context.Context, device uuid.UUID, keyIDs []string) error {
+	keys := []string{commandsKey(device), seqKey(device), deliveredKey(device)}
+	for _, k := range keyIDs {
+		keys = append(keys, deviceKeyKey(k))
+	}
+	if err := c.c.Do(ctx, c.c.B().Del().Key(keys...).Build()).Error(); err != nil {
+		return fmt.Errorf("devicecache: delete the keys of offboarded device %s: %w", device, err)
+	}
+	return nil
 }

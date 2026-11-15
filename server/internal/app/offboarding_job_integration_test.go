@@ -20,6 +20,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/offboarding"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
@@ -63,12 +64,41 @@ func (f *fakeOffboardFleet) DeleteHost(_ context.Context, ref ports.HostRef) err
 	return nil
 }
 
-// fakeOffboardCache is the device keys in Valkey, by organization; it records the devices of every deletion.
+// fakeOffboardCache is the device keys in Valkey, by organization; it records the devices of every deletion and the
+// devices handed over by the step devices.
 type fakeOffboardCache struct {
-	mu      sync.Mutex
-	keys    map[uuid.UUID]int
-	err     error
-	devices []devicecache.OffboardDevice
+	mu         sync.Mutex
+	keys       map[uuid.UUID]int
+	err        error
+	devices    []devicecache.OffboardDevice
+	offboarded map[uuid.UUID]devicecache.OffboardedDevice
+}
+
+func (f *fakeOffboardCache) PutOffboardedDevice(_ context.Context, d devicecache.OffboardedDevice, _ int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	if f.offboarded == nil {
+		f.offboarded = map[uuid.UUID]devicecache.OffboardedDevice{}
+	}
+	f.offboarded[d.ID] = d
+	return nil
+}
+
+// fakeCommandSigner signs with command-signing:v1 and a constant signature; err fails every call.
+type fakeCommandSigner struct{ err error }
+
+func (f fakeCommandSigner) SignBatch(_ context.Context, _ string, messages [][]byte) ([]bao.RawSignature, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([]bao.RawSignature, len(messages))
+	for i := range out {
+		out[i] = bao.RawSignature{KeyVersion: 1, Value: []byte{1}}
+	}
+	return out, nil
 }
 
 func (f *fakeOffboardCache) DeleteOrganization(_ context.Context, org uuid.UUID, devices []devicecache.OffboardDevice) (int64, error) {
@@ -153,6 +183,7 @@ type offboardWorld struct {
 	fleet                 *fakeOffboardFleet
 	cache                 *fakeOffboardCache
 	sessions              *fakeOffboardSessions
+	signer                fakeCommandSigner
 	bundles, escrow, logs *fakeBucket
 	bucketCalls           []string
 	clock                 time.Time
@@ -210,12 +241,12 @@ func newOffboardWorld(t *testing.T) *offboardWorld {
 	return w
 }
 
-// job is the deletion as the worker wires it, with the stubbed steps of PDK-1016 and PDK-1017.
+// job is the deletion as the worker wires it, with the stubbed step of PDK-1017.
 func (w *offboardWorld) job() *app.Offboarding {
 	return app.NewOffboarding(app.OffboardingObjects{Bundles: w.bundles, Escrow: w.escrow}).
 		WithDeps(app.OffboardingDeps{Runner: w.runner, Worker: w.worker, Platform: w.platform, Identity: w.idp,
-			Inventory: w.fleet, Cache: w.cache, Sessions: w.sessions}).
-		WithStubbedSteps(offboarding.StepDevices, offboarding.StepAuditFinal).
+			Inventory: w.fleet, Cache: w.cache, Sessions: w.sessions, Signer: w.signer}).
+		WithStubbedSteps(offboarding.StepAuditFinal).
 		WithClock(func() time.Time {
 			w.clockMu.Lock()
 			defer w.clockMu.Unlock()
@@ -559,6 +590,10 @@ func TestOffboardingTombstone(t *testing.T) {
 	job := w.job()
 	w.requestDue(t, job)
 	w.advanceTo(t, job, offboarding.StepTombstone)
+	// The step devices took the wait set already (PDK-1016); the straggler below starts after it and bypasses the gate,
+	// so the test starts the tombstone's wait afresh to exercise it alone.
+	w.exec(t, `UPDATE organization SET deleting_committed_at = NULL, offboarding_wait_vxids = NULL, offboarding_wait_taken_at = NULL
+		WHERE id = $1`, w.org)
 
 	env := pgtest.SharedPaddock(t)
 	ctx := context.Background()
@@ -675,42 +710,6 @@ func TestOffboardingDefinerFunctions(t *testing.T) {
 // offboardingTestContext is the system principal of org for InOrgOffboarding.
 func offboardingTestContext(org uuid.UUID) context.Context {
 	return principal.With(context.Background(), principal.Principal{Kind: principal.KindSystem, Display: "test", OrganizationID: org})
-}
-
-// TestOffboardingWaitsForDevices (main's decision §37, until PDK-1016): the stubbed step devices does not complete
-// while a device of the organization has neither reported its removal nor been retired or rejected; it stores
-// devices_pending and records one failure event. Once every device is retired, rejected or reported, it completes.
-func TestOffboardingWaitsForDevices(t *testing.T) {
-	w := newOffboardWorld(t)
-	job := w.job()
-	rejected, _ := w.newDevice(t, w.org, "rejected")
-	retired, _ := w.newDevice(t, w.org, "retired")
-	w.requestDueWithDevices(t, job)
-	w.advanceTo(t, job, offboarding.StepDevices)
-	for range 3 {
-		_, err := job.Advance(context.Background(), w.org)
-		var oe *app.OffboardingError
-		if !errors.As(err, &oe) || oe.Code != offboarding.ErrorDevicesPending {
-			t.Fatalf("Advance with an unreported active device: %v", err)
-		}
-	}
-	if _, step, code := w.state(t); step != offboarding.StepDevices || code != offboarding.ErrorDevicesPending {
-		t.Fatalf("at %s with %q", step, code)
-	}
-	failed := w.stepEvents(t, audit.CodeOrganizationDeletionStepFailed)
-	if len(failed) != 1 || failed[0].Params["error_code"] != offboarding.ErrorDevicesPending || failed[0].Params["step"] != offboarding.StepDevices {
-		t.Fatalf("failure events %+v, want one devices_pending", failed)
-	}
-	quarantined, _ := w.newDevice(t, w.org, "quarantined")
-	w.exec(t, "UPDATE device SET uninstalled_at = now() WHERE id = $1", w.device)
-	if _, err := job.Advance(context.Background(), w.org); err == nil {
-		t.Fatal("a quarantined unreported device did not hold the step")
-	}
-	w.exec(t, "UPDATE device SET state = 'retired' WHERE id = $1", quarantined)
-	w.advanceTo(t, job, offboarding.StepOutbox)
-	if n := w.count(t, "SELECT count(*) FROM device WHERE id = ANY($1)", []uuid.UUID{rejected, retired}); n != 2 {
-		t.Fatalf("the step deleted devices: %d left", n)
-	}
 }
 
 // TestOffboardingKeepsOffboardedDeviceKeys (amendment l point 3): the valkey step hands every device to the cache

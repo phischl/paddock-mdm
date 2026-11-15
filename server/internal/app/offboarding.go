@@ -55,8 +55,7 @@ type OffboardingObjects struct {
 type Offboarding struct {
 	objects OffboardingObjects
 	deps    OffboardingDeps
-	// stubbed are steps that complete at once without work until their tickets land (devices: PDK-1016,
-	// audit_final: PDK-1017).
+	// stubbed are steps that complete at once without work until their tickets land (audit_final: PDK-1017).
 	stubbed map[string]bool
 	now     func() time.Time
 }

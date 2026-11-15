@@ -42,20 +42,38 @@ ORDER BY d.id, k.key_id;
 -- name: ListOffboardingInventoryRefs :many
 SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id;
 
--- Devices of the context organization that may still contact the server: no reported removal and neither retired nor
--- rejected (plan M17 decision 15). Until PDK-1016 records them as offboarded devices, the step devices waits while any
--- exists, so the deletion never takes away the path their uninstall needs.
--- name: CountOffboardingPendingDevices :one
-SELECT count(*) FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('retired', 'rejected');
+-- Locks the devices of the context organization that may still contact the server and gives each without a usable
+-- open uninstall a fresh one (plan M17 decision 15, amendment e point 10, migration 00135); returns how many.
+-- name: OffboardReissueUninstalls :one
+SELECT paddock_offboard_reissue_uninstalls(@params::jsonb, @issued_at::timestamptz, @expires_at::timestamptz)::bigint;
+
+-- The devices the step devices hands over to offboarded_device: no reported removal, neither retired nor rejected.
+-- name: ListOffboardingHandedDevices :many
+SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('retired', 'rejected') ORDER BY id;
+
+-- The uninstall commands of the handed-over devices, kept or fresh.
+-- name: ListOffboardingUninstallCommands :many
+SELECT c.* FROM device_command c JOIN device d ON d.uninstall_command_id = c.id
+WHERE d.id = ANY(@device_ids::uuid[])
+ORDER BY d.id;
+
+-- The active identity keys of the handed-over devices with their check-in counters.
+-- name: ListOffboardingDeviceIdentities :many
+SELECT k.device_id, k.key_id, k.public_key, coalesce(s.last_seq, 0)::bigint AS last_seq
+FROM device_identity_key k LEFT JOIN device_status s ON s.device_id = k.device_id
+WHERE k.device_id = ANY(@device_ids::uuid[]) AND k.status = 'active'
+ORDER BY k.device_id, k.key_id;
 
 -- name: ListOffboardingTables :many
 SELECT table_name, delete_order FROM offboarding_table ORDER BY delete_order;
 
 -- Devices that had not reported their removal when their organization was deleted (platform role only).
 
--- name: InsertOffboardedDevice :exec
+-- A device handed over again (a repeated step) keeps its row; only new rows count.
+-- name: InsertOffboardedDevices :execrows
 INSERT INTO offboarded_device (device_id, organization_id, keys, command_id, command_envelope)
-VALUES (@device_id, @organization_id, @keys, @command_id, @command_envelope)
+SELECT unnest(@device_ids::uuid[]), @organization_id::uuid, unnest(@keys::text[])::jsonb, unnest(@command_ids::uuid[]),
+       unnest(@command_envelopes::bytea[])
 ON CONFLICT (device_id) DO NOTHING;
 
 -- The offboarded devices of an organization, whose identity, command and sequence keys outlive it (plan M17 amendment l
@@ -72,5 +90,13 @@ SELECT * FROM offboarded_device ORDER BY device_id;
 -- name: DeleteOffboardedDevice :one
 DELETE FROM offboarded_device WHERE device_id = @device_id RETURNING *;
 
--- name: PurgeOffboardedDevices :many
-DELETE FROM offboarded_device WHERE offboarded_at < @before RETURNING device_id, organization_id;
+-- name: ListExpiredOffboardedDevices :many
+SELECT * FROM offboarded_device WHERE offboarded_at < @before ORDER BY offboarded_at, device_id LIMIT @max_rows;
+
+-- name: DeleteOffboardedDevices :execrows
+DELETE FROM offboarded_device WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- The devices of ids that still have a record: the cache sync deletes the keys it rewrote for any other (a device
+-- that reported its removal meanwhile).
+-- name: ListPresentOffboardedDevices :many
+SELECT device_id FROM offboarded_device WHERE device_id = ANY(@device_ids::uuid[]) ORDER BY device_id;

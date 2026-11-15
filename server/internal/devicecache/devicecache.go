@@ -72,6 +72,9 @@ const (
 	KeyRetired     = "retired"
 	KeyRejected    = "rejected"
 	KeyRevoked     = "revoked"
+	// KeyOffboarded is the key of a device whose organization is being deleted or was deleted and that has not
+	// reported its removal: the gateway serves it the uninstall and nothing else (plan M17 decision 15).
+	KeyOffboarded = "offboarded"
 )
 
 // KeyStatus combines the key status and the device state into DeviceKey.Status.

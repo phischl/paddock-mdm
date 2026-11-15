@@ -68,8 +68,19 @@ func (g *gateway) verify(ctx context.Context, r *http.Request, s signed, pub *ec
 
 // authenticateDevice verifies a request of an enrolled device in the order of architecture §6.3: header presence,
 // timestamp, key lookup in dk:, key status, signature, nonce. Quarantined devices pass (fail safe); the handlers
-// withhold new bundles from them.
+// withhold new bundles from them. An offboarded key is refused (plan M17 decision 15).
 func (g *gateway) authenticateDevice(w http.ResponseWriter, r *http.Request, limit int64) (device, error) {
+	return g.authenticate(w, r, limit, false)
+}
+
+// authenticateLeaving is authenticateDevice that also lets an offboarded key pass: a device of a deleted organization
+// still checks in for its uninstall, reports the uninstall's result and its removal (plan M17 decision 15). The
+// handler serves such a device only that.
+func (g *gateway) authenticateLeaving(w http.ResponseWriter, r *http.Request, limit int64) (device, error) {
+	return g.authenticate(w, r, limit, true)
+}
+
+func (g *gateway) authenticate(w http.ResponseWriter, r *http.Request, limit int64, offboarded bool) (device, error) {
 	s, err := g.readSigned(w, r, limit)
 	if err != nil {
 		return device{}, err
@@ -84,7 +95,8 @@ func (g *gateway) authenticateDevice(w http.ResponseWriter, r *http.Request, lim
 	if !ok || key.DeviceID.String() != s.headers.Device {
 		return device{}, errInvalidSignature.with("unknown key")
 	}
-	if key.Status != devicecache.KeyActive && key.Status != devicecache.KeyQuarantined {
+	if key.Status != devicecache.KeyActive && key.Status != devicecache.KeyQuarantined &&
+		(!offboarded || key.Status != devicecache.KeyOffboarded) {
 		return device{}, errIdentityRevoked.with("the device identity is not active")
 	}
 	pub, err := protocol.ParsePublicKey(key.PublicKey)
