@@ -7,8 +7,12 @@
 #    1  the previous release installed as smoke.sh does, with its agent artifacts (re-signed with throwaway keys);
 #    2  seeded (seed.sh) with a device of the previous release's devicesim package (upgradesim built from the previous
 #       tag's checkout);
-#    3  ./paddock upgrade-check on both hosts: no FAIL, no WARN but the known ones;
-#    4  ./paddock upgrade --yes on the control plane, then on the audit host;
+#    3  ./paddock upgrade-check on both hosts: no FAIL, no WARN but the known ones; the previous release's object store
+#       given the obsolete paddock-escrow-read beside the api's grant and two escrowed header versions
+#       (assert-buckets.sh);
+#    4  ./paddock upgrade --yes on the control plane, then on the audit host; its bucket bootstrap (--add-missing) added
+#       the users of organization deletion and changed nothing else but removing paddock-escrow-read, and a second run
+#       of it changes nothing (snapshots of assert-buckets.sh, checksums only);
 #    5  probes: the hosts, the hardening, every seeded object with its ID, the audit count, the chain verification, the
 #       API token, the escrowed password revealed with a step-up, the old device's check-in and events, a new device;
 #    6  ./paddock rollback --yes on the control plane (the backup key on stdin), then on the audit host (the
@@ -16,7 +20,7 @@
 #    7  probes on the previous release: the pre-upgrade set;
 #    8  ./paddock upgrade --yes again from the same directories: after a rollback it starts again at the check, copies
 #       .env and .secrets/ again, carries the raised high-water file into the bundle-seq/ its release handed to uid 999
-#       (PDK-980) and takes its own pre-upgrade backup (rollback.sh);
+#       (PDK-980) and takes its own pre-upgrade backup (rollback.sh); its bucket bootstrap is asserted as in step 4;
 #    9  the probes of step 5 on the release upgraded again;
 #   10  restore drill, backup: a confirmed backup key, the local target, ./paddock backup now --label ci --wait;
 #   11  restore drill, loss and restore: ./paddock down --volumes, ./paddock secrets, ./paddock restore --from --at;
@@ -308,8 +312,13 @@ prev_supported() {
   esac
 }
 
+# buckets <bundle dir> <command…>: assert-buckets.sh on the control plane's project.
+buckets() { "$here/assert-buckets.sh" paddock-cp "$@" </dev/null; }
+
 # upgrade_hosts <n> <name>: step 4, and step 8 after the rollback: ./paddock upgrade --yes from the previous
-# release's directories on the control plane, then on the audit host, then the release's bootstrap and the orphans.
+# release's directories on the control plane, then on the audit host, then what the upgrade's bucket bootstrap did to
+# the object store and the orphans. No bootstrap of the job's own runs between the upgrade and the assertions: a full
+# `./paddock bootstrap buckets` sets every user and policy again and would hide a broken --add-missing (PDK-1054b).
 # The second run uses the same candidate directories, as rollback.sh and docs/operations/upgrade.md tell an operator:
 # their .upgrade-state records the rollback, so the upgrade starts again at the check, and migrate-from replaces the
 # bundle-seq/ that the candidate's release handed to uid 999 with the previous release's raised high-water file
@@ -320,13 +329,16 @@ upgrade_hosts() {
   use_cand
   stop_unsealer
   start_unsealer
+  buckets "$W/prev/cp" snapshot "$W/buckets-$2/before"
   # BAO_TOKEN lets the upgrade run ./paddock bootstrap openbao for the new release's policies and AppRoles.
   BAO_TOKEN="$(sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p' "$W/init.json")" cp_paddock upgrade "$W/prev/cp" --yes </dev/null
   step "$1.2 $2: audit host"
   audit_paddock upgrade "$W/prev/audit" --yes </dev/null
-  step "$1.3 $2: the release's bootstrap and orphans"
-  cp_paddock bootstrap buckets
-  cp_paddock up
+  step "$1.3 $2: the upgrade's bucket bootstrap and orphans"
+  buckets "$W/cand/cp" upgraded "$W/buckets-$2/before" "$W/buckets-$2/after"
+  # The upgrade's buckets step again, as a rerun of ./paddock upgrade after a failure later on would run it.
+  cp_paddock bootstrap buckets --add-missing </dev/null
+  buckets "$W/cand/cp" unchanged "$W/buckets-$2/after" "$W/buckets-$2/again"
   orphans
 }
 
@@ -413,6 +425,8 @@ for host in cp audit; do
   printf '%s: %s\n' "$host" "$json"
   check_upgrade "$json"
 done
+step "3.1 the previous release's object store: paddock-escrow-read and escrowed header versions"
+buckets "$W/prev/cp" plant
 
 # --- 4 upgrade -------------------------------------------------------------------------------------------------------
 upgrade_hosts 4 upgrade
