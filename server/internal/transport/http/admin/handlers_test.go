@@ -342,6 +342,8 @@ type env struct {
 	accounts *app.Accounts
 	// identitySessions are the identity provider's sessions that End all sessions ends (plan M8f decision 16).
 	identitySessions *fakeIdentitySessions
+	// orgPool is the handler's organization pool, whose gate status cache a test refreshes after a status change.
+	orgPool *db.OrgPool
 }
 
 func newEnv(t *testing.T) *env {
@@ -398,7 +400,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		t.Fatal(err)
 	}
 	e := &env{t: t, keys: keys, super: super, writer: writer, writerDSN: ag.Writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t),
-		stepUps: newStepUpProofs(), sessions: newFakeSessions(), identitySessions: &fakeIdentitySessions{}}
+		stepUps: newStepUpProofs(), sessions: newFakeSessions(), identitySessions: &fakeIdentitySessions{}, orgPool: orgPool}
 	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
 	verifyRelease := app.NewReleaseVerifier(releasePub)
 	e.orgs = app.NewOrganizations(runner, platformPool, idp, app.NewUninstalls(runner, orgPool, discardCommands{}), false)

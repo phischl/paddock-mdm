@@ -11,6 +11,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
@@ -41,6 +42,8 @@ func TestOutcomeOf(t *testing.T) {
 		{"mcp write not enabled", problem.MCPWriteNotEnabled, audit.OutcomeDenied, "mcp_write_not_enabled"},
 		{"rate limited", problem.RateLimited, audit.OutcomeDenied, "rate_limited"},
 		{"mcp login required", problem.MCPLoginRequired, audit.OutcomeFailure, "mcp_login_required"},
+		{"organization deleting", fmt.Errorf("x: %w", db.OrganizationUnavailable(uuid.New(), "deleting")),
+			audit.OutcomeDenied, "organization_inactive"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

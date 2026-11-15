@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +18,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 var (
@@ -125,6 +127,63 @@ func setOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
 	return err
 }
 
+// enterOrg sets the organization context and passes the offboarding gate (plan M17 amendment 2026-11-15 j points 2
+// and 3): an organization that is deleting or deleted is refused with OrganizationUnavailable before fn runs. With a
+// fresh status cache the gate is a map lookup and the transaction runs no SQL beyond set_config. A cache older than
+// gateMaxAge fails closed: the status is read in the transaction, in the same batch as set_config, so the fallback
+// costs no extra round trip. No row (the organization does not exist) passes: RLS still applies, and there is
+// nothing to protect.
+func (p *OrgPool) enterOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
+	if p.beforeGate != nil {
+		p.beforeGate(org)
+	}
+	status, fresh := p.gate.lookup(org)
+	if fresh {
+		if status != "" {
+			return OrganizationUnavailable(org, status)
+		}
+		return setOrg(ctx, tx, org)
+	}
+	b := &pgx.Batch{}
+	b.Queue("SELECT set_config('paddock.org_id', $1, true)", org.String())
+	b.Queue("SELECT status FROM organization WHERE id = $1::uuid", org)
+	br := tx.SendBatch(ctx, b)
+	if _, err := br.Exec(); err != nil {
+		_ = br.Close()
+		return err
+	}
+	err := br.QueryRow().Scan(&status)
+	if cerr := br.Close(); err == nil || errors.Is(err, pgx.ErrNoRows) {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if status == "deleting" || status == "deleted" {
+		return OrganizationUnavailable(org, status)
+	}
+	return nil
+}
+
+// OrganizationUnavailableError is the gate's refusal of an organization that is deleting or deleted. It matches
+// problem.OrganizationInactive (api and MCP 403, worker drop, audit organization.inactive_denied).
+type OrganizationUnavailableError struct {
+	Organization uuid.UUID
+	Status       string
+}
+
+// OrganizationUnavailable returns the gate's refusal of org in status.
+func OrganizationUnavailable(org uuid.UUID, status string) error {
+	return &OrganizationUnavailableError{Organization: org, Status: status}
+}
+
+func (e *OrganizationUnavailableError) Error() string {
+	return fmt.Sprintf("db: organization %s is %s", e.Organization, e.Status)
+}
+
+// Unwrap makes the refusal match problem.OrganizationInactive.
+func (e *OrganizationUnavailableError) Unwrap() error { return problem.OrganizationInactive }
+
 func orgFromContext(ctx context.Context) (uuid.UUID, error) {
 	p, ok := principal.From(ctx)
 	if !ok || p.OrganizationID == uuid.Nil {
@@ -133,22 +192,60 @@ func orgFromContext(ctx context.Context) (uuid.UUID, error) {
 	return p.OrganizationID, nil
 }
 
-// OrgPool is the pool of role paddock_api (organization data, RLS enforced).
-type OrgPool struct{ pool }
+// OrgPool is the pool of role paddock_api (organization data, RLS enforced). It keeps the offboarding gate's status
+// cache, polled every second on the pool itself until Close.
+type OrgPool struct {
+	pool
+	gate *orgGate
+	// beforeGate, set only by tests (export_test.go), runs at the start of every gate pass, so a test can commit a
+	// status change between a caller's earlier check and the gate.
+	beforeGate func(org uuid.UUID)
+}
 
 // NewOrgPool opens the paddock_api pool.
 func NewOrgPool(ctx context.Context, dsn string, o Options) (*OrgPool, error) {
+	return newOrgPool(ctx, dsn, o, monotonicSince(), slog.Default())
+}
+
+func newOrgPool(ctx context.Context, dsn string, o Options, since func() time.Duration, log *slog.Logger) (*OrgPool, error) {
 	p, err := newPool(ctx, dsn, o)
 	if err != nil {
 		return nil, err
 	}
-	return &OrgPool{p}, nil
+	return &OrgPool{pool: p, gate: newOrgGate(ctx, p.p, since, log)}, nil
+}
+
+// Close stops the status cache's poller and closes all connections.
+func (p *OrgPool) Close() {
+	p.gate.close()
+	p.pool.Close()
+}
+
+// RefreshOrganizationStatus re-reads the offboarding gate's status cache now instead of at the next poll, for a
+// caller that has just changed an organization's status and must see the gate apply it at once (tests).
+func (p *OrgPool) RefreshOrganizationStatus(ctx context.Context) error {
+	return p.gate.refresh(ctx)
 }
 
 // InOrg opens a transaction, executes SELECT set_config('paddock.org_id', <principal.OrganizationID>, true) and
-// calls fn. It returns ErrNoOrganization if the principal is missing or has no organization. It commits if fn
-// returns nil, otherwise it rolls back and returns fn's error unchanged.
+// calls fn. It returns ErrNoOrganization if the principal is missing or has no organization, and an error matching
+// problem.OrganizationInactive (IsOrganizationUnavailable) if the organization is deleting or deleted (the offboarding
+// gate, plan M17 amendments 2026-11-14 d and 2026-11-15 j). It commits if fn returns nil, otherwise it rolls back and
+// returns fn's error unchanged.
 func (p *OrgPool) InOrg(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	org, err := orgFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return inTx(ctx, p.p,
+		func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// InOrgOffboarding is InOrg without the gate, for the offboarding job only (app.Offboarding; enforced by
+// TestInOrgOffboardingCallers): it reaches an organization that is deleting, to delete its rows and finalize it. The
+// organization comes from the principal, as for InOrg.
+func (p *OrgPool) InOrgOffboarding(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	org, err := orgFromContext(ctx)
 	if err != nil {
 		return err
@@ -167,7 +264,7 @@ func (p *OrgPool) InOrgSnapshot(ctx context.Context, fn func(ctx context.Context
 		return err
 	}
 	return inTxWith(ctx, p.p, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly},
-		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) },
 		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }
 
@@ -426,11 +523,11 @@ type NotifierPool struct{ OrgPool }
 
 // NewNotifierPool opens the paddock_notifier pool.
 func NewNotifierPool(ctx context.Context, dsn string, o Options) (*NotifierPool, error) {
-	p, err := newPool(ctx, dsn, o)
+	p, err := newOrgPool(ctx, dsn, o, monotonicSince(), slog.Default())
 	if err != nil {
 		return nil, err
 	}
-	return &NotifierPool{OrgPool{p}}, nil
+	return &NotifierPool{*p}, nil
 }
 
 // InPlatformScope runs fn in a transaction scoped to the platform pseudo-organization (audit.PlatformOrganizationID),
@@ -732,6 +829,22 @@ func IsLockTimeout(err error) bool {
 func IsNoPartition(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == ""
+}
+
+// IsOrganizationUnavailable reports whether err is the gate's refusal: the organization is deleting or deleted.
+func IsOrganizationUnavailable(err error) bool {
+	var u *OrganizationUnavailableError
+	return errors.As(err, &u)
+}
+
+// OrganizationUnavailableStatus is the status (deleting or deleted) of the organization the gate refused in err, and ""
+// when err is no such refusal.
+func OrganizationUnavailableStatus(err error) string {
+	var u *OrganizationUnavailableError
+	if !errors.As(err, &u) {
+		return ""
+	}
+	return u.Status
 }
 
 // IsCheckViolation reports whether err is a check constraint violation.

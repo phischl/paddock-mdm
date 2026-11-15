@@ -1,0 +1,30 @@
+package db
+
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+)
+
+// NewOrgPoolWithClock is NewOrgPool with the status cache's monotonic clock injected.
+func NewOrgPoolWithClock(ctx context.Context, dsn string, o Options, since func() time.Duration) (*OrgPool, error) {
+	return newOrgPool(ctx, dsn, o, since, slog.Default())
+}
+
+// NewOrgPoolWithLogger is NewOrgPool with the status cache's logger injected.
+func NewOrgPoolWithLogger(ctx context.Context, dsn string, o Options, log *slog.Logger) (*OrgPool, error) {
+	return newOrgPool(ctx, dsn, o, monotonicSince(), log)
+}
+
+// GateRefreshFailures is the value of paddock_org_gate_refresh_failures_total.
+func GateRefreshFailures() float64 { return testutil.ToFloat64(metricGateRefreshFailures) }
+
+// StopStatusPoller stops p's status cache poller, so only RefreshOrganizationStatus changes the cache.
+func StopStatusPoller(p *OrgPool) { p.gate.close() }
+
+// SetBeforeGate makes fn run at the start of every gate pass of p, before the status cache is consulted. Set it
+// before p is used concurrently.
+func SetBeforeGate(p *OrgPool, fn func(org uuid.UUID)) { p.beforeGate = fn }

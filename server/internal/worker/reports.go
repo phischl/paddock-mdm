@@ -74,7 +74,9 @@ func (r *Reports) heartbeat(ctx context.Context, messageID string, body []byte) 
 				"reported_seq", hb.ReportedSeq, "issued_seq", hb.ExpectedSeq)
 		}
 	}
-	if err := r.commands.MarkDelivered(ctx, hb); err != nil {
+	if err := r.commands.MarkDelivered(ctx, hb); unavailable(ctx, err) {
+		return ack
+	} else if err != nil {
 		slog.WarnContext(ctx, "recording command delivery failed; retrying", "device_id", hb.DeviceID, "error", err)
 		return retry
 	}
@@ -86,7 +88,9 @@ func (r *Reports) heartbeat(ctx context.Context, messageID string, body []byte) 
 	if !fresh {
 		return ack
 	}
-	if err := r.reports.RecordStatus(ctx, hb); err != nil {
+	if err := r.reports.RecordStatus(ctx, hb); unavailable(ctx, err) {
+		return ack
+	} else if err != nil {
 		slog.WarnContext(ctx, "recording device status failed; retrying", "device_id", hb.DeviceID, "error", err)
 		if err := r.cache.ReleaseHeartbeat(ctx, hb.DeviceID); err != nil {
 			slog.WarnContext(ctx, "releasing heartbeat claim failed", "device_id", hb.DeviceID, "error", err)
@@ -107,6 +111,9 @@ func (r *Reports) events(ctx context.Context, messageID string, body []byte) out
 	for _, t := range unknown {
 		metricUnknownEvents.Inc()
 		slog.WarnContext(ctx, "device event of an unknown type skipped", "device_id", batch.DeviceID, "type", t)
+	}
+	if unavailable(ctx, err) {
+		return ack
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "recording device events failed; retrying", "device_id", batch.DeviceID,

@@ -11,8 +11,9 @@ SELECT coalesce(max(version_id), 0)::bigint AS version FROM goose_db_version WHE
 -- name: UpgradeCheckRelationExists :one
 SELECT (to_regclass(@relation::text) IS NOT NULL)::boolean AS present;
 
+-- An organization that is deleting or deleted refuses every organization transaction (PDK-1038).
 -- name: UpgradeCheckOrganizationIDs :many
-SELECT id FROM organization ORDER BY id;
+SELECT id FROM organization WHERE status NOT IN ('deleting', 'deleted') ORDER BY id;
 
 -- The organization's active devices by reported agent version (NULL: never checked in).
 -- name: UpgradeCheckAgentVersions :many
