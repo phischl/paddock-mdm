@@ -3,11 +3,12 @@
 # amendment g). The blueprints no longer nest metaapplyblueprint: concurrent applies of nested blueprints deadlocked
 # Authentik's workers until the providers never appeared (CI run 43731878343). The device, step-up, MCP and development
 # blueprints refer to the portal's objects with !Find, so the portal goes first. Authentik's own startup discovery still
-# applies every file in no order and may fail one; this script applies the files again in order, then checks that the
-# objects Paddock needs exist (decisions-alpha11 §69).
+# applies every file in no order and may fail one; this script applies the files again in order, then has Authentik
+# apply every Paddock blueprint instance that is not successful (decisions-alpha11 §68 B1), and checks that the objects
+# Paddock needs exist (decisions-alpha11 §69).
 # `make up` and `./paddock up` (and so `./paddock upgrade`) call it before they wait for paddock-api, whose readiness
-# needs the providers. Exit 1 names the file whose apply failed after its tries (later files are not applied), or the
-# objects that are missing afterwards.
+# needs the providers. Exit 1 names the file whose apply failed after its tries (later files are not applied), the
+# instances that are not successful afterwards, or the objects that are missing.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,6 +32,12 @@ flows=(paddock-admin-login paddock-device-authentication paddock-device-code pad
   paddock-recovery)
 
 tries="${PADDOCK_BLUEPRINT_TRIES:-3}"
+# Seconds per instance for its pending applies and the one this script sends.
+instance_timeout="${PADDOCK_BLUEPRINT_INSTANCE_TIMEOUT:-180}"
+if ! [[ "$instance_timeout" =~ ^[0-9]+$ ]]; then
+  echo "PADDOCK_BLUEPRINT_INSTANCE_TIMEOUT must be a number of seconds" >&2
+  exit 1
+fi
 delay="${PADDOCK_BLUEPRINT_RETRY_DELAY:-20}"
 timeout="${WAIT_TIMEOUT:-900}"
 
@@ -139,10 +146,94 @@ apply() {
   return 1
 }
 
+# apply_instances brings the BlueprintInstance of every applied file to status successful. ak apply_blueprint creates the
+# objects but leaves the instance alone, so one that Authentik's startup discovery failed (a !Find before the portal
+# existed) would stay in error until the hourly discovery, while the acceptance stack (devseed) reads the instance status
+# (decisions-alpha11 §66, §68 B1). For each instance in turn it waits for the applies already queued for it, then, if it
+# is not successful, sends the apply_blueprint task the way the API's POST /api/v3/managed/blueprints/<pk>/apply/ does
+# and waits for that task (Authentik 2026.8.5, blueprints/api.py and blueprints/v1/tasks.py); the task runs in the
+# worker, whose environment holds the secrets the blueprints read with !Env. Only a status and the path of a file of
+# this script leave the container, never the instance's context or task logs (decisions-alpha11 §71).
+apply_instances() {
+  local out status path line failed=() n=0
+  local re_line='^paddock-instance ([^ ]+) (.+)$'
+  declare -A got=()
+  if ! out="$(compose exec -T authentik-worker ak shell -c "
+import time
+from django.contrib.contenttypes.models import ContentType
+from django_dramatiq_postgres.models import TaskState
+from authentik.blueprints.models import BlueprintInstance, BlueprintInstanceStatus
+from authentik.blueprints.v1.tasks import apply_blueprint
+from authentik.tasks.models import Task
+kind = ContentType.objects.get_for_model(BlueprintInstance)
+def settled(instance, deadline):
+    while True:
+        if not Task.objects.filter(actor_name=apply_blueprint.actor_name, rel_obj_content_type=kind,
+                rel_obj_id=str(instance.pk)).exclude(state__in=[TaskState.DONE, TaskState.REJECTED]).exists():
+            return True
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(2)
+for path in $(py_list "${files[@]}"):
+    deadline = time.monotonic() + $instance_timeout
+    instance = BlueprintInstance.objects.filter(path=path).first()
+    while instance is None and time.monotonic() < deadline:
+        time.sleep(2)
+        instance = BlueprintInstance.objects.filter(path=path).first()
+    if instance is None:
+        print('paddock-instance missing', path)
+        continue
+    if not settled(instance, deadline):
+        print('paddock-instance timeout', path)
+        continue
+    instance.refresh_from_db()
+    if instance.status != BlueprintInstanceStatus.SUCCESSFUL:
+        apply_blueprint.send_with_options(args=(instance.pk,), rel_obj=instance)
+        if not settled(instance, deadline):
+            print('paddock-instance timeout', path)
+            continue
+        instance.refresh_from_db()
+    print('paddock-instance', instance.status, path)
+" </dev/null 2>/dev/null)"; then
+    echo "FAIL  Authentik blueprint instances: not applied, ak shell failed" >&2
+    exit 1
+  fi
+  while IFS= read -r line; do
+    [[ "$line" =~ $re_line ]] || continue
+    status="${BASH_REMATCH[1]}" path="${BASH_REMATCH[2]}"
+    [[ " ${files[*]} " == *" $path "* ]] || continue
+    case "$status" in
+      successful | warning | error | orphaned | unknown | missing | timeout) ;;
+      *) status=unrecognized ;;
+    esac
+    got[$path]="$status"
+  done <<<"$out"
+  for path in "${files[@]}"; do
+    status="${got[$path]:-not reported}"
+    if [[ "$status" == successful ]]; then n=$((n + 1)); else failed+=("$path: $(instance_reason "$status")"); fi
+  done
+  if ((${#failed[@]} > 0)); then
+    echo "FAIL  Authentik blueprint instances: not successful after Authentik applied them" >&2
+    printf '      - %s\n' "${failed[@]}" >&2
+    echo "      see the instance under System > Blueprints in Authentik, or compose logs authentik-worker" >&2
+    exit 1
+  fi
+  echo "PASS  Authentik blueprint instances: $n of ${#files[@]} successful"
+}
+
+# instance_reason <status>: the fixed text for an instance status that is not successful.
+instance_reason() {
+  case "$1" in
+    missing) printf 'no instance; Authentik did not discover the file' ;;
+    timeout) printf 'its apply did not finish within %ss' "$instance_timeout" ;;
+    unrecognized) printf 'a status this script does not know' ;;
+    "not reported") printf 'no status reported' ;;
+    *) printf 'status %s' "$1" ;;
+  esac
+}
+
 # check_objects checks by name that the objects the stack needs exist after the applies, and fails naming the missing
-# ones. Authentik's own startup apply may have failed a file before this script applied it, and the instance keeps that
-# status until Authentik's hourly discovery, so the objects are checked instead of the instances (decisions-alpha11
-# §69). Only names leave the container.
+# ones (decisions-alpha11 §69). Only names leave the container.
 check_objects() {
   local out want=() have=() missing=() name
   if ! out="$(compose exec -T authentik-worker ak shell -c "
@@ -198,4 +289,5 @@ for file in "${files[@]}"; do
   done
   echo "applied the Authentik blueprint $file"
 done
+apply_instances
 check_objects
