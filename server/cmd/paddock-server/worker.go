@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/domain/offboarding"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
@@ -268,6 +269,10 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool),
 			app.NewVulnerabilitySummary(runner), pool, platformPool, s.inventoryEvery).WithSLASummary(app.NewVulnerabilitySLASummary(runner))
 		osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(s.osvURL), pool, platformPool, s.osvEvery)
+		// The steps devices and audit_final complete at once until PDK-1016 and PDK-1017 implement them.
+		offboard := worker.NewOffboarding(s.offboarding.WithDeps(app.OffboardingDeps{Runner: runner, Worker: pool,
+			Platform: platformPool, Identity: ak, Inventory: fleetClient, Cache: cache, Sessions: sessions.NewStore(vk)}).
+			WithStubbedSteps(offboarding.StepDevices, offboarding.StepAuditFinal), platformPool)
 		return []func(context.Context) error{
 			worker.NewOpsProbe(signer, worker.DialCertExpiry(s.tlsAddr, nil), s.tlsHosts).Run,
 			worker.NewAutoUnsealObserver(platformPool, runner).Run,
@@ -291,6 +296,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 			inventory.RunSettings,
 			inventory.RunSync,
 			osvSync.Run,
+			offboard.Run,
 		}
 	}
 	slog.InfoContext(ctx, "worker starting", "mode", mode)

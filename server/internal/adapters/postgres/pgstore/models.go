@@ -893,6 +893,7 @@ type Organization struct {
 	DeletingCommittedAt       *time.Time
 	OffboardingWaitVxids      []string
 	OffboardingWaitTakenAt    *time.Time
+	OffboardingCounts         json.RawMessage
 }
 
 type OrganizationDmsSetting struct {

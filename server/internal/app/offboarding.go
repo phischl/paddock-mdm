@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/server/internal/domain/offboarding"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 )
 
@@ -14,10 +16,10 @@ import (
 // organization.deletion_step_failed (plan M17 decision 6, §6).
 const (
 	// OffboardingObjectStoreUnavailable: the object store failed, or the deletion's credentials are not configured.
-	OffboardingObjectStoreUnavailable = "object_store_unavailable"
+	OffboardingObjectStoreUnavailable = offboarding.ErrorObjectStoreUnavailable
 	// OffboardingObjectRetained: Object Lock retention or a legal hold kept objects of the organization; the step
 	// never completes as if they were gone (plan M17 amendment k, RR-140).
-	OffboardingObjectRetained = "object_retained"
+	OffboardingObjectRetained = offboarding.ErrorObjectRetained
 )
 
 // OffboardingError is a failed offboarding step with its error code.
@@ -49,14 +51,19 @@ type OffboardingObjects struct {
 }
 
 // Offboarding deletes what remains of an organization whose grace period ended (plan M17, ADR 0052). It alone holds
-// the deletion's object-store credentials (amendment k point 2); the steps' job is PDK-1015.
+// the deletion's object-store credentials (amendment k point 2). WithDeps adds what the other steps need.
 type Offboarding struct {
 	objects OffboardingObjects
+	deps    OffboardingDeps
+	// stubbed are steps that complete at once without work until their tickets land (devices: PDK-1016,
+	// audit_final: PDK-1017).
+	stubbed map[string]bool
+	now     func() time.Time
 }
 
 // NewOffboarding returns the organization deletion with its object-store credentials.
 func NewOffboarding(objects OffboardingObjects) *Offboarding {
-	return &Offboarding{objects: objects}
+	return &Offboarding{objects: objects, now: time.Now}
 }
 
 // DeleteObjects is the object-store part of the step objects (plan M17 decision 12): every object below org/<org>/

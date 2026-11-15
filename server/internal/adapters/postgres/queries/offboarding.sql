@@ -18,6 +18,30 @@ SELECT paddock_offboard_quiesce()::boolean AS ready;
 -- name: OffboardFinalize :exec
 SELECT paddock_offboard_finalize();
 
+-- The number of the context organization's unpublished outbox rows (plan M17 decision 9, amendment c point 2); the
+-- step outbox completes at 0. Only paddock_worker may call it, inside InOrgOffboarding of a deleting organization.
+-- name: OffboardOutboxPending :one
+SELECT paddock_offboard_outbox_pending()::bigint AS pending;
+
+-- Revokes every API token of the context organization (decision 14) and returns how many were still live.
+-- name: OffboardRevokeAPITokens :one
+SELECT paddock_offboard_revoke_api_tokens()::bigint AS revoked;
+
+-- The administrator accounts of the context organization, whose portal and MCP sessions the step sessions ends.
+-- name: ListOffboardingAdminAccounts :many
+SELECT id FROM admin_account ORDER BY id;
+
+-- Every device of the context organization with its identity keys (key_id empty for a device without one), for the
+-- step valkey (decision 13).
+-- name: ListOffboardingDeviceKeys :many
+SELECT d.id AS device_id, coalesce(k.key_id, '')::text AS key_id
+FROM device d LEFT JOIN device_identity_key k ON k.device_id = d.id
+ORDER BY d.id, k.key_id;
+
+-- The Fleet hosts the context organization's devices reference, for the step fleet (decision 11).
+-- name: ListOffboardingInventoryRefs :many
+SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id;
+
 -- name: ListOffboardingTables :many
 SELECT table_name, delete_order FROM offboarding_table ORDER BY delete_order;
 

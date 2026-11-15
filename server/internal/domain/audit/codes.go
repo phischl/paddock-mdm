@@ -2196,7 +2196,7 @@ var registry = map[Code]Definition{
 		Description: "A step of an organization's deletion failed and is retried in the next round (actor: system).",
 		Params:      []string{"slug", "step", "error_code"},
 		Outcomes:    []Outcome{OutcomeFailure},
-		Note:        "Platform pseudo-organization; recorded once per step and error code until the step succeeds.",
+		Note:        "Platform pseudo-organization; recorded once per step and error code until the step succeeds (the worker metric paddock_offboarding_step_failing shows a failure for as long as it lasts). error_code is authentik_unavailable, fleet_unavailable, object_store_unavailable, object_retained (Object Lock keeps objects of the organization), valkey_unavailable, outbox_pending (unpublished outbox rows of the organization), audit_writer_pending, database_error or finalize_waiting (step tombstone, after more than one hour waiting for organization transactions that were open when the deletion started).",
 	},
 	CodeOrganizationDeleted: {
 		Code: CodeOrganizationDeleted, Emitted: true,

@@ -78,6 +78,10 @@ func (f *fakeIdP) err() error {
 	return nil
 }
 
+func (f *fakeIdP) DeleteOrganization(context.Context, string) (ports.OrgIdentityDeletion, error) {
+	return ports.OrgIdentityDeletion{}, problem.Internal
+}
+
 func (f *fakeIdP) EnsureOrganization(ctx context.Context, _ string) (ports.OrgIdentityRefs, error) {
 	if f.onEnsure != nil {
 		if err := f.onEnsure(ctx); err != nil {

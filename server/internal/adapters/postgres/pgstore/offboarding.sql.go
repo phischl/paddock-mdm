@@ -107,6 +107,94 @@ func (q *Queries) ListOffboardedDevices(ctx context.Context) ([]OffboardedDevice
 	return items, nil
 }
 
+const listOffboardingAdminAccounts = `-- name: ListOffboardingAdminAccounts :many
+SELECT id FROM admin_account ORDER BY id
+`
+
+// The administrator accounts of the context organization, whose portal and MCP sessions the step sessions ends.
+func (q *Queries) ListOffboardingAdminAccounts(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listOffboardingAdminAccounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardingDeviceKeys = `-- name: ListOffboardingDeviceKeys :many
+SELECT d.id AS device_id, coalesce(k.key_id, '')::text AS key_id
+FROM device d LEFT JOIN device_identity_key k ON k.device_id = d.id
+ORDER BY d.id, k.key_id
+`
+
+type ListOffboardingDeviceKeysRow struct {
+	DeviceID uuid.UUID
+	KeyID    string
+}
+
+// Every device of the context organization with its identity keys (key_id empty for a device without one), for the
+// step valkey (decision 13).
+func (q *Queries) ListOffboardingDeviceKeys(ctx context.Context) ([]ListOffboardingDeviceKeysRow, error) {
+	rows, err := q.db.Query(ctx, listOffboardingDeviceKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOffboardingDeviceKeysRow{}
+	for rows.Next() {
+		var i ListOffboardingDeviceKeysRow
+		if err := rows.Scan(&i.DeviceID, &i.KeyID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOffboardingInventoryRefs = `-- name: ListOffboardingInventoryRefs :many
+SELECT device_id, external_id FROM device_inventory_ref ORDER BY device_id
+`
+
+type ListOffboardingInventoryRefsRow struct {
+	DeviceID   uuid.UUID
+	ExternalID string
+}
+
+// The Fleet hosts the context organization's devices reference, for the step fleet (decision 11).
+func (q *Queries) ListOffboardingInventoryRefs(ctx context.Context) ([]ListOffboardingInventoryRefsRow, error) {
+	rows, err := q.db.Query(ctx, listOffboardingInventoryRefs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOffboardingInventoryRefsRow{}
+	for rows.Next() {
+		var i ListOffboardingInventoryRefsRow
+		if err := rows.Scan(&i.DeviceID, &i.ExternalID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOffboardingTables = `-- name: ListOffboardingTables :many
 SELECT table_name, delete_order FROM offboarding_table ORDER BY delete_order
 `
@@ -158,6 +246,19 @@ func (q *Queries) OffboardFinalize(ctx context.Context) error {
 	return err
 }
 
+const offboardOutboxPending = `-- name: OffboardOutboxPending :one
+SELECT paddock_offboard_outbox_pending()::bigint AS pending
+`
+
+// The number of the context organization's unpublished outbox rows (plan M17 decision 9, amendment c point 2); the
+// step outbox completes at 0. Only paddock_worker may call it, inside InOrgOffboarding of a deleting organization.
+func (q *Queries) OffboardOutboxPending(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, offboardOutboxPending)
+	var pending int64
+	err := row.Scan(&pending)
+	return pending, err
+}
+
 const offboardQuiesce = `-- name: OffboardQuiesce :one
 SELECT paddock_offboard_quiesce()::boolean AS ready
 `
@@ -171,6 +272,18 @@ func (q *Queries) OffboardQuiesce(ctx context.Context) (bool, error) {
 	var ready bool
 	err := row.Scan(&ready)
 	return ready, err
+}
+
+const offboardRevokeAPITokens = `-- name: OffboardRevokeAPITokens :one
+SELECT paddock_offboard_revoke_api_tokens()::bigint AS revoked
+`
+
+// Revokes every API token of the context organization (decision 14) and returns how many were still live.
+func (q *Queries) OffboardRevokeAPITokens(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, offboardRevokeAPITokens)
+	var revoked int64
+	err := row.Scan(&revoked)
+	return revoked, err
 }
 
 const purgeOffboardedDevices = `-- name: PurgeOffboardedDevices :many

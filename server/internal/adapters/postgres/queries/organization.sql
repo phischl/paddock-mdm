@@ -133,6 +133,38 @@ UPDATE organization SET offboarding_error_code = @error_code, updated_at = now()
 WHERE id = @id AND status = 'deleting'
 RETURNING *;
 
+-- The organizations the deletion job works on: every deleting one, and a deleted one whose tombstone is written but
+-- whose organization.deleted is not recorded yet (offboarding_step still tombstone).
+-- name: ListOffboardingOrganizations :many
+SELECT * FROM organization
+WHERE status = 'deleting' OR (status = 'deleted' AND offboarding_step = 'tombstone')
+ORDER BY delete_after, id;
+
+-- A step's checkpoint (plan M17 decision 6): the next step, the cleared error and what the step removed, only while the
+-- organization is still at that step, so a step completes once.
+-- name: CompleteOrganizationOffboardingStep :one
+UPDATE organization
+SET offboarding_step = @next_step, offboarding_error_code = NULL, updated_at = now(),
+    offboarding_counts = offboarding_counts || jsonb_build_object(@current_step::text,
+      coalesce((offboarding_counts ->> @current_step::text)::bigint, 0) + @added::bigint)
+WHERE id = @id AND status = 'deleting' AND offboarding_step = @current_step
+RETURNING *;
+
+-- A failed attempt of a step: its error code and what it removed before failing.
+-- name: FailOrganizationOffboardingStep :one
+UPDATE organization
+SET offboarding_error_code = @error_code, updated_at = now(),
+    offboarding_counts = offboarding_counts || jsonb_build_object(@step::text,
+      coalesce((offboarding_counts ->> @step::text)::bigint, 0) + @added::bigint)
+WHERE id = @id AND status = 'deleting' AND offboarding_step = @step
+RETURNING *;
+
+-- organization.deleted is recorded exactly once, together with this: the tombstone no longer waits for its event.
+-- name: CloseOrganizationOffboarding :one
+UPDATE organization SET offboarding_step = NULL, updated_at = now()
+WHERE id = @id AND status = 'deleted' AND offboarding_step = 'tombstone'
+RETURNING *;
+
 -- name: TombstoneOrganization :one
 UPDATE organization
 SET status = 'deleted', deleted_at = now(), domains = '{}', offboarding_error_code = NULL, idp_ensured_at = NULL,

@@ -79,6 +79,10 @@ type fakeAuthentik struct {
 	dropGroupsObj bool
 	// devices are the owners (user pks) of the authenticator devices by Authentik model label, one entry per device.
 	devices map[string][]int
+	// deletedGroups are the names of the deleted groups in the order of their deletion; deletingParent records a
+	// group deleted while another group still named it as parent.
+	deletedGroups  []string
+	deletingParent []string
 }
 
 type fakeRequest struct {
@@ -102,6 +106,8 @@ type fakeUser struct {
 	superuser bool
 	// typ is the user's type; empty is the fixture's internal.
 	typ string
+	// path is the user's path; empty is Authentik's default users.
+	path string
 }
 
 func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
@@ -242,6 +248,7 @@ func (f *fakeAuthentik) userJSON(u *fakeUser, includeGroups bool) map[string]any
 	j["pk"], j["username"], j["name"], j["email"], j["attributes"], j["groups"] = u.pk, u.username, u.name, u.email, u.attributes, u.groups
 	j["is_active"] = !u.inactive
 	j["uid"] = "uid-" + strconv.Itoa(u.pk)
+	j["path"] = cmp.Or(u.path, "users")
 	j["groups_obj"] = nil
 	if u.typ != "" {
 		j["type"] = u.typ
@@ -266,7 +273,7 @@ var (
 	reUser        = regexp.MustCompile(`^/api/v3/core/users/([0-9]+)/(recovery/)?$`)
 	reApplication = regexp.MustCompile(`^/api/v3/core/applications/([^/]+)/$`)
 	reBrand       = regexp.MustCompile(`^/api/v3/core/brands/([^/]+)/$`)
-	reObject      = regexp.MustCompile(`^/api/v3/(providers/oauth2|propertymappings/provider/scope|policies/expression)/([^/]+)/$`)
+	reObject      = regexp.MustCompile(`^/api/v3/(providers/oauth2|propertymappings/provider/scope|policies/expression|policies/bindings)/([^/]+)/$`)
 )
 
 // collections maps list paths to the store collection and the recorded create response.
@@ -372,7 +379,13 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 		}
 		switch {
 		case r.Method == http.MethodDelete:
+			for _, other := range f.groups {
+				if slices.Contains(other.parents, g.pk) {
+					f.deletingParent = append(f.deletingParent, g.name)
+				}
+			}
 			delete(f.groups, g.pk)
+			f.deletedGroups = append(f.deletedGroups, g.name)
 			return http.StatusNoContent, nil
 		case m[2] == "add_user/" || m[2] == "remove_user/":
 			u, ok := f.users[int(body["pk"].(float64))]
@@ -398,6 +411,7 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 		f.nextPK++
 		u.name, _ = body["name"].(string)
 		u.email, _ = body["email"].(string)
+		u.path, _ = body["path"].(string)
 		if attrs, ok := body["attributes"].(map[string]any); ok {
 			u.attributes = attrs
 		}
@@ -498,6 +512,10 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 		if !ok {
 			return http.StatusNotFound, f.fixture("get_core_applications_paddock-device-fixture-org_404.json")
 		}
+		if r.Method == http.MethodDelete {
+			delete(f.objects["applications"], reApplication.FindStringSubmatch(p)[1])
+			return http.StatusNoContent, nil
+		}
 		if r.Method == http.MethodPatch {
 			for k, v := range body {
 				app[k] = v
@@ -510,6 +528,10 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 		obj, ok := f.objects[coll][m[2]]
 		if !ok {
 			return http.StatusNotFound, f.fixture("delete_core_groups_id_404.json")
+		}
+		if r.Method == http.MethodDelete {
+			delete(f.objects[coll], m[2])
+			return http.StatusNoContent, nil
 		}
 		if r.Method == http.MethodPut || r.Method == http.MethodPatch {
 			if coll == "providers" && f.unknownFlow(body) {
@@ -644,6 +666,9 @@ func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
 			continue
 		}
 		if pk := first(q["groups_by_pk"]); pk != "" && !slices.Contains(u.groups, pk) {
+			continue
+		}
+		if path := first(q["path"]); path != "" && u.path != path {
 			continue
 		}
 		if name := first(q["username"]); name != "" && u.username != name {

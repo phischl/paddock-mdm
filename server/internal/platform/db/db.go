@@ -820,6 +820,20 @@ func IsLockTimeout(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
 }
 
+// IsSerializationFailure reports whether err is SQLSTATE 40001, e.g. paddock_offboard_finalize finding rows of the
+// organization that a straggling transaction wrote after the delete loop.
+func IsSerializationFailure(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "40001"
+}
+
+// IsNotInPrerequisiteState reports whether err is SQLSTATE 55000, e.g. paddock_offboard_finalize called while
+// paddock_offboard_quiesce still waits.
+func IsNotInPrerequisiteState(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "55000"
+}
+
 // IsNoPartition reports whether err is an insert into a partitioned table without a partition for the row (SQLSTATE
 // 23514 without a constraint name), e.g. an audit_event month the index purge dropped concurrently.
 func IsNoPartition(err error) bool {
