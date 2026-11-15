@@ -144,7 +144,7 @@ step waits for that acknowledgement.
 - An `audit.event_after_retirement` for an organization that is **not** being deleted means that something requested
   its audit retirement without a deletion (RR-144). Investigate a compromised control plane: find the
   `organization.audit_retirement_requested` event in the platform audit log, check which role wrote it and rotate
-  that role's credentials. The alert on `audit.event_after_retirement` is defined by PDK-1017.
+  that role's credentials. The alerts: Prometheus `PaddockAuditEventAfterRetirement` (`increase(paddock_audit_events_after_retirement_total{role="paddock-audit-writer"}[1h]) > 0`, warning), Wazuh rule 100916 (level 10, group `paddock_integrity`) and the Sigma rule `integrations/sigma/paddock_audit_event_after_retirement.yml` (level high), all PDK-1017.
 
 ## Reading the retained evidence (PDK-1017)
 
