@@ -215,16 +215,23 @@ func (constSigner) SignBatch(_ context.Context, _ string, messages [][]byte) ([]
 }
 
 // TestOffboardingUnreportedDevicesNeverStall (main's requirement for PDK-1016): devices that never report their
-// removal, offline or pending approval, do not hold the deletion. The round hands them over and deletes the
-// organization without a failing step, so neither the backoff nor PaddockOrganizationDeletionStuck
-// (paddock_offboarding_retry_capped) nor paddock_offboarding_step_failing ever shows it. The hand-over adds the
-// disarm and the uninstall to cmd: and keeps a disarm that was pending there (amendment n point 2).
+// removal, offline or pending approval, do not hold the deletion. The round deletes the organization without a
+// failing step, so neither the backoff nor PaddockOrganizationDeletionStuck (paddock_offboarding_retry_capped) nor
+// paddock_offboarding_step_failing ever shows it. An approved offline device is handed over: the hand-over adds the
+// disarm and the uninstall to cmd: and keeps a disarm that was pending there (amendment n point 2). A device still
+// pending approval gets no uninstall and is not handed over (amendment m, ADR decision §47).
 func TestOffboardingUnreportedDevicesNeverStall(t *testing.T) {
 	f := newFixture(t)
 	platform := platformPool(t)
 	ctx := context.Background()
 	offline, pending := f.device(t, "active"), f.device(t, "pending")
 	pendingDisarm := uuid.Must(uuid.NewV7())
+	for _, dev := range []uuid.UUID{offline, pending} {
+		if _, err := f.super.Exec(ctx, `INSERT INTO device_identity_key (key_id, organization_id, device_id, public_key, key_protection, status)
+			VALUES ($1, $2, $3, '\x01', 'file', 'active')`, "k-"+dev.String(), f.org, dev); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := f.cache.PutCommand(ctx, offline, pendingDisarm, devicecache.Command{ExpiresAt: time.Now().Add(time.Hour),
 		Envelope: offboardedEnvelope(t, pendingDisarm, offline, f.org, command.TypeDeleteSelfLock, `{}`)}); err != nil {
 		t.Fatal(err)
@@ -282,8 +289,20 @@ func TestOffboardingUnreportedDevicesNeverStall(t *testing.T) {
 		AND payload -> 'target' ->> 'id' = $2`, audit.PlatformOrganizationID, f.org.String()); n != 0 {
 		t.Fatalf("%d failed steps", n)
 	}
-	if n := f.count(t, "SELECT count(*) FROM offboarded_device WHERE device_id = ANY($1)", []uuid.UUID{offline, pending}); n != 2 {
-		t.Fatalf("%d of the 2 unreported devices were handed over", n)
+	if n := f.count(t, "SELECT count(*) FROM offboarded_device WHERE device_id = $1", offline); n != 1 {
+		t.Fatalf("the approved offline device was handed over %d times, want once", n)
+	}
+	if n := f.count(t, "SELECT count(*) FROM offboarded_device WHERE device_id = $1", pending); n != 0 {
+		t.Fatalf("the pending device was handed over %d times, want not at all", n)
+	}
+	if key, ok, err := f.cache.DeviceKey(ctx, "k-"+offline.String()); err != nil || !ok || key.Status != devicecache.KeyOffboarded {
+		t.Fatalf("key of the offline device %+v %v %v, want offboarded", key, ok, err)
+	}
+	if key, ok, err := f.cache.DeviceKey(ctx, "k-"+pending.String()); err != nil || (ok && key.Status == devicecache.KeyOffboarded) {
+		t.Fatalf("key of the pending device %+v %v %v, want no offboarded key", key, ok, err)
+	}
+	if pcmds, err := f.cache.Commands(ctx, pending, time.Now()); err != nil || len(pcmds) != 0 {
+		t.Fatalf("cmd: of the pending device: %v %v; want none", pcmds, err)
 	}
 	cmds, err := f.cache.Commands(ctx, offline, time.Now())
 	if err != nil || len(cmds) != 3 {
