@@ -30,6 +30,8 @@ type CacheSync struct {
 	cache    *devicecache.Cache
 	interval time.Duration
 	now      func() time.Time
+	// beforeListen, if set, runs before each LISTEN attempt; tests use it to hold the listener back.
+	beforeListen func(ctx context.Context)
 }
 
 // NewCacheSync creates the sync.
@@ -37,9 +39,12 @@ func NewCacheSync(pool *db.OrgPool, cache *devicecache.Cache) *CacheSync {
 	return &CacheSync{pool: pool, cache: cache, interval: ReconcileInterval, now: time.Now}
 }
 
-// Run listens for changes and reconciles periodically until ctx ends.
+// Run listens for changes and reconciles periodically until ctx ends. It also reconciles whenever LISTEN is
+// (re-)established (PDK-1060): a change committed before that raised a notification nobody received, and a revocation
+// must not wait for the next interval.
 func (s *CacheSync) Run(ctx context.Context) error {
-	go s.listen(ctx)
+	listening := make(chan struct{}, 1)
+	go s.listen(ctx, listening)
 	for {
 		if err := s.ReconcileAll(ctx); err != nil && ctx.Err() == nil {
 			slog.WarnContext(ctx, "device cache reconcile failed", "error", err)
@@ -47,14 +52,24 @@ func (s *CacheSync) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-listening:
 		case <-time.After(s.interval):
 		}
 	}
 }
 
-func (s *CacheSync) listen(ctx context.Context) {
+func (s *CacheSync) listen(ctx context.Context, listening chan<- struct{}) {
 	for ctx.Err() == nil {
-		err := s.pool.Listen(ctx, notifyChannel, func(payload string) {
+		if s.beforeListen != nil {
+			s.beforeListen(ctx)
+		}
+		err := s.pool.Listen(ctx, notifyChannel, func() {
+			// A pending signal already guarantees a reconcile that starts after this LISTEN.
+			select {
+			case listening <- struct{}{}:
+			default:
+			}
+		}, func(payload string) {
 			if err := s.Changed(ctx, payload); err != nil {
 				slog.WarnContext(ctx, "device cache update failed; the reconcile loop repairs it", "change", payload, "error", err)
 			}
