@@ -33,7 +33,9 @@ import (
 func TestOffboardedDeviceUninstallsAfterTombstone(t *testing.T) {
 	slug, orgID := gateOrganization(t)
 	admin := newGateAdmin(t, slug)
-	d := activeDevice(t, admin.portal, "", "of6-"+slug)
+	// No cleanup: the organization's deletion removes the token, and the session of its administrator is revoked by
+	// it, so a cleanup with that session would get 401.
+	d := activeDeviceWith(t, admin.portal, "", "of6-"+slug, false)
 
 	root := steppedUpRoot(t)
 	res := call(t, root, http.MethodPost, orgPath+orgID.String()+"/delete",
@@ -164,7 +166,10 @@ func TestDeletedOrganizationAuditEvidence(t *testing.T) {
 	ctx := testContext(t, 15*time.Minute)
 	slug, orgID := gateOrganization(t)
 	admin := newGateAdmin(t, slug)
-	createGroup(t, admin.portal)
+	// No cleanup: the organization's deletion removes the group, and the session of its administrator is revoked by
+	// it, so a cleanup with that session would get 401.
+	expectStatus(t, call(t, admin.portal, http.MethodPost, "/api/v1/device-groups", map[string]string{"name": uniqueName("audit gate")}),
+		http.StatusCreated, "")
 	root := steppedUpRoot(t)
 	res := call(t, root, http.MethodPost, orgPath+orgID.String()+"/delete",
 		map[string]any{"confirm_slug": slug, "reason": "of5 gate", "grace_days": 0})

@@ -36,6 +36,12 @@ func autoinstallBody(cfg protocol.EnrollmentConfig, release string) map[string]a
 
 func createToken(t *testing.T, p *env.Portal, o tokenOptions) createdToken {
 	t.Helper()
+	return createTokenWith(t, p, o, true)
+}
+
+// createTokenWith is createToken; cleanup false leaves the token to the deletion of its organization.
+func createTokenWith(t *testing.T, p *env.Portal, o tokenOptions, cleanup bool) createdToken {
+	t.Helper()
 	if o.maxUses == 0 {
 		o.maxUses = 10
 	}
@@ -49,6 +55,13 @@ func createToken(t *testing.T, p *env.Portal, o tokenOptions) createdToken {
 		"max_uses": o.maxUses, "auto_approve": o.autoApprove}
 	res := call(t, p, http.MethodPost, "/api/v1/enrollment-tokens", body)
 	expectStatus(t, res, http.StatusCreated, "")
+	if !cleanup {
+		var tok createdToken
+		if err := res.JSON(&tok); err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
 	return createdTokenOf(t, p, res)
 }
 
@@ -213,7 +226,13 @@ func enroll(t *testing.T, cfg protocol.EnrollmentConfig, hostname string) (*devi
 // enrollment token names cannot be deleted, and the gates delete their groups.
 func activeDevice(t *testing.T, p *env.Portal, groupID, hostname string) *devicesim.Device {
 	t.Helper()
-	tok := createToken(t, p, tokenOptions{autoApprove: true})
+	return activeDeviceWith(t, p, groupID, hostname, true)
+}
+
+// activeDeviceWith is activeDevice; cleanup false leaves the enrollment token to the deletion of its organization.
+func activeDeviceWith(t *testing.T, p *env.Portal, groupID, hostname string, cleanup bool) *devicesim.Device {
+	t.Helper()
+	tok := createTokenWith(t, p, tokenOptions{autoApprove: true}, cleanup)
 	d, s := enroll(t, tok.EnrollmentConfig, hostname)
 	if s.Status != protocol.EnrollActive {
 		t.Fatalf("enrollment %+v, want active", s)
