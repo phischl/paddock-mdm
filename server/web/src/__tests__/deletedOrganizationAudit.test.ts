@@ -11,6 +11,7 @@ import { vuetify } from '../plugins/vuetify'
 
 const deletion = {
   requested_at: '2026-11-01T00:00:00Z', requested_by: 'pat', reason: 'contract ended', delete_after: '2026-12-01T00:00:00Z',
+  recovery_export_until: '2026-11-30T23:40:00Z',
   step: null, last_error_code: null, deleted_at: '2026-12-01T01:00:00Z', uninstalls_issued: 3, uninstalls_skipped: 0,
   audit_final_verified_at: '2026-12-01T00:30:00Z', audit_final_outcome: 'verified' as 'verified' | 'failed' | null,
 }

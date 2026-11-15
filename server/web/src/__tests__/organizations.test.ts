@@ -170,7 +170,7 @@ describe('recovery export row action (plan M17 amendments g and h)', () => {
   const deletion = {
     requested_at: '2026-11-14T10:00:00Z', requested_by: 'root', reason: 'contract ended', delete_after: '2099-12-14T10:00:00Z',
     recovery_export_until: '2099-12-14T09:40:00Z', step: null, last_error_code: null, deleted_at: null, uninstalls_issued: 2,
-    uninstalls_skipped: 0,
+    uninstalls_skipped: 0, audit_final_verified_at: null, audit_final_outcome: null,
   }
 
   it('offers the export for a pending deletion of an active or provisioning_failed organization only', async () => {

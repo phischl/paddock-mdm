@@ -15,6 +15,7 @@ import { pendingConfirm, settleConfirm } from '../composables/useConfirm'
 
 const deletion = {
   requested_at: '2026-11-01T00:00:00Z', requested_by: 'pat', reason: 'contract ended', delete_after: '2026-12-01T00:00:00Z',
+  recovery_export_until: '2026-11-30T23:40:00Z',
   step: null, last_error_code: null, deleted_at: null, uninstalls_issued: 3, uninstalls_skipped: 0,
   audit_final_verified_at: null, audit_final_outcome: null,
 }
@@ -260,7 +261,7 @@ describe('the deletion banner for organization administrators', () => {
   }
 
   it('warns with the date and the advice while the deletion is pending', () => {
-    const w = mountBanner({ ...me, organization_deletion: { delete_after: '2026-12-01T00:00:00Z', devices_pending: 0 } })
+    const w = mountBanner({ ...me, organization_deletion: { delete_after: '2026-12-01T00:00:00Z', recovery_export_until: '2026-11-30T23:40:00Z', devices_pending: 0 } })
     const text = w.get('[data-testid="organization-deletion-banner"]').text()
     expect(text).toContain('scheduled for deletion on')
     expect(text).toContain('recovery keys')
@@ -268,14 +269,14 @@ describe('the deletion banner for organization administrators', () => {
   })
 
   it('counts the devices still pending approval when there are some', () => {
-    const w = mountBanner({ ...me, organization_deletion: { delete_after: '2026-12-01T00:00:00Z', devices_pending: 2 } })
+    const w = mountBanner({ ...me, organization_deletion: { delete_after: '2026-12-01T00:00:00Z', recovery_export_until: '2026-11-30T23:40:00Z', devices_pending: 2 } })
     const text = w.get('[data-testid="organization-deletion-pending"]').text()
     expect(text).toContain('2 devices are still pending approval')
     expect(text).toContain('apt purge paddock-agent paddock-supervisor')
   })
 
   it('does not mention pending devices when there are none', () => {
-    const w = mountBanner({ ...me, organization_deletion: { delete_after: '2026-12-01T00:00:00Z', devices_pending: 0 } })
+    const w = mountBanner({ ...me, organization_deletion: { delete_after: '2026-12-01T00:00:00Z', recovery_export_until: '2026-11-30T23:40:00Z', devices_pending: 0 } })
     expect(w.find('[data-testid="organization-deletion-pending"]').exists()).toBe(false)
   })
 
