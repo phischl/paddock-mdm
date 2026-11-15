@@ -219,3 +219,47 @@ worker may only delete the bundle pointers of the organization's devices and the
 neither read nor write either key (corrected 2026-11-15: a bare `%W~` would also have allowed `SET`, `HSET` and
 `PEXPIREAT`). The gateway's restrictions (AZ-4) are unchanged.
 
+
+## Amendment 2026-11-16 — Valkey memory policy and the worker's read-only HGETALL (plan M17 amendment s)
+
+Status: Accepted (approved by main, decisions-alpha11 §81).
+
+**Context.** On the development stack, Valkey had no `maxmemory`, AOF on and a 512 MiB container limit. It was
+OOM-killed 23 times after a 110 000-device organization was deleted:
+- An offboarded device keeps about 2.3 KB in Valkey for 365 days.
+- The worker rewrote every cache entry each minute, unchanged or not.
+- The AOF rewrite's fork, with copy-on-write under that load, crossed the limit.
+
+Each kill cost every client its reads and writes until the AOF was loaded again.
+
+**Decisions.**
+1. **`maxmemory` at 60 % of the container limit.** The entrypoint reads `/sys/fs/cgroup/memory.max` and starts
+   `valkey-server --maxmemory <60 % in bytes>`. Without a cgroup limit (`max`) it sets none and says so in one log
+   line. The remaining 40 % is headroom for the AOF rewrite's copy-on-write. This mirrors RabbitMQ's memory alarm at
+   60 % of its limit.
+2. **`maxmemory-policy noeviction`** (in `valkey.conf`). Paddock's Valkey is not a disposable cache:
+   - evicting `seq:` or `nonce:` weakens device replay protection;
+   - evicting `sess:` signs administrators out;
+   - evicting `dk:` or `cmd:` turns into 503s that look like outages.
+
+   At the limit Valkey refuses writes that need memory, visibly, and keeps serving reads and `DEL`, so deletions and
+   uninstall reports still free memory. Every eviction policy was rejected for this reason.
+3. **Sizing rule:** `PADDOCK_VALKEY_MEM_LIMIT ≥ 2 × (64 MiB + live devices × 2.0 KB + offboarded devices × 2.3 KB)`.
+   - Measured on 2026-11-15: 220 MiB for 110 000 live devices, +175 MiB after their hand-over.
+   - Offboarded devices count for 365 days after their organization's deletion.
+   - `./paddock check --online` warns when Valkey uses more than 50 % of its limit. `docs/operations/capacity.md`
+     carries the rule.
+4. **Default `PADDOCK_VALKEY_MEM_LIMIT=1g`** (was 512m). It fits 70 000 live plus 70 000 offboarded devices (716 MiB
+   by the rule). Hosts need about 512 MiB more RAM. The release's changelog carries this as an `Upgrade:` line.
+5. **The worker reads `dk:` and `cmd:` hashes, read-only.** So that the periodic reconcile writes only changed
+   entries, the worker user gains the selector `(%R~dk:* %R~cmd:* -@all +hgetall)`.
+   - `HGETALL` is not added to its root permissions, so every other key and command stays refused (NOPERM, proven by
+     a test).
+   - The worker already writes these keys from PostgreSQL, so it gains no data it could not reconstruct.
+
+**Consequences.**
+- A Valkey that is too small fails writes with clear OOM errors instead of crash loops.
+- Operators size Valkey by the rule.
+- There is no Prometheus metric for Valkey memory yet, because that needs an exporter image. The check is the only
+  signal.
+- Implemented by PDK-1088.

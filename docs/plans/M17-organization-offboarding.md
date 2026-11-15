@@ -1793,3 +1793,396 @@ only the computation moves outside it.
 
 Ticket: the lead's Opus implementer on `alpha11-offboarding-integration`. Points 6 and 7 MAY be split into two tickets,
 but both must land before OF3 is re-measured.
+
+## Amendment 2026-11-16 s — every large step yields, and the caches a deletion leaves stay affordable (architect decision; main §79/§80, alpha.11 blocker)
+
+Status: Accepted (approved by main, §81).
+
+Binding; it refines amendment p (round, passes, budget), amendment q point 6 (the database step's yield) and decision
+15 (offboarded devices in Valkey), and corrects the Valkey line of `docs/operations/capacity.md`. OF3's bound stays at
+5 minutes.
+
+**Finding (devstack, §62 step 4, image of integration 7e23f0ca).** A 3-device organization was deleted next to one
+with 110 000 devices; both requests were sent at the same second with grace 0.
+
+| Organization | Request to tombstone | Own work | Longest wait |
+| --- | --- | --- | --- |
+| small (3 devices) | 48 min 55 s (bound 5 min) | about 10 s | `valkey` 16.8 min, `audit_final` 28.0 min |
+| large (110 000 devices) | 69 min 49 s (no bound) | — | `objects` 44.7 min, `database` 20.8 min |
+
+- The round advances organizations in passes, but only the `database` step yields (amendment q). The `objects` step
+  deleted one object per `DeleteObject` request, about 40 per second, and held the round for 44.7 minutes. The
+  `devices` step (174.5 s, signing about 1.6 s per 1 000 devices) delayed the small organization by 2 minutes in the
+  same way.
+- **Why `audit_final` waited 28 minutes.** The audit writer was not the cause.
+  - The small organization's `organization.audit_retirement_requested` was recorded only at about 22:38:45. The
+    writer acknowledged it within seconds. The large organization's own `audit_final`, with 8.18 M events, took
+    16.8 s.
+  - The large `objects` step failed once at 22:10:48 (RustFS was OOM-killed). The next round gave the small
+    organization exactly one step (`valkey`). Then it ran the large `objects` step again, for another 26.9 minutes.
+  - The retry was not delayed. `worker.Offboarding.advance` computes the backoff from the time the failed attempt
+    *started*: 21:54:03 + 1 min, which was already in the past.
+  - Point 1 removes the long step and point 2 the backoff defect. Together they cover the 28 minutes.
+- **Valkey** (512 MiB limit, AOF on, no `maxmemory`) was OOM-killed 23 times. The cause:
+  - Every offboarded device keeps about 2.3 KB (`cmd:` with two signed envelopes 1 720 B, `dk:` 520 B, `seq:` 64 B),
+    so 110 000 devices hold about 253 MB.
+  - The cache sync rewrites every entry every 60 s, unchanged or not. `app.OffboardedDevices.Restore` does it for
+    every offboarded device (`HSET` per command, `DEL`+`HSET` per key), `CacheSync.Reconcile` for every live key.
+  - That grows the AOF by hundreds of MB per minute and triggers rewrites. The rewrite's fork, with copy-on-write
+    under the same write load, crosses the container limit.
+  - The resets broke other organizations' rounds and gateway check-ins.
+  - In addition, `Restore` loads all 110 000 records in one transaction every minute (worker 60 → 550 MiB).
+- **RustFS** (2 GiB) was OOM-looping before the deletion started. It reached 2 GiB about 2 minutes after each restart,
+  from its own scanner over 110 000 bundle objects (330 000 directories). It stopped once about half of them were
+  purged.
+- **Log flood.** Within one second of the `deleting` commit:
+  - 74 920 × `attention finding not materialized` (one per open condition of a round that had already listed the
+    organization);
+  - 48 561 × `device cache update failed` (one per change notification of the organization's devices).
+
+### 1. Every step whose work grows with the organization yields (refines amendments p and q)
+
+1. **One slice for all steps.** `app.OffboardingDatabaseSlice` is renamed `app.OffboardingStepSlice` (5 s, unchanged).
+   A step call that is **resumable** stops after a unit of work once `now ≥ min(deadline, call start +
+   OffboardingStepSlice)`. It stores its progress and returns the yield (point 1.7). With a zero deadline (`Advance`)
+   it runs to the end.
+   - Every call completes **at least one unit**, so every call progresses.
+   - Resumable steps: `devices`, `fleet`, `objects`, `valkey`, `database`.
+   - Not resumable, because their work does not grow with the number of devices: `sessions` (administrator accounts),
+     `outbox` (one count), `authentik` (the organization's fixed set of objects), `audit_final` (one claim),
+     `tombstone`. `fleet` is added beyond main's list: with real Fleet hosts it makes one HTTP request per host and
+     would starve the round exactly like `objects` did.
+2. **Progress and cursor.** Migration `00159_organization_offboarding_progress.sql`, transactional. It adds:
+   - `organization.offboarding_cursor text NULL`: the resume position of the current step. Its meaning depends on the
+     step (point 1.3). NULL means the step has not started.
+   - `organization.offboarding_failures_recorded text[] NOT NULL DEFAULT '{}'` (point 3).
+   - It backfills `offboarding_failures_recorded = ARRAY[offboarding_error_code]` for every organization with a
+     non-NULL `offboarding_error_code`.
+
+   Query changes:
+   - New query `SaveOrganizationOffboardingProgress` (section 8) adds `@added` to
+     `offboarding_counts[@step]`, sets `offboarding_cursor`, and clears `offboarding_error_code`. It applies only while
+     the organization is `deleting` at `@step`, like `SaveOrganizationOffboardingDatabaseBatch`, which stays for the
+     database step.
+   - `CompleteOrganizationOffboardingStep` also sets `offboarding_cursor = NULL`.
+
+   The migration number follows PDK-1079b's `00158`. If `00159` is taken when the ticket starts, that is a stop
+   condition.
+3. **The units and the resume of each step.**
+
+   | Step | Unit | Cursor | Resume |
+   | --- | --- | --- | --- |
+   | `devices` | first call: quiesce + `OffboardReissueUninstalls` (one transaction, unchanged); then one page of 500 handed devices: commands, keys, cancelled uninstalls (one `InOrgOffboarding` transaction), `commandsign.SignAll`, `PutOffboardedDevice`, `DeleteCommand` of the cancelled ones, `InsertOffboardedDevices` | NULL before the reissue; after it the last handed device ID of the page (`00000000-0000-0000-0000-000000000000` right after the reissue) | the quiesce and the reissue run only while the cursor is NULL; pages continue with `id > cursor` |
+   | `fleet` | one page of 200 distinct Fleet hosts, `external_id > cursor`, ordered by `external_id` | the last `external_id` of the page | continues after it; a host is listed once, because `DISTINCT ON (external_id)` keeps every reference of a host on one page |
+   | `objects` | one listing page (at most 1 000 keys or versions) and **one `DeleteObjects` request** for it | none | re-listing: every call lists the three prefixes from their start again (point 1.4) |
+   | `valkey` | one page of 2 000 devices with their key IDs: `ListPresentOffboardedDevices` for the page, then `devicecache.DeleteOrganization(ctx, org, page, OffboardOrgKeys{})`; the call that reads a page shorter than 2 000 also reads the token hashes and escrow IDs and passes them | the last device ID of the page | continues with `id > cursor` |
+   | `database` | one `paddock_offboard_delete_batch_from` batch (unchanged, amendment q) | `offboarding_db_order` (unchanged) | unchanged |
+
+   - Each unit's count is stored with `SaveOrganizationOffboardingProgress` right after the unit, before the slice
+     check. A crash therefore loses neither the count nor the position.
+   - The step completes (`complete`) when a call reaches the end: a page shorter than its size, or every listing
+     done. The final unit's count goes with the completion.
+4. **`objects`: `DeleteObjects` in batches of 1 000, resumed by listing again (no stored cursor).**
+   - `objectstore.Store.PurgeObjects(ctx, prefix, until)` (unversioned bundles bucket) and `PurgeVersions(ctx, prefix,
+     until)` (versioned escrow bucket):
+     - list pages of at most 1 000 entries from the start of the prefix;
+     - send one `DeleteObjects` with `Quiet: true` per page, keys only, or key and `VersionId`;
+     - read the per-key errors of the response;
+     - return `Purge{Deleted, Retained, Done}`.
+   - A per-key error that `retainedKeyError(code, message)` classifies as Object Lock is recorded in `Retained`. It
+     uses the codes and message words of `retainedError`. Any other per-key error, or an error of the whole request,
+     ends the call with that error.
+   - Each S3 request gets its own 30 s timeout (`objectstore.PurgeRequestTimeout`).
+   - **Yield rule:** the call returns `Done = false` after a page only if it has **deleted at least one entry in this
+     call** and `until` has passed. A call that meets only retained entries therefore lists to the end, and the step
+     terminates.
+   - **Why no cursor:** deleted entries vanish from the listing, so listing from the start continues exactly where the
+     last call stopped. Only retained entries are listed again: one failed entry per call, and only in the escrow
+     bucket, where Object Lock is a misconfiguration that already fails the step with `object_retained`. A persisted
+     marker would add a column and a stale-marker case (an object written behind the marker by a straggler) for no
+     gain.
+   - The step calls the three purges in order (`org/<id>/` and `apt/<id>/` of bundles, `org/<id>/` of escrow) with
+     the same `until`. When one returns `Done = false`, the step stores its count and yields. The next call starts
+     again at the first prefix: an emptied prefix costs one list request.
+   - When all three are done: `object_retained` if any were retained, otherwise the step completes.
+   - The old one-object-per-request loops are removed.
+   - Rights: S3 authorizes `DeleteObjects` per key with `s3:DeleteObject` (and `s3:DeleteObjectVersion` for a
+     version). The offboard policies of amendment k already grant both. **If RustFS 1.0.4 refuses `DeleteObjects` for
+     the offboard users, or the SDK's request checksum: stop and report. Do not widen a policy.**
+5. **Errors.**
+   - A unit that fails returns the step's error code as before: `object_store_unavailable`, `valkey_unavailable`,
+     `signing_unavailable`, `fleet_unavailable` or `database_error`. The count of the call's earlier units is already
+     stored.
+   - The backoff and retry are unchanged. Progress clears `offboarding_error_code` (and with it the
+     `paddock_offboarding_step_failing` gauge), as the database step already does.
+6. **Fairness.**
+   - The round's passes stay as in amendment p 2a. A yielding organization stays in the pass list, like the database
+     step's yield.
+   - One large organization therefore costs every other organization at most one slice (5 s plus one unit, bounded
+     by the 30 s S3 timeout) per pass.
+7. **The yield reaches the worker as a value, not as `nil`.**
+   - New exported error type `app.OffboardingYield{Step string}`. Every resumable step returns it on a yield, which
+     replaces `errDatabaseYield`.
+   - `worker.Offboarding.advance` treats it like a completed step: the organization stays in the pass, and its
+     retries are cleared. It also counts `paddock_offboarding_step_yields_total{step}`.
+
+### 2. Two defects of the round (worker)
+
+1. **Backoff from the end of the attempt.** In `advance`, `r.next = o.now().Add(delay)` is taken **after**
+   `AdvanceWithin` returned, not from the time before the call.
+2. **`audit_final` is polled, not spun.**
+   - Today the pending acknowledgement returns `(false, nil)`. The organization stays in every pass and is re-read in
+     a tight loop until the budget ends, against amendment p point 2.
+   - New exported sentinel `app.ErrOffboardingPolling`, returned while the acknowledgement is missing.
+   - The worker keeps such an organization in the round, but skips it in a pass until `offboardingPollInterval`
+     (2 s) has passed since its last poll.
+   - When a pass advanced no organization and only polling organizations remain, the round sleeps until the earliest
+     poll is due or the deadline, whichever comes first. The sleep is context-aware and injectable for tests.
+   - The acknowledgement is therefore seen within about 2 s, as today, without the hot loop.
+3. **Overrun visibility.**
+   - Counter `paddock_offboarding_round_overruns_total`: rounds that took longer than 120 s (`2 × OffboardingInterval`).
+   - Alert `PaddockOrganizationDeletionRoundOverrun`: `increase(paddock_offboarding_round_overruns_total[30m]) > 0`,
+     severity warning, with a `promtool` test.
+   - After point 1 a round lasts at most the budget plus one slice plus one unit. An overrun means a step stopped
+     yielding.
+
+### 3. At most one failure event per code per deletion (main §32)
+
+- `fail` records `organization.deletion_step_failed` only when the code is **not** in
+  `offboarding_failures_recorded`. In the same transaction it appends the code.
+- The comparison with the stored `offboarding_error_code` no longer decides whether an event is recorded. The stored
+  code is still written, for the gauge and the portal.
+- This also closes today's gaps:
+  - a code that comes back after progress cleared it (the database step since §61);
+  - a sequence A → B → A.
+- The rule is per code, not per step and code (confirmed by main, §81). The step of a later failure with an
+  already-recorded code is visible in the gauge `paddock_offboarding_step_failing{step,error_code}` and on the
+  organization, not as a second event.
+
+### 4. Valkey: no rewrite of unchanged entries, bounded memory, a sizing rule
+
+1. **Compare before write in the periodic reconcile.** New type `devicecache.Syncer` with:
+   - `SyncDeviceKeys(ctx, []DeviceKeyEntry) (written int, err error)`;
+   - `SyncOffboardedDevices(ctx, []OffboardedDevice) (written int, err error)`.
+
+   Per batch of at most 500 entries, it:
+   - pipelines `SET seq:<device> <last> NX`. A failed NX writes nothing to the AOF, which keeps `RestoreSeq`'s
+     semantics.
+   - pipelines `HGETALL` of the `dk:` (and, for offboarded devices, `cmd:`) keys;
+   - writes only what differs:
+     - `dk:` with the existing `putHash` (DEL+HSET in MULTI) when its field map differs from the wanted one;
+     - `cmd:` with `HSET` of exactly the fields that are missing or differ. It never removes a field (amendment n
+       point 2).
+
+   `CacheSync.Reconcile` (live keys) and `OffboardedDevices.Restore` use the Syncer. The change-notification path
+   (`CacheSync.Changed`) and the deletion's `devices` step keep their unconditional writes: they write one changed
+   entry each.
+   - **Why read-compare and not a process-local fingerprint:** other paths write `dk:` too (enrolment, the `devices`
+     step, notifications). A fingerprint that misses one of them could skip a needed write, and a stale `active` key
+     is a security defect. Reading costs about 300 B per live key per minute, and nothing is written to the AOF.
+   - **ACL (main §81):** `+hgetall` is **not** added to the worker's root permissions. The worker's user gains a
+     read-only selector: `(%R~dk:* %R~cmd:* -@all +hgetall)`.
+     - Within the selector the worker may run `HGETALL` on `dk:` and `cmd:` keys only.
+     - Every other key and every other command stays as before. `HGETALL` on any other key is refused with NOPERM.
+     - The worker already writes these keys from PostgreSQL, so it sees no data it could not already reconstruct.
+     - ADR 0051's amendment of 2026-11-16 records the selector.
+     - A running devstack needs `docker compose up -d --force-recreate valkey` (the ACL is rendered at start, §58).
+     - An upgrade recreates the container.
+2. **`Restore` pages and runs less often.**
+   - It reads `offboarded_device` in keyset pages of 1 000 rows, each in its own platform transaction (new query
+     `ListOffboardedDevicesPage(after_device uuid, max_rows int)` in a new query file `offboarded_device.sql`).
+   - It runs at most every **15 minutes** (`worker.OffboardedRestoreInterval`) instead of with every 60-s reconcile,
+     and at the first reconcile after the worker starts.
+   - An offboarded device only fetches its uninstall, which is valid for 365 days, so after a Valkey data loss it
+     waits at most 15 minutes longer.
+3. **Counter** `paddock_device_cache_reconcile_writes_total{kind="device_key"|"offboarded_device"}`. In the steady
+   state it stays flat. That is how the operator and the gate see that nothing is rewritten.
+4. **`maxmemory` with `noeviction`.**
+   - Without `maxmemory` the kernel kills Valkey, and every client loses reads and writes until the AOF is loaded
+     again.
+   - **Eviction is not acceptable.** An evicted `seq:` or `nonce:` weakens replay protection, and an evicted `dk:` or
+     `cmd:` turns into 503s that look like outages.
+   - So: `maxmemory-policy noeviction` in `valkey.conf`. `deploy/compose/valkey/entrypoint.sh` reads the cgroup limit
+     (`/sys/fs/cgroup/memory.max`). If it is a number, the entrypoint passes `--maxmemory <60 % of it in bytes>` to
+     `valkey-server`. If it is `max`, the entrypoint sets no maxmemory and prints one line saying so.
+   - At the limit Valkey refuses writes that need memory and keeps serving reads and `DEL`, so the deletion's
+     `valkey` step and the uninstall reports still free memory. The 40 % above it is the AOF rewrite's copy-on-write
+     headroom.
+   - This mirrors RabbitMQ's memory alarm at 60 % of its limit (`docs/operations/capacity.md`).
+5. **Default and sizing rule.**
+   - `PADDOCK_VALKEY_MEM_LIMIT` defaults to **1g** instead of 512m (`compose.yaml`, `prod.env.example`,
+     `lab.env.example`, changelog `Upgrade:` line).
+   - Rule in `docs/operations/capacity.md`: `PADDOCK_VALKEY_MEM_LIMIT ≥ 2 × (64 MiB + live devices × 2.0 KB +
+     offboarded devices × 2.3 KB)`.
+     - Measured: 220 MiB for 110 000 live devices, +175 MiB after their hand-over.
+     - Offboarded devices count for 365 days after their organization's deletion.
+     - Example: 70 000 live plus 70 000 offboarded devices need 716 MiB, so the 1 GiB default fits.
+   - The sentence "a limit reached there points to a leak, not to a larger installation" is replaced.
+6. **`./paddock check --online` warns.**
+   - New item `valkey: memory headroom`. It reads the container's usage and limit with `docker stats --no-stream`
+     (no Valkey credential, no ACL change).
+   - PASS at ≤ 50 % of the limit.
+   - WARN above, with the usage, the limit and the rule of point 5.
+   - "not checked" WARN when the listing fails.
+   - The parsing lives in `deploy/compose/scripts/valkey-headroom.sh` with a shell test.
+
+### 5. RustFS sizing (docs only)
+
+`docs/operations/capacity.md` (memory limits) gains:
+- **1 GiB of `PADDOCK_RUSTFS_MEM_LIMIT` per 20 000 objects in the control plane's object store, at least 2 GiB.**
+  Each managed device keeps one bundle object, plus its escrow objects (one LUKS header per encrypted disk,
+  diagnostics while retained).
+- The number comes from the §62 measurement on RustFS 1.0.4:
+  - 2 GiB looped at 110 000 bundle objects (330 000 directories), from RustFS's own scanner (`walk_dir`);
+  - it stayed below the limit from about 55 000 objects on;
+  - 20 000 per GiB leaves headroom.
+- Example: 70 000 devices with one LUKS header each need 140 000 objects, so 7 GiB.
+- The default stays 2 GiB (about 40 000 objects). No scanner tuning in alpha.11 (open point 2).
+
+### 6. Rounds skip organizations that start deleting (log flood)
+
+1. `app.Findings.Materialize`: the first write that fails with `db.IsOrganizationUnavailable(err)` ends the
+   organization's materialization at once. It returns that error once, with no per-finding `WARN`.
+2. `worker.CacheSync`:
+   - In the listener, a `Changed` error with `db.IsOrganizationUnavailable(err)` is not logged at `WARN`. It is
+     logged once per organization per process, at `Info`: "device cache changes of a deleting organization are
+     skipped; the deletion removes its keys".
+   - In `ReconcileAll`, an organization that fails with it is skipped without a `WARN`.
+3. Other rounds already log one line per organization. They are unchanged.
+
+### 7. Proof: OF3 next to a large organization (gate OF3L)
+
+1. New acceptance test `TestOrganizationDeletedWithinFiveMinutesNextToLargeOrganization`. It runs only when
+   `PADDOCK_OF3_LARGE_ORG` names a seeded organization (slug), and skips otherwise. CI does not run it; the lead runs
+   it on the devstack. It:
+   - checks the precondition: the admin device list of the large organization reports `total ≥ 10000` or
+     `total_capped = true`;
+   - creates a small organization with the existing helpers `gateOrganization` and `activeDeviceWith` (3 active
+     devices);
+   - sends both deletions with grace 0 in parallel;
+   - asserts that the small organization reaches `deleted` within **5 minutes**, client-side and server-side
+     (`requested_at` to `deleted_at`);
+   - then waits up to 60 minutes for the large organization's tombstone (the 1-hour alert's bound) and asserts
+     `objects_deleted ≥ 10000` in its `organization.deleted` event, read from the audit index (the seed had real
+     bundles);
+   - logs the per-step durations of both organizations from their `organization.deletion_step_completed` events,
+     read from the audit index like OF5 does (`expectOneIndexEvent`).
+2. **Seeding with the existing load tooling** (on a development stack only; the load guard refuses otherwise):
+   ```
+   make load-enrol-configs ORG=of3-large TOKENS=20 USES=1000
+   make load-identities CONFIGS="$(ls bin/load/token-*.json | tr '\n' ' ')" COUNT=20000
+   ```
+   - 20 000 devices, twice main's minimum: at 10 000 the old code delayed the small organization by only about
+     4 minutes, too close to the bound to discriminate.
+   - The devices are approved automatically by their tokens. The compiler writes their bundles. The gate's
+     `objects_deleted` assertion proves this.
+   - `make load-test` is not needed.
+3. **Recorded in the result document:**
+   - both organizations' per-step durations;
+   - the duration of `OffboardReissueUninstalls` for 20 000 devices. Above 10 s (amendment r's target) is a stop
+     condition.
+   - Valkey and RustFS restart counts during the run, which must be 0.
+   - the growth of Valkey's incremental AOF file (`/data/appendonlydir/*.incr.aof`) over 10 idle minutes after the
+     run, before and after section 4.
+
+### 8. Interfaces (binding)
+
+```sql
+-- migration 00159_organization_offboarding_progress.sql (transactional)
+ALTER TABLE organization
+  ADD COLUMN offboarding_cursor text,
+  ADD COLUMN offboarding_failures_recorded text[] NOT NULL DEFAULT '{}';
+UPDATE organization SET offboarding_failures_recorded = ARRAY[offboarding_error_code]
+WHERE offboarding_error_code IS NOT NULL;
+
+-- organization.sql
+-- name: SaveOrganizationOffboardingProgress :exec
+UPDATE organization
+SET offboarding_error_code = NULL,
+    offboarding_counts = offboarding_counts || jsonb_build_object(@step::text,
+      coalesce((offboarding_counts ->> @step::text)::bigint, 0) + @added::bigint),
+    offboarding_cursor = sqlc.narg(cursor)::text
+WHERE id = @id AND status = 'deleting' AND offboarding_step = @step;
+
+-- name: MarkOrganizationOffboardingFailureRecorded :execrows
+UPDATE organization SET offboarding_failures_recorded = array_append(offboarding_failures_recorded, @code::text)
+WHERE id = @id AND NOT (@code::text = ANY(offboarding_failures_recorded));
+-- CompleteOrganizationOffboardingStep: additionally SET offboarding_cursor = NULL.
+
+-- offboarding.sql (organization context, InOrgOffboarding)
+-- name: ListOffboardingHandedDevicesPage :many
+SELECT id FROM device WHERE uninstalled_at IS NULL AND state NOT IN ('pending', 'retired', 'rejected')
+  AND id > @after_device::uuid ORDER BY id LIMIT @max_devices;
+-- name: ListOffboardingInventoryRefsPage :many
+SELECT DISTINCT ON (external_id) external_id, device_id FROM device_inventory_ref
+WHERE external_id <> '' AND external_id > @after_external_id::text ORDER BY external_id, device_id LIMIT @max_hosts;
+-- name: ListOffboardingDeviceKeysPage :many
+SELECT d.id AS device_id, coalesce(k.key_id, '')::text AS key_id
+FROM (SELECT id FROM device WHERE id > @after_device::uuid ORDER BY id LIMIT @max_devices) d
+LEFT JOIN device_identity_key k ON k.device_id = d.id ORDER BY d.id, k.key_id;
+
+-- offboarded_device.sql (new file, platform pool; PDK-1088)
+-- name: ListOffboardedDevicesPage :many
+SELECT * FROM offboarded_device WHERE device_id > @after_device::uuid ORDER BY device_id LIMIT @max_rows;
+```
+
+```go
+// app
+const OffboardingStepSlice = 5 * time.Second // replaces OffboardingDatabaseSlice
+type OffboardingYield struct{ Step string } // Error() "offboarding: step <step> yields at its slice"
+var ErrOffboardingPolling = errors.New("offboarding: the step waits for an acknowledgement and is polled again")
+const (
+    offboardingDevicePage = 500
+    offboardingFleetPage  = 200
+    offboardingValkeyPage = 2000
+)
+type OffboardingBundles interface {
+    PurgeObjects(ctx context.Context, prefix string, until time.Time) (objectstore.Purge, error)
+}
+type OffboardingEscrow interface {
+    PurgeVersions(ctx context.Context, prefix string, until time.Time) (objectstore.Purge, error)
+}
+func (o *Offboarding) DeleteObjects(ctx context.Context, org uuid.UUID, until time.Time) (int, error)
+
+// objectstore
+const PurgeBatch = 1000
+const PurgeRequestTimeout = 30 * time.Second
+type Purge struct {
+    Deleted  int
+    Retained []string
+    Done     bool // the listing reached its end in this call
+}
+// until zero: no bound. Done=false only after a page that deleted at least one entry in this call once until passed.
+func (s *Store) PurgeObjects(ctx context.Context, prefix string, until time.Time) (Purge, error)
+func (s *Store) PurgeVersions(ctx context.Context, prefix string, until time.Time) (Purge, error)
+
+// worker
+const offboardingPollInterval = 2 * time.Second
+const OffboardedRestoreInterval = 15 * time.Minute // PDK-1088
+// metrics: paddock_offboarding_step_yields_total{step} (counter), paddock_offboarding_round_overruns_total (counter),
+// paddock_device_cache_reconcile_writes_total{kind} (counter, PDK-1088)
+
+// devicecache (PDK-1088)
+type DeviceKeyEntry struct {
+    KeyID   string
+    Key     DeviceKey
+    LastSeq int64
+}
+type Syncer struct{ /* unexported */ }
+func NewSyncer(c *Cache) *Syncer
+func (s *Syncer) SyncDeviceKeys(ctx context.Context, entries []DeviceKeyEntry) (written int, err error)
+func (s *Syncer) SyncOffboardedDevices(ctx context.Context, devices []OffboardedDevice) (written int, err error)
+```
+
+### Tickets and order
+
+- **PDK-1087** (sections 1–3, 7; high, Opus) and **PDK-1088** (sections 4–6; high, Opus) run **in parallel** on
+  `alpha11-offboarding-integration`. They share no file.
+- PDK-1087 merges after PDK-1079b (migration order).
+- OF3L counts after both are merged; the lead re-runs it there.
+
+**ADR check.**
+- ADR 0052 is unchanged: steps, order and idempotency stay.
+- ADR 0051 amendment 2026-11-16 (Accepted, main §81) records the worker's read-only `HGETALL` selector, and the
+  Valkey memory policy of section 4 points 4–5: `maxmemory` at 60 % with `noeviction`, the sizing rule and the 1g
+  default. These bind every future Valkey user beyond M17.
