@@ -170,3 +170,14 @@ func TestIsAdministratorGroup(t *testing.T) {
 		}
 	}
 }
+
+func TestOffboarding(t *testing.T) {
+	for status, want := range map[string]bool{
+		StatusProvisioning: false, StatusActive: false, StatusProvisioningFailed: false, StatusSuspended: false,
+		StatusDeleting: true, StatusDeleted: true,
+	} {
+		if got := Offboarding(status); got != want {
+			t.Errorf("Offboarding(%q) = %v, want %v", status, got, want)
+		}
+	}
+}

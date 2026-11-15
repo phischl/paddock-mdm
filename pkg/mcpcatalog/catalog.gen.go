@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "94580a041f884f84da7defadf5d26ccbec79ed53bab54073168c301d748841f7"
+const Version = "b5f93c28bfb5c8e079c7363ec660a20b34839a49b6778b1909d16a4342eb014b"
 
 var tools = []Tool{
 	{
@@ -4793,7 +4793,7 @@ var tools = []Tool{
 		Idempotent:  false,
 		AuditCode:   "organization.domains_changed",
 		Summary:     "",
-		Description: "Roles: platform_admin. Replaces the domains of the organization (plan M3a decision 1): lowercase DNS names, each belonging to one organization only (409 domain_taken); the first is the primary domain of device logins and local usernames must use one of them.\n\nChanges data; needs your MCP write access.",
+		Description: "Roles: platform_admin. Replaces the domains of the organization (plan M3a decision 1): lowercase DNS names, each belonging to one organization only (409 domain_taken); the first is the primary domain of device logins and local usernames must use one of them. An organization that is deleting or deleted keeps its domains (409 invalid_state, recorded in the platform pseudo-organization).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"domains\":{\"description\":\"Lowercase DNS names; the first one is the primary domain of device logins.\",\"items\":{\"maxLength\":253,\"type\":\"string\"},\"maxItems\":20,\"type\":\"array\"}},\"required\":[\"domains\"],\"type\":\"object\"},\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"body\",\"id\"],\"type\":\"object\"}"),
 	},
 	{
