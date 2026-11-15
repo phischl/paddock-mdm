@@ -86,8 +86,10 @@ rb_carry_offboard_keys() {
     [[ -f "$f" ]] || continue
     name="$(basename "$f")"
     [[ ! -e "$2/.secrets/$name" ]] || continue
-    # Through a temporary name, so that an interrupted copy never leaves half a key behind.
-    (umask 077 && cp -- "$f" "$2/.secrets/.$name.tmp" && mv -- "$2/.secrets/.$name.tmp" "$2/.secrets/$name") ||
+    # Through a temporary name, so that an interrupted copy never leaves half a key behind. With the source's mode
+    # (0644 from gen-prod-secrets.sh inside the 0700 .secrets/): the services' uid 65532 must read the copy a later
+    # upgrade takes over (PDK-1084); the umask only keeps the half-written temporary file private.
+    (umask 077 && cp --preserve=mode -- "$f" "$2/.secrets/.$name.tmp" && mv -- "$2/.secrets/.$name.tmp" "$2/.secrets/$name") ||
       echo "rollback: could not carry $name into $2/.secrets; a later upgrade creates new organization deletion keys and its bucket bootstrap removes the users of these" >&2
   done
 }
