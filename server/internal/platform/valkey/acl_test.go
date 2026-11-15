@@ -314,6 +314,13 @@ func TestACLRoleMatrix(t *testing.T) {
 			{"DEL bp: and tt: (organization deletion)", func(ctx context.Context) error {
 				return worker.Do(ctx, worker.B().Del().Key("bp:x", "tt:x").Build()).Error()
 			}},
+			// The delete-only selector leaves the worker's own key families as they were.
+			{"HSET, HEXISTS, PEXPIREAT and DEL on dk: (unaffected by the selector)", func(ctx context.Context) error {
+				return errors.Join(worker.Do(ctx, worker.B().Hset().Key("dk:probe").FieldValue().FieldValue("f", "v").Build()).Error(),
+					worker.Do(ctx, worker.B().Hexists().Key("dk:probe").Field("f").Build()).Error(),
+					worker.Do(ctx, worker.B().Pexpireat().Key("dk:probe").MillisecondsTimestamp(time.Now().Add(time.Hour).UnixMilli()).Build()).Error(),
+					worker.Do(ctx, worker.B().Del().Key("dk:probe").Build()).Error())
+			}},
 		}},
 	}
 	for _, r := range roles {
@@ -334,11 +341,18 @@ func TestACLRoleMatrix(t *testing.T) {
 		{"api", []string{"HGETALL", "dk:x"}},
 		{"api", []string{"GET", "revocation-jti:x"}},
 		{"worker", []string{"GET", "stepup:x"}},
-		// Write-only for the worker (%W~bp:* %W~tt:*, plan M17 amendment k): it deletes them and reads neither; the
-		// gateway still cannot write them (ADR 0051 AZ-4).
+		// Delete-only for the worker (selector (%W~bp:* %W~tt:* -@all +del), plan M17 amendment k): it neither reads
+		// nor writes them; the gateway still cannot write them (ADR 0051 AZ-4).
 		{"worker", []string{"GET", "bp:x"}},
 		{"worker", []string{"GET", "tt:x"}},
 		{"worker", []string{"HGETALL", "bp:x"}},
+		{"worker", []string{"HGETALL", "tt:x"}},
+		{"worker", []string{"SET", "bp:x", "v"}},
+		{"worker", []string{"SET", "tt:x", "v"}},
+		{"worker", []string{"HSET", "bp:x", "f", "v"}},
+		{"worker", []string{"HSET", "tt:x", "f", "v"}},
+		{"worker", []string{"PEXPIREAT", "bp:x", "1"}},
+		{"worker", []string{"PEXPIREAT", "tt:x", "1"}},
 		{"gateway", []string{"DEL", "bp:x"}},
 		{"gateway", []string{"SET", "tt:x", "v"}},
 		{"compiler", []string{"HGETALL", "cmd:x"}},

@@ -210,6 +210,38 @@ expect_allowed "bundles offboard list org/" "${ob[@]}" s3api list-objects-v2 --b
 expect_allowed "bundles offboard list apt/" "${ob[@]}" s3api list-objects-v2 --bucket paddock-bundles --prefix apt/aaaa/
 expect_allowed "escrow offboard list versions org/" "${oe[@]}" s3api list-object-versions --bucket paddock-escrow --prefix "$A/"
 
+# --- 3a. --add-missing removes the known-obsolete paddock-escrow-read, never the api's only escrow grant -------------
+
+api_key="$(key rustfs_escrow_api_access_key)"
+api_policies() { K="$api_key" S="" rcx 'rc admin user info --json -- t "$K"'; }
+# An installation from before M12 (PDK-749): the api holds the bucket-wide escrow read.
+K="$api_key" S="" rcx 'printf "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::paddock-escrow/*\"]}]}" >/tmp/p.json &&
+  rc admin policy create t paddock-escrow-read /tmp/p.json >/dev/null && rc admin policy attach t paddock-escrow-read --user="$K" >/dev/null'
+# Guard: without paddock-escrow-api the obsolete policy is the api's only grant; --add-missing must refuse loudly.
+K="$api_key" S="" rcx 'rc admin policy detach t paddock-escrow-api --user="$K" >/dev/null'
+if bootstrap --add-missing; then
+  fail "--add-missing removed the api's only escrow grant"
+elif grep -q "refusing to remove the former policy paddock-escrow-read: its holder lacks paddock-escrow-api" "$work/out"; then
+  ok "--add-missing refuses to remove the api's only escrow grant"
+else
+  fail "--add-missing failed differently: $(shown 3)"
+fi
+info="$(api_policies)"
+[[ "$info" == *'"paddock-escrow-read"'* ]] && ok "the refused run removed nothing" || fail "the refused run detached paddock-escrow-read"
+if name="$(leaked "$work/out")"; then fail "the refused run printed the key $name"; else ok "the refused run prints no key"; fi
+# With paddock-escrow-api attached, --add-missing removes the obsolete policy and keeps the api's grant.
+K="$api_key" S="" rcx 'rc admin policy attach t paddock-escrow-api --user="$K" >/dev/null'
+if bootstrap --add-missing && grep -q "removed the former policy paddock-escrow-read" "$work/out"; then
+  ok "--add-missing removes the obsolete paddock-escrow-read"
+else
+  fail "--add-missing kept paddock-escrow-read: $(shown 3)"
+fi
+info="$(api_policies)"
+[[ "$info" != *'"paddock-escrow-read"'* && "$info" == *'"paddock-escrow-api"'* ]] &&
+  ok "the api keeps paddock-escrow-api and loses paddock-escrow-read" || fail "the api's policies after the removal are wrong"
+expect_denied "api GetObject outside headers and diagnostics after the removal" rustfs_escrow_api_access_key \
+  rustfs_escrow_api_secret_key s3api get-object --bucket paddock-escrow --key "$A/devices/d1/other/o" /dev/null
+
 # --- 3. --add-missing on an installation that predates the offboard users -------------------------------------------
 
 for role in bundles escrow; do
@@ -243,7 +275,7 @@ if name="$(leaked "$work/out")"; then fail "--add-missing printed the key $name"
 grep -q "created bundles user for paddock-bundles-offboard" "$work/out" &&
   grep -q "created bundles user for paddock-escrow-offboard" "$work/out" &&
   ok "--add-missing creates both offboard users" || fail "--add-missing did not create the offboard users: $(shown)"
-grep -q "versioning of paddock-escrow enabled\|is public-read\|removed the former policy" "$work/out" &&
+grep -q "versioning of paddock-escrow enabled\|is public-read" "$work/out" &&
   fail "--add-missing reconfigured an existing bucket or policy" || ok "--add-missing leaves the buckets' configuration alone"
 snapshot >"$work/after"
 if cmp -s "$work/before" "$work/after"; then

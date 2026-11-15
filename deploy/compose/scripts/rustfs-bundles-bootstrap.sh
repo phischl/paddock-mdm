@@ -14,7 +14,8 @@
 #   rustfs-bundles-bootstrap.sh [--add-missing]
 # --add-missing (./paddock upgrade) only adds what is missing: an existing bucket keeps its versioning and bucket
 # policy, an existing policy its statements and an existing user its secret and policies, so an upgrade never rewrites
-# what an installation already holds (the escrowed headers above all). Without it, every policy and secret is set again.
+# what an installation already holds (the escrowed headers above all); it only removes the known-obsolete policies
+# below. Without it, every policy and secret is set again.
 set -euo pipefail
 
 ADD_MISSING=
@@ -178,9 +179,12 @@ policy paddock-escrow-api "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"],\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"org/*/devices/*/diagnostics/*\"]}}},
   {\"Effect\":\"Allow\",\"Action\":[\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/diagnostics/*\"]}]"
 user ESCROW_API_ACCESS_KEY paddock-escrow-api
-# Installations bootstrapped before carry the former policy paddock-escrow-read (GetObject on the whole bucket); left
-# attached, it would void the scope above. An upgrade (--add-missing) removes nothing.
-[[ -n "$ADD_MISSING" ]] || rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY
+# Known-obsolete policies, one removal each, in both modes: an upgrade keeps what an installation needs, not a grant
+# that voids a narrower one. Installations bootstrapped before carry the former policy paddock-escrow-read (GetObject
+# on the whole bucket); left attached, it would void the scope above. --add-missing never attaches paddock-escrow-api
+# to an existing api user, so the removal first requires it: it must not strip the api's only escrow grant.
+rc_require_successor rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY paddock-escrow-api
+rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY
 # The revocation-issuer deletes every version of the headers of a destroyed device (plan M4c decision 9).
 policy paddock-escrow-destroy "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},

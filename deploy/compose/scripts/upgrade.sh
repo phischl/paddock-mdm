@@ -308,7 +308,8 @@ ug_migrate_from_step() {
 
 # ug_buckets_step: the object-store users and policies a release adds (plan M17 amendment k: the organization deletion's
 # two users) are created once the new stack runs. --add-missing changes nothing that exists: no bucket setting, policy,
-# user secret or escrowed object. A rollback leaves the added users behind, unused by the older release and inert.
+# user secret or escrowed object; it removes only known-obsolete policies (paddock-escrow-read). A rollback leaves the
+# added users behind, unused by the older release and inert.
 ug_buckets_step() {
   if [[ "$UG_HOST" == audit ]]; then
     echo "skipped: the audit host runs no control-plane object store"
@@ -392,7 +393,7 @@ ug_plan() {
         ;;
       buckets)
         [[ "$UG_HOST" != audit ]] || continue
-        what="./paddock bootstrap buckets --add-missing (creates the object-store users and policies this release adds, changes none)"
+        what="./paddock bootstrap buckets --add-missing (creates the object-store users and policies this release adds, changes none, removes obsolete ones)"
         ;;
       openbao)
         [[ "$UG_HOST" != audit ]] || continue

@@ -205,6 +205,24 @@ rc_policy_absent() {
 # rc_policy_missing <rc function> <alias> <policy>: whether the policy does not exist; aborts on any other rc error.
 rc_policy_missing() { rc_policy_absent "$1" "rc admin policy info $2 $3"; }
 
+# rc_require_successor <rc function> <alias> <obsolete policy> <access key variable> <successor policy>: when the obsolete
+# policy still exists, aborts unless the user also holds the successor, so that removing the obsolete one cannot leave
+# the user without the grant it needs; nothing when the obsolete policy is gone.
+rc_require_successor() {
+  local rcf="$1" alias="$2" name="$3" key="$4" successor="$5" info
+  if rc_policy_absent "$rcf" "rc admin policy info $alias $name"; then
+    return 0
+  fi
+  info="$("$rcf" "rc admin user info --json -- $alias \"\$$key\"")" || {
+    echo "rc admin user info failed for the holder of $name" >&2
+    exit 1
+  }
+  if [[ "$info" != *"\"$successor\""* ]]; then
+    echo "refusing to remove the former policy $name: its holder lacks $successor; run ./paddock bootstrap buckets" >&2
+    exit 1
+  fi
+}
+
 # rc_remove_policy <rc function> <alias> <policy> <access key variable>: detaches the policy from the user, if attached,
 # and removes it; nothing when the policy is absent, so a rerun after a partial removal completes it. RustFS refuses
 # to remove a policy still attached ("policy in use"), and every rc error aborts the script.

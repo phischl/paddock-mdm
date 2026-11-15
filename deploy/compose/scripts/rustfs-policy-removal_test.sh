@@ -76,9 +76,37 @@ INFO="0||" USERINFO="0|$detached|"
 RM='1||✗ Failed to remove policy: Network error: HTTP 500: <Error><Code>InternalError</Code><Message>policy in use</Message></Error>'
 expect "$(run)" "info,userinfo,rm abort" "rm refused (policy in use)"
 
+# The guard before the removal (PDK-1054 review 1): --add-missing does not attach paddock-escrow-api to an existing api
+# user, so the removal must not run while the obsolete policy is that user's only escrow grant.
+guard() {
+  : >"$log"
+  local result
+  result="$( (rc_require_successor fake_rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY paddock-escrow-api) 2>/dev/null)" &&
+    result=pass || result=abort
+  printf '%s %s' "$(paste -sd, "$log")" "$result"
+}
+only_read='{"accessKey":"k","status":"enabled","policies":["paddock-escrow-read"],"memberOf":[]}'
+both='{"accessKey":"k","status":"enabled","policies":["paddock-escrow-api","paddock-escrow-read"],"memberOf":[]}'
+INFO="5||✗ Policy 'paddock-escrow-read' not found" USERINFO="1||must not run"
+expect "$(guard)" "info pass" "guard: obsolete policy absent"
+INFO="0||" USERINFO="0|$both|"
+expect "$(guard)" "info,userinfo pass" "guard: the holder has the successor"
+INFO="0||" USERINFO="0|$only_read|"
+expect "$(guard)" "info,userinfo abort" "guard: the obsolete policy is the holder's only grant"
+INFO="0||" USERINFO="1||✗ Failed to get user info: Network error"
+expect "$(guard)" "info,userinfo abort" "guard: user info fails"
+INFO="1||✗ Failed to get policy info: Network error"
+expect "$(guard)" "info abort" "guard: policy info fails"
+if grep -B1 '^rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY$' "$here/rustfs-bundles-bootstrap.sh" |
+  grep -qx 'rc_require_successor rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY paddock-escrow-api'; then
+  echo "ok   the bootstrap guards the removal of paddock-escrow-read with paddock-escrow-api"
+else
+  echo "FAIL the bootstrap removes paddock-escrow-read without the successor guard"
+  failures=$((failures + 1))
+fi
+
 bootstrap="$here/rustfs-bundles-bootstrap.sh"
-# Only --add-missing (./paddock upgrade, plan M17 amendment k) skips the removal: it changes nothing that exists.
-if grep -qE '^(\[\[ -n "\$ADD_MISSING" \]\] \|\| )?rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY$' "$bootstrap" &&
+if grep -q '^rc_remove_policy rc bundles paddock-escrow-read ESCROW_API_ACCESS_KEY$' "$bootstrap" &&
   ! grep -q 'rc admin policy \(info\|detach\|rm\)' "$bootstrap"; then
   echo "ok   rustfs-bundles-bootstrap.sh removes paddock-escrow-read only through rc_remove_policy"
 else
