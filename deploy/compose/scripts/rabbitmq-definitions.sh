@@ -38,11 +38,12 @@ export RABBITMQ_CTL_ERL_ARGS='+S 1:1 +SDcpu 1:1 +SDio 1 +A 1 +sbwt none +sbwtdcp
 
 ctl() { compose exec -T -e RABBITMQ_CTL_ERL_ARGS rabbitmq rabbitmqctl "$@"; }
 # import_definitions: the definitions on stdin into the broker, by way of a private file in the container; the trap
-# names the file as mktemp made it.
+# names the file as mktemp made it, and a signal exits through it, so a stopped broker leaves no copy behind.
 # shellcheck disable=SC2016 # $f is the container shell's.
 import_definitions() {
   compose exec -T -e RABBITMQ_CTL_ERL_ARGS rabbitmq sh -c 'umask 077 && f="$(mktemp)" || exit 1
 trap "rm -f -- \"$f\"" EXIT
+trap "exit 1" HUP INT TERM
 cat >"$f" && rabbitmqctl import_definitions --format json "$f"'
 }
 # The broker applies an import asynchronously now and then, so the check right after it may still see the old
