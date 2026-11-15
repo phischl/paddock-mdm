@@ -214,11 +214,14 @@ expect_allowed "escrow offboard list versions org/" "${oe[@]}" s3api list-object
 
 api_key="$(key rustfs_escrow_api_access_key)"
 api_policies() { K="$api_key" S="" rcx 'rc admin user info --json -- t "$K"'; }
-# An installation from before M12 (PDK-749): the api holds the bucket-wide escrow read.
+# An installation from before M12 (PDK-749): the api holds the bucket-wide escrow read. On RustFS 1.0.4 / rc v0.1.37
+# `policy attach` replaces the user's policies, so this single attach leaves paddock-escrow-read as its only grant.
 K="$api_key" S="" rcx 'printf "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::paddock-escrow/*\"]}]}" >/tmp/p.json &&
   rc admin policy create t paddock-escrow-read /tmp/p.json >/dev/null && rc admin policy attach t paddock-escrow-read --user="$K" >/dev/null'
 # Guard: without paddock-escrow-api the obsolete policy is the api's only grant; --add-missing must refuse loudly.
-K="$api_key" S="" rcx 'rc admin policy detach t paddock-escrow-api --user="$K" >/dev/null'
+info="$(api_policies)"
+[[ "$info" == *'"paddock-escrow-read"'* && "$info" != *'"paddock-escrow-api"'* ]] &&
+  ok "setup: the api holds paddock-escrow-read only" || fail "setup: the api's policies before the refusal are wrong"
 if bootstrap --add-missing; then
   fail "--add-missing removed the api's only escrow grant"
 elif grep -q "refusing to remove the former policy paddock-escrow-read: its holder lacks paddock-escrow-api" "$work/out"; then
@@ -229,8 +232,12 @@ fi
 info="$(api_policies)"
 [[ "$info" == *'"paddock-escrow-read"'* ]] && ok "the refused run removed nothing" || fail "the refused run detached paddock-escrow-read"
 if name="$(leaked "$work/out")"; then fail "the refused run printed the key $name"; else ok "the refused run prints no key"; fi
-# With paddock-escrow-api attached, --add-missing removes the obsolete policy and keeps the api's grant.
-K="$api_key" S="" rcx 'rc admin policy attach t paddock-escrow-api --user="$K" >/dev/null'
+# With both attached (attach replaces, hence one call naming both), --add-missing detaches and removes the obsolete
+# policy and keeps the api's grant.
+K="$api_key" S="" rcx 'rc admin policy attach t paddock-escrow-api,paddock-escrow-read --user="$K" >/dev/null'
+info="$(api_policies)"
+[[ "$info" == *'"paddock-escrow-read"'* && "$info" == *'"paddock-escrow-api"'* ]] &&
+  ok "setup: the api holds paddock-escrow-api and paddock-escrow-read" || fail "setup: the api does not hold both policies"
 if bootstrap --add-missing && grep -q "removed the former policy paddock-escrow-read" "$work/out"; then
   ok "--add-missing removes the obsolete paddock-escrow-read"
 else
@@ -239,6 +246,11 @@ fi
 info="$(api_policies)"
 [[ "$info" != *'"paddock-escrow-read"'* && "$info" == *'"paddock-escrow-api"'* ]] &&
   ok "the api keeps paddock-escrow-api and loses paddock-escrow-read" || fail "the api's policies after the removal are wrong"
+if K="" S="" rcx 'rc admin policy info t paddock-escrow-read' >/dev/null 2>&1; then
+  fail "the policy paddock-escrow-read still exists"
+else
+  ok "the policy paddock-escrow-read is gone"
+fi
 expect_denied "api GetObject outside headers and diagnostics after the removal" rustfs_escrow_api_access_key \
   rustfs_escrow_api_secret_key s3api get-object --bucket paddock-escrow --key "$A/devices/d1/other/o" /dev/null
 
