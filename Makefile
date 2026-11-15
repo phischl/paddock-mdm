@@ -150,6 +150,8 @@ lint-shell:
 	shellcheck -s bash deploy/compose/scripts/upgrade.sh deploy/compose/scripts/rollback.sh deploy/bundle/upgrade_test.sh \
 		deploy/bundle/rollback_test.sh deploy/compose/scripts/legacy-alpha8.sh
 	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/offboard-users-check.sh deploy/compose/scripts/offboard-prune_test.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/authentik-apply-blueprints.sh \
+		deploy/compose/scripts/authentik-apply-blueprints_test.sh
 	shellcheck -x -s bash deploy/bundle/ci/lib-smoke.sh deploy/bundle/ci/upgrade.sh deploy/bundle/ci/upgrade_test.sh \
 		deploy/bundle/ci/seed.sh deploy/bundle/ci/fetch-previous.sh deploy/bundle/ci/fetch-previous_test.sh \
 		deploy/bundle/ci/smoke.sh deploy/bundle/ci/assert-buckets.sh deploy/bundle/ci/assert-buckets_test.sh
@@ -464,12 +466,18 @@ up: dev-secrets ## Start the full stack (infrastructure, OpenBao/bucket bootstra
 	$(COMPOSE_DIR)/scripts/postgres-unsealer-role.sh
 	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh
+	$(COMPOSE_DIR)/scripts/authentik-apply-blueprints.sh
 	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
 	$(if $(BACKUP),$(COMPOSE_DIR)/scripts/rustfs-backup-bootstrap.sh,)
 	$(COMPOSE) --profile paddock --profile observability up -d --build
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh --profile paddock
+
+.PHONY: authentik-blueprints-test
+# Its own Compose project with throwaway secrets, so it runs beside a development stack and never touches it.
+authentik-blueprints-test: ## Cold start of the pinned Authentik, then the serial blueprint apply twice (plan M12h-2 amendment g)
+	bash $(COMPOSE_DIR)/scripts/authentik-apply-blueprints_test.sh
 
 .PHONY: down
 down: ## Stop the stack (pass V=1 to delete volumes)
