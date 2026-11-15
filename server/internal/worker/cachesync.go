@@ -31,6 +31,8 @@ type CacheSync struct {
 	offboarded offboardedRestorer
 	interval   time.Duration
 	now        func() time.Time
+	// pageSize overrides ReconcilePageSize in tests; zero keeps it.
+	pageSize int
 	// beforeListen, if set, runs before each LISTEN attempt; tests use it to hold the listener back.
 	beforeListen func(ctx context.Context)
 }
@@ -98,7 +100,8 @@ func (s *CacheSync) listen(ctx context.Context, listening chan<- struct{}) {
 	}
 }
 
-// Changed applies one change notification "<table>:<organization_id>:<id>".
+// Changed applies one change notification "<table>:<organization_id>:<id>". The rows are read in one short
+// transaction and written to Valkey after it committed (plan M17 amendment r point 6).
 func (s *CacheSync) Changed(ctx context.Context, payload string) error {
 	parts := strings.Split(payload, ":")
 	if len(parts) != 3 {
@@ -110,28 +113,44 @@ func (s *CacheSync) Changed(ctx context.Context, payload string) error {
 		return fmt.Errorf("malformed notification %q", payload)
 	}
 	ctx = systemContext(ctx, org, "cache-sync")
-	return s.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		switch parts[0] {
-		case "enrollment_token":
-			tok, err := q.GetEnrollmentToken(ctx, id)
-			if err != nil {
-				return err
-			}
-			return s.putToken(ctx, tok)
-		case "device":
-			if err := s.putKeys(ctx, q, org, uuid.NullUUID{UUID: id, Valid: true}); err != nil {
-				return err
-			}
-			dev, err := q.GetDevice(ctx, id)
-			if err != nil {
-				return err
-			}
-			return s.putUpdateRequest(ctx, id, dev.AgentUpdateRequestedVersion, dev.AgentUpdateRequestedAt)
-		case "device_identity_key":
-			return s.putKeys(ctx, q, org, uuid.NullUUID{UUID: id, Valid: true})
+	switch parts[0] {
+	case "enrollment_token":
+		var tok pgstore.EnrollmentToken
+		if err := s.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			var err error
+			tok, err = q.GetEnrollmentToken(ctx, id)
+			return err
+		}); err != nil {
+			return err
 		}
-		return fmt.Errorf("unexpected table in notification %q", payload)
-	})
+		return s.putToken(ctx, tok)
+	case "device", "device_identity_key":
+		var keys []cachedKey
+		var dev pgstore.Device
+		if err := s.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			rows, err := q.ListCachedDeviceKeysOfDevice(ctx, id)
+			if err != nil {
+				return err
+			}
+			for _, r := range rows {
+				keys = append(keys, cachedKey(r))
+			}
+			if parts[0] == "device" {
+				dev, err = q.GetDevice(ctx, id)
+			}
+			return err
+		}); err != nil {
+			return err
+		}
+		if err := s.putKeys(ctx, org, keys); err != nil {
+			return err
+		}
+		if parts[0] == "device" {
+			return s.putUpdateRequest(ctx, id, dev.AgentUpdateRequestedVersion, dev.AgentUpdateRequestedAt)
+		}
+		return nil
+	}
+	return fmt.Errorf("unexpected table in notification %q", payload)
 }
 
 // ReconcileAll rewrites the cache entries of every organization. A failing organization is logged and skipped, and
@@ -160,34 +179,73 @@ func (s *CacheSync) ReconcileAll(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// ReconcilePageSize is the number of identity keys one reconcile transaction reads (plan M17 amendment r point 6).
+const ReconcilePageSize = 2000
+
+// cachedKey is one identity key with the state of its device, as ListCachedDeviceKeysPage and
+// ListCachedDeviceKeysOfDevice return it.
+type cachedKey pgstore.ListCachedDeviceKeysPageRow
+
 // Reconcile rewrites the live tokens and the identity keys of one organization; writing a key restores its device's
-// missing sequence number.
+// missing sequence number. Every read is a short transaction of its own, the keys in pages of ReconcilePageSize
+// keyset-paged by device ID, and Valkey is written only after each transaction committed: a reconcile must not hold
+// an organization transaction for as long as Valkey takes, because an organization deletion waits for every open
+// one (plan M17 amendment r). A device that changes between two pages is caught by its change notification or the
+// next reconcile.
 func (s *CacheSync) Reconcile(ctx context.Context, org uuid.UUID) error {
 	ctx = systemContext(ctx, org, "cache-sync")
-	return s.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		tokens, err := q.ListLiveEnrollmentTokens(ctx)
-		if err != nil {
+	var tokens []pgstore.EnrollmentToken
+	if err := s.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		tokens, err = q.ListLiveEnrollmentTokens(ctx)
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, tok := range tokens {
+		if err := s.putToken(ctx, tok); err != nil {
 			return err
 		}
-		for _, tok := range tokens {
-			if err := s.putToken(ctx, tok); err != nil {
-				return err
+	}
+	pageSize := s.pageSize
+	if pageSize <= 0 {
+		pageSize = ReconcilePageSize
+	}
+	after := pgstore.ListCachedDeviceKeysPageParams{PageSize: int32(pageSize)} //nolint:gosec // a small positive constant
+	for {
+		var keys []cachedKey
+		if err := s.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			rows, err := q.ListCachedDeviceKeysPage(ctx, after)
+			for _, r := range rows {
+				keys = append(keys, cachedKey(r))
 			}
-		}
-		if err := s.putKeys(ctx, q, org, uuid.NullUUID{}); err != nil {
+			return err
+		}); err != nil {
 			return err
 		}
-		requests, err := q.ListAgentUpdateRequests(ctx)
-		if err != nil {
+		if err := s.putKeys(ctx, org, keys); err != nil {
 			return err
 		}
-		for _, r := range requests {
-			if err := s.putUpdateRequest(ctx, r.ID, r.AgentUpdateRequestedVersion, r.AgentUpdateRequestedAt); err != nil {
-				return err
-			}
+		if len(keys) < pageSize {
+			break
 		}
-		return nil
-	})
+		last := keys[len(keys)-1]
+		after.AfterDevice, after.AfterKey = last.DeviceID, last.KeyID
+	}
+	var requests []pgstore.ListAgentUpdateRequestsRow
+	if err := s.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		requests, err = q.ListAgentUpdateRequests(ctx)
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, r := range requests {
+		if err := s.putUpdateRequest(ctx, r.ID, r.AgentUpdateRequestedVersion, r.AgentUpdateRequestedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // putUpdateRequest writes au:<device> for an open update-now request younger than 24 hours and deletes it otherwise
@@ -205,13 +263,13 @@ func (s *CacheSync) putToken(ctx context.Context, tok pgstore.EnrollmentToken) e
 	}, s.now())
 }
 
-// putKeys caches the identity keys of one device or, with a null device, of the whole organization.
-func (s *CacheSync) putKeys(ctx context.Context, q *pgstore.Queries, org uuid.UUID, deviceID uuid.NullUUID) error {
-	keys, err := q.ListCachedDeviceKeys(ctx, deviceID)
-	if err != nil {
-		return err
-	}
+// putKeys caches identity keys read by Reconcile or Changed; keys of pending devices are not cached (plan M2a
+// decision 10).
+func (s *CacheSync) putKeys(ctx context.Context, org uuid.UUID, keys []cachedKey) error {
 	for _, k := range keys {
+		if k.State == "pending" {
+			continue
+		}
 		if err := s.cache.PutDeviceKey(ctx, k.KeyID, devicecache.DeviceKey{
 			DeviceID: k.DeviceID, OrganizationID: org, Status: devicecache.KeyStatus(k.KeyStatus, k.State), PublicKey: k.PublicKey,
 		}, k.LastSeq); err != nil {
