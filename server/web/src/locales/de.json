@@ -117,6 +117,8 @@
     "switchRoleConfirm": "Wechseln",
     "switchRoleFailed": "Die Rolle konnte nicht gewechselt werden. Bitte versuchen Sie es erneut.",
     "roleFallbackOrganizationInactive": "Ihre Organisation ist nicht aktiv; Sie sind als Plattformadministrator angemeldet.",
+    "mfaEnrolmentNotice": "{pending, plural, =0 {Alle Administratoren melden sich jetzt mit einem Passkey an.} one {# Administrator hat noch keinen Passkey eingerichtet und wird bei der nächsten Anmeldung dazu aufgefordert.} other {# Administratoren haben noch keinen Passkey eingerichtet und werden bei der nächsten Anmeldung dazu aufgefordert.}} Neue Administratorkonten richten ihren Passkey nur über einen einmaligen Link zur Einrichtung der Anmeldung ein: Eine Organisationsadministratorin oder ein Organisationsadministrator erstellt ihn auf der Seite des Benutzers, für Plattformadministratoren erstellt ihn der Betrieb. Dieser Hinweis wird bis {until} angezeigt.",
+    "mfaEnrolmentNoticeDismiss": "Ausblenden",
     "stepUpValidUntil": "Identität bestätigt bis {time}",
     "stepUpNone": "Keine aktuelle Identitätsbestätigung",
     "stepUpChip": "Bestätigt bis {time}"
@@ -297,6 +299,7 @@
     "invalid_request": "Die Anfrage war ungültig.",
     "internal": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
     "invalid_state": "Diese Aktion ist im aktuellen Zustand nicht möglich.",
+    "enrolment_link_platform_administrator": "Dieses Konto ist auch Plattformadministrator. Plattformadministratoren erhalten ihren Link zur Einrichtung der Anmeldung vom Betreiber des Hosts.",
     "conflict": "Das steht im Konflikt mit einem vorhandenen Eintrag.",
     "already_exists": "Das wird für dieselben Geräte bereits verwaltet.",
     "unsupported_compression": "Das Steuerarchiv des Pakets ist mit einem Verfahren komprimiert, das Paddock nicht liest. Bauen Sie es mit dpkg-deb -Zgzip oder -Zzstd.",
@@ -580,7 +583,8 @@
       "offboarded_device_uninstalled": "Ein Gerät einer gelöschten Organisation hat Paddock entfernt",
       "deleted_organization_audit_read": "{actor} hat das Audit-Protokoll der gelöschten Organisation {slug} gelesen",
       "mfa_enrol_marks_seeded": "{marked, plural, one {# Administrator ohne Passkey wurde} other {# Administratoren ohne Passkey wurden}} markiert, ihn bei der nächsten Anmeldung einzurichten ({totp_only, number} nur mit Authenticator-App, {organizations, number} Organisationen)",
-      "mfa_enrol_marks_cleared": "{cleared, plural, one {Die Einrichtungsmarkierung von # Administrator mit Passkey wurde} other {Die Einrichtungsmarkierungen von # Administratoren mit Passkey wurden}} entfernt"
+      "mfa_enrol_marks_cleared": "{cleared, plural, one {Die Einrichtungsmarkierung von # Administrator mit Passkey wurde} other {Die Einrichtungsmarkierungen von # Administratoren mit Passkey wurden}} entfernt",
+      "enrolment_link_created": "{actor} hat auf dem Host einen Link zur Einrichtung der Anmeldung für das Konto {username} erstellt"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
@@ -613,6 +617,7 @@
       "deleted": "{actor} hat den Benutzer {username} gelöscht",
       "locked": "{actor} hat den Benutzer {username} gesperrt",
       "unlocked": "{actor} hat den Benutzer {username} entsperrt",
+      "enrolment_link_created": "{actor} hat einen Link zur Einrichtung der Anmeldung für den Benutzer {username} erstellt",
       "synced_added": "Der synchronisierte Benutzer {username} wurde hinzugefügt",
       "synced_removed": "Der synchronisierte Benutzer {username} wurde entfernt"
     },
@@ -2166,6 +2171,15 @@
     "groups": "Gruppen",
     "recoveryLink": "Passwort-Link",
     "linkShownOnce": "Geben Sie {username} diesen Einmal-Link: Er setzt das Passwort und ist 24 Stunden gültig. Er wird nur jetzt angezeigt.",
+    "enrolmentLink": {
+      "create": "Link zur Einrichtung der Anmeldung erstellen",
+      "title": "Link zur Einrichtung der Anmeldung",
+      "confirm": "Einen einmaligen Link zur Einrichtung der Anmeldung für {username} erstellen? Damit setzt das Konto sein Passwort, falls es keines hat, und einen Passkey, falls es keinen hat. Der Link ist 24 Stunden gültig und wird nur einmal angezeigt.",
+      "link": "Link zur Einrichtung der Anmeldung",
+      "copyFailed": "Der Link konnte nicht kopiert werden. Markieren Sie ihn im Feld und kopieren Sie ihn von Hand.",
+      "shownOnce": "Geben Sie diesen Einmal-Link über einen vertrauenswürdigen Kanal an {username}. Er ist bis {at} gültig und wird nur jetzt angezeigt.",
+      "help": "Mit einem Link zur Einrichtung der Anmeldung setzt das Konto einmalig innerhalb von 24 Stunden sein Passwort und einen Passkey. Ein Link, der erstellt wurde, solange der Benutzer keine Portalrolle hat, etwa der Passwort-Link eines neuen Benutzers, bleibt seine 24 Stunden gültig, und ein neuerer Link beendet ihn nicht: Sein Inhaber könnte den Passkey des Kontos einrichten, sobald es Administrator geworden ist. Geben Sie dem Benutzer eine Portalrolle erst, nachdem er den Link verwendet hat, oder erstellen Sie nach der Ernennung einen neuen Link und geben Sie nur diesen weiter."
+    },
     "syncedHint": "Dieser Benutzer wird aus einem Quellverzeichnis synchronisiert: Name, E-Mail und Passwort werden dort verwaltet. Sperre, Gruppen und Berechtigungen werden hier verwaltet.",
     "lock": "Sperren",
     "lockTitle": "Benutzer sperren",

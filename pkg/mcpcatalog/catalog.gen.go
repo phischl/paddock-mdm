@@ -5,7 +5,7 @@ package mcpcatalog
 import "encoding/json"
 
 // Version identifies this catalog: the SHA-256 of the JSON encoding of the tool table.
-const Version = "65146bc3e5ba61cdf772a78a96aca4be57c5f4027d9240b299ba78bbe0137f41"
+const Version = "ee7d6302ccc75f2593678ebaeb95713729a1adb3a6f318b70138e4f4aafafe05"
 
 var tools = []Tool{
 	{
@@ -727,6 +727,24 @@ var tools = []Tool{
 		Summary:     "",
 		Description: "Roles: org_admin, org_operator. Creates a local user in Authentik (no password, member of paddock.<slug>) and returns a one-time recovery link (valid 24 h) with which the user sets a password; it is returned only here. The username is <local-part>@<a domain of the organization> (409 username_taken if it exists anywhere). A user who would receive root through grants to everyone needs org_admin (403 forbidden) and a step-up (403 step_up_required; API tokens cannot satisfy it).\n\nChanges data; needs your MCP write access.",
 		InputSchema: json.RawMessage("{\"properties\":{\"body\":{\"additionalProperties\":false,\"properties\":{\"display_name\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"email\":{\"maxLength\":254,\"type\":\"string\"},\"username\":{\"maxLength\":256,\"type\":\"string\"}},\"required\":[\"username\",\"display_name\"],\"type\":\"object\"}},\"required\":[\"body\"],\"type\":\"object\"}"),
+	},
+	{
+		Name:        "createUserEnrolmentLink",
+		Method:      "POST",
+		Path:        "/api/v1/users/{id}/enrolment-link",
+		Pattern:     "POST /api/v1/users/{id}/enrolment-link",
+		Tag:         "users",
+		Scope:       ScopeOrganization,
+		Class:       ClassWrite,
+		StepUp:      true,
+		Expose:      false,
+		Bootstrap:   false,
+		Destructive: false,
+		Idempotent:  false,
+		AuditCode:   "user.enrolment_link_created",
+		Summary:     "",
+		Description: "Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). A one-time sign-in setup link for the user (ADR 0053 decision 1), valid 24 hours: the account sets its password if it has none and a passkey if it has none. The link is returned once and never stored, logged or audited; responses are never cached. A locked user, a user deactivated in the identity provider, a user not provisioned there and a platform administrator (a direct member of paddock.platform.admins, who receives the setup link from the host operator) get none (409 invalid_state). A link created while the user has no portal role stays usable for its 24 hours and a newer link does not end it: give the user a portal role only after the link was used, or create a fresh link after the promotion and hand only that one over.\n\nChanges data; needs your MCP write access.",
+		InputSchema: json.RawMessage("{\"properties\":{\"id\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}"),
 	},
 	{
 		Name:        "createUserGroup",

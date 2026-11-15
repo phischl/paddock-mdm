@@ -284,6 +284,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Inventory:        app.NewInventory(orgPool),
 		ConfigStatus:     app.NewConfigStatus(orgPool),
 		Accounts:         accounts,
+		MFANotices:       app.NewMFAEnrolmentNotices(platformPool, ak, ak),
 		Releases:         releases,
 		ReleaseImports:   imports,
 		AgentUpdates:     app.NewAgentUpdates(runner, orgPool, devicecache.New(vk)),

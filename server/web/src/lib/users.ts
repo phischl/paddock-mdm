@@ -1,6 +1,6 @@
 import {
   api, listPage, problemCode, type Device, type IdentitySource, type OwnedDeviceSort, type User, type UserCreated, type UserDetail,
-  type UserEffectiveProfile, type UserSort,
+  type UserEffectiveProfile, type UserEnrolmentLink, type UserSort,
 } from '../api/client'
 import { maxListDepth, type ListFilter, type ListParams, type Page } from './listQuery'
 
@@ -120,6 +120,25 @@ export async function setLocked(id: string, locked: boolean): Promise<string | n
   const { error } = await api.POST(path, { params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } } })
   return error ? problemCode(error) : null
 }
+
+/**
+ * Creates a one-time sign-in setup link for a user (ADR 0053 decision 1; step-up): the link to show once, or the
+ * problem code (step_up_required starts the step-up).
+ */
+export async function createEnrolmentLink(id: string): Promise<UserEnrolmentLink | string> {
+  const { data, error } = await api.POST('/api/v1/users/{id}/enrolment-link', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
+  })
+  if (data) return data
+  const code = problemCode(error)
+  // The refusal for a platform administrator (plan M12h-2 amendment f) shares invalid_state with the locked and
+  // deactivated cases; only its detail tells the administrator that the host operator issues this link.
+  const detail = error && typeof error === 'object' && 'detail' in error ? error.detail : undefined
+  return code === 'invalid_state' && detail === platformAdministratorLinkDetail ? 'enrolment_link_platform_administrator' : code
+}
+
+/** The server's detail of the 409 invalid_state refusing a setup link for a platform administrator. */
+export const platformAdministratorLinkDetail = 'platform administrators receive their setup link from the host operator'
 
 /** The effective profile of a user on a device (or on a device in no group); the problem code on failure. */
 export async function getEffectiveProfile(id: string, deviceID: string | null): Promise<UserEffectiveProfile | string> {
