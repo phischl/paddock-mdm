@@ -2,11 +2,14 @@
 # Tests of assert-buckets.sh (PDK-1054b, `make test`) against a throwaway RustFS that the real bucket bootstrap set up
 # as the previous release did (without the users of organization deletion):
 #   1. plant, snapshot, `rustfs-bundles-bootstrap.sh --add-missing` with the candidate's key files, `upgraded` passes
-#      and a second --add-missing passes `unchanged`;
-#   2. a rewritten policy, a reset user secret, a deleted escrowed version, a removed bucket policy, suspended
-#      versioning and a changed key file each fail `unchanged`, named by label; so does an added policy;
-#   3. an obsolete policy left in place and a missing offboard user fail `upgraded`;
-#   4. a snapshot without an escrowed header version fails, so an empty comparison cannot pass;
+#      and a second --add-missing passes `unchanged`, as do four more snapshots of the unchanged store;
+#   2. a rewritten policy, a reset user secret, a user with an extra or a removed policy, a disabled user, a deleted
+#      escrowed version, a removed bucket policy, suspended versioning and a changed key file each fail `unchanged`,
+#      named by label; so does an added policy;
+#   3. an obsolete policy left in place, one that was not there before the upgrade and a missing offboard user fail
+#      `upgraded`; a snapshot into a reused directory keeps no attachment of the earlier one;
+#   4. a snapshot without an escrowed header version fails, so an empty comparison cannot pass; an unexpected key file
+#      name ends the run instead of leaving the role out;
 #   5. no key or secret is printed, and a snapshot directory holds no key.
 # Needs Docker, like rustfs-offboard_test.sh; it fails rather than skips without it.
 # The rc commands name keys as $VARIABLES that only the container expands (SC2016); ok never fails (SC2015).
@@ -127,6 +130,43 @@ else
   fail "second --add-missing: $(shown again)"
 fi
 
+# RustFS lists a policy's actions, resources and condition values as sets, in a different order from call to call;
+# repeated snapshots of an unchanged store must still compare equal (without the sorting, about every second one did not).
+stable=0
+for i in 1 2 3 4; do
+  assert "stable$i" "$cand" unchanged "$work/again" "$work/stable$i" && stable=$((stable + 1))
+done
+((stable == 4)) && ok "four more snapshots of the unchanged store compare equal" ||
+  fail "an unchanged store compared unequal: $(cat "$work"/stable*.out | grep -v '^snapshot' | sort -u | head -5)"
+# A reused snapshot directory: a stale attachment of an earlier snapshot must not survive into the checks.
+rm -rf "$work/reuse"
+cp -a "$work/after" "$work/reuse"
+echo "rustfs_escrow_api paddock-escrow-read" >>"$work/reuse/attached"
+if assert reuse "$cand" upgraded "$work/before" "$work/reuse"; then
+  ok "a snapshot into a reused directory keeps no stale attachment"
+else
+  fail "reused directory: $(shown reuse 8)"
+fi
+# Check (c) needs the obsolete policy before the upgrade; without it, its absence afterwards proves nothing.
+if assert vacuous "$cand" upgraded "$work/after" "$work/vacuous"; then
+  fail "upgraded passes although paddock-escrow-read was not there before"
+elif said vacuous "the obsolete policy paddock-escrow-read was not there before the upgrade"; then
+  ok "upgraded fails when the obsolete policy was not there before"
+else
+  fail "vacuous: $(shown vacuous)"
+fi
+# A key file whose name no role matches ends the run; it must not drop out of the snapshot unnoticed.
+mkdir -p "$work/oddname"
+cp -a "$cand/.secrets" "$work/oddname/.secrets"
+cp "$cand/.secrets/rustfs_escrow_api_access_key" "$work/oddname/.secrets/rustfs_escrow_api2_access_key"
+if assert oddname "$work/oddname" snapshot "$work/snap-oddname"; then
+  fail "a snapshot passes with an unexpected key file name"
+elif said oddname "unexpected key file name rustfs_escrow_api2_access_key" && [[ ! -f "$work/snap-oddname/sums" ]]; then
+  ok "an unexpected key file name ends the run before a snapshot is written"
+else
+  fail "odd key file name: $(shown oddname)"
+fi
+
 # --- 2. every kind of change fails unchanged ---------------------------------------------------------------------------
 
 # A rewritten policy, as a full bootstrap of a later release would leave it.
@@ -141,13 +181,18 @@ root s3api delete-bucket-policy --bucket paddock-agent-artifacts
 root s3api put-bucket-versioning --bucket paddock-escrow --versioning-configuration Status=Suspended
 rand >"$cand/.secrets/rustfs_bundles_gateway_secret_key"
 K="" S="" rcx 'printf "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::x\"]}]}" >/tmp/p.json && rc admin policy create t ci-added /tmp/p.json >/dev/null'
+# A user with an extra policy, one with its policy removed and a disabled one.
+K="$(key rustfs_bundles_compiler_access_key)" S="" rcx 'rc admin policy attach t paddock-bundles-compiler,ci-added --user="$K" >/dev/null'
+K="$(key rustfs_escrow_backup_access_key)" S="" rcx 'rc admin policy detach t paddock-escrow-backup --user="$K" >/dev/null'
+K="$(key rustfs_artifacts_api_access_key)" S="" rcx 'rc admin user disable -- t "$K" >/dev/null'
 if assert changed "$cand" unchanged "$work/after" "$work/changed"; then
   fail "unchanged passes after every kind of change"
 else
   for label in "changed: policy paddock-bundles-compiler" "changed: auth rustfs_escrow_worker" \
     "changed: escrow versions" "changed: bucket paddock-agent-artifacts policy" \
     "changed: bucket paddock-escrow versioning" "changed: secret rustfs_bundles_gateway_secret_key" \
-    "changed: auth rustfs_bundles_gateway" "added: policy ci-added"; do
+    "changed: auth rustfs_bundles_gateway" "added: policy ci-added" "changed: user rustfs_bundles_compiler" \
+    "changed: user rustfs_escrow_backup" "changed: user rustfs_artifacts_api"; do
     said changed "$label" && ok "unchanged fails naming '$label'" || fail "unchanged did not name '$label': $(shown changed 20)"
   done
 fi

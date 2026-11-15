@@ -258,7 +258,7 @@ out="$(lib eval '
   upgrade_hosts 8 upgrade-again
   echo "phase=$phase"' 2>&1)"
 b="$work/w/buckets-upgrade-again"
-order="*8.1 upgrade-again: control plane*buckets $work/w/prev/cp snapshot $b/before*"
+order="*8.1 upgrade-again: control plane*buckets $work/w/prev/cp plant*buckets $work/w/prev/cp snapshot $b/before*"
 order+="cp $work/w/cand/cp upgrade $work/w/prev/cp --yes token=s.root*"
 order+="8.2 upgrade-again: audit host*audit $work/w/cand/audit upgrade $work/w/prev/audit --yes*"
 order+="8.3 upgrade-again: the upgrade's bucket bootstrap and orphans*"

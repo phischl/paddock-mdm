@@ -7,12 +7,12 @@
 #    1  the previous release installed as smoke.sh does, with its agent artifacts (re-signed with throwaway keys);
 #    2  seeded (seed.sh) with a device of the previous release's devicesim package (upgradesim built from the previous
 #       tag's checkout);
-#    3  ./paddock upgrade-check on both hosts: no FAIL, no WARN but the known ones; the previous release's object store
-#       given the obsolete paddock-escrow-read beside the api's grant and two escrowed header versions
-#       (assert-buckets.sh);
-#    4  ./paddock upgrade --yes on the control plane, then on the audit host; its bucket bootstrap (--add-missing) added
-#       the users of organization deletion and changed nothing else but removing paddock-escrow-read, and a second run
-#       of it changes nothing (snapshots of assert-buckets.sh, checksums only);
+#    3  ./paddock upgrade-check on both hosts: no FAIL, no WARN but the known ones;
+#    4  the previous release's object store given the obsolete paddock-escrow-read beside the api's grant and two
+#       escrowed header versions (assert-buckets.sh plant), then ./paddock upgrade --yes on the control plane, then on
+#       the audit host; its bucket bootstrap (--add-missing) added the users of organization deletion and changed
+#       nothing else but removing paddock-escrow-read, and a second run of it changes nothing (snapshots of
+#       assert-buckets.sh, checksums only);
 #    5  probes: the hosts, the hardening, every seeded object with its ID, the audit count, the chain verification, the
 #       API token, the escrowed password revealed with a step-up, the old device's check-in and events, a new device;
 #    6  ./paddock rollback --yes on the control plane (the backup key on stdin), then on the audit host (the
@@ -20,7 +20,8 @@
 #    7  probes on the previous release: the pre-upgrade set;
 #    8  ./paddock upgrade --yes again from the same directories: after a rollback it starts again at the check, copies
 #       .env and .secrets/ again, carries the raised high-water file into the bundle-seq/ its release handed to uid 999
-#       (PDK-980) and takes its own pre-upgrade backup (rollback.sh); its bucket bootstrap is asserted as in step 4;
+#       (PDK-980) and takes its own pre-upgrade backup (rollback.sh); the object store is planted again (the rollback
+#       restores no RustFS user or policy) and the bucket bootstrap is asserted as in step 4;
 #    9  the probes of step 5 on the release upgraded again;
 #   10  restore drill, backup: a confirmed backup key, the local target, ./paddock backup now --label ci --wait;
 #   11  restore drill, loss and restore: ./paddock down --volumes, ./paddock secrets, ./paddock restore --from --at;
@@ -329,6 +330,7 @@ upgrade_hosts() {
   use_cand
   stop_unsealer
   start_unsealer
+  buckets "$W/prev/cp" plant
   buckets "$W/prev/cp" snapshot "$W/buckets-$2/before"
   # BAO_TOKEN lets the upgrade run ./paddock bootstrap openbao for the new release's policies and AppRoles.
   BAO_TOKEN="$(sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p' "$W/init.json")" cp_paddock upgrade "$W/prev/cp" --yes </dev/null
@@ -425,8 +427,6 @@ for host in cp audit; do
   printf '%s: %s\n' "$host" "$json"
   check_upgrade "$json"
 done
-step "3.1 the previous release's object store: paddock-escrow-read and escrowed header versions"
-buckets "$W/prev/cp" plant
 
 # --- 4 upgrade -------------------------------------------------------------------------------------------------------
 upgrade_hosts 4 upgrade

@@ -77,16 +77,15 @@ export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 export_rc_host t "$endpoint" AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 
 # roles: the bucket users whose keys the control plane holds (rustfs_<bucket>_<role>), as the bucket bootstrap creates
-# them; the audit host's RustFS is not this one.
-roles() {
-  local f r
-  for f in "$SECRETS_DIR"/rustfs_{bundles,artifacts,escrow}_*_access_key; do
-    [[ -f "$f" ]] || continue
-    r="$(basename "$f" _access_key)"
-    [[ "$r" =~ ^rustfs_[a-z]+_[a-z]+$ ]] || die "unexpected key file name $(basename "$f")"
-    printf '%s\n' "$r"
-  done
-}
+# them; the audit host's RustFS is not this one. Collected once in the main shell, so that an unexpected key file name
+# ends the run instead of only a subshell, which would leave the role out of the snapshot.
+roles=()
+for f in "$SECRETS_DIR"/rustfs_{bundles,artifacts,escrow}_*_access_key; do
+  [[ -f "$f" ]] || continue
+  r="$(basename "$f" _access_key)"
+  [[ "$r" =~ ^rustfs_[a-z]+_[a-z]+$ ]] || die "unexpected key file name $(basename "$f")"
+  roles+=("$r")
+done
 
 # with_keys <kinds> <command…>: runs the command with K_<n> (and S_<n> for kinds=both) exported for the n-th role of
 # roles, read from the key files; nothing reaches a command line.
@@ -94,21 +93,21 @@ with_keys() {
   local kinds="$1" n=0 r
   shift
   (
-    while read -r r; do
+    for r in "${roles[@]}"; do
       export "K_$n=$(cat "$SECRETS_DIR/${r}_access_key")"
       [[ "$kinds" != both ]] || export "S_$n=$(cat "$SECRETS_DIR/${r}_secret_key")"
       n=$((n + 1))
-    done < <(roles)
+    done
     "$@"
   )
 }
 key_env() {
   local n=0 r
-  while read -r r; do
+  for r in "${roles[@]}"; do
     printf -- '-e\nK_%s\n' "$n"
     [[ "${1:-}" != both ]] || printf -- '-e\nS_%s\n' "$n"
     n=$((n + 1))
-  done < <(roles)
+  done
 }
 
 rcx() {
@@ -158,6 +157,21 @@ sections() {
   [[ -f "$2/labels" ]] || : >"$2/labels"
 }
 sum() { sha256sum | cut -c1-64; }
+# canonical: rc's pretty JSON with every run of string array elements sorted and without commas. RustFS keeps a
+# policy's actions, resources and condition values as sets and lists them in a different order from one call to the
+# next, so the raw text of an unchanged policy does not compare equal.
+canonical() {
+  awk '
+    function flush(   i, j, t) {
+      for (i = 2; i <= n; i++) for (j = i; j > 1 && run[j - 1] > run[j]; j--) { t = run[j]; run[j] = run[j - 1]; run[j - 1] = t }
+      for (i = 1; i <= n; i++) print run[i]
+      n = 0
+    }
+    /^[[:space:]]*"([^"\\]|\\.)*",?$/ { s = $0; sub(/,$/, "", s); gsub(/^[[:space:]]+/, "", s); run[++n] = s; next }
+    { flush(); print }
+    END { flush() }
+  '
+}
 # normalized_user: a user's info without the obsolete policies; commas and blanks go too, so that removing the last
 # policy of a list leaves no trace.
 normalized_user() {
@@ -171,7 +185,9 @@ snapshot() {
   local out="$1" p r n label policies=() i=0
   (umask 077 && mkdir -p "$out")
   raw="$(mktemp -d "$out/raw.XXXXXX")"
+  # A reused directory must not keep the attachments of an earlier snapshot.
   : >"$out/sums.tmp"
+  : >"$out/attached"
 
   rcx 'rc admin policy list t --json' >"$raw/policy-list" || die "rc admin policy list failed"
   mapfile -t policies < <(sed -n 's/^[[:space:]]*"\([A-Za-z0-9_-]*\)",\{0,1\}$/\1/p' "$raw/policy-list" | sort)
@@ -182,10 +198,10 @@ snapshot() {
     is_obsolete "$p" && continue
     script+="echo '@@ policy $p'; rc admin policy info t $p --json || echo '@@ failed policy $p';"
   done
-  while read -r r; do
+  for r in "${roles[@]}"; do
     script+="echo '@@ user $r'; rc admin user info --json -- t \"\$K_$i\" 2>/dev/null || echo absent;"
     i=$((i + 1))
-  done < <(roles)
+  done
   with_keys access rcx "$script" >"$raw/rc" || die "rc admin policy/user info failed"
 
   script="echo '@@ escrow versions'; aws --endpoint-url $endpoint s3api list-object-versions --bucket $escrow_bucket --query '[Versions[].[Key,VersionId,ETag],DeleteMarkers[].[Key,VersionId]]' --output json || echo '@@ failed escrow versions';"
@@ -195,11 +211,11 @@ snapshot() {
   done
   # A user signs in when RustFS answers anything but a signature or key error; its permissions do not matter here.
   i=0
-  while read -r r; do
+  for r in "${roles[@]}"; do
     script+="echo '@@ auth $r'; e=\$(AWS_ACCESS_KEY_ID=\"\$K_$i\" AWS_SECRET_ACCESS_KEY=\"\$S_$i\" aws --endpoint-url $endpoint s3api list-objects-v2 --bucket $escrow_bucket --max-keys 1 2>&1 >/dev/null);"
     script+="case \"\$e\" in '' | *AccessDenied*) echo ok ;; *SignatureDoesNotMatch*) echo SignatureDoesNotMatch ;; *InvalidAccessKeyId*) echo InvalidAccessKeyId ;; *) echo error ;; esac;"
     i=$((i + 1))
-  done < <(roles)
+  done
   with_keys both awsx "$script" >"$raw/aws" || die "the bucket listing failed"
 
   for src in rc aws; do
@@ -213,8 +229,9 @@ snapshot() {
           # Attached policies are names, never keys: kept for the checks of upgraded.
           awk '/"policies"/ { on = 1; next } on && /\]/ { on = 0 } on { gsub(/[ ",]/, ""); if ($0 != "") print }' \
             "$raw/$src.d/$n" | sed "s/^/${label#user } /" >>"$out/attached"
-          printf '%s\t%s\n' "$label" "$(normalized_user <"$raw/$src.d/$n" | sum)" >>"$out/sums.tmp"
+          printf '%s\t%s\n' "$label" "$(canonical <"$raw/$src.d/$n" | normalized_user | sum)" >>"$out/sums.tmp"
           ;;
+        policy\ *) printf '%s\t%s\n' "$label" "$(canonical <"$raw/$src.d/$n" | sum)" >>"$out/sums.tmp" ;;
         *) printf '%s\t%s\n' "$label" "$(sum <"$raw/$src.d/$n")" >>"$out/sums.tmp" ;;
       esac
     done <"$raw/$src.d/labels"
@@ -227,7 +244,6 @@ snapshot() {
   done
   sort "$out/sums.tmp" >"$out/sums"
   rm -f "$out/sums.tmp"
-  touch "$out/attached"
 
   # An incomplete snapshot would compare equal to the next one and prove nothing.
   local users absent bad
@@ -270,6 +286,8 @@ upgraded() {
   local before="$1" out="$2" role bucket o
   compare "$before" "$out" yes
   for o in "${obsolete[@]}"; do
+    # Without the obsolete policy before the upgrade, its absence afterwards proves nothing (plant runs first).
+    if ! grep -qxF -- "$o" "$before/policies"; then finding "the obsolete policy $o was not there before the upgrade"; fi
     if grep -qxF -- "$o" "$out/policies"; then finding "the obsolete policy $o is still there"; else echo "$o removed"; fi
     if attached rustfs_escrow_api "$o" "$out"; then finding "the api user still holds $o"; fi
   done
