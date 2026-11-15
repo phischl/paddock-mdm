@@ -54,6 +54,7 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockAuditExportStuck` | the oldest pending evidence export has waited more than an hour, for 10 minutes: no audit writer builds exports | warning |
 | `PaddockAuditWriterTransactionSlow` | the audit writer's transaction p95 is above 5 s for 5 minutes (see [Attributing a slow audit writer](#attributing-a-slow-audit-writer)) | warning |
 | `PaddockOrganizationDeletionStuck` | an organization deletion retries a failing step at the longest backoff (30 minutes); the job keeps retrying, and the organization shows the step and error code (`paddock_offboarding_step_failing`) | warning |
+| `PaddockWorkerOffboardingConsumerDisconnected` | a worker replica has not consumed `worker.offboarding` for 15 minutes (`paddock_worker_offboarding_consumer_connected` is 0). The worker's readiness does not wait for this consumer, so its other work goes on; organization deletions wait in step `audit_final` until it reconnects (backoff up to 30 s). Usual cause: the broker refuses it because the upgrade's step `broker` did not run — `./paddock check --online` names missing permissions, `./paddock bootstrap broker` applies them | warning |
 | `PaddockCompileLatencyHigh` | bundle compilation p95 above 30 s for 10 minutes | warning |
 | `PaddockGateway5xx` | more than 5 % of the device API's responses are 5xx for 10 minutes | warning |
 | `PaddockOpenBaoSealed` | OpenBao is sealed (`docs/operations/openbao.md` section 2) | critical |

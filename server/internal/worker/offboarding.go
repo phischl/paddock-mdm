@@ -47,6 +47,10 @@ var (
 		Name: "paddock_offboarding_finalize_busy_total",
 		Help: "Rounds in which an organization's tombstone waited for organization transactions older than the deletion.",
 	})
+	metricAuditRetirementsConnected = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "paddock_worker_offboarding_consumer_connected",
+		Help: "1 while the worker consumes worker.offboarding (the audit writer's acknowledgements of retired organizations), else 0.",
+	})
 )
 
 // offboarder is the organization deletion (app.Offboarding).
@@ -218,6 +222,17 @@ type AuditRetirements struct {
 // NewAuditRetirements creates the consumer.
 func NewAuditRetirements(job auditFinalRecorder) *AuditRetirements {
 	return &AuditRetirements{job: job, pause: RetryPause}
+}
+
+// AuditRetirementsConnected is the mq.Consumer OnConnection hook of queue worker.offboarding. The worker's readiness
+// does not wait for this consumer (main §45), so the gauge and PaddockWorkerOffboardingConsumerDisconnected are what
+// reports a consumer the broker keeps refusing.
+func AuditRetirementsConnected(connected bool) {
+	if connected {
+		metricAuditRetirementsConnected.Set(1)
+	} else {
+		metricAuditRetirementsConnected.Set(0)
+	}
 }
 
 // Handle is the mq.ConsumeFunc of queue worker.offboarding.

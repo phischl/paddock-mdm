@@ -208,8 +208,16 @@ func finalIDs(org uuid.UUID) (runID, eventID uuid.UUID) {
 // offline (paddockctl audit verify-export) with its retired day.
 func (r *Retirement) finalVerification(ctx context.Context, org uuid.UUID) (string, error) {
 	runID, eventID := finalIDs(org)
-	if _, err := r.sealer.sealBeforeFinal(ctx, org); err != nil {
-		return "", fmt.Errorf("auditwriter: seal %s before its final verification: %w", org, err)
+	written, err := r.eventWritten(ctx, eventID)
+	if err != nil {
+		return "", fmt.Errorf("auditwriter: look up the final verification event of %s: %w", org, err)
+	}
+	// A retry after the final event was written (its run or outcome not recorded yet) must not pre-seal: the event's
+	// day may be sealable by now, and only the regular sealer seals it, with the retired mark (review 2 m3).
+	if !written {
+		if _, err := r.sealer.sealBeforeFinal(ctx, org); err != nil {
+			return "", fmt.Errorf("auditwriter: seal %s before its final verification: %w", org, err)
+		}
 	}
 	started := r.now()
 	first, newest, objects, sealed, err := r.chainDays(ctx, org)
@@ -269,6 +277,22 @@ func (r *Retirement) finalVerification(ctx context.Context, org uuid.UUID) (stri
 		"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly), "objects", report.Objects, "outcome", outcome,
 		"problems", len(report.Problems))
 	return outcome, nil
+}
+
+// eventWritten reports whether the index holds the event.
+func (r *Retirement) eventWritten(ctx context.Context, eventID uuid.UUID) (bool, error) {
+	written := false
+	err := r.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		_, err := q.GetAuditEventTime(ctx, eventID)
+		switch {
+		case err == nil:
+			written = true
+		case !db.IsNoRows(err):
+			return err
+		}
+		return nil
+	})
+	return written, err
 }
 
 // chainDays is org's first day and newest manifest day; sealed is false without a manifest, objects false without an

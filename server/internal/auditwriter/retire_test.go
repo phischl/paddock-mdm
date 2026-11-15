@@ -434,3 +434,67 @@ func TestRetirementVerificationFailureRetries(t *testing.T) {
 		t.Fatalf("after the retry: %d final verifications, %d pending, %d acknowledgements", n, s.pending(t, org), acks.of(org))
 	}
 }
+
+// TestRetirementRetryAfterTheFinalEventKeepsTheRetiredMark (review 2 m3): a retry after the final event was written but
+// its outcome not recorded, once the event's day may be sealed, must not seal that day ahead of the regular sealer: the
+// final day is sealed with the retired mark.
+func TestRetirementRetryAfterTheFinalEventKeepsTheRetiredMark(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	org := uuid.Must(uuid.NewV7())
+	day := time.Now().UTC().AddDate(0, 0, -3).Truncate(24 * time.Hour)
+	s.historicObject(t, org, day.Add(9*time.Hour), event(org, day.Add(9*time.Hour), audit.CodeDeviceGroupCreated))
+	retirement := s.retirement(&fakeAcks{})
+	if err := retirement.Close(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := retirement.Complete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var finalDay time.Time
+	if err := s.super.QueryRow(ctx, `SELECT o.day FROM audit_object o JOIN audit_event e ON e.object_key = o.object_key
+		WHERE e.organization_id = $1 AND e.code = 'audit.chain_verified' AND e.params->>'final' = 'true'`, org).Scan(&finalDay); err != nil {
+		t.Fatalf("the final event's day: %v", err)
+	}
+	finalDay = finalDay.UTC().Truncate(24 * time.Hour)
+	// The state of a failed or interrupted record: the final event is in the log, its outcome is not.
+	if _, err := s.super.Exec(ctx, `UPDATE audit_org_retired SET final_verified_at = NULL, final_outcome = NULL,
+		ack_published_at = NULL WHERE organization_id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	later := finalDay.AddDate(0, 0, 2).Add(12 * time.Hour)
+	auditwriter.SetSealerClock(s.sealer, func() time.Time { return later })
+	if !auditwriter.LastSealableDay(later).After(finalDay) {
+		t.Fatal("the final event's day is not sealable at the retry's clock; the test proves nothing")
+	}
+	if err := retirement.Complete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s.pending(t, org) != 0 {
+		t.Fatal("the retry did not record the final verification")
+	}
+	if n := s.count(t, `SELECT count(*) FROM audit_event WHERE organization_id = $1 AND code LIKE 'audit.chain_%'
+		AND params->>'final' = 'true'`, org); n != 1 {
+		t.Fatalf("%d final verification events after the retry, want 1", n)
+	}
+	if _, err := s.sealer.SealOrganizationThrough(ctx, org, finalDay.AddDate(0, 0, 3)); err != nil {
+		t.Fatal(err)
+	}
+	var key string
+	if err := s.super.QueryRow(ctx, "SELECT object_key FROM audit_manifest WHERE organization_id = $1 AND day = $2", org,
+		finalDay).Scan(&key); err != nil {
+		t.Fatalf("the final day is not sealed: %v", err)
+	}
+	raw, err := s.store.Get(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file auditwriter.ManifestFile
+	var manifest auditwriter.Manifest
+	if err := json.Unmarshal(raw, &file); err != nil || json.Unmarshal(file.Manifest, &manifest) != nil || !manifest.Retired {
+		t.Fatalf("the final day's manifest lost the retired mark after the retry: %s", raw)
+	}
+	if n := s.count(t, "SELECT count(*) FROM audit_manifest WHERE organization_id = $1 AND day > $2", org, finalDay); n != 0 {
+		t.Fatalf("%d manifests after the final day", n)
+	}
+}

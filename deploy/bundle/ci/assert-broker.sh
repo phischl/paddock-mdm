@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Asserts that a control plane's RabbitMQ has exactly the permissions of this tree's definitions on vhost paddock after
 # an upgrade (PDK-1017, decisions main §44): above all the audit writer may publish to paddock.offboarding and the
-# worker may read worker.offboarding, which the upgrade's step broker applied without a restart. Every user of the
+# worker may read worker.offboarding, which the upgrade's step broker imported before up, without a restart. Every user of the
 # definitions must have its patterns and no other user may have permissions on the vhost.
 #   assert-broker.sh <project>
 # Only user names and permission patterns are read and printed; the definitions' passwords are never read.

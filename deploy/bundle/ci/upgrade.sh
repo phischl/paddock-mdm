@@ -8,8 +8,9 @@
 #    2  seeded (seed.sh) with a device of the previous release's devicesim package (upgradesim built from the previous
 #       tag's checkout);
 #    3  ./paddock upgrade-check on both hosts: no FAIL, no WARN but the known ones;
-#    4  ./paddock upgrade --yes on the control plane, then on the audit host; its step broker gave the audit writer and
-#       the worker exactly the permissions of this tree's definitions, without a broker restart (assert-broker.sh);
+#    4  ./paddock upgrade --yes on the control plane, then on the audit host; its step broker (before up) gave the audit
+#       writer and the worker exactly the permissions of this tree's definitions, without a broker restart, so that the
+#       new worker became healthy in up (assert-broker.sh);
 #    5  probes: the hosts, the hardening, every seeded object with its ID, the audit count, the chain verification, the
 #       API token, the escrowed password revealed with a step-up, the old device's check-in and events, a new device;
 #    6  ./paddock rollback --yes on the control plane (the backup key on stdin), then on the audit host (the

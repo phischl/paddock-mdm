@@ -849,7 +849,7 @@ FAKE_BROKER_FAIL=1 FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --onlin
   pass "check --online reports the broker as not checked when the listing fails" || fail "failed listing: $out"
 : >"$FAKE_DOCKER_LOG"
 PADDOCK_CHECK_SKIP_BROKER=1 FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
-[[ "$out" == *"not checked: the old release still runs; the step broker"* ]] && ! grep -q list_permissions "$FAKE_DOCKER_LOG" &&
+[[ "$out" == *"not checked: the old release still runs; the upgrade checks them in its step broker-check"* ]] && ! grep -q list_permissions "$FAKE_DOCKER_LOG" &&
   pass "check --online before an upgrade's up leaves the old broker alone" || fail "skip broker: $out"
 : >"$FAKE_DOCKER_LOG"
 FAKE_CONTAINERS="c1" FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check

@@ -84,6 +84,42 @@ func workerJobs(mode string, consumers []func(context.Context) error, rounds fun
 	return append(consumers, rounds()...)
 }
 
+// workerConsumers are the worker's queue consumers.
+type workerConsumers struct {
+	enroll, heartbeat, event, issued, result, escrow *mq.Consumer
+	// offboarding is left out of the readiness (main §45): a broker that refuses it (an upgrade whose permissions are
+	// not applied yet) must not mark the rounds, the retention and the ingest unhealthy. It reconnects with backoff
+	// and reports its state in paddock_worker_offboarding_consumer_connected.
+	offboarding *mq.Consumer
+}
+
+func newWorkerConsumers(cfg mq.Config) workerConsumers {
+	return workerConsumers{
+		enroll:      mq.NewConsumer(cfg, mq.IngestQueue(mq.IngestEnroll), worker.Prefetch),
+		heartbeat:   mq.NewConsumer(cfg, mq.IngestQueue(mq.IngestHeartbeat), worker.Prefetch),
+		event:       mq.NewConsumer(cfg, mq.IngestQueue(mq.IngestEvent), worker.Prefetch),
+		issued:      mq.NewConsumer(cfg, mq.QueueCommandIssued, worker.Prefetch),
+		result:      mq.NewConsumer(cfg, mq.IngestQueue(mq.IngestCommandResult), worker.Prefetch),
+		escrow:      mq.NewConsumer(cfg, mq.IngestQueue(mq.IngestEscrow), worker.Prefetch),
+		offboarding: mq.NewConsumer(cfg, mq.QueueWorkerOffboarding, worker.Prefetch).OnConnection(worker.AuditRetirementsConnected),
+	}
+}
+
+// ready are the consumers the worker's readiness waits for.
+func (w workerConsumers) ready() []*mq.Consumer {
+	return []*mq.Consumer{w.enroll, w.heartbeat, w.event, w.issued, w.result, w.escrow}
+}
+
+// consumersReady fails while one of the consumers has no session.
+func consumersReady(queues []*mq.Consumer) error {
+	for _, q := range queues {
+		if !q.Connected() {
+			return errors.New("rabbitmq consumers not connected")
+		}
+	}
+	return nil
+}
+
 // workerSettings are the settings of the rounds, read in full mode only.
 type workerSettings struct {
 	authentikURL, authentikToken         string
@@ -214,14 +250,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	}
 	runner := app.NewActionRunner(pool, platformPool, httpx.RequestID)
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
-	enrollQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestEnroll), worker.Prefetch)
-	heartbeatQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestHeartbeat), worker.Prefetch)
-	eventQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestEvent), worker.Prefetch)
-	issuedQueue := mq.NewConsumer(mqCfg, mq.QueueCommandIssued, worker.Prefetch)
-	resultQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestCommandResult), worker.Prefetch)
-	escrowQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestEscrow), worker.Prefetch)
-	auditRetiredQueue := mq.NewConsumer(mqCfg, mq.QueueWorkerOffboarding, worker.Prefetch)
-	queues := []*mq.Consumer{enrollQueue, heartbeatQueue, eventQueue, issuedQueue, resultQueue, escrowQueue, auditRetiredQueue}
+	wc := newWorkerConsumers(mqCfg)
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
 	deviceCommands := app.NewDeviceCommands(runner, pool)
 	offboarded := app.NewOffboardedDevices(runner, platformPool, cache)
@@ -234,22 +263,17 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	consumers := []func(context.Context) error{
 		func(ctx context.Context) error {
 			return ops.ServeReporting(ctx, common.OpsAddr, "mode="+mode, func(ctx context.Context) error {
-				var notConnected error
-				for _, q := range queues {
-					if !q.Connected() {
-						notConnected = errors.New("rabbitmq consumers not connected")
-					}
-				}
-				return errors.Join(pool.Ping(ctx), platformPool.Ping(ctx), valkey.Ping(ctx, vk), signer.Ping(ctx), notConnected)
+				return errors.Join(pool.Ping(ctx), platformPool.Ping(ctx), valkey.Ping(ctx, vk), signer.Ping(ctx),
+					consumersReady(wc.ready()))
 			})
 		},
-		func(ctx context.Context) error { return enrollQueue.Run(ctx, enroll.Handle) },
-		func(ctx context.Context) error { return heartbeatQueue.Run(ctx, reports.HandleHeartbeats) },
-		func(ctx context.Context) error { return eventQueue.Run(ctx, reports.HandleEvents) },
-		func(ctx context.Context) error { return issuedQueue.Run(ctx, commands.HandleIssued) },
-		func(ctx context.Context) error { return resultQueue.Run(ctx, commands.HandleResults) },
-		func(ctx context.Context) error { return escrowQueue.Run(ctx, escrowStore.Handle) },
-		func(ctx context.Context) error { return auditRetiredQueue.Run(ctx, auditRetirements.Handle) },
+		func(ctx context.Context) error { return wc.enroll.Run(ctx, enroll.Handle) },
+		func(ctx context.Context) error { return wc.heartbeat.Run(ctx, reports.HandleHeartbeats) },
+		func(ctx context.Context) error { return wc.event.Run(ctx, reports.HandleEvents) },
+		func(ctx context.Context) error { return wc.issued.Run(ctx, commands.HandleIssued) },
+		func(ctx context.Context) error { return wc.result.Run(ctx, commands.HandleResults) },
+		func(ctx context.Context) error { return wc.escrow.Run(ctx, escrowStore.Handle) },
+		func(ctx context.Context) error { return wc.offboarding.Run(ctx, auditRetirements.Handle) },
 	}
 	rounds := func() []func(context.Context) error {
 		cacheSync := worker.NewCacheSync(pool, cache).WithOffboardedDevices(offboarded)

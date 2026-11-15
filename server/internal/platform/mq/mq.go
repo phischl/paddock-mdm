@@ -445,13 +445,20 @@ type Consumer struct {
 	queue    string
 	prefetch int
 
-	mu        sync.Mutex
-	connected bool
+	mu           sync.Mutex
+	connected    bool
+	onConnection func(connected bool)
 }
 
 // NewConsumer creates a consumer.
 func NewConsumer(cfg Config, queue string, prefetch int) *Consumer {
 	return &Consumer{cfg: cfg, queue: queue, prefetch: prefetch}
+}
+
+// OnConnection makes the consumer report every change of Connected to f, for example to a metric. Set it before Run.
+func (c *Consumer) OnConnection(f func(connected bool)) *Consumer {
+	c.onConnection = f
+	return c
 }
 
 // Connected reports whether a consumer session is active.
@@ -465,6 +472,9 @@ func (c *Consumer) setConnected(v bool) {
 	c.mu.Lock()
 	c.connected = v
 	c.mu.Unlock()
+	if c.onConnection != nil {
+		c.onConnection(v)
+	}
 }
 
 // Run consumes until ctx ends, reconnecting after failures (1 s → 30 s).
