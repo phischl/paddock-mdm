@@ -86,6 +86,17 @@ func workerJobs(mode string, consumers []func(context.Context) error, rounds fun
 	return append(consumers, rounds()...)
 }
 
+// auditRetirementJobs returns the consumer of worker.offboarding in full mode and nothing in ingest mode. build is
+// called only in full mode: the offboarding dependencies exist only there, and an ingest worker holds no consumer of
+// worker.offboarding (plan M17 amendment o).
+func auditRetirementJobs(mode string, queue *mq.Consumer, build func() *worker.AuditRetirements) []func(context.Context) error {
+	if mode != workerModeFull {
+		return nil
+	}
+	retirements := build()
+	return []func(context.Context) error{func(ctx context.Context) error { return queue.Run(ctx, retirements.Handle) }}
+}
+
 // workerConsumers are the worker's queue consumers.
 type workerConsumers struct {
 	enroll, heartbeat, event, issued, result, escrow *mq.Consumer
@@ -256,9 +267,13 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	if err := worker.RegisterMetrics(prometheus.DefaultRegisterer); err != nil {
 		return err
 	}
-	offboardingConnected, err := worker.NewAuditRetirementsGauge(prometheus.DefaultRegisterer)
-	if err != nil {
-		return err
+	// Only the full worker consumes worker.offboarding, so only it exports the gauge: a gauge at 0 in an ingest worker
+	// would raise PaddockWorkerOffboardingConsumerDisconnected without a consumer (main §46).
+	offboardingConnected := func(bool) {}
+	if mode == workerModeFull {
+		if offboardingConnected, err = worker.NewAuditRetirementsGauge(prometheus.DefaultRegisterer); err != nil {
+			return err
+		}
 	}
 	wc := newWorkerConsumers(mqCfg, offboardingConnected)
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
@@ -268,8 +283,6 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	commands := worker.NewCommands(deviceCommands, app.NewRevocationReports(runner, pool), pool, platformPool, cache, signer)
 	diagnostics := worker.NewDiagnostics(app.NewDiagnostics(runner, pool, escrowObjects, retentionDay), pool, platformPool)
 	escrowStore := worker.NewEscrow(app.NewEscrow(runner, pool, escrowObjects), cache, pool, platformPool).WithDiagnostics(diagnostics)
-	auditRetirements := worker.NewAuditRetirements(s.offboarding.WithDeps(app.OffboardingDeps{Runner: runner, Worker: pool,
-		Platform: platformPool}))
 	consumers := []func(context.Context) error{
 		func(ctx context.Context) error {
 			return ops.ServeReporting(ctx, common.OpsAddr, "mode="+mode, func(ctx context.Context) error {
@@ -283,8 +296,11 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		func(ctx context.Context) error { return wc.issued.Run(ctx, commands.HandleIssued) },
 		func(ctx context.Context) error { return wc.result.Run(ctx, commands.HandleResults) },
 		func(ctx context.Context) error { return wc.escrow.Run(ctx, escrowStore.Handle) },
-		func(ctx context.Context) error { return wc.offboarding.Run(ctx, auditRetirements.Handle) },
 	}
+	consumers = append(consumers, auditRetirementJobs(mode, wc.offboarding, func() *worker.AuditRetirements {
+		return worker.NewAuditRetirements(s.offboarding.WithDeps(app.OffboardingDeps{Runner: runner, Worker: pool,
+			Platform: platformPool}))
+	})...)
 	rounds := func() []func(context.Context) error {
 		cacheSync := worker.NewCacheSync(pool, cache).WithOffboardedDevices(offboarded)
 		dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)

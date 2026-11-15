@@ -107,6 +107,22 @@ func TestWorkerJobs(t *testing.T) {
 	}
 }
 
+// TestAuditRetirementJobsOnlyInFullMode: an ingest worker neither builds the audit-retirement consumer (its offboarding
+// dependencies are nil there, which crashed the startup) nor consumes worker.offboarding; a full worker runs it.
+func TestAuditRetirementJobsOnlyInFullMode(t *testing.T) {
+	built := 0
+	build := func() *worker.AuditRetirements {
+		built++
+		return nil
+	}
+	if got := auditRetirementJobs(workerModeIngest, nil, build); len(got) != 0 || built != 0 {
+		t.Fatalf("ingest: %d jobs, built %d times; want none", len(got), built)
+	}
+	if got := auditRetirementJobs(workerModeFull, nil, build); len(got) != 1 || built != 1 {
+		t.Fatalf("full: %d jobs, built %d times; want 1 job built once", len(got), built)
+	}
+}
+
 // TestWorkerPoolsOnTheServer reads the pools of each mode from pg_stat_activity: a full worker takes a leader lock on a
 // connection of its lock pool; an ingest worker has no lock pool and no platform readiness connection, so even a lock
 // it were asked for would sit on one of its two platform query connections (plan M19 D1.1).
