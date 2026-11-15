@@ -220,14 +220,37 @@ offboard_files=(rustfs_bundles_offboard_access_key rustfs_bundles_offboard_secre
 setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
 mkdir -p "$work/t/new/.secrets"
 for f in "${offboard_files[@]}" rustfs_root_user; do printf 'new-%s' "$f" >"$work/t/new/.secrets/$f"; done
+# The mode gen-prod-secrets.sh gives secret files, so that the services' uid 65532 reads them (PDK-1084).
+chmod 644 "$work/t/new/.secrets/"*
 run 0 "rollback with the new release's offboarding key files" "$work/t/old" --yes
 carried=1
 for f in "${offboard_files[@]}"; do
   [[ "$(cat "$work/t/old/.secrets/$f" 2>/dev/null)" == "new-$f" ]] || carried=""
 done
 if [[ -n "$carried" ]]; then pass "the four offboarding key files are carried into the old directory"; else fail "the offboarding key files did not reach the old directory"; fi
-if [[ "$(stat -c %a "$work/t/old/.secrets/${offboard_files[1]}")" == 600 ]]; then pass "the carried key files are private"; else fail "the carried key files are not mode 0600"; fi
+modes=""
+for f in "${offboard_files[@]}"; do modes+="$(stat -c %a "$work/t/old/.secrets/$f" 2>/dev/null) "; done
+if [[ "$modes" == "644 644 644 644 " ]]; then pass "the carried key files keep the source mode 0644"
+else fail "the carried key files do not keep the source mode 0644: $modes"; fi
+if ! compgen -G "$work/t/old/.secrets/.*.tmp" >/dev/null; then pass "no temporary copy is left behind"; else fail "a temporary copy is left in the old .secrets/"; fi
 if [[ ! -e "$work/t/old/.secrets/rustfs_root_user" ]]; then pass "no other key file is carried"; else fail "the rollback carried a file that is no offboarding key"; fi
+# Upgrade again (PDK-1084): its migrate-from step copies .secrets/ from the old directory into a fresh one, and the
+# production check needs every offboarding key readable by the services' uid 65532, which is neither the owner nor in
+# the operator's group: the copy the upgrade ends up with must be world-readable inside the 0700 .secrets/.
+mkdir -p "$work/t/again/scripts"
+cp "$work/t/new/paddock" "$work/t/again/paddock"
+cp "$work/t/new/scripts/"* "$work/t/again/scripts/"
+cp "$work/t/new/VERSION" "$work/t/new/versions.env" "$work/t/again/"
+again_rc=0
+again_out="$(cd "$work/t/again" && ./paddock migrate-from "$work/t/old" 2>&1)" || again_rc=$?
+if [[ "$again_rc" == 0 ]]; then pass "upgrade again: migrate-from copies .secrets/ from the old directory"
+else fail "upgrade again: migrate-from exit $again_rc: $again_out"; fi
+unreadable=""
+for f in "${offboard_files[@]}"; do
+  [[ "$(stat -c %A "$work/t/again/.secrets/$f" 2>/dev/null)" == ???????r?? ]] || unreadable+="$f "
+done
+if [[ -z "$unreadable" ]]; then pass "upgrade again: the offboarding keys are readable by the services' uid 65532"
+else fail "upgrade again: not readable by uid 65532 (no read bit for others): $unreadable"; fi
 # A key the old directory holds already is kept, and a new release without the files is no failure.
 setup controlplane "Schema: migrations 00105–00106 (control-plane database); audit unchanged"
 mkdir -p "$work/t/new/.secrets"
