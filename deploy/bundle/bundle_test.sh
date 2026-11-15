@@ -1075,6 +1075,17 @@ case "$*" in
       echo '{"event": "Entry invalid on retry: {\"key\": \"S3cr3tTokenKey\"}", "level": "warning", "logger": "authentik.blueprints.v1.importer", "entry": "S3cr3tClientValue"}'
     fi
     ;;
+  *" exec -T authentik-worker ak shell -c "*BlueprintInstance*)
+    [[ -z "${FAKE_INSTANCE_SHELL_FAIL:-}" ]] || exit 1
+    echo '{"event": "Booting authentik", "level": "info", "logger": "authentik.lib.config", "context": "S3cr3tContext"}'
+    for f in paddock/paddock-portal.yaml paddock/paddock-device.yaml paddock/paddock-stepup.yaml \
+      paddock/paddock-recovery.yaml paddock/paddock-mcp.yaml paddock-dev/paddock-dev.yaml; do
+      status=successful
+      for o in ${FAKE_INSTANCE_STATUS:-}; do [[ "${o%%=*}" != "$f" ]] || status="${o#*=}"; done
+      [[ "$status" == none ]] || echo "paddock-instance $status $f"
+    done
+    echo "paddock-instance error S3cr3tPath.yaml"
+    ;;
   *" exec -T authentik-worker ak shell -c "*)
     [[ -z "${FAKE_SHELL_FAIL:-}" ]] || exit 1
     for o in provider/paddock-portal provider/paddock-portal-stepup provider/paddock-mcp application/paddock-portal \
@@ -1110,6 +1121,30 @@ if [[ -n "$up_line" && -n "$first_apply" && -n "$wait_line" ]] && ((up_line < fi
 else fail "up order: up -d line ${up_line:-none}, first apply ${first_apply:-none}, wait ${wait_line:-none}"; fi
 [[ "$out" == *"PASS  Authentik objects of the blueprints: 12 providers, applications and flows exist"* ]] &&
   pass "up checks the blueprints' objects after the applies" || fail "object check: $out"
+# PDK-1083: ak apply_blueprint leaves an instance that Authentik's discovery failed in error, so the script has
+# Authentik apply the instances after the files, and fails when one is still not successful.
+last_apply="$(grep -n 'entrypoint.sh apply_blueprint' "$FAKE_DOCKER_LOG" | tail -n 1 | cut -d: -f1)"
+instance_line="$(bp_line 'BlueprintInstance')" objects_line="$(bp_line 'OAuth2Provider')"
+if [[ "$out" == *"PASS  Authentik blueprint instances: 5 of 5 successful"* && -n "$instance_line" && -n "$objects_line" ]] &&
+  ((last_apply < instance_line && instance_line < objects_line && instance_line < wait_line)); then
+  pass "up has Authentik apply the blueprint instances after the files and before the object check"
+else fail "instances: last apply ${last_apply:-none}, instances ${instance_line:-none}, objects ${objects_line:-none}, $out"; fi
+FAKE_INSTANCE_STATUS="paddock/paddock-stepup.yaml=error paddock/paddock-mcp.yaml=timeout paddock/paddock-device.yaml=none" \
+  bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"FAIL  Authentik blueprint instances: not successful"* &&
+  "$out" == *"- paddock/paddock-device.yaml: no status reported"* &&
+  "$out" == *"- paddock/paddock-stepup.yaml: status error"* &&
+  "$out" == *"- paddock/paddock-mcp.yaml: its apply did not finish within 180s"* &&
+  "$out" != *"paddock-portal.yaml:"* && "$out" != *S3cr3t* ]] &&
+  ! grep -q 'ps -a --format {{.Service}}|{{.Name}}' "$FAKE_DOCKER_LOG" &&
+  pass "an instance still not successful fails up, named by its path, without the context or any value" ||
+  fail "instance error: exit $rc, $out"
+FAKE_INSTANCE_STATUS="paddock/paddock-recovery.yaml=S3cr3tStatus" bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"- paddock/paddock-recovery.yaml: a status this script does not know"* && "$out" != *S3cr3t* ]] &&
+  pass "a status outside the allow-list is never printed" || fail "unknown status: exit $rc, $out"
+FAKE_INSTANCE_SHELL_FAIL=1 bp_run ./paddock up
+[[ $rc != 0 && "$out" == *"FAIL  Authentik blueprint instances: not applied, ak shell failed"* ]] &&
+  pass "a failed instance apply fails up" || fail "instance shell failed: exit $rc, $out"
 FAKE_APPLY_FAIL=paddock/paddock-stepup.yaml bp_run ./paddock up
 if [[ $rc != 0 && "$(applied)" == "paddock/paddock-portal.yaml paddock/paddock-device.yaml paddock/paddock-stepup.yaml paddock/paddock-stepup.yaml paddock/paddock-stepup.yaml" ]] &&
   [[ "$out" == *"the Authentik blueprint paddock/paddock-stepup.yaml failed 3 times"* && "$out" == *"Blueprint invalid"* ]] &&
@@ -1140,7 +1175,8 @@ FAKE_SHELL_FAIL=1 bp_run ./paddock up
 [[ $rc != 0 && "$out" == *"FAIL  Authentik objects of the blueprints: not checked"* ]] &&
   pass "a failed object listing fails up" || fail "listing failed: exit $rc, $out"
 PADDOCK_ENV=development bp_run scripts/authentik-apply-blueprints.sh
-[[ $rc == 0 && "$(applied)" == "$order paddock-dev/paddock-dev.yaml" ]] &&
+[[ $rc == 0 && "$(applied)" == "$order paddock-dev/paddock-dev.yaml" &&
+  "$out" == *"PASS  Authentik blueprint instances: 6 of 6 successful"* ]] &&
   pass "a development stack applies the development blueprint last" || fail "development: exit $rc, $(applied), $out"
 WAIT_TIMEOUT=0 FAKE_WORKER_HEALTH=starting bp_run scripts/authentik-apply-blueprints.sh
 [[ $rc != 0 && -z "$(applied)" && "$out" == *"Authentik is not healthy: authentik-worker (running, starting)"* ]] &&
