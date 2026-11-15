@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -364,6 +365,29 @@ func awaitTombstone(t *testing.T, root *env.Portal, id uuid.UUID, slug string, r
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// sharedTombstone is the deleted gate organization of the gates that only read a deleted organization's routes
+// (PDK-1077): a deletion costs the worker minutes, so a run deletes one for all of them.
+var sharedTombstone struct {
+	once sync.Once
+	id   uuid.UUID
+}
+
+// deletedGateOrganization returns a gate organization with the status deleted. The first caller creates and deletes
+// it, and its failure there fails every later caller too.
+func deletedGateOrganization(t *testing.T) uuid.UUID {
+	t.Helper()
+	sharedTombstone.once.Do(func() {
+		slug, id := gateOrganization(t)
+		requested := deleteNow(t, id, slug, "shared tombstone of the read-only gates")
+		awaitTombstone(t, login(t, env.PlatformAdmin), id, slug, requested)
+		sharedTombstone.id = id
+	})
+	if sharedTombstone.id == uuid.Nil {
+		t.Fatal("the shared deleted gate organization could not be created; the first gate that asked for it failed")
+	}
+	return sharedTombstone.id
 }
 
 // uninstallCommand returns the uninstall among the check-in's commands, or nil.
