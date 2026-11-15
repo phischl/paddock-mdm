@@ -94,8 +94,8 @@ func TestOffboardedDeviceUninstallsAfterTombstone(t *testing.T) {
 }
 
 // TestGateOrganizationsAreDeleted is gate OF8 (plan M17 §7 step 7, OFB-8, PDK-946): an organization a gate creates is
-// deleted when its case ends. The organization of the subtest has the status deleted once the subtest returned, so it
-// is absent from the default list, which leaves out tombstones, and present in the list filtered by status deleted.
+// deleted when its case ends. The organization of the subtest reaches the status deleted within orgDeletedWithin after
+// the subtest returned, so it is then absent from the default list, which leaves out tombstones, and present in the list filtered by status deleted.
 // Other gates' organizations are deleted by the same cleanup but may still be in progress while this gate runs, so the
 // gate looks at its own only.
 func TestGateOrganizationsAreDeleted(t *testing.T) {
