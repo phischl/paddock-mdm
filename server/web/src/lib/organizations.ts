@@ -2,6 +2,7 @@ import {
   api, listPage, problemCode, type AuditEvent, type AuditEventSort, type AuditExport, type AuditExportCreate, type AuditExportSort,
   type AuditExportStatus, type AuditOutcome, type AuditActorType, type Organization, type OrganizationSort, type OrganizationStatus,
 } from '../api/client'
+import { firstDate } from './audit'
 import { dateInputToRFC3339 } from './format'
 import type { ListFilter, ListParams, Page } from './listQuery'
 
@@ -89,10 +90,6 @@ export function canRequestDeletion(org: Organization): boolean {
 export async function getOrganization(id: string): Promise<Organization | string> {
   const { data, error } = await api.GET('/api/platform/v1/organizations/{id}', { params: { path: { id } } })
   return data ?? problemCode(error)
-}
-
-function firstDate(value: unknown): string {
-  return (value as string[])[0] ?? ''
 }
 
 /** The retained audit log of a deleted organization for DataList (filters as the audit log of an organization). */

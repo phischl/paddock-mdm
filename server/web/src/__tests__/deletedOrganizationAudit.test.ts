@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { h } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
-import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
+import { createMemoryHistory, createRouter, RouterView, type Router } from 'vue-router'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { VApp } from 'vuetify/components'
 import DeletedOrganizationAudit from '../views/DeletedOrganizationAudit.vue'
@@ -21,6 +21,8 @@ const ready: AuditExport = {
   key_version: 1, expires_at: '2027-01-01T00:00:00Z',
 } as unknown as AuditExport
 const eventsFor = vi.fn()
+const exportsFor = vi.fn()
+const resumed = { value: null as null | { failed: false; payload: { from: string; to: string; purpose: string } } | { failed: true } }
 const createExport = vi.fn()
 
 vi.mock('../lib/organizations', async (original) => ({
@@ -30,8 +32,10 @@ vi.mock('../lib/organizations', async (original) => ({
     eventsFor(id, p)
     return Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_capped: false, sort: '-occurred_at' })
   },
-  listDeletedOrganizationAuditExports: () => () =>
-    Promise.resolve({ items: [ready], page: 1, page_size: 25, total: 1, total_capped: false, sort: '-requested_at' }),
+  listDeletedOrganizationAuditExports: () => (p: unknown) => {
+    exportsFor(p)
+    return Promise.resolve({ items: [ready], page: 1, page_size: 25, total: 1, total_capped: false, sort: '-requested_at' })
+  },
   createDeletedOrganizationAuditExport: (...args: unknown[]) => createExport(...args),
 }))
 
@@ -39,6 +43,8 @@ const startStepUp = vi.fn()
 vi.mock('../lib/stepUp', async (original) => ({
   ...(await original<typeof import('../lib/stepUp')>()),
   startStepUp: (...args: unknown[]) => startStepUp(...args),
+  resumeStepUp: (action: string) => (action === 'organization-audit-export' ? resumed.value : null),
+  withoutStepUpParam: () => '/platform/organizations/o1/audit',
 }))
 
 let wrapper: VueWrapper | null = null
@@ -46,6 +52,8 @@ beforeEach(() => {
   org = { id: 'o1', slug: 'acme', name: 'Acme', status: 'deleted', domains: [], created_at: '2026-10-01T00:00:00Z', deletion }
   deletion.audit_final_outcome = 'verified'
   eventsFor.mockReset()
+  exportsFor.mockReset()
+  resumed.value = null
   createExport.mockReset()
   startStepUp.mockReset()
 })
@@ -54,9 +62,11 @@ afterEach(() => {
   wrapper = null
 })
 
+let router: Router
+
 async function mountView(): Promise<VueWrapper> {
   setActivePinia(createPinia())
-  const router = createRouter({
+  router = createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/platform/organizations/:id/audit', component: DeletedOrganizationAudit },
@@ -117,5 +127,46 @@ describe('retained audit of a deleted organization', () => {
     ;(document.querySelector('[data-testid="export-submit"]') as HTMLButtonElement).click()
     await flushPromises()
     expect(startStepUp).not.toHaveBeenCalled()
+  })
+
+  it('keeps the query of the audit log and of the export list apart', async () => {
+    const w = await mountView()
+    await router.push({ query: { 'log.q': 'login', 'log.page': '2' } })
+    await flushPromises()
+    const lastExports = exportsFor.mock.calls.at(-1)?.[0] as { q?: string; page: number }
+    expect(lastExports.q ?? '').toBe('')
+    expect(lastExports.page).toBe(1)
+    const input = w.find('[data-testid="deleted-organization-exports"] [data-testid="list-search"] input')
+    ;(input.element as HTMLInputElement).value = 'audit'
+    await input.trigger('input')
+    await vi.waitFor(() => expect(router.currentRoute.value.query['exports.q']).toBe('audit'))
+    expect(router.currentRoute.value.query['log.q']).toBe('login')
+    expect(router.currentRoute.value.query['log.page']).toBe('2')
+    expect(router.currentRoute.value.query.q).toBeUndefined()
+  })
+
+  it('repeats the export request once after the step-up without a second step-up', async () => {
+    createExport.mockResolvedValue({ ...ready, status: 'pending' })
+    resumed.value = { failed: false, payload: { from: '2026-11-01', to: '2026-11-30', purpose: 'audit' } }
+    const w = await mountView()
+    expect(createExport).toHaveBeenCalledExactlyOnceWith('o1', { from_day: '2026-11-01', to_day: '2026-11-30', purpose: 'audit' })
+    expect(startStepUp).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="export-requested"]').exists()).toBe(true)
+  })
+
+  it('does not loop when the repeated request asks for a step-up again, and shows the problem', async () => {
+    createExport.mockResolvedValue('step_up_required')
+    resumed.value = { failed: false, payload: { from: '2026-11-01', to: '2026-11-30', purpose: 'audit' } }
+    await mountView()
+    expect(createExport).toHaveBeenCalledOnce()
+    expect(startStepUp).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-testid="export-dialog-problem"]')).not.toBeNull()
+  })
+
+  it('shows a problem and sends nothing when the step-up was refused', async () => {
+    resumed.value = { failed: true }
+    const w = await mountView()
+    expect(createExport).not.toHaveBeenCalled()
+    expect(w.get('[data-testid="export-problem"]').text()).toContain('identity')
   })
 })

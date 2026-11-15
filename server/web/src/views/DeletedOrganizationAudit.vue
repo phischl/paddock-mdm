@@ -195,6 +195,7 @@ onBeforeUnmount(() => {
       <AuditEventList
         :fetch="events"
         :show-device="false"
+        query-prefix="log"
         data-testid="deleted-organization-audit"
       />
 
@@ -228,6 +229,7 @@ onBeforeUnmount(() => {
         :columns="columns"
         :fetch="fetchExports"
         :filters="exportFilters"
+        query-prefix="exports"
         searchable
         default-sort="-requested_at"
         item-value="id"

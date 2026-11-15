@@ -19,7 +19,8 @@ export const auditFilters: ListFilter[] = [
   },
 ]
 
-function firstDate(value: unknown): string {
+/** The first value of a date filter (a list of strings in the list state). */
+export function firstDate(value: unknown): string {
   return (value as string[])[0] ?? ''
 }
 
