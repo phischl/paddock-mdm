@@ -289,3 +289,63 @@ func TestOffboardingUnreportedDevicesNeverStall(t *testing.T) {
 		t.Fatalf("command types %v, pending disarm kept %v", types, ok)
 	}
 }
+
+// TestCacheSyncRestoresOffboardedDevicesWithoutOrganizations (review 1 nit 7): the offboarded devices are platform
+// records, so the reconcile restores them also when the organization list fails, and reports that failure.
+func TestCacheSyncRestoresOffboardedDevicesWithoutOrganizations(t *testing.T) {
+	f := newFixture(t)
+	platform := platformPool(t)
+	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
+	dev := f.device(t, "active")
+	_, cmd := f.offboard(t, dev, "k-"+dev.String())
+	broken, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).Worker, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken.Close()
+	sync := NewCacheSync(broken, f.cache).WithOffboardedDevices(app.NewOffboardedDevices(runner, platform, f.cache))
+	if err := sync.ReconcileAll(context.Background()); err == nil {
+		t.Fatal("ReconcileAll hid the failed organization list")
+	}
+	ctx := context.Background()
+	if key, ok, err := f.cache.DeviceKey(ctx, "k-"+dev.String()); err != nil || !ok || key.Status != devicecache.KeyOffboarded {
+		t.Fatalf("restored key %+v %v %v", key, ok, err)
+	}
+	if cmds, err := f.cache.Commands(ctx, dev, time.Now()); err != nil || len(cmds) != 2 || cmds[cmd].Envelope == nil {
+		t.Fatalf("restored commands %v %v", cmds, err)
+	}
+}
+
+// TestRetentionRoundPurgesOffboardedDevices (review 1 nit 8, plan M17 decision 15): the retention round runs the
+// platform-only store offboarded_device, which has no per-organization purge, without failing, and purges a record
+// older than the retention with the keys it kept.
+func TestRetentionRoundPurgesOffboardedDevices(t *testing.T) {
+	f := newFixture(t)
+	platform := platformPool(t)
+	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
+	ctx := context.Background()
+	dev := f.device(t, "active")
+	_, cmd := f.offboard(t, dev, "k-"+dev.String())
+	if _, err := f.super.Exec(ctx, "UPDATE offboarded_device SET offboarded_at = now() - interval '366 days' WHERE device_id = $1", dev); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.cache.PutCommand(ctx, dev, cmd, devicecache.Command{ExpiresAt: time.Now().Add(time.Hour), Envelope: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	day := 24 * time.Hour
+	offboarded := app.NewOffboardedDevices(runner, platform, f.cache)
+	r := NewRetention(app.NewRetention(runner, f.pool, platform, &fakeSource{}, day, 400), app.NewLoginHistory(runner, f.pool, day),
+		f.pool, platform, time.Hour).WithOffboardedDevices(offboarded)
+	if err := r.Round(ctx); err != nil {
+		t.Logf("retention round: %v (other organizations of the shared database)", err)
+	}
+	if n := f.count(t, "SELECT count(*) FROM offboarded_device WHERE device_id = $1", dev); n != 0 {
+		t.Fatal("the expired record survived the round")
+	}
+	if ok, err := f.cache.HasCommand(ctx, dev, cmd); ok || err != nil {
+		t.Fatalf("cmd: of the purged device: %v %v", ok, err)
+	}
+	if testutil.ToFloat64(metricRetentionLastSuccess.WithLabelValues(app.StoreOffboardedDevice)) == 0 {
+		t.Fatal("the offboarded_device pass recorded no success")
+	}
+}

@@ -50,6 +50,7 @@ type OffboardingInventory interface {
 // OffboardingCache hands devices over in Valkey and deletes the organization's device keys (devicecache.Cache).
 type OffboardingCache interface {
 	PutOffboardedDevice(ctx context.Context, d devicecache.OffboardedDevice, lastSeq int64) error
+	DeleteCommand(ctx context.Context, device, id uuid.UUID) error
 	DeleteOrganization(ctx context.Context, org uuid.UUID, devices []devicecache.OffboardDevice) (int64, error)
 }
 
@@ -305,6 +306,7 @@ func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization) (in
 	}
 	var cmds []pgstore.DeviceCommand
 	var keys []pgstore.ListOffboardingDeviceIdentitiesRow
+	var cancelled []pgstore.ListOffboardingCancelledUninstallsRow
 	err = o.deps.Worker.InOrgOffboarding(orgCtx, func(ctx context.Context, q *pgstore.Queries) error {
 		if _, err := q.OffboardReissueUninstalls(ctx); err != nil {
 			return fmt.Errorf("issue the disarms and uninstalls: %w", err)
@@ -318,6 +320,9 @@ func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization) (in
 		}
 		if keys, err = q.ListOffboardingDeviceIdentities(ctx, locked); err != nil {
 			return fmt.Errorf("list identity keys: %w", err)
+		}
+		if cancelled, err = q.ListOffboardingCancelledUninstalls(ctx, locked); err != nil {
+			return fmt.Errorf("list cancelled uninstalls: %w", err)
 		}
 		return nil
 	})
@@ -376,6 +381,13 @@ func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization) (in
 		in.Keys = append(in.Keys, string(rawKeys))
 		in.CommandEnvelopes = append(in.CommandEnvelopes, string(rawCmds))
 		start = end
+	}
+	// A cancelled uninstall, such as the predecessor an administrator's renewed uninstall replaced (amendment m point 2),
+	// would otherwise still be served next to its replacement until it expires.
+	for _, c := range cancelled {
+		if err := o.deps.Cache.DeleteCommand(ctx, c.DeviceID, c.ID); err != nil {
+			return 0, stepError(offboarding.ErrorValkeyUnavailable, err)
+		}
 	}
 	var n int64
 	err = o.deps.Platform.InPlatform(offboardingSystem(ctx), func(ctx context.Context, q *pgstore.Queries) error {

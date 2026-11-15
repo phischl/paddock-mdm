@@ -140,8 +140,9 @@ func (w *offboardWorld) devicesStepEvent(t *testing.T) audit.Event {
 // devices records every device that has not reported its removal and is neither retired nor rejected in
 // offboarded_device, each with the disarm of its dead man's switch (delete_self_lock, valid for the retention) and an
 // uninstall. A device whose offboarding uninstall is pending or delivered keeps that command, as does a delivered
-// administrator reset; an administrator's pending reset with 7 days left is cancelled and replaced by a reset valid for
-// the retention; a device enrolled during the grace period, one the request skipped for an open Lock, one whose command
+// administrator reset; an administrator's pending reset with 7 days left is cancelled, dropped from the cache and
+// replaced by a reset valid for the retention, while one that has already lapsed gets a fresh leave (review 2 finding
+// 1); a device enrolled during the grace period, one the request skipped for an open Lock, one whose command
 // failed (conversion_pending), expired or lapsed while pending, a quarantined and a pending device each get a fresh
 // leave, also with the Lock open. The cache receives each device's active keys and both signed commands; the
 // completion event carries uninstalls_reissued and disarms_issued. The deletion then finishes without any failure
@@ -157,6 +158,7 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	lapsed, _ := w.newDevice(t, w.org, "active")
 	reset, _ := w.newDevice(t, w.org, "active")
 	resetDelivered, _ := w.newDevice(t, w.org, "active")
+	resetLapsed, _ := w.newDevice(t, w.org, "active")
 	quarantined, _ := w.newDevice(t, w.org, "quarantined")
 	pending, _ := w.newDevice(t, w.org, "pending")
 	retired, _ := w.newDevice(t, w.org, "retired")
@@ -170,6 +172,9 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	resetParams := `{"mode":"reset","clear_tpm":true}`
 	oldReset := w.adminUninstall(t, reset, resetParams, "pending")
 	keptReset := w.adminUninstall(t, resetDelivered, resetParams, "delivered")
+	oldResetLapsed := w.adminUninstall(t, resetLapsed, resetParams, "pending")
+	w.exec(t, "UPDATE device_command SET issued_at = now() - interval '8 days', expires_at = now() - interval '1 second' WHERE id = $1",
+		oldResetLapsed)
 	t.Cleanup(func() { w.exec(t, "DELETE FROM offboarded_device WHERE organization_id = $1", w.org) })
 
 	if _, err := w.devOrgs.RequestDeletion(w.root(true), w.org, w.input(0)); err != nil {
@@ -193,7 +198,8 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	}
 	w.advanceTo(t, job, offboarding.StepOutbox)
 
-	handed := []uuid.UUID{w.device, delivered, locked, failed, expired, lapsed, reset, resetDelivered, quarantined, pending, graceEnrolled}
+	handed := []uuid.UUID{w.device, delivered, locked, failed, expired, lapsed, reset, resetDelivered, resetLapsed, quarantined, pending,
+		graceEnrolled}
 	rows := w.offboardedRows(t)
 	if len(rows) != len(handed) {
 		t.Fatalf("%d offboarded devices, want %d: %v", len(rows), len(handed), rows)
@@ -209,7 +215,7 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 			t.Fatalf("device %s: the kept uninstall %s was replaced by %s", id, cmd, rows[id].uninstall)
 		}
 	}
-	unusable := []uuid.UUID{oldFailed, oldExpired, oldLapsed, oldReset}
+	unusable := []uuid.UUID{oldFailed, oldExpired, oldLapsed, oldReset, oldResetLapsed}
 	for _, id := range handed {
 		row, ok := rows[id]
 		if !ok {
@@ -252,8 +258,9 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 				t.Fatalf("the delivered reset: %s %+v", status, p)
 			}
 		case kept[id] != uuid.Nil:
-			if p.Mode != command.UninstallLeave {
-				t.Fatalf("device %s: kept params %s", id, c.Params)
+			if p.Mode != command.UninstallLeave ||
+				w.count(t, "SELECT count(*) FROM device WHERE id = $1 AND uninstall_reason = 'organization_offboarding'", id) != 1 {
+				t.Fatalf("device %s: kept params %s or reason lost", id, c.Params)
 			}
 		default:
 			if p.Mode != command.UninstallLeave || status != "pending" ||
@@ -267,6 +274,9 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 	if err := w.super.QueryRow(ctx, "SELECT status FROM device_command WHERE id = $1", oldReset).Scan(&oldStatus); err != nil || oldStatus != "cancelled" {
 		t.Fatalf("the replaced reset is %q (%v), want cancelled", oldStatus, err)
 	}
+	if !slices.Contains(w.cache.dropped, oldReset) || slices.Contains(w.cache.dropped, keptReset) {
+		t.Fatalf("commands dropped from the cache %v; want the replaced reset %s only among the kept ones", w.cache.dropped, oldReset)
+	}
 	if keys := w.cache.offboarded[delivered].Keys; len(keys) != 1 || keys[0].KeyID != "k-active-"+delivered.String() ||
 		len(rows[delivered].keys) != 1 || rows[delivered].keys[0]["key_id"] != "k-active-"+delivered.String() {
 		t.Fatalf("keys of the delivered device: cached %+v, recorded %v; want the active key only", keys, rows[delivered].keys)
@@ -275,7 +285,7 @@ func TestOffboardingHandsDevicesOver(t *testing.T) {
 		t.Fatalf("keys of the quarantined device: %+v", keys)
 	}
 	ev := w.devicesStepEvent(t)
-	if ev.Params["count"] != float64(len(handed)) || ev.Params["uninstalls_reissued"] != float64(8) ||
+	if ev.Params["count"] != float64(len(handed)) || ev.Params["uninstalls_reissued"] != float64(9) ||
 		ev.Params["disarms_issued"] != float64(len(handed)) {
 		t.Fatalf("devices step event %+v", ev.Params)
 	}

@@ -61,6 +61,13 @@ WHERE d.id = ANY(@device_ids::uuid[])
     AND c.expires_at > now() + interval '31 days'))
 ORDER BY c.device_id, c.id;
 
+-- The cancelled uninstalls of the handed-over devices, among them the predecessors the hand-over replaced: the worker's
+-- removal of cancelled commands from cmd: runs through the gate and no longer reaches a deleting organization.
+-- name: ListOffboardingCancelledUninstalls :many
+SELECT device_id, id FROM device_command
+WHERE device_id = ANY(@device_ids::uuid[]) AND type = 'uninstall' AND status = 'cancelled'
+ORDER BY device_id, id;
+
 -- The active identity keys of the handed-over devices with their check-in counters.
 -- name: ListOffboardingDeviceIdentities :many
 SELECT k.device_id, k.key_id, k.public_key, coalesce(s.last_seq, 0)::bigint AS last_seq

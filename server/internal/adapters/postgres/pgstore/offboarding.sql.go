@@ -203,6 +203,39 @@ func (q *Queries) ListOffboardingAdminAccounts(ctx context.Context) ([]uuid.UUID
 	return items, nil
 }
 
+const listOffboardingCancelledUninstalls = `-- name: ListOffboardingCancelledUninstalls :many
+SELECT device_id, id FROM device_command
+WHERE device_id = ANY($1::uuid[]) AND type = 'uninstall' AND status = 'cancelled'
+ORDER BY device_id, id
+`
+
+type ListOffboardingCancelledUninstallsRow struct {
+	DeviceID uuid.UUID
+	ID       uuid.UUID
+}
+
+// The cancelled uninstalls of the handed-over devices, among them the predecessors the hand-over replaced: the worker's
+// removal of cancelled commands from cmd: runs through the gate and no longer reaches a deleting organization.
+func (q *Queries) ListOffboardingCancelledUninstalls(ctx context.Context, deviceIds []uuid.UUID) ([]ListOffboardingCancelledUninstallsRow, error) {
+	rows, err := q.db.Query(ctx, listOffboardingCancelledUninstalls, deviceIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOffboardingCancelledUninstallsRow{}
+	for rows.Next() {
+		var i ListOffboardingCancelledUninstallsRow
+		if err := rows.Scan(&i.DeviceID, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOffboardingDeviceIdentities = `-- name: ListOffboardingDeviceIdentities :many
 SELECT k.device_id, k.key_id, k.public_key, coalesce(s.last_seq, 0)::bigint AS last_seq
 FROM device_identity_key k LEFT JOIN device_status s ON s.device_id = k.device_id

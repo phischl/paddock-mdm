@@ -72,6 +72,17 @@ type fakeOffboardCache struct {
 	err        error
 	devices    []devicecache.OffboardDevice
 	offboarded map[uuid.UUID]devicecache.OffboardedDevice
+	dropped    []uuid.UUID
+}
+
+func (f *fakeOffboardCache) DeleteCommand(_ context.Context, _, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	f.dropped = append(f.dropped, id)
+	return nil
 }
 
 func (f *fakeOffboardCache) PutOffboardedDevice(_ context.Context, d devicecache.OffboardedDevice, _ int64) error {

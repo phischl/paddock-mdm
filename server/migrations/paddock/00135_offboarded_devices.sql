@@ -21,10 +21,12 @@ ALTER TABLE offboarded_device
 --      margin keeps the deletion request's own leave (valid delete_after + 365 days, so only the step's delay short of
 --      the retention): replacing it would hand a returning device two uninstalls, and the old one may already sit on a
 --      device whose delivery mark was dropped while the organization was deleting (amendment f point 2). An
---      administrator's uninstall (7 days) is always replaced;
+--      administrator's uninstall (7 days) is always replaced while it is still valid; one that has already lapsed is
+--      not renewed with its mode (the administrator's intent lapsed with it) and gets a fresh leave in step 3;
 --   3. gives a fresh uninstall (mode leave, reason organization_offboarding) to every device without an open uninstall
---      it can still act on (delivered or succeeded, or pending): also with an open Lock or Destroy, which cannot be
---      served once the organization is gone.
+--      it can still act on (delivered or succeeded, or pending and unexpired: the expiry sweep runs through the gate and
+--      stops once the organization is deleting, so a lapsed command can still be pending): also with an open Lock or
+--      Destroy, which cannot be served once the organization is gone.
 -- The disarm is inserted first, so its UUIDv7 sorts before a fresh uninstall. The leave's params are built here, never
 -- taken from the caller (least privilege, as 00134). The counts of every call are added to the organization's
 -- offboarding_counts (devices.disarms_issued, devices.uninstalls_reissued) in the same transaction, so a repeated step
@@ -69,7 +71,8 @@ BEGIN
     UPDATE public.device_command c SET status = 'cancelled', finished_at = now()
     FROM public.device d
     WHERE d.organization_id = org AND d.id = ANY(locked) AND c.organization_id = org AND c.id = d.uninstall_command_id
-      AND d.uninstall_requested_at IS NOT NULL AND c.status = 'pending' AND c.expires_at < v_expires - interval '30 days'
+      AND d.uninstall_requested_at IS NOT NULL AND c.status = 'pending' AND c.expires_at > v_issued
+      AND c.expires_at < v_expires - interval '30 days'
     RETURNING c.device_id, c.params
   ), issued AS (
     INSERT INTO public.device_command (id, organization_id, device_id, type, params, status, issued_at, expires_at)
@@ -88,7 +91,7 @@ BEGIN
     FROM public.device d LEFT JOIN public.device_command c ON c.id = d.uninstall_command_id AND c.organization_id = org
     WHERE d.organization_id = org AND d.id = ANY(locked)
       AND NOT (d.uninstall_requested_at IS NOT NULL AND d.uninstalled_at IS NULL AND c.id IS NOT NULL
-        AND c.status IN ('pending', 'delivered', 'succeeded'))
+        AND (c.status IN ('delivered', 'succeeded') OR (c.status = 'pending' AND c.expires_at > v_issued)))
     ORDER BY d.id
     RETURNING id AS cid, device_id AS did
   ), marked AS (

@@ -70,7 +70,8 @@ func (c *Cache) Commands(ctx context.Context, device uuid.UUID, now time.Time) (
 }
 
 // PendingCommand returns the field command_id of cmd:<device_id> whether or not it has expired: a device may report the
-// result of a command it fetched before the expiry.
+// result of a command it fetched before the expiry. It reads the hash with HGETALL, as Commands does: the gateway's
+// Valkey user may run HGETALL and HEXISTS on cmd:, not HGET (deploy/compose/valkey/users.acl.tmpl, ADR 0051).
 func (c *Cache) PendingCommand(ctx context.Context, device, id uuid.UUID) (Command, bool, error) {
 	m, err := c.c.Do(ctx, c.c.B().Hgetall().Key(commandsKey(device)).Build()).AsStrMap()
 	if err != nil {
