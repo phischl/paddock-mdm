@@ -890,6 +890,9 @@ type Organization struct {
 	IdpEnsureRevision         *string
 	DeletionUninstallsIssued  *int32
 	DeletionUninstallsSkipped *int32
+	DeletingCommittedAt       *time.Time
+	OffboardingWaitVxids      []string
+	OffboardingWaitTakenAt    *time.Time
 	RecoveryExports           int32
 	RecoveryExportsSince      *time.Time
 }

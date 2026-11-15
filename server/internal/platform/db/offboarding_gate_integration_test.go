@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,6 +59,16 @@ func newGateEnv(ctx context.Context, t *testing.T) gateEnv {
 }
 
 func noop(context.Context, *pgstore.Queries) error { return nil }
+
+// refresh makes every pool's gate see the statuses committed so far at once instead of at its next poll.
+func (g gateEnv) refresh(ctx context.Context, t *testing.T) {
+	t.Helper()
+	for name, p := range g.pools {
+		if err := p.RefreshOrganizationStatus(ctx); err != nil {
+			t.Fatalf("%s: refresh the status cache: %v", name, err)
+		}
+	}
+}
 
 // wantUnavailable checks that err is the gate's refusal in every form a caller matches it.
 func wantUnavailable(t *testing.T, what string, err error) {
@@ -115,30 +126,68 @@ func deleteAllRetrying(t *testing.T, worker *db.OrgPool, org uuid.UUID, tries in
 	}
 }
 
+// quiesce calls paddock_offboard_quiesce through the offboarding bypass.
+func quiesce(worker *db.OrgPool, org uuid.UUID) (bool, error) {
+	var ready bool
+	err := worker.InOrgOffboarding(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		ready, err = q.OffboardQuiesce(ctx)
+		return err
+	})
+	return ready, err
+}
+
+// pastCutoff moves the organization's deleting_committed_at 7 s back, so the quiescence cutoff has passed, for tests
+// that are not about the cutoff itself.
+func pastCutoff(ctx context.Context, t *testing.T, super *pgx.Conn, org uuid.UUID) {
+	t.Helper()
+	if _, err := super.Exec(ctx, `UPDATE organization SET deleting_committed_at = now() - interval '7 seconds'
+		WHERE id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// quiesced moves the cutoff into the past and calls quiesce until it is true.
+func quiesced(ctx context.Context, t *testing.T, g gateEnv, org uuid.UUID) {
+	t.Helper()
+	pastCutoff(ctx, t, g.super, org)
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		ready, err := quiesce(g.worker, org)
+		if err != nil {
+			t.Fatalf("quiesce: %v", err)
+		}
+		if ready {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("quiesce did not become ready within 15 s")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// waitState is the organization's stored quiescence state.
+type waitState struct {
+	committedAt *time.Time
+	vxids       []string
+	takenAt     *time.Time
+}
+
+func orgWait(ctx context.Context, t *testing.T, super *pgx.Conn, org uuid.UUID) waitState {
+	t.Helper()
+	var w waitState
+	if err := super.QueryRow(ctx, `SELECT deleting_committed_at, offboarding_wait_vxids, offboarding_wait_taken_at
+		FROM organization WHERE id = $1`, org).Scan(&w.committedAt, &w.vxids, &w.takenAt); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
 func finalize(worker *db.OrgPool, org uuid.UUID) error {
 	return worker.InOrgOffboarding(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
 		return q.OffboardFinalize(ctx)
 	})
-}
-
-// waitForAdvisoryLockWait waits until a backend of role waits for an advisory lock.
-func waitForAdvisoryLockWait(ctx context.Context, t *testing.T, super *pgx.Conn, role string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var waiting int
-		if err := super.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
-			WHERE usename = $1 AND wait_event_type = 'Lock' AND wait_event = 'advisory'`, role).Scan(&waiting); err != nil {
-			t.Fatal(err)
-		}
-		if waiting > 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("no %s backend waits for an advisory lock", role)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 }
 
 func orgStatus(ctx context.Context, t *testing.T, super *pgx.Conn, org uuid.UUID) (status string, deletedAt *time.Time) {
@@ -158,45 +207,19 @@ func TestOrganizationUnavailableStatusOfOtherErrors(t *testing.T) {
 	}
 }
 
-// TestOffboardingLockKey: the lock key has one derivation, identical in Go and SQL (plan M17 amendment 2026-11-14 d
-// point 1).
-func TestOffboardingLockKey(t *testing.T) {
-	ctx := context.Background()
-	g := newGateEnv(ctx, t)
-	var ids []uuid.UUID
-	for range 20 {
-		ids = append(ids, uuid.New(), uuid.Must(uuid.NewV7()))
-	}
-	seen := map[int64]bool{}
-	for _, id := range append([]uuid.UUID{uuid.Nil, uuid.Max, uuid.MustParse("00000000-0000-0000-ffff-ffffffffffff")}, ids...) {
-		var key int64
-		if err := g.super.QueryRow(ctx, "SELECT paddock_offboarding_lock_key($1)", id).Scan(&key); err != nil {
-			t.Fatal(err)
-		}
-		if want := db.OffboardingLockKey(id); key != want {
-			t.Errorf("%v: SQL key %#x, Go key %#x", id, key, want)
-		}
-		seen[key] = true
-	}
-	// The halves are combined by XOR, so the edge values Nil and Max share a key; random IDs do not.
-	if len(seen) < len(ids) {
-		t.Errorf("%d distinct keys for %d organizations", len(seen), len(ids))
-	}
-}
-
 // TestOrgEnterGate: every role that enters organizations passes the gate of an active organization; once deleting
-// or deleted is committed, InOrg and InOrgSnapshot of every role are refused with the status before fn runs, other
-// organizations are unaffected, and only the offboarding bypass still enters (plan M17 amendment 2026-11-14 d points
-// 1, 2 and 7, amendment i). A role whose status read found no row for its own organization would pass the gate and
-// fail here.
+// or deleted is committed and the status cache has read it, InOrg and InOrgSnapshot of every role are refused with
+// the status before fn runs, other organizations are unaffected, and only the offboarding bypass still enters (plan
+// M17 amendment 2026-11-14 d points 1, 2 and 7, amendment 2026-11-15 j points 1 to 3). The cache's fail-closed
+// fallback is TestOrgGateStatusCache.
 func TestOrgEnterGate(t *testing.T) {
 	ctx := context.Background()
 	g := newGateEnv(ctx, t)
 	gone := offboardingFixture(ctx, t, g.super, 0)
 	kept := offboardingFixture(ctx, t, g.super, 0)
 
-	t.Run("finalize is a definer function owned by paddock_owner with a pinned search path and lock timeout", func(t *testing.T) {
-		for _, fn := range []string{"paddock_offboard_finalize"} {
+	t.Run("finalize, quiesce and the cache's read are definer functions owned by paddock_owner with a pinned search path", func(t *testing.T) {
+		for _, fn := range []string{"paddock_offboard_finalize", "paddock_offboard_quiesce", "paddock_inactive_organizations"} {
 			var owner string
 			var definer bool
 			var config []string
@@ -204,8 +227,8 @@ func TestOrgEnterGate(t *testing.T) {
 				FROM pg_proc WHERE proname = $1`, fn).Scan(&owner, &definer, &config); err != nil {
 				t.Fatal(err)
 			}
-			if owner != "paddock_owner" || !definer || len(config) != 2 ||
-				config[0] != "search_path=pg_catalog, public, pg_temp" || config[1] != "lock_timeout=1s" {
+			if owner != "paddock_owner" || !definer || len(config) != 1 ||
+				config[0] != "search_path=pg_catalog, public, pg_temp" {
 				t.Errorf("%s: owner %q, security definer %v, config %v", fn, owner, definer, config)
 			}
 		}
@@ -222,12 +245,36 @@ func TestOrgEnterGate(t *testing.T) {
 		}
 	})
 
-	t.Run("the gate has no function of its own", func(t *testing.T) {
+	t.Run("the gate has no per-transaction function and no lock key", func(t *testing.T) {
 		var n int
-		if err := g.super.QueryRow(ctx, "SELECT count(*) FROM pg_proc WHERE proname = 'paddock_org_enter'").Scan(&n); err != nil ||
-			n != 0 {
-			t.Errorf("paddock_org_enter exists: %d, %v", n, err)
+		if err := g.super.QueryRow(ctx, `SELECT count(*) FROM pg_proc
+			WHERE proname IN ('paddock_org_enter', 'paddock_offboarding_lock_key')`).Scan(&n); err != nil || n != 0 {
+			t.Errorf("paddock_org_enter or paddock_offboarding_lock_key exists: %d, %v", n, err)
 		}
+	})
+
+	t.Run("the cache's read reveals only ID and status of inactive organizations, to organization roles", func(t *testing.T) {
+		var cols string
+		if err := g.super.QueryRow(ctx, `SELECT pg_get_function_result(oid) FROM pg_proc
+			WHERE proname = 'paddock_inactive_organizations'`).Scan(&cols); err != nil {
+			t.Fatal(err)
+		}
+		if cols != "TABLE(id uuid, status text, checked_at timestamp with time zone)" {
+			t.Errorf("paddock_inactive_organizations returns %s", cols)
+		}
+		for name, p := range g.pools {
+			if err := p.RefreshOrganizationStatus(ctx); err != nil {
+				t.Errorf("%s may not read the inactive organizations: %v", name, err)
+			}
+		}
+		env := sharedPaddock(t)
+		conn, err := pgx.Connect(ctx, env.Platform)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		_, err = conn.Exec(ctx, "SELECT * FROM paddock_inactive_organizations()")
+		wantDenied(t, "paddock_platform reads the inactive organizations", err)
 	})
 
 	t.Run("escrow reader and revocation issuer read only their own organization's id and status", func(t *testing.T) {
@@ -261,6 +308,7 @@ func TestOrgEnterGate(t *testing.T) {
 	})
 
 	setDeleting(ctx, t, g.super, gone)
+	g.refresh(ctx, t)
 
 	t.Run("a deleting organization is refused for every role", func(t *testing.T) {
 		for name, p := range g.pools {
@@ -320,9 +368,11 @@ func TestOrgEnterGate(t *testing.T) {
 	})
 
 	deleteAll(t, g.worker, gone)
+	quiesced(ctx, t, g, gone)
 	if err := finalize(g.worker, gone); err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
+	g.refresh(ctx, t)
 
 	t.Run("a deleted organization is refused for every role", func(t *testing.T) {
 		for name, p := range g.pools {
@@ -338,13 +388,13 @@ func TestOrgEnterGate(t *testing.T) {
 	})
 }
 
-// TestOffboardFinalize: finalize refuses an organization that is not deleting and every role but the worker; it
-// raises 40001 while rows remain; it waits at most its lock_timeout: while a transaction that entered the organization
-// stays open it raises 55P03 and writes nothing; when that transaction inserts a row after the delete loop finished,
-// the next finalize raises 40001, and the round after it deletes the row and finalizes. A transaction that enters
-// while finalize holds the lock waits only until finalize ends and is then refused as deleted, and writers that keep
-// entering the organization do not starve finalize (plan M17 amendment 2026-11-14 d points 3 and 7, amendment i points
-// 2 and 4; the bounded wait is PDK-1038 fix round 2's deviation from the try-lock).
+// TestOffboardFinalize: quiesce and finalize refuse an organization that is not deleting and every role but the
+// worker. quiesce stores the cutoff after the status change, takes nothing before deleting_committed_at + 6 s, then
+// takes the wait set once and is true only when every transaction in it has ended: a writer that read before the
+// change and writes after the delete loop holds it off, as does a read-only transaction; sessions of other roles do
+// not. finalize refuses until quiesce is true (55000), raises 40001 while rows remain, keeps the wait set on failure
+// and writes the tombstone; writers that keep entering the organization, and writers of another organization, do not
+// starve it (plan M17 amendment 2026-11-14 d points 3 and 7, amendment 2026-11-15 j point 4 and its addendum).
 func TestOffboardFinalize(t *testing.T) {
 	ctx := context.Background()
 	g := newGateEnv(ctx, t)
@@ -352,6 +402,8 @@ func TestOffboardFinalize(t *testing.T) {
 	t.Run("refuses an active organization", func(t *testing.T) {
 		org := offboardingFixture(ctx, t, g.super, 0)
 		wantSQLState(t, "finalize of an active organization", finalize(g.worker, org), "42501")
+		_, err := quiesce(g.worker, org)
+		wantSQLState(t, "quiesce of an active organization", err, "42501")
 		if status, _ := orgStatus(ctx, t, g.super, org); status != "active" {
 			t.Errorf("status %q, want active", status)
 		}
@@ -366,6 +418,8 @@ func TestOffboardFinalize(t *testing.T) {
 				continue
 			}
 			wantDenied(t, name, finalize(p, org))
+			_, err := quiesce(p, org)
+			wantDenied(t, name+" quiesce", err)
 		}
 		if status, _ := orgStatus(ctx, t, g.super, org); status != "deleting" {
 			t.Errorf("status %q, want deleting", status)
@@ -375,6 +429,8 @@ func TestOffboardFinalize(t *testing.T) {
 	t.Run("raises while rows remain", func(t *testing.T) {
 		org := offboardingFixture(ctx, t, g.super, 3)
 		setDeleting(ctx, t, g.super, org)
+		wantSQLState(t, "finalize before quiesce", finalize(g.worker, org), "55000")
+		quiesced(ctx, t, g, org)
 		wantSQLState(t, "finalize with rows left", finalize(g.worker, org), "40001")
 		if status, _ := orgStatus(ctx, t, g.super, org); status != "deleting" {
 			t.Errorf("status %q, want deleting", status)
@@ -387,36 +443,34 @@ func TestOffboardFinalize(t *testing.T) {
 		if status != "deleted" || deletedAt == nil {
 			t.Errorf("tombstone: status %q, deleted_at %v", status, deletedAt)
 		}
+		if w := orgWait(ctx, t, g.super, org); w.vxids != nil || w.takenAt != nil {
+			t.Errorf("the tombstone keeps the wait set %v taken at %v", w.vxids, w.takenAt)
+		}
 		wantSQLState(t, "second finalize", finalize(g.worker, org), "42501")
 	})
 
-	t.Run("a writer that entered before deleting holds finalize off", func(t *testing.T) {
+	t.Run("a writer that read before deleting and writes after the delete loop holds quiesce off", func(t *testing.T) {
 		org := offboardingFixture(ctx, t, g.super, 0)
-		entered, insert := make(chan struct{}), make(chan struct{})
+		read, insert := make(chan struct{}), make(chan struct{})
 		writerDone := make(chan error, 1)
 		go func() {
 			writerDone <- g.pools["paddock_api"].InOrg(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
-				close(entered)
+				if _, err := q.GetOrganization(ctx, org); err != nil {
+					return err
+				}
+				close(read)
 				<-insert
 				_, err := q.InsertDeviceGroup(ctx, pgstore.InsertDeviceGroupParams{ID: uuid.New(), OrganizationID: org,
 					Name: "late"})
 				return err
 			})
 		}()
-		<-entered
+		<-read
 		setDeleting(ctx, t, g.super, org)
+		g.refresh(ctx, t)
 		deleteAll(t, g.worker, org)
 		if got := offboardingRows(ctx, t, g.super, org); got != 0 {
 			t.Fatalf("%d rows left after the delete loop", got)
-		}
-
-		start := time.Now()
-		wantSQLState(t, "finalize with a writer open", finalize(g.worker, org), "55P03")
-		if d := time.Since(start); d > 3*time.Second {
-			t.Errorf("the refused finalize took %v; its wait is not bounded by lock_timeout", d)
-		}
-		if status, _ := orgStatus(ctx, t, g.super, org); status != "deleting" {
-			t.Fatalf("status %q after the refused finalize, want deleting", status)
 		}
 		// A new transaction of the organization is refused at once, and other organizations are entered as usual.
 		wantUnavailable(t, "InOrg while a writer is open", g.pools["paddock_api"].InOrg(orgCtx(org), noop))
@@ -425,9 +479,51 @@ func TestOffboardFinalize(t *testing.T) {
 			t.Errorf("InOrg of another organization: %v", err)
 		}
 
+		// Before the cutoff, quiesce stores only the moment after the change and takes no wait set.
+		start := time.Now()
+		if ready, err := quiesce(g.worker, org); err != nil || ready {
+			t.Fatalf("first quiesce: %v, %v; want false", ready, err)
+		}
+		w := orgWait(ctx, t, g.super, org)
+		if w.committedAt == nil || w.vxids != nil || w.takenAt != nil {
+			t.Fatalf("after the first quiesce: committed %v, wait set %v taken at %v; want only the commit moment",
+				w.committedAt, w.vxids, w.takenAt)
+		}
+		for time.Since(start) < 5*time.Second {
+			if ready, err := quiesce(g.worker, org); err != nil || ready {
+				t.Fatalf("quiesce before the cutoff: %v, %v; want false", ready, err)
+			}
+			if w := orgWait(ctx, t, g.super, org); w.vxids != nil {
+				t.Fatalf("quiesce took the wait set %v %v after the change, before the cutoff", w.vxids, time.Since(start))
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		// After the cutoff, the writer is in the wait set, and quiesce stays false while it is open.
+		deadline := time.Now().Add(10 * time.Second)
+		for orgWait(ctx, t, g.super, org).vxids == nil {
+			if ready, err := quiesce(g.worker, org); err != nil || ready {
+				t.Fatalf("quiesce with the writer open: %v, %v; want false", ready, err)
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("quiesce took no wait set after the cutoff")
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		taken := orgWait(ctx, t, g.super, org)
+		if len(taken.vxids) == 0 {
+			t.Fatal("the wait set is empty although the writer is open")
+		}
+		if ready, err := quiesce(g.worker, org); err != nil || ready {
+			t.Fatalf("quiesce with the writer open: %v, %v; want false", ready, err)
+		}
+		wantSQLState(t, "finalize with the writer open", finalize(g.worker, org), "55000")
+
 		close(insert)
 		if err := <-writerDone; err != nil {
-			t.Fatalf("writer that entered before deleting: %v", err)
+			t.Fatalf("writer that read before deleting: %v", err)
+		}
+		if ready, err := quiesce(g.worker, org); err != nil || !ready {
+			t.Fatalf("quiesce after the writer ended: %v, %v; want true", ready, err)
 		}
 		wantSQLState(t, "finalize after the late insert", finalize(g.worker, org), "40001")
 		if status, _ := orgStatus(ctx, t, g.super, org); status != "deleting" {
@@ -437,9 +533,33 @@ func TestOffboardFinalize(t *testing.T) {
 			t.Fatalf("%d rows after the late insert, want 1", got)
 		}
 
+		// The wait set survives the failed finalize and is not taken again, although organization-role transactions
+		// open now would be in a new one.
+		hold := make(chan struct{})
+		holding := make(chan struct{})
+		otherDone := make(chan error, 1)
+		go func() {
+			otherDone <- g.pools["paddock_api"].InOrg(orgCtx(other), func(context.Context, *pgstore.Queries) error {
+				close(holding)
+				<-hold
+				return nil
+			})
+		}()
+		<-holding
+		if ready, err := quiesce(g.worker, org); err != nil || !ready {
+			t.Errorf("quiesce after the failed finalize, another transaction open: %v, %v; want true", ready, err)
+		}
+		if w := orgWait(ctx, t, g.super, org); !slices.Equal(w.vxids, taken.vxids) || w.takenAt == nil ||
+			!w.takenAt.Equal(*taken.takenAt) {
+			t.Errorf("wait set %v taken at %v, want %v taken at %v", w.vxids, w.takenAt, taken.vxids, taken.takenAt)
+		}
 		deleteAll(t, g.worker, org)
 		if err := finalize(g.worker, org); err != nil {
 			t.Fatalf("finalize in the next round: %v", err)
+		}
+		close(hold)
+		if err := <-otherDone; err != nil {
+			t.Fatal(err)
 		}
 		if status, _ := orgStatus(ctx, t, g.super, org); status != "deleted" {
 			t.Errorf("status %q, want deleted", status)
@@ -449,47 +569,176 @@ func TestOffboardFinalize(t *testing.T) {
 		}
 	})
 
-	t.Run("a transaction entering while finalize holds the lock is refused as deleted", func(t *testing.T) {
+	t.Run("the stored cutoff base is not before the deleting commit, even when quiesce's transaction began earlier", func(t *testing.T) {
+		org := offboardingFixture(ctx, t, g.super, 0)
+		var commit time.Time
+		err := g.worker.InOrgOffboarding(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
+			// The transaction has begun (set_config ran); deleting commits only now, from another session.
+			time.Sleep(200 * time.Millisecond)
+			setDeleting(ctx, t, g.super, org)
+			if err := g.super.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&commit); err != nil {
+				return err
+			}
+			ready, err := q.OffboardQuiesce(ctx)
+			if err == nil && ready {
+				t.Error("the first quiesce returned true")
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := orgWait(ctx, t, g.super, org)
+		if w.committedAt == nil || w.committedAt.Before(commit) {
+			t.Errorf("deleting_committed_at %v lies before the deleting commit %v", w.committedAt, commit)
+		}
+	})
+
+	t.Run("quiesce takes the wait set only at or after the cutoff on the database's clock", func(t *testing.T) {
 		org := offboardingFixture(ctx, t, g.super, 0)
 		setDeleting(ctx, t, g.super, org)
-		deleteAll(t, g.worker, org)
-		finalized, release := make(chan struct{}), make(chan struct{})
-		finalizeDone := make(chan error, 1)
+		// Just below: the cutoff lies 0.5 s after the database's now() of the call; nothing is stored.
+		if _, err := g.super.Exec(ctx, `UPDATE organization SET deleting_committed_at = now() - interval '5.5 seconds'
+			WHERE id = $1`, org); err != nil {
+			t.Fatal(err)
+		}
+		if ready, err := quiesce(g.worker, org); err != nil || ready {
+			t.Fatalf("quiesce just below the cutoff: %v, %v; want false", ready, err)
+		}
+		if w := orgWait(ctx, t, g.super, org); w.vxids != nil || w.takenAt != nil {
+			t.Fatalf("quiesce just below the cutoff stored the wait set %v taken at %v", w.vxids, w.takenAt)
+		}
+		// At: the cutoff is the database's now() of the update, at or before that of the call.
+		if _, err := g.super.Exec(ctx, `UPDATE organization SET deleting_committed_at = now() - interval '6 seconds'
+			WHERE id = $1`, org); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := quiesce(g.worker, org); err != nil {
+			t.Fatal(err)
+		}
+		w := orgWait(ctx, t, g.super, org)
+		if w.vxids == nil || w.takenAt == nil || w.takenAt.Before(w.committedAt.Add(6*time.Second)) {
+			t.Errorf("quiesce at the cutoff: wait set %v taken at %v, committed at %v", w.vxids, w.takenAt, w.committedAt)
+		}
+	})
+
+	t.Run("a read-only transaction open at the cutoff holds quiesce off", func(t *testing.T) {
+		org := offboardingFixture(ctx, t, g.super, 0)
+		other := offboardingFixture(ctx, t, g.super, 0)
+		hold, holding := make(chan struct{}), make(chan struct{})
+		readerDone := make(chan error, 1)
 		go func() {
-			finalizeDone <- g.worker.InOrgOffboarding(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
-				if err := q.OffboardFinalize(ctx); err != nil {
-					return err
-				}
-				close(finalized)
-				<-release
+			readerDone <- g.pools["paddock_compiler"].InOrgSnapshot(orgCtx(other), func(context.Context, *pgstore.Queries) error {
+				close(holding)
+				<-hold
 				return nil
 			})
 		}()
-		select {
-		case <-finalized:
-		case err := <-finalizeDone:
-			t.Fatalf("finalize: %v", err)
+		<-holding
+		setDeleting(ctx, t, g.super, org)
+		if ready, err := quiesce(g.worker, org); err != nil || ready {
+			t.Fatalf("first quiesce: %v, %v", ready, err)
 		}
-		entered := make(chan error, 1)
-		go func() { entered <- g.pools["paddock_api"].InOrg(orgCtx(org), noop) }()
-		waitForAdvisoryLockWait(ctx, t, g.super, "paddock_api")
-		close(release)
-		if err := <-finalizeDone; err != nil {
-			t.Fatalf("finalize commit: %v", err)
+		pastCutoff(ctx, t, g.super, org)
+		for range 3 {
+			if ready, err := quiesce(g.worker, org); err != nil || ready {
+				t.Fatalf("quiesce with a read-only transaction open: %v, %v; want false", ready, err)
+			}
 		}
-		err := <-entered
-		wantUnavailable(t, "InOrg that waited for finalize", err)
-		if got := db.OrganizationUnavailableStatus(err); got != "deleted" {
-			t.Errorf("refused status %q, want deleted", got)
+		close(hold)
+		if err := <-readerDone; err != nil {
+			t.Fatal(err)
+		}
+		if ready, err := quiesce(g.worker, org); err != nil || !ready {
+			t.Errorf("quiesce after the read-only transaction ended: %v, %v; want true", ready, err)
+		}
+	})
+
+	t.Run("transactions of other roles do not hold quiesce off", func(t *testing.T) {
+		env := sharedPaddock(t)
+		org := offboardingFixture(ctx, t, g.super, 0)
+		var open []pgx.Tx
+		var theirs []string
+		for _, dsn := range []string{env.Super, env.Platform} {
+			conn, err := pgx.Connect(ctx, dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = conn.Close(ctx) }()
+			tx, err := conn.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var vxid string
+			if err := tx.QueryRow(ctx, `SELECT virtualxid FROM pg_locks
+				WHERE pid = pg_backend_pid() AND locktype = 'virtualxid'`).Scan(&vxid); err != nil {
+				t.Fatal(err)
+			}
+			open = append(open, tx)
+			theirs = append(theirs, vxid)
+		}
+		setDeleting(ctx, t, g.super, org)
+		quiesced(ctx, t, g, org)
+		// The pools' status polls are organization-role transactions too and may be in the set; the open superuser and
+		// platform transactions must not.
+		if w := orgWait(ctx, t, g.super, org); w.takenAt == nil || slices.ContainsFunc(w.vxids, func(v string) bool {
+			return slices.Contains(theirs, v)
+		}) {
+			t.Errorf("wait set %v taken at %v holds a transaction of another role %v", w.vxids, w.takenAt, theirs)
+		}
+		for _, tx := range open {
+			_ = tx.Rollback(ctx)
+		}
+	})
+
+	t.Run("application roles still cannot read other sessions' query text", func(t *testing.T) {
+		env := sharedPaddock(t)
+		for name, dsn := range map[string]string{"paddock_api": env.API, "paddock_worker": env.Worker} {
+			conn, err := pgx.Connect(ctx, dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var hidden, visible int
+			if err := conn.QueryRow(ctx, `SELECT count(*) FILTER (WHERE query = '<insufficient privilege>'),
+				count(*) FILTER (WHERE query IS NOT NULL AND query <> '<insufficient privilege>')
+				FROM pg_stat_activity WHERE usename IS NOT NULL AND usename <> current_user`).Scan(&hidden, &visible); err != nil {
+				t.Fatal(err)
+			}
+			if hidden == 0 || visible != 0 {
+				t.Errorf("%s: %d other sessions' query text hidden, %d visible; want all hidden", name, hidden, visible)
+			}
+			var stats bool
+			if err := conn.QueryRow(ctx, "SELECT pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')").Scan(&stats); err != nil ||
+				stats {
+				t.Errorf("%s holds pg_read_all_stats: %v, %v", name, stats, err)
+			}
+			_ = conn.Close(ctx)
 		}
 	})
 
 	t.Run("continuous writers do not starve finalize", func(t *testing.T) {
 		org := offboardingFixture(ctx, t, g.super, 0)
+		other := offboardingFixture(ctx, t, g.super, 0)
 		wctx, stop := context.WithCancel(ctx)
 		var wg sync.WaitGroup
-		var refused, written atomic.Int64
+		var refused, written, otherWritten atomic.Int64
 		for range continuousWriters {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for wctx.Err() == nil {
+					err := g.pools["paddock_api"].InOrg(orgCtx(other), func(ctx context.Context, q *pgstore.Queries) error {
+						_, err := q.InsertDeviceGroup(ctx, pgstore.InsertDeviceGroupParams{ID: uuid.New(), OrganizationID: other,
+							Name: uuid.NewString()})
+						return err
+					})
+					if err != nil {
+						t.Errorf("writer of another organization: %v", err)
+						return
+					}
+					otherWritten.Add(1)
+				}
+			}()
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -514,8 +763,11 @@ func TestOffboardFinalize(t *testing.T) {
 		defer func() { stop(); wg.Wait() }()
 		time.Sleep(200 * time.Millisecond)
 		setDeleting(ctx, t, g.super, org)
+		g.refresh(ctx, t)
+		before := otherWritten.Load()
+		quiesced(ctx, t, g, org)
 
-		attempts, busy := 0, 0
+		attempts := 0
 		for {
 			attempts++
 			deleteAllRetrying(t, g.worker, org, 5)
@@ -524,20 +776,20 @@ func TestOffboardFinalize(t *testing.T) {
 				break
 			}
 			var pgErr *pgconn.PgError
-			if !errors.As(err, &pgErr) || (pgErr.Code != "55P03" && pgErr.Code != "40001") {
+			if !errors.As(err, &pgErr) || pgErr.Code != "40001" {
 				t.Fatalf("finalize attempt %d: %v", attempts, err)
 			}
-			if pgErr.Code == "55P03" {
-				busy++
-			}
 			if attempts >= finalizeAttempts {
-				t.Fatalf("finalize did not succeed in %d attempts (%d busy) against %d continuous writers (%d refused)",
-					attempts, busy, continuousWriters, refused.Load())
+				t.Fatalf("finalize did not succeed in %d attempts against %d continuous writers (%d refused)",
+					attempts, continuousWriters, refused.Load())
 			}
 			time.Sleep(finalizePause)
 		}
-		t.Logf("finalize succeeded at attempt %d (%d busy) against %d continuous writers: %d written, %d refused",
-			attempts, busy, continuousWriters, written.Load(), refused.Load())
+		t.Logf("finalize succeeded at attempt %d against %d continuous writers: %d written, %d refused",
+			attempts, continuousWriters, written.Load(), refused.Load())
+		if otherWritten.Load() == before {
+			t.Error("the other organization's writers made no progress during the deletion")
+		}
 		if status, _ := orgStatus(ctx, t, g.super, org); status != "deleted" {
 			t.Errorf("status %q, want deleted", status)
 		}
@@ -593,13 +845,14 @@ func TestOffboardFinalize(t *testing.T) {
 					return err
 				}
 			}
+			quiesced(ctx, t, g, org)
 			for round := 0; ; round++ {
 				deleteAll(t, g.worker, org)
 				err := finalize(g.worker, org)
 				if err == nil {
 					return nil
 				}
-				if !strings.Contains(err.Error(), "40001") && !strings.Contains(err.Error(), "55P03") || round > 20 {
+				if !strings.Contains(err.Error(), "40001") || round > 20 {
 					return err
 				}
 			}
@@ -620,11 +873,10 @@ func TestOffboardFinalize(t *testing.T) {
 }
 
 // The continuous-writers test: continuousWriters goroutines enter the organization in a tight loop, more than the
-// consumer concurrency of two ingest workers, so the shared lock is held almost all the time. finalizeAttempts is 3:
-// the first finalize may meet a writer that entered before deleting and still inserts (40001) or stays open past the
-// lock timeout (55P03); refused writers hold the lock only for one round trip and queue behind a waiting finalize, so
-// the second attempt has nothing left to wait for, and the third is margin. A pure try-lock failed 50 of 50 attempts in
-// this test.
+// consumer concurrency of two ingest workers, and as many enter another organization. quiesce waits only for the
+// transactions open when it took its wait set, so new writers cannot starve it; finalizeAttempts is 3: the first
+// finalize may still meet a straggler's row (40001) if the delete loop ran before it committed; after the next delete
+// loop nothing is left, and the third is margin.
 const (
 	continuousWriters = 16
 	finalizeAttempts  = 3
@@ -724,9 +976,9 @@ func TestInOrgOffboardingCallersDetectsUse(t *testing.T) {
 	}
 }
 
-// BenchmarkInOrgGate measures the gate (plan M17 amendment 2026-11-14 d point 5): InOrg against InOrgOffboarding,
-// which is the transaction without the gate, empty, with one read and with one committed insert, serially
-// and in parallel on one organization (the shared lock of one key).
+// BenchmarkInOrgGate measures the gate (plan M17 amendment 2026-11-14 d point 5, amendment 2026-11-15 j point 7): InOrg
+// on the status cache against InOrgOffboarding, which is the transaction without the gate, empty, with one read and
+// with one committed insert, serially and in parallel on one organization.
 func BenchmarkInOrgGate(b *testing.B) {
 	ctx := context.Background()
 	env := pgtest.StartPaddock(b)

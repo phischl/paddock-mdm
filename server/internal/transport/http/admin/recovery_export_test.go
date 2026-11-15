@@ -18,13 +18,10 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
-	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
-	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
 
@@ -461,28 +458,37 @@ func TestPlatformExportOutlivesPending(t *testing.T) {
 	}
 }
 
-// TestPlatformExportRacesGate (review 2 finding 6): the worker commits deleting while the export's first transaction
-// waits in the gate (enterOrg): 403 organization_inactive, no export bytes, exactly one organization.inactive_denied in
-// the platform pseudo-organization.
+// TestPlatformExportRacesGate (review 2 finding 6, plan M17 amendment j): deleting reaches the gate's status cache
+// after the platform check read the organization as pending deletion: 403 organization_inactive, no export bytes,
+// exactly one organization.inactive_denied in the platform pseudo-organization. Without a hook between the check and
+// the gate in this package, the race is staged as the state it leaves behind: the cache already holds deleting (it
+// learned it from a committed status and cannot refresh any more) while the database, and with it both platform
+// checks, still says pending deletion, so only the gate can refuse.
 func TestPlatformExportRacesGate(t *testing.T) {
 	e := newEnv(t)
 	e.exportDevice(e.acme, "active", "key-1")
 	e.pendingDeletion(e.acme)
 	root := e.steppedUp(e.platformSession(), time.Now())
 	ctx := context.Background()
-	worker, err := pgx.Connect(ctx, pgtest.SharedPaddock(t).Super)
-	if err != nil {
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := e.super.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const (
+		revoke = "REVOKE EXECUTE ON FUNCTION paddock_inactive_organizations() FROM paddock_api"
+		grant  = "GRANT EXECUTE ON FUNCTION paddock_inactive_organizations() TO paddock_api"
+	)
+	exec("UPDATE organization SET status = 'deleting' WHERE id = $1", e.acme)
+	if err := e.orgPool.RefreshOrganizationStatus(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = worker.Close(ctx) }()
-	tx, err := worker.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", db.OffboardingLockKey(e.acme)); err != nil {
-		t.Fatal(err)
-	}
+	// The poller would read the reverted status back within a second; a failed refresh keeps the cached deleting,
+	// fresh for the gate's 5 s, and the request reaches the gate well within that.
+	exec(revoke)
+	t.Cleanup(func() { exec(grant) })
+	exec("UPDATE organization SET status = 'active' WHERE id = $1", e.acme)
 	body, _ := json.Marshal(exportBody(exportPassphrase))
 	req := httptest.NewRequest(http.MethodPost, "https://admin.test/api/platform/v1/organizations/"+e.acme.String()+"/recovery-export",
 		bytes.NewReader(body))
@@ -490,40 +496,11 @@ func TestPlatformExportRacesGate(t *testing.T) {
 	req.Header.Set("X-Paddock-CSRF", "1")
 	req.AddCookie(root)
 	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		e.handler.ServeHTTP(rec, req)
-	}()
-	waiter, err := pgx.Connect(ctx, pgtest.SharedPaddock(t).Super)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = waiter.Close(ctx) }()
-	for waited := 0; ; waited++ {
-		var waiting bool
-		if err := waiter.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)`).
-			Scan(&waiting); err != nil {
-			t.Fatal(err)
-		}
-		if waiting {
-			break
-		}
-		if waited > 500 {
-			t.Fatal("the export never waited in the gate")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if _, err := tx.Exec(ctx, "UPDATE organization SET status = 'deleting' WHERE id = $1", e.acme); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	<-done
+	e.handler.ServeHTTP(rec, req)
+	exec(grant)
 	var p httpx.Problem
 	if rec.Code != http.StatusForbidden || json.Unmarshal(rec.Body.Bytes(), &p) != nil || p.Code != "organization_inactive" ||
-		rec.Header().Get("Content-Type") == "application/pgp-encrypted" {
+		rec.Header().Get("Content-Type") == "application/pgp-encrypted" || strings.Contains(rec.Body.String(), "PGP MESSAGE") {
 		t.Fatalf("race through the gate: %d %s", rec.Code, rec.Body.String())
 	}
 	got := e.events(rec.Header().Get(httpx.HeaderRequestID))
@@ -532,5 +509,12 @@ func TestPlatformExportRacesGate(t *testing.T) {
 		rec.Header().Get(httpx.HeaderRequestID)).Scan(&org); err != nil || len(got) != 1 ||
 		got[0] != "organization.inactive_denied:denied:organization_inactive" || org != audit.PlatformOrganizationID {
 		t.Fatalf("events %v in %s (%v)", got, org, err)
+	}
+	// The refusal came from the gate: both platform checks read pending deletion, and prepare never reserved.
+	var status string
+	var exports int
+	if err := e.super.QueryRow(ctx, `SELECT status, recovery_exports FROM organization WHERE id = $1`, e.acme).
+		Scan(&status, &exports); err != nil || status != "active" || exports != 0 {
+		t.Fatalf("organization %s with %d exports (%v)", status, exports, err)
 	}
 }

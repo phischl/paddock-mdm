@@ -53,6 +53,9 @@ func TestMessagesOfDeletingOrganizationDropped(t *testing.T) {
 		offboarding_step = 'database' WHERE id = $1`, f.org); err != nil {
 		t.Fatal(err)
 	}
+	if err := f.pool.RefreshOrganizationStatus(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if o := reports.heartbeat(ctx, "hb", heartbeat); o != ack {
 		t.Errorf("heartbeat: %v, want ack", o)
 	}

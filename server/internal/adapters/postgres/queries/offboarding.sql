@@ -5,9 +5,16 @@
 -- name: OffboardDeleteBatch :one
 SELECT paddock_offboard_delete_batch(@max_rows::int)::bigint AS deleted;
 
--- Waits for every transaction that entered the organization before it was deleting, re-counts every registered table
--- (40001 when rows remain) and writes the tombstone in the same transaction (plan M17 amendment 2026-11-14 d). Only
--- paddock_worker may call it, inside InOrgOffboarding of an organization in status deleting.
+-- True once every transaction that could have passed the gate before it saw the organization deleting has ended; false
+-- while waiting (plan M17 amendment 2026-11-15 j and its addendum). The step tombstone calls it every round and calls
+-- OffboardFinalize once it is true. Only paddock_worker may call it, inside InOrgOffboarding of an organization in
+-- status deleting.
+-- name: OffboardQuiesce :one
+SELECT paddock_offboard_quiesce()::boolean AS ready;
+
+-- Requires OffboardQuiesce to be true (else 55000), re-counts every registered table (40001 when rows remain) and
+-- writes the tombstone in the same transaction (plan M17 amendments 2026-11-14 d, 2026-11-15 j). Only paddock_worker
+-- may call it, inside InOrgOffboarding of an organization in status deleting.
 -- name: OffboardFinalize :exec
 SELECT paddock_offboard_finalize();
 

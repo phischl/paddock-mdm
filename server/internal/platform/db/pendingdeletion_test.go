@@ -81,75 +81,87 @@ func TestInPendingDeletionOrg(t *testing.T) {
 	expectPermissionDenied(t, "paddock_api cancels a deletion", err)
 }
 
-// TestInPendingDeletionOrgRacesDeleting (plan M17 amendment g point 6): when the worker commits deleting after the
-// platform check but before the transaction passes the gate, InPendingDeletionOrg fails closed with
-// db.OrganizationUnavailable and fn never runs.
+// TestInPendingDeletionOrgRacesDeleting (plan M17 amendments g point 6 and j): when the worker commits deleting after
+// the platform check but before the transaction passes the gate, InPendingDeletionOrg fails closed with
+// db.OrganizationUnavailable and fn never runs, whether the gate learns the status from its refreshed cache or, with
+// a stale cache, from its own status read in the transaction.
 func TestInPendingDeletionOrgRacesDeleting(t *testing.T) {
-	f := newFixture(t)
 	ctx := context.Background()
 	root := principal.With(ctx, principal.Principal{Kind: principal.KindPlatformAdmin, Role: principal.RolePlatform})
-	err := f.platform.InPlatform(root, func(ctx context.Context, q *pgstore.Queries) error {
-		_, err := q.RequestOrganizationDeletion(ctx, pgstore.RequestOrganizationDeletionParams{ID: f.orgA, GraceDays: 30})
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The worker's side: hold the offboarding lock exclusively, as paddock_offboard_finalize does, so the export's
-	// transaction waits in the gate (enterOrg) after the platform check passed.
-	worker, err := pgx.Connect(ctx, sharedPaddock(t).Super)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = worker.Close(ctx) }()
-	tx, err := worker.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", db.OffboardingLockKey(f.orgA)); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	ran := false
-	go func() {
-		done <- f.org.InPendingDeletionOrg(root, f.platform, f.orgA, func(context.Context, *pgstore.Queries) error {
-			ran = true
-			return nil
+	for _, tc := range []struct {
+		name    string
+		pool    func(t *testing.T, f fixture) *db.OrgPool
+		refresh bool
+	}{
+		{name: "refreshed cache", pool: func(_ *testing.T, f fixture) *db.OrgPool { return f.org }, refresh: true},
+		{name: "stale cache, status read in the transaction", pool: func(t *testing.T, _ fixture) *db.OrgPool {
+			clock := &fakeMonotonic{}
+			p, err := db.NewOrgPoolWithClock(ctx, sharedPaddock(t).API, db.Options{}, clock.since)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(p.Close)
+			db.StopStatusPoller(p)
+			clock.advance(time.Hour)
+			return p
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			p := tc.pool(t, f)
+			err := f.platform.InPlatform(root, func(ctx context.Context, q *pgstore.Queries) error {
+				_, err := q.RequestOrganizationDeletion(ctx, pgstore.RequestOrganizationDeletionParams{ID: f.orgA, GraceDays: 30})
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.refresh {
+				if err := p.RefreshOrganizationStatus(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			worker, err := pgx.Connect(ctx, sharedPaddock(t).Super)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = worker.Close(ctx) }()
+			// The gate is entered only after the platform check found the deletion pending, so the hook's commit lies
+			// between the two.
+			var calls int
+			db.SetBeforeGate(p, func(entered uuid.UUID) {
+				calls++
+				if entered != f.orgA || calls > 1 {
+					return
+				}
+				if _, err := worker.Exec(ctx, "UPDATE organization SET status = 'deleting' WHERE id = $1", f.orgA); err != nil {
+					t.Error(err)
+				}
+				if tc.refresh {
+					if err := p.RefreshOrganizationStatus(ctx); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			ran := false
+			err = p.InPendingDeletionOrg(root, f.platform, f.orgA, func(context.Context, *pgstore.Queries) error {
+				ran = true
+				return nil
+			})
+			if !errors.Is(err, problem.OrganizationInactive) || db.OrganizationUnavailableStatus(err) != "deleting" || ran || calls != 1 {
+				t.Fatalf("race with deleting: %v (ran %v, gate passes %d)", err, ran, calls)
+			}
+			// Once deleting is committed, the platform check itself refuses with the gate's error, never
+			// ErrNotPendingDeletion, whose caller would fall back to the ungated platform pool (amendment h point 2).
+			err = p.InPendingDeletionOrg(root, f.platform, f.orgA, func(context.Context, *pgstore.Queries) error {
+				t.Error("fn ran for a deleting organization")
+				return nil
+			})
+			if !errors.Is(err, problem.OrganizationInactive) || errors.Is(err, db.ErrNotPendingDeletion) ||
+				db.OrganizationUnavailableStatus(err) != "deleting" || calls != 1 {
+				t.Fatalf("deleting: %v (gate passes %d)", err, calls)
+			}
 		})
-	}()
-	for waited := 0; ; waited++ {
-		var waiting bool
-		if err := worker.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)`).
-			Scan(&waiting); err != nil {
-			t.Fatal(err)
-		}
-		if waiting {
-			break
-		}
-		if waited > 200 {
-			t.Fatal("the export's transaction never waited for the lock")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if _, err := tx.Exec(ctx, "UPDATE organization SET status = 'deleting' WHERE id = $1", f.orgA); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	err = <-done
-	if !errors.Is(err, problem.OrganizationInactive) || db.OrganizationUnavailableStatus(err) != "deleting" || ran {
-		t.Fatalf("race with deleting: %v (ran %v)", err, ran)
-	}
-	// Once deleting is committed, the platform check itself refuses with the gate's error, never
-	// ErrNotPendingDeletion, whose caller would fall back to the ungated platform pool (amendment h point 2).
-	err = f.org.InPendingDeletionOrg(root, f.platform, f.orgA, func(context.Context, *pgstore.Queries) error {
-		t.Error("fn ran for a deleting organization")
-		return nil
-	})
-	if !errors.Is(err, problem.OrganizationInactive) || errors.Is(err, db.ErrNotPendingDeletion) ||
-		db.OrganizationUnavailableStatus(err) != "deleting" {
-		t.Fatalf("deleting: %v", err)
 	}
 }
 
