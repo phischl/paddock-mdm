@@ -3,7 +3,7 @@
 How a platform administrator deletes an organization, what its users and devices experience, what each failure of the
 deletion means and what to do, and how to repeat a deletion after a restore (ADR 0052, plan M17). What is deleted,
 what is kept and on which basis: [retention.md](../compliance/retention.md), section "Organization offboarding".
-Residual risks: [residual-risks.md](../compliance/residual-risks.md) RR-137, RR-138, RR-140 to RR-142.
+Residual risks: [residual-risks.md](../compliance/residual-risks.md) RR-137, RR-138, RR-140, RR-142, RR-143.
 
 Sentences marked **(PDK-1017)** describe the audit retirement, the reading of retained evidence and the host command
 `paddock-server audit deletions`, which arrive with PDK-1017; they follow plan M17 amendment o.
@@ -61,7 +61,7 @@ with the organization, and directory logins on the devices stop. Take the export
    when it is destroyed.
 
 Advise administrators to finish any in-place encryption during the grace period: a device with an unfinished one
-refuses the removal (RR-141).
+refuses the removal (RR-142).
 
 ## What users experience
 
@@ -87,11 +87,12 @@ no configuration, agent update or time ticket; its final report `agent.uninstall
 
 - The removal commands stay valid for 365 days. A device that never returns is forgotten after 365 days
   (`retention.purged`, store `offboarded_device`); it keeps an inert agent that no longer reaches the server.
-- A pending removal that would expire within about a month is replaced by one valid for the full period at the step
-  `devices`.
-- The count `devices_offboarded` of `organization.deleted` is an upper bound (RR-142).
+- A pending removal that would expire more than 30 days before the end of the 365-day period (for example one an
+  administrator issued, which is valid for 7 days) is replaced at the step `devices` by one with the same mode that
+  is valid for the full period; the deletion request's own removal is kept.
+- The count `devices_offboarded` of `organization.deleted` is an upper bound (RR-143).
 - A device that refused the removal (unfinished in-place encryption, a revocation just handed to `paddock-revoke`)
-  keeps an inert agent (RR-141): remove the packages by hand, `sudo apt purge paddock-agent paddock-supervisor`.
+  keeps an inert agent (RR-142): remove the packages by hand, `sudo apt purge paddock-agent paddock-supervisor`.
 - Monitor `platform.offboarded_device_uninstalled` in the platform audit log to see devices return.
 
 ## The steps and their failures
@@ -129,13 +130,14 @@ stops verifying or writing into that organization. It also acknowledges to the w
 step waits for that acknowledgement.
 
 - **The outcome can be `failed`.** The deletion still completes, and `organization.deleted` carries the outcome as
-  `audit_final_outcome`. A Prometheus alert for the failed chain verification fires (`PaddockAuditChainBroken`, see
-  `docs/operations/monitoring.md`). What to do: do not retry the deletion (it is finished); treat it as an audit
+  `audit_final_outcome`. `PaddockAuditChainBroken` fires on the nightly verification's gauge; whether a failed final verification raises an
+  alert is defined by PDK-1017, so read the outcome from `audit_final_outcome` in `organization.deleted` and from
+  `audit.chain_verification_failed` in the platform audit log. What to do: do not retry the deletion (it is finished); treat it as an audit
   integrity incident: run `paddock-server audit verify --org <id> --from <day> --to <day>` for the organization as
   described in `docs/operations/audit-bucket.md`, find the broken day, keep the report and the WORM objects, compare
-  with the audit bucket's replica, and record the finding in your ISMS (A.5.33, A.8.10 evidence).
+  with the audit bucket's replica if you keep one (`docs/operations/audit-bucket.md`), and record the finding in your ISMS (A.5.33, A.8.10 evidence).
 - **The sealer stops after the final verification day.** The manifest of that day carries `"retired": true`, and no
-  manifest follows. This is expected, not a gap: the nightly verification and `paddockctl audit verify` accept no
+  manifest follows. This is expected, not a gap: the nightly verification and `paddockctl audit verify-export` accept no
   manifest after a retired one. Do not read the missing days of a deleted organization as a missing-evidence finding.
 - Events of the organization that arrive after the retirement are not lost: they are written to the platform
   pseudo-organization as `audit.event_after_retirement` with their original code.
@@ -145,7 +147,7 @@ step waits for that acknowledgement.
 For an organization in status `deleted` only, a platform administrator reads its audit log
 (`GET /api/platform/v1/organizations/{id}/audit-events`) and requests the usual evidence export package
 (`POST /api/platform/v1/organizations/{id}/audit-exports`, step-up); the package is handed to the customer's auditors
-and verified offline with `paddockctl audit verify`. Every read is recorded as
+and verified offline with `paddockctl audit verify-export`. Every read is recorded as
 `platform.deleted_organization_audit_read`. An organization administrator gets 404. The evidence stays until the WORM
 retention ends.
 
