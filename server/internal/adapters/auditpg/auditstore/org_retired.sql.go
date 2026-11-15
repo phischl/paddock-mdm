@@ -88,6 +88,32 @@ func (q *Queries) ListAuditOrgRetiredIDs(ctx context.Context) ([]uuid.UUID, erro
 	return items, nil
 }
 
+const listAuditOrgRetiredPending = `-- name: ListAuditOrgRetiredPending :many
+SELECT organization_id FROM audit_org_retired WHERE final_verified_at IS NULL ORDER BY retired_at, organization_id
+`
+
+// Retired organizations whose final verification is not recorded yet (plan M17 amendment o, review 1 M1): the
+// retirement loop completes them, also after a crash.
+func (q *Queries) ListAuditOrgRetiredPending(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listAuditOrgRetiredPending)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var organization_id uuid.UUID
+		if err := rows.Scan(&organization_id); err != nil {
+			return nil, err
+		}
+		items = append(items, organization_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditOrgRetiredUnacknowledged = `-- name: ListAuditOrgRetiredUnacknowledged :many
 SELECT organization_id, retired_at, final_verified_at, final_outcome, ack_published_at FROM audit_org_retired
 WHERE final_verified_at IS NOT NULL AND ack_published_at IS NULL
@@ -115,6 +141,44 @@ func (q *Queries) ListAuditOrgRetiredUnacknowledged(ctx context.Context) ([]Audi
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditRetirementRequestsWithoutRow = `-- name: ListAuditRetirementRequestsWithoutRow :many
+SELECT DISTINCT (e.params ->> 'organization_id')::uuid AS organization_id
+FROM audit_event e
+WHERE e.organization_id = $1 AND e.code = 'organization.audit_retirement_requested'
+  AND e.outcome = 'success' AND e.occurred_at >= $2
+  AND e.params ->> 'organization_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  AND e.params ->> 'organization_id' <> $1::text
+  AND NOT EXISTS (SELECT 1 FROM audit_org_retired r WHERE r.organization_id::text = e.params ->> 'organization_id')
+`
+
+type ListAuditRetirementRequestsWithoutRowParams struct {
+	PlatformOrganizationID uuid.UUID
+	Since                  time.Time
+}
+
+// Organizations whose retirement was requested (an indexed organization.audit_retirement_requested of the platform
+// pseudo-organization since @since) but that have no audit_org_retired row: the consumer failed to insert it, and the
+// retirement loop does it instead, so a request is never lost to a redelivery limit.
+func (q *Queries) ListAuditRetirementRequestsWithoutRow(ctx context.Context, arg ListAuditRetirementRequestsWithoutRowParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listAuditRetirementRequestsWithoutRow, arg.PlatformOrganizationID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var organization_id uuid.UUID
+		if err := rows.Scan(&organization_id); err != nil {
+			return nil, err
+		}
+		items = append(items, organization_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

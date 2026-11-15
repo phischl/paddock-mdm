@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -30,8 +29,10 @@ func (w *Writer) Handle(ctx context.Context, ch *amqp.Channel, deliveries <-chan
 	return w.consume(ctx, deliveries, nil)
 }
 
-// consume is Handle; retire, when set, runs for every organization.audit_retirement_requested of a batch after the
-// batch is written and before it is acknowledged, so a failed retirement is retried with the redelivered batch.
+// consume is Handle; retire, when set, closes the log of every organization.audit_retirement_requested of a batch
+// after the batch is written. Its failure is logged and the batch acknowledged all the same: the request is in the
+// index, where the retirement loop finds a request without its audit_org_retired row (Retirement.Complete), so it
+// neither blocks other events nor reaches the dead-letter queue.
 func (w *Writer) consume(ctx context.Context, deliveries <-chan amqp.Delivery, retire func(ctx context.Context, org uuid.UUID) error) error {
 	for {
 		batch, open := collect(ctx, deliveries)
@@ -104,7 +105,7 @@ func (w *Writer) process(ctx context.Context, batch []amqp.Delivery, retire func
 	last := valid[len(valid)-1]
 	n, err := w.WriteBatch(ctx, events)
 	if err == nil && retire != nil {
-		err = retireRequested(ctx, events, retire)
+		retireRequested(ctx, events, retire)
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "audit batch failed; requeueing", "events", len(events), "error", err)
@@ -144,9 +145,9 @@ func ackUpTo(valid []amqp.Delivery, last amqp.Delivery) error {
 
 // retireRequested calls retire for the organization of every organization.audit_retirement_requested in events. Only
 // the platform pseudo-organization's successful request counts: an organization's own events reach the platform
-// pseudo-organization only through the platform scope of ActionRunner. A request without a valid organization_id is
-// logged and skipped, so it does not block the queue.
-func retireRequested(ctx context.Context, events []audit.Event, retire func(ctx context.Context, org uuid.UUID) error) error {
+// pseudo-organization only through the platform scope of ActionRunner. A request without a valid organization_id, and
+// a failed retire, are logged.
+func retireRequested(ctx context.Context, events []audit.Event, retire func(ctx context.Context, org uuid.UUID) error) {
 	for _, ev := range events {
 		if ev.Code != audit.CodeOrganizationAuditRetirementRequested || ev.OrganizationID != audit.PlatformOrganizationID ||
 			ev.Outcome != audit.OutcomeSuccess {
@@ -159,8 +160,8 @@ func retireRequested(ctx context.Context, events []audit.Event, retire func(ctx 
 			continue
 		}
 		if err := retire(ctx, org); err != nil {
-			return fmt.Errorf("retire organization %s: %w", org, err)
+			slog.WarnContext(ctx, "closing the audit log of a retired organization failed; the retirement loop retries",
+				"organization_id", org, "error", err)
 		}
 	}
-	return nil
 }

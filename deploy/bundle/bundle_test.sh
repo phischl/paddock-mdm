@@ -688,6 +688,7 @@ case "$*" in
   *":/run/paddock-check/containers.json:ro "*)
     for a in "$@"; do [[ "$a" != *:/run/paddock-check/containers.json:ro ]] || cp "${a%%:*}" "$FAKE_DOCKER_LOG.containers"; done
     ;;
+  *" rabbitmqctl -q list_permissions "*) [[ -z "${FAKE_BROKER_FAIL:-}" ]] || exit 1; echo '[]' ;;
   *" prod-check "*) exit "${FAKE_PRODCHECK_RC:-0}" ;;
   "ps -q --filter label=com.docker.compose.project="*) [[ -z "${FAKE_PS_FAIL:-}" ]] || exit 1; printf '%s\n' $FAKE_CONTAINERS ;;
   "inspect "*) printf '[{"Name":"/%s"}]\n' "${*:2}" ;;
@@ -827,6 +828,29 @@ grep -q -- "^ps -q --filter label=com.docker.compose.project=paddock$" "$FAKE_DO
   [[ -n "$mounted" && ! -e "$mounted" ]] &&
   pass "check --online hands prod-check the inspected containers of the project and the exceptions file" ||
   fail "check --online without the containers: exit $rc, $out, docker: $(grep -e prod-check -e '^ps ' -e '^inspect' "$FAKE_DOCKER_LOG")"
+# PDK-1017, main §44: online, prod-check gets the broker's permissions (rabbitmqctl's listing, as a mounted file, never
+# the definitions with the passwords); the file is removed afterwards. Offline, and during an upgrade before up, the
+# broker is not read; a failed listing is reported as not checked.
+: >"$FAKE_DOCKER_LOG"
+FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
+mounted="$(grep -o -- "-v [^ ]*:/run/paddock-check/broker.json:ro" "$FAKE_DOCKER_LOG" | head -1 | sed 's/^-v //; s/:.*//')"
+grep -q -- "exec -T -e RABBITMQ_CTL_ERL_ARGS=.* rabbitmq rabbitmqctl -q list_permissions -p paddock --formatter json" "$FAKE_DOCKER_LOG" &&
+  grep -q -- "prod-check .* --online .* --broker-permissions /run/paddock-check/broker.json " "$FAKE_DOCKER_LOG" &&
+  ! grep -q "definitions.json:" "$FAKE_DOCKER_LOG" && [[ -n "$mounted" && ! -e "$mounted" ]] &&
+  pass "check --online hands prod-check the broker's permissions and removes the listing" ||
+  fail "check --online without the broker's permissions: exit $rc, $out, docker: $(grep -e prod-check -e list_permissions "$FAKE_DOCKER_LOG")"
+: >"$FAKE_DOCKER_LOG"
+paddock_t check
+! grep -q list_permissions "$FAKE_DOCKER_LOG" && ! grep -q -- "--broker-permissions" "$FAKE_DOCKER_LOG" &&
+  pass "check offline does not read the broker" || fail "offline check read the broker: $(grep list_permissions "$FAKE_DOCKER_LOG")"
+: >"$FAKE_DOCKER_LOG"
+FAKE_BROKER_FAIL=1 FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
+[[ "$out" == *"not checked: rabbitmqctl list_permissions failed"* ]] && ! grep -q -- "--broker-permissions" "$FAKE_DOCKER_LOG" &&
+  pass "check --online reports the broker as not checked when the listing fails" || fail "failed listing: $out"
+: >"$FAKE_DOCKER_LOG"
+PADDOCK_CHECK_SKIP_BROKER=1 FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check --online
+[[ "$out" == *"not checked: the old release still runs; the step broker"* ]] && ! grep -q list_permissions "$FAKE_DOCKER_LOG" &&
+  pass "check --online before an upgrade's up leaves the old broker alone" || fail "skip broker: $out"
 : >"$FAKE_DOCKER_LOG"
 FAKE_CONTAINERS="c1" FAKE_REVISIONS="$smb=4 $nfs=1 $loc=1" paddock_t check
 ! grep -q -- "--containers" "$FAKE_DOCKER_LOG" && ! grep -q "^ps -q" "$FAKE_DOCKER_LOG" &&

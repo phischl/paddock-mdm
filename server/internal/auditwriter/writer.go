@@ -142,6 +142,25 @@ func (w *Writer) WriteBatch(ctx context.Context, events []audit.Event) (int, err
 	return written, nil
 }
 
+// exporterEvidence reports whether ev is the audit writer's own record of an evidence export: audit.export_completed
+// (with the package's checksum and verification result) or the retention.purged of an expired export. Platform
+// administrators produce such exports for a deleted organization's auditors (ADR 0052 decision 7), so these keep their
+// code and params in the platform pseudo-organization, with organization_id added, instead of becoming
+// audit.event_after_retirement (review 1 m2).
+func exporterEvidence(ev audit.Event) bool {
+	if ev.Actor.Type != audit.ActorSystem || ev.Actor.ID != selfActorID {
+		return false
+	}
+	switch ev.Code {
+	case audit.CodeAuditExportCompleted:
+		return true
+	case audit.CodeRetentionPurged:
+		store, _ := ev.Params["store"].(string)
+		return store == storeAuditExports
+	}
+	return false
+}
+
 // retiredError refuses the new events of a retired organization; events holds them.
 type retiredError struct{ events []audit.Event }
 
@@ -156,6 +175,12 @@ func (e *retiredError) Error() string {
 func afterRetirement(org uuid.UUID, events []audit.Event) []audit.Event {
 	out := make([]audit.Event, len(events))
 	for i, ev := range events {
+		if exporterEvidence(ev) {
+			out[i] = ev
+			out[i].OrganizationID = audit.PlatformOrganizationID
+			out[i].Params = cloneWith(ev.Params, "organization_id", org.String())
+			continue
+		}
 		out[i] = audit.Event{
 			Schema:         audit.Schema,
 			EventID:        uuid.NewSHA1(uuid.NameSpaceURL, []byte("urn:paddock:audit:after-retirement:"+ev.EventID.String())),

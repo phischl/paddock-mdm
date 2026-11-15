@@ -45,6 +45,31 @@ func (f *fakeAcks) PublishBatch(_ context.Context, exchange string, msgs []mq.Me
 	return []error{nil}, nil
 }
 
+// of are the acknowledgements of org; the audit database is shared, so a loop may complete other tests' organizations.
+func (f *fakeAcks) of(org uuid.UUID) int {
+	n := 0
+	for _, a := range f.messages() {
+		if a.OrganizationID == org {
+			n++
+		}
+	}
+	return n
+}
+
+// sentFor are the acknowledgements of org with their routing keys.
+func (f *fakeAcks) sentFor(org uuid.UUID) ([]offboarding.AuditRetired, []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var sent []offboarding.AuditRetired
+	var keys []string
+	for i, a := range f.sent {
+		if a.OrganizationID == org {
+			sent, keys = append(sent, a), append(keys, f.keys[i])
+		}
+	}
+	return sent, keys
+}
+
 func (f *fakeAcks) messages() []offboarding.AuditRetired {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -90,33 +115,50 @@ func retirementRequest(t *testing.T, org uuid.UUID) []byte {
 	return body
 }
 
-// TestRetirement covers plan M17 decision 16 and amendment 2026-11-15 o: the request yields exactly one final
-// verification in the organization's log, one audit_org_retired row and one acknowledgement, also when the request is
-// delivered again and when the first confirm is lost; a later event of the organization lands in the platform
-// pseudo-organization as audit.event_after_retirement, once; the nightly cycle no longer lists the organization; the
-// sealer seals through the final day with the retired mark and never after it; and a manifest after the retired day
-// fails the verification.
+func (s stack) retirement(acks auditwriter.AckPublisher) *auditwriter.Retirement {
+	return auditwriter.NewRetirement(s.pool, s.writer, s.verifier, s.sealer, auditwriter.NewRecorder(s.pool, s.writer, time.Now), acks)
+}
+
+// pending is the number of org's audit_org_retired rows without a recorded final verification.
+func (s stack) pending(t *testing.T, org uuid.UUID) int {
+	t.Helper()
+	return s.count(t, "SELECT count(*) FROM audit_org_retired WHERE organization_id = $1 AND final_verified_at IS NULL", org)
+}
+
+// TestRetirement covers plan M17 decision 16 and amendment 2026-11-15 o with review 1: the consumer only closes the log
+// (one audit_org_retired row, no verification); the retirement loop seals the days that may be sealed, verifies the
+// chain and the unsealed tail (today's object), and records exactly one final verification and one acknowledgement,
+// also when the request is delivered again and when the first confirm is lost; a later event of the organization
+// lands in the platform pseudo-organization as audit.event_after_retirement, once, while the exporter's own evidence
+// keeps its code and params there; the nightly cycle no longer lists the organization; the sealer seals through the
+// final day with the retired mark and never after it; and a manifest after the retired day fails the verification.
 func TestRetirement(t *testing.T) {
 	s := newStack(t)
 	ctx := context.Background()
 	org := uuid.Must(uuid.NewV7())
-	day1 := time.Now().UTC().AddDate(0, 0, -3).Truncate(24 * time.Hour)
-	day2 := day1.AddDate(0, 0, 1)
+	day1 := time.Now().UTC().AddDate(0, 0, -4).Truncate(24 * time.Hour)
+	day3 := day1.AddDate(0, 0, 2)
 	s.historicObject(t, org, day1.Add(9*time.Hour), event(org, day1.Add(9*time.Hour), audit.CodeDeviceGroupCreated))
-	s.historicObject(t, org, day2.Add(9*time.Hour), event(org, day2.Add(9*time.Hour), audit.CodeDeviceGroupUpdated))
-	if _, err := s.sealer.SealOrganizationThrough(ctx, org, day2); err != nil {
-		t.Fatal(err)
-	}
+	s.historicObject(t, org, day3.Add(9*time.Hour), event(org, day3.Add(9*time.Hour), audit.CodeDeviceGroupUpdated))
+	writeOne(t, s.writer, event(org, time.Now(), audit.CodeDeviceGroupDeleted))
 
 	acks := &fakeAcks{failures: 1}
-	retirement := auditwriter.NewRetirement(s.pool, s.writer, s.verifier, auditwriter.NewRecorder(s.pool, s.writer, time.Now), acks)
+	retirement := s.retirement(acks)
 	request := retirementRequest(t, org)
 	if got := deliver(t, retirement.Handle, request); got != "ack" {
 		t.Fatalf("request settled with %s", got)
 	}
+	if s.pending(t, org) != 1 {
+		t.Fatal("the consumer did not close the log")
+	}
+	if err := retirement.Complete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sealedDays := int(auditwriter.LastSealableDay(time.Now()).Sub(day1)/(24*time.Hour)) + 1
 	finals := func() int {
 		return s.count(t, `SELECT count(*) FROM audit_event WHERE organization_id = $1 AND code = 'audit.chain_verified'
-			AND params->>'final' = 'true' AND params->>'trigger' = 'final' AND params->>'days' = '2'`, org)
+			AND params->>'final' = 'true' AND params->>'trigger' = 'final' AND (params->>'days')::int = $2
+			AND params->>'objects' = '3'`, org, sealedDays)
 	}
 	if n := finals(); n != 1 {
 		t.Fatalf("%d final verifications, want 1", n)
@@ -128,17 +170,17 @@ func TestRetirement(t *testing.T) {
 	if n := s.count(t, `SELECT count(*) FROM audit_verification_run WHERE organization_id = $1 AND trigger = 'final' AND ok`, org); n != 1 {
 		t.Fatalf("%d final runs, want 1", n)
 	}
-	if len(acks.messages()) != 0 {
+	if acks.of(org) != 0 {
 		t.Fatal("a lost confirm counted as sent")
 	}
 
 	if err := retirement.Republish(ctx); err != nil {
 		t.Fatal(err)
 	}
-	sent := acks.messages()
-	if len(sent) != 1 || sent[0].OrganizationID != org || sent[0].FinalOutcome != offboarding.AuditFinalVerified ||
-		sent[0].FinalVerifiedAt.IsZero() || acks.keys[0] != mq.AuditRetiredRoutingKey(org) {
-		t.Fatalf("acknowledgements %+v %v", sent, acks.keys)
+	sent, keys := acks.sentFor(org)
+	if len(sent) != 1 || sent[0].FinalOutcome != offboarding.AuditFinalVerified ||
+		sent[0].FinalVerifiedAt.IsZero() || keys[0] != mq.AuditRetiredRoutingKey(org) {
+		t.Fatalf("acknowledgements %+v %v", sent, keys)
 	}
 	if n := s.count(t, "SELECT count(*) FROM audit_org_retired WHERE organization_id = $1 AND ack_published_at IS NOT NULL", org); n != 1 {
 		t.Fatal("the confirmed acknowledgement is not marked")
@@ -148,11 +190,14 @@ func TestRetirement(t *testing.T) {
 	if got := deliver(t, retirement.Handle, request); got != "ack" {
 		t.Fatalf("redelivered request settled with %s", got)
 	}
+	if err := retirement.Complete(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := retirement.Republish(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if n := finals(); n != 1 || len(acks.messages()) != 1 {
-		t.Fatalf("after a redelivery: %d final verifications, %d acknowledgements", n, len(acks.messages()))
+	if n := finals(); n != 1 || acks.of(org) != 1 {
+		t.Fatalf("after a redelivery: %d final verifications, %d acknowledgements", n, acks.of(org))
 	}
 
 	late := event(org, time.Now(), audit.CodeDeviceGroupDeleted)
@@ -168,6 +213,20 @@ func TestRetirement(t *testing.T) {
 		AND params->>'organization_id' = $2 AND params->>'original_code' = 'device_group.deleted'
 		AND params->>'original_event_id' = $3`, audit.PlatformOrganizationID, org.String(), late.EventID.String()); n != 1 {
 		t.Fatalf("%d audit.event_after_retirement for the late event, want 1", n)
+	}
+
+	completed := audit.Event{
+		Schema: audit.Schema, EventID: uuid.Must(uuid.NewV7()), OrganizationID: org, OccurredAt: audit.Timestamp(time.Now()),
+		Code: audit.CodeAuditExportCompleted, Outcome: audit.OutcomeSuccess,
+		Actor:  audit.Actor{Type: audit.ActorSystem, ID: "audit-writer", Display: "audit-writer"},
+		Source: audit.SourceSystem, CorrelationID: "export-1",
+		Params: map[string]any{"export_id": "e1", "package_sha256": "abc123", "verify_ok": true},
+	}
+	writeOne(t, s.writer, completed)
+	if n := s.count(t, `SELECT count(*) FROM audit_event WHERE event_id = $1 AND organization_id = $2
+		AND code = 'audit.export_completed' AND params->>'organization_id' = $3 AND params->>'package_sha256' = 'abc123'
+		AND params->>'verify_ok' = 'true'`, completed.EventID, audit.PlatformOrganizationID, org.String()); n != 1 {
+		t.Fatal("the exporter's evidence of a retired organization lost its code or params")
 	}
 
 	_, _, _, list := auditwriter.PoolIndex(s.pool)
@@ -232,8 +291,11 @@ func TestRetirementFailedOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	acks := &fakeAcks{}
-	retirement := auditwriter.NewRetirement(s.pool, s.writer, s.verifier, auditwriter.NewRecorder(s.pool, s.writer, time.Now), acks)
-	if err := retirement.Retire(ctx, org); err != nil {
+	retirement := s.retirement(acks)
+	if err := retirement.Close(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := retirement.Complete(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if n := s.count(t, `SELECT count(*) FROM audit_event WHERE organization_id = $1 AND code = 'audit.chain_verification_failed'
@@ -246,7 +308,129 @@ func TestRetirementFailedOutcome(t *testing.T) {
 	if n := s.count(t, `SELECT count(*) FROM audit_verification_run WHERE organization_id = $1 AND trigger = 'final' AND NOT ok`, org); n != 1 {
 		t.Fatal("the failed final run is not recorded for paddock_audit_verify_runs_total")
 	}
-	if sent := acks.messages(); len(sent) != 1 || sent[0].FinalOutcome != offboarding.AuditFinalFailed {
+	if sent, _ := acks.sentFor(org); len(sent) != 1 || sent[0].FinalOutcome != offboarding.AuditFinalFailed {
 		t.Fatalf("acknowledgements %+v", sent)
+	}
+}
+
+// blockingVerifier blocks every call until release is closed and counts the calls.
+type blockingVerifier struct {
+	release chan struct{}
+	calls   chan struct{}
+}
+
+func (b blockingVerifier) Verify(ctx context.Context, _ uuid.UUID, _, _ time.Time) (*auditwriter.Report, error) {
+	b.calls <- struct{}{}
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	return &auditwriter.Report{}, nil
+}
+
+func (b blockingVerifier) VerifyUnsealed(context.Context, uuid.UUID, time.Time, time.Time, *auditwriter.Report) error {
+	return nil
+}
+
+// failingVerifier fails every final verification.
+type failingVerifier struct{}
+
+func (failingVerifier) Verify(context.Context, uuid.UUID, time.Time, time.Time) (*auditwriter.Report, error) {
+	return nil, errors.New("object store unreachable")
+}
+
+func (failingVerifier) VerifyUnsealed(context.Context, uuid.UUID, time.Time, time.Time, *auditwriter.Report) error {
+	return errors.New("object store unreachable")
+}
+
+// TestRetirementDoesNotBlockTheConsumer (review 1 M1): the consumer acknowledges the request and another
+// organization's event while the final verification of the retiring organization hangs in the retirement loop.
+func TestRetirementDoesNotBlockTheConsumer(t *testing.T) {
+	s := newStack(t)
+	org, other := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	day := time.Now().UTC().AddDate(0, 0, -3).Truncate(24 * time.Hour)
+	s.historicObject(t, org, day.Add(9*time.Hour), event(org, day.Add(9*time.Hour), audit.CodeDeviceGroupCreated))
+	retirement := s.retirement(&fakeAcks{})
+	v := blockingVerifier{release: make(chan struct{}), calls: make(chan struct{}, 4)}
+	auditwriter.SetRetirementVerifier(retirement, v)
+	ctx, cancel := context.WithCancel(context.Background())
+	loop := make(chan struct{})
+	go func() { retirement.RunRetirements(ctx); close(loop) }()
+	defer func() { close(v.release); cancel(); <-loop }()
+
+	if got := deliver(t, retirement.Handle, retirementRequest(t, org)); got != "ack" {
+		t.Fatalf("request settled with %s", got)
+	}
+	select {
+	case <-v.calls:
+	case <-time.After(time.Minute):
+		t.Fatal("the retirement loop did not start the final verification")
+	}
+	ev := event(other, time.Now(), audit.CodeDeviceGroupCreated)
+	body, _ := json.Marshal(ev)
+	if got := deliver(t, retirement.Handle, body); got != "ack" {
+		t.Fatalf("another organization's event settled with %s while the verification hangs", got)
+	}
+	if n := s.count(t, "SELECT count(*) FROM audit_event WHERE event_id = $1", ev.EventID); n != 1 {
+		t.Fatal("another organization's event was not written while the verification hangs")
+	}
+}
+
+// TestRetirementCloseFailureIsRecovered (review 1 M1): a database error while the consumer closes the log does not
+// requeue or dead-letter the request; the retirement loop finds the indexed request and completes it.
+func TestRetirementCloseFailureIsRecovered(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	org := uuid.Must(uuid.NewV7())
+	writeOne(t, s.writer, event(org, time.Now(), audit.CodeDeviceGroupCreated))
+	acks := &fakeAcks{}
+	retirement := s.retirement(acks)
+	auditwriter.SetBeforeClose(retirement, func(uuid.UUID) error { return errors.New("database down") })
+	if got := deliver(t, retirement.Handle, retirementRequest(t, org)); got != "ack" {
+		t.Fatalf("request settled with %s, want ack (no requeue, no dead letter)", got)
+	}
+	if n := s.count(t, "SELECT count(*) FROM audit_org_retired WHERE organization_id = $1", org); n != 0 {
+		t.Fatal("the failed close inserted the row")
+	}
+	auditwriter.SetBeforeClose(retirement, nil)
+	if err := retirement.Complete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.count(t, `SELECT count(*) FROM audit_event WHERE organization_id = $1 AND code = 'audit.chain_verified'
+		AND params->>'final' = 'true'`, org); n != 1 || s.pending(t, org) != 0 || acks.of(org) != 1 {
+		t.Fatalf("after the loop: %d final verifications, %d pending, %d acknowledgements", n, s.pending(t, org), acks.of(org))
+	}
+}
+
+// TestRetirementVerificationFailureRetries (review 1 M1): a failing final verification records nothing and leaves the
+// closed log pending, as a crash would; the next run of the loop resumes from the table and completes it once.
+func TestRetirementVerificationFailureRetries(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	org := uuid.Must(uuid.NewV7())
+	day := time.Now().UTC().AddDate(0, 0, -3).Truncate(24 * time.Hour)
+	s.historicObject(t, org, day.Add(9*time.Hour), event(org, day.Add(9*time.Hour), audit.CodeDeviceGroupCreated))
+	acks := &fakeAcks{}
+	retirement := s.retirement(acks)
+	auditwriter.SetRetirementVerifier(retirement, failingVerifier{})
+	if err := retirement.Close(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := retirement.Complete(ctx); err == nil {
+		t.Fatal("a failing verification reported success")
+	}
+	if n := s.count(t, "SELECT count(*) FROM audit_event WHERE organization_id = $1 AND code LIKE 'audit.chain_%'", org); n != 0 ||
+		s.pending(t, org) != 1 || acks.of(org) != 0 {
+		t.Fatalf("after the failure: %d verification events, %d pending, %d acknowledgements", n, s.pending(t, org), acks.of(org))
+	}
+	auditwriter.SetRetirementVerifier(retirement, s.verifier)
+	for range 2 {
+		if err := retirement.Complete(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := s.count(t, `SELECT count(*) FROM audit_event WHERE organization_id = $1 AND code = 'audit.chain_verified'
+		AND params->>'final' = 'true'`, org); n != 1 || s.pending(t, org) != 0 || acks.of(org) != 1 {
+		t.Fatalf("after the retry: %d final verifications, %d pending, %d acknowledgements", n, s.pending(t, org), acks.of(org))
 	}
 }

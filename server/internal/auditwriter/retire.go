@@ -3,6 +3,7 @@ package auditwriter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -24,39 +25,71 @@ const TriggerFinal = "final"
 // amendment 2026-11-15 o point 5).
 const AckRepublishInterval = 5 * time.Minute
 
+// RetirementInterval is how often the retirement loop looks for retirements to complete; a request the consumer
+// closed wakes it at once.
+const RetirementInterval = 5 * time.Minute
+
+// RetirementRequestWindow is how far back the retirement loop reads the index for requests whose audit_org_retired row
+// is missing. It exceeds every realistic outage of the audit writer: the worker records the request once.
+const RetirementRequestWindow = 90 * 24 * time.Hour
+
 // AckPublisher publishes with publisher confirms (mq.Publisher).
 type AckPublisher interface {
 	PublishBatch(ctx context.Context, exchange string, msgs []mq.Message) ([]error, error)
 }
 
+// finalVerifier is the part of Verifier the final verification uses.
+type finalVerifier interface {
+	Verify(ctx context.Context, org uuid.UUID, from, to time.Time) (*Report, error)
+	VerifyUnsealed(ctx context.Context, org uuid.UUID, after, to time.Time, report *Report) error
+}
+
+// preSealer seals the days of a retiring organization before its final verification (Sealer.sealBeforeFinal).
+type preSealer interface {
+	sealBeforeFinal(ctx context.Context, org uuid.UUID) (int, error)
+}
+
 // Retirement closes the audit log of a deleting organization on the worker's organization.audit_retirement_requested
-// (plan M17 decision 16, amendment 2026-11-15 o): it marks the organization retired, so that its later events go to the
-// platform pseudo-organization, verifies its whole sealed chain once, records the result with final: true as the last
-// event of the organization's log and acknowledges it to the worker on paddock.offboarding.
+// (plan M17 decision 16, amendment 2026-11-15 o). The consumer only closes the log: it inserts audit_org_retired under
+// the organization's commit-sequence lock, so later events go to the platform pseudo-organization, and acknowledges the
+// batch. RunRetirements completes every closed log without a recorded final verification: it seals the days that may be
+// sealed, verifies the whole chain and the unsealed tail, records the result with final: true as the last event of the
+// organization's log and acknowledges it to the worker on paddock.offboarding. A slow or failing verification therefore
+// never holds the audit queue, a failure is retried by the loop, and a crash resumes from the table.
 type Retirement struct {
 	pool     *db.AuditWriterPool
 	writer   *Writer
-	verifier chainVerifier
+	verifier finalVerifier
+	sealer   preSealer
 	metrics  *VerifyMetrics
 	acks     AckPublisher
 	now      func() time.Time
+	wake     chan struct{}
+	// beforeClose, set only by tests (export_test.go), fails Close to simulate a database error in the consumer path.
+	beforeClose func(org uuid.UUID) error
 }
 
 // NewRetirement creates the retirement; recorder's collector counts its runs.
-func NewRetirement(pool *db.AuditWriterPool, writer *Writer, verifier chainVerifier, recorder *Recorder, acks AckPublisher) *Retirement {
-	return &Retirement{pool: pool, writer: writer, verifier: verifier, metrics: recorder.metrics, acks: acks, now: recorder.now}
+func NewRetirement(pool *db.AuditWriterPool, writer *Writer, verifier *Verifier, sealer *Sealer, recorder *Recorder,
+	acks AckPublisher) *Retirement {
+	return &Retirement{pool: pool, writer: writer, verifier: verifier, sealer: sealer, metrics: recorder.metrics, acks: acks,
+		now: recorder.now, wake: make(chan struct{}, 1)}
 }
 
-// Handle is Writer.Handle that also retires the organizations whose retirement a batch requests.
+// Handle is Writer.Handle that also closes the logs of the organizations whose retirement a batch requests.
 func (r *Retirement) Handle(ctx context.Context, _ *amqp.Channel, deliveries <-chan amqp.Delivery) error {
-	return r.writer.consume(ctx, deliveries, r.Retire)
+	return r.writer.consume(ctx, deliveries, r.Close)
 }
 
-// Retire retires org once; a repeated request finds the recorded result and only acknowledges it again when the broker
-// has not confirmed the acknowledgement yet. A failed publish is no error: RunAcks republishes it.
-func (r *Retirement) Retire(ctx context.Context, org uuid.UUID) error {
-	// The writers of org hold its commit-sequence lock until they commit (writeGroupOnce), so once this commits no
-	// event of org is written into its log except the final verification.
+// Close closes org's log: once it commits, no event of org is written into its log except the final verification
+// (the writers of org hold its commit-sequence lock until they commit, writeGroupOnce). It is idempotent and wakes
+// the retirement loop.
+func (r *Retirement) Close(ctx context.Context, org uuid.UUID) error {
+	if r.beforeClose != nil {
+		if err := r.beforeClose(org); err != nil {
+			return err
+		}
+	}
 	err := r.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		if _, err := q.LockOrgSeq(ctx, org); err != nil {
 			return err
@@ -66,26 +99,81 @@ func (r *Retirement) Retire(ctx context.Context, org uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("auditwriter: close the log of %s: %w", org, err)
 	}
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// RunRetirements completes retirements at start, when the consumer closed a log, and every RetirementInterval, until
+// ctx ends.
+func (r *Retirement) RunRetirements(ctx context.Context) {
+	for {
+		if err := r.Complete(ctx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "completing retired organizations failed; retried", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.wake:
+		case <-time.After(RetirementInterval):
+		}
+	}
+}
+
+// Complete closes the logs of indexed requests that have no audit_org_retired row yet, then runs the final
+// verification of every closed log without one. A failing organization does not stop the others; their errors are
+// returned together and retried at the next call.
+func (r *Retirement) Complete(ctx context.Context) error {
+	var requested, pending []uuid.UUID
+	err := r.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		var err error
+		requested, err = q.ListAuditRetirementRequestsWithoutRow(ctx, auditstore.ListAuditRetirementRequestsWithoutRowParams{
+			PlatformOrganizationID: audit.PlatformOrganizationID, Since: r.now().Add(-RetirementRequestWindow)})
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("auditwriter: list retirement requests: %w", err)
+	}
+	var errs []error
+	for _, org := range requested {
+		errs = append(errs, r.Close(ctx, org))
+	}
+	err = r.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		var err error
+		pending, err = q.ListAuditOrgRetiredPending(ctx)
+		return err
+	})
+	if err != nil {
+		return errors.Join(append(errs, fmt.Errorf("auditwriter: list pending retirements: %w", err))...)
+	}
+	for _, org := range pending {
+		if ctx.Err() != nil {
+			break
+		}
+		errs = append(errs, r.finalize(ctx, org))
+	}
+	return errors.Join(errs...)
+}
+
+// finalize records org's final verification and acknowledges it.
+func (r *Retirement) finalize(ctx context.Context, org uuid.UUID) error {
+	outcome, err := r.finalVerification(ctx, org)
+	if err != nil {
+		r.metrics.countError(TriggerFinal, resultError)
+		return err
+	}
+	err = r.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		return q.RecordAuditOrgRetiredVerification(ctx, auditstore.RecordAuditOrgRetiredVerificationParams{
+			OrganizationID: org, FinalOutcome: &outcome})
+	})
+	if err != nil {
+		return fmt.Errorf("auditwriter: record the final verification of %s: %w", org, err)
+	}
 	row, err := r.retired(ctx, org)
 	if err != nil {
 		return err
-	}
-	if row.FinalVerifiedAt == nil {
-		outcome, err := r.finalVerification(ctx, org)
-		if err != nil {
-			r.metrics.countError(TriggerFinal, resultError)
-			return err
-		}
-		err = r.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
-			return q.RecordAuditOrgRetiredVerification(ctx, auditstore.RecordAuditOrgRetiredVerificationParams{
-				OrganizationID: org, FinalOutcome: &outcome})
-		})
-		if err != nil {
-			return fmt.Errorf("auditwriter: record the final verification of %s: %w", org, err)
-		}
-		if row, err = r.retired(ctx, org); err != nil {
-			return err
-		}
 	}
 	if row.AckPublishedAt == nil {
 		r.acknowledge(ctx, row)
@@ -113,19 +201,36 @@ func finalIDs(org uuid.UUID) (runID, eventID uuid.UUID) {
 		uuid.NewSHA1(uuid.NameSpaceURL, []byte("urn:paddock:audit:final-event:"+org.String()))
 }
 
-// finalVerification verifies every sealed day of org, writes audit.chain_verified or audit.chain_verification_failed
-// with final: true into org's log and records the run, and returns the outcome of the run of record.
+// finalVerification seals what may be sealed, verifies every sealed day of org and every object of the days after the
+// newest manifest (the unsealed tail, through the day after now, where a write may file its object), writes
+// audit.chain_verified or audit.chain_verification_failed with final: true into org's log, records the run, and
+// returns the outcome of the run of record. The final event's own object is written after the check and verified
+// offline (paddockctl audit verify-export) with its retired day.
 func (r *Retirement) finalVerification(ctx context.Context, org uuid.UUID) (string, error) {
 	runID, eventID := finalIDs(org)
+	if _, err := r.sealer.sealBeforeFinal(ctx, org); err != nil {
+		return "", fmt.Errorf("auditwriter: seal %s before its final verification: %w", org, err)
+	}
 	started := r.now()
-	from, to, sealed, err := r.sealedRange(ctx, org, started)
+	first, newest, objects, sealed, err := r.chainDays(ctx, org)
 	if err != nil {
 		return "", err
 	}
 	report := &Report{}
+	from, to := dayOf(started), dayOf(started)
 	if sealed {
+		from, to = first, newest
 		if report, err = r.verifier.Verify(ctx, org, from, to); err != nil {
 			return "", fmt.Errorf("auditwriter: final verification of %s: %w", org, err)
+		}
+	}
+	if objects {
+		after := newest
+		if !sealed {
+			after = first.AddDate(0, 0, -1)
+		}
+		if err := r.verifier.VerifyUnsealed(ctx, org, after, dayOf(started).AddDate(0, 0, 1), report); err != nil {
+			return "", fmt.Errorf("auditwriter: final verification of %s's unsealed days: %w", org, err)
 		}
 	}
 	ev, err := verificationEvent(org, runID, TriggerFinal, from, to, r.now(), report)
@@ -161,36 +266,40 @@ func (r *Retirement) finalVerification(ctx context.Context, org uuid.UUID) (stri
 		outcome = offboarding.AuditFinalFailed
 	}
 	slog.InfoContext(ctx, "final audit chain verification recorded", "organization_id", org, "run_id", runID,
-		"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly), "outcome", outcome,
+		"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly), "objects", report.Objects, "outcome", outcome,
 		"problems", len(report.Problems))
 	return outcome, nil
 }
 
-// sealedRange is org's first day through its newest manifest; sealed is false when org has no manifest yet, and the
-// range is then the day of now.
-func (r *Retirement) sealedRange(ctx context.Context, org uuid.UUID, now time.Time) (from, to time.Time, sealed bool, err error) {
+// chainDays is org's first day and newest manifest day; sealed is false without a manifest, objects false without an
+// indexed object.
+func (r *Retirement) chainDays(ctx context.Context, org uuid.UUID) (first, newest time.Time, objects, sealed bool, err error) {
 	err = r.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		_, err := q.LastAuditObjectDay(ctx, org)
+		switch {
+		case err == nil:
+			objects = true
+		case !db.IsNoRows(err):
+			return err
+		}
 		latest, err := q.GetLatestAuditManifest(ctx, org)
-		if db.IsNoRows(err) {
+		switch {
+		case err == nil:
+			sealed, newest = true, dayOf(latest.Day)
+		case !db.IsNoRows(err):
+			return err
+		}
+		if !objects && !sealed {
 			return nil
 		}
-		if err != nil {
-			return err
-		}
-		first, err := q.FirstAuditDay(ctx, org)
-		if err != nil {
-			return err
-		}
-		from, to, sealed = dayOf(first), dayOf(latest.Day), true
-		return nil
+		f, err := q.FirstAuditDay(ctx, org)
+		first = dayOf(f)
+		return err
 	})
 	if err != nil {
-		return from, to, false, fmt.Errorf("auditwriter: sealed days of %s: %w", org, err)
+		err = fmt.Errorf("auditwriter: days of %s: %w", org, err)
 	}
-	if !sealed {
-		from, to = dayOf(now), dayOf(now)
-	}
-	return from, to, sealed, nil
+	return first, newest, objects, sealed, err
 }
 
 // acknowledge publishes the recorded outcome of row to the worker and marks it published once the broker confirmed.

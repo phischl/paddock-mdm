@@ -209,3 +209,14 @@ func SetPackageSized(e *Exporter, fn func(size int64)) { e.packageSized = fn }
 
 // SetChunkInserted runs fn after every chunk row the build inserted.
 func SetChunkInserted(e *Exporter, fn func(seq int32)) { e.chunkInserted = fn }
+
+// SetBeforeClose fails Retirement.Close with fn's error (a database error in the consumer path).
+func SetBeforeClose(r *Retirement, fn func(org uuid.UUID) error) { r.beforeClose = fn }
+
+// SetRetirementVerifier replaces the final verification's verifier (a slow or failing verification).
+func SetRetirementVerifier(r *Retirement, v interface {
+	Verify(ctx context.Context, org uuid.UUID, from, to time.Time) (*Report, error)
+	VerifyUnsealed(ctx context.Context, org uuid.UUID, after, to time.Time, report *Report) error
+}) {
+	r.verifier = v
+}

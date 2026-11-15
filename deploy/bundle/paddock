@@ -19,9 +19,10 @@ usage: ./paddock <command> [arguments]
   logs [service...]               show the last log lines
   compose <args...>               docker compose with this host's files
   bao <args...>                   the bao CLI inside the openbao container (BAO_TOKEN from the environment)
-  bootstrap openbao|buckets|audit-bucket|fleet
+  bootstrap openbao|buckets|audit-bucket|fleet|broker
                                   configure OpenBao, the buckets or Fleet (docs/operations/install.md);
-                                  buckets --add-missing only adds missing users and policies (./paddock upgrade)
+                                  buckets --add-missing only adds missing users and policies (./paddock upgrade);
+                                  broker applies the RabbitMQ users and permissions to the running broker and checks them
   agent-release <version> <dir>   upload and publish signed agent artifacts (control plane)
   agent-rollout <version> [--waves 1,10,50,100] [--min-wave-minutes N] [--failure-threshold-percent P]
                 [--failure-threshold-min M]
@@ -440,6 +441,27 @@ case "$cmd" in
         echo "      - not checked: listing the project's containers failed"
       fi
     fi
+    # Online on a host with RabbitMQ, the broker's permissions on vhost paddock against the definitions (PDK-1017, main
+    # §44): rabbitmqctl's listing goes in as a file, never the definitions file with the passwords.
+    # PADDOCK_CHECK_SKIP_BROKER: set by ./paddock upgrade before up; the old release's broker has the old permissions
+    # until the step broker applies the new ones.
+    broker=() broker_mount=()
+    if [[ -n "$online" && "$PADDOCK_HOST" != audit ]]; then
+      if [[ -n "${PADDOCK_CHECK_SKIP_BROKER:-}" ]]; then
+        echo "WARN  rabbitmq: permissions match the definitions"
+        echo "      - not checked: the old release still runs; the step broker of the upgrade applies and checks them"
+      else
+        broker_file="$(mktemp)"
+        trap 'rm -f "${containers_file:-}" "$broker_file"' EXIT
+        if compose exec -T -e "RABBITMQ_CTL_ERL_ARGS=+S 1:1 +SDcpu 1:1 +SDio 1 +A 1 +sbwt none +sbwtdcpu none +sbwtdio none"           rabbitmq rabbitmqctl -q list_permissions -p paddock --formatter json </dev/null >"$broker_file"; then
+          broker_mount=(-v "$broker_file:/run/paddock-check/broker.json:ro")
+          broker=(--broker-permissions /run/paddock-check/broker.json)
+        else
+          echo "WARN  rabbitmq: permissions match the definitions"
+          echo "      - not checked: rabbitmqctl list_permissions failed (is the broker running?)"
+        fi
+      fi
+    fi
     # The connection budget of the control-plane database (plan M19 D1.4) from the same configuration, so the replicas
     # of .env count (PADDOCK_WORKER_INGEST_REPLICAS); its FAIL fails the check after the checklist.
     budget_failed=""
@@ -451,10 +473,10 @@ case "$cmd" in
     fi
     rc=0
     PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
-      docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" "${containers_mount[@]}" \
+      docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" "${containers_mount[@]}" "${broker_mount[@]}" \
         -v "$BUNDLE_DIR:$BUNDLE_DIR:ro" -w "$BUNDLE_DIR" "$PADDOCK_IMAGE" \
         prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online} "${revisions[@]}" \
-        "${docker_networks[@]}" "${containers[@]}" || rc=$?
+        "${docker_networks[@]}" "${broker[@]}" "${containers[@]}" || rc=$?
     ((rc == 0)) || exit "$rc"
     [[ -z "$budget_failed" ]] || exit 1
     ;;
@@ -526,7 +548,12 @@ case "$cmd" in
         require_host controlplane lab "bootstrap fleet"
         "$BUNDLE_DIR/scripts/fleet-bootstrap.sh"
         ;;
-      *) die "usage: ./paddock bootstrap openbao|buckets|audit-bucket|fleet" 2 ;;
+      broker)
+        require_host controlplane lab "bootstrap broker"
+        [[ $# -eq 1 ]] || die "usage: ./paddock bootstrap broker" 2
+        "$BUNDLE_DIR/scripts/rabbitmq-definitions.sh"
+        ;;
+      *) die "usage: ./paddock bootstrap openbao|buckets|audit-bucket|fleet|broker" 2 ;;
     esac
     ;;
   agent-release)

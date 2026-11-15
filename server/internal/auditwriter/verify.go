@@ -219,3 +219,30 @@ func deref(s *string) string {
 	}
 	return *s
 }
+
+// VerifyUnsealed checks the objects of org's days after through to that no manifest covers yet (the unsealed tail of a
+// retired organization's chain, plan M17 amendment 2026-11-15 o, review 1 m1): every indexed object is readable and its
+// SHA-256 matches the index. It adds to report and counts the objects; the days count only sealed days.
+func (v *Verifier) VerifyUnsealed(ctx context.Context, org uuid.UUID, after, to time.Time, report *Report) error {
+	return v.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		for day := dayOf(after).AddDate(0, 0, 1); !day.After(dayOf(to)); day = day.AddDate(0, 0, 1) {
+			objects, err := q.ListAuditObjectsForDay(ctx, auditstore.ListAuditObjectsForDayParams{OrganizationID: org, Day: day})
+			if err != nil {
+				return err
+			}
+			name := day.Format(time.DateOnly)
+			for _, o := range objects {
+				report.Objects++
+				got, _, err := streamObject(ctx, v.store, o.ObjectKey, v.maxObject, io.Discard)
+				if err != nil {
+					report.addf("%s (unsealed): object %s unreadable: %v", name, o.ObjectKey, err)
+					continue
+				}
+				if !bytes.Equal(got[:], o.Sha256) {
+					report.addf("%s (unsealed): object %s was modified (SHA-256 mismatch)", name, o.ObjectKey)
+				}
+			}
+		}
+		return nil
+	})
+}

@@ -31,3 +31,20 @@ SELECT EXISTS (SELECT 1 FROM audit_org_retired WHERE organization_id = @organiza
 -- its last event, which the sealer seals as the organization's last day (amendment o point 7).
 -- name: LastAuditObjectDay :one
 SELECT day FROM audit_object WHERE organization_id = @organization_id ORDER BY day DESC LIMIT 1;
+
+-- Retired organizations whose final verification is not recorded yet (plan M17 amendment o, review 1 M1): the
+-- retirement loop completes them, also after a crash.
+-- name: ListAuditOrgRetiredPending :many
+SELECT organization_id FROM audit_org_retired WHERE final_verified_at IS NULL ORDER BY retired_at, organization_id;
+
+-- Organizations whose retirement was requested (an indexed organization.audit_retirement_requested of the platform
+-- pseudo-organization since @since) but that have no audit_org_retired row: the consumer failed to insert it, and the
+-- retirement loop does it instead, so a request is never lost to a redelivery limit.
+-- name: ListAuditRetirementRequestsWithoutRow :many
+SELECT DISTINCT (e.params ->> 'organization_id')::uuid AS organization_id
+FROM audit_event e
+WHERE e.organization_id = @platform_organization_id AND e.code = 'organization.audit_retirement_requested'
+  AND e.outcome = 'success' AND e.occurred_at >= @since
+  AND e.params ->> 'organization_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  AND e.params ->> 'organization_id' <> @platform_organization_id::text
+  AND NOT EXISTS (SELECT 1 FROM audit_org_retired r WHERE r.organization_id::text = e.params ->> 'organization_id');

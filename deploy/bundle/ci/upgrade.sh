@@ -8,7 +8,8 @@
 #    2  seeded (seed.sh) with a device of the previous release's devicesim package (upgradesim built from the previous
 #       tag's checkout);
 #    3  ./paddock upgrade-check on both hosts: no FAIL, no WARN but the known ones;
-#    4  ./paddock upgrade --yes on the control plane, then on the audit host;
+#    4  ./paddock upgrade --yes on the control plane, then on the audit host; its step broker gave the audit writer and
+#       the worker exactly the permissions of this tree's definitions, without a broker restart (assert-broker.sh);
 #    5  probes: the hosts, the hardening, every seeded object with its ID, the audit count, the chain verification, the
 #       API token, the escrowed password revealed with a step-up, the old device's check-in and events, a new device;
 #    6  ./paddock rollback --yes on the control plane (the backup key on stdin), then on the audit host (the
@@ -324,6 +325,8 @@ upgrade_hosts() {
   BAO_TOKEN="$(sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p' "$W/init.json")" cp_paddock upgrade "$W/prev/cp" --yes </dev/null
   step "$1.2 $2: audit host"
   audit_paddock upgrade "$W/prev/audit" --yes </dev/null
+  # Before the job's own bootstrap and up below, so that only the upgrade's step broker can have applied them.
+  "$here/assert-broker.sh" paddock-cp </dev/null
   step "$1.3 $2: the release's bootstrap and orphans"
   cp_paddock bootstrap buckets
   cp_paddock up

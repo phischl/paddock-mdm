@@ -142,7 +142,7 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 		return err
 	}
 	nightly := auditwriter.NewNightly(deps.pool, deps.verifier(), recorder, time.Now)
-	retirement := auditwriter.NewRetirement(deps.pool, deps.writer, deps.verifier(), recorder, acks)
+	retirement := auditwriter.NewRetirement(deps.pool, deps.writer, deps.verifier(), sealer, recorder, acks)
 	purger := auditwriter.NewPurger(deps.pool, deps.writer, deps.indexRetention)
 	exporter := auditwriter.NewExporter(deps.pool, deps.writer, deps.store, deps.bao, deps.publicKeys, deps.verifier(),
 		buildinfo.Version, poll, maxBytes)
@@ -160,6 +160,7 @@ func serveAuditWriter(ctx context.Context, l *config.Loader, common config.Commo
 		},
 		func(ctx context.Context) error { return consumer.Run(ctx, retirement.Handle) },
 		func(ctx context.Context) error { retirement.RunAcks(ctx); return nil },
+		func(ctx context.Context) error { retirement.RunRetirements(ctx); return nil },
 		func(ctx context.Context) error { publishCurrentKey(ctx, publisher, deps.pool); return nil },
 		func(ctx context.Context) error { sealer.RunDaily(ctx); return nil },
 		func(ctx context.Context) error { nightly.RunNightly(ctx); return nil },

@@ -145,6 +145,8 @@ lint-shell:
 	shellcheck -s bash scripts/release-notes-check.sh scripts/release-notes-check_test.sh
 	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade-check.sh deploy/bundle/upgrade-check_test.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/rabbitmq-definitions.sh deploy/bundle/ci/assert-broker.sh \
+		deploy/bundle/ci/assert-broker_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade.sh deploy/compose/scripts/rollback.sh deploy/bundle/upgrade_test.sh \
 		deploy/bundle/rollback_test.sh deploy/compose/scripts/legacy-alpha8.sh
 	shellcheck -x -s bash deploy/bundle/ci/lib-smoke.sh deploy/bundle/ci/upgrade.sh deploy/bundle/ci/upgrade_test.sh \
@@ -292,6 +294,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash deploy/bundle/rollback_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
 	bash deploy/bundle/ci/assert-hardening_test.sh
+	bash deploy/bundle/ci/assert-broker_test.sh
 	bash deploy/bundle/ci/assert-segmentation_test.sh
 	bash deploy/bundle/ci/upgrade_test.sh
 	bash deploy/bundle/ci/fetch-previous_test.sh
