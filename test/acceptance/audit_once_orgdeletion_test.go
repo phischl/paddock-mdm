@@ -9,8 +9,6 @@ import (
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
-const orgPath = "/api/platform/v1/organizations/"
-
 // deletionGateOrg creates an organization of the case's own: the deletion cases never touch a shared organization.
 func deletionGateOrg(t *testing.T, w *auditWorld) (id, slug string) {
 	t.Helper()

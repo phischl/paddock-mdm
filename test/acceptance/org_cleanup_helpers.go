@@ -13,6 +13,9 @@ import (
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
+// orgPath is the platform API prefix of an organization.
+const orgPath = "/api/platform/v1/organizations/"
+
 // orgDeletedWithin bounds how long the gate OF8 waits for the worker to delete an organization. The worker runs one
 // of the ten deletion steps per round of a minute, so a deletion takes about ten minutes; plan M17 amendment p
 // (PDK-946c) makes a round run several steps, and the bound then returns to 5 minutes.
