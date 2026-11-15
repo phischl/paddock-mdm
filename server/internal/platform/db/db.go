@@ -213,12 +213,13 @@ func (p *OrgPool) OrganizationIDs(ctx context.Context) ([]uuid.UUID, error) {
 }
 
 // Listen holds a dedicated connection with LISTEN channel and calls fn with the payload of every notification. It
-// returns when ctx ends or the connection fails; notifications sent meanwhile are lost, so callers reconcile.
-func (p *OrgPool) Listen(ctx context.Context, channel string, fn func(payload string)) error {
-	return listen(ctx, p.p, channel, fn)
+// calls listening (if not nil) once LISTEN is established: notifications sent before that, and after Listen returns
+// when ctx ends or the connection fails, are lost, so callers reconcile after listening.
+func (p *OrgPool) Listen(ctx context.Context, channel string, listening func(), fn func(payload string)) error {
+	return listen(ctx, p.p, channel, listening, fn)
 }
 
-func listen(ctx context.Context, p *pgxpool.Pool, channel string, fn func(payload string)) error {
+func listen(ctx context.Context, p *pgxpool.Pool, channel string, listening func(), fn func(payload string)) error {
 	conn, err := p.Acquire(ctx)
 	if err != nil {
 		return err
@@ -226,6 +227,9 @@ func listen(ctx context.Context, p *pgxpool.Pool, channel string, fn func(payloa
 	defer conn.Release()
 	if _, err := conn.Exec(ctx, "LISTEN "+pgx.Identifier{channel}.Sanitize()); err != nil {
 		return err
+	}
+	if listening != nil {
+		listening()
 	}
 	for {
 		n, err := conn.Conn().WaitForNotification(ctx)
@@ -578,7 +582,7 @@ func (p *BackupPool) BundleSeqHighWater(ctx context.Context) (int64, error) {
 // Listen holds a dedicated connection with LISTEN channel and sends to notify on every notification (non-blocking).
 // It returns when ctx ends or the connection fails.
 func (p *RelayPool) Listen(ctx context.Context, channel string, notify chan<- struct{}) error {
-	return listen(ctx, p.p, channel, func(string) {
+	return listen(ctx, p.p, channel, nil, func(string) {
 		select {
 		case notify <- struct{}{}:
 		default:
