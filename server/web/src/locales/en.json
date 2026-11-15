@@ -412,6 +412,7 @@
       "deletion_step_completed": "Deletion of {slug}: step {step} completed",
       "deletion_step_failed": "Deletion of {slug}: step {step} failed",
       "deleted": "The organization {slug} was deleted",
+      "audit_retirement_requested": "Deletion of {slug}: the final verification of the audit log was requested",
       "inactive_denied": "{actor} was refused: organization {organization_id} is {status, select, deleted {deleted} other {being deleted}} ({attempted_code})"
     },
     "device_group": {

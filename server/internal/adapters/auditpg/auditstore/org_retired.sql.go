@@ -7,12 +7,13 @@ package auditstore
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 const getAuditOrgRetired = `-- name: GetAuditOrgRetired :one
-SELECT organization_id, retired_at, final_verified_at, final_outcome FROM audit_org_retired WHERE organization_id = $1
+SELECT organization_id, retired_at, final_verified_at, final_outcome, ack_published_at FROM audit_org_retired WHERE organization_id = $1
 `
 
 func (q *Queries) GetAuditOrgRetired(ctx context.Context, organizationID uuid.UUID) (AuditOrgRetired, error) {
@@ -23,6 +24,7 @@ func (q *Queries) GetAuditOrgRetired(ctx context.Context, organizationID uuid.UU
 		&i.RetiredAt,
 		&i.FinalVerifiedAt,
 		&i.FinalOutcome,
+		&i.AckPublishedAt,
 	)
 	return i, err
 }
@@ -36,6 +38,30 @@ INSERT INTO audit_org_retired (organization_id) VALUES ($1) ON CONFLICT (organiz
 func (q *Queries) InsertAuditOrgRetired(ctx context.Context, organizationID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, insertAuditOrgRetired, organizationID)
 	return err
+}
+
+const isAuditOrgRetired = `-- name: IsAuditOrgRetired :one
+SELECT EXISTS (SELECT 1 FROM audit_org_retired WHERE organization_id = $1) AS retired
+`
+
+func (q *Queries) IsAuditOrgRetired(ctx context.Context, organizationID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, isAuditOrgRetired, organizationID)
+	var retired bool
+	err := row.Scan(&retired)
+	return retired, err
+}
+
+const lastAuditObjectDay = `-- name: LastAuditObjectDay :one
+SELECT day FROM audit_object WHERE organization_id = $1 ORDER BY day DESC LIMIT 1
+`
+
+// The day of an organization's newest object: after the final verification of a retired organization, the day of
+// its last event, which the sealer seals as the organization's last day (amendment o point 7).
+func (q *Queries) LastAuditObjectDay(ctx context.Context, organizationID uuid.UUID) (time.Time, error) {
+	row := q.db.QueryRow(ctx, lastAuditObjectDay, organizationID)
+	var day time.Time
+	err := row.Scan(&day)
+	return day, err
 }
 
 const listAuditOrgRetiredIDs = `-- name: ListAuditOrgRetiredIDs :many
@@ -62,9 +88,53 @@ func (q *Queries) ListAuditOrgRetiredIDs(ctx context.Context) ([]uuid.UUID, erro
 	return items, nil
 }
 
+const listAuditOrgRetiredUnacknowledged = `-- name: ListAuditOrgRetiredUnacknowledged :many
+SELECT organization_id, retired_at, final_verified_at, final_outcome, ack_published_at FROM audit_org_retired
+WHERE final_verified_at IS NOT NULL AND ack_published_at IS NULL
+ORDER BY organization_id
+`
+
+// The retirement of an organization whose acknowledgement the broker has not confirmed yet (plan M17 amendment o point
+// 5).
+func (q *Queries) ListAuditOrgRetiredUnacknowledged(ctx context.Context) ([]AuditOrgRetired, error) {
+	rows, err := q.db.Query(ctx, listAuditOrgRetiredUnacknowledged)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditOrgRetired{}
+	for rows.Next() {
+		var i AuditOrgRetired
+		if err := rows.Scan(
+			&i.OrganizationID,
+			&i.RetiredAt,
+			&i.FinalVerifiedAt,
+			&i.FinalOutcome,
+			&i.AckPublishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markAuditOrgRetiredAcknowledged = `-- name: MarkAuditOrgRetiredAcknowledged :exec
+UPDATE audit_org_retired SET ack_published_at = now()
+WHERE organization_id = $1 AND final_verified_at IS NOT NULL AND ack_published_at IS NULL
+`
+
+func (q *Queries) MarkAuditOrgRetiredAcknowledged(ctx context.Context, organizationID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markAuditOrgRetiredAcknowledged, organizationID)
+	return err
+}
+
 const recordAuditOrgRetiredVerification = `-- name: RecordAuditOrgRetiredVerification :exec
 UPDATE audit_org_retired SET final_verified_at = now(), final_outcome = $1
-WHERE organization_id = $2
+WHERE organization_id = $2 AND final_verified_at IS NULL
 `
 
 type RecordAuditOrgRetiredVerificationParams struct {

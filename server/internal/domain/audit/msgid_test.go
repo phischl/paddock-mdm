@@ -65,6 +65,7 @@ func TestMsgIDAliasTableIsAddOnly(t *testing.T) {
 		"organization.deletion_step_failed":             "organization.deletion_step_fail",
 		"platform.offboarded_device_uninstalled":        "platform.offboarded_uninstalled",
 		"platform.deleted_organization_audit_read":      "platform.deleted_org_audit_read",
+		"organization.audit_retirement_requested":       "organization.audit_retire_req",
 	}
 	for c, want := range published {
 		if got := msgIDAliases[c]; got != want {

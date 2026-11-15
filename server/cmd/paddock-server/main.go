@@ -35,6 +35,7 @@ commands:
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD   (recorded as a verification run; prints run <id>)
   audit keys                 (prints the audit-chain key fingerprints: audit-chain v<N> <sha256>)
   audit purge [--dry-run]   (drops expired audit index partitions; prints DROP/KEEP lines)
+  audit deletions --since <RFC3339>   (prints occurred_at, organization_id, slug of every organization.deleted, read from WORM)
   osv import <file>
   admin bump-bundle-seq --by N
   admin raise-bundle-seq --at-least N

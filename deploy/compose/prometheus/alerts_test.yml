@@ -444,6 +444,28 @@ tests:
               summary: "The audit hash chain failed its nightly verification"
               description: "2 organization(s) have a broken or unreadable audit chain; see the evidence integrity page and paddock-server audit verify."
 
+  - name: a failed final verification of a deleted organization fires for the following hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_verify_runs_total{trigger="final", result="failed", job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 0 1x180"
+      - series: 'paddock_audit_verify_runs_total{trigger="final", result="ok", job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "0 1 2x180"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PaddockAuditFinalVerificationFailed
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: PaddockAuditFinalVerificationFailed
+        exp_alerts:
+          - exp_labels: { severity: critical, trigger: final, result: failed, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "The final audit verification of a deleted organization failed"
+              description: "The audit chain of an organization being deleted did not verify; its retained evidence is incomplete or altered. The organization detail and organization.deleted show audit_final_outcome failed."
+      - eval_time: 2h
+        alertname: PaddockAuditFinalVerificationFailed
+        exp_alerts: []
+
   - name: a chain verification older than 36 hours warns after one more hour
     interval: 1m
     input_series:

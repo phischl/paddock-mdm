@@ -118,6 +118,9 @@ type Manifest struct {
 	Day                string           `json:"day"`
 	Objects            []ManifestObject `json:"objects"`
 	PrevManifestSHA256 *string          `json:"prev_manifest_sha256"`
+	// Retired marks the last manifest of a deleted organization: no manifest may follow it. Verifiers that predate the
+	// field ignore it.
+	Retired bool `json:"retired,omitempty"`
 }
 
 // ManifestFile is the stored object org/<org>/manifests/<day>.json.

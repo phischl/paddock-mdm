@@ -46,6 +46,9 @@ type Manifest struct {
 	Day                string           `json:"day"`
 	Objects            []ManifestObject `json:"objects"`
 	PrevManifestSHA256 *string          `json:"prev_manifest_sha256"`
+	// Retired marks the last manifest of a retired organization (plan M17 amendment 2026-11-15 o point 7); no manifest
+	// follows it. Omitted otherwise, so every other manifest keeps its canonical form.
+	Retired bool `json:"retired,omitempty"`
 }
 
 // ManifestFile is the stored object org/<org>/manifests/<day>.json.
@@ -58,10 +61,16 @@ type ManifestFile struct {
 // CanonicalManifest builds the manifest and returns its RFC 8785 canonical bytes and their SHA-256. Objects are
 // sorted by key, so the result does not depend on the input order.
 func CanonicalManifest(org uuid.UUID, day time.Time, objects []ManifestObject, prev []byte) ([]byte, [32]byte, error) {
+	return canonicalManifest(org, day, objects, prev, false)
+}
+
+// canonicalManifest is CanonicalManifest with the retired mark.
+func canonicalManifest(org uuid.UUID, day time.Time, objects []ManifestObject, prev []byte, retired bool) ([]byte, [32]byte, error) {
 	sorted := append([]ManifestObject(nil), objects...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Key < sorted[j].Key })
 	m := Manifest{
 		Schema: ManifestSchema, OrganizationID: org.String(), Day: day.UTC().Format(time.DateOnly), Objects: sorted,
+		Retired: retired,
 	}
 	if m.Objects == nil {
 		m.Objects = []ManifestObject{}
@@ -191,9 +200,16 @@ func (s *Sealer) sealOrganization(ctx context.Context, q *auditstore.Queries, or
 	default:
 		return 0, err
 	}
+	finalDay, stop, err := retiredLastDay(ctx, q, org)
+	if err != nil {
+		return 0, err
+	}
+	if stop && finalDay.Before(last) {
+		last = finalDay
+	}
 	n := 0
 	for ; !day.After(last); day = day.AddDate(0, 0, 1) {
-		sum, err := s.sealDay(ctx, org, day, prev)
+		sum, err := s.sealDay(ctx, org, day, prev, stop && day.Equal(finalDay))
 		if err != nil {
 			return n, err
 		}
@@ -203,10 +219,33 @@ func (s *Sealer) sealOrganization(ctx context.Context, q *auditstore.Queries, or
 	return n, nil
 }
 
+// retiredLastDay is the last day the sealer seals for a retired organization (plan M17 amendment 2026-11-15 o point 7):
+// the day of its newest object, which after the final verification is the day of that verification's event, since
+// every later event goes to the platform pseudo-organization. stop is true for a retired organization; while its final
+// verification is still being recorded, the last day is the day before its first day, so nothing is sealed and the
+// final event cannot land on a day already sealed without the mark.
+func retiredLastDay(ctx context.Context, q *auditstore.Queries, org uuid.UUID) (last time.Time, stop bool, err error) {
+	row, err := q.GetAuditOrgRetired(ctx, org)
+	if db.IsNoRows(err) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if row.FinalVerifiedAt == nil {
+		return time.Time{}, true, nil
+	}
+	last, err = q.LastAuditObjectDay(ctx, org)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return dayOf(last), true, nil
+}
+
 // sealDay writes and records one manifest in its own transaction. It holds the organization's audit-day lock, so
 // every writer transaction that inserted an object of the day has committed before the objects are listed, and every
 // later one sees the manifest and files its object under the next day (audit migration 00005).
-func (s *Sealer) sealDay(ctx context.Context, org uuid.UUID, day time.Time, prev []byte) ([]byte, error) {
+func (s *Sealer) sealDay(ctx context.Context, org uuid.UUID, day time.Time, prev []byte, retired bool) ([]byte, error) {
 	var sum [32]byte
 	err := s.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		if err := q.LockAuditDays(ctx, org); err != nil {
@@ -221,7 +260,7 @@ func (s *Sealer) sealDay(ctx context.Context, org uuid.UUID, day time.Time, prev
 			objects[i] = ManifestObject{Key: r.ObjectKey, SHA256: hex.EncodeToString(r.Sha256), EventCount: int(r.EventCount)}
 		}
 		var canonical []byte
-		canonical, sum, err = CanonicalManifest(org, day, objects, prev)
+		canonical, sum, err = canonicalManifest(org, day, objects, prev, retired)
 		if err != nil {
 			return err
 		}

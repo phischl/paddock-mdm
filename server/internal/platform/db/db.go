@@ -739,6 +739,60 @@ func (r *AuditReader) InOrgWrite(ctx context.Context, fn func(ctx context.Contex
 		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
 }
 
+// ErrNotDeleted refuses InDeletedOrg: the organization is not deleted (or does not exist), or the caller is no
+// platform administrator. Callers answer it as not found.
+var ErrNotDeleted = errors.New("db: organization is not deleted")
+
+// InDeletedOrg runs fn in a read-only transaction scoped to org, a deleted organization, for a platform administrator
+// who reads its retained audit evidence (ADR 0052 decision 7, plan M17 decision 18). It is the only place where an
+// organization ID taken from a request, not from the principal, opens an organization context, so it refuses with
+// ErrNotDeleted unless the principal is a platform administrator and platform confirms organization.status = 'deleted'.
+// Its only caller is app.DeletedOrgAudit (deletedorgaudit_lint_test.go).
+func (r *AuditReader) InDeletedOrg(ctx context.Context, platform *PlatformPool, org uuid.UUID,
+	fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	return r.inDeletedOrg(ctx, platform, org, true, fn)
+}
+
+// InDeletedOrgWrite is InDeletedOrg in a read-write transaction, for the one write the reader role has: the insert of
+// an evidence export request (as InOrgWrite).
+func (r *AuditReader) InDeletedOrgWrite(ctx context.Context, platform *PlatformPool, org uuid.UUID,
+	fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	return r.inDeletedOrg(ctx, platform, org, false, fn)
+}
+
+func (r *AuditReader) inDeletedOrg(ctx context.Context, platform *PlatformPool, org uuid.UUID, readOnly bool,
+	fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindPlatformAdmin || org == uuid.Nil || org == audit.PlatformOrganizationID {
+		return ErrNotDeleted
+	}
+	var status string
+	err := platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		row, err := q.GetOrganization(ctx, org)
+		status = row.Status
+		return err
+	})
+	if IsNoRows(err) {
+		return ErrNotDeleted
+	}
+	if err != nil {
+		return fmt.Errorf("db: status of organization %s: %w", org, err)
+	}
+	if status != "deleted" {
+		return ErrNotDeleted
+	}
+	return inTx(ctx, r.p,
+		func(tx pgx.Tx) error {
+			if readOnly {
+				if _, err := tx.Exec(ctx, "SET TRANSACTION READ ONLY"); err != nil {
+					return err
+				}
+			}
+			return setOrg(ctx, tx, org)
+		},
+		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
+}
+
 // AuditWriterPool is the pool of role paddock_audit_writer (cross-organization writer).
 type AuditWriterPool struct{ pool }
 

@@ -307,8 +307,8 @@ func TestVerifyRunsCollectorSurvivesDatabaseError(t *testing.T) {
 	if series[[2]string{"nightly", "error"}] != 1 {
 		t.Errorf("nightly/error = %v, want 1", series[[2]string{"nightly", "error"}])
 	}
-	if len(series) != 6 {
-		t.Errorf("series %v, want the 6 in-process ones", series)
+	if len(series) != 8 {
+		t.Errorf("series %v, want the 8 in-process ones (4 triggers, final included)", series)
 	}
 	for k := range series {
 		if k[1] == "ok" || k[1] == "failed" {
@@ -320,7 +320,7 @@ func TestVerifyRunsCollectorSurvivesDatabaseError(t *testing.T) {
 		return []auditstore.CountAuditVerificationRunsRow{{Trigger: "sample", Ok: false, Runs: 3}}, nil
 	})
 	series = gather(t, m)
-	if len(series) != 12 || series[[2]string{"sample", "failed"}] != 3 || series[[2]string{"nightly", "error"}] != 1 {
+	if len(series) != 16 || series[[2]string{"sample", "failed"}] != 3 || series[[2]string{"nightly", "error"}] != 1 {
 		t.Errorf("series after recovery: %v", series)
 	}
 }

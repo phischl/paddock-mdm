@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net/http"
 	"time"
 
@@ -32,6 +31,14 @@ const FinalizeWaitAlert = time.Hour
 
 // offboardingBatch is the max_rows of one paddock_offboard_delete_batch call (plan M17 decision 7).
 const offboardingBatch = 1000
+
+// AuditFinalWaitAlert is how long step audit_final waits for the audit writer's acknowledgement before it records
+// organization.deletion_step_failed with audit_writer_pending (plan M17 amendment 2026-11-15 o point 6).
+const AuditFinalWaitAlert = time.Hour
+
+// errAuditFinalPending means step audit_final waits for the audit writer's acknowledgement; the step is retried next
+// round without a failure.
+var errAuditFinalPending = errors.New("offboarding: the audit writer has not acknowledged the final verification yet")
 
 // ErrOffboardingWaiting means the tombstone waits for organization transactions that started before the deletion was
 // visible to every process (paddock_offboard_quiesce returned false); the job asks again next round. It is no failure.
@@ -78,20 +85,6 @@ type OffboardingDeps struct {
 func (o *Offboarding) WithDeps(d OffboardingDeps) *Offboarding {
 	c := *o
 	c.deps = d
-	return &c
-}
-
-// WithStubbedSteps makes steps complete at once without work: audit_final until PDK-1017 implements it (plan M17 §7
-// step 3). That ticket removes the option.
-func (o *Offboarding) WithStubbedSteps(steps ...string) *Offboarding {
-	c := *o
-	c.stubbed = maps.Clone(c.stubbed)
-	if c.stubbed == nil {
-		c.stubbed = map[string]bool{}
-	}
-	for _, s := range steps {
-		c.stubbed[s] = true
-	}
 	return &c
 }
 
@@ -176,7 +169,7 @@ func (o *Offboarding) Advance(ctx context.Context, org uuid.UUID) (done bool, er
 	}
 	var count int
 	var totals map[string]string
-	if step == offboarding.StepDevices && !o.stubbed[step] {
+	if step == offboarding.StepDevices {
 		count, err = o.devices(ctx, row)
 		totals = map[string]string{"uninstalls_reissued": countUninstallsReissued, "disarms_issued": countDisarmsIssued}
 	} else {
@@ -184,6 +177,9 @@ func (o *Offboarding) Advance(ctx context.Context, org uuid.UUID) (done bool, er
 	}
 	if errors.Is(err, ErrOffboardingWaiting) {
 		return false, err
+	}
+	if errors.Is(err, errAuditFinalPending) {
+		return false, nil
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -217,9 +213,6 @@ func stepError(code string, err error) error {
 
 // run executes one step and returns what it removed, also when it fails after partial progress.
 func (o *Offboarding) run(ctx context.Context, row pgstore.Organization, step string) (int, error) {
-	if o.stubbed[step] {
-		return 0, nil
-	}
 	switch step {
 	case offboarding.StepSessions:
 		return o.sessions(ctx, row.ID)
@@ -234,6 +227,8 @@ func (o *Offboarding) run(ctx context.Context, row pgstore.Organization, step st
 		return o.DeleteObjects(ctx, row.ID)
 	case offboarding.StepValkey:
 		return o.valkey(ctx, row.ID)
+	case offboarding.StepAuditFinal:
+		return 0, o.auditFinal(ctx, row)
 	case offboarding.StepDatabase:
 		return o.database(ctx, row.ID)
 	}
@@ -416,6 +411,61 @@ func (o *Offboarding) outbox(ctx context.Context, org uuid.UUID) error {
 	if pending > 0 {
 		return stepError(offboarding.ErrorOutboxPending, fmt.Errorf("%d outbox rows of organization %s are unpublished", pending, org))
 	}
+	return nil
+}
+
+// auditFinal hands the organization's audit log over to the audit writer for its final verification (plan M17
+// decision 16, amendment 2026-11-15 o). The worker has no connection to the audit database: it records
+// organization.audit_retirement_requested once through ActionRunner in the platform pseudo-organization, which reaches
+// the audit writer through the outbox, and the step completes when the writer's acknowledgement on paddock.offboarding
+// has set audit_final_verified_at (RecordAuditFinal). A failed outcome completes it too; after AuditFinalWaitAlert
+// without acknowledgement the step fails with audit_writer_pending, recorded once, and keeps waiting.
+func (o *Offboarding) auditFinal(ctx context.Context, row pgstore.Organization) error {
+	if row.AuditFinalVerifiedAt != nil {
+		return nil
+	}
+	if row.AuditRetirementRequestedAt == nil {
+		spec := ActionSpec{Code: audit.CodeOrganizationAuditRetirementRequested, Target: orgTarget(row),
+			Params: map[string]any{"organization_id": row.ID.String(), "slug": row.Slug}}
+		_, err := o.deps.Runner.RecordOnceInScope(offboardingSystem(ctx), ScopePlatform, spec,
+			func(ctx context.Context, q *pgstore.Queries, _ Recorder) (bool, error) {
+				_, err := q.ClaimOrganizationAuditRetirement(ctx, row.ID)
+				if db.IsNoRows(err) {
+					return false, nil
+				}
+				return err == nil, err
+			})
+		if err != nil {
+			return stepError(offboarding.ErrorDatabase, fmt.Errorf("request the final audit verification: %w", err))
+		}
+		return errAuditFinalPending
+	}
+	if waited := o.now().Sub(*row.AuditRetirementRequestedAt); waited > AuditFinalWaitAlert {
+		return stepError(offboarding.ErrorAuditWriterPending,
+			fmt.Errorf("the audit writer has not acknowledged the final verification requested %s ago", waited.Round(time.Second)))
+	}
+	return errAuditFinalPending
+}
+
+// RecordAuditFinal applies the audit writer's acknowledgement of the organization's final verification (plan M17
+// amendment 2026-11-15 o point 6) through the platform pool, once and only while the organization is deleting. A
+// repeated acknowledgement, or one of an organization that is not deleting, changes nothing and is no error.
+func (o *Offboarding) RecordAuditFinal(ctx context.Context, ack offboarding.AuditRetired) error {
+	if err := ack.Validate(); err != nil {
+		return err
+	}
+	var applied int64
+	err := o.deps.Platform.InPlatform(offboardingSystem(ctx), func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		applied, err = q.SetOrganizationAuditFinal(ctx, pgstore.SetOrganizationAuditFinalParams{
+			ID: ack.OrganizationID, FinalVerifiedAt: &ack.FinalVerifiedAt, FinalOutcome: &ack.FinalOutcome})
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("record the final audit verification of %s: %w", ack.OrganizationID, err)
+	}
+	slog.InfoContext(ctx, "final audit verification acknowledged", "organization", ack.OrganizationID,
+		"outcome", ack.FinalOutcome, "applied", applied == 1)
 	return nil
 }
 
@@ -692,7 +742,7 @@ func (o *Offboarding) recordDeleted(ctx context.Context, row pgstore.Organizatio
 		{Code: audit.CodeOrganizationDeleted, Target: orgTarget(row), Params: map[string]any{
 			"slug": row.Slug, "devices_offboarded": c[offboarding.StepDevices], "rows_deleted": c[offboarding.StepDatabase],
 			"objects_deleted": c[offboarding.StepObjects], "authentik_objects_deleted": c[offboarding.StepAuthentik],
-			"fleet_hosts_deleted": c[offboarding.StepFleet]}},
+			"fleet_hosts_deleted": c[offboarding.StepFleet], "audit_final_outcome": deref(row.AuditFinalOutcome, "")}},
 	}
 	_, err := o.deps.Runner.RecordAllOnce(offboardingSystem(ctx), ScopePlatform, specs,
 		func(ctx context.Context, q *pgstore.Queries) (bool, error) {

@@ -47,6 +47,7 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockAuditWriterLag` | `audit.writer` has not drained for 10 minutes (lag > 10 min) | critical |
 | `PaddockAuditWriterNotConsuming` | `audit.writer` has no consumer for 5 minutes (visible on the control plane) | critical |
 | `PaddockAuditChainBroken` | the last nightly chain verification found a broken or unreadable audit chain of at least one organization (`docs/operations/audit-bucket.md` section 3) | critical |
+| `PaddockAuditFinalVerificationFailed` | the final verification of a deleted organization's audit chain (step `audit_final`, ADR 0052 decision 6) failed in the last hour; the deletion went on, and the organization's detail and `organization.deleted` show `audit_final_outcome` `failed`. Run `paddock-server audit verify` for that organization's days and keep its evidence export with the result | critical |
 | `PaddockAuditVerifyStale` | no nightly chain verification has finished for 36 hours, for one hour | warning |
 | `PaddockAuditIndexPurgeStale` | no complete audit index purge (01:15 UTC) has finished for 48 hours, for one hour; a purge with a failed or timed-out partition is not complete (`docs/operations/audit-bucket.md` section 4) | warning |
 | `PaddockAuditExportFailed` | an evidence export was marked failed in the last hour (the export's `error` and the audit writer's log name the cause; the requester requests again) | warning |
