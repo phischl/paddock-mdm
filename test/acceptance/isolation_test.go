@@ -457,27 +457,53 @@ func seedGlobexUpstream(t *testing.T, w *isolationWorld) {
 	w.globexIDs = append(w.globexIDs, pk)
 }
 
+// hiddenPlatformRoutes are the platform operations that answer an organization administrator 404 not_found instead of
+// 403: the retained audit log of a deleted organization is hidden from every caller who is no platform administrator
+// (plan M17 §8 test 7, OFB-5).
+var hiddenPlatformRoutes = map[string]bool{
+	"GET /api/platform/v1/organizations/{id}/audit-events":                       true,
+	"GET /api/platform/v1/organizations/{id}/audit-exports":                      true,
+	"POST /api/platform/v1/organizations/{id}/audit-exports":                     true,
+	"GET /api/platform/v1/organizations/{id}/audit-exports/{export_id}/download": true,
+}
+
 // TestPlatformEndpointsForbiddenForOrganizations extends the isolation gate to the platform API (plan M2b decision
-// 20): an organization administrator gets 403 on every /api/platform/ operation.
+// 20): an organization administrator gets 403 on every /api/platform/ operation, and 404 not_found on the hidden ones.
 func TestPlatformEndpointsForbiddenForOrganizations(t *testing.T) {
 	doc := loadSpec(t)
 	alice := login(t, env.Alice)
-	replacer := strings.NewReplacer("{id}", uuid.NewString(), "{version}", "9.9.9", "{arch}", "amd64")
-	n := 0
+	replacer := strings.NewReplacer("{id}", uuid.NewString(), "{export_id}", uuid.NewString(), "{version}", "9.9.9",
+		"{name}", "paddock-agent", "{arch}", "amd64")
+	n, hidden := 0, 0
 	for path, item := range doc.Paths.Map() {
 		if !strings.HasPrefix(path, "/api/platform/") {
 			continue
 		}
 		for method := range item.Operations() {
 			n++
-			t.Run(method+" "+path, func(t *testing.T) {
+			route := method + " " + path
+			if hiddenPlatformRoutes[route] {
+				hidden++
+			}
+			t.Run(route, func(t *testing.T) {
 				var body any
 				if method != http.MethodGet {
 					body = map[string]any{}
 				}
-				expectStatus(t, call(t, alice, method, replacer.Replace(path), body), http.StatusForbidden, "forbidden")
+				target := replacer.Replace(path)
+				if strings.Contains(target, "{") {
+					t.Fatalf("path parameter of %s not substituted: %s", path, target)
+				}
+				if hiddenPlatformRoutes[route] {
+					expectStatus(t, call(t, alice, method, target, body), http.StatusNotFound, "not_found")
+					return
+				}
+				expectStatus(t, call(t, alice, method, target, body), http.StatusForbidden, "forbidden")
 			})
 		}
+	}
+	if hidden != len(hiddenPlatformRoutes) {
+		t.Fatalf("%d of the %d hidden platform routes are in the contract", hidden, len(hiddenPlatformRoutes))
 	}
 	if n < 8 {
 		t.Fatalf("only %d platform operations in the contract", n)
