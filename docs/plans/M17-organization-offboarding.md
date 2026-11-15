@@ -827,3 +827,334 @@ Binding; where it contradicts amendments b or g, it wins.
 4. **Tests.** Reservation with `delete_after = now() + 19 min` → 409; with `now() + 21 min` → allowed; the
    escrow-reader's own check refuses the same 19-minute case; the platform path for a `deleting` organization → 403
    `organization_inactive`; portal component test for the disabled state.
+
+## Amendment 2026-11-14 i — a cheaper writer gate (architect decision after the PDK-1038 load measurement)
+
+Binding; where it contradicts amendments d, f, g or h, it wins. ADR 0052 is unchanged: it requires that every
+organization transaction passes the offboarding gate and fails closed once the deletion has started; it does not
+prescribe the mechanism.
+
+### Why
+
+The N2 ingest scenario (5 000 events/s offered, 2 ingest workers), with the gate of amendment d against no gate,
+alternating, measured CPU seconds per event (worker plus postgres containers): **+9.1 %** median, B higher in both
+pairs (+12.6 %, +6.0 %), postgres +5.5 %, workers +16.6 %. The stop condition is 5 %. The benchmark of the gate put
+its server-side cost at 17–20 µs per transaction: about 4.6 µs for the advisory lock and its key function, about
+2.8 µs for each of the two status reads, and the rest for calling a PL/pgSQL `SECURITY DEFINER` function with a
+`SET search_path` clause (function-manager wrapper, GUC save and restore, no inlining).
+
+### Candidates (cost relative to amendment d's gate)
+
+| Candidate | Keeps guarantees 1–4 | Expected server cost per transaction | Verdict |
+|---|---|---|---|
+| a. Fold `set_config`, status check and lock into one definer statement | yes | ~15–18 µs; the definer and `SET` overhead stays (the implementer measured this variant: no change within the noise) | rejected |
+| b. Drop the pre-lock check, non-queueing finalize, function unchanged | yes | ~14–17 µs (saves one status read) | rejected alone, adopted as a part of e |
+| c. Status cached per connection or in the process, invalidated on change | no | — | rejected: the invalidation is asynchronous, so the read after the lock would no longer be fresh; a per-transaction cache saves nothing (one call per transaction) |
+| d. Gate only write transactions | no | ~0 on ingest (every ingest transaction writes) | rejected: `InOrg` does not know whether `fn` writes, the measured path would not get cheaper, and reads of a deleting organization would no longer get 403 `organization_inactive` |
+| e. Plain-SQL gate in `db`: lock and `set_config` in one statement, one plain status read after it, refusal in Go; finalize with a try-lock | yes | ~6–8 µs (lock without key function ~4 µs, primary-key read under RLS ~2–3 µs, no PL/pgSQL, no definer) | **chosen** |
+
+### Decision (candidate e)
+
+1. **Gate statements.** `db.enterOrg(ctx, tx, org)` sends one pgx batch (one round trip) with exactly two plain SQL
+   statements and no function of Paddock's own:
+
+   ```sql
+   -- statement 1: context and shared lock; $2 = db.OffboardingLockKey(org)
+   SELECT set_config('paddock.org_id', $1, true), pg_advisory_xact_lock_shared($2::bigint);
+   -- statement 2: status after the lock, in its own statement (READ COMMITTED takes a new snapshot)
+   SELECT status FROM organization WHERE id = $1::uuid;
+   ```
+
+   When statement 2 returns `deleting` or `deleted`, `enterOrg` returns `db.OrganizationUnavailable(org, status)`
+   (wraps `problem.OrganizationInactive`); `inTx` then rolls back and `fn` never runs. No row (the organization does
+   not exist) passes, as in amendment d; RLS still applies.
+2. **No pre-lock status check.** Amendment f point 4 allows dropping it together with a non-queueing finalize; point 3
+   provides that. The check after the lock stays mandatory: a transaction whose lock had to wait for a finalize that
+   holds the lock sees `deleted` in statement 2.
+3. **`paddock_org_enter()` is removed** (never merged). `InOrg`, `InOrgSnapshot` and `InPendingDeletionOrg` (amendment
+   g point 6) call `enterOrg`; `InOrgOffboarding` keeps calling `setOrg` only. The refusal no longer carries SQLSTATE
+   `PD001`: `IsOrganizationUnavailable(err)` and `OrganizationUnavailableStatus(err)` recognise the typed error of
+   `db.OrganizationUnavailable`. The mapping of amendment d point 4 (api and MCP 403 `organization_inactive`, gateway
+   401 `identity_revoked`, worker drop and `paddock_worker_dropped_total{reason="organization_unavailable"}`) and the
+   audit of amendment f point 1 (`organization.inactive_denied` in the platform pseudo-organization, params
+   `organization_id`, `attempted_code`, `status`) are unchanged.
+4. **Non-queueing finalize.** `paddock_offboard_finalize()` takes `pg_try_advisory_xact_lock(paddock_offboarding_lock_key(org))`.
+   When it is not granted, the function raises SQLSTATE `55P03` (`lock_not_available`) and writes nothing; otherwise
+   it continues as in amendment d point 3 (row lock, status `deleting` required, `EXISTS` per registered table with
+   `40001` when rows remain, tombstone in the same transaction). Finalize therefore never waits, so no transaction
+   queues behind a waiting finalize and no wait cycle can form through a nested `InOrg`. Guarantee 2 becomes: finalize
+   never commits while a transaction that entered the organization is still open.
+5. **PDK-1015 reaction.** `55P03` from finalize keeps the job in step `tombstone` and retries next round, without
+   returning to `database`; `40001` returns to `database` as before. Each `55P03` increments
+   `paddock_offboarding_finalize_busy_total`.
+6. **Status read for every organization role.** Statement 2 runs as the pool's own role. `paddock_api`,
+   `paddock_worker`, `paddock_compiler` and `paddock_notifier` can already read their own organization row. The
+   migration grants them their own organization's ID and status, nothing else:
+
+   ```sql
+   GRANT SELECT (id, status) ON organization TO paddock_escrow_reader, paddock_revocation;
+   CREATE POLICY org_gate_self ON organization FOR SELECT TO paddock_escrow_reader, paddock_revocation
+     USING (id = current_setting('paddock.org_id')::uuid);
+   ```
+7. **Migration content.** `paddock_offboarding_lock_key(uuid)` (used by finalize; `TestOffboardingLockKey` keeps Go
+   and SQL equal), `paddock_offboard_finalize()` per point 4, `paddock_organization_ids()` skipping `deleting` and
+   `deleted` (amendment d point 4, unchanged), and the grants and policy of point 6. No `paddock_org_enter`.
+
+### Migration numbers and merge order
+
+Goose rejects a migration whose number lies below the highest applied one, so numbers ascend in merge order:
+
+| Ticket | Migration | Merge order |
+|---|---|---|
+| PDK-1026 | `00131_platform_mfa_enrolment.sql` (renumbered from 00132) | 1 |
+| PDK-1038 | `00132_offboarding_writer_gate.sql` (renumbered from 00131, content per point 7) | 2 |
+| PDK-1036 | `00133_recovery_export.sql` (unchanged) | 3, rebased on PDK-1038 |
+| PDK-1015 | next free number at its merge | after PDK-1038 and PDK-1036 |
+
+PDK-1026 and the tickets stacked on it do not wait for PDK-1038. PDK-1036 waits for PDK-1038: it uses
+`problem.OrganizationInactive`, `db.OrganizationUnavailable`, the `organization.inactive_denied` code and the
+`ActionRunner` denial path that PDK-1038 introduces, so it cannot ship with a guarded gate call. Any further ticket
+that adds a migration and merges after PDK-1036 takes 00134 or higher.
+
+### Development stack
+
+The development stack's `paddock` database has amendment d's 00131 applied. It is repaired in place, without
+resetting the `postgres-data` volume (shared with the audit and Authentik databases) and without touching OpenBao, as
+the PostgreSQL superuser in database `paddock`:
+
+```sql
+BEGIN;
+DROP FUNCTION paddock_org_enter();
+DROP FUNCTION paddock_offboard_finalize();
+DROP FUNCTION paddock_offboarding_lock_key(uuid);
+CREATE OR REPLACE FUNCTION paddock_organization_ids() RETURNS SETOF uuid
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
+  $$ SELECT id FROM organization ORDER BY id $$;
+DELETE FROM goose_db_version WHERE version_id = 131;
+COMMIT;
+```
+
+Precondition: `SELECT max(version_id) FROM goose_db_version` returns 131. The body of `paddock_organization_ids` is
+the one of migration 00003. No organization, device or key row changes, so the audit database, Authentik and the
+escrow keys in OpenBao stay consistent. The next deployment applies 00131 (PDK-1026) and, from the PDK-1038 image,
+00132. No other ticket uses this repair; it is not part of any migration.
+
+### Re-measurement (decides the stop condition of amendment d point 5)
+
+- Method: the N2 ingest scenario, CPU seconds per event, worker plus postgres containers over the run window, median
+  A against B. At least 2 strictly alternating A/B pairs with CPU data; a run starts only when the one-minute load is
+  below 8; a run whose throughput deviates by more than 10 % from its variant, or whose p99 is at least 1.5× the
+  variant median, is repeated. No VMs and no test suites in parallel.
+- A: the cluster branch with PDK-1026 merged (migrations up to 00131). B: the PDK-1038 branch rebased on it (00132).
+  If PDK-1026 is not merged yet, A is the PDK-1026 branch and B is PDK-1038 rebased on it; B MUST NOT run on a base
+  without 00131, otherwise 00131 can never be applied afterwards.
+- Report per container (postgres, each worker) as well as the total; the decision uses the total.
+- **Expected:** postgres about +2 %, total about +3 to +4 %.
+- **Result ≤ 5 %:** PDK-1038 goes ahead. **Above 5 %:** PDK-1038 stops again and goes back to the architect with the
+  per-container figures; it is not accepted, and no gate variant is tried without a new decision.
+
+### Tests (replace the PD001 assertions of PDK-1038)
+
+- `TestOrgEnterGate`: for every role of point 6 and for `InOrg`, `InOrgSnapshot` and `InPendingDeletionOrg`, an
+  organization in `deleting` and in `deleted` is refused with `IsOrganizationUnavailable` and the right status before
+  `fn` runs; other organizations are unaffected. A role whose status read returns no row for its own organization
+  fails this test, because it would pass the gate.
+- `TestOffboardFinalize`: an open `InOrg` transaction of the organization makes finalize raise `55P03` at once, without
+  waiting; after it commits a late row, the next finalize raises `40001`; after the delete, finalize writes the
+  tombstone. While finalize holds the lock, a new `InOrg` waits only until finalize ends and is then refused with
+  status `deleted`. The 40-writer no-deadlock test stays.
+- A migration test: `paddock_org_enter` does not exist; `paddock_escrow_reader` and `paddock_revocation` read `id` and
+  `status` of their own organization only (another organization: no row; another column: permission denied).
+- `BenchmarkInOrgGate` stays and reports the new gate against `InOrgOffboarding`.
+
+### Correction 2026-11-14 to amendment i point 4 (PDK-1038 fix round 2)
+
+Point 4's pure try-lock is replaced. A test with 16 continuous writers of the deleting organization made it fail 50 of
+50 times: every refused writer holds the shared lock for one round trip, so one of them almost always holds it and
+finalize starves. Keeping the try-lock would need a status read before the lock in every transaction, which point 2
+removed for cost.
+
+- `paddock_offboard_finalize()` carries the function clause `SET lock_timeout = '1s'` and takes
+  `pg_advisory_xact_lock(paddock_offboarding_lock_key(org))`. When the lock is not granted within 1 s, PostgreSQL
+  raises `55P03` and nothing is written. PDK-1015's reaction is still point 5.
+- While finalize waits, new transactions of that organization only queue behind it, for at most 1 s, and are then
+  refused (status `deleted`) or pass (finalize timed out). Other organizations are unaffected. A wait cycle through a
+  nested `InOrg` of the same organization is broken after 1 s. Guarantee 2 is unchanged.
+- The test asserts that finalize succeeds within 3 attempts under 16 continuous writers. The hot-path gate (points 1–3)
+  is unchanged.
+
+## Amendment 2026-11-15 j — a gate without per-transaction database cost; the budget question (architect decision after the PDK-1038 v3 measurement)
+
+Binding; where it contradicts amendments d, f or i, it wins. ADR 0052 is unchanged (amendment i, "Why").
+
+### The v3 measurement decides nothing
+
+The v3 series (A `500ab352`, B `f97efbdf`) gave +12.0 % CPU per event, but:
+
+- its two pairs disagree by a factor of ten (+22.9 % and +2.3 %);
+- valkey and rustfs were OOM-looping during the whole series, and one A run dropped 65 events with a backlog of 250;
+- +12.9 % in postgres contradicts the gate's measured server cost (6–8 µs per transaction): at 5 000 events/s that
+  much would need far more organization transactions per event than the ingest path opens.
+
+So the series is not evidence for or against v3. No decision is taken on it, and v3 is not re-measured: the design
+below removes the per-transaction database work, so v3's cost no longer matters.
+
+### (a) Answer to the coordinator: a gate with no per-transaction database work (candidate k, **chosen**)
+
+The guarantee stays the one of amendment i: once the deletion has started, no organization transaction can write
+anything that survives the tombstone, and every refused request gets 403 `organization_inactive`.
+
+1. **Status cache per process.** Every process that opens organization transactions keeps an in-memory set of
+   inactive organizations (`deleting`, `deleted`). It loads the set by calling the new definer function
+   `paddock_inactive_organizations()` (returns `id`, `status`, and the database's `now()`; `EXECUTE` for every
+   organization role). It re-reads it **every second** on the existing pool, so no extra connection is needed.
+   - *Rejected:* `LISTEN`/`NOTIFY`. It would cost one held connection per process against the M19 D1 budget, and a
+     notification lost across a reconnect would need the same polling as a safety net anyway.
+2. **The gate is a memory check.** `enterOrg` first checks the set. It refuses an inactive organization with
+   `db.OrganizationUnavailable(org, status)`, exactly as in amendment i point 3.
+   - **Fail closed on a stale cache:** if the last successful refresh is older than **5 s** on the process's monotonic
+     clock, `enterOrg` falls back to amendment i's statement 2 (one status read). That read needs no advisory lock,
+     because point 4 does not rely on locks.
+   - With a fresh cache, the transaction runs no SQL of its own: the cost is one map lookup.
+3. **No advisory locks.** `pg_advisory_xact_lock_shared` in `enterOrg` and the advisory lock in finalize are removed.
+   `db.OffboardingLockKey` and `paddock_offboarding_lock_key` are removed with them.
+4. **Finalize waits for quiescence and then checks; it never starves.** Step `tombstone` calls
+   `paddock_offboard_finalize()` (definer, `EXECUTE` for `paddock_worker` only). It runs in this order:
+   - It locks the organization row, requires status `deleting`, and reads `deleting_since`. That is a new column, set
+     in the same statement that sets `deleting`.
+   - It refuses with SQLSTATE `55P03` while any backend of an organization role (`paddock_api`, `paddock_gateway`,
+     `paddock_worker`, `paddock_compiler`, `paddock_notifier`, `paddock_escrow_reader`, `paddock_revocation`) has an
+     open transaction whose `xact_start` is earlier than `deleting_since + 6 s`. Those are the 5 s staleness bound of
+     point 2 plus 1 s of margin, all on the database's clock, read from `pg_stat_activity`.
+   - It runs the `EXISTS` check per registered table and raises `40001` when rows remain.
+   - It writes the tombstone.
+
+   Every transaction that could still have seen the organization as active started before that instant, and the set of
+   such transactions only shrinks. Finalize therefore succeeds once they have ended, however much new traffic there
+   is: unlike amendment i's lock, it cannot starve. A straggler's row is caught by the `EXISTS` check (40001), so the
+   job goes back to step `database`.
+   - The owner `paddock_owner` gets `pg_read_all_stats` in the migration, so the function can read other roles'
+     `xact_start`. If the hosting refuses that grant: stop condition.
+5. **PDK-1015's reaction is unchanged.** On `55P03` it stays in step `tombstone` and retries next round; on `40001` it
+   returns to `database`.
+   - New: the job records `organization.deletion_step_failed` with `error_code: finalize_waiting` only when it has
+     waited longer than **1 h**. A transaction open for an hour is an anomaly an operator must see.
+   - The counter `paddock_offboarding_finalize_busy_total` stays.
+6. **Expected cost and the re-measurement.** About 0 % per transaction. The poll adds 1 query per second per process,
+   independent of load. One re-measurement on a cleaned devstack (main's precondition: valkey and rustfs stable, load
+   devices removed):
+   - 3 strictly alternating A/B pairs, otherwise amendment i's method;
+   - additionally, per run, the `xact_commit` delta of the `paddock` database divided by the events, so that an
+     implausible result is visible as such.
+   - Budget: the existing 5 %. A result above it goes back to the architect with the figures, as before.
+7. **Tests.** They replace amendment i's.
+   - `TestOrgEnterGate`: the refusal from the cache; the stale-cache fallback (the poller is stopped for 6 s, then the
+     status read refuses); other organizations are unaffected.
+   - `TestOffboardFinalize`:
+     - an open transaction whose `xact_start` lies before the cutoff → `55P03`;
+     - a transaction started after the cutoff that was refused by the cache does not block;
+     - a straggler's row → `40001`, the next delete loop removes it, then the tombstone is written;
+     - 16 continuous writers of the organization plus 16 of another organization do not stop finalize from succeeding
+       within 3 rounds after the stragglers end.
+   - A migration test: `paddock_inactive_organizations()` reveals only IDs and status.
+   - `BenchmarkInOrgGate` reports the cache path against `InOrgOffboarding`.
+
+### (b) Answer to the coordinator: is the 5 % budget calibrated correctly?
+
+The 5 % is a performance guard set in amendment d without a cost model. The requirement it guards is N2: 5 000
+events/s with a lag below 60 s. N2 was met by every v1 and v3 run, and B's p99 was lower. Deletion correctness
+(nothing survives the tombstone) is non-negotiable and must not be traded for CPU.
+
+In the architect's view the budget is therefore stricter than the requirement needs. A gate costing around 10 % CPU
+at peak ingest, with N2 met, would be acceptable on correctness grounds. **The budget is not changed here:** changing
+it is the maintainer's decision, raised through the coordinator. Candidate k is meant to make that question moot. If it
+lands within 5 %, nothing needs deciding; if not, the figures and this assessment go to the maintainer.
+
+### Tickets and order
+
+- **PDK-1038 v4** implements points 1–7 on top of v3. v3's exported surface stays unchanged: `enterOrg`,
+  `db.OrganizationUnavailable`, `IsOrganizationUnavailable`, `problem.OrganizationInactive`, the denial audit of
+  amendment f, and `InOrgOffboarding`. Migration `00132` is not merged yet, so its content changes in place: remove the
+  lock key function, add `deleting_since`, `paddock_inactive_organizations()`, the new finalize and the
+  `pg_read_all_stats` grant.
+- **PDK-1036** rebases onto PDK-1038 v3 now. It uses only the unchanged surface, so v4 causes no further conflicts.
+  Merge order stays as in amendment i: 1038 → 1036.
+- **PDK-1015** may be built stacked on PDK-1038 v3 now. It needs only the `finalize_waiting` event of point 5. It
+  merges after 1038 and 1036. Then **PDK-1016 and PDK-1017**, in either order.
+
+### Addendum 2026-11-15 to amendment j — the quiescence wait without a statistics grant (after main's objection)
+
+Binding. It replaces amendment j point 4's quiescence bullet and its `pg_read_all_stats` grant, and the "55P03" wording
+of points 4 and 5. Everything else in amendment j stays: the status cache, the fail-closed fallback and the removal of
+the advisory locks are independent of this addendum and proceed unchanged.
+
+**Isolation is the criterion.** A role with `pg_read_all_stats` can read every session's query text, including other
+organizations' sessions. No Paddock role gets it. A non-login role holding it is not needed either (see the decision).
+
+**The transaction-ID variant is disproven (PDK-1038 v4, PostgreSQL 18.6).** PostgreSQL assigns a transaction ID only
+at a transaction's first write, and `pg_snapshot_xmin` sees only transactions that have one. A gated transaction that
+reads first and writes later is therefore invisible. Reproduced: W began and selected; the deletion start got ID 754;
+finalize saw xmin 756 > 754 while W was open; W then got ID 756 and inserted a row that survived the tombstone. Forcing
+an ID in the gate would spend an ID on every read transaction and bring back per-transaction cost. Rejected, as is
+making `paddock_owner` a member of the organization roles: it would still see their query text.
+
+**Decision: wait on virtual transaction IDs, as `CREATE INDEX CONCURRENTLY` does.** Every open transaction, including a
+read-only one, holds an exclusive lock on its own virtual transaction ID (`pg_locks.locktype = 'virtualxid'`).
+`pg_locks` and the `pid`, `usename` and `datname` columns of `pg_stat_activity` are readable by every role without a
+grant; query text, state and timestamps of other roles are not exposed. Nothing new becomes visible.
+
+1. **The cutoff is taken after the commit.** The worker commits the status `deleting`. In a new transaction it then
+   stores `organization.deleting_committed_at = now()`, replacing `deleting_since` of amendment j. The cutoff is
+   `deleting_committed_at + 6 s`: the 5 s cache staleness bound plus 1 s of margin, counted from a moment at which the
+   status was certainly visible.
+2. **`paddock_offboard_quiesce() RETURNS boolean`** (`SECURITY DEFINER`, owner `paddock_owner`, `EXECUTE` for
+   `paddock_worker` only, context organization, status `deleting` required):
+   - It captures the wait set **only when the database's `now()` is at or after the cutoff**
+     (`deleting_committed_at + 6 s`). Before that it returns `false` and stores nothing.
+     Reason: a set captured earlier would miss a transaction that starts between the capture and the cutoff, because
+     that transaction's cache can still say `active`.
+   - At the first call after the cutoff it stores the **wait set** in `organization.offboarding_wait_vxids text[]` and
+     `offboarding_wait_taken_at` and commits. The wait set is every `virtualxid` lock held by a backend whose `usename`
+     is an organization role (amendment j point 4) and whose `datname` is the current database, excluding its own
+     backend. Taken at or after the cutoff, it is a superset of every transaction that could still have passed the gate
+     on a stale cache.
+   - On later calls it returns `true` once none of the stored virtual IDs is still present in `pg_locks`, otherwise
+     `false`. The set is never taken again for the same deletion.
+3. **`paddock_offboard_finalize()`** requires a stored wait set and that `quiesce` returns `true` in the same
+   transaction. It then runs the `EXISTS` check per registered table (`40001` when rows remain) and writes the
+   tombstone, clearing the wait columns. It no longer raises `55P03`.
+4. **PDK-1015's reaction (replaces amendment j point 5's first sentence).** In step `tombstone`, each round calls
+   `quiesce`. On `false` it stays in the step. On `true` it calls `finalize`. On `40001` it returns to `database`; the
+   stored wait set stays and is not needed again, because new transactions are refused by the gate.
+5. **The 1 h alert and the counter live in PDK-1015's job**, the only caller.
+   - `organization.deletion_step_failed` with `error_code: finalize_waiting` is recorded once, when `quiesce` has
+     returned `false` for more than 1 h after the wait set was taken.
+   - `paddock_offboarding_finalize_busy_total` counts the `false` answers.
+   - PDK-1038 delivers the two functions, the columns and their tests; it has no job and no alert.
+6. **Edge cases.**
+
+   | Case | Effect on the wait |
+   | --- | --- |
+   | Transaction-ID wraparound, hot standby | Not relevant: virtual IDs are per server and never wrap within a server's lifetime in a way that matters here; Paddock runs one primary, and a standby cannot write. |
+   | Prepared transactions | Not used (`max_prepared_transactions` 0). If two-phase commit is ever enabled, `quiesce` MUST also wait on `pg_prepared_xacts` (noted in the migration header). |
+   | Autovacuum, pgBackRest, `paddock-migrate`, superuser sessions | Not in the set: their `usename` is not an organization role. |
+   | A long-running transaction of an organization role, of any organization, open at the cutoff | Waited for until it ends; it is in the set by construction. More than 1 h raises the alert. The operator finds it in `pg_stat_activity` as the database superuser; the remedy is `pg_terminate_backend` (runbook, PDK-1019). |
+   | An idle pool connection, not in a transaction | Not in the set: a session outside a transaction holds no virtual-ID lock. pgx pool connections between transactions are of this kind. |
+   | Backup and monitoring sessions (pgBackRest, Prometheus exporters, `psql` as the superuser) | Not in the set: excluded by the `usename` filter on organization roles. |
+   | An idle-in-transaction pool connection | Possible only through a bug or a hung `fn`, since pgx never hands back an open transaction. Same as the previous row. |
+   | A backend reusing a PID | Harmless: a virtual ID includes the backend's local transaction counter, so a new transaction on the same PID has a different virtual ID. |
+7. **Tests** (they replace the ones of the earlier text of this addendum):
+   - The reproduction above: W begins and reads before the status change and writes after the delete loop. `quiesce`
+     returns `false` until W ends; then `finalize` raises `40001`; the next delete loop and `finalize` write the
+     tombstone.
+   - `quiesce` called before the cutoff stores no wait set and returns `false`. Test the boundary with the
+     database's `now()` just below and just at the cutoff.
+   - A read-only transaction open at the cutoff blocks `quiesce`.
+   - Cache staleness (amendment j point 2) is measured on the **process's monotonic clock**, never on wall time or on
+     the database's clock. The 5 s bound therefore holds as an elapsed duration whatever the drift between the process
+     and the database, and stays below the 6 s margin of the cutoff. The cache takes an injectable monotonic clock. A
+     test advances it past 5 s without a successful refresh and asserts the fallback status read. A second test moves
+     the wall clock (not the monotonic one) and asserts that nothing changes.
+   - Sessions of a non-organization role do not block.
+   - The wait set survives a failed `finalize` and is not re-taken.
+   - Application roles still see `<insufficient privilege>` for other sessions' query text: no grant was added.

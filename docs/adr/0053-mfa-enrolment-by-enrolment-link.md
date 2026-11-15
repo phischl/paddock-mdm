@@ -89,3 +89,9 @@ decision 18, `adapters/authentik/users.go::RecoveryLink`).
 - **Decision 4 is extended.** Seeding and clearing `paddock_mfa_enrol_at_login` are recorded in the platform
   pseudo-organization as `platform.mfa_enrol_marks_seeded` and `platform.mfa_enrol_marks_cleared`, with counts, once
   per round that changed something.
+
+## Amendment 2026-11-14 e — every sign-in flow (architect; plan M12h-2 amendment e)
+
+Decision 3 applies to every Authentik flow Paddock ships, including the device login flows: an administrator without a
+factor who is not marked sets one up only through the setup link. Decision 5 is narrowed to device users, who keep
+setting up their factor at their first device sign-in. A blueprint test and a regression gate enforce this.

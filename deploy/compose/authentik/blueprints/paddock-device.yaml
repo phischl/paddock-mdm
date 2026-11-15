@@ -16,6 +16,13 @@ metadata:
   labels:
     blueprints.goauthentik.io/description: Authentication and device-code flows with mandatory MFA for device logins
 entries:
+  # The second-factor policies of the portal sign-in, which the MFA bindings below reuse by name.
+  - model: authentik_blueprints.metaapplyblueprint
+    attrs:
+      identifiers:
+        path: paddock/paddock-portal.yaml
+      required: true
+
   - model: authentik_flows.flow
     id: authentication-flow
     identifiers:
@@ -45,11 +52,27 @@ entries:
         - authentik.core.auth.InbuiltBackend
       failed_attempts_before_cancel: 5
 
-  # Mandatory MFA: a user without an authenticator must enroll one; never skip (PoC M1 finding A2.5).
+  # Mandatory MFA, never skipped (PoC M1 finding A2.5). This stage runs for administrators without the enrolment mark
+  # and denies such an account without a factor: administrators set up their second factor only through the setup
+  # link, in every sign-in flow (ADR 0053 decision 3 and amendment e, plan M12h-2 amendment e).
   - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
     id: mfa
     identifiers:
       name: paddock-device-mfa
+    attrs:
+      device_classes: [webauthn, totp]
+      not_configured_action: deny
+      last_auth_threshold: minutes=5
+      configuration_stages:
+        - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+        - !Find [authentik_stages_authenticator_totp.authenticatortotpstage, [name, default-authenticator-totp-setup]]
+
+  # The sibling for everyone else: device users, who set up their factor at their first device sign-in (ADR 0053
+  # decision 5, RR-139), and marked administrators (decision 4). Exactly one of the two runs at each of its orders.
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: mfa-enrol
+    identifiers:
+      name: paddock-device-mfa-enrol
     attrs:
       device_classes: [webauthn, totp]
       not_configured_action: configure
@@ -75,11 +98,50 @@ entries:
       target: !KeyOf authentication-flow
       stage: !KeyOf password
       order: 20
+  # The deny stage and its sibling share order 30. Their policies are evaluated when the stage is reached, for the
+  # identified user (on the plan the user is still anonymous), and are each other's complement. The policy bindings
+  # are identified by policy and order, so each order is unique per policy across the Paddock blueprints.
   - model: authentik_flows.flowstagebinding
+    id: mfa-binding
     identifiers:
       target: !KeyOf authentication-flow
       stage: !KeyOf mfa
       order: 30
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !Find [authentik_policies_expression.expressionpolicy, [name, paddock-mfa-enrol-at-login-absent]]
+      order: 3
+    attrs:
+      target: !KeyOf mfa-binding
+      # A check that raised counts as unmarked: the deny stage runs.
+      failure_result: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !Find [authentik_policies_expression.expressionpolicy, [name, paddock-admin-login-webauthn-administrator]]
+      order: 6
+    attrs:
+      target: !KeyOf mfa-binding
+      failure_result: true
+  - model: authentik_flows.flowstagebinding
+    id: mfa-enrol-binding
+    identifiers:
+      target: !KeyOf authentication-flow
+      stage: !KeyOf mfa-enrol
+      order: 30
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !Find [authentik_policies_expression.expressionpolicy, [name, paddock-mfa-enrol-at-login]]
+      order: 3
+    attrs:
+      target: !KeyOf mfa-enrol-binding
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf authentication-flow
@@ -124,8 +186,46 @@ entries:
       designation: authorization
       authentication: require_authenticated
 
+  # The same pair as in the sign-in flow above. The user is already signed in here; the pair keeps the rule when the
+  # session comes from another flow.
   - model: authentik_flows.flowstagebinding
+    id: authorization-mfa-binding
     identifiers:
       target: !KeyOf authorization-flow
       stage: !KeyOf mfa
       order: 10
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !Find [authentik_policies_expression.expressionpolicy, [name, paddock-mfa-enrol-at-login-absent]]
+      order: 4
+    attrs:
+      target: !KeyOf authorization-mfa-binding
+      # A check that raised counts as unmarked: the deny stage runs.
+      failure_result: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !Find [authentik_policies_expression.expressionpolicy, [name, paddock-admin-login-webauthn-administrator]]
+      order: 7
+    attrs:
+      target: !KeyOf authorization-mfa-binding
+      failure_result: true
+  - model: authentik_flows.flowstagebinding
+    id: authorization-mfa-enrol-binding
+    identifiers:
+      target: !KeyOf authorization-flow
+      stage: !KeyOf mfa-enrol
+      order: 10
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !Find [authentik_policies_expression.expressionpolicy, [name, paddock-mfa-enrol-at-login]]
+      order: 4
+    attrs:
+      target: !KeyOf authorization-mfa-enrol-binding

@@ -389,3 +389,47 @@ Binding; where it contradicts decision 7 or amendment c, it wins.
 Amendment d point 3 is wrong and is replaced. In Authentik 2026.8.5, `GET /api/v3/authenticators/admin/all/?user=<pk>`
 does filter by user. The adapter's `UserAuthenticators` uses that endpoint, one request per account, and decision 7's
 per-type listings are replaced by it. The PDK-1042 measurement of the callback lookup stays.
+
+## Amendment 2026-11-14 e — administrators set up their second factor only through the setup link, in every sign-in flow (architect decision; ADR 0053 amendment e)
+
+Binding; it replaces the §4 non-goal "No change to the device login flow's MFA".
+
+1. **One rule for every shipped sign-in flow.** Every Authentik flow that Paddock ships, the device login flows
+   included, applies the deny/enrol pair of amendment c to every stage that can set up a second factor. An
+   administrator who is neither marked (amendment c point 2) nor already has a factor sets one up only through the
+   setup link. The technical binding list is in ticket PDK-1047.
+2. **Device users** keep setting up their factor at their first device sign-in (decision 5, RR-139). **Administrators
+   who approve a device sign-in** prove a factor they already have.
+3. **Tests (both required).** A blueprint test fails when any stage in a production blueprint that can set up a factor
+   lacks the pair. An acceptance regression gate on the dev stack (attribute `paddock_dev_enforce_mfa`) proves that an
+   administrator without a factor cannot set one up in any device sign-in flow, and that a device user still can. The
+   lab repeats the administrator case (PDK-1042).
+4. **Releases.** PDK-1047 implements this. It blocks the alpha.11 release tag. No alpha.10 hotfix: alpha.10 does not
+   have the setup-link model at all, and alpha.11 introduces it.
+
+## Amendment 2026-11-15 f — older setup links, synced accounts, the banner (architect decision after the PDK-1027 review)
+
+Binding; where it contradicts decision 7 or the amendments above, it wins.
+
+1. **A new setup link replaces older ones.** Only the newest setup or password link of an account may work. Creating a
+   link first deletes the account's unexpired recovery tokens in Authentik, then issues the new one; the audit event
+   (`user.enrolment_link_created`, `platform.enrolment_link_created`, and the existing local-user link) gains the param
+   `previous_links_revoked` (int). If the deletion fails, no new link is issued (502 `upstream_unavailable`). Granting
+   a portal role does not revoke links: roles are granted in Authentik or the upstream source, not by Paddock. Ticket
+   **PDK-1052** (follow-up; PDK-1027 ships as it is, with its current help text, which PDK-1052 then shortens to "a new
+   link ends every older one").
+2. **Synced accounts get links, never a local password.** Administrators usually come from the organization's
+   identity source, so `POST /api/v1/users/{id}/enrolment-link` accepts synced users; only disabled users are refused
+   (as planned). The link flow MUST NOT set an Authentik password for an account Paddock does not manage: the password
+   prompt runs only when the account has `paddock_managed: true` **and** no usable password. A synced account's link
+   therefore only sets up the passkey. Blueprint change and an acceptance case (a synced user's link shows no password
+   prompt) in **PDK-1052**.
+3. **Banner audience and wording: accepted as implemented.** All portal roles (organization administrator, operator,
+   auditor, platform administrator) see it during the 30 days. With nothing pending it shows the announcement without a
+   count. Reusing the setup-link wording is correct; the denial reason key stays for the denial page only.
+4. **No organization-issued link for a platform administrator.** When the account is a direct member of
+   `paddock.platform.admins` (an identity with both roles, ADR 0045), `POST /api/v1/users/{id}/enrolment-link` answers
+   409 `invalid_state` with the detail "platform administrators receive their setup link from the host operator" and
+   records the attempt as a failure. Reason: an organization administrator must not control how a platform account gets
+   its second factor; the host command stays the only path for platform administrators. In **PDK-1027**, with an
+   acceptance case.
