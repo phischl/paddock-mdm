@@ -463,8 +463,9 @@ for the password first.
 4. **Wording.** Texts, help and documents say "an account Paddock created" (or "a Paddock-managed account") where
    they said "local user", wherever the meaning is `paddock_managed`.
 5. **install.md §9 step 1** gains one sentence: create the platform administrator in Authentik without a password and
-   without an authenticator, add it to `paddock.platform.admins`, then run `./paddock` → `paddock-server admin
-   enrolment-link --username <name>` and hand over the link; it sets the password and the passkey.
+   without an authenticator, add it to `paddock.platform.admins`, then run `./paddock compose run --rm --no-deps paddock-worker admin
+   enrolment-link --username <name>` (the pattern of the other `admin` host commands) and hand over the link; it sets
+   the password and the passkey.
 6. **Tests (PDK-1052):**
    - the host command on a hand-created account without a password sets the attribute, and the link shows the password
      prompt and then the passkey setup;
