@@ -373,8 +373,7 @@ func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 	}
 	rec := r.newRecorder(ctx, p, scope, spec)
 	if err := r.authorize(p, scope, spec, rec); err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 	defer r.recordPanic(ctx, p, scope, rec)
 	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
@@ -384,8 +383,7 @@ func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 		return r.insertFinished(ctx, q, rec, nil)
 	})
 	if err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 	return nil
 }
@@ -402,8 +400,7 @@ func (r *ActionRunner) RunTxRefusal(ctx context.Context, scope Scope, spec Actio
 	}
 	rec := r.newRecorder(ctx, p, scope, spec)
 	if err := r.authorize(p, scope, spec, rec); err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 	defer r.recordPanic(ctx, p, scope, rec)
 	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
@@ -413,8 +410,7 @@ func (r *ActionRunner) RunTxRefusal(ctx context.Context, scope Scope, spec Actio
 		return r.insertFinished(ctx, q, rec, refusal)
 	})
 	if err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 	return refusal
 }
@@ -492,8 +488,7 @@ func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 	}
 	rec := r.newRecorder(ctx, p, ScopeOrg, spec)
 	if err := r.authorize(p, ScopeOrg, spec, rec); err != nil {
-		r.recordFinal(ctx, p, ScopeOrg, rec, err)
-		return false, err
+		return false, r.recordFinal(ctx, p, ScopeOrg, rec, err)
 	}
 	defer r.recordPanic(ctx, p, ScopeOrg, rec)
 	recorded, on := false, false
@@ -517,8 +512,7 @@ func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 		if !on {
 			return false, err
 		}
-		r.recordFinal(ctx, p, ScopeOrg, rec, err)
-		return false, err
+		return false, r.recordFinal(ctx, p, ScopeOrg, rec, err)
 	}
 	return recorded, nil
 }
@@ -770,15 +764,15 @@ func (r *ActionRunner) RecordRefusal(ctx context.Context, scope Scope, spec Acti
 	if !ok {
 		return problem.Unauthenticated
 	}
-	r.recordFinal(ctx, p, scope, r.newRecorder(ctx, p, scope, spec), refusal)
-	return refusal
+	return r.recordFinal(ctx, p, scope, r.newRecorder(ctx, p, scope, spec), refusal)
 }
 
 // recordPanic records a panicking use case as failure (error_code internal) and re-panics for the HTTP recovery
 // middleware, so even a crash inside a request leaves exactly one event.
 func (r *ActionRunner) recordPanic(ctx context.Context, p principal.Principal, scope Scope, rec *recorder) {
 	if v := recover(); v != nil {
-		r.recordFinal(ctx, p, scope, rec, fmt.Errorf("panic: %v", v))
+		// The panic is re-raised, so there is no caller to report the gate's refusal to.
+		_ = r.recordFinal(ctx, p, scope, rec, fmt.Errorf("panic: %v", v))
 		panic(v)
 	}
 }
@@ -801,8 +795,7 @@ func (r *ActionRunner) RunExternal(ctx context.Context, scope Scope, spec Action
 	}
 	rec := r.newRecorder(ctx, p, scope, spec)
 	if err := r.authorize(p, scope, spec, rec); err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 
 	err := func() error {
@@ -815,8 +808,7 @@ func (r *ActionRunner) RunExternal(ctx context.Context, scope Scope, spec Action
 		})
 	}()
 	if err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 
 	if r.externalDelay > 0 {
@@ -905,17 +897,16 @@ func (r *ActionRunner) inScope(ctx context.Context, p principal.Principal, scope
 	return r.platform.InPlatform(ctx, fn)
 }
 
-// recordFinal writes action(finished, failure|denied) + outbox in a new transaction after a failed attempt.
-func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, scope Scope, rec *recorder, cause error) {
+// recordFinal writes action(finished, failure|denied) + outbox in a new transaction after a failed attempt. It
+// returns the error to report: cause, or the gate's refusal when the organization turned out to be deleting or
+// deleted.
+func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, scope Scope, rec *recorder,
+	cause error) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if scope == ScopeOrg && p.OrganizationID != uuid.Nil && errors.Is(cause, problem.OrganizationInactive) {
-		r.recordInactiveDenied(ctx, p, p.OrganizationID, rec, cause)
-		return
-	}
-	if scope == ScopePlatform && r.pendingOrg != uuid.Nil && errors.Is(cause, problem.OrganizationInactive) {
-		r.recordInactiveDenied(ctx, p, r.pendingOrg, rec, cause)
-		return
+	if org := r.gatedOrg(p, scope); org != uuid.Nil && errors.Is(cause, problem.OrganizationInactive) {
+		r.recordInactiveDenied(ctx, p, org, rec, cause)
+		return cause
 	}
 	// Denials of organization actions by principals without an organization go to the platform pseudo-organization.
 	if scope == ScopeOrg && p.OrganizationID == uuid.Nil {
@@ -930,10 +921,30 @@ func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, s
 	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
 		return r.insertFinished(ctx, q, rec, cause)
 	})
+	// A refusal that comes before the gate (role, step-up, MCP guard) or a failure after it cannot be recorded in an
+	// organization that is deleting or deleted: the gate refuses the record too, and the event would be lost
+	// (PDK-1113). The organization's unavailability wins, as it would have refused the attempt anyway: the one event
+	// is organization.inactive_denied and the caller gets organization_inactive, matching the event.
+	if org := r.gatedOrg(p, scope); org != uuid.Nil && db.IsOrganizationUnavailable(err) {
+		r.recordInactiveDenied(ctx, p, org, rec, err)
+		return err
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "audit: could not record failed action", "action_id", rec.id, "code", rec.code,
 			"cause", cause, "error", err)
 	}
+	return cause
+}
+
+// gatedOrg is the organization whose offboarding gate the record of an attempt in scope passes, or uuid.Nil.
+func (r *ActionRunner) gatedOrg(p principal.Principal, scope Scope) uuid.UUID {
+	switch {
+	case scope == ScopeOrg && p.OrganizationID != uuid.Nil:
+		return p.OrganizationID
+	case scope == ScopePlatform && r.pendingOrg != uuid.Nil:
+		return r.pendingOrg
+	}
+	return uuid.Nil
 }
 
 // recordInactiveDenied records an organization action refused because its organization is deleting or deleted as

@@ -2279,7 +2279,7 @@ var registry = map[Code]Definition{
 		Description: "An action was refused because its organization is being deleted or was deleted (403 organization_inactive). Actor and target are those of the refused attempt.",
 		Params:      []string{"organization_id", "attempted_code", "status"},
 		Outcomes:    []Outcome{OutcomeDenied},
-		Note:        "Platform pseudo-organization: nothing is written into an organization that is being deleted. organization_id names the refused organization, attempted_code the action's own code (not recorded in addition), status is deleting or deleted.",
+		Note:        "Platform pseudo-organization: nothing is written into an organization that is being deleted. organization_id names the refused organization, attempted_code the action's own code (not recorded in addition), status is deleting or deleted. The organization's unavailability wins over every other outcome: an attempt refused before the gate (missing step-up, role, MCP guard) or failing after it is recorded here as well, once, when the gate refuses its own record, and is answered with organization_inactive.",
 	},
 	CodeUserEnrolmentLinkCreated: {
 		Code: CodeUserEnrolmentLinkCreated, Emitted: true,
