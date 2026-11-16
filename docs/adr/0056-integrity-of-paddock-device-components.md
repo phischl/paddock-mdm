@@ -134,7 +134,7 @@ published hashes, which the worker logs.
 
 ## Amendment 2026-11-16 b (architect, PDK-1122c) — a check-in does not prove the genuine agent
 
-Status: **proposed**, pending the maintainer's approval of the estimate (`decisions-alpha11.md` §146). Details, texts
+Status: **accepted** (`decisions-alpha11.md` §147, maintainer and main, 2026-11-16). Details, texts
 and tests: plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 b (architect, PDK-1122c)".
 
 **Context.** Item 3 of the previous amendment left a gap: a local root user stops the genuine agent and lets a

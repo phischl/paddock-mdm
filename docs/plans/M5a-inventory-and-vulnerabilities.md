@@ -1019,8 +1019,9 @@ amendment agree (update both); log message wording other than the `hashes` attri
 
 ## Amendment 2026-11-16 b (architect, PDK-1122c) — the mutual watch reports an absent agent while the device checks in
 
-Status: **proposed**, pending the maintainer's approval of the estimate (`decisions-alpha11.md` §146: design and
-estimate go to main before any implementation). Basis: branch state `c792e707` (PDK-1122b with the decisions of its
+Status: **accepted** (`decisions-alpha11.md` §147, maintainer and main, 2026-11-16: approved as designed, including
+the reuse of `device.tamper_agent_not_running` with the new description and params, and the residuals of D8 and
+section 12). Basis: branch state `c792e707` (PDK-1122b with the decisions of its
 review round 1). ADR 0056 records the decision in its amendment of the same date ("b"). Ticket PDK-1122c, risk high.
 Implementation starts only after PDK-1122b is merged into the cluster branch.
 
