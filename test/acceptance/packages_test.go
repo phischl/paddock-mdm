@@ -26,9 +26,9 @@ func TestAgentPackagesPublic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	get := func(path string) (int, []byte) {
+	do := func(method, path string) (int, []byte) {
 		t.Helper()
-		req, err := http.NewRequestWithContext(testContext(t, time.Minute), http.MethodGet, stack.BundlesURL()+path, nil)
+		req, err := http.NewRequestWithContext(testContext(t, time.Minute), method, stack.BundlesURL()+path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -39,6 +39,10 @@ func TestAgentPackagesPublic(t *testing.T) {
 		defer func() { _ = res.Body.Close() }()
 		body, _ := io.ReadAll(res.Body)
 		return res.StatusCode, body
+	}
+	get := func(path string) (int, []byte) {
+		t.Helper()
+		return do(http.MethodGet, path)
 	}
 	if status, body := get("/packages/" + v + "/paddock-supervisor_" + v + "_amd64.deb"); status != http.StatusOK || string(body) != string(deb) {
 		t.Fatalf("public package: HTTP %d, %d bytes", status, len(body))
@@ -71,9 +75,13 @@ func TestAgentPackagesPublic(t *testing.T) {
 	bin := []byte("gate binary " + v)
 	expectStatus(t, uploadArtifact(t, root, v, bin, signBinary(t, bin, v)), http.StatusOK, "")
 	for _, path := range []string{"/paddock-agent-artifacts/releases/" + v + "/amd64/paddockd", "/paddock-agent-artifacts/?list-type=2",
-		"/paddock-agent-artifacts/?list-type=2&prefix=packages/", "/packages/"} {
-		if status, _ := get(path); status != http.StatusForbidden {
-			t.Errorf("%s without credentials: HTTP %d, want 403", path, status)
+		"/paddock-agent-artifacts/?list-type=2&prefix=packages/", "/packages/", "/packages/some/dir/", "/packages/" + v + "/",
+		"/packages", "/packages//", "/packages/a//", "/packages/a%2F", "/packages/?list-type=2",
+		"/packages/some/dir/..", "/packages/some/dir/%2e%2e", "/packages/some/.", "/PACKAGES/", "//packages/", "/./packages/"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			if status, _ := do(method, path); status != http.StatusForbidden {
+				t.Errorf("%s %s without credentials: HTTP %d, want 403", method, path, status)
+			}
 		}
 	}
 }
