@@ -794,7 +794,7 @@ const (
 | Key | `file` param | Active in a pass when | Bound | Longest regular duration |
 | --- | --- | --- | --- | --- |
 | `lock` | `/var/lib/paddock/state/integrity.lock` | `store.lock` returned `ErrLockTimeout` | State | seconds (enroll, a sync) |
-| `baseline_read` | `/var/lib/paddock/state/integrity.json` | load failed with an error other than not-exist (also non-regular, oversized). The pass is skipped; the baseline is NOT re-initialized (internal L2). A JSON parse error stays C9 (rename, re-initialize, no cause). | State | never |
+| `baseline_read` | `/var/lib/paddock/state/integrity.json` | load failed with an error other than not-exist (also non-regular, oversized). The pass is skipped; the baseline is NOT re-initialized (internal L2). A JSON parse error stays C9 (rename, re-initialize, no suspension cause) and is reported by R14. | State | never |
 | `baseline_write` | `/var/lib/paddock/state/integrity.json` | the save of step 3 failed | State | never (full disk is not regular) |
 | `baseline_raced` | `/var/lib/paddock/state/integrity.json` | generation mismatch in step 3 | State | one pass |
 | `update_request` | `/var/lib/paddock/staging/request.json` | `update.Pending` | Flow | minutes (install); a PDK-1118 stall is an anomaly the runbook names |
@@ -1030,6 +1030,51 @@ Replaces the rule "records `{path, md5 from the current md5sums entry, sha256 ob
   `check_suspended`, naming the blocking file."
 - ADR 0056: amendment of the same date (written with this amendment).
 
+### R14 A baseline reset is reported (main §150; amends C9 "one `Warn` and no event")
+
+Corrupting or deleting `integrity.json` makes the agent rebuild the baseline by trust on first use, and with it a
+replaced binary would become the new baseline. A reset is therefore reported once per episode with the existing code
+`device.tamper_protected_file_changed`, `file` `/var/lib/paddock/state/integrity.json` and the new `reason` value
+`baseline_reset` (constant `protocol.TamperReasonBaselineReset = "baseline_reset"`).
+
+1. **Reset kinds.**
+   - `corrupt`: `load` finds a regular `integrity.json` that does not parse as JSON (C9: rename to
+     `integrity.json.corrupt`, start an empty baseline). Any loader detects it: `Check` and every writer
+     (`SyncFiles`, `SyncFileIfChanged`, `RecordStaged`, `UpdateResult`, `RecordSupervisorPre`, `SupervisorResult`).
+   - `missing`: a `Check` pass on a device whose baseline was **established** finds no `current` in `Expected` — the
+     file was deleted, or a writer recreated it without the slots. Established means the agent state holds
+     `IntegrityEstablishedAt` (new field in `agent/internal/state/state.go`:
+     `IntegrityEstablishedAt *time.Time \`json:"integrity_established_at,omitempty"\``). `Check` returns
+     `established bool`: true after a successful save of a baseline whose `Expected` holds
+     `/opt/paddock/agent/current`; `tickIntegrity` then sets the field once and calls `saveState`. A fresh
+     installation and a re-enrollment after an uninstall (which removes `/var/lib/paddock`) are not established and
+     initialize silently, as before.
+2. **Persistence of the episode.** The loader that detects `corrupt` sets `Baseline.Reset = &Reset{Kind: "corrupt",
+   At: now}` (`json:"reset,omitempty"`; `Reset{Kind string \`json:"kind"\`; At time.Time \`json:"at"\`}`) in the
+   rebuilt baseline, so the reset survives a writer that runs before the next pass. `Check` sets `Kind: "missing"` the
+   same way. Every writer keeps an existing `Reset` unchanged.
+3. **Report.** A `Check` pass that loads a baseline with `Reset != nil` initializes the objects by trust on first use
+   (as before), emits `{file: "/var/lib/paddock/state/integrity.json", reason: "baseline_reset"}` once and clears
+   `Reset` in the same save. The `Warn` of C9 stays.
+4. **One per episode.** The episode ends with the first successful save of that `Check` pass (a valid record). A new
+   corruption or deletion after that is a new episode and reports again. If the save fails, or `integrity.json`
+   cannot be renamed and stays corrupt, the `Checker` keeps the dedup in memory (`resetReported`, set when the event
+   is emitted, cleared after a successful save without `Reset`), so later passes of the same process do not repeat
+   it; an agent restart while the file stays corrupt and unwritable reports once more (RR-148, like R4.4).
+5. **Not covered:** the re-initialization of the slots after an update result without a matching staged release
+   (C4) stays a `Warn` without an event, because a rollback to an agent older than PDK-1122a causes it on a regular
+   flow. RR-148 keeps naming it.
+6. **Audit contract.** The `Description` of R5 MUST instead read exactly: "A device found a protected file changed
+   that the agent does not restore itself, e.g. its PAM configuration or one of Paddock's own components (actor: the
+   device). reason check_suspended: the agent could not check its own components for longer than a fixed bound, and
+   file names the path that blocks the check. reason baseline_reset: the agent's baseline of its own components was
+   corrupt or missing and was recorded anew, and file names the baseline file." Additive again: a second value of
+   the existing param.
+7. **RR-148:** move "corrupt `integrity.json` to force a re-initialization" from "none is detected" to the mitigation:
+   "a corrupt or deleted baseline is reported as `baseline_reset`; the binary that becomes the new baseline is not
+   judged against the old one". The runbook subsection of R13 gets one row for `baseline_reset`: check the slots
+   against the published release hashes (PDK-1122b) and the packages with `dpkg --verify`.
+
 ### Files
 
 | Path | Action | Purpose |
@@ -1043,7 +1088,8 @@ Replaces the rule "records `{path, md5 from the current md5sums entry, sha256 ob
 | `agent/internal/agent/updates.go` | change | R7.2/R7.3 in `reportUpdate` and `handleUpdate` |
 | `agent/internal/agent/supervisor.go` | change | R10 capture before `Launch`, `SupervisorResult` before the event |
 | `agent/internal/agent/agent.go` | change | `Emit` mapping with `Reason` |
-| `pkg/protocol/types.go` | change | R5 field and constant |
+| `agent/internal/state/state.go` | change | R14 `IntegrityEstablishedAt` |
+| `pkg/protocol/types.go` | change | R5 field, constants of R5 and R14 |
 | `server/internal/domain/audit/codes.go` | change | R5 description only |
 | `docs/compliance/audit-codes.md` | regenerate | `make gen` |
 | tests: `agent/internal/integrity/*_test.go`, `agent/internal/agent/integrity_test.go`, `test/system/{integrity.go,agent_test.go,encrypt_test.go,device.go}` | change | T1–T14, R12 |
@@ -1098,6 +1144,18 @@ document)
   no event; crash replay (same result processed twice): no event.
 - **T14 (R9)** `splitQuoted` table test: plain, quoted with space, escaped quote, two elements, unterminated → error;
   `checkUnits` with a quoted drop-in reports `file` with the space intact.
+- **T15 (R14)** `integrity` and `agent` packages, each case failing on `9b285ad3` (which emits nothing on a reset):
+  - corrupt `integrity.json` on an established device → exactly one event `{file:
+    /var/lib/paddock/state/integrity.json, reason: baseline_reset}`; five later passes → no further event;
+  - after that valid record, corrupt it again → a second event (new episode);
+  - corrupt it, then `SyncFiles` runs before the next pass → the next pass still emits the one event;
+  - corrupt it with the state directory read-only (rename and save fail) → one event across five passes of the same
+    `Checker`;
+  - delete `integrity.json` on an established device → one event; a writer recreates it without the slots before
+    the pass → one event;
+  - fresh device (no `IntegrityEstablishedAt`) without `integrity.json` → no event, and `IntegrityEstablishedAt` is
+    set after the first pass that recorded `current`;
+  - C4 result without a staged release → no event (unchanged).
 - System gates: R12 (no new VM gate).
 
 ### Stop conditions
@@ -1117,11 +1175,14 @@ Stop and report to the lead, without working around it, when:
 
 Implemented on `9b285ad3`: 948 net production lines (952 added, 4 removed; Go files outside tests and
 `test/system`). This round adds about: R1 +60, R2 +30, R3/R4 (`suspend.go` and the call sites) +110, R6 +5,
-R7 +40, R8 +25, R9 +25, R10 +35 (net, `SupervisorRolledBack` replaced), R11 +10, R5 +2 → **about +340, about 1290 net
-production lines in total**, well past the ~900 that §148 names. Tests: about +650. This is reported to main for
+R7 +40, R8 +25, R9 +25, R10 +35 (net, `SupervisorRolledBack` replaced), R11 +10, R5 +2, R14 +45 (added under §150)
+→ **about +385, about 1335 net production lines in total**, well past the ~900 that §148 names. Tests: about +750. This is reported to main for
 transparency; it is not a stop below 1450 (stop condition 5).
 
 ### Approvals needed
+
+All three were granted by main under §150 (2026-11-16), together with the order to add R14.
+
 
 - **Main:** R5, the new value `check_suspended` of the param `reason` on the released code
   `device.tamper_protected_file_changed`, with the description text change (additive audit-contract change).

@@ -123,6 +123,13 @@ decision:
 4. **The check observes without the lock** and holds `integrity.lock` only to load, compare and save, so a slow pass
    never makes a Paddock writer give up.
 
+5. **A baseline reset is reported (main §150; amends the re-initialization of a corrupt baseline in decision 1).** A
+   corrupt `integrity.json`, or a missing baseline on a device whose baseline was once established (agent state
+   `integrity_established_at`), is re-initialized as before, and is now reported once per episode as
+   `device.tamper_protected_file_changed` with `file` the baseline file and `reason` `baseline_reset`. The episode
+   ends with the next valid record. The re-initialization after an update result without a matching staged release
+   stays a `Warn` without an event, because a rollback to an older agent causes it on a regular flow.
+
 Consequences: RR-148 also names short-lived changes within one drift interval, the staged-guard, conversion and
 re-sync windows, and that changes during a suspension are reported only as the suspension. An unwritable baseline
 delays staging, supervisor upgrades and update results by at most 15 minutes before they proceed.
