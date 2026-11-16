@@ -179,7 +179,7 @@ devices that have not checked in for 15 minutes.
 
 ## Amendment 2026-11-16 c (architect, PDK-1122d) — the server watches fleetd
 
-Status: **proposed**, pending main's approval of the estimate (`decisions-alpha11.md` §147). Details, texts and
+Status: **accepted** (`decisions-alpha11.md` §148, 2026-11-16). Details, texts and
 tests: plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 c (architect, PDK-1122d)".
 
 **Context.** After amendment b, a root user who replaces the agent and also stops fleetd is not reported: the impostor
@@ -209,4 +209,6 @@ Fleet's clock relative to its newest contact, so a Fleet that stops recording co
   installation-wide Fleet reachability problem as a suppression log line and gauge.
 - Negative: residuals stay in RR-149 (a decoy agent; a replaced or simulated osquery; single-device installations;
   a root user controlling more than half of the live devices). One more additive code in the audit event contract.
-- Follow-up: PDK-1122d, after PDK-1122c.
+- A lasting suppression is itself an alert (`PaddockFleetSilenceWatchSuppressed`, critical, added in §148), so a
+  root user who controls more than half of the live devices stays unreported per device but not unnoticed.
+- Follow-up: PDK-1122d, after PDK-1122c; PDK-1122e (attention kind for the event, alpha.12).

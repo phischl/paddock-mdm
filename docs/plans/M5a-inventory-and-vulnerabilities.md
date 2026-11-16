@@ -1408,8 +1408,8 @@ audit description and params change. VM time: F6 adds about 20 minutes per VM (V
 
 ## Amendment 2026-11-16 c (architect, PDK-1122d) — the server reports a fleetd that falls silent while the device checks in
 
-Status: **proposed**, pending main's approval of the estimate (`decisions-alpha11.md` §147: the maintainer put
-PDK-1122d into alpha.11; design and estimate go to main before any implementation). ADR 0056 records the decision in
+Status: **accepted** (`decisions-alpha11.md` §148, main within the maintainer's decision §147, 2026-11-16: approved
+as designed, points 1–5; main added the alert rule E8; the attention kind follows as PDK-1122e in alpha.12). ADR 0056 records the decision in
 its amendment "c" of the same date. Ticket PDK-1122d, risk high. Implementation starts after PDK-1122c is merged (it
 extends gate F6, RR-149 and the migration sequence).
 
@@ -1525,6 +1525,49 @@ CodeDeviceTamperFleetdSilent: {
   attention kind, and the finding is listed on the device and in the findings list.
 - No secret or personal data in the params.
 
+**E8 Alert on a lasting suppression (added by main, §148).** A suppression that lasts means either that devices
+cannot reach `fleet.<domain>` or that a root user controls more than half of the live devices; in both cases the watch
+is blind and an operator MUST hear of it. `deploy/compose/prometheus/alerts.yml`, group `paddock-control-plane`,
+after `PaddockOSVStale`:
+
+```yaml
+      # Plan M5a amendment 2026-11-16 c, E8: the fleetd silence watch holds back due devices because no or too few
+      # live devices reach Fleet; the watch is blind until it clears.
+      - alert: PaddockFleetSilenceWatchSuppressed
+        expr: max(paddock_inventory_fleet_silent_suppressed{role="paddock-worker"}) > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The fleetd silence watch holds back {{ $value }} devices"
+          description: "For 15 minutes the worker has held back reports of devices whose fleetd is silent while they check in, because no live device or fewer than half of them reach Fleet. Either devices cannot reach fleet.<domain> (certificate, DNS, proxy, Fleet's device endpoints) or more than half of the live devices were tampered with; until it clears, a silent fleetd is not reported (docs/operations/fleet.md, \"When the fleetd silence watch is suppressed\")."
+```
+
+- `critical`, because while it fires a mass tampering is invisible. `for: 15m` (three rounds) skips a single round
+  during a Fleet restart; a due device already needs 30 minutes of silence.
+- **Gauge semantics (binding).** Only the process that ran the round sets the gauge, in the watch step, to the
+  number of due devices it held back (0 when it reported or nothing was due). `RunSync` MUST set the gauge to 0 when
+  `WithLeaderLock` returns `false` (this process did not run the round), so a former leader never keeps a stale value.
+  A round that fails before the watch leaves the value of the last watch.
+- `make lint-prometheus` runs the rule tests (section 8).
+- **Runbook**, new subsection in `docs/operations/fleet.md` after "Inventory sync and mutual watch", titled "When the
+  fleetd silence watch is suppressed", text: "`PaddockFleetSilenceWatchSuppressed` fires when the worker has held
+  back `device.tamper_fleetd_silent` for 15 minutes because no live device, or fewer than half of them, reach Fleet.
+  The worker logs `fleet silence watch suppressed` with `reason` (`no_fresh_peer` or `fresh_minority`), `due`,
+  `live` and `fresh` every round. 1. Check that devices reach `https://fleet.<domain>`: the certificate
+  (`PaddockCertificateProbeFailing`), DNS, a proxy, and the Fleet service (`docker compose ps fleet`, its log). 2. If
+  Fleet is reachable and most devices still look silent, treat it as a possible mass tampering: compare the devices'
+  last contact with Fleet in Fleet's host list with their check-ins in the portal, and follow the incident process.
+  3. The alert clears in the first round in which at least half of the live devices reach Fleet; the held-back
+  devices are then reported."
+- `docs/operations/monitoring.md`: a row in the alert table — "`PaddockFleetSilenceWatchSuppressed` | the fleetd
+  silence watch has held back reports of silent fleetd for 15 minutes because no live device or fewer than half of
+  them reach Fleet (`paddock_inventory_fleet_silent_suppressed`, `role="paddock-worker"`): devices cannot reach
+  `fleet.<domain>`, or more than half of them were tampered with (`docs/operations/fleet.md`, *When the fleetd
+  silence watch is suppressed*) | critical"; and a row in "Metrics Paddock adds for the alerts" — "`paddock_inventory_fleet_silent_suppressed` | worker, every inventory round of the leader (plan M5a amendment
+  2026-11-16 c): devices whose silent fleetd the watch held back in the last round; 0 on a replica that did not run
+  the round".
+
 **E7 Contract and compatibility.**
 
 - Device API (`api/openapi/device.yaml` 1.0.0, `pkg/protocol`): **unchanged**; no agent change; old and new agents
@@ -1538,8 +1581,8 @@ CodeDeviceTamperFleetdSilent: {
 ### 4. Non-goals
 
 No change to `agent/` (in particular `agent/internal/revoke/`), the supervisor, `pkg/`, `api/openapi/*.yaml`, the
-Fleet settings and policies, the attention function; no detection of a replaced or simulated osquery; no alerting
-rule for the new gauge (operators MAY add one).
+Fleet settings and policies, the attention function; no detection of a replaced or simulated osquery; no
+attention kind (PDK-1122e, alpha.12).
 
 ### 5. Files
 
@@ -1557,7 +1600,8 @@ rule for the new gauge (operators MAY add one).
 | `server/web/src/locales/en.json`, `de.json` | change | E6 messages |
 | `test/acceptance/inventory_test.go` | change | `TestInventoryFleetdSilent` |
 | `test/system/inventory_test.go` | change | gate F7 inside the impostor gate, peers, counts |
-| `docs/compliance/residual-risks.md`, `docs/architecture.md` §11.5, `docs/operations/fleet.md` | change | texts below |
+| `deploy/compose/prometheus/alerts.yml`, `alerts_test.yml` | change | E8 rule and its tests |
+| `docs/compliance/residual-risks.md`, `docs/architecture.md` §11.5, `docs/operations/fleet.md`, `docs/operations/monitoring.md` | change | texts below and E8 |
 | `changelog.d/pdk-1122d.security.md` | new | fragment |
 
 ### 6. Interfaces and data model
@@ -1670,7 +1714,8 @@ Texts:
 - **RR-149**, in the text set by amendment b, replace "a foreign program that checks in while fleetd is stopped
   (PDK-1122d proposed);" by "a foreign program that checks in while fleetd is stopped, as long as fewer than half of
   the live devices reach the inventory system, or on an installation with a single live device (the server reports a
-  silent fleetd as `device.tamper_fleetd_silent` only with a fresh majority; amendment c); a replaced osquery, or a
+  silent fleetd as `device.tamper_fleetd_silent` only with a fresh majority, and a lasting suppression raises the
+  alert `PaddockFleetSilenceWatchSuppressed`; amendment c); a replaced osquery, or a
   program that answers Fleet with the device's osquery node key;".
 - **`docs/architecture.md` §11.5**, new row after `paddock_agent_binary_known`: "fleetd talks to Fleet while the
   device checks in (worker, from Fleet's `seen_time`; only while at least half of the live devices reach Fleet) |
@@ -1697,7 +1742,10 @@ Texts:
 4. **Worker.** Check: `go test ./server/internal/worker/ -run 'TestInventoryRoundFleet'`.
 5. **Acceptance.** Check: `make acceptance` runs `TestInventoryFleetdSilent` green.
 6. **System gate F7.** Check: `make system-test VM=all SUITE=misc` green, serially to acceptance.
-7. Docs, changelog, quality gate (`make typecheck`, full Go suite with `nice -n 19`, `make lint test`).
+7. **Alert rule (E8).** Rule, rule tests, gauge reset in `RunSync`. Check: `make lint-prometheus` (the new tests
+   run: the output counts them); `go test ./server/internal/worker/ -run TestInventoryFleetSuppressedGauge`.
+8. Docs (including the runbook subsection and both monitoring rows), changelog, quality gate (`make typecheck`, full
+   Go suite with `nice -n 19`, `make lint test`).
 
 ### 8. Tests
 
@@ -1735,6 +1783,12 @@ All times are injected or seeded; no test sleeps for a duration; "regression" te
   except the watched device, which reconnects one round later → no event; (3) all hosts' `seen` frozen for 40 min
   with fresh check-ins → no event; (4) 3 of 4 live devices stale for 40 min → no event, the gauge is 3 and one
   `WARN` per round with `reason=fresh_minority`.
+- **Worker** `TestInventoryFleetSuppressedGauge`: a round that holds back 2 devices sets the gauge to 2; a
+  following round that reports them sets 0; `RunSync` of a process whose `WithLeaderLock` returns `false` sets 0.
+- **Rules** (`alerts_test.yml`, `make lint-prometheus`): `PaddockFleetSilenceWatchSuppressed` — series
+  `paddock_inventory_fleet_silent_suppressed{role="paddock-worker"}` at 3 from minute 1 → no alert at 15m, firing at
+  16m with `severity: critical` and summary "The fleetd silence watch holds back 3 devices"; a series that returns
+  to 0 at minute 10 → no alert at 20m; a standby series at 0 next to a leader at 0 → no alert.
 - **Worker** `TestInventoryRoundFleetWorkerRestart`: a fresh `Inventory` instance over the same database continues
   the state: a device with `since = now - 16m` in the database is reported in the new instance's first round, exactly
   once across both instances.
@@ -1778,6 +1832,7 @@ All times are injected or seeded; no test sleeps for a duration; "regression" te
 | AC-D3 | Given suspend, boot, network loss, orbit restart or a fleetd upgrade, then no event (unit tests; F2/F5 counts) | F9 | Org admin |
 | AC-D4 | Given another organization, then its admin never sees the event | F10 | Org admin of globex |
 | AC-D5 | Device API, admin API and agent unchanged | ADR 0047 | Maintainer (diff, CI `upgrade`) |
+| AC-D6 | Given the watch holds back reports for 15 minutes, then `PaddockFleetSilenceWatchSuppressed` fires as critical and the operator finds the runbook in `docs/operations/fleet.md` (rule tests) | F9 | Platform operator (alerting) |
 
 ### 10. Freedoms
 
@@ -1799,7 +1854,8 @@ one statement; log wording except the `reason`, `due`, `live`, `fresh` attribute
 
 - **Installations with one live device, or where most devices cannot reach Fleet,** are never judged (guards 2 and
   3). Accepted; RR-149.
-- **A root user who controls more than half of the live devices** suppresses the reports. Accepted; RR-149.
+- **A root user who controls more than half of the live devices** suppresses the per-device reports; the lasting
+  suppression raises the critical alert `PaddockFleetSilenceWatchSuppressed` (E8). Accepted; RR-149.
 - **A site that blocks only `fleet.<domain>`** raises the event for its devices; documented in fleet.md and the
   description.
 - **A replaced osquery or a program that answers Fleet with the device's node key** keeps `seen_time` fresh. RR-01,
@@ -1812,11 +1868,11 @@ one statement; log wording except the `reason`, `due`, `live`, `fresh` attribute
 
 | Part | Lines | Files |
 | --- | --- | --- |
-| Production, hand-written (migration ~30, queries ~25, port/adapter ~25, `fleetwatch.go` ~110, app ~90, worker ~45, registry/finding/messages ~15) | about 340 | 10 |
+| Production, hand-written (migration ~30, queries ~25, port/adapter ~25, `fleetwatch.go` ~110, app ~90, worker ~50, registry/finding/messages ~15, alert rule ~15) | about 360 | 11 |
 | Generated (`pgstore`, audit doc, TS codes) | about 70 | 3 |
-| Tests (unit ~260, adapter ~30, app ~150, worker ~200, acceptance ~130, system ~170) | about 940 | 6 |
-| Docs by the implementer (RR-149, architecture, fleet.md, changelog) | about 35 | 4 |
-| Design docs (this amendment, ADR 0056 amendment c) | about 380 | 2 |
+| Tests (unit ~260, adapter ~30, app ~150, worker ~230, rules ~45, acceptance ~130, system ~170) | about 1015 | 7 |
+| Docs by the implementer (RR-149, architecture, fleet.md incl. runbook, monitoring.md, changelog) | about 60 | 5 |
+| Design docs (this amendment, ADR 0056 amendment c) | about 420 | 2 |
 
 Not protocol-breaking: no device API, admin API, bundle, command or event-type change; one new audit code, one
 additive migration. VM time: F7 adds about 35 minutes per VM (VMs in parallel), on top of F6.
