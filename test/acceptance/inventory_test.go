@@ -401,8 +401,10 @@ func TestInventoryAgentBinaryPolicy(t *testing.T) {
 	}
 	t.Logf("%s after %s", agentBinaryCode, time.Since(start).Round(time.Second))
 
-	// Phase 2 waits on observed conditions only (plan M5a amendment 2026-11-16, review round 1, A11). The publish also
-	// makes Fleet reset every host's binary policy result, so the changed device staying at one event proves A7.
+	// Phase 2 waits on observed conditions only (plan M5a amendment 2026-11-16, review round 1, A11). The publish
+	// makes Fleet reset every host's binary policy result; a worker round that reads the changed host before it answers
+	// again exercises A7, which this gate does not assert. A7's regression test is
+	// TestInventoryRoundAgentBinaryUnansweredAfterPublish.
 	newHash := publishAgentBinary(t, root)
 	hosts["updated"].AgentBinarySHA256 = newHash
 	db := ownerDB(t)
