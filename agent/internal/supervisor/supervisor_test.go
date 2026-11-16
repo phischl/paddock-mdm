@@ -36,6 +36,9 @@ type fake struct {
 	notices chan string
 	clock   *clock
 	ticks   atomic.Int64 // ticks of the Run loop started by start, counted before Notify
+	// versionStalled makes the version calls of the slot that stallVersion names time out; stalledCalls counts them.
+	versionStalled atomic.Bool
+	stalledCalls   atomic.Int32
 }
 
 // clock is the supervisor's injected clock: real time plus an offset the test sets to end a probation exactly when

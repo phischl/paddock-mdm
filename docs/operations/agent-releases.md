@@ -522,7 +522,16 @@ waits, the agent stages no other release and installs no supervisor package. A s
 and `apt install --reinstall paddock-agent` do not help: the package never touches an existing `current` or the
 slots. Make the active slot answer again, as root on the device:
 
-1. If the other slot holds a working agent, point `current` at it. The other slot is the one `current` does not point
+1. Remove the waiting request and its release first. Otherwise the supervisor would compare the waiting release with
+   the agent you put in place in the next step, which can be older than the stalled one, and the release could pass
+   the downgrade refusal. The agent stages the release that the server offers again on its own:
+
+   ```sh
+   cat /var/lib/paddock/staging/request.json            # {"version":"<version>"}
+   rm -f /var/lib/paddock/staging/request.json && rm -rf /var/lib/paddock/staging/<version>
+   ```
+
+2. If the other slot holds a working agent, point `current` at it. The other slot is the one `current` does not point
    at, here A:
 
    ```sh
@@ -531,21 +540,22 @@ slots. Make the active slot answer again, as root on the device:
    ln -sfn A /opt/paddock/agent/.current.new && mv -T /opt/paddock/agent/.current.new /opt/paddock/agent/current
    ```
 
-2. Otherwise copy the packaged agent into the active slot, here B:
+3. Otherwise copy the packaged agent into the active slot, here B:
 
    ```sh
    install -m 0755 /usr/lib/paddock/paddockd /opt/paddock/agent/B/paddockd.new
    mv -f /opt/paddock/agent/B/paddockd.new /opt/paddock/agent/B/paddockd
    ```
 
-3. Restart the supervisor:
+4. Restart the supervisor:
 
    ```sh
    systemctl restart paddock-supervisor
    ```
 
-The supervisor then processes the waiting request as usual: signature check, downgrade refusal against the version
-that the active slot now reports, self-test and probation. Paddock does not report either step as a tamper event: no
+The agent then stages the current release again, and the supervisor processes it as usual: signature check, downgrade
+refusal against the version that the active slot now reports, self-test and probation. Paddock does not report either
+step as a tamper event: no
 check watches the slots or `current`, and the Fleet policy `paddock_agent_running` only checks that a `paddockd` runs
 from a slot below `/opt/paddock/agent/`. Record the intervention in your own change log as an intended intervention.
 The device then reports the agent version of the slot it runs.

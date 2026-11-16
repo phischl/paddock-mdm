@@ -21,7 +21,7 @@ type probation struct {
 	SwitchedAt  time.Time `json:"switched_at"`
 	// BootID is the kernel boot ID at the switch: a resume in the same boot keeps the window of SwitchedAt.
 	BootID string `json:"boot_id,omitempty"`
-	// RollingBack marks a rollback whose flip to FromSlot happened but is not known to be durable; its result waits.
+	// RollingBack marks a decided rollback, recorded before its flip to FromSlot; its result waits for a durable flip.
 	RollingBack bool `json:"rolling_back,omitempty"`
 	// RollbackPending marks a rollback whose flip back failed; the outcome is rollback_failed, the log stays and the
 	// flip is retried until it succeeds (ADR 0024).
@@ -120,6 +120,7 @@ func (s *Supervisor) report(p *probation, recorded bool) {
 
 // resumeProbation continues a probation that a restarted supervisor (or device) interrupted.
 func (s *Supervisor) resumeProbation() {
+	s.keptLog = false
 	var p probation
 	data, err := os.ReadFile(s.cfg.ProbationLog)
 	if err != nil {
@@ -128,7 +129,9 @@ func (s *Supervisor) resumeProbation() {
 	if err := json.Unmarshal(data, &p); err != nil {
 		rebuilt, reason := s.rebuildProbation()
 		if reason == versionTimedOut {
-			slog.Error("keeping the unreadable probation log until the next start: a slot's version call timed out", "error", err)
+			s.keptLog = true
+			s.deferRetry()
+			slog.Error("keeping the unreadable probation log: a slot's version call timed out", "error", err, "next_attempt_in", s.deferWait)
 			return
 		}
 		if rebuilt == nil {
@@ -155,10 +158,11 @@ func (s *Supervisor) resumeProbation() {
 		p.Outcome, p.DecidedAt, p.RollbackPending = res.Outcome, res.At, res.Outcome == outcomeRollbackFailed
 		p.unrecorded = writeJSON(s.cfg.ProbationLog, &p, s.cfg.SyncFile) != nil
 	}
-	// A pending rollback, or a rolled_back whose flip back was lost with the power, retries the flip back; with current
-	// on FromSlot (flipped by hand, or the rename landed before a crash) only its durability is outstanding. A rollback
-	// rebuilt from the pending marker has no decision time: its result was delivered, so none is written again.
-	if p.RollbackPending || p.Outcome == outcomeRolledBack && s.activeSlot() == p.ToSlot {
+	// A pending rollback, a rolled_back whose flip back was lost with the power, or a recorded rollback whose flip back
+	// did not land (PDK-1118b), retries the flip back; with current on FromSlot (flipped by hand, or the rename landed
+	// before a crash) only its durability is outstanding. A rollback rebuilt from the pending marker has no decision
+	// time: its result was delivered, so none is written again.
+	if p.RollbackPending || (p.Outcome == outcomeRolledBack || p.RollingBack) && s.activeSlot() == p.ToSlot {
 		if p.RollbackPending = s.activeSlot() != p.FromSlot; p.RollbackPending && p.Outcome == outcomeRollbackFailed && !p.DecidedAt.IsZero() {
 			s.report(&p, true)
 		}
@@ -178,8 +182,8 @@ func (s *Supervisor) resumeProbation() {
 	}
 	// A rollback flip lost with the power leaves current on ToSlot: the probation runs again and decides anew.
 	if s.activeSlot() != p.ToSlot {
-		// The flip never happened, or a rollback flip back survived whose log could not be marked rolling_back; on disk
-		// the two look the same. No result is reported: rolled_back for a switch lost with the power would count the
+		// The flip never happened, or a rollback flip back survived whose intent could not be recorded (rollback); on
+		// disk the two look the same. No result is reported: rolled_back for a switch lost with the power would count the
 		// release as failed in the rollout and block it on this device, while without a result the agent stages the
 		// release again and its next probation reports. A current on neither slot proves nothing either way.
 		slog.Warn("dropping the probation log: current points at neither the new nor a rolled-back slot", "version", p.Version,
@@ -187,17 +191,20 @@ func (s *Supervisor) resumeProbation() {
 		s.dropProbation(p.Version)
 		return
 	}
-	p.RollingBack = false
 	// The previous supervisor may have seen the switch's sync fail; only a confirmed flip may end in "updated".
 	p.unsynced = true
 	// Within one boot the window stays the one that started at the switch, so watchdog restarts during a stalled rollback
 	// pass postpone it by at most the floor, which leaves a healthy agent that the restart killed time to check in again.
-	// After a reboot, or with a log that names no boot, the network may need minutes: the window starts anew (plan M2b
-	// amendment 2026-11-16). The deadline counts from Now, so a clock set back cannot stretch it past one window.
-	remaining := min(max(p.SwitchedAt.Add(s.cfg.Probation).Sub(s.cfg.Now()), s.cfg.Probation/5), s.cfg.Probation)
+	// After a reboot, or with a log that names no boot, the network may need minutes: the window starts anew, and the
+	// log records that start, so later restarts in this boot keep it (plan M2b amendment 2026-11-16, M1). The deadline
+	// counts from Now, so a clock set back cannot stretch it past one window.
 	if p.BootID == "" || p.BootID != s.cfg.BootID {
-		remaining = s.cfg.Probation
+		p.SwitchedAt, p.BootID = s.cfg.Now(), s.cfg.BootID
+		if err := writeJSON(s.cfg.ProbationLog, &p, s.cfg.SyncFile); err != nil {
+			slog.Error("recording the resumed probation's boot in the probation log failed", "error", err)
+		}
 	}
+	remaining := min(max(p.SwitchedAt.Add(s.cfg.Probation).Sub(s.cfg.Now()), s.cfg.Probation/5), s.cfg.Probation)
 	p.deadline = s.cfg.Now().Add(remaining)
 	s.probation = &p
 	// Rolling back here would start the old agent before Run starts the current one; checkProbation does it.
@@ -212,8 +219,8 @@ func (s *Supervisor) resumeProbation() {
 // names it updated. Otherwise it returns why not. A release left without its probation would break design contract 4;
 // flipping back instead could roll back a release that already passed. If the rebuilt log cannot be written, it runs
 // in memory and the next start rebuilds it again. If a slot's version call times out, it returns versionTimedOut as the
-// reason: the log stays for the next start, because a slot that only looks version-less could drop it or misname the
-// failed release (plan M2b amendment 2026-11-16).
+// reason: the log stays and is rebuilt again on the deferral's back-off, because a slot that only looks version-less
+// could drop it or misname the failed release (plan M2b amendment 2026-11-16, M2).
 func (s *Supervisor) rebuildProbation() (*probation, string) {
 	to := s.activeSlot()
 	if to != "A" && to != "B" {

@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -118,98 +119,257 @@ func (f *fake) waitTicksOrEnd(n int, done <-chan struct{}) {
 	}
 }
 
-// TestWatchdogKillsBeforeTheFlipBackConverge (PDK-1118): a supervisor killed in every rollback pass before the flip
-// back lands (here between the attempts of a blocked flip; a rename that stalls leaves the same state on disk)
-// tries again after each restart once the floor of a fifth of the probation has passed, not after a fresh window, so
-// k kills postpone the rollback by k floors, and it rolls back at the first pass whose flip lands.
-func TestWatchdogKillsBeforeTheFlipBackConverge(t *testing.T) {
-	f := newFake(t)
-	mc := &manualClock{now: time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)}
-	f.expiredProbation(mc, mc.now.Add(-2*testProbation), "boot-1")
-	f.blockFlip()
-	var kills atomic.Int32
-	f.cfg.Sleep = func(time.Duration) { kills.Add(1); runtime.Goexit() }
-	for i := range int32(3) {
-		s, done := f.startKillable()
-		f.waitReady()
-		mc.advance(testProbation/5 - time.Nanosecond)
-		f.waitTicksOrEnd(3, done)
-		if kills.Load() != i {
-			t.Fatalf("restart %d: the rollback pass started before the floor", i+1)
-		}
-		mc.advance(time.Nanosecond)
-		f.killed(s, done, &kills, i+1)
-		if f.active() != "B" {
-			t.Fatalf("restart %d: current → %s, want B", i+1, f.active())
-		}
+// probationOnDisk reads the probation log.
+func (f *fake) probationOnDisk() probation {
+	f.t.Helper()
+	var p probation
+	data, err := os.ReadFile(f.cfg.ProbationLog)
+	if err == nil {
+		err = json.Unmarshal(data, &p)
 	}
-	f.unblockFlip()
-	f.cfg.Sleep = nil
-	f.start()
-	f.waitReady()
-	f.expectRollbackAfter(mc, testProbation/5)
+	if err != nil {
+		f.t.Fatalf("probation log %s: %v", data, err)
+	}
+	return p
 }
 
-// TestWatchdogKillAfterTheFlipBackConverges (PDK-1118): a supervisor killed after the rollback's rename has landed
-// leaves current on the previous slot; the restart runs the previous agent and never the failed release again. It
-// documents the behaviour the window change relies on; it passes without the change too.
-func TestWatchdogKillAfterTheFlipBackConverges(t *testing.T) {
-	tests := []struct {
-		name    string
-		seam    func(f *fake, kill func())
-		outcome string // the result after the restart, "" for none
-	}{
-		{"in the sync of the flip back", func(f *fake, kill func()) {
+// TestResumeAfterARebootRecordsTheNewWindow (PDK-1118, plan M2b fix batch 2026-11-16, M1): a resume in another boot,
+// or of a log without a boot, starts a full window and records it, so a later restart in this boot gets only the rest
+// of that window; if the record cannot be written, the window holds in memory; without a boot ID every resume runs a
+// full window, and New says so once.
+func TestResumeAfterARebootRecordsTheNewWindow(t *testing.T) {
+	start := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	t.Run("restart later in the new boot", func(t *testing.T) {
+		f := newFake(t)
+		mc := &manualClock{now: start}
+		f.expiredProbation(mc, start.Add(-2*testProbation), "boot-0")
+		f.start()
+		f.waitReady()
+		if p := f.probationOnDisk(); p.BootID != "boot-1" || !p.SwitchedAt.Equal(start) {
+			t.Fatalf("log names boot %q, switched at %s; want boot-1 at the resume %s", p.BootID, p.SwitchedAt, start)
+		}
+		mc.advance(testProbation - time.Second)
+		f.waitTicks(3)
+		f.expectNoResult()
+		f.stop()
+		f.start()
+		f.waitReady()
+		f.expectRollbackAfter(mc, testProbation/5)
+	})
+	t.Run("the record fails", func(t *testing.T) {
+		log := captureLog(t)
+		f := newFake(t)
+		mc := &manualClock{now: start}
+		f.expiredProbation(mc, start.Add(-2*testProbation), "boot-0")
+		f.cfg.SyncFile = func(file *os.File) error {
+			if file.Name() == f.cfg.ProbationLog+".tmp" {
+				return errors.New("injected")
+			}
+			return file.Sync()
+		}
+		f.start()
+		f.waitReady()
+		if !strings.Contains(log.String(), `level=ERROR msg="recording the resumed probation's boot in the probation log failed"`) {
+			t.Fatalf("no error about the failed record:\n%s", log.String())
+		}
+		f.expectRollbackAfter(mc, testProbation)
+	})
+	t.Run("no boot ID", func(t *testing.T) {
+		log := captureLog(t)
+		f := newFake(t)
+		mc := &manualClock{now: start}
+		f.cfg.BootID, f.cfg.BootIDFile = "", filepath.Join(f.dir, "missing")
+		f.expiredProbation(mc, start.Add(-testProbation/2), "")
+		f.start()
+		f.waitReady()
+		if n := strings.Count(log.String(), `level=WARN msg="reading the boot ID failed; every resumed probation runs a full window"`); n != 1 {
+			t.Fatalf("%d warnings about the boot ID, want 1:\n%s", n, log.String())
+		}
+		f.expectRollbackAfter(mc, testProbation)
+	})
+}
+
+// killPass starts a supervisor on an expired probation of B, kills it where seam calls kill, kills its agent, and
+// returns the clock; the seams are reset for the restart.
+func (f *fake) killPass(seam func(kill func())) *manualClock {
+	f.t.Helper()
+	mc := &manualClock{now: time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)}
+	f.expiredProbation(mc, mc.now.Add(-2*testProbation), "boot-1")
+	f.runRecordingPID("A")
+	var kills atomic.Int32
+	seam(func() { kills.Add(1); runtime.Goexit() })
+	s, done := f.startKillable()
+	f.waitReady()
+	mc.advance(testProbation / 5)
+	f.killed(s, done, &kills, 1)
+	f.cfg.SyncDir, f.cfg.SyncFile, f.cfg.Sleep = nil, nil, nil
+	return mc
+}
+
+// syncOf kills at the SyncFile of name.
+func (f *fake) syncOf(name string) func(kill func()) {
+	return func(kill func()) {
+		f.cfg.SyncFile = func(file *os.File) error {
+			if file.Name() == name {
+				kill()
+			}
+			return file.Sync()
+		}
+	}
+}
+
+// TestRollbackKillMatrix (PDK-1118b, plan M2b): a watchdog kill at any point of a rollback pass ends in rolled_back
+// after the restart, and never reports it while current points at the failed release.
+func TestRollbackKillMatrix(t *testing.T) {
+	t.Run("1-2 before the intent is in place", func(t *testing.T) {
+		f := newFake(t)
+		mc := &manualClock{now: time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)}
+		f.expiredProbation(mc, mc.now.Add(-2*testProbation), "boot-1")
+		// The intent's temporary file was written, its rename did not happen: the switch's log stands.
+		if err := os.WriteFile(f.cfg.ProbationLog+".tmp", []byte(`{"version":"1.1.0","rolling_back":true}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f.start()
+		f.waitReady()
+		f.expectRollbackAfter(mc, testProbation/5)
+	})
+	t.Run("3 after the intent, before the flip back", func(t *testing.T) {
+		f := newFake(t)
+		f.killPass(func(kill func()) { f.blockFlip(); f.cfg.Sleep = func(time.Duration) { kill() } })
+		if p := f.probationOnDisk(); !p.RollingBack || f.active() != "B" {
+			t.Fatalf("log %+v, current %s; want the recorded intent on B", p, f.active())
+		}
+		f.unblockFlip()
+		f.start()
+		f.waitReady()
+		if r := f.waitOutcome(outcomeRolledBack); r.Version != "1.1.0" || f.active() != "A" {
+			t.Fatalf("result %+v, current %s", r, f.active())
+		}
+		f.waitAgentRuns("A")
+		f.waitNoProbationLog()
+	})
+	t.Run("3 with a flip back that keeps failing", func(t *testing.T) {
+		f := newFake(t)
+		mc := f.killPass(func(kill func()) { f.blockFlip(); f.cfg.Sleep = func(time.Duration) { kill() } })
+		f.start()
+		f.waitReady()
+		if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRollbackFailed || f.active() != "B" {
+			t.Fatalf("result %+v, current %s", r, f.active())
+		}
+		f.unblockFlip()
+		mc.advance(pendingRetryStart)
+		if r := f.waitOutcome(outcomeRolledBack); f.active() != "A" {
+			t.Fatalf("result %+v, current %s", r, f.active())
+		}
+	})
+	t.Run("4 in the sync of the flip back", func(t *testing.T) {
+		f := newFake(t)
+		f.killPass(func(kill func()) {
 			f.cfg.SyncDir = func(dir string) error {
 				if dir == f.cfg.Slots && f.active() == "A" {
 					kill()
 				}
 				return syncDir(dir)
 			}
-		}, ""},
-		{"in the sync of the recorded outcome", func(f *fake, kill func()) {
-			f.cfg.SyncFile = func(file *os.File) error {
-				if file.Name() == f.cfg.ProbationLog+".tmp" {
-					kill()
-				}
-				return file.Sync()
-			}
-		}, ""},
-		{"in the sync of the result", func(f *fake, kill func()) {
-			f.cfg.SyncFile = func(file *os.File) error {
-				if file.Name() == f.cfg.Result+".tmp" {
-					kill()
-				}
-				return file.Sync()
-			}
-		}, outcomeRolledBack},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := newFake(t)
-			mc := &manualClock{now: time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)}
-			f.expiredProbation(mc, mc.now.Add(-2*testProbation), "boot-1")
-			f.runRecordingPID("A")
-			var kills atomic.Int32
-			tt.seam(f, func() { kills.Add(1); runtime.Goexit() })
-			s, done := f.startKillable()
-			f.waitReady()
-			mc.advance(testProbation / 5)
-			f.killed(s, done, &kills, 1)
-			f.cfg.SyncDir, f.cfg.SyncFile = nil, nil
-			f.start()
-			f.waitReady()
-			f.waitAgentRuns("A")
-			f.waitNoProbationLog()
-			if f.active() != "A" {
-				t.Fatalf("current → %s, want A", f.active())
-			}
-			if tt.outcome == "" {
-				f.expectNoResult()
-			} else if r := f.waitResult(10 * time.Second); r.Outcome != tt.outcome {
-				t.Fatalf("result %+v", r)
-			}
 		})
+		f.expectRolledBackAfterRestart(false)
+	})
+	t.Run("4 in the sync of the recorded outcome", func(t *testing.T) {
+		f := newFake(t)
+		f.killPass(f.syncOf(f.cfg.ProbationLog + ".tmp"))
+		f.expectRolledBackAfterRestart(false)
+	})
+	t.Run("5 in the sync of the result", func(t *testing.T) {
+		f := newFake(t)
+		// The log records rolled_back; the result's rename did not happen, so the restart writes it again.
+		f.killPass(f.syncOf(f.cfg.Result + ".tmp"))
+		if p := f.probationOnDisk(); p.Outcome != outcomeRolledBack {
+			t.Fatalf("log %+v, want the recorded rolled_back", p)
+		}
+		f.expectRolledBackAfterRestart(false)
+	})
+}
+
+// expectRolledBackAfterRestart restarts the supervisor after killPass and expects rolled_back with the previous agent
+// running; written says whether the killed pass had already written the result.
+func (f *fake) expectRolledBackAfterRestart(written bool) {
+	f.t.Helper()
+	if _, err := os.Stat(f.cfg.Result); (err == nil) != written {
+		f.t.Fatalf("result before the restart: %v, want written %v", err, written)
+	}
+	if f.active() != "A" {
+		f.t.Fatalf("current → %s after the kill, want A", f.active())
+	}
+	f.start()
+	f.waitReady()
+	if r := f.waitOutcome(outcomeRolledBack); r.Version != "1.1.0" || f.active() != "A" {
+		f.t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.waitAgentRuns("A")
+	f.waitNoProbationLog()
+}
+
+// TestRollbackUnderStalledSyncsConverges (PDK-1118b correction, plan M2b): on a disk where every sync stalls past the
+// watchdog, each pass is killed at its first sync; the flip back lands before it in the first pass, the failed release
+// never runs again, and a restart once the disk answers reports rolled_back.
+func TestRollbackUnderStalledSyncsConverges(t *testing.T) {
+	f := newFake(t)
+	stall := func(kill func()) {
+		f.cfg.SyncDir = func(string) error { kill(); return nil }
+		f.cfg.SyncFile = func(*os.File) error { kill(); return nil }
+	}
+	f.killPass(stall)
+	if f.active() != "A" {
+		t.Fatalf("current → %s after the first killed pass, want A", f.active())
+	}
+	for i := range int32(2) {
+		var kills atomic.Int32
+		stall(func() { kills.Add(1); runtime.Goexit() })
+		s, done := f.startKillable()
+		f.waitReady()
+		f.killed(s, done, &kills, 1)
+		if f.active() != "A" {
+			t.Fatalf("restart %d: current → %s, want A", i+1, f.active())
+		}
+		f.expectNoResult()
+	}
+	f.cfg.SyncDir, f.cfg.SyncFile = nil, nil
+	f.start()
+	f.waitReady()
+	if r := f.waitOutcome(outcomeRolledBack); r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.waitAgentRuns("A")
+}
+
+// TestSwitchKilledInItsLogWriteReportsNothing (PDK-1118b regression): a supervisor killed while the switch's own log
+// is written leaves an undecided log without rolling_back and current on the previous slot; the restart drops the log
+// and reports nothing, as for a switch whose flip never landed.
+func TestSwitchKilledInItsLogWriteReportsNothing(t *testing.T) {
+	f := newFake(t)
+	var kills atomic.Int32
+	kill := func() { kills.Add(1); runtime.Goexit() }
+	f.cfg.SyncFile = func(file *os.File) error {
+		if _, err := os.Stat(f.cfg.ProbationLog); err == nil && file.Name() == filepath.Dir(f.cfg.ProbationLog) && f.active() == "A" {
+			kill()
+		}
+		return file.Sync()
+	}
+	s, done := f.startKillable()
+	f.waitReady()
+	f.stage("1.1.0", script("1.1.0", 0, f.good()), nil)
+	f.killed(s, done, &kills, 1)
+	if p := f.probationOnDisk(); p.RollingBack || f.active() != "A" {
+		t.Fatalf("log %+v, current %s; want the switch's log on A", p, f.active())
+	}
+	f.cfg.SyncFile = nil
+	f.start()
+	f.waitReady()
+	f.waitNoProbationLog()
+	f.waitTicks(3)
+	f.expectNoResult()
+	if f.active() != "A" {
+		t.Fatalf("current → %s, want A", f.active())
 	}
 }
 
