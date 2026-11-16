@@ -366,7 +366,7 @@ The N2 numbers this rests on: per-execution planning of everything costs +28 % C
 
 ## Amendment 2026-11-16 (4) — Organization foreign keys reference narrow key tables (main §92)
 
-Status of this amendment: Proposed (architect, 2026-11-16). It adds decisions 14 to 16. Implementation: PDK-1095.
+Status of this amendment: Accepted (architect, 2026-11-16; approved by main, main §93). It adds decisions 14 to 16, target alpha.12 (PDK-1095). For alpha.11, decision 17 mitigates the risk until then.
 
 ### Finding
 
@@ -439,3 +439,28 @@ Paddock controls:
   children have indexes led by `organization_id` without that column. Offboarding deletes children before parents,
   so the ranges scanned are empty; single deletions in a live organization scan that organization's child rows once
   per deleted parent. The offboarding gates measure it; a change needs a further decision.
+
+### alpha.11 mitigation (main §93)
+
+Decisions 14 to 16 ship in alpha.12. Until then, the statistics of the parents that a large organization fills in
+one burst catch up within about a minute.
+
+17. **Earlier autoanalyze for `device`, `app_user` and `user_group`.** A migration sets
+    `autovacuum_analyze_scale_factor = 0.01` and `autovacuum_analyze_threshold = 50` on these three tables. They are
+    the parents a single organization can fill with thousands of rows at once (enrolment, identity sync). The other
+    seven parents grow by administrator action and are small, so the default trigger (50 rows plus 10 %) already
+    fires early. `device_status` is not a foreign-key parent.
+    - Why it works: autoanalyze runs once `n_mod_since_analyze` exceeds threshold + scale factor × rows. With
+      100 000 devices the default needs 10 050 changes, so an organization of 10 000 devices never triggers it
+      (PDK-1091); the new setting needs 1 050. The threshold stays at 50, because a higher one (1 000) would let a
+      young install with fewer than about 10 000 devices wait longer than the default does.
+    - Measured on PostgreSQL 18.6 (default `autovacuum_naptime` of 1 min): 100 000 one-device organizations
+      analyzed, then 10 000 devices of one organization inserted. Autoanalyze ran 58 s later, and the check moved
+      from `device_org_name_key` (2 065 buffers) to `device_organization_id_id_key` (6 buffers).
+    - Cost: one `ANALYZE` of a fixed 30 000-row sample per 1 % of changed rows. `device` rows change rarely after
+      enrolment (hostname and OS release only on change), so this is a few extra runs a day.
+    - Residual risk: during a burst, checks still scan the organization's rows until the next autoanalyze, which is
+      at most about a minute plus the 1 % of rows that trigger it. Rows of an organization added in small steps over
+      a long time are covered by the regular runs. Runbook line in `docs/operations/capacity.md`: after a large
+      enrolment or identity import, run `ANALYZE device;` (or `ANALYZE app_user, user_group;`) if check-ins or
+      writes of that organization slow down before autoanalyze has run.
