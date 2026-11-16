@@ -509,27 +509,33 @@ func (q *Queries) ListAgentBinaryUnknown(ctx context.Context, arg ListAgentBinar
 }
 
 const listAgentNotRunning = `-- name: ListAgentNotRunning :many
-SELECT r.device_id, s.last_contact_at
-FROM inventory_policy_result r JOIN device d ON d.id = r.device_id LEFT JOIN device_status s ON s.device_id = r.device_id
+SELECT r.device_id, s.last_contact_at, r.failing_since, i.policy_updated_at AS evaluated_at
+FROM inventory_policy_result r JOIN device d ON d.id = r.device_id
+     LEFT JOIN device_status s ON s.device_id = r.device_id
+     LEFT JOIN device_inventory_ref i ON i.device_id = r.device_id
 WHERE d.state = 'active' AND r.policy_key = $1 AND NOT r.passing AND r.alerted_at IS NULL
-  AND (s.last_contact_at IS NULL OR s.last_contact_at < $2::timestamptz)
+  AND (s.last_contact_at IS NULL OR s.last_contact_at < $2::timestamptz
+       OR i.policy_updated_at >= r.failing_since + make_interval(secs => $3::double precision))
 ORDER BY r.device_id
 `
 
 type ListAgentNotRunningParams struct {
-	PolicyKey string
-	Before    time.Time
+	PolicyKey  string
+	Before     time.Time
+	AbsentForS float64
 }
 
 type ListAgentNotRunningRow struct {
 	DeviceID      uuid.UUID
 	LastContactAt *time.Time
+	FailingSince  *time.Time
+	EvaluatedAt   *time.Time
 }
 
-// Active devices whose agent-running policy fails, not yet reported, and that have not checked in since before (plan
-// M5a decision 8).
+// Active devices whose agent-running policy fails, not yet reported, and that either have not checked in since before
+// or whose policy failed in evaluations at least absent_for_s apart (plan M5a decision 8 as amended 2026-11-16 b).
 func (q *Queries) ListAgentNotRunning(ctx context.Context, arg ListAgentNotRunningParams) ([]ListAgentNotRunningRow, error) {
-	rows, err := q.db.Query(ctx, listAgentNotRunning, arg.PolicyKey, arg.Before)
+	rows, err := q.db.Query(ctx, listAgentNotRunning, arg.PolicyKey, arg.Before, arg.AbsentForS)
 	if err != nil {
 		return nil, err
 	}
@@ -537,7 +543,12 @@ func (q *Queries) ListAgentNotRunning(ctx context.Context, arg ListAgentNotRunni
 	items := []ListAgentNotRunningRow{}
 	for rows.Next() {
 		var i ListAgentNotRunningRow
-		if err := rows.Scan(&i.DeviceID, &i.LastContactAt); err != nil {
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.LastContactAt,
+			&i.FailingSince,
+			&i.EvaluatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1037,12 +1048,15 @@ func (q *Queries) UpsertInventoryRef(ctx context.Context, arg UpsertInventoryRef
 }
 
 const upsertPolicyResult = `-- name: UpsertPolicyResult :exec
-INSERT INTO inventory_policy_result (device_id, organization_id, policy_key, passing, updated_at)
-VALUES ($1, $2, $3, $4, now())
+INSERT INTO inventory_policy_result (device_id, organization_id, policy_key, passing, updated_at, failing_since)
+VALUES ($1, $2, $3, $4, now(),
+        CASE WHEN $4::boolean THEN NULL ELSE $5::timestamptz END)
 ON CONFLICT (device_id, policy_key) DO UPDATE
   SET passing = EXCLUDED.passing,
       updated_at = CASE WHEN inventory_policy_result.passing = EXCLUDED.passing THEN inventory_policy_result.updated_at ELSE now() END,
-      alerted_at = CASE WHEN EXCLUDED.passing THEN NULL ELSE inventory_policy_result.alerted_at END
+      alerted_at = CASE WHEN EXCLUDED.passing THEN NULL ELSE inventory_policy_result.alerted_at END,
+      failing_since = CASE WHEN EXCLUDED.passing THEN NULL
+                           ELSE COALESCE(inventory_policy_result.failing_since, EXCLUDED.failing_since) END
 `
 
 type UpsertPolicyResultParams struct {
@@ -1050,6 +1064,7 @@ type UpsertPolicyResultParams struct {
 	OrganizationID uuid.UUID
 	PolicyKey      string
 	Passing        bool
+	EvaluatedAt    *time.Time
 }
 
 // updated_at is when the result last changed; a policy that passes again ends its mutual watch alert.
@@ -1059,6 +1074,7 @@ func (q *Queries) UpsertPolicyResult(ctx context.Context, arg UpsertPolicyResult
 		arg.OrganizationID,
 		arg.PolicyKey,
 		arg.Passing,
+		arg.EvaluatedAt,
 	)
 	return err
 }

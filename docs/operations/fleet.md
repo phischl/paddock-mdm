@@ -88,7 +88,11 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    Free disk space, uptime and network addresses are not copied. The device page shows the hardware facts in its
    identity panel, and the device search matches the serial number;
 5. reports, once per failure, `device.tamper_agent_not_running` for every active device whose `paddock_agent_running`
-   policy fails while it has not checked in for 15 minutes (fleetd's half of the mutual watch). The reported failure
+   policy fails while it has not checked in for 15 minutes, or fails in evaluations at least 15 minutes apart although
+   it keeps checking in — then something other than the genuine agent may check in with the device's credentials
+   (fleetd's half of the mutual watch). With the default policy interval of 10 minutes the second case is reported
+   within about 40 minutes. The agent must run from `/opt/paddock/agent/` as installed; a device whose `/opt` is a
+   symbolic link to another place fails `paddock_agent_running` and is reported. The reported failure
    stays on the attention page and on the device as *Agent not running* (kind `agent_not_running`) until the policy
    passes again. It also reports, once per failure, `device.tamper_agent_binary_changed` for every active device whose
    `paddock_agent_binary_known` policy fails: a running agent process (named `paddockd`, running a file named

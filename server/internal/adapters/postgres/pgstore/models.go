@@ -709,6 +709,7 @@ type InventoryPolicyResult struct {
 	Passing        bool
 	UpdatedAt      time.Time
 	AlertedAt      *time.Time
+	FailingSince   *time.Time
 }
 
 type IpAllowlistEntry struct {
