@@ -162,3 +162,81 @@ func TestRunExternalInPendingDeletionStepUpDenial(t *testing.T) {
 		t.Fatalf("event %s in %s, params %v", ev.Code, ev.OrganizationID, ev.Params)
 	}
 }
+
+// TestRunTxRefusalInactiveOrganization (PDK-1113): RunTxRefusal records a role denial in a deleting organization, and
+// a failure after the gate, once as organization.inactive_denied.
+func TestRunTxRefusalInactiveOrganization(t *testing.T) {
+	t.Run("role denial", func(t *testing.T) {
+		h := newHarness(t)
+		h.setOrgStatus(t, "deleting")
+		err := h.runner.RunTxRefusal(h.admin(principal.RoleOrgAuditor), app.ScopeOrg, createSpec, problem.NameTaken,
+			func(context.Context, *pgstore.Queries, app.Recorder) error {
+				t.Fatal("fn for a denied attempt")
+				return nil
+			})
+		if !errors.Is(err, problem.OrganizationInactive) {
+			t.Fatalf("RunTxRefusal = %v, want organization_inactive", err)
+		}
+		expectInactiveDenied(t, h, audit.CodeDeviceGroupCreated, "deleting")
+	})
+	t.Run("failure after the gate", func(t *testing.T) {
+		h := newHarness(t)
+		err := h.runner.RunTxRefusal(h.admin(principal.RoleOrgAdmin), app.ScopeOrg, createSpec, problem.NameTaken,
+			func(context.Context, *pgstore.Queries, app.Recorder) error {
+				h.setOrgStatus(t, "deleting")
+				return problem.UpstreamUnavailable
+			})
+		if !errors.Is(err, problem.OrganizationInactive) {
+			t.Fatalf("RunTxRefusal = %v, want organization_inactive", err)
+		}
+		expectInactiveDenied(t, h, audit.CodeDeviceGroupCreated, "deleting")
+	})
+}
+
+// TestRecordReadOnceInactiveOrganization (PDK-1113): RecordReadOnce records a role denial in a deleting organization,
+// and a claim failing after the gate, once as organization.inactive_denied. A read the gate refuses before the switch
+// was read records nothing, by RecordReadOnce's contract (PDK-139 round 3), and is refused with organization_inactive.
+func TestRecordReadOnceInactiveOrganization(t *testing.T) {
+	on := func(context.Context, *pgstore.Queries) (bool, error) { return true, nil }
+	t.Run("role denial", func(t *testing.T) {
+		h := newHarness(t)
+		h.setOrgStatus(t, "deleting")
+		_, err := h.runner.RecordReadOnce(h.admin(principal.RoleOrgAuditor), createSpec, on,
+			func(context.Context, *pgstore.Queries, app.Recorder) (bool, error) {
+				t.Fatal("claim for a denied read")
+				return false, nil
+			})
+		if !errors.Is(err, problem.OrganizationInactive) {
+			t.Fatalf("RecordReadOnce = %v, want organization_inactive", err)
+		}
+		expectInactiveDenied(t, h, audit.CodeDeviceGroupCreated, "deleting")
+	})
+	t.Run("failure after the gate", func(t *testing.T) {
+		h := newHarness(t)
+		_, err := h.runner.RecordReadOnce(h.admin(principal.RoleOrgAdmin), createSpec, on,
+			func(context.Context, *pgstore.Queries, app.Recorder) (bool, error) {
+				h.setOrgStatus(t, "deleting")
+				return false, problem.UpstreamUnavailable
+			})
+		if !errors.Is(err, problem.OrganizationInactive) {
+			t.Fatalf("RecordReadOnce = %v, want organization_inactive", err)
+		}
+		expectInactiveDenied(t, h, audit.CodeDeviceGroupCreated, "deleting")
+	})
+	t.Run("refused before the switch was read", func(t *testing.T) {
+		h := newHarness(t)
+		h.setOrgStatus(t, "deleting")
+		_, err := h.runner.RecordReadOnce(h.admin(principal.RoleOrgAdmin), createSpec,
+			func(context.Context, *pgstore.Queries) (bool, error) {
+				t.Fatal("switch read past the gate")
+				return false, nil
+			},
+			func(context.Context, *pgstore.Queries, app.Recorder) (bool, error) { return true, nil })
+		if !errors.Is(err, problem.OrganizationInactive) {
+			t.Fatalf("RecordReadOnce = %v, want organization_inactive", err)
+		}
+		if actions, events := h.recorded(t, "corr-"+t.Name()); len(actions)+len(events) != 0 {
+			t.Fatalf("a read refused before the switch was read was recorded: %+v", actions)
+		}
+	})
+}

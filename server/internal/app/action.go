@@ -771,7 +771,8 @@ func (r *ActionRunner) RecordRefusal(ctx context.Context, scope Scope, spec Acti
 // middleware, so even a crash inside a request leaves exactly one event.
 func (r *ActionRunner) recordPanic(ctx context.Context, p principal.Principal, scope Scope, rec *recorder) {
 	if v := recover(); v != nil {
-		r.recordFinal(ctx, p, scope, rec, fmt.Errorf("panic: %v", v))
+		// The panic is re-raised, so there is no caller to report the gate's refusal to.
+		_ = r.recordFinal(ctx, p, scope, rec, fmt.Errorf("panic: %v", v))
 		panic(v)
 	}
 }
