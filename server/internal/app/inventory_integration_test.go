@@ -363,6 +363,13 @@ func TestStoreHostKeepsReportedUnansweredPolicy(t *testing.T) {
 	if len(got) != 1 || got[0].key != "paddock_agent_binary_known" || got[0].passing || got[0].alerted == nil || !got[0].alerted.Equal(alerted) {
 		t.Fatalf("stored results %+v, want only the reported unanswered failure unchanged", got)
 	}
+	// Fleet no longer lists the policy and reports no unanswered one (a nil list): the reported row goes too.
+	if err := h.sync.StoreHost(systemCtx(org), dev, "1", ports.HostInventory{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.count(t, "SELECT count(*) FROM inventory_policy_result WHERE device_id = $1", dev); n != 0 {
+		t.Fatalf("%d results kept for a policy Fleet no longer lists, want 0", n)
+	}
 }
 
 // TestReportAgentNotRunningKeepsMarkWhileUnanswered (plan M5a amendment 2026-11-16, review round 1, A7): a reported
