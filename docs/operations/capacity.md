@@ -562,6 +562,94 @@ bundle versions (the floor after a prune; it grows by one per device with every 
 LUKS header each hold 210 000 objects and need 11 GiB. The default of 2 GiB fits about 40 000 objects. OpenBao holds its keys and the Raft index in memory and stays
 small.
 
+After a prune or an organization deletion that removed more objects than the limit is sized for, follow section
+"Object store after a large deletion": the store can keep being killed although few objects are left (RR-147).
+
+## Object store after a large deletion
+
+RustFS keeps a data-usage cache per bucket in its volume, `.rustfs.sys/buckets/<bucket>/.usage-cache.bin` and its copy
+`.usage-cache.bin.bkp`. The cache grows with the objects the bucket held when RustFS last wrote it, and RustFS loads it
+at every start. After a large deletion (`./paddock bundles prune --yes`, or the step `objects` of an organization
+deletion, which removes the organization's bundles and escrow objects) the cache still describes the old, larger
+bucket. If it is larger than the store can load within `PADDOCK_RUSTFS_MEM_LIMIT`, the kernel kills RustFS before its
+scanner writes a fresh one, Docker restarts it, and the loop does not end by itself (RR-147). Measured on the
+development stack with RustFS 1.0.4: a 229 MB cache of `paddock-bundles` from about 400 000 objects killed the store at
+2 GiB about every 2 minutes with about 10 000 live objects and no client load; after the procedure below it stayed between
+155 and 295 MiB and wrote a cache of 63 KB.
+
+While the store loops, every object-store operation fails or is cut off: uploads of recompiled bundles and escrow
+objects, downloads of bundles and agent artifacts, a running prune (failed batches with 503) and the organization
+deletion's step `objects` (`object_store_unavailable`, retried every round). Devices keep working with their current
+configuration and fetch the new one once the store is back. The procedure moves cache files only; it never touches objects,
+and moving the files back undoes it.
+
+**When.** Run it whenever the signs below appear. Run it pre-emptively after a prune or an organization deletion that
+removed more than 20 000 objects per GiB of `PADDOCK_RUSTFS_MEM_LIMIT` (40 000 at the default of 2 GiB): the bucket
+then held more objects before the deletion than the limit is sized for, and its cache describes that bucket. This
+trigger is a conservative one taken from the sizing rule; the one measured loop followed a bucket of about 400 000 objects. The prune
+prints the number it deleted; an organization deletion records it as the count of
+`organization.deletion_step_completed` for the step `objects` and as `objects_deleted` in `organization.deleted`. Wait
+until the prune has returned or the step `objects` has completed. The store is down for about a minute; run the
+procedure outside the busiest hours.
+
+**Recognise.** On the control-plane host:
+
+```bash
+id="$(./paddock compose ps -q rustfs)"
+./paddock ps rustfs                                   # "Restarting" or "unhealthy", or a recent start time
+docker inspect --format '{{.RestartCount}} {{.State.OOMKilled}} {{.State.StartedAt}}' "$id"
+docker exec "$id" cat /sys/fs/cgroup/memory.events    # oom_kill rises
+journalctl -k --since -1h | grep -i 'killed process.*(rustfs)'
+docker stats --no-stream "$id"                        # MEM USAGE climbs to the limit within minutes, without load
+```
+
+The loop is this case when the restart count keeps rising, RustFS is OOM-killed, and its memory reaches the limit within
+a few minutes of each start while no prune, deletion or other client load runs.
+
+**Fix.** Stop the store, list the caches, move the caches of the affected bucket aside inside the volume, start it:
+
+```bash
+./paddock compose stop rustfs
+./paddock compose run --rm --no-deps -T --entrypoint sh rustfs -c \
+  'du -sk /data/.rustfs.sys/buckets/*/.usage-cache.bin*'
+./paddock compose run --rm --no-deps -T --entrypoint sh rustfs -c '
+  set -eu
+  aside=/data/.rustfs.sys/usage-cache-aside-$(date -u +%Y%m%dT%H%M%SZ)
+  for bucket in "$@"; do
+    mkdir -p "$aside/$bucket"
+    for f in .usage-cache.bin .usage-cache.bin.bkp; do
+      src="/data/.rustfs.sys/buckets/$bucket/$f"
+      if [ -e "$src" ]; then mv "$src" "$aside/$bucket/"; fi
+    done
+  done
+  du -sk "$aside"/*/.usage-cache.bin*' sh paddock-bundles
+./paddock compose start rustfs
+```
+
+End the move command with the name of every bucket whose cache the listing shows at tens of megabytes or more:
+`paddock-bundles` after a prune, `paddock-bundles paddock-escrow` after an organization deletion if both are large.
+The commands run in the store's own image and as its own user, so the files keep their owner. Keep the printed `usage-cache-aside-…` directory
+at least until the store has run a day without a restart; it holds no object data.
+
+**Verify.** Watch the store for 15 minutes:
+
+```bash
+id="$(./paddock compose ps -q rustfs)"
+./paddock ps rustfs                                   # healthy
+docker inspect --format '{{.RestartCount}} {{.State.OOMKilled}}' "$id"   # stays 0 false
+docker stats --no-stream "$id"                        # well below the limit
+./paddock compose exec -T rustfs sh -c 'du -sk /data/.rustfs.sys/buckets/*/.usage-cache.bin'
+```
+
+RustFS writes the new cache within a few minutes, at first in passes of a few MB and then at the size of the live
+bucket (63 KB for about 10 000 objects in the measurement above). Then repeat a prune that the loop interrupted; an
+organization deletion continues by itself.
+
+If the store still loops, the live objects exceed the sizing rule: raise `PADDOCK_RUSTFS_MEM_LIMIT` and the host's RAM
+(section "Memory limits") and apply it with `./paddock up`. Moving the files back into the bucket's directory while the
+store is stopped restores the previous state; it is needed only to hand the old cache to an analysis, because RustFS
+rebuilds the cache from the objects.
+
 ## Organization deletion
 
 The deletion request issues every active device's uninstall before it answers `202`, within a budget of 2 minutes

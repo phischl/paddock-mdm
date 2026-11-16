@@ -116,7 +116,7 @@ store.
 | --- | --- | --- | --- |
 | `authentik_unavailable` | `authentik` | Authentik cannot be reached or refused a call | Check `docker compose ps` and the logs of the Authentik server and worker, and the API token of the Paddock integration. Nothing else is needed: the step continues in the next round once Authentik answers. |
 | `fleet_unavailable` | `fleet` | Fleet cannot be reached or refused a call | Check Fleet and its API token (`docs/operations/fleet.md`). The step continues by itself. |
-| `object_store_unavailable` | `objects` | The object store cannot be reached, or the offboarding credentials are missing (the step fails closed) | Check RustFS. Run `./paddock check`: it fails when the four `rustfs_*_offboard_*` secret files or the two RustFS users are missing; `./paddock upgrade` (or `up`) generates the files and creates the users, then the step continues. Do not widen the worker's own object-store policies. |
+| `object_store_unavailable` | `objects` | The object store cannot be reached, or the offboarding credentials are missing (the step fails closed) | Check RustFS. If `./paddock ps rustfs` shows it restarting or it is OOM-killed again and again, follow `docs/operations/capacity.md` section "Object store after a large deletion" (RR-147). Run `./paddock check`: it fails when the four `rustfs_*_offboard_*` secret files or the two RustFS users are missing; `./paddock upgrade` (or `up`) generates the files and creates the users, then the step continues. Do not widen the worker's own object-store policies. |
 | `object_retained` | `objects` | An object version is kept by Object Lock retention or a legal hold (neither bucket has Object Lock by default; an operator added it) | Let the retention expire or remove the legal hold. The deletion continues by itself; nothing is counted as deleted meanwhile. |
 | `valkey_unavailable` | `valkey` | Valkey cannot be reached or refused a command | Check Valkey and its ACL file (`deploy/compose/valkey/users.acl.tmpl`: the worker user must be allowed `DEL` on the device and organization keys). The step continues by itself. |
 | `outbox_pending` | `outbox` | The organization still has unpublished outbox rows; the step never deletes them, so that no audit event is lost | Check RabbitMQ and the outbox relay (`serve outbox-relay`) and their alerts. The step continues once the relay has published everything. |
@@ -127,6 +127,11 @@ store.
 
 A row of the organization that appears after the delete loop (a straggler of a transaction that was open at the start)
 is deleted by the next round automatically; the step then returns to `database`.
+
+**After the step `objects` of a large organization.** When the step deleted more than 20 000 objects per GiB of
+`PADDOCK_RUSTFS_MEM_LIMIT` (40 000 at the default of 2 GiB; its count is in `organization.deletion_step_completed`),
+follow the procedure in `docs/operations/capacity.md` section "Object store after a large deletion" once the step
+has completed: the object store's stale usage cache can otherwise keep it in an OOM restart loop (RR-147).
 
 ### Final audit verification (PDK-1017)
 
