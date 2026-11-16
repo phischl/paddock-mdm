@@ -2186,3 +2186,256 @@ func (s *Syncer) SyncOffboardedDevices(ctx context.Context, devices []Offboarded
 - ADR 0051 amendment 2026-11-16 (Accepted, main §81) records the worker's read-only `HGETALL` selector, and the
   Valkey memory policy of section 4 points 4–5: `maxmemory` at 60 % with `noeviction`, the sizing rule and the 1g
   default. These bind every future Valkey user beyond M17.
+
+## Amendment 2026-11-16 t — no Valkey peak during a deletion, no fixed two-minute wait, bundle versions that are never pruned, the size of a deletion request (architect decision; main §94)
+
+Status: Proposed.
+
+Binding once accepted. It refines amendment s point 4 (Valkey sizing), amendment j's addendum point 4 (how the job
+reacts to `paddock_offboard_quiesce` returning `false`) and amendment s point 5 (RustFS sizing). ADRs 0051 and 0052 are
+unchanged: the Valkey memory policy, the sizing rule's formula, the steps, their order and their idempotency stay.
+
+**Evidence (devstack, §87 step 5, image of integration 10bbc671).** `load-n2` (218 034 devices) and a 3-device
+organization were deleted in parallel with grace 0.
+
+| Measurement | Value |
+| --- | --- |
+| small organization, request to tombstone | 2 min 31 s server-side (bound 5 min: met) |
+| small organization, step `devices` | 119.9 s (step 4 on 7e23f0ca: 120.0 s); its reissue took 3 ms |
+| large organization, request to tombstone | 75 min 49 s |
+| delete request of the large organization (202) | 27.3 s (step 4: 9.2 s for 110 000 devices) |
+| Valkey (2g, `maxmemory` 1 228.8 MiB) | 640 MiB → 1 004 MiB in the step `devices` (+218 009 keys); the step `valkey` deleted 436 299 keys 50 min later; 986 MiB at the end |
+| RustFS (2g) | 29 OOM kills during the run; still looping afterwards with 201 395 objects in `paddock-bundles`, 195 457 of them below one organization (`acme`: 195 451 bundle rows for 2 845 devices, about 69 versions per device, created 2026-11-03 to 2026-11-15) |
+
+### 1. The step `devices` frees each page's live Valkey entries before it writes the page's offboarded ones (alpha.11)
+
+**Cause (code of 10bbc671).**
+- `Offboarding.handOver` writes, per handed device, `cmd:<device>` with two signed envelopes (about 1 720 B) and
+  rewrites `dk:<key>` with status `offboarded` (same size as before). `seq:<device>` already exists.
+- The live entries the device no longer needs, `bp:`, `enr:`, `hb:` and `au:`, stay until the step `valkey`.
+  `devicecache.DeleteOrganization` deletes them there, for every device of the organization.
+- Between the two steps run `outbox`, `authentik`, `fleet` and `objects`. For `load-n2` that was 51 minutes, during
+  which both sets were held: +364 MiB RSS for 218 034 devices. At the briefed 1g the step could not have written the
+  offboarded entries at all (`maxmemory` 614.4 MiB, `noeviction`).
+
+**What still needs the live entries after a device's hand-over: nothing.**
+- The gateway serves a device whose `dk:` has status `offboarded` its commands only. `checkin` returns before
+  `bundleRef` (no `bp:` read), records no heartbeat (no `hb:`) and offers no agent update (no `au:`).
+  `authenticateDevice`, used by `catalogIcon` (the other `bp:` reader), refuses an offboarded key.
+- `enrollStatus` with an existing `enr:` answers `rejected` for a device whose `dk:` is `offboarded`, and 404
+  `not_found` once `enr:` is gone. A device in neither case reaches its uninstall through the enrollment status
+  (amendment m point 1), so deleting `enr:` earlier changes no outcome. The step `valkey` deletes it today anyway.
+- No step after `devices` reads them. `objects` lists object-store prefixes, and `valkey` deletes what is left.
+- No writer re-creates them after the step's quiesce: the compiler's and the worker's organization transactions are
+  refused for a deleting organization, and their reconciles skip it (amendment s point 6).
+- A late writer, such as a compiler that committed before the quiesce and writes `bp:` after it, is still covered:
+  the step `valkey` stays unchanged and deletes whatever exists.
+
+**Decision.**
+1. New method `devicecache.Cache.DeleteHandedDeviceKeys(ctx, devices []uuid.UUID) (int64, error)`. It deletes
+   `hb:`, `au:` and `enr:` of every given device in DEL calls of at most `deleteChunk` (500) keys. It deletes `bp:` in
+   **separate** DEL calls of at most 500 keys: the worker may delete `bp:` only through its delete-only selector
+   `(%W~bp:* %W~tt:* -@all +del)`, and Valkey allows a DEL only when one selector or the root permissions cover every
+   key of it. It returns how many keys existed.
+   - `DeleteOrganization` keeps its behaviour and its key list. The code that builds and sends the two DEL groups
+     MAY be shared between both methods.
+   - No ACL change.
+2. `app.OffboardingCache` gains `DeleteHandedDeviceKeys(ctx context.Context, devices []uuid.UUID) (int64, error)`.
+3. `Offboarding.handOver` calls it with **every device ID of the page** returned by `ListOffboardingHandedDevicesPage`.
+   - It runs right after the page's `InOrgOffboarding` transaction, **before** `commandsign.SignAll` and before any
+     `PutOffboardedDevice`. Freeing first means the page's new entries can use the memory just freed, and the step
+     still progresses while Valkey is at its `maxmemory`: `noeviction` refuses writes that need memory but serves
+     `DEL`.
+   - It also runs when the page has no commands (`len(cmds) == 0`).
+   - An error fails the step with `valkey_unavailable`, like `PutOffboardedDevice`. The page is repeated: deleting
+     missing keys is a no-op.
+   - The deleted count is **not** added to any step count. The step `valkey`'s count, which reports what it deleted,
+     becomes smaller for the same organization.
+4. Order inside one device's hand-over during the window: a check-in that still sees the `active` key between the
+   delete and the `dk:` rewrite gets no bundle reference and no agent update for that one check-in. That is harmless:
+   the organization is `deleting`, and its devices get nothing new anyway.
+5. **Sizing.** With point 3, a device of a deleting organization moves from about 2.0 KB (live) to about 2.3 KB
+   (offboarded) per page of 500 devices. The peak is that difference plus one page, not the sum of both sets. The
+   rule of ADR 0051's amendment of 2026-11-16 stays as it is. `docs/operations/capacity.md` gains one sentence:
+   **"Count the devices of an organization from the moment its deletion runs as offboarded devices."**
+   `./paddock check --online` and `valkey-headroom.sh` are unchanged.
+6. **The devstack stays at 2g.** It holds about 330 000 offboarded devices (load-enrol and load-n2, 365-day
+   retention) and 3 400 live ones. By the rule that is 2 × (64 MiB + 3 400 × 2.0 KB + 330 000 × 2.3 KB) ≈ 1.6 GiB.
+   - `docs/operations/local-dev.md`, section "Valkey", gains a paragraph: a development stack that kept the
+     offboarded devices of a load-seeded organization's deletion needs `PADDOCK_VALKEY_MEM_LIMIT` by the rule of
+     `docs/operations/capacity.md`. It is set in `deploy/compose/.env` (example `PADDOCK_VALKEY_MEM_LIMIT=2g`) and
+     applied with `docker compose up -d --force-recreate valkey`. A shell export is lost at the next `make up`.
+   - The default in `compose.yaml` stays 1g. The lead sets 2g in the devstack's `.env`, which is untracked.
+
+### 2. A waiting step is polled within the round, not once a minute (alpha.11)
+
+**Cause (code of 10bbc671).** The 120 s are two round intervals (`worker.OffboardingInterval` = 1 min). They are not
+load, not the reissue and not the uninstall issue.
+- Call 1, round *n*: `paddock_offboard_quiesce` finds `deleting_committed_at` NULL, stores `clock_timestamp()` and
+  returns `false`. `Offboarding.devices` returns `ErrOffboardingWaiting`, and `worker.Offboarding.advance` answers
+  `stepStop`: the organization takes no further step **in this round**.
+- Call 2, round *n+1* (60 s later, past the 6 s cutoff): it takes the wait set and checks it in the same statement.
+  Any organization-role transaction open at that instant (check-ins, other rounds) is in the set and still open
+  microseconds later, so the answer is `false` almost always on a busy stack.
+- Call 3, round *n+2*: the set has ended, so the reissue and the hand-over run. That is 2 × 60 s ≈ 119.9 s, for
+  every organization size. The same reaction applies to the tombstone, where the wait set already exists and the
+  answer usually comes at once.
+
+**Decision.**
+1. `worker.Offboarding.advance` answers `ErrOffboardingWaiting` with **`stepPolling`** instead of `stepStop`. It still
+   clears the organization's retries, as today.
+   - The organization stays in the round and is asked again after `offboardingPollInterval` (2 s), exactly like a
+     pending `audit_final` (amendment s point 2.2).
+   - When only polling organizations remain, the round sleeps in `awaitPoll` until the earliest poll is due or the
+     budget ends.
+2. `paddock_offboarding_finalize_busy_total` is incremented **at most once per organization per round**: on the first
+   `ErrOffboardingWaiting` of that organization in the round. Its help text and `docs/operations/monitoring.md` keep
+   the meaning "rounds in which the step `devices` or the tombstone waited". This replaces amendment j's "counts the
+   `false` answers".
+3. Nothing else changes:
+   - the function `paddock_offboard_quiesce`, the 6 s cutoff (the gate's 5 s staleness bound plus 1 s) and the
+     wait-set semantics;
+   - `FinalizeWaitAlert` (1 h) and `finalize_waiting`, recorded once;
+   - the round budget, the slice and the backoff of failing steps.
+4. Expected effect: the step `devices` of a small organization takes about 8–12 s (cutoff 6 s, then one or two polls
+   2 s apart) instead of 120 s. The OF3 bound stays 5 minutes.
+5. Cost: one short `InOrgOffboarding` transaction (the row lock `FOR NO KEY UPDATE` on the organization row plus a
+   `pg_locks` scan) and one `GetOrganization` read per poll, at most every 2 s per waiting organization. A waiting
+   step that waits behind a long transaction (RR-145) is polled every 2 s for the length of that wait. That is
+   accepted: it is the same cost as `audit_final`'s polling.
+6. Doc comments that say "asks again next round" (`ErrOffboardingWaiting`, `Offboarding.devices`,
+   `Offboarding.tombstone` in `server/internal/app/offboarding_job.go`) are corrected to "asked again after the
+   round's poll interval". The runbook row `finalize_waiting` in `docs/operations/organization-offboarding.md` says
+   "The step continues within seconds" instead of "in the next round".
+
+### 3. Bundle versions are never pruned (alpha.11: operator command and documentation; alpha.12: automatic pruning)
+
+**Cause (code of 10bbc671).**
+- `compiler.Compiler.commit` writes every bundle version to its own key
+  `org/<org>/devices/<device>/bundles/<version>.dsse` (`compiler.ObjectKey`) and inserts a `bundle` row.
+- Nothing deletes a superseded object. Only an organization's deletion (step `objects`) removes them.
+- Every recompile therefore adds one object per device: a platform change, an agent update, a rollout, a key change.
+  On the devstack that was about 69 per device in 12 days.
+- RustFS's resident memory grows with the number of objects (amendment s point 5: 1 GiB per 20 000), so every
+  installation runs into the RustFS limit over time.
+- Amendment s point 5's premise, "each managed device keeps one bundle object", is wrong.
+
+**What devices and agents need.**
+- The gateway presigns only the newest version (`bp:<device>`, never moved back) with `BundleURLTTL` = 120 s. An
+  agent may still be downloading the previous version for up to 120 s after a newer one was published. On a 404 the
+  agent keeps its applied state and fetches the newest version at its next check-in (fail safe).
+- No server path reads an older version's object. The portal's bundle history (`ListDeviceBundles`), the rollouts
+  and the apply reports use the `bundle` **rows**, which stay.
+- A restore does not back up the bundles bucket. It raises the bundle sequence and recompiles every device
+  (`docs/operations/restore.md`, "Bundle sequence"). Version numbers are therefore **not contiguous**: pruning MUST
+  NOT compute keys as `version − n`.
+- **WORM:** `paddock-bundles` has neither versioning nor Object Lock (`rustfs-bundles-bootstrap.sh`). Only
+  `paddock-escrow` is versioned, and only the audit store is WORM. Nothing blocks a delete.
+
+**Options.**
+
+| Option | For | Against |
+| --- | --- | --- |
+| A. Bucket lifecycle (`Expiration`, `NoncurrentVersionExpiration`) on RustFS 1.0.4 | No code in the hot path; RustFS documents AWS-compatible lifecycle rules, and the development backup target already uses `NoncurrentVersionExpiration` | Not applicable: every version is its own **current** key in an **unversioned** bucket, so there are no noncurrent versions. An age rule (`Expiration.Days`) would also delete the newest bundle of a device whose configuration did not change. S3 lifecycle cannot express "keep the newest N keys below a prefix". It runs in RustFS's scanner, the component that OOMs. Rejected. |
+| A'. One key per device in a versioned bucket, plus `NoncurrentVersionExpiration` with `NewerNoncurrentVersions` | Lifecycle then fits | Changes the object-key contract (architecture §7.1), the presigned URLs (version IDs), the step `objects` (versions) and the bootstrap. RustFS does not document `NewerNoncurrentVersions`. Rejected for alpha.11 and alpha.12. |
+| B. The compiler deletes the superseded objects after a publish, keeping the newest two (current and previous) | Bounded at two objects per device; uses the `bundle` rows, so the versions need not be contiguous; no scanner | Adds a delete to the compile path, which is load-measured. Needs `s3:DeleteObject` for the compiler on `org/*/devices/*/bundles/*`, a grant that `./paddock upgrade` (`bootstrap buckets --add-missing`) cannot add to an existing user today, so it needs a new attach helper. The backlog of existing installations needs a catch-up. Not small. |
+| C. An operator command that prunes on demand, keeping the newest N per device | Small; no server change; works on every existing installation now; fixes the devstack | Manual; the operator must run it. |
+
+**Decision.**
+1. **alpha.11: option C**, as `./paddock bundles prune [--keep N] [--yes]` (control plane or lab host). The script is
+   `deploy/compose/scripts/bundles-prune.sh`, run with the bucket's root credential and the pinned `AWS_CLI_IMAGE`,
+   like `rustfs-bundles-bootstrap.sh`.
+   - It lists `org/` of `PADDOCK_BUNDLES_S3_BUCKET` (default `paddock-bundles`) and considers only keys matching
+     `^org/[0-9a-f-]{36}/devices/[0-9a-f-]{36}/bundles/[0-9]+\.dsse$`. Icons (`org/<org>/icons/`) and packages
+     (`apt/`) are never touched.
+   - Per device directory it keeps the `N` highest version numbers (numeric order, `--keep` default 2, minimum 2;
+     `--keep 1` is refused with exit 2).
+   - It also keeps every object whose `LastModified` lies less than 10 minutes in the past: a version published while
+     the command runs, and an in-flight download, are never removed.
+   - Without `--yes` it deletes nothing and prints `would delete <n> of <m> bundle objects of <d> devices (keeping the
+     newest <N> per device)`. With `--yes` it deletes in `delete-objects` requests of at most 1 000 keys with
+     `Quiet: true`, and prints `deleted <n> of <m> bundle objects of <d> devices`.
+   - Any per-key error in a response ends the run with exit 1 and the number deleted so far. A rerun continues: the
+     selection is computed again from a fresh listing.
+   - It never reads object contents and never prints a credential.
+   - It is not an audited action: it removes derived, reproducible artifacts on the operator's own host (like
+     `docker image prune`), the `bundle` rows and the history in the portal stay, and the server's audited actions
+     are not involved. The runbook says so.
+2. **Documentation (alpha.11).**
+   - `docs/operations/capacity.md`, RustFS paragraph: the objects to count are **every stored bundle version**, not one
+     per device, plus the escrow objects. The paragraph says that versions accumulate with every recompile until
+     pruned, how to count them (the command's dry run prints the number), and that `./paddock bundles prune --yes`
+     after large recompiles keeps the store at two objects per device.
+   - Residual risk **RR-146** in `docs/compliance/residual-risks.md`, section "Application hardening (M12h)", next to
+     RR-120:
+     - **Risk:** bundle versions accumulate in the control plane's object store until an operator prunes them, and
+       the store's memory grows with them until it hits its limit.
+     - **Mitigation:** `./paddock bundles prune`, the sizing rule in `capacity.md`, automatic pruning planned for
+       0.1.0-alpha.12.
+     - **Record in the ISMS:** run the prune after large recompiles and in the monthly capacity review.
+   - The command in the usage text of `./paddock`.
+3. **alpha.12: option B**, planned in a separate amendment (ticket stub PDK-1100). It binds now only as a direction:
+   - the compiler deletes, after a successful publish, the objects of the device's versions older than the newest two
+     `bundle` rows;
+   - a dedicated grant `s3:DeleteObject` on `org/*/devices/*/bundles/*` only;
+   - an upgrade path that attaches it to an existing compiler user;
+   - a bounded catch-up for the existing backlog;
+   - a load measurement of the compile path.
+   If it needs a migration, it takes the next free number when that ticket starts (00161 or later).
+
+### 4. Uninstalls issued inside the deletion request (alpha.11: documented limit; alpha.12: asynchronous)
+
+**Cause (code of 10bbc671).** `Organizations.RequestDeletion` issues the uninstall to every active device in the
+request (`RunExternal`, bounded by `DeletionRequestBudget` = 2 min), before it answers 202. The duration grows with the
+devices, and faster than linearly: 9.2 s for 110 000 devices, 27.3 s for 218 034. The server's `WriteTimeout` is
+120 s. A proxy or client with a 30–60 s timeout in front of it gives up first. When the request context ends, the
+external phase is cancelled and the request is withdrawn as a whole (`CancelOrganizationDeletion`).
+
+**Decision.**
+1. **alpha.11: documentation only.** `docs/operations/capacity.md` gains the section "Organization deletion", stating:
+   - the request issues every device's uninstall before it answers;
+   - measured: 9.2 s for 110 000 devices, 27.3 s for 218 034;
+   - **supported up to about 250 000 devices per organization**;
+   - above that, or behind a proxy whose read timeout is below 60 s, raise the proxy's read timeout to at least 120 s
+     for `/api/platform/` (the bundled Caddy has no response timeout; `nginx/paddock.conf.example` sets 300 s);
+   - a request that timed out at the client is either complete or withdrawn as a whole: read the organization's
+     status before you repeat it;
+   - the deletion steps themselves have no such limit, because they yield (amendment s point 1).
+2. **alpha.12: asynchronous issue** (ticket stub PDK-1101). The request records the deletion as pending and answers
+   202 at once. The worker issues the uninstalls in set-based pages (amendment e) before the grace period can end, and
+   the grace period does not start counting before every uninstall is issued. Planned in a separate amendment. It
+   changes ADR 0052 decision 2's "the request issues the leave", so it needs an ADR 0052 amendment.
+
+### 5. Tickets and order
+
+| Ticket | Points | alpha | Branch base | Files (exclusive) |
+| --- | --- | --- | --- | --- |
+| PDK-1097 | 1, 4.1 | 11 | `alpha11-offboarding-integration` | `server/internal/devicecache/offboarding.go`, `server/internal/devicecache/offboarding_test.go`, `server/internal/app/offboarding_job.go`, `server/internal/app/offboarding_job_integration_test.go`, `server/internal/app/offboarding_devices_integration_test.go`, `docs/operations/capacity.md`, `docs/operations/local-dev.md`, `changelog.d/PDK-1097.fixed.md` |
+| PDK-1098 | 2 (without point 2.6's Go comments) | 11 | `alpha11-offboarding-integration` | `server/internal/worker/offboarding.go`, `server/internal/worker/offboarding_test.go`, `docs/operations/monitoring.md`, `docs/operations/organization-offboarding.md`, `changelog.d/PDK-1098.fixed.md` |
+| PDK-1099 | 3.1, 3.2 | 11 | `alpha11-offboarding-integration`, after PDK-1097 merged (`capacity.md`) | `deploy/compose/scripts/bundles-prune.sh`, `deploy/compose/scripts/bundles-prune_test.sh`, `deploy/bundle/paddock`, `deploy/bundle/build.sh`, `Makefile`, `docs/operations/capacity.md`, `docs/compliance/residual-risks.md`, `changelog.d/PDK-1099.added.md` |
+| PDK-1100 | 3.3 | 12 | — | stub |
+| PDK-1101 | 4.2 | 12 | — | stub |
+
+- PDK-1097 and PDK-1098 run **in parallel**. They share no file. Point 2.6's Go doc comments live in
+  `offboarding_job.go`, so PDK-1097 corrects them, citing this amendment.
+- PDK-1099 starts after PDK-1097 has merged.
+- None of the three needs a migration. PDK-1096 keeps `00160`.
+- Interactions with tickets in flight:
+  - **PDK-1079d** (`platform/db/statementcache.go`, `ingest_plans_test.go`, `cmd/paddock-server/worker.go`): none of
+    these files is touched. No new SQL is added, so the statement cache lists are unaffected.
+  - **PDK-1096** (migration `00160`): no migration here.
+  - **PDK-1091** (`organizations_deletion_integration_test.go`) and **PDK-1092** (`s3test.go`, compiler tests): no
+    shared file. PDK-1091's request-path timing is what PDK-1101 removes in alpha.12, and nothing here changes it.
+  - **PDK-1085** (todo) also edits `deploy/bundle/paddock` (the check). Whichever of PDK-1085 and PDK-1099 merges
+    second rebases. The blocks are independent.
+- Never touched: `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, the revocation issuer, ADRs, dependencies and
+  images.
+
+**Proof (lead, after PDK-1097 and PDK-1098 are merged):** OF3L, plus a repeat of the §87 run on the devstack at 2g.
+Record in the result documents:
+- the small organization's step `devices` duration, which MUST be ≤ 30 s;
+- Valkey RSS before and after the large organization's step `devices`. An increase above `devices × 1.0 KB + 64 MiB`
+  (about 277 MiB for 218 034 devices) is a stop condition for the release.
+- `bp:` and `enr:` counts of the deleting organization right after its step `devices`, which MUST be 0 for handed
+  devices;
+- the step `valkey`'s count.
