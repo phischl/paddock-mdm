@@ -547,12 +547,19 @@ cache included, reached 7.4 GiB, which the kernel reclaims below the limit). Whe
 limit, clients see failed uploads and the audit writer retries; raise `PADDOCK_AUDIT_RUSTFS_MEM_LIMIT` (or
 `PADDOCK_RUSTFS_MEM_LIMIT`) and the host's RAM together.
 
-The control plane's `rustfs` needs **1 GiB of `PADDOCK_RUSTFS_MEM_LIMIT` per 20 000 objects, at least 2 GiB**. Every
-managed device keeps one bundle object, plus its escrow objects (one LUKS header per encrypted disk, diagnostics while
-they are retained). The figure comes from the §62 measurement of plan M17 amendment s on RustFS 1.0.4: at 2 GiB the
+The control plane's `rustfs` needs **1 GiB of `PADDOCK_RUSTFS_MEM_LIMIT` per 20 000 objects, at least 2 GiB**. Count
+every bundle version that is stored, plus the escrow objects (one LUKS header per encrypted disk, diagnostics while
+they are retained). A device gets a new bundle version with every recompile, and until it is pruned every version stays:
+a test installation held about 69 per device after twelve days. `./paddock bundles prune` (a dry run) prints the number
+it would remove; `./paddock bundles prune --yes` removes every version but the newest two per device and anything younger
+than 10 minutes. Run it after large recompiles and in the monthly capacity review. A `--yes` run is audited
+(`platform.bundle_versions_pruned`, system actor `paddock-server admin`; the person is known from the host's own access
+control, as for RR-90); the dry run is not. The portal's bundle history stays. After an in-place restore, do not run `bundles prune --yes` until the recompile that follows it has finished. Automatic pruning is planned for
+0.1.0-alpha.12. The figure comes from the §62 measurement of plan M17 amendment s on RustFS 1.0.4: at 2 GiB the
 store was killed in a loop with 110 000 bundle objects (330 000 directories), from RustFS's own scanner, and stayed
-below the limit from about 55 000 objects on; 20 000 per GiB leaves headroom. For example, 70 000 devices with one
-LUKS header each hold 140 000 objects and need 7 GiB. The default of 2 GiB fits about 40 000 objects. OpenBao holds its keys and the Raft index in memory and stays
+below the limit from about 55 000 objects on; 20 000 per GiB leaves headroom. For example, 70 000 devices with two
+bundle versions (the floor after a prune; it grows by one per device with every recompile until the next prune) and one
+LUKS header each hold 210 000 objects and need 11 GiB. The default of 2 GiB fits about 40 000 objects. OpenBao holds its keys and the Raft index in memory and stays
 small.
 
 ## Organization deletion

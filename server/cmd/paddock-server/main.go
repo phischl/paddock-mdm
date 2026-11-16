@@ -39,6 +39,7 @@ commands:
   osv import <file>
   admin bump-bundle-seq --by N
   admin raise-bundle-seq --at-least N
+  admin record-bundle-prune --keep K --listed M --devices D --selected N --deleted X --failed F | --check
   admin recompile --all
   admin rebuild-cache
   admin security-review

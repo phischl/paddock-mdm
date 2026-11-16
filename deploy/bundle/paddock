@@ -24,6 +24,8 @@ usage: ./paddock <command> [arguments]
                                   buckets --add-missing only adds missing users and policies (./paddock upgrade);
                                   broker applies the RabbitMQ users and permissions to the running broker and checks them;
                                   broker --import only applies them, broker --check only checks them (./paddock upgrade)
+  bundles prune [--keep N] [--yes]   remove superseded bundle versions, keeping the newest N (default 2) per device;
+                                  without --yes only counts (control plane)
   agent-release <version> <dir>   upload and publish signed agent artifacts (control plane)
   agent-rollout <version> [--waves 1,10,50,100] [--min-wave-minutes N] [--failure-threshold-percent P]
                 [--failure-threshold-min M]
@@ -193,7 +195,7 @@ case "$cmd" in
     upgrade_main "$BUNDLE_DIR" "$@"
     exit 0
     ;;
-  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal | restore | backup-target | backup | rollback) ;;
+  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | bundles | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | auto-unseal | restore | backup-target | backup | rollback) ;;
   *) usage ;;
 esac
 
@@ -586,6 +588,11 @@ case "$cmd" in
         ;;
       *) die "usage: ./paddock bootstrap openbao|buckets|audit-bucket|fleet|broker" 2 ;;
     esac
+    ;;
+  bundles)
+    [[ "${1:-}" == prune ]] || die "usage: ./paddock bundles prune [--keep N] [--yes]" 2
+    require_host controlplane lab "bundles prune"
+    "$BUNDLE_DIR/scripts/bundles-prune.sh" "${@:2}"
     ;;
   agent-release)
     [[ $# -eq 2 && -d "$2" ]] || die "usage: ./paddock agent-release <version> <dir>" 2

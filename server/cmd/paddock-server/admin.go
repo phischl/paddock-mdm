@@ -36,7 +36,7 @@ import (
 // agent-release: plan M7b decision 31; auto-unseal: plan M8u decision 8; agent-rollout, agent-rollout-halt,
 // agent-rollout-resume: ADR 0034 amendment 2026-10-26; upgrade-check: plan M16 decision 4).
 type adminCommand struct {
-	name    string             // bump-bundle-seq | raise-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | security-review | end-sessions | auto-unseal | upgrade-check
+	name    string             // bump-bundle-seq | raise-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | agent-rollout | agent-rollout-halt | agent-rollout-resume | security-review | end-sessions | auto-unseal | upgrade-check | record-bundle-prune
 	by      int64              // bump-bundle-seq only
 	atLeast int64              // raise-bundle-seq only
 	sub     string             // allowlist: show | disable | add; auto-unseal: show | verify | disable
@@ -46,6 +46,8 @@ type adminCommand struct {
 	dir     string             // agent-release
 	rollout app.RolloutOptions // agent-rollout
 	json    bool               // upgrade-check
+	prune   app.BundlePrune    // record-bundle-prune
+	check   bool               // record-bundle-prune --check
 }
 
 // parseAdmin parses the arguments after "admin"; every error is a usage error.
@@ -77,6 +79,10 @@ func parseAdmin(args []string) (adminCommand, error) {
 			return adminCommand{}, errUsage
 		}
 		cmd.atLeast = n
+	case "record-bundle-prune":
+		if err := parseBundlePrune(&cmd, args[1:]); err != nil {
+			return adminCommand{}, err
+		}
 	case "recompile":
 		all := fs.Bool("all", false, "")
 		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || !*all {
@@ -151,6 +157,55 @@ func parseAdmin(args []string) (adminCommand, error) {
 	return cmd, nil
 }
 
+// Bounds of record-bundle-prune: far above any bucket, so a larger value is a typo.
+const (
+	minPruneKeep  = 2
+	maxPruneKeep  = 1000
+	maxPruneCount = 1_000_000_000
+)
+
+// parseBundlePrune parses record-bundle-prune: either --check alone, or all six counts, each given exactly once.
+func parseBundlePrune(cmd *adminCommand, args []string) error {
+	fs := flag.NewFlagSet("admin record-bundle-prune", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.BoolVar(&cmd.check, "check", false, "")
+	var keep, listed, devices, selected, deleted, failed int64
+	seen := map[string]bool{}
+	count := func(name string, dst *int64) {
+		fs.Func(name, "", func(v string) error {
+			if seen[name] {
+				return errors.New("flag given twice")
+			}
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 || n > maxPruneCount {
+				return errors.New("count out of range")
+			}
+			seen[name], *dst = true, n
+			return nil
+		})
+	}
+	count("keep", &keep)
+	count("listed", &listed)
+	count("devices", &devices)
+	count("selected", &selected)
+	count("deleted", &deleted)
+	count("failed", &failed)
+	if fs.Parse(args) != nil || fs.NArg() != 0 {
+		return errUsage
+	}
+	if cmd.check {
+		if len(seen) != 0 {
+			return errUsage
+		}
+		return nil
+	}
+	if len(seen) != 6 || keep < minPruneKeep || keep > maxPruneKeep || selected > listed || deleted+failed > selected {
+		return errUsage
+	}
+	cmd.prune = app.BundlePrune{Keep: keep, Listed: listed, Devices: devices, Selected: selected, Deleted: deleted, Failed: failed}
+	return nil
+}
+
 // runAdmin runs a restore command with the worker's configuration (plan M6c decisions 20–22): in the Compose stack as
 // docker compose … run --rm --no-deps paddock-worker admin <command>. It prints one line on stdout.
 func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
@@ -211,6 +266,16 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 			return err
 		}
 		fmt.Fprintf(os.Stdout, "raised bundle_seq of %d devices to at least %d\n", n, cmd.atLeast)
+	case "record-bundle-prune":
+		if cmd.check {
+			return platformPool.Ping(ctx)
+		}
+		// A run with failed keys is recorded as a failure event: the command succeeds, so the host script can tell a
+		// recorded failure from a record that could not be written (which exits 1).
+		if err := admin.RecordBundlePrune(ctx, cmd.prune); err != nil && !errors.Is(err, app.ErrBundlePruneIncomplete) {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "recorded the prune of %d bundle versions\n", cmd.prune.Deleted)
 	case "recompile":
 		n, err := admin.RecompileAll(ctx)
 		if err != nil {
