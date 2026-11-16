@@ -223,3 +223,41 @@ func TestDeleteOrganizationRevokesSurvivingMembersLinks(t *testing.T) {
 		t.Fatalf("left in Authentik: %v", left)
 	}
 }
+
+// TestDeleteOrganizationMemberGoneMeanwhile (PDK-1112): a member deleted after the members were listed, before its
+// link is ended, and a member deleted between reading its attributes and removing its mark do not fail the deletion:
+// both are skipped and the organization's objects are deleted in the same call.
+func TestDeleteOrganizationMemberGoneMeanwhile(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	if _, err := c.EnsureOrganization(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	root := f.groupByName("paddock.acme").pk
+	f.users[900] = &fakeUser{pk: 900, username: "gone-before-revoke", attributes: map[string]any{}, groups: []string{root}}
+	f.users[901] = &fakeUser{pk: 901, username: "gone-before-unmark", attributes: map[string]any{}, groups: []string{root}}
+	for _, pk := range []string{"900", "901"} {
+		if _, err := c.RecoveryLink(ctx, pk); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.SetUserAttribute(ctx, pk, ports.AttrPasswordByLink, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.afterUserPage = func() {
+		f.afterUserPage = nil
+		delete(f.users, 900)
+	}
+	f.failOnce = map[string]int{"PATCH /api/v3/core/users/901/": http.StatusNotFound}
+
+	if _, err := c.DeleteOrganization(ctx, "acme"); err != nil {
+		t.Fatalf("deletion with members gone meanwhile: %v", err)
+	}
+	if left := f.remains("acme"); len(left) != 0 {
+		t.Fatalf("left in Authentik: %v", left)
+	}
+	if len(f.failOnce) != 0 {
+		t.Fatalf("the mark of member 901 was never removed: %v left", f.failOnce)
+	}
+}
