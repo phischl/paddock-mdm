@@ -227,6 +227,77 @@ including the last, `q`, one and two kinds, a kind without matches, `device_id`)
 no table scan refers to a query parameter. The HTTP figures after this change are still to be measured once it is
 merged and deployed.
 
+*Note, 2026-11-16 (PDK-1079, ADR 0055):* the organization pools now plan every execution, so they no longer run
+generic plans and the trap described above no longer applies to them (see Query planning). The rewrite stays as
+defence in depth, and `TestAttentionDevicesGenericPlan` still pins its plan property.
+
+## Query planning
+
+Since PDK-1079 (ADR 0055) the pools that open organization transactions run pgx's `QueryExecModeCacheDescribe`: pgx
+caches only a statement's description and sends every execution as an unnamed statement, so PostgreSQL plans it with
+the real parameter values and the organization of the transaction. A reused plan built for another organization was
+catastrophic before: a statement prepared by pgx's default statement cache keeps a generic plan, and a statement
+without parameters (the organization comes from `paddock.org_id`, not from a parameter) never gets a custom plan. On
+the development stack (PostgreSQL 18.6, one organization of 70 000 devices next to about 400 small ones), a plan built
+for a small organization took more than 5 s for the large one in the attention list and count, the outdated-schema
+and the config rollout device lists, and 300 to 430 ms instead of 0.03 to 0.06 ms in the event-gap lookups; 29 more
+queries were 150 to 1 700 times slower in one direction or the other.
+
+Pool modes (`db.openPool`; pinned by `TestPoolQueryExecModes`):
+
+| Pool | Roles | Mode |
+| --- | --- | --- |
+| `OrgPool` (incl. `NotifierPool`) | api, worker incl. ingest, compiler, notifier, escrow-reader, revocation-issuer, the `paddock-server admin` commands (the gateway opens no PostgreSQL pool) | per execution (`CacheDescribe`), `jit = off` |
+| `OrgPool.WithStatementCache()` view (same connections) | worker `ingest.heartbeat` and `ingest.event` consumers, full and ingest mode | listed statements `CacheStatement`, all others per execution; `jit = off` |
+| `PlatformPool` and its lock pool | platform endpoints, leader locks | statement cache |
+| `AuditReader`, `AuditWriterPool` | audit reader and writer | statement cache |
+| `RelayPool`, `UnsealerPool`, `BackupPool` | outbox relay, unsealer, backup and restore | statement cache |
+| health pools (`Options.HealthConn`) | readiness pings | statement cache |
+| migrations | `paddock-server migrate` (own connection) | unchanged |
+
+Planning cost, measured read-only on the development stack for PDK-1079: median 0.11 ms per query, p99 3.9 ms,
+maximum 5.6 ms. The round trips are unchanged (one per query), so plan M17 amendment j's "no extra statement per
+transaction" still holds. `TestOrganizationPoolPlansPerExecution` seeds 70 000 devices and bounds each of the former
+catastrophic queries to 1 s in the large organization after six runs in a small one on the same connection.
+
+Ingest CPU per event with and without per-execution planning (N2 method, ADR 0055 decision 3): +28 % CPU seconds per
+1 000 events (median, postgres +36 %; two pairs, +32 % and +24 %), far above the 5 % budget. This led to the
+statement-cache view below.
+
+The heartbeat and event ingest keeps cached statements (ADR 0055 amendment 2026-11-15 (2), PDK-1079b): planning its
+short, keyed statements per execution cost about 30 % more CPU per event in the first N2 measurement. The worker's
+`ingest.heartbeat` and `ingest.event` consumers run on `OrgPool.WithStatementCache()`, a view of the worker's
+organization pool with the same connections, role, offboarding gate and `jit = off`; it adds no connection. The view
+runs a statement as a named, cached one only if its sqlc name is on the closed allow list `ingestStatementCached`
+(`server/internal/platform/db/statementcache.go`): `device` by `id`, `device_status` by `device_id`, the device-keyed
+queries of `device_event_seen`, `device_event_gap` and `device_event_dropped`, `InsertAction`, `FinishAction`,
+`InsertOutbox` and plain inserts. Every other statement, also on the view, is planned per execution. Migration 00158
+replaced the organization-only indexes of the three event tables by `(organization_id, device_id)`, so a generic plan
+that takes the organization index still reads only one device's rows (7 000 shared buffers before, 13 after, for
+`MaxDeviceEventSeenBefore` at 70 000 devices). `TestIngestViewGenericPlans` forces generic plans and bounds every
+listed read and write, and the two event-gap lookups, to 100 shared buffers in a 70 000-device organization.
+
+Ingest CPU per event with the statement-cache view (N2 method, ADR 0055 amendment 2 decision 12, series 1 and 2;
+5 000 events/s offered, two ingest workers, 150 connections):
+
+- Series 1, view against the build without per-execution planning: +0.7 % (median of three alternating pairs, 1.715
+  against 1.703 CPU seconds per 1 000 events; pairs −15.1 %, +6.5 %, −1.0 %). Within the 5 % budget.
+- Series 2a, the `(organization_id, device_id)` event-table indexes of migration 00158 against the organization-only
+  ones: −20.7 % (postgres −31.5 %). The composite indexes are cheaper.
+- Series 2b, `outbox_org_idx` (PDK-1068) present against absent: median +10.3 %, but the pairs range from −35 % to
+  +55 % with a mean of +5.9 % and the present variant always ran second on a host whose load drifted, so the
+  measurement does not separate the index's cost from noise. The index stays for the offboarding database step; a
+  re-measurement with randomized order on a quiet host follows (decisions recorded with the release).
+
+The organization pools also open their connections with `jit = off` (connection runtime parameter, no statement per
+transaction; ADR 0055 amendment 2026-11-15, PDK-1081); the other pools keep the server's default. At 70 000 active
+devices that all have a status row, the attention view's plan costs about 630 000, above PostgreSQL's
+`jit_above_cost` (100 000) and `jit_optimize_above_cost`/`jit_inline_above_cost` (500 000). With JIT, every execution
+spent about 2.3 s compiling (2.7 s in total, 0.3 to 0.4 s without JIT), whatever the plan cache does, and the worker's
+findings loop would pay it in every round. The organization roles run short, index-driven queries where compilation
+does not pay off. `TestOrganizationPoolPlansPerExecution` runs with that data and the production pool configuration,
+and `TestPoolQueryExecModes` asserts `jit = off` on the organization pools and the default on the others.
+
 ## Authentik web workers
 
 Every portal login, step-up, device login and every call of the worker's identity rounds is a request to

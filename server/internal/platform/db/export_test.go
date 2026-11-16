@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -42,4 +43,63 @@ func InOrgTx(p *OrgPool, ctx context.Context, fn func(tx pgx.Tx) error) error {
 		return err
 	}
 	return inTx(ctx, p.p, func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) }, fn)
+}
+
+// IngestStatementCached reports whether the statement-cache view runs the pgstore statement name cached.
+func IngestStatementCached(name string) bool { return ingestStatementCached(name) }
+
+// StatementName returns the sqlc name of a pgstore statement's SQL text, or "".
+func StatementName(sql string) string { return statementName(sql) }
+
+// QueryExecModes returns the default query execution mode of the query pool behind p, keyed "query", and of its health
+// ("health") and lock ("locks") pools where it has them. p is one of the pool types of this package.
+func QueryExecModes(p any) map[string]pgx.QueryExecMode {
+	modes := map[string]pgx.QueryExecMode{}
+	for name, cp := range connPools(p) {
+		modes[name] = cp.Config().ConnConfig.DefaultQueryExecMode
+	}
+	return modes
+}
+
+// RuntimeParams returns the connection runtime parameter name of the pools behind p, keyed as QueryExecModes; a pool
+// that does not set it maps to "".
+func RuntimeParams(p any, name string) map[string]string {
+	params := map[string]string{}
+	for pool, cp := range connPools(p) {
+		params[pool] = cp.Config().ConnConfig.RuntimeParams[name]
+	}
+	return params
+}
+
+func connPools(p any) map[string]*pgxpool.Pool {
+	var base pool
+	var locks *pgxpool.Pool
+	switch v := p.(type) {
+	case *OrgPool:
+		base = v.pool
+	case *NotifierPool:
+		base = v.pool
+	case *PlatformPool:
+		base, locks = v.pool, v.locks
+	case *RelayPool:
+		base = v.pool
+	case *UnsealerPool:
+		base = v.pool
+	case *BackupPool:
+		base = v.pool
+	case *AuditReader:
+		base = v.pool
+	case *AuditWriterPool:
+		base = v.pool
+	default:
+		panic("db: connPools: unknown pool type")
+	}
+	pools := map[string]*pgxpool.Pool{"query": base.p}
+	if base.health != nil {
+		pools["health"] = base.health
+	}
+	if locks != nil {
+		pools["locks"] = locks
+	}
+	return pools
 }

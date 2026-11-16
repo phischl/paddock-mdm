@@ -46,6 +46,12 @@ type Options struct {
 	// connection runtime parameter so it costs no statement per transaction (plan M17 amendment r point 2). The
 	// organization pools pass OrgTransactionTimeout; a transaction may lower it with SET LOCAL, never raise it.
 	TransactionTimeout time.Duration
+	// organizationPool, set by the organization pool constructors only, runs every statement as an unnamed one with a
+	// cached description (pgx.QueryExecModeCacheDescribe), so PostgreSQL plans each execution for the organization of
+	// the transaction instead of reusing a plan built for another one, and switches JIT compilation off, which cost
+	// seconds per execution of the attention view at 70 000 devices (ADR 0055 decisions 1 and 6). The other pools
+	// keep pgx's statement cache and the server's JIT setting.
+	organizationPool bool
 }
 
 // newPool opens the query pool and, with o.HealthConn, the health pool of one connection.
@@ -72,6 +78,9 @@ func suffixed(name, suffix string) string {
 	return name + "-" + suffix
 }
 
+// runtimeJIT is the connection runtime parameter the organization pools set to off (ADR 0055 decision 6).
+const runtimeJIT = "jit"
+
 func openPool(ctx context.Context, dsn string, o Options) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -85,6 +94,10 @@ func openPool(ctx context.Context, dsn string, o Options) (*pgxpool.Pool, error)
 	}
 	if o.TransactionTimeout > 0 {
 		cfg.ConnConfig.RuntimeParams[runtimeTransactionTimeout] = transactionTimeoutParam(o.TransactionTimeout)
+	}
+	if o.organizationPool {
+		cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
+		cfg.ConnConfig.RuntimeParams[runtimeJIT] = "off"
 	}
 	cfg.MaxConnIdleTime = 5 * time.Minute
 	return pgxpool.NewWithConfig(ctx, cfg)
@@ -135,8 +148,21 @@ func inTxWith(ctx context.Context, p *pgxpool.Pool, opts pgx.TxOptions, setup fu
 	return timedOut(ctx, tx.Conn(), start, tx.Commit(ctx))
 }
 
+// setOrgSQL sets paddock.org_id for the transaction.
+const setOrgSQL = "SELECT set_config('paddock.org_id', $1, true)"
+
 func setOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
-	_, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", org.String())
+	_, err := tx.Exec(ctx, setOrgSQL, org.String())
+	return err
+}
+
+// setOrg is setOrg in p's mode: a statement-cache view runs it as a named, cached statement (ADR 0055 amendment 2
+// decision 8).
+func (p *OrgPool) setOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
+	if !p.statementCache {
+		return setOrg(ctx, tx, org)
+	}
+	_, err := tx.Exec(ctx, setOrgSQL, pgx.QueryExecModeCacheStatement, org.String())
 	return err
 }
 
@@ -155,7 +181,7 @@ func (p *OrgPool) enterOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error 
 		if status != "" {
 			return OrganizationUnavailable(org, status)
 		}
-		return setOrg(ctx, tx, org)
+		return p.setOrg(ctx, tx, org)
 	}
 	b := &pgx.Batch{}
 	b.Queue("SELECT set_config('paddock.org_id', $1, true)", org.String())
@@ -213,14 +239,18 @@ type OrgPool struct {
 	// beforeGate, set only by tests (export_test.go), runs at the start of every gate pass, so a test can commit a
 	// status change between a caller's earlier check and the gate.
 	beforeGate func(org uuid.UUID)
+	// statementCache marks a view made by WithStatementCache: its transactions run the listed statements cached, and
+	// its Close does nothing.
+	statementCache bool
 }
 
-// NewOrgPool opens the paddock_api pool.
+// NewOrgPool opens the paddock_api pool. Its statements are planned per execution, without JIT (ADR 0055).
 func NewOrgPool(ctx context.Context, dsn string, o Options) (*OrgPool, error) {
 	return newOrgPool(ctx, dsn, o, monotonicSince(), slog.Default())
 }
 
 func newOrgPool(ctx context.Context, dsn string, o Options, since func() time.Duration, log *slog.Logger) (*OrgPool, error) {
+	o.organizationPool = true
 	p, err := newPool(ctx, dsn, o)
 	if err != nil {
 		return nil, err
@@ -228,8 +258,12 @@ func newOrgPool(ctx context.Context, dsn string, o Options, since func() time.Du
 	return &OrgPool{pool: p, gate: newOrgGate(ctx, p.p, since, log)}, nil
 }
 
-// Close stops the status cache's poller and closes all connections.
+// Close stops the status cache's poller and closes all connections. On a view made by WithStatementCache it does
+// nothing: the connections and the gate belong to the pool it was made from.
 func (p *OrgPool) Close() {
+	if p.statementCache {
+		return
+	}
 	p.gate.close()
 	p.pool.Close()
 }
@@ -252,7 +286,16 @@ func (p *OrgPool) InOrg(ctx context.Context, fn func(ctx context.Context, q *pgs
 	}
 	return inTx(ctx, p.p,
 		func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) },
-		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+		func(tx pgx.Tx) error { return fn(ctx, p.queries(tx)) })
+}
+
+// queries returns the pgstore.Queries of a transaction of p; on a statement-cache view they run the listed statements
+// cached (cachedTx).
+func (p *OrgPool) queries(tx pgx.Tx) *pgstore.Queries {
+	if p.statementCache {
+		return pgstore.New(cachedTx{tx: tx})
+	}
+	return pgstore.New(tx)
 }
 
 // InOrgOffboarding is InOrg without the gate, for the offboarding job only (app.Offboarding; enforced by
@@ -264,8 +307,8 @@ func (p *OrgPool) InOrgOffboarding(ctx context.Context, fn func(ctx context.Cont
 		return err
 	}
 	return inTx(ctx, p.p,
-		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
-		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+		func(tx pgx.Tx) error { return p.setOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, p.queries(tx)) })
 }
 
 // InOrgSnapshot is InOrg in a REPEATABLE READ transaction: every query of fn sees the snapshot taken at its first
@@ -278,7 +321,7 @@ func (p *OrgPool) InOrgSnapshot(ctx context.Context, fn func(ctx context.Context
 	}
 	return inTxWith(ctx, p.p, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly},
 		func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) },
-		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+		func(tx pgx.Tx) error { return fn(ctx, p.queries(tx)) })
 }
 
 // InPendingDeletionOrg is InOrg for an organization named by its argument instead of the principal: the second narrow
@@ -314,7 +357,7 @@ func (p *OrgPool) InPendingDeletionOrg(ctx context.Context, platform *PlatformPo
 	}
 	return inTx(ctx, p.p,
 		func(tx pgx.Tx) error { return p.enterOrg(ctx, tx, org) },
-		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+		func(tx pgx.Tx) error { return fn(ctx, p.queries(tx)) })
 }
 
 // ResolveSlug maps an organization slug to its ID before an organization context exists (login). It runs only the
