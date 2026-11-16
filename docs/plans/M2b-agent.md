@@ -103,6 +103,8 @@ rolled out in waves with an automatic stop. Proven on both test VMs.
     was applied to `supervisor.go` alone; with the outcome `rollback_failed` and its retry the supervisor is at 693 such
     lines. The ceiling is **800**. Code that pushes past it is moved out of the supervisor (into the agent or `pkg/`),
     not split into more files. PDK-062 adds a check to `make lint` that enforces the ceiling.
+    Amendment 2026-11-16 (architect, PDK-1118): the ceiling is **835**; see the section of that date at the end of
+    this plan.
 16. **Update protocol (agent ↔ supervisor):** the check-in response may contain
     `agent_update: {version, url, sha256, size, minisig}` (device API change, §6.1). The agent downloads to
     `/var/lib/paddock/staging/<version>/paddockd` + `paddockd.minisig`, checks size and SHA-256, then writes
@@ -377,3 +379,52 @@ validate the package path.
 - **Residual risk.** A store-side write that completes more than the lease lifetime after its upload gave up, and
   after the publish, is not detected. Devices refuse such an object by its SHA-256 (fail safe) until the release is
   replaced.
+
+## Amendment 2026-11-16 (architect, PDK-1118) — supervisor decisions under disk stalls; line budget 835
+
+Slow device disks can stall a single fsync for half a minute (measured: 33 s for a 7-byte fsync under parallel
+writers; PDK-1115 Review 1). The probation's health verdict does not depend on a disk write, but two side paths of
+decision 16 do, and both fixes belong in the supervisor: it alone flips the slots and refuses downgrades (decision 15),
+and a fail-closed decision under an I/O stall cannot be delegated to the agent it judges. Both parts ship in the same
+change (PDK-1118), with an external review.
+
+**Part 1 — the probation window is bounded across supervisor restarts (decision 16).** `WatchdogSec=60` stays, the
+watchdog stays petted once per tick from the single loop goroutine, and the probation stays 10 min (2 min with
+`paddock_dev`). Until now `resumeProbation` set `SwitchedAt = Now()`, so every watchdog kill during a stalled rollback
+pass started a full new window and the rollback of a sick release could be postponed again and again. The rule now is:
+
+- The probation log records the kernel boot ID at the switch: field `boot_id` (string, `omitempty`) of
+  `probation`, set in `onSelfTest` and in `rebuildProbation` from `Config.BootID`. `New` fills an empty
+  `Config.BootID` from `/proc/sys/kernel/random/boot_id` (trimmed; a read error leaves it empty); tests inject it.
+- `resumeProbation` no longer overwrites `SwitchedAt`; the persisted switch time stays the start of the window. The
+  resumed deadline is `Now() + remaining`, with `remaining = min(max(SwitchedAt + Probation - Now(), Probation/5),
+  Probation)`, so it carries the monotonic clock of the resume, never extends the original window (a clock set back
+  cannot stretch it past one fresh window), and leaves a healthy agent that the restart killed (`KillMode=mixed`) at
+  least `Probation/5` (2 min; 24 s with `paddock_dev`) to check in again.
+- If the log's `boot_id` is empty (a log of an earlier supervisor, a rebuild that could not read the boot ID) or
+  differs from `Config.BootID` (the device rebooted; a watchdog restart never changes it), `remaining = Probation`,
+  as before: after a reboot the network may need minutes, and a short window would roll back healthy releases.
+- Nothing else changes: the check-in mark is cleared on resume, the switch counts as `unsynced`, the rollback runs from
+  the loop after the child has started. A resume whose deadline has passed rolls back at the first tick after the
+  floor; within one boot, watchdog restarts can postpone a rollback by at most `Probation/5` each, not by a window.
+- Rejected: petting the watchdog after every completed fsync (it would wrap `SyncDir`/`SyncFile`, blur the meaning of
+  the watchdog, which proves a responsive loop, and break the tests' tick counting, which counts `WATCHDOG=1`); a
+  watchdog goroutine (it would pet a hung loop); raising `WatchdogSec` or the window (excluded by the ticket); keeping
+  `SwitchedAt` without the boot ID (a reboot after the deadline would leave only the floor to a booting laptop).
+
+**Part 2 — a stalled `paddockd version` defers the decision (decision 16, direction B).** A `paddockd version` call
+that hits its 10 s timeout is distinguished from an agent that cannot report a version. In `onRequest` such a timeout
+writes no outcome and keeps `staging/request.json`; the request is processed again on a later tick, and after a
+restart through `resumeRequest`, so a stall never lets a release that is not newer pass the downgrade refusal. In
+`rebuildProbation` such a timeout keeps the unreadable probation log and skips the probation until the next start,
+instead of rebuilding or dropping it from a slot that only looked version-less. Rejected: refusing the release with
+`downgrade_refused` on a timeout (a false failure counted against the rollout, and the agent marks the release as
+failed); moving helpers out of the supervisor to make room (it would split the A/B logic across components that update
+on different channels).
+
+**Budget.** The supervisor counts 797 lines at 64382b2f. Part 1 is estimated at 11 counted lines (`Config.BootID` 1,
+reading it in `New` 4, the `probation` field 1, the two struct literals +1 each, the resumed deadline +3); part 2 at
+21 (implementer's estimate). 797 + 11 + 21 = 829, plus a buffer of 6: the ceiling is **835**
+(`test/supervisor-budget.sh`, its regression test and the `Makefile` comment change with it). The principle of design
+contract 1 is unchanged: the supervisor stays one goroutine's loop with no new dependency, simple enough to need no
+updates; only the number changes. A change that needs more than 835 lines stops and goes back to the architect.
