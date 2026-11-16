@@ -1,8 +1,9 @@
 import { expect, type Page } from '@playwright/test'
-import { login, stepUp, tempUser } from './auth'
+import { login, loginWithPassword, stepUp, tempUser } from './auth'
 import { expectAccessible, mainNav, openUserMenu, watchCSP } from './checks'
 import { test } from './cleanup'
 
+const csrf = { 'X-Paddock-CSRF': '1' }
 const platformDetail = 'platform administrators receive their setup link from the host operator'
 
 async function openUser(page: Page, username: string, users: string): Promise<void> {
@@ -150,7 +151,9 @@ test('organization admin creates a one-time sign-in setup link', async ({ page, 
     await expect(page.locator('html')).toHaveAttribute('lang', 'de')
     await page.keyboard.press('Escape')
     await page.reload()
-    await expect(page.getByTestId('enrolment-link-help')).toContainText('Ein Link zur Einrichtung der Anmeldung')
+    await expect(page.getByTestId('enrolment-link-help')).toContainText(
+      'Mit einem Link zur Einrichtung der Anmeldung richtet das Konto einmalig innerhalb von 24 Stunden einen Passkey ein; ein von Paddock angelegtes Konto ohne Passwort setzt außerdem eines. Ein neuer Link beendet jeden älteren: Erstellen Sie nach der Vergabe einer Portalrolle einen neuen Link und geben Sie nur diesen weiter, sofern der Benutzer seinen Link nicht schon verwendet hat.',
+    )
     await expect(button).toHaveText('Link zur Einrichtung der Anmeldung erstellen')
     await button.click()
     const de = page.getByRole('dialog', { name: 'Link zur Einrichtung der Anmeldung' })
@@ -179,20 +182,25 @@ test('organization admin creates a one-time sign-in setup link', async ({ page, 
   expect(consoleErrors.filter((e) => !/status of (409|500)|Failed to load resource/.test(e))).toEqual([])
 })
 
-// Permission-denied state: an operator has no setup-link action and no help text on the user page.
+// Permission-denied state: an operator has no setup-link action and no help text on the user page. The user to open
+// is created here: the organization may have no other user when this test runs.
 test('operator sees no sign-in setup link action', async ({ page, cleanup }) => {
+  await login(page, 'alice@acme.test', 'dev_alice_password')
+  const username = `e2e-link-op-${Date.now().toString(36)}@acme.test`
+  cleanup.remove('/api/v1/users', username)
+  const created = await page.request.post('/api/v1/users', { headers: csrf, data: { username, display_name: 'E2E Link Operator Target' } })
+  expect(created.status()).toBe(201)
   const operator = await tempUser('e2e-link-operator', 'paddock.acme.operators')
   try {
-    const { loginWithPassword } = await import('./auth')
+    await page.context().clearCookies()
     await loginWithPassword(page, operator.username, operator.password)
-    void cleanup
-    await mainNav(page).getByRole('link', { name: 'Users', exact: true }).click()
-    await page.getByRole('row').nth(1).getByRole('link').first().click()
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+    await openUser(page, username, 'Users')
     await expect(page.getByTestId('enrolment-link')).toHaveCount(0)
     await expect(page.getByTestId('enrolment-link-help')).toHaveCount(0)
     await expectAccessible(page)
   } finally {
     await operator.remove()
+    await page.context().clearCookies()
+    await login(page, 'alice@acme.test', 'dev_alice_password')
   }
 })
