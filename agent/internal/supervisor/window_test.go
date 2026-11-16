@@ -102,23 +102,6 @@ func (f *fake) killed(s *Supervisor, done <-chan struct{}, kills *atomic.Int32, 
 	f.cancel = nil
 }
 
-// waitTicksOrEnd is waitTicks that also returns once the supervisor's goroutine has ended, which ticks no more.
-func (f *fake) waitTicksOrEnd(n int, done <-chan struct{}) {
-	for len(f.notices) > 0 {
-		<-f.notices
-	}
-	for n > 0 {
-		select {
-		case notice := <-f.notices:
-			if notice == "WATCHDOG=1" {
-				n--
-			}
-		case <-done:
-			return
-		}
-	}
-}
-
 // probationOnDisk reads the probation log.
 func (f *fake) probationOnDisk() probation {
 	f.t.Helper()
