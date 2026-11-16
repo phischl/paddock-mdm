@@ -87,7 +87,7 @@ func TestPoolQueryExecModes(t *testing.T) {
 	}
 
 	t.Run("statement-cache view", func(t *testing.T) {
-		parent, err := db.NewOrgPool(ctx, env.API, db.Options{MaxConns: 1})
+		parent, err := db.NewOrgPool(ctx, env.Worker, db.Options{MaxConns: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,23 +96,32 @@ func TestPoolQueryExecModes(t *testing.T) {
 		if mode := db.QueryExecModes(view)["query"]; mode != pgx.QueryExecModeCacheDescribe {
 			t.Errorf("view: pool mode %s, want %s (only the listed statements run cached)", mode, pgx.QueryExecModeCacheDescribe)
 		}
-		getDevice := func(p *db.OrgPool) {
+		// DeleteDeviceEventDropped is listed and deletes nothing for a random device; GetDevice is not listed.
+		probe := func(p *db.OrgPool) {
 			t.Helper()
 			err := p.InOrg(orgCtx(f.orgA), func(ctx context.Context, q *pgstore.Queries) error {
-				_, err := q.GetDevice(ctx, uuid.New())
-				return err
+				if err := q.DeleteDeviceEventDropped(ctx, uuid.New()); err != nil {
+					return err
+				}
+				if _, err := q.GetDevice(ctx, uuid.New()); !db.IsNoRows(err) {
+					return err
+				}
+				return nil
 			})
-			if err != nil && !db.IsNoRows(err) {
+			if err != nil {
 				t.Fatal(err)
 			}
 		}
-		getDevice(parent)
-		if got := preparedStatements(t, parent, f.orgA, "-- name: GetDevice %"); len(got) != 0 {
-			t.Errorf("parent pool: GetDevice prepared as %v, want unnamed (CacheDescribe)", got)
+		probe(parent)
+		if got := preparedStatements(t, parent, f.orgA, "-- name: DeleteDeviceEventDropped %"); len(got) != 0 {
+			t.Errorf("parent pool: DeleteDeviceEventDropped prepared as %v, want unnamed (CacheDescribe)", got)
 		}
-		getDevice(view)
-		if got := preparedStatements(t, parent, f.orgA, "-- name: GetDevice %"); len(got) != 1 {
-			t.Errorf("view: GetDevice prepared as %v, want one named, cached statement", got)
+		probe(view)
+		if got := preparedStatements(t, parent, f.orgA, "-- name: DeleteDeviceEventDropped %"); len(got) != 1 {
+			t.Errorf("view: DeleteDeviceEventDropped prepared as %v, want one named, cached statement", got)
+		}
+		if got := preparedStatements(t, parent, f.orgA, "-- name: GetDevice %"); len(got) != 0 {
+			t.Errorf("view: unlisted GetDevice prepared as %v, want unnamed (planned per execution)", got)
 		}
 		var jit string
 		if err := db.InOrgTx(view, orgCtx(f.orgA), func(tx pgx.Tx) error {
@@ -124,7 +133,7 @@ func TestPoolQueryExecModes(t *testing.T) {
 			t.Errorf("SHOW jit on a view connection: %s, want off", jit)
 		}
 		view.Close()
-		getDevice(parent)
+		probe(parent)
 	})
 }
 

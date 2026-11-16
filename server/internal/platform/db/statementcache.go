@@ -57,28 +57,23 @@ func statementName(sql string) string {
 	return name
 }
 
-// ingestStatementCached is the closed allow list of the statement-cache view (ADR 0055 amendment 2, clarification of
-// decisions 8 and 11): a name may be listed only if every table it touches is reached by its primary key or by a
-// device key that every index led by organization_id on that table contains, or if it is a plain INSERT … VALUES
-// without a subquery. TestIngestViewGenericPlans proves the plans of the listed reads and writes; an unlisted
-// statement runs per execution, which is safe and costs only planning.
+// ingestStatementCached is the closed allow list of the statement-cache view (ADR 0055 amendment 2026-11-16 (3),
+// decision 11): a name may be listed only if it is (a) an INSERT … VALUES without SELECT whose ON CONFLICT, if any,
+// names a unique index or is a bare ON CONFLICT DO NOTHING (its arbiters are the table's unique indexes), or (b) compares device_id with a parameter and every table of its plan has no index led by
+// organization_id without device_id in second place. Access by primary key alone admits nothing: when ANALYZE misses a
+// small organization, a generic plan built there takes an index led by organization_id and reads the whole large
+// organization. TestIngestViewAdmissionRule checks the rule, TestIngestViewGenericPlans the plans under that worst case;
+// an unlisted statement runs per execution, which is safe and costs only planning.
 func ingestStatementCached(name string) bool {
 	switch name {
 	case
-		// device by its primary key id.
-		"GetDevice", "LockDevice", "ClearAgentUpdateRequest", "UpdateDeviceOSRelease", "UpdateReportedHostname",
-		"SetDeviceRetiredReason", "EndFailedUninstall",
-		// device_status by its primary key device_id.
-		"GetDeviceStatus", "GetDeviceClockState", "LockDeviceEventSeq", "ClearClockDrift", "SetClockDrift",
-		"ResetEventSeq", "UpsertDeviceStatus", "SetDeviceLoginState",
-		// device_event_seen, device_event_gap, device_event_dropped by device_id, which their organization indexes
-		// contain since migration 00158.
-		"MaxDeviceEventSeenBefore", "DeleteDeviceEventSeenBefore", "CloseOpenDeviceEventGaps", "DeleteDeviceEventDropped",
-		// action by its primary key id.
-		"FinishAction",
-		// Plain INSERT … VALUES without a subquery; UpsertDeviceUserSeen conflicts on (device_id, username).
-		"InsertDeviceEventSeen", "InsertDeviceEventDropped", "InsertAction", "InsertOutbox", "InsertDeviceLoginEvent",
-		"InsertAgentUpdateReport", "UpsertDeviceUserSeen":
+		// Rule (b): device_event_seen and device_event_dropped by device_id, which their organization indexes contain
+		// since migration 00158.
+		"MaxDeviceEventSeenBefore", "DeleteDeviceEventSeenBefore", "DeleteDeviceEventDropped",
+		// Rule (a): UpsertDeviceStatus and SetDeviceLoginState conflict on device_status's primary key,
+		// UpsertDeviceUserSeen on (device_id, username).
+		"UpsertDeviceStatus", "SetDeviceLoginState", "UpsertDeviceUserSeen", "InsertDeviceEventSeen",
+		"InsertDeviceEventDropped", "InsertAction", "InsertOutbox", "InsertDeviceLoginEvent", "InsertAgentUpdateReport":
 		return true
 	}
 	return false

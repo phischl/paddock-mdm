@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ import (
 )
 
 // ingestBufferBound is the most shared buffers one execution of a listed statement may touch in the large organization
-// (ADR 0055 amendment 2 decision 12); a device-keyed lookup needs a few, a scan of the organization tens of thousands.
+// (ADR 0055 amendment 2 decision 12, made precise by amendment 2026-11-16 (3)); a device-keyed lookup needs a few, a scan of the organization tens of thousands.
 const ingestBufferBound = 100
 
 // ingestPlanCase runs one query in organization org for device.
@@ -28,64 +29,13 @@ type ingestPlanCase struct {
 	run  func(ctx context.Context, q *pgstore.Queries, org, device uuid.UUID) error
 }
 
-// ingestPlanCases are the allow-listed queries of the statement-cache view that read, update or delete a table, plus
+// ingestPlanCases are the allow-listed queries of the statement-cache view that read, update, upsert or delete, plus
 // ListDeviceEventSeenAbove and CountDeviceEventSeenInRanges of the event-gap round, which runs per execution but whose
-// device-keyed lookups migration 00158 made safe in every mode. TestIngestStatementAllowList makes every listed name
-// that is not a plain INSERT … VALUES have a case here.
+// device-keyed lookups migration 00158 made safe in every mode (ADR 0055 amendment 2026-11-16 (3) decision 12).
+// TestIngestStatementAllowList makes every listed name that is not a plain INSERT … VALUES have a case here.
 func ingestPlanCases() []ingestPlanCase {
 	now := time.Now()
-	text := func(s string) *string { return &s }
 	return []ingestPlanCase{
-		{"GetDevice", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.GetDevice(ctx, d)
-			return err
-		}},
-		{"LockDevice", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.LockDevice(ctx, d)
-			return err
-		}},
-		{"ClearAgentUpdateRequest", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.ClearAgentUpdateRequest(ctx, pgstore.ClearAgentUpdateRequestParams{DeviceID: d, Version: text("1.0.0")})
-			return err
-		}},
-		{"UpdateDeviceOSRelease", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.UpdateDeviceOSRelease(ctx, pgstore.UpdateDeviceOSReleaseParams{OsID: "debian", VersionID: "13", DeviceID: d})
-			return err
-		}},
-		{"UpdateReportedHostname", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.UpdateReportedHostname(ctx, pgstore.UpdateReportedHostnameParams{Hostname: "plan-host", ID: d})
-			return err
-		}},
-		{"SetDeviceRetiredReason", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			return q.SetDeviceRetiredReason(ctx, pgstore.SetDeviceRetiredReasonParams{Reason: text("uninstalled"), ID: d})
-		}},
-		{"EndFailedUninstall", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.EndFailedUninstall(ctx, pgstore.EndFailedUninstallParams{ID: d, CommandID: uuid.New()})
-			return err
-		}},
-		{"GetDeviceStatus", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.GetDeviceStatus(ctx, d)
-			return err
-		}},
-		{"GetDeviceClockState", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.GetDeviceClockState(ctx, d)
-			return err
-		}},
-		{"LockDeviceEventSeq", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.LockDeviceEventSeq(ctx, d)
-			return err
-		}},
-		{"ClearClockDrift", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.ClearClockDrift(ctx, pgstore.ClearClockDriftParams{DeviceID: d, ThresholdS: 60})
-			return err
-		}},
-		{"SetClockDrift", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			_, err := q.SetClockDrift(ctx, pgstore.SetClockDriftParams{Now: &now, DeviceID: d, ThresholdS: 60})
-			return err
-		}},
-		{"ResetEventSeq", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			return q.ResetEventSeq(ctx, pgstore.ResetEventSeqParams{High: 3, DeviceID: d})
-		}},
 		{"UpsertDeviceStatus", func(ctx context.Context, q *pgstore.Queries, org, d uuid.UUID) error {
 			return q.UpsertDeviceStatus(ctx, pgstore.UpsertDeviceStatusParams{
 				DeviceID: d, OrganizationID: org, LastContactAt: &now, Health: json.RawMessage(`{}`),
@@ -110,17 +60,8 @@ func ingestPlanCases() []ingestPlanCase {
 			_, err := q.DeleteDeviceEventSeenBefore(ctx, pgstore.DeleteDeviceEventSeenBeforeParams{DeviceID: d, Before: now})
 			return err
 		}},
-		{"CloseOpenDeviceEventGaps", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
-			return q.CloseOpenDeviceEventGaps(ctx, pgstore.CloseOpenDeviceEventGapsParams{Now: &now, DeviceID: d})
-		}},
 		{"DeleteDeviceEventDropped", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
 			return q.DeleteDeviceEventDropped(ctx, d)
-		}},
-		{"FinishAction", func(ctx context.Context, q *pgstore.Queries, org, _ uuid.UUID) error {
-			_, err := q.FinishAction(ctx, pgstore.FinishActionParams{
-				Outcome: text("success"), Params: json.RawMessage(`{}`), OrganizationID: org, FinishedAt: &now, ID: uuid.New(),
-			})
-			return err
 		}},
 		{"ListDeviceEventSeenAbove", func(ctx context.Context, q *pgstore.Queries, _, d uuid.UUID) error {
 			_, err := q.ListDeviceEventSeenAbove(ctx, pgstore.ListDeviceEventSeenAboveParams{DeviceID: d, Above: planEventsPerDev - 1})
@@ -166,7 +107,8 @@ func (recordedRow) Scan(...any) error { return errRecorded }
 // errRollback ends a transaction of the test so that its writes are rolled back.
 var errRollback = errors.New("roll back")
 
-// TestIngestViewGenericPlans is the plan test of the statement-cache view (ADR 0055 amendment 2 decision 12): on one
+// TestIngestViewGenericPlans is the plan test of the statement-cache view (ADR 0055 amendment 2026-11-16 (3) decision
+// 12): after analyzeWithoutOrg pinned the statistics of every organization table to the worst case, on one
 // connection with plan_cache_mode = force_generic_plan, every case of ingestPlanCases runs six times in a small
 // organization as a named, cached statement, and its cached plan then executes in an organization of 70 000 devices
 // touching at most ingestBufferBound shared buffers. The listed queries run through the view; the two event-gap
@@ -175,8 +117,10 @@ func TestIngestViewGenericPlans(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds 70 000 devices")
 	}
+	withoutAutovacuum(t, "device", "device_status", "bundle", "device_event_seen", "device_event_gap", "device_event_dropped")
 	small, large, smallDevice, largeDevice := planOrgs(t)
 	seedEventGaps(t, small, large)
+	analyzeWithoutOrg(t, small)
 	ctx := context.Background()
 	dsn, err := url.Parse(sharedPaddock(t).Worker)
 	if err != nil {
@@ -337,5 +281,106 @@ func seedEventGaps(t *testing.T, orgs ...uuid.UUID) {
 		if _, err := super.Exec(ctx, "VACUUM ANALYZE "+table); err != nil {
 			t.Fatalf("vacuum %s: %v", table, err)
 		}
+	}
+}
+
+// withoutAutovacuum turns autovacuum off for tables until t ends and resets the setting in Cleanup, so the shared
+// database's other tests keep the default. An autovacuum ANALYZE after the seed would overwrite the statistics that
+// analyzeWithoutOrg pins, and its invalidation of a table would rebuild the cached plan at EXECUTE, whose catalog
+// reads count as shared buffers. The PDK-1079d diagnostic disproved autovacuum as the only source of that rebuild
+// (UpsertDeviceStatus still failed with it off); see analyzeWithoutOrg's DISCARD TEMP for the confirmed one.
+func withoutAutovacuum(t *testing.T, tables ...string) {
+	t.Helper()
+	ctx := context.Background()
+	c, err := pgx.Connect(ctx, sharedPaddock(t).Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, tb := range tables {
+			if _, err := c.Exec(ctx, "ALTER TABLE "+pgx.Identifier{tb}.Sanitize()+" RESET (autovacuum_enabled)"); err != nil {
+				t.Errorf("reset autovacuum on %s: %v", tb, err)
+			}
+		}
+		_ = c.Close(ctx)
+	})
+	for _, tb := range tables {
+		if _, err := c.Exec(ctx, "ALTER TABLE "+pgx.Identifier{tb}.Sanitize()+" SET (autovacuum_enabled = false)"); err != nil {
+			t.Fatalf("turn off autovacuum on %s: %v", tb, err)
+		}
+	}
+}
+
+// analyzeWithoutOrg analyzes every base table of schema public with an organization_id column without the rows of
+// organization org, so their statistics are those of an ANALYZE sample that missed a small organization: its
+// organization_id estimate drops to one row, and planning in it prices an index led by organization_id below a
+// primary-key or device-key lookup. A sample of 30 000 rows misses an organization of 5 devices in about 6 % of the
+// ANALYZE runs and nearly always one of 1 device, so the test pins this worst case instead of depending on the sample
+// (CI run 43793534819; ADR 0055 amendment 2026-11-16 (3) decision 12).
+func analyzeWithoutOrg(t *testing.T, org uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	c, err := pgx.Connect(ctx, sharedPaddock(t).Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close(ctx) }()
+	rows, err := c.Query(ctx, "SELECT c.table_name::text FROM information_schema.columns c "+
+		"JOIN information_schema.tables t USING (table_schema, table_name) "+
+		"WHERE c.table_schema = 'public' AND c.column_name = 'organization_id' AND t.table_type = 'BASE TABLE' "+
+		"ORDER BY c.table_name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil || len(tables) == 0 {
+		t.Fatalf("tables with organization_id: %v (%d found)", err, len(tables))
+	}
+	// replica skips the foreign-key triggers, so the rows leave and return without touching their references.
+	if _, err := c.Exec(ctx, "SET session_replication_role = replica"); err != nil {
+		t.Fatal(err)
+	}
+	kept := func(i int) string { return "kept_" + strconv.Itoa(i) }
+	for i, tb := range tables {
+		for _, s := range []string{
+			"CREATE TEMP TABLE " + kept(i) + " AS SELECT * FROM " + pgx.Identifier{tb}.Sanitize() + " WHERE organization_id = $1",
+			"DELETE FROM " + pgx.Identifier{tb}.Sanitize() + " WHERE organization_id = $1",
+		} {
+			if _, err := c.Exec(ctx, s, org); err != nil {
+				t.Fatalf("%s: %v", s, err)
+			}
+		}
+	}
+	for _, tb := range tables {
+		if _, err := c.Exec(ctx, "ANALYZE "+pgx.Identifier{tb}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := len(tables) - 1; i >= 0; i-- {
+		tb := tables[i]
+		var cols string
+		var always bool
+		if err := c.QueryRow(ctx, "SELECT string_agg(quote_ident(column_name), ','), coalesce(bool_or(identity_generation = 'ALWAYS'), false) "+
+			"FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND is_generated = 'NEVER'",
+			tb).Scan(&cols, &always); err != nil {
+			t.Fatal(err)
+		}
+		override := ""
+		if always {
+			override = " OVERRIDING SYSTEM VALUE"
+		}
+		if _, err := c.Exec(ctx, "INSERT INTO "+pgx.Identifier{tb}.Sanitize()+" ("+cols+")"+override+
+			" SELECT "+cols+" FROM "+kept(i)); err != nil {
+			t.Fatalf("restore %s: %v", tb, err)
+		}
+	}
+	// A session drops its temporary tables after the client has gone, concurrently with the test that follows; their
+	// catalog invalidations can overflow the shared invalidation queue and reset every backend's caches, so the plan
+	// cached in the small organization is rebuilt at EXECUTE in the large one, and the rebuild's catalog reads count as
+	// shared buffers. PDK-1079d diagnostic: UpsertDeviceStatus touched 105 buffers in exactly the 5 of 10 runs whose
+	// plan was rebuilt and 12 in the others, with the same plan and no scan; with the drop done here, 10 of 10 runs
+	// rebuilt no plan and stayed at 15.
+	if _, err := c.Exec(ctx, "DISCARD TEMP"); err != nil {
+		t.Fatal(err)
 	}
 }
