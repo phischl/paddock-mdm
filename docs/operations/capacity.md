@@ -585,7 +585,8 @@ and moving the files back undoes it.
 
 **When.** Run it whenever the signs below appear. Run it pre-emptively after a prune or an organization deletion that
 removed more than 20 000 objects per GiB of `PADDOCK_RUSTFS_MEM_LIMIT` (40 000 at the default of 2 GiB): the bucket
-then held more objects before the deletion than the limit is sized for, and its cache describes that bucket. The prune
+then held more objects before the deletion than the limit is sized for, and its cache describes that bucket. This
+trigger is a conservative one taken from the sizing rule; the one measured loop followed a bucket of about 400 000 objects. The prune
 prints the number it deleted; an organization deletion records it as the count of
 `organization.deletion_step_completed` for the step `objects` and as `objects_deleted` in `organization.deleted`. Wait
 until the prune has returned or the step `objects` has completed. The store is down for about a minute; run the
@@ -625,10 +626,9 @@ a few minutes of each start while no prune, deletion or other client load runs.
 ./paddock compose start rustfs
 ```
 
-Pass every bucket whose cache the listing shows at tens of megabytes or more as the arguments after `sh` at the end of
-the move command (`paddock-bundles` after a prune; `paddock-bundles paddock-escrow` after an organization deletion if
-both are large). The commands run in the
-store's own image and as its own user, so the files keep their owner. Keep the printed `usage-cache-aside-…` directory
+End the move command with the name of every bucket whose cache the listing shows at tens of megabytes or more:
+`paddock-bundles` after a prune, `paddock-bundles paddock-escrow` after an organization deletion if both are large.
+The commands run in the store's own image and as its own user, so the files keep their owner. Keep the printed `usage-cache-aside-…` directory
 at least until the store has run a day without a restart; it holds no object data.
 
 **Verify.** Watch the store for 15 minutes:
