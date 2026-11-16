@@ -20,14 +20,30 @@ func (a *Agent) tickIntegrity(ctx context.Context) {
 		// The conversion worker writes or removes disk-setup.json long before it returns and syncs the baseline.
 		skip = append(skip, a.d.Layout.DiskSetupConfig())
 	}
-	established := a.d.Integrity.Check(ctx, integrity.Pass{ReportedUpdateAt: a.st.ReportedUpdateAt,
-		ReportedSupervisorAt: a.st.ReportedSupervisorUpgradeAt, SkipFiles: skip, Interval: a.d.Config.DriftInterval,
-		Established: a.st.IntegrityEstablishedAt != nil})
-	if established && a.st.IntegrityEstablishedAt == nil {
+	r := a.d.Integrity.Check(ctx, integrity.Pass{ReportedUpdateAt: a.st.ReportedUpdateAt,
+		ReportedSupervisorAt: a.st.ReportedSupervisorUpgradeAt, SkipFiles: skip,
+		Interval: integrity.Interval(a.d.Config.DriftInterval), Established: a.st.IntegrityEstablishedAt != nil,
+		Suspended: a.st.IntegritySuspended})
+	save := r.SuspendedChanged
+	a.st.IntegritySuspended = r.Suspended
+	if r.Established && a.st.IntegrityEstablishedAt == nil {
 		at := a.d.Now().UTC()
 		a.st.IntegrityEstablishedAt = &at
+		save = true
+	}
+	if save {
 		a.saveState()
 	}
+}
+
+// integrityInterval is the interval of the integrity check; it logs once when the cap of plan M5a R15.5 applies.
+func (a *Agent) integrityInterval() time.Duration {
+	used := integrity.Interval(a.d.Config.DriftInterval)
+	if used != a.d.Config.DriftInterval {
+		slog.Warn("the integrity check runs more often than the drift interval", "drift_interval", a.d.Config.DriftInterval,
+			"integrity_interval", used)
+	}
+	return used
 }
 
 // syncIntegrity moves the integrity baseline of agent-written files after Paddock's own write (plan M5a C7); a

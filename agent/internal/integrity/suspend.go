@@ -2,106 +2,93 @@ package integrity
 
 import (
 	"time"
+
+	"github.com/phischl/paddock-mdm/agent/internal/state"
 )
 
-// Bounds of a suspension cause, in observed time (plan M5a R3).
+// Bounds of a blocked object, in observed time (plan M5a R3, R15.2).
 const (
-	// StateBound covers causes in the baseline itself; regular holders keep integrity.lock for milliseconds.
+	// StateBound covers the baseline itself; regular holders keep integrity.lock for milliseconds.
 	StateBound = 15 * time.Minute
-	// FlowBound covers causes that Paddock's own flows create; the longest regular one (a dpkg run of a release
+	// FlowBound covers objects that Paddock's own flows block; the longest regular one (a dpkg run of a release
 	// upgrade) stays well below it.
 	FlowBound = 6 * time.Hour
+	// MaxInterval caps the check's interval, so that a long drift interval cannot stretch the bounds (R15.5).
+	MaxInterval = time.Hour
 )
 
-// The causes of the baseline itself (plan M5a R3); every other cause is one of Paddock's flows or an object.
+// Interval is the interval of the integrity check for a drift interval (plan M5a R15.5).
+func Interval(drift time.Duration) time.Duration { return min(drift, MaxInterval) }
+
+// Suspension is one blocked object; the agent keeps it in state.json (plan M5a R15.3).
+type Suspension = state.IntegritySuspension
+
+// The objects with their own key (plan M5a R15.2); the others are "package:<name>", "file:<path>" and "unit:<unit>".
 const (
-	causeLock          = "lock"
-	causeBaselineRead  = "baseline_read"
-	causeBaselineWrite = "baseline_write"
-	causeBaselineRaced = "baseline_raced"
+	objBaseline = "baseline"
+	objSlots    = "slots"
 )
 
-// Suspension is one active suspension cause (plan M5a R4).
-type Suspension struct {
-	File string `json:"file"`
-	// Observed is the seconds the cause was seen active.
-	Observed int64 `json:"observed_s"`
-	// Last is the time of the last pass that saw it active.
-	Last     time.Time `json:"last"`
-	Reported bool      `json:"reported"`
+// blockers are the objects blocked in a pass, each with its first active blocker.
+type blockers map[string]blocker
+
+// blocker is one active blocker; rank is its position in the column of R15.2, the lowest names the file.
+type blocker struct {
+	rank int
+	file string
 }
 
-// causes are the suspension causes active in a pass: key → the path that blocks the check.
-type causes map[string]string
+func (bl blockers) block(object string, rank int, file string) {
+	if b, ok := bl[object]; !ok || rank < b.rank {
+		bl[object] = blocker{rank: rank, file: file}
+	}
+}
 
-func (c causes) add(key, file string) { c[key] = file }
-
-func bound(key string) time.Duration {
-	switch key {
-	case causeLock, causeBaselineRead, causeBaselineWrite, causeBaselineRaced:
+func bound(object string) time.Duration {
+	if object == objBaseline {
 		return StateBound
 	}
 	return FlowBound
 }
 
-// adopt merges the persisted suspensions into memory: memory is authoritative, an entry it lacks is adopted, and on
-// a conflict the larger Observed wins with Reported OR-ed (plan M5a R4.1).
-func (c *Checker) adopt(persisted map[string]Suspension) {
-	if c.suspended == nil {
-		c.suspended = map[string]Suspension{}
-	}
-	for k, p := range persisted {
-		m, ok := c.suspended[k]
-		switch {
-		case !ok:
-			c.suspended[k] = p
-		case p.Observed > m.Observed:
-			p.Reported = p.Reported || m.Reported
-			c.suspended[k] = p
-		default:
-			m.Reported = m.Reported || p.Reported
-			c.suspended[k] = m
+// track accumulates the blocked objects of a pass, once per pass, and returns the files whose object reached its
+// bound in this episode (plan M5a R4, R15.4). An episode ends only in a judged pass (classified and saved) without a
+// blocker of its object; a pass that was not judged starts only the baseline's episode and continues every other. A
+// gap between passes counts as at most two intervals, so a suspend or a shutdown does not reach a bound.
+func (c *Checker) track(active blockers, judged bool, now time.Time, interval time.Duration) []string {
+	if !judged {
+		counted := blockers{}
+		if b, ok := active[objBaseline]; ok {
+			counted[objBaseline] = b
 		}
-	}
-}
-
-// track accumulates the active causes of a pass and returns the files whose cause reached its bound in this
-// episode (plan M5a R4). A cause neither active nor kept (not evaluated by this pass) ends its episode. A gap between
-// passes counts as at most two intervals, so a suspend or a shutdown does not reach a bound.
-func (c *Checker) track(active causes, keep func(key string) bool, now time.Time, interval time.Duration) []string {
-	if c.suspended == nil {
-		c.suspended = map[string]Suspension{}
+		for k, s := range c.suspended {
+			if b, ok := active[k]; ok {
+				counted[k] = b
+			} else {
+				counted[k] = blocker{file: s.File}
+			}
+		}
+		active = counted
 	}
 	for k := range c.suspended {
-		if _, ok := active[k]; !ok && !keep(k) {
+		if _, ok := active[k]; !ok {
 			delete(c.suspended, k)
 		}
 	}
 	var report []string
-	for k, file := range active {
+	for k, b := range active {
 		s, ok := c.suspended[k]
-		if !ok {
-			s = Suspension{File: file}
-		} else if gap := now.Sub(s.Last); gap > 0 {
-			s.Observed += int64(min(gap, 2*interval) / time.Second)
+		if ok {
+			if gap := now.Sub(s.Last); gap > 0 {
+				s.Observed += int64(min(gap, 2*interval) / time.Second)
+			}
 		}
-		s.File, s.Last = file, now
+		s.File, s.Last = b.file, now
 		if !s.Reported && time.Duration(s.Observed)*time.Second >= bound(k) {
 			s.Reported = true
-			report = append(report, file)
+			report = append(report, b.file)
 		}
 		c.suspended[k] = s
 	}
 	return report
-}
-
-// persisted is the memory map without the cause key, for the save (plan M5a R4.1).
-func (c *Checker) persisted(without string) map[string]Suspension {
-	out := map[string]Suspension{}
-	for k, s := range c.suspended {
-		if k != without {
-			out[k] = s
-		}
-	}
-	return out
 }

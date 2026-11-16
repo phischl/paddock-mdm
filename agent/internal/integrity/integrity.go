@@ -61,7 +61,7 @@ type Checker struct {
 
 	hash          hasher
 	warned        map[string]time.Time
-	suspended     map[string]Suspension
+	suspended     map[string]Suspension // nil until the first Check seeds it from Pass.Suspended
 	resetReported bool
 
 	mu       sync.Mutex
@@ -86,10 +86,21 @@ type Pass struct {
 	// SkipFiles are agent-written files (layout paths) a running Paddock writer may change before its sync: the
 	// conversion worker writes and removes disk-setup.json minutes before it returns.
 	SkipFiles []string
-	// Interval is the drift interval; a gap between passes counts as at most two of it (plan M5a R4).
+	// Interval is the check's interval (Interval); a gap between passes counts as at most two of it (plan M5a R4).
 	Interval time.Duration
 	// Established is whether a pass on this device ever saved a baseline with the slots (plan M5a R14).
 	Established bool
+	// Suspended is the agent state's suspensions; the first Check of the process takes them (plan M5a R15.3).
+	Suspended map[string]Suspension
+}
+
+// Result is what a pass hands back to the agent state.
+type Result struct {
+	// Established is true after a save of a baseline that holds current (plan M5a R14).
+	Established bool
+	// Suspended is the suspensions after the pass; the agent saves them when SuspendedChanged (R15.3).
+	Suspended        map[string]Suspension
+	SuspendedChanged bool
 }
 
 // Defer marks agent-written files (layout paths) whose sync failed after Paddock's own write: a later pass takes
@@ -122,59 +133,56 @@ type snapshot struct {
 	unitsComplete  bool
 	deferred       map[string]uint64 // the deferred paths when the observation started
 	applied        map[string]uint64 // the deferred paths the baseline took
-	causes         causes
+	blocked        blockers
 }
 
 // Check runs one pass: it observes without integrity.lock, then classifies and saves under it, then reports
-// (plan M5a R1). Errors are logged and suspend their object or the pass; a suspension that lasts past its bound is
-// reported once (R4). established is true after a save of a baseline that holds current (R14).
-func (c *Checker) Check(ctx context.Context, p Pass) (established bool) {
+// (plan M5a R1). Errors are logged and block their object or the pass; an object blocked past its bound is reported
+// once (R4, R15).
+func (c *Checker) Check(ctx context.Context, p Pass) Result {
 	if c.hash.cache == nil {
 		c.hash.cache = map[string]cached{}
 	}
+	if c.suspended == nil {
+		c.suspended = maps.Clone(p.Suspended)
+		if c.suspended == nil {
+			c.suspended = map[string]Suspension{}
+		}
+	}
+	before := maps.Clone(c.suspended)
 	now := c.Now()
 	gen0 := peekGeneration(c.Layout)
 	s := c.observe(ctx, p)
-	var changed, report []string
-	var raced, resetDue bool
-	keepWrite := func(k string) bool { return k == causeBaselineWrite }
+	var changed []string
+	var raced, resetDue, established bool
 	err := newStore(c.Layout, c.Sleep).update(func(b *Baseline) bool {
-		c.adopt(b.Suspended)
 		if b.Generation != gen0 {
 			raced = true
 			return false
 		}
 		changed = c.classify(b, s, p.Established, now)
 		resetDue, b.Reset = b.Reset != nil, nil
-		report = c.track(s.causes, keepWrite, now, p.Interval)
-		b.Suspended = c.persisted(causeBaselineWrite)
 		b.CheckedAt = now.UTC()
 		_, established = b.Expected[current]
 		return true
 	})
+	// The baseline's blockers in the order of plan M5a R15.2: lock, read, write, raced.
 	switch {
 	case err == nil && raced:
-		s.causes.add(causeBaselineRaced, integrityFile)
-		report = c.track(s.causes, keepWrite, now, p.Interval)
+		s.blocked.block(objBaseline, 3, integrityFile)
 	case errors.Is(err, errBaselineWrite):
 		c.warn("baseline", "the integrity check could not save this pass", err)
-		report = append(report, c.track(causes{causeBaselineWrite: integrityFile},
-			func(k string) bool { return k != causeBaselineWrite }, now, p.Interval)...)
+		s.blocked.block(objBaseline, 2, integrityFile)
 	case errors.Is(err, errBaselineRead):
 		c.warn("baseline", "the integrity check skipped this pass", err)
-		s.causes.add(causeBaselineRead, integrityFile)
-		report = c.track(s.causes, func(k string) bool { return k == causeBaselineWrite || k == causeBaselineRaced },
-			now, p.Interval)
+		s.blocked.block(objBaseline, 1, integrityFile)
 	case err != nil:
 		c.warn("baseline", "the integrity check skipped this pass", err)
-		s.causes.add(causeLock, devicePath(c.Layout, c.Layout.IntegrityLock()))
-		report = c.track(s.causes, func(k string) bool {
-			return k == causeBaselineRead || k == causeBaselineWrite || k == causeBaselineRaced
-		}, now, p.Interval)
+		s.blocked.block(objBaseline, 0, devicePath(c.Layout, c.Layout.IntegrityLock()))
 	}
 	saved := err == nil && !raced
+	report := c.track(s.blocked, saved, now, p.Interval)
 	if saved {
-		delete(c.suspended, causeBaselineWrite)
 		c.forgetApplied(s.applied)
 		for _, f := range changed {
 			slog.Warn("a protected Paddock file changed outside Paddock", "file", f)
@@ -188,12 +196,14 @@ func (c *Checker) Check(ctx context.Context, p Pass) (established bool) {
 	if saved {
 		c.resetReported = false
 	}
+	// Objects blocked by the same file (dpkg's lock blocks every package) report it once.
 	slices.Sort(report)
-	for _, f := range report {
+	for _, f := range slices.Compact(report) {
 		slog.Warn("the integrity check is suspended past its bound", "file", f)
 		c.emit(f, protocol.TamperReasonCheckSuspended)
 	}
-	return established && saved
+	return Result{Established: established && saved, Suspended: maps.Clone(c.suspended),
+		SuspendedChanged: !maps.Equal(before, c.suspended)}
 }
 
 func (c *Checker) emit(file, reason string) {
@@ -216,11 +226,11 @@ func (c *Checker) forgetApplied(applied map[string]uint64) {
 // observe evaluates the flow conditions and hashes every checked path, without the lock (plan M5a R1).
 func (c *Checker) observe(ctx context.Context, p Pass) *snapshot {
 	s := &snapshot{files: map[string]string{}, obs: map[string]observed{}, pkgFiles: map[string]pkgFile{},
-		deferred: c.deferredNow(), applied: map[string]uint64{}, causes: causes{}}
-	if c.quiescent(p.ReportedUpdateAt, s.causes) {
+		deferred: c.deferredNow(), applied: map[string]uint64{}, blocked: blockers{}}
+	if c.quiescent(p.ReportedUpdateAt, s.blocked) {
 		if v, err := c.hash.slots(c.Layout); err != nil {
 			c.warn("slots", "reading the agent slots failed", err)
-			s.causes.add("object:"+slotsDir, slotsDir)
+			s.blocked.block(objSlots, 4, slotsDir)
 		} else {
 			s.slots = v
 		}
@@ -228,11 +238,11 @@ func (c *Checker) observe(ctx context.Context, p Pass) *snapshot {
 	c.observeFiles(p.SkipFiles, s)
 	if v, err := linkValue(c.Layout, agentLink); err != nil {
 		c.warn(agentLink, "reading the paddockd link failed", err)
-		s.causes.add("object:"+agentLink, agentLink)
+		s.blocked.block("file:"+agentLink, 1, agentLink)
 	} else {
 		s.obs[agentLink] = observed{value: v, expected: v == agentTarget}
 	}
-	c.observePackages(ctx, s, c.supervisorBusy(p.ReportedSupervisorAt, s.causes))
+	c.observePackages(ctx, s, c.supervisorBusy(p.ReportedSupervisorAt, s.blocked))
 	c.observeUnits(ctx, s)
 	return s
 }
@@ -250,8 +260,8 @@ func (c *Checker) classify(b *Baseline, s *snapshot, established bool, now time.
 		case !ok:
 			b.expect(p, v)
 			fresh = append(fresh, p)
-		case b.Staged != nil && (v == b.Staged.SHA256 || p == current && s.slots[slotPath(v)] == b.Staged.SHA256):
-			s.causes.add("staged:"+p, p)
+		case v != exp && b.Staged != nil && (v == b.Staged.SHA256 || p == current && s.slots[slotPath(v)] == b.Staged.SHA256):
+			s.blocked.block(objSlots, 3, p)
 		default:
 			obs[p] = observed{value: v, expected: v == exp}
 		}
@@ -324,13 +334,13 @@ func (c *Checker) observeFiles(skip []string, s *snapshot) {
 	for _, full := range []string{l.AgentConfig(), l.Trust(), l.RevokeTrust(), l.DiskSetupConfig()} {
 		p := devicePath(l, full)
 		if slices.Contains(skip, full) {
-			s.causes.add("conversion", p)
+			s.blocked.block("file:"+p, 0, p)
 			continue
 		}
 		v, err := c.hash.value(l, p)
 		if err != nil {
 			c.warn(p, "hashing an agent-written file failed", err)
-			s.causes.add("object:"+p, p)
+			s.blocked.block("file:"+p, 1, p)
 			continue
 		}
 		s.files[p] = v
@@ -338,35 +348,36 @@ func (c *Checker) observeFiles(skip []string, s *snapshot) {
 }
 
 // quiescent reports that no agent update runs: no request, no probation, and no unprocessed result (plan M5a C4).
-// Each condition that holds is a suspension cause (R3).
-func (c *Checker) quiescent(reportedAt *time.Time, cs causes) bool {
+// Each condition that holds blocks the slots (R15.2).
+func (c *Checker) quiescent(reportedAt *time.Time, bl blockers) bool {
 	l := c.Layout
+	quiet := true
 	if update.Pending(l) {
-		cs.add("update_request", devicePath(l, l.UpdateRequest()))
+		bl.block(objSlots, 0, devicePath(l, l.UpdateRequest()))
+		quiet = false
 	}
 	if _, err := os.Lstat(l.Probation()); !errors.Is(err, fs.ErrNotExist) {
-		cs.add("probation", devicePath(l, l.Probation()))
+		bl.block(objSlots, 1, devicePath(l, l.Probation()))
+		quiet = false
 	}
 	if r, err := update.ReadResult(l); err != nil || r != nil && (reportedAt == nil || !reportedAt.Equal(r.At)) {
-		cs.add("update_result", devicePath(l, l.UpdateResult()))
+		bl.block(objSlots, 2, devicePath(l, l.UpdateResult()))
+		quiet = false
 	}
-	_, a := cs["update_request"]
-	_, b := cs["probation"]
-	_, r := cs["update_result"]
-	return !a && !b && !r
+	return quiet
 }
 
 // supervisorBusy reports a supervisor upgrade that runs or whose result is not processed (plan M5a C2); each
-// condition that holds is a suspension cause (R3).
-func (c *Checker) supervisorBusy(reportedAt *time.Time, cs causes) bool {
+// condition that holds blocks the supervisor package (R15.2).
+func (c *Checker) supervisorBusy(reportedAt *time.Time, bl blockers) bool {
 	l := c.Layout
 	busy := false
 	if _, err := os.Lstat(l.SupervisorUpgrade()); !errors.Is(err, fs.ErrNotExist) {
-		cs.add("supervisor_marker", devicePath(l, l.SupervisorUpgrade()))
+		bl.block("package:"+supervisorPackage, 0, devicePath(l, l.SupervisorUpgrade()))
 		busy = true
 	}
 	if r, err := supervisorpkg.ReadResult(l); err != nil || r != nil && (reportedAt == nil || !reportedAt.Equal(r.At)) {
-		cs.add("supervisor_result", devicePath(l, l.SupervisorUpgradeResult()))
+		bl.block("package:"+supervisorPackage, 1, devicePath(l, l.SupervisorUpgradeResult()))
 		busy = true
 	}
 	return busy

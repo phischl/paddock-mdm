@@ -419,6 +419,11 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 	defer localAdmin.Stop()
 	drift := time.NewTicker(a.d.Config.DriftInterval)
 	defer drift.Stop()
+	// The integrity check runs at start and on its own ticker, capped so that its bounds hold (plan M5a R15.5).
+	integrityStart := time.NewTimer(0)
+	defer integrityStart.Stop()
+	integrityTick := time.NewTicker(a.integrityInterval())
+	defer integrityTick.Stop()
 	sessionPoll := time.NewTicker(SessionPoll)
 	defer sessionPoll.Stop()
 	dms := time.NewTicker(DMSTick)
@@ -444,11 +449,14 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 			a.event(protocol.EventSoftwareRequestWithdrawn, ev)
 		case <-drift.C:
 			a.drift(ctx)
-			a.tickIntegrity(ctx)
 			a.refreshSelfService()
 			a.tickLUKS(ctx, true)
 			a.tickConversion(ctx)
 			a.reportUpdateRuns(ctx)
+		case <-integrityStart.C:
+			a.tickIntegrity(ctx)
+		case <-integrityTick.C:
+			a.tickIntegrity(ctx)
 		case d := <-a.installDone:
 			a.finishInstall(d)
 		case d := <-a.diagnosticsDone:

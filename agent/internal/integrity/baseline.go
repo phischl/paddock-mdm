@@ -66,16 +66,15 @@ type Reset struct {
 // Baseline is integrity.json. A path in Expected is initialized; its value is the expected observed value.
 // Reported holds the last reported observed value per path (plan M5a C8). Every save increments Generation (R6).
 type Baseline struct {
-	Generation    uint64                `json:"generation"`
-	CheckedAt     time.Time             `json:"checked_at"`
-	Expected      map[string]string     `json:"expected"`
-	Staged        *Staged               `json:"staged,omitempty"`
-	LastStaged    *Staged               `json:"last_staged,omitempty"`
-	Exceptions    []Exception           `json:"supervisor_exceptions,omitempty"`
-	SupervisorPre *SupervisorPre        `json:"supervisor_pre,omitempty"`
-	Reported      map[string]string     `json:"reported"`
-	Suspended     map[string]Suspension `json:"suspended,omitempty"`
-	Reset         *Reset                `json:"reset,omitempty"`
+	Generation    uint64            `json:"generation"`
+	CheckedAt     time.Time         `json:"checked_at"`
+	Expected      map[string]string `json:"expected"`
+	Staged        *Staged           `json:"staged,omitempty"`
+	LastStaged    *Staged           `json:"last_staged,omitempty"`
+	Exceptions    []Exception       `json:"supervisor_exceptions,omitempty"`
+	SupervisorPre *SupervisorPre    `json:"supervisor_pre,omitempty"`
+	Reported      map[string]string `json:"reported"`
+	Reset         *Reset            `json:"reset,omitempty"`
 }
 
 // expect moves the baseline of path; its reported mark goes with it (plan M5a C8).
@@ -199,39 +198,40 @@ func (s store) load() (b *Baseline, rebuilt bool, err error) {
 	return b, rebuilt, nil
 }
 
-// peekGeneration reads the generation of the baseline without the lock; 0 when it cannot be read (plan M5a R1).
+// peekGeneration reads the generation of the baseline without the lock; 0 when it cannot be read or parsed, so that
+// a corrupt file is rebuilt and reported, not dropped as raced (plan M5a R1, R15.7).
 func peekGeneration(l paths.Layout) uint64 {
 	data, err := readRegular(l.Integrity(), maxBaseline)
-	if err != nil {
+	var b Baseline
+	if err != nil || json.Unmarshal(data, &b) != nil {
 		return 0
 	}
-	var b struct {
-		Generation uint64 `json:"generation"`
-	}
-	_ = json.Unmarshal(data, &b)
 	return b.Generation
 }
 
 // SyncFiles sets the baseline of the given agent-written configuration files to their current state. Every Paddock
-// writer of such a file calls it after the write (plan M5a C7). It hashes before it takes the lock (R1).
+// writer of such a file calls it after the write (plan M5a C7). It hashes before it takes the lock (R1), applies every
+// file it could hash, and returns an error naming the others, so that the caller defers them (R15.1).
 func SyncFiles(l paths.Layout, files ...string) error {
 	var h hasher
 	values := map[string]string{}
+	var failed []error
 	for _, full := range files {
 		f := devicePath(l, full)
 		v, err := h.value(l, f)
 		if err != nil {
-			slog.Warn("recording an agent-written file in the integrity baseline failed", "file", f, "error", err)
+			failed = append(failed, fmt.Errorf("hashing %s: %w", f, err))
 			continue
 		}
 		values[f] = v
 	}
-	return newStore(l, nil).update(func(b *Baseline) bool {
+	err := newStore(l, nil).update(func(b *Baseline) bool {
 		for f, v := range values {
 			b.expect(f, v)
 		}
 		return true
 	})
+	return errors.Join(append(failed, err)...)
 }
 
 // Fingerprint is the Lstat fingerprint of a file: device, inode, size, mtime, ctime and type (plan M5a R8).
@@ -278,8 +278,7 @@ func UpdateResult(l paths.Layout, version string) error {
 	var h hasher
 	obs, err := h.slots(l)
 	if err != nil {
-		slog.Warn("reading the agent slots for the update result failed; the next pass compares the old baseline", "error", err)
-		return nil
+		return fmt.Errorf("reading the agent slots for the update result: %w", err)
 	}
 	return newStore(l, nil).update(func(b *Baseline) bool {
 		staged := b.Staged
@@ -325,8 +324,7 @@ func observeSupervisor(l paths.Layout, arch string) (map[string]supervisorObserv
 	for _, f := range supervisorFiles() {
 		sha, sum, err := h.file(l, f)
 		if err != nil {
-			slog.Warn("hashing a supervisor file for the integrity baseline failed", "file", f, "error", err)
-			continue
+			return nil, fmt.Errorf("hashing %s: %w", f, err)
 		}
 		out[f] = supervisorObserved{sha: sha, md5: sum, entry: sums[f]}
 	}

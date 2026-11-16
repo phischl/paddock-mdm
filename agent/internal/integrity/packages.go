@@ -94,7 +94,9 @@ func (c *Checker) packageStatus(ctx context.Context, pkg string) (string, error)
 // skips the supervisor package while its upgrade runs or its result is not processed.
 func (c *Checker) observePackages(ctx context.Context, s *snapshot, supervisorBusy bool) {
 	if c.DpkgBusy() {
-		s.causes.add("dpkg_lock", reconcile.DpkgFrontendLock)
+		for _, spec := range packageSpecs() {
+			s.blocked.block("package:"+spec.name, 2, reconcile.DpkgFrontendLock)
+		}
 		return
 	}
 	for _, spec := range packageSpecs() {
@@ -124,13 +126,13 @@ func (c *Checker) observePackage(ctx context.Context, spec pkgSpec, s *snapshot)
 	key := "package:" + spec.name
 	if err != nil {
 		c.warn(key, "reading dpkg's md5sums failed", err)
-		s.causes.add(key, file)
+		s.blocked.block(key, 3, file)
 		return
 	}
 	if status, err := c.packageStatus(ctx, spec.name); err != nil || status != "installed" {
 		if err != nil {
 			c.warn(key, "asking dpkg for the package status failed", err)
-			s.causes.add(key, file)
+			s.blocked.block(key, 3, file)
 		}
 		return
 	}
@@ -142,7 +144,7 @@ func (c *Checker) observePackage(ctx context.Context, spec pkgSpec, s *snapshot)
 		sha, md5sum, err := c.hash.file(c.Layout, path)
 		if err != nil {
 			c.warn(path, "hashing a package file failed", err)
-			s.causes.add("object:"+path, path)
+			s.blocked.block(key, 4, path)
 			continue
 		}
 		found[path] = pkgFile{sha: sha, md5: md5sum, entry: sum}
@@ -150,11 +152,11 @@ func (c *Checker) observePackage(ctx context.Context, spec pkgSpec, s *snapshot)
 	// dpkg may have rewritten the package meanwhile: its result is checked in the next pass (race guard, C5).
 	_, again, _, err := readMD5Sums(c.Layout, spec.name, c.Arch)
 	if c.DpkgBusy() {
-		s.causes.add("dpkg_lock", reconcile.DpkgFrontendLock)
+		s.blocked.block(key, 2, reconcile.DpkgFrontendLock)
 		return
 	}
 	if err != nil || !bytes.Equal(raw, again) {
-		s.causes.add(key, file)
+		s.blocked.block(key, 3, file)
 		return
 	}
 	maps.Copy(s.pkgFiles, found)
@@ -206,23 +208,23 @@ func allowedUnitFile(path string) bool {
 // unit or a foreign file could not be hashed.
 func (c *Checker) observeUnits(ctx context.Context, s *snapshot) {
 	s.unitsComplete = true
-	foreign := map[string]bool{}
+	foreign := map[string]string{} // path → unit
 	for _, u := range c.unitSpecs() {
 		for _, dir := range []string{"/etc/systemd/system/", "/run/systemd/system/"} {
 			if _, err := os.Lstat(c.Layout.Join(dir + u.name)); err == nil && !allowedUnitFile(dir+u.name) {
-				foreign[dir+u.name] = true
+				foreign[dir+u.name] = u.name
 			}
 			confs, _ := filepath.Glob(c.Layout.Join(dir + u.name + ".d/*.conf"))
 			for _, f := range confs {
 				if p := devicePath(c.Layout, f); !allowedUnitFile(p) {
-					foreign[p] = true
+					foreign[p] = u.name
 				}
 			}
 		}
 		fragment, dropIns, loaded, err := c.show(ctx, u.name)
 		if err != nil {
 			c.warn("unit:"+u.name, "asking systemd for the unit's files failed", err)
-			s.causes.add("unit:"+u.name, "/etc/systemd/system/"+u.name+".d")
+			s.blocked.block("unit:"+u.name, 0, "/etc/systemd/system/"+u.name+".d")
 			s.unitsComplete = false
 			continue
 		}
@@ -230,19 +232,19 @@ func (c *Checker) observeUnits(ctx context.Context, s *snapshot) {
 			continue
 		}
 		if u.fragment != "" && fragment != "" && c.canonical(fragment) != c.canonical(u.fragment) {
-			foreign[fragment] = true
+			foreign[fragment] = u.name
 		}
 		for _, p := range dropIns {
 			if c.canonical(p) != c.canonical(reconcile.FleetdDropIn) {
-				foreign[p] = true
+				foreign[p] = u.name
 			}
 		}
 	}
-	for p := range foreign {
+	for p, unit := range foreign {
 		sha, _, err := c.hash.file(c.Layout, p)
 		if err != nil {
 			c.warn(p, "hashing a foreign unit file failed", err)
-			s.causes.add("object:"+p, p)
+			s.blocked.block("unit:"+unit, 1, p)
 			s.unitsComplete = false
 			continue
 		}

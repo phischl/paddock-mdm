@@ -115,6 +115,10 @@ func TestSuspensionBounds(t *testing.T) {
 		{"update_request", "/var/lib/paddock/staging/request.json", FlowBound, func(_ *testing.T, d *device, _ *Pass) {
 			d.write("/var/lib/paddock/staging/request.json", `{"version":"2.0.0"}`)
 		}},
+		{"request before probation", "/var/lib/paddock/staging/request.json", FlowBound, func(_ *testing.T, d *device, _ *Pass) {
+			d.write(state+"probation.json", "{}")
+			d.write("/var/lib/paddock/staging/request.json", "{}")
+		}},
 		{"probation", state + "probation.json", FlowBound, func(_ *testing.T, d *device, _ *Pass) {
 			d.write(state+"probation.json", "{}")
 		}},
@@ -258,7 +262,7 @@ func TestUnreadableBaselineSkipsThePass(t *testing.T) {
 	if _, err := os.Lstat(d.l.Integrity() + ".corrupt"); err == nil {
 		t.Fatal("moved aside")
 	}
-	if _, ok := d.c.suspended[causeBaselineRead]; !ok {
+	if _, ok := d.c.suspended[objBaseline]; !ok {
 		t.Fatalf("suspended %v", d.c.suspended)
 	}
 }
@@ -309,7 +313,7 @@ func TestProductionDpkgBusy(t *testing.T) {
 			}
 			d.write("/opt/paddock/revoke/paddock-revoke", "foreign")
 			d.quiet(1, Pass{})
-			if _, ok := d.c.suspended["dpkg_lock"]; !ok {
+			if _, ok := d.c.suspended["package:paddock-revoke"]; !ok {
 				t.Fatalf("suspended %v", d.c.suspended)
 			}
 			_ = stdin.Close()

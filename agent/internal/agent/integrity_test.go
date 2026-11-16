@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // the md5sums of the fake dpkg database
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -537,4 +539,151 @@ func TestIntegrityBaselineReset(t *testing.T) {
 	if want := "/var/lib/paddock/state/integrity.json#" + protocol.TamperReasonBaselineReset; !slices.Equal(reasons, []string{want}) {
 		t.Fatalf("reported %v", reasons)
 	}
+}
+
+// TestIntegritySuspensionInState (plan M5a R15.3, T17): the suspensions are saved to state.json and a restarted agent
+// continues them.
+func TestIntegritySuspensionInState(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	now := time.Now()
+	a.d.Now = func() time.Time { return now }
+	a = withIntegrity(t, a)
+	ticks(t, a, g, 1)
+	writeFile(t, a.d.Layout.Probation(), "{}")
+	ticks(t, a, g, 1)
+	now = now.Add(a.d.Config.DriftInterval)
+	s, err := state.Load(a.d.Layout.State())
+	if err != nil || s.IntegritySuspended["slots"].File != "/var/lib/paddock/state/probation.json" {
+		t.Fatalf("saved %v, %v", s.IntegritySuspended, err)
+	}
+	b := withIntegrity(t, a)
+	b.st = s
+	ticks(t, b, g, 1)
+	if s := b.st.IntegritySuspended["slots"]; s.Observed == 0 {
+		t.Fatalf("the restarted agent started the suspension anew: %+v", s)
+	}
+}
+
+// TestIntegrityIntervalCapped (plan M5a R15.5, T18): a drift interval above an hour runs the check hourly with one
+// Warn, and a pass runs at agent start.
+func TestIntegrityIntervalCapped(t *testing.T) {
+	if got := integrity.Interval(365 * 24 * time.Hour); got != time.Hour {
+		t.Fatalf("interval %v", got)
+	}
+	g := testgw.New(t)
+	g.Checkin.NextCheckinS = 3600
+	a := newAgent(t, g)
+	a.d.Config.DriftInterval = 24 * time.Hour
+	a = withIntegrity(t, a)
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	if got := a.integrityInterval(); got != time.Hour || !strings.Contains(logs.String(), "level=WARN") {
+		slog.SetDefault(prev)
+		t.Fatalf("interval %v, log %q", got, logs.String())
+	}
+	slog.SetDefault(prev)
+	a.d.Config.DriftInterval = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	waitWithin(t, servedAtOnce, func() bool {
+		_, err := os.Stat(a.d.Layout.Integrity())
+		return err == nil
+	})
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// unreadableOnce makes a device file unreadable until the returned func restores it; root reads it anyway.
+func unreadableOnce(t *testing.T, path string) func() {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file of mode 000")
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestIntegrityHooksReturnReadErrors (plan M5a R15.1, T21): a hook that cannot read a file fails, so the flow waits for
+// it or defers the file, and nothing is reported afterwards.
+func TestIntegrityHooksReturnReadErrors(t *testing.T) {
+	t.Run("UpdateResult", func(t *testing.T) {
+		g := testgw.New(t)
+		a := newAgent(t, g)
+		a = withIntegrity(t, a)
+		a.d.Supervisor = func() (int, error) { return 1, nil }
+		a.d.Signal = func(int) error { return nil }
+		ticks(t, a, g, 1)
+		updatedTo(t, a, g, "9.1.0", "B", time.Now().UTC())
+		restore := unreadableOnce(t, filepath.Join(a.d.Layout.Slots(), "B", "paddockd"))
+		a.reportUpdate()
+		restore()
+		if a.st.ReportedUpdateAt != nil || updateEvents(t, a) != 0 {
+			t.Fatal("reported without moving the baseline")
+		}
+		a.reportUpdate()
+		if a.st.ReportedUpdateAt == nil || updateEvents(t, a) != 1 {
+			t.Fatal("not reported at the next tick")
+		}
+		ticks(t, a, g, 3)
+	})
+	t.Run("RecordSupervisorPre and SupervisorResult", func(t *testing.T) {
+		a, _, launched := supervisorAgent(t, "")
+		a = withIntegrity(t, a, supervisorpkg.Package)
+		l := a.d.Layout
+		install := func(content string) {
+			var sums strings.Builder
+			for _, f := range []string{supervisorpkg.Binary, supervisorpkg.UnitFile} {
+				writeFile(t, l.Join(f), content+f)
+				sum := md5.Sum([]byte(content + f)) //nolint:gosec // dpkg's format
+				sums.WriteString(hex.EncodeToString(sum[:]) + "  " + strings.TrimPrefix(f, "/") + "\n")
+			}
+			writeFile(t, l.Join("/var/lib/dpkg/info/paddock-supervisor.md5sums"), sums.String())
+		}
+		install("v1")
+		ticks(t, a, nil, 1)
+		restore := unreadableOnce(t, l.Join(supervisorpkg.Binary))
+		a.handleSupervisorPackage(context.Background())
+		restore()
+		a.handleSupervisorPackage(context.Background())
+		if len(*launched) != 1 {
+			t.Fatalf("launched %v", *launched)
+		}
+		install("v2")
+		writeFile(t, l.Join(supervisorpkg.Binary), "v1"+supervisorpkg.Binary)
+		writeFile(t, l.Join(supervisorpkg.UnitFile), "v1"+supervisorpkg.UnitFile)
+		if err := os.Remove(l.SupervisorUpgrade()); err != nil {
+			t.Fatal(err)
+		}
+		if err := supervisorpkg.WriteResult(l, supervisorpkg.Result{Version: buildinfo.Version, FromVersion: "0.0.0~alpha.1",
+			Outcome: protocol.SupervisorOutcomeRolledBack, At: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+		restore = unreadableOnce(t, l.Join(supervisorpkg.UnitFile))
+		a.reportSupervisorUpgrade()
+		restore()
+		if a.st.ReportedSupervisorUpgradeAt != nil {
+			t.Fatal("processed without the exception")
+		}
+		a.reportSupervisorUpgrade()
+		ticks(t, a, nil, 3)
+	})
+	t.Run("SyncFiles", func(t *testing.T) {
+		a := preparedIntegrity(t)
+		writeFile(t, a.d.Layout.DiskSetupConfig(), `{"written":"by Paddock"}`)
+		restore := unreadableOnce(t, a.d.Layout.DiskSetupConfig())
+		a.syncIntegrity(a.d.Layout.DiskSetupConfig())
+		restore()
+		ticks(t, a, nil, 3)
+	})
 }

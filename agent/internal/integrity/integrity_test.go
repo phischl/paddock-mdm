@@ -60,6 +60,8 @@ type device struct {
 	logs   *logs
 	// clock is the checker's time when set.
 	clock time.Time
+	// state is the agent state's suspensions, handed to every pass as the agent does.
+	state map[string]Suspension
 }
 
 func show(fragment string, dropIns ...string) string {
@@ -182,7 +184,10 @@ func (d *device) writeSums(pkg string, files ...string) {
 func (d *device) pass(p Pass) []string {
 	d.t.Helper()
 	d.events = nil
-	d.c.Check(context.Background(), p)
+	if p.Suspended == nil {
+		p.Suspended = d.state
+	}
+	d.state = d.c.Check(context.Background(), p).Suspended
 	return d.events
 }
 

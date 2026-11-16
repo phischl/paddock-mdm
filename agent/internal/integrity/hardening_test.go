@@ -159,7 +159,7 @@ func TestObserveOutsideTheLock(t *testing.T) {
 	if len(ev) != 0 {
 		t.Fatalf("the raced pass reported %v", ev)
 	}
-	if _, ok := d.c.suspended[causeBaselineRaced]; !ok {
+	if _, ok := d.c.suspended[objBaseline]; !ok {
 		t.Fatalf("suspended %v", d.c.suspended)
 	}
 	d.restart()
@@ -343,7 +343,7 @@ func TestBaselineReset(t *testing.T) {
 	})
 	t.Run("fresh device", func(t *testing.T) {
 		d := newDevice(t)
-		if !d.c.Check(context.Background(), Pass{}) {
+		if !d.c.Check(context.Background(), Pass{}).Established {
 			t.Fatal("not established after the first pass")
 		}
 		if len(d.events) != 0 {
@@ -354,7 +354,7 @@ func TestBaselineReset(t *testing.T) {
 	t.Run("established only with the slots", func(t *testing.T) {
 		d := newDevice(t)
 		d.write("/var/lib/paddock/staging/request.json", "{}")
-		if d.c.Check(context.Background(), Pass{}) {
+		if d.c.Check(context.Background(), Pass{}).Established {
 			t.Fatal("established without the slots")
 		}
 	})
