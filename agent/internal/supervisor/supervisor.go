@@ -5,6 +5,7 @@
 package supervisor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,7 +55,13 @@ type Config struct {
 	Sleep        func(time.Duration)    // waits between rollback flip attempts; nil is time.Sleep (tests inject one)
 	SyncDir      func(dir string) error // syncs slots after a flip, staging before a drop or a result; nil is fsync (tests inject failures)
 	SyncFile     func(*os.File) error   // syncs a state file before its rename and its directory after; nil is fsync (tests inject failures)
+	// VersionTimeout bounds a `paddockd version` call; 0 is 10 s (tests inject a short one for a stalled call).
+	VersionTimeout time.Duration
 }
+
+// versionTimedOut is what version returns for a call that hit VersionTimeout. It cannot be an agent's output, which
+// version trims, so a slot whose disk stalls is never mistaken for one that reports no valid version (PDK-1118).
+const versionTimedOut = " timed out"
 
 // rollbackAttempts bounds the attempts to flip current back to the previous slot; the waits between them double from
 // rollbackRetryWait. With the waits (3.75 s), five flips and stopping the agent (up to 10 s) the blocked loop stays
@@ -87,6 +94,10 @@ type Supervisor struct {
 	rolledBack *probation
 	testing    bool
 	tested     chan selfTest
+	// deferredAt is when an update request deferred because the active agent's version call timed out is processed
+	// again; deferWait is the wait before it, reset when a request is removed (plan M2b amendment 2026-11-16).
+	deferredAt time.Time
+	deferWait  time.Duration
 }
 
 // New creates a supervisor.
@@ -138,6 +149,10 @@ func (s *Supervisor) Run(ctx context.Context, usr1 <-chan os.Signal) {
 			// Petting the watchdog from this loop proves that the loop is responsive.
 			s.cfg.Notify("WATCHDOG=1")
 			s.checkProbation()
+			if !s.deferredAt.IsZero() && !s.cfg.Now().Before(s.deferredAt) {
+				s.deferredAt = time.Time{}
+				s.onRequest(ctx)
+			}
 		}
 	}
 }
@@ -217,6 +232,16 @@ func (s *Supervisor) onRequest(ctx context.Context) {
 	}
 	dir := filepath.Join(s.cfg.Staging, req.Version)
 	from := s.version(s.current())
+	// A stall is no verdict on the active agent: treating it as one that cannot report its version would let any
+	// signed release pass the downgrade refusal, and refusing would count a false failure against the rollout. The
+	// request stays, and no outcome is written. Each attempt can block the loop for the whole timeout, so the retries
+	// back off as a pending rollback's do (plan M2b amendment 2026-11-16).
+	if from == versionTimedOut {
+		s.deferWait = min(max(2*s.deferWait, pendingRetryStart), pendingRetryMax)
+		s.deferredAt = s.cfg.Now().Add(s.deferWait)
+		slog.Warn("update request deferred: the active agent did not report its version in time", "version", req.Version, "next_attempt_in", s.deferWait)
+		return
+	}
 	bin, err := os.ReadFile(filepath.Join(dir, "paddockd")) //nolint:gosec // version validated above
 	if err != nil || !s.verify(bin, filepath.Join(dir, "paddockd.minisig"), req.Version) {
 		slog.Error("release signature invalid or not for this version and architecture; update refused", "version", req.Version, "error", err)
@@ -517,6 +542,7 @@ func (s *Supervisor) finishAt(version, from, outcome string, at time.Time) error
 // it let a late RemoveAll delete files the agent had begun to stage anew under the same version, leaving a request
 // without its release in normal operation, not only after a crash between the two removals.
 func (s *Supervisor) cleanup(version string) {
+	s.deferWait = 0
 	if version != "" {
 		_ = os.RemoveAll(filepath.Join(s.cfg.Staging, version))
 	}
@@ -571,11 +597,14 @@ func (s *Supervisor) inactiveSlot() string {
 	return "A"
 }
 
-// version runs `<dir>/paddockd version`.
+// version runs `<dir>/paddockd version`; a call that hits VersionTimeout returns versionTimedOut.
 func (s *Supervisor) version(dir string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cmp.Or(s.cfg.VersionTimeout, 10*time.Second))
 	defer cancel()
 	out, err := exec.CommandContext(ctx, filepath.Join(dir, "paddockd"), "version").Output() //nolint:gosec // our slot
+	if err != nil && ctx.Err() != nil {
+		return versionTimedOut
+	}
 	if err != nil {
 		return "unknown"
 	}

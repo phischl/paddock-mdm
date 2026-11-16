@@ -125,6 +125,10 @@ func (s *Supervisor) resumeProbation() {
 	}
 	if err := json.Unmarshal(data, &p); err != nil {
 		rebuilt, reason := s.rebuildProbation()
+		if reason == versionTimedOut {
+			slog.Error("keeping the unreadable probation log until the next start: a slot's version call timed out", "error", err)
+			return
+		}
 		if rebuilt == nil {
 			// Without the log's content the release is unknown, so no result could be true; the staged release
 			// directory stays, because its version is unknown too.
@@ -198,7 +202,9 @@ func (s *Supervisor) resumeProbation() {
 // that result; otherwise a probation forward, if the active release is newer than the other slot's and no result
 // names it updated. Otherwise it returns why not. A release left without its probation would break design contract 4;
 // flipping back instead could roll back a release that already passed. If the rebuilt log cannot be written, it runs
-// in memory and the next start rebuilds it again.
+// in memory and the next start rebuilds it again. If a slot's version call times out, it returns versionTimedOut as the
+// reason: the log stays for the next start, because a slot that only looks version-less could drop it or misname the
+// failed release (plan M2b amendment 2026-11-16).
 func (s *Supervisor) rebuildProbation() (*probation, string) {
 	to := s.activeSlot()
 	if to != "A" && to != "B" {
@@ -206,6 +212,9 @@ func (s *Supervisor) rebuildProbation() (*probation, string) {
 	}
 	from := s.inactiveSlot()
 	version, fromVersion := s.version(s.current()), s.version(filepath.Join(s.cfg.Slots, from))
+	if version == versionTimedOut || fromVersion == versionTimedOut {
+		return nil, versionTimedOut
+	}
 	p := &probation{Version: version, FromVersion: fromVersion, FromSlot: from, ToSlot: to, SwitchedAt: s.cfg.Now(), Rebuilt: true}
 	var res probation
 	if data, err := os.ReadFile(s.cfg.Result); err != nil || json.Unmarshal(data, &res) != nil || res.Version != version {
