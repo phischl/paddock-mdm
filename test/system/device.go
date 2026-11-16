@@ -52,7 +52,7 @@ type installOptions struct{ reportOnly bool }
 func ReportOnly() InstallOption { return func(o *installOptions) { o.reportOnly = true } }
 
 // prepareGuest adds the stack's hosts entries and CA (the lab's throwaway CA for the backup gates, whose names are the
-// same) to the guest and installs the packages from debDir.
+// same) to the guest, installs the packages from debDir and publishes their paddockd (PublishInstalledAgent).
 func prepareGuest(t *testing.T, s *Stack, vm *VM, debDir string) {
 	t.Helper()
 	ca := filepath.Join(s.root, "deploy", "compose", ".secrets", "caddy-root.crt")
@@ -77,6 +77,7 @@ func prepareGuest(t *testing.T, s *Stack, vm *VM, debDir string) {
 		remote = append(remote, r)
 	}
 	vm.Must("sudo dpkg -i " + strings.Join(remote, " ") + " && systemctl is-enabled paddock-supervisor && readlink /opt/paddock/agent/current")
+	s.PublishInstalledAgent(t, vm)
 }
 
 // Install prepares the guest (hosts entries, Caddy CA), installs the packages from debDir and enrolls the device

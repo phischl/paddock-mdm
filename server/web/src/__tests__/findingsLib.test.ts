@@ -92,6 +92,7 @@ describe('findingTitle', () => {
       'device.tamper_sudo_group_member', 'device.tamper_sudoers_d_file', 'device.tamper_sudoers_changed',
       'device.tamper_protected_file_changed', 'device.tamper_local_admin_changed', 'device.tamper_keyslot_changed',
       'device.tamper_service_stopped', 'device.clone_suspected', 'device.tamper_agent_not_running',
+      'device.tamper_agent_binary_changed',
     ]
     for (const locale of ['en', 'de'] as const) {
       for (const code of codes) {

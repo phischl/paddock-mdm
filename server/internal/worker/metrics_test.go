@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -35,6 +36,13 @@ func TestMetricsOnlyWhereRegistered(t *testing.T) {
 		if n, err := testutil.GatherAndCount(reg, name); err != nil || n != 1 {
 			t.Errorf("worker registry: %d series of %s (%v), want 1", n, name, err)
 		}
+	}
+	// A vector without series gathers nothing, so the policy gauge is checked by its registration (A13).
+	if prometheus.DefaultRegisterer.Unregister(metricPolicyUnanswered) {
+		t.Error("default registry: paddock_inventory_policy_unanswered_hosts is registered")
+	}
+	if !errors.As(reg.Register(metricPolicyUnanswered), new(prometheus.AlreadyRegisteredError)) {
+		t.Error("worker registry: paddock_inventory_policy_unanswered_hosts is not registered")
 	}
 	if err := RegisterMetrics(reg); err == nil {
 		t.Error("a second registration in the same registry succeeded")

@@ -267,16 +267,21 @@ func (q *Queries) DeleteMissingFindings(ctx context.Context, arg DeleteMissingFi
 }
 
 const deleteMissingPolicyResults = `-- name: DeleteMissingPolicyResults :exec
-DELETE FROM inventory_policy_result WHERE device_id = $1 AND NOT (policy_key = ANY($2::text[]))
+DELETE FROM inventory_policy_result
+WHERE device_id = $1 AND NOT (policy_key = ANY($2::text[]))
+  AND NOT (policy_key = ANY($3::text[]) AND alerted_at IS NOT NULL)
 `
 
 type DeleteMissingPolicyResultsParams struct {
-	DeviceID uuid.UUID
-	Keys     []string
+	DeviceID   uuid.UUID
+	Keys       []string
+	Unanswered []string
 }
 
+// A reported result whose policy the host has not answered since its query changed keeps its row and mark, so that the
+// same failure is not reported again (plan M5a amendment 2026-11-16, review round 1, A7).
 func (q *Queries) DeleteMissingPolicyResults(ctx context.Context, arg DeleteMissingPolicyResultsParams) error {
-	_, err := q.db.Exec(ctx, deleteMissingPolicyResults, arg.DeviceID, arg.Keys)
+	_, err := q.db.Exec(ctx, deleteMissingPolicyResults, arg.DeviceID, arg.Keys, arg.Unanswered)
 	return err
 }
 
@@ -459,6 +464,48 @@ func (q *Queries) InventoryHold(ctx context.Context, deviceID uuid.UUID) (Invent
 	var i InventoryHoldRow
 	err := row.Scan(&i.LastAnswer, &i.UnchangedRounds, &i.RetiredAt)
 	return i, err
+}
+
+const listAgentBinaryUnknown = `-- name: ListAgentBinaryUnknown :many
+SELECT r.device_id, i.policy_updated_at::timestamptz AS evaluated_at, s.agent_version
+FROM inventory_policy_result r JOIN device d ON d.id = r.device_id
+     JOIN device_inventory_ref i ON i.device_id = r.device_id LEFT JOIN device_status s ON s.device_id = r.device_id
+WHERE d.state = 'active' AND r.policy_key = $1 AND NOT r.passing AND r.alerted_at IS NULL
+  AND i.policy_updated_at >= $2::timestamptz
+ORDER BY r.device_id
+`
+
+type ListAgentBinaryUnknownParams struct {
+	PolicyKey      string
+	EvaluatedAfter time.Time
+}
+
+type ListAgentBinaryUnknownRow struct {
+	DeviceID     uuid.UUID
+	EvaluatedAt  time.Time
+	AgentVersion *string
+}
+
+// Active devices whose agent binary policy fails, not yet reported, and whose host evaluated its policies at or after
+// evaluated_after (plan M5a amendment 2026-11-16, A3): an older evaluation may predate the current definition.
+func (q *Queries) ListAgentBinaryUnknown(ctx context.Context, arg ListAgentBinaryUnknownParams) ([]ListAgentBinaryUnknownRow, error) {
+	rows, err := q.db.Query(ctx, listAgentBinaryUnknown, arg.PolicyKey, arg.EvaluatedAfter)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAgentBinaryUnknownRow{}
+	for rows.Next() {
+		var i ListAgentBinaryUnknownRow
+		if err := rows.Scan(&i.DeviceID, &i.EvaluatedAt, &i.AgentVersion); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAgentNotRunning = `-- name: ListAgentNotRunning :many
@@ -938,31 +985,35 @@ func (q *Queries) SetInventoryHold(ctx context.Context, arg SetInventoryHoldPara
 
 const upsertInventoryRef = `-- name: UpsertInventoryRef :exec
 INSERT INTO device_inventory_ref (device_id, organization_id, external_id, last_seen_at, os_version, fleetd_version, synced_at,
-                                  hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes)
+                                  hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes,
+                                  policy_updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, now(),
-        $7, $8, $9, $10, $11, $12, $13)
+        $7, $8, $9, $10, $11, $12, $13,
+        $14)
 ON CONFLICT (device_id) DO UPDATE
   SET external_id = EXCLUDED.external_id, last_seen_at = EXCLUDED.last_seen_at, os_version = EXCLUDED.os_version,
       fleetd_version = EXCLUDED.fleetd_version, synced_at = now(),
       hardware_vendor = EXCLUDED.hardware_vendor, hardware_model = EXCLUDED.hardware_model,
       hardware_serial = EXCLUDED.hardware_serial, cpu_brand = EXCLUDED.cpu_brand, cpu_cores = EXCLUDED.cpu_cores,
-      memory_bytes = EXCLUDED.memory_bytes, disk_total_bytes = EXCLUDED.disk_total_bytes
+      memory_bytes = EXCLUDED.memory_bytes, disk_total_bytes = EXCLUDED.disk_total_bytes,
+      policy_updated_at = EXCLUDED.policy_updated_at
 `
 
 type UpsertInventoryRefParams struct {
-	DeviceID       uuid.UUID
-	OrganizationID uuid.UUID
-	ExternalID     string
-	LastSeenAt     *time.Time
-	OsVersion      string
-	FleetdVersion  string
-	HardwareVendor string
-	HardwareModel  string
-	HardwareSerial string
-	CpuBrand       string
-	CpuCores       int32
-	MemoryBytes    int64
-	DiskTotalBytes int64
+	DeviceID        uuid.UUID
+	OrganizationID  uuid.UUID
+	ExternalID      string
+	LastSeenAt      *time.Time
+	OsVersion       string
+	FleetdVersion   string
+	HardwareVendor  string
+	HardwareModel   string
+	HardwareSerial  string
+	CpuBrand        string
+	CpuCores        int32
+	MemoryBytes     int64
+	DiskTotalBytes  int64
+	PolicyUpdatedAt *time.Time
 }
 
 func (q *Queries) UpsertInventoryRef(ctx context.Context, arg UpsertInventoryRefParams) error {
@@ -980,6 +1031,7 @@ func (q *Queries) UpsertInventoryRef(ctx context.Context, arg UpsertInventoryRef
 		arg.CpuCores,
 		arg.MemoryBytes,
 		arg.DiskTotalBytes,
+		arg.PolicyUpdatedAt,
 	)
 	return err
 }

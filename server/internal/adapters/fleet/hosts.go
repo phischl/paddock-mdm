@@ -121,6 +121,10 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	}
 	h := out.Host
 	inv := ports.HostInventory{OSVersion: h.OSVersion, AgentVersion: h.OsqueryVersion, LastSeenAt: h.SeenTime}
+	if !h.PolicyUpdatedAt.IsZero() {
+		at := h.PolicyUpdatedAt
+		inv.PolicyUpdatedAt = &at
+	}
 	if h.OrbitVersion != nil && *h.OrbitVersion != "" {
 		inv.AgentVersion = *h.OrbitVersion
 	}
@@ -143,6 +147,8 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	for _, p := range h.Policies {
 		if p.Response == "pass" || p.Response == "fail" {
 			inv.Policies = append(inv.Policies, ports.PolicyResult{Key: p.Name, Passing: p.Response == "pass"})
+		} else {
+			inv.UnansweredPolicies = append(inv.UnansweredPolicies, p.Name)
 		}
 	}
 	return inv, nil

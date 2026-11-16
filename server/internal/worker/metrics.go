@@ -16,7 +16,7 @@ func RegisterMetrics(reg prometheus.Registerer) error {
 		metricOffboardingStepYields, metricOffboardingRoundOverruns,
 		metricRetentionLastSuccess, metricRetentionDeleted, metricRetentionStores,
 		metricAutoUnsealEnabled, metricAutoUnsealSharesPresent, metricAutoUnsealUnsealerUp,
-		metricDirectoryRefusals, metricUnknownEvents, metricDropped, metricConfigRollouts, metricUnmappedHosts,
+		metricDirectoryRefusals, metricUnknownEvents, metricDropped, metricConfigRollouts, metricUnmappedHosts, metricPolicyUnanswered,
 		metricOSVLastSuccess, metricOSVStale, metricOSVEntries,
 		metricOpenBaoSealed, metricOpenBaoReachable, metricTLSExpiry, metricTLSProbeSuccess, metricTLSProbeHosts,
 		metricReconcileWrites,

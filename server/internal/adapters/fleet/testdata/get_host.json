@@ -61,7 +61,7 @@
       },
       {
         "id": 3,
-        "name": "not_answered",
+        "name": "paddock_agent_binary_known",
         "query": "SELECT 1;",
         "description": "",
         "author_id": 4,

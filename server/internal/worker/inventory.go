@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -26,6 +28,18 @@ const inventoryRetryInterval = 15 * time.Second
 // vulnerability state did not change (a safety net).
 const inventoryFullEvery = 12
 
+// binaryEvaluationLag is how long after the worker applied a new agent binary policy a host's evaluation counts (plan
+// M5a amendment 2026-11-16, A3): an earlier evaluation may still use the previous definition. Fleet's
+// policy_updated_at is when Fleet stored the result, not when the host evaluated: a host that read the previous
+// definition before the apply and posts its result more than binaryEvaluationLag later passes the gate with a result of
+// the previous definition. That needs a device that already runs a release the previous definition did not list, so it
+// is accepted (plan M5a amendment 2026-11-16, review round 1, A10).
+const binaryEvaluationLag = 2 * time.Minute
+
+// binaryHashesWarn is the size of the hash set above which the worker warns: Fleet must accept the whole policy query
+// (plan M5a amendment 2026-11-16, review round 1, A10).
+const binaryHashesWarn = 1000
+
 // inventorySyncLockKey is the advisory lock of the sync round ("padd inv").
 const inventorySyncLockKey = 0x7061646420696e76
 
@@ -33,6 +47,11 @@ var metricUnmappedHosts = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "paddock_inventory_unmapped_hosts",
 	Help: "Hosts of the inventory system of the last sync round that map to no device or to more than one; never stored.",
 })
+
+var metricPolicyUnanswered = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "paddock_inventory_policy_unanswered_hosts",
+	Help: "Mapped hosts of the last full sync round that evaluated a Paddock policy's current definition without an answer: the query failed there.",
+}, []string{"policy"})
 
 // InventorySettings keeps the data minimization settings of the inventory system (fleet.Client).
 type InventorySettings interface {
@@ -54,18 +73,39 @@ type Inventory struct {
 	retry      time.Duration
 	now        func() time.Time
 
+	// hashes reads the hash set of the agent binary policy.
+	hashes agentHashes
+
 	// since is the start of the last complete sync round, vulnState the vulnerability state it stored; rounds counts
 	// them (owned by RunSync).
 	since     time.Time
 	vulnState string
 	rounds    int
+	// binaryPrint is the fingerprint of the hash set this process last applied, binaryAppliedAt when it applied it
+	// (owned by RunSync). A new process starts without one, which only delays reports.
+	binaryPrint     string
+	binaryAppliedAt time.Time
+	// defined holds, per Paddock policy key, the query text this process last applied and when it first applied that
+	// text (owned by RunSync; plan M5a addendum 2026-11-16, review round 2, A13).
+	defined map[string]definedPolicy
+}
+
+// definedPolicy is a policy's applied query text and when this process first applied it.
+type definedPolicy struct {
+	query string
+	at    time.Time
+}
+
+// agentHashes reads the SHA-256 of every published agent artifact (app.InventorySync).
+type agentHashes interface {
+	PublishedAgentHashes(ctx context.Context) ([]string, error)
 }
 
 // NewInventory creates the inventory rounds.
 func NewInventory(settings InventorySettings, source ports.Inventory, sync *app.InventorySync, summary *app.VulnerabilitySummary,
 	org *db.OrgPool, platform *db.PlatformPool, every time.Duration) *Inventory {
 	return &Inventory{settings: settings, source: source, sync: sync, summary: summary, org: org, platform: platform, every: every,
-		retry: inventoryRetryInterval, now: time.Now}
+		retry: inventoryRetryInterval, now: time.Now, hashes: sync}
 }
 
 // slaSummarizer records the daily patch SLA summary of the organization of ctx (app.VulnerabilitySLASummary).
@@ -120,15 +160,30 @@ func (i *Inventory) RunSync(ctx context.Context) error {
 
 // Round pushes Paddock's policies, stores the inventory of every changed host that maps to a device — every host
 // after a start, when the inventory system's vulnerability matches changed and each inventoryFullEvery rounds — and
-// reports devices whose agent fleetd finds not running.
+// reports devices whose agent fleetd finds not running or running from a binary of no published release.
 func (i *Inventory) Round(ctx context.Context) error {
 	start := i.now()
 	policies, err := inventory.Policies()
 	if err != nil {
 		return err
 	}
+	raw, err := i.hashes.PublishedAgentHashes(ctx)
+	if err != nil {
+		return err
+	}
+	known := inventory.KnownAgentHashes(raw)
+	policies = append(policies, inventory.AgentBinaryPolicy(known))
 	if err := i.source.ApplyPolicies(ctx, policies); err != nil {
 		return err
+	}
+	i.noteDefinitions(policies)
+	if fp := hashSetPrint(known); fp != i.binaryPrint {
+		i.binaryPrint, i.binaryAppliedAt = fp, i.now()
+		slog.InfoContext(ctx, "applied the agent binary policy", "hashes", len(known))
+		if len(known) > binaryHashesWarn {
+			slog.WarnContext(ctx, "the agent binary policy accepts many published hashes; Fleet must accept the whole query",
+				"hashes", len(known), "warn_above", binaryHashesWarn)
+		}
 	}
 	vulnState, err := i.source.VulnerabilityState(ctx)
 	if err != nil {
@@ -150,7 +205,7 @@ func (i *Inventory) Round(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	unmapped := 0
+	unmapped, unanswered := 0, map[string]int{}
 	for _, h := range hosts {
 		dev, ok := mapped[strings.ToLower(h.HardwareUUID)]
 		if !ok {
@@ -164,11 +219,16 @@ func (i *Inventory) Round(ctx context.Context) error {
 		if err := i.sync.StoreHost(systemContext(ctx, dev.OrganizationID, "inventory-sync"), dev.DeviceID, h.Ref, inv); err != nil {
 			return fmt.Errorf("store the inventory of device %s: %w", dev.DeviceID, err)
 		}
+		i.countUnanswered(inv, unanswered)
 	}
 	if since.IsZero() {
 		metricUnmappedHosts.Set(float64(unmapped))
+		i.reportUnanswered(ctx, unanswered)
 	}
 	if err := i.reportAgents(ctx, start); err != nil {
+		return err
+	}
+	if err := i.reportBinaries(ctx, known); err != nil {
 		return err
 	}
 	if err := i.summarize(ctx, start); err != nil {
@@ -212,6 +272,81 @@ func (i *Inventory) reportAgents(ctx context.Context, now time.Time) error {
 		}
 	}
 	return nil
+}
+
+// reportBinaries reports, in every organization, the devices whose agent binary policy fails in an evaluation made at
+// least binaryEvaluationLag after this process applied the current hash set (plan M5a amendment 2026-11-16, A3). It
+// reports nothing for an empty hash set, and nothing when a release was published during the round: the hosts have
+// not seen that definition yet, and the next round applies it.
+func (i *Inventory) reportBinaries(ctx context.Context, known []string) error {
+	if len(known) == 0 {
+		return nil
+	}
+	raw, err := i.hashes.PublishedAgentHashes(ctx)
+	if err != nil {
+		return err
+	}
+	if hashSetPrint(inventory.KnownAgentHashes(raw)) != i.binaryPrint {
+		slog.InfoContext(ctx, "the published agent releases changed during the inventory round; agent binary reports wait for the next round")
+		return nil
+	}
+	orgs, err := i.org.OrganizationIDs(ctx)
+	if err != nil {
+		return err
+	}
+	after := i.binaryAppliedAt.Add(binaryEvaluationLag)
+	for _, org := range orgs {
+		devices, err := i.sync.ReportAgentBinaryUnknown(systemContext(ctx, org, "inventory-sync"), after, len(known))
+		if err != nil {
+			return fmt.Errorf("organization %s: %w", org, err)
+		}
+		for _, d := range devices {
+			slog.WarnContext(ctx, "fleetd reports an agent binary of no published release", "organization_id", org, "device_id", d)
+		}
+	}
+	return nil
+}
+
+// noteDefinitions records when this process first applied each policy's current query text.
+func (i *Inventory) noteDefinitions(policies []ports.PolicyDefinition) {
+	if i.defined == nil {
+		i.defined = map[string]definedPolicy{}
+	}
+	for _, p := range policies {
+		if d, ok := i.defined[p.Key]; !ok || d.query != p.Query {
+			i.defined[p.Key] = definedPolicy{query: p.Query, at: i.now()}
+		}
+	}
+}
+
+// countUnanswered counts, per Paddock policy, a host that lists it without an answer although it evaluated its
+// policies binaryEvaluationLag or more after the current definition was applied: the query did not run there.
+func (i *Inventory) countUnanswered(inv ports.HostInventory, counts map[string]int) {
+	if inv.PolicyUpdatedAt == nil {
+		return
+	}
+	for _, key := range inv.UnansweredPolicies {
+		if d, ok := i.defined[key]; ok && !inv.PolicyUpdatedAt.Before(d.at.Add(binaryEvaluationLag)) {
+			counts[key]++
+		}
+	}
+}
+
+// reportUnanswered sets the gauge of every Paddock policy and logs one warning per policy that did not run on some
+// host (plan M5a addendum 2026-11-16, review round 2, A13): detection by that policy stops there.
+func (i *Inventory) reportUnanswered(ctx context.Context, counts map[string]int) {
+	for key := range i.defined {
+		metricPolicyUnanswered.WithLabelValues(key).Set(float64(counts[key]))
+		if counts[key] > 0 {
+			slog.WarnContext(ctx, "a Paddock policy did not run on hosts that evaluated it", "policy", key, "hosts", counts[key])
+		}
+	}
+}
+
+// hashSetPrint is the fingerprint of a sorted hash set: the SHA-256 of its newline-joined hashes.
+func hashSetPrint(sorted []string) string {
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	return hex.EncodeToString(sum[:])
 }
 
 // summarize records the critical CVE summary (plan M9 decision 37) and the patch SLA summary (plan M13c decision 18) of
