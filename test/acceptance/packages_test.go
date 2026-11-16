@@ -71,7 +71,8 @@ func TestAgentPackagesPublic(t *testing.T) {
 	bin := []byte("gate binary " + v)
 	expectStatus(t, uploadArtifact(t, root, v, bin, signBinary(t, bin, v)), http.StatusOK, "")
 	for _, path := range []string{"/paddock-agent-artifacts/releases/" + v + "/amd64/paddockd", "/paddock-agent-artifacts/?list-type=2",
-		"/paddock-agent-artifacts/?list-type=2&prefix=packages/", "/packages/"} {
+		"/paddock-agent-artifacts/?list-type=2&prefix=packages/", "/packages/", "/packages/some/dir/", "/packages/" + v + "/",
+		"/packages", "/packages//", "/packages/a//", "/packages/a%2F", "/packages/?list-type=2"} {
 		if status, _ := get(path); status != http.StatusForbidden {
 			t.Errorf("%s without credentials: HTTP %d, want 403", path, status)
 		}
