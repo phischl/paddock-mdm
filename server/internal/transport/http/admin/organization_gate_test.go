@@ -65,3 +65,38 @@ func TestDeletingOrganizationRefused(t *testing.T) {
 		t.Errorf("list of another organization: %d %s", r.status, r.body)
 	}
 }
+
+// TestDeletingOrganizationStepUpDenialRecordedOnce (PDK-1113): a step-up action without a fresh step-up in a deleting
+// organization fails the step-up check before the gate; the gate refuses its record in the organization, so the
+// attempt is recorded once as organization.inactive_denied in the platform pseudo-organization and answered with 403
+// organization_inactive, matching the event.
+func TestDeletingOrganizationStepUpDenialRecordedOnce(t *testing.T) {
+	e := newEnv(t)
+	org := e.org("stepup-gate")
+	alice := e.session(org, principal.RoleOrgAdmin)
+	if _, err := e.super.Exec(context.Background(), `UPDATE organization SET status = 'deleting',
+		deletion_requested_at = now(), deletion_requested_by = 'platform admin', deletion_reason = 'contract ended',
+		delete_after = now(), offboarding_step = 'database' WHERE id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.orgPool.RefreshOrganizationStatus(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r := e.do(call{method: "PUT", path: "/api/v1/settings/watched-units", cookie: alice,
+		body: map[string]any{"units": []string{"wazuh-agent.service"}}})
+	if r.status != http.StatusForbidden || r.problemCode(t) != "organization_inactive" {
+		t.Fatalf("step-up action of a deleting organization: %d %s, want 403 organization_inactive", r.status, r.body)
+	}
+	var events int
+	var code, attempted, status string
+	if err := e.super.QueryRow(context.Background(), `SELECT count(*), max(code), max(params->>'attempted_code'),
+		max(params->>'status') FROM action WHERE params->>'organization_id' = $1 OR organization_id = $1::uuid`,
+		org.String()).Scan(&events, &code, &attempted, &status); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 || code != "organization.inactive_denied" || attempted != "settings.watched_units_changed" ||
+		status != "deleting" {
+		t.Errorf("events: %d, code %q, attempted %q, status %q; want one organization.inactive_denied of "+
+			"settings.watched_units_changed, deleting", events, code, attempted, status)
+	}
+}
