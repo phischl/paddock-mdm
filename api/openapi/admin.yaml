@@ -2565,6 +2565,37 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/users/{id}/enrolment-link:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: createUserEnrolmentLink
+      x-paddock-step-up: true
+      tags: [users]
+      description: |
+        Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). A one-time sign-in setup link
+        for the user (ADR 0053 decision 1), valid 24 hours: the account sets its password if it has none and a passkey
+        if it has none. The link is returned once and never stored, logged or audited; responses are never cached. A
+        locked user, a user deactivated in the identity provider, a user not provisioned there and a platform
+        administrator (a direct member of paddock.platform.admins, who receives the setup link from the host operator)
+        get none (409 invalid_state). A link created while the user has no portal role stays usable for its 24 hours and a newer
+        link does not end it: give the user a portal role only after the link was used, or create a fresh link after
+        the promotion and hand only that one over.
+      x-paddock-audit: user.enrolment_link_created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "201":
+          description: The link.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserEnrolmentLink" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /api/v1/users/{id}/effective-profile:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -8406,6 +8437,22 @@ components:
           type: array
           description: DNS domains of the organization's users; the first is the primary domain of the device login.
           items: { type: string }
+    UserEnrolmentLink:
+      type: object
+      required: [link, expires_at]
+      properties:
+        link: { type: string, format: uri, description: The one-time sign-in setup link; shown once. }
+        expires_at: { type: string, format: date-time, description: When the link expires at the latest. }
+    MeMfaEnrolmentNotice:
+      type: object
+      required: [until, pending]
+      properties:
+        until: { type: string, format: date-time, description: The end of the announcement (30 days after the upgrade's seed). }
+        pending:
+          type: integer
+          description: |
+            Administrators still marked to set up a passkey at their next sign-in: of the organization's role groups
+            for an organization role, of every portal role group for the platform administrator.
     MeOrganizationDeletion:
       type: object
       required: [delete_after]
@@ -8415,7 +8462,7 @@ components:
       type: object
       required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,
         step_up_valid_until, server_version, alternate_role, channel, mcp_write_enabled, mcp_write_enabled_at,
-        organization_deletion]
+        organization_deletion, mfa_enrolment_notice]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -8432,6 +8479,14 @@ components:
           description: |
             The pending deletion of the administrator's organization (ADR 0052): the portal warns with its date. null
             while no deletion is pending, and for platform administrators.
+        mfa_enrolment_notice:
+          allOf:
+            - $ref: "#/components/schemas/MeMfaEnrolmentNotice"
+          nullable: true
+          description: |
+            The announcement of the second-factor change to administrators (ADR 0053 decision 6) for 30 days after
+            the upgrade's seed; null before the seed, afterwards, for API tokens and MCP sessions, and while the
+            identity provider cannot be read.
         locale: { type: string, enum: [en, de] }
         theme:
           type: string

@@ -117,6 +117,8 @@
     "switchRoleConfirm": "Switch",
     "switchRoleFailed": "The role could not be switched. Please try again.",
     "roleFallbackOrganizationInactive": "Your organization is not active; you are signed in as platform administrator.",
+    "mfaEnrolmentNotice": "{pending, plural, =0 {Every administrator now signs in with a passkey.} one {# administrator has not set up a passkey yet and is asked to set one up at the next sign-in.} other {# administrators have not set up a passkey yet and are asked to set one up at the next sign-in.}} New administrator accounts set up their passkey only through a one-time sign-in setup link: an organization administrator creates it on the user's page, the operator creates it for platform administrators. This notice is shown until {until}.",
+    "mfaEnrolmentNoticeDismiss": "Dismiss",
     "stepUpValidUntil": "Identity confirmed until {time}",
     "stepUpNone": "No current identity confirmation",
     "stepUpChip": "Confirmed until {time}"
@@ -297,6 +299,7 @@
     "invalid_request": "The request was not valid.",
     "internal": "Something went wrong. Please try again.",
     "invalid_state": "This action is not possible in the current state.",
+    "enrolment_link_platform_administrator": "This account is also a platform administrator. Platform administrators receive their sign-in setup link from the host operator.",
     "conflict": "This conflicts with an existing item.",
     "already_exists": "This is already managed for the same devices.",
     "unsupported_compression": "The package's control archive uses a compression Paddock does not read. Build it with dpkg-deb -Zgzip or -Zzstd.",
@@ -580,7 +583,8 @@
       "offboarded_device_uninstalled": "A device of a deleted organization removed Paddock",
       "deleted_organization_audit_read": "{actor} read the audit log of the deleted organization {slug}",
       "mfa_enrol_marks_seeded": "{marked, plural, one {# administrator without a passkey was} other {# administrators without a passkey were}} marked to set one up at the next sign-in ({totp_only, number} with only an authenticator app, {organizations, number} organizations)",
-      "mfa_enrol_marks_cleared": "{cleared, plural, one {The sign-in setup mark of # administrator with a passkey was} other {The sign-in setup marks of # administrators with a passkey were}} removed"
+      "mfa_enrol_marks_cleared": "{cleared, plural, one {The sign-in setup mark of # administrator with a passkey was} other {The sign-in setup marks of # administrators with a passkey were}} removed",
+      "enrolment_link_created": "{actor} created a sign-in setup link for the account {username} on the host"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -613,6 +617,7 @@
       "deleted": "{actor} deleted the user {username}",
       "locked": "{actor} locked the user {username}",
       "unlocked": "{actor} unlocked the user {username}",
+      "enrolment_link_created": "{actor} created a sign-in setup link for the user {username}",
       "synced_added": "The synced user {username} was added",
       "synced_removed": "The synced user {username} was removed"
     },
@@ -2166,6 +2171,15 @@
     "groups": "Groups",
     "recoveryLink": "Password link",
     "linkShownOnce": "Give this one-time link to {username}: it sets the password and is valid for 24 hours. It is shown only now.",
+    "enrolmentLink": {
+      "create": "Create sign-in setup link",
+      "title": "Sign-in setup link",
+      "confirm": "Create a one-time sign-in setup link for {username}? With it, the account sets its password if it has none and a passkey if it has none. The link is valid for 24 hours and is shown only once.",
+      "link": "Sign-in setup link",
+      "copyFailed": "The link could not be copied. Select it in the field and copy it by hand.",
+      "shownOnce": "Give this one-time link to {username} on a trusted channel. It is valid until {at} and is shown only now.",
+      "help": "A sign-in setup link lets the account set its password and a passkey once, within 24 hours. A link created while the user has no portal role, such as the password link of a new user, stays usable for its 24 hours, and a newer link does not end it: its holder could set up the passkey of the account once it has become an administrator. Give the user a portal role only after they have used the link, or create a fresh link after the promotion and hand only that one over."
+    },
     "syncedHint": "This user is synced from an upstream directory: name, email and password are managed there. Lock, groups and permissions are managed here.",
     "lock": "Lock",
     "lockTitle": "Lock user",

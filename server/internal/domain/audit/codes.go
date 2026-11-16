@@ -371,6 +371,11 @@ const (
 	// may enrol a passkey at their next sign-in.
 	CodePlatformMFAEnrolMarksSeeded  Code = "platform.mfa_enrol_marks_seeded"
 	CodePlatformMFAEnrolMarksCleared Code = "platform.mfa_enrol_marks_cleared"
+
+	// Sign-in setup links (ADR 0053 decision 1): one-time links with which an account sets its password if missing and
+	// a passkey. The link itself is never part of an event.
+	CodeUserEnrolmentLinkCreated     Code = "user.enrolment_link_created"
+	CodePlatformEnrolmentLinkCreated Code = "platform.enrolment_link_created"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -2237,6 +2242,20 @@ var registry = map[Code]Definition{
 		Params:      []string{"cleared"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Recorded only for a round that removed at least one mark; cleared counts them. Failure when a removal failed after others were written; the next round retries it. No usernames. Actor is the system actor worker. Platform pseudo-organization.",
+	},
+	CodeUserEnrolmentLinkCreated: {
+		Code: CodeUserEnrolmentLinkCreated, Emitted: true,
+		Description: "An organization administrator created a one-time sign-in setup link for a user of the organization (ADR 0053 decision 1): valid 24 hours, the account sets its password if it has none and a passkey if it has none.",
+		Params:      []string{"username"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "The link is shown once to the administrator and never recorded. Denied with step_up_required without a fresh step-up, forbidden for another role. Failure with not_found, invalid_state (the user is locked, deactivated, not provisioned in the identity provider, or a direct member of paddock.platform.admins) or upstream_unavailable.",
+	},
+	CodePlatformEnrolmentLinkCreated: {
+		Code: CodePlatformEnrolmentLinkCreated, Emitted: true,
+		Description: "The operator created a one-time sign-in setup link for a platform administrator account with paddock-server admin enrolment-link (ADR 0053 decision 1): valid 24 hours, the account sets its password if it has none and a passkey if it has none.",
+		Params:      []string{"username"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeUnknown},
+		Note:        "The link is printed once on the host and never recorded. Failure with invalid_state when the account is not a direct member of paddock.platform.admins or is deactivated, upstream_unavailable when the identity provider failed. Actor is the system actor paddock-server admin. Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

@@ -721,3 +721,191 @@ func TestMFAEnrolmentSeed(t *testing.T) {
 		t.Errorf("seed events after a later round: %d (%v), want 1", len(again), err)
 	}
 }
+
+// TestMF3EnrolmentLink is gate MF3 (plan M12h-2 §8, ADR 0053 decision 1 and amendment d): an organization administrator
+// creates a one-time sign-in setup link only with a step-up; an operator never gets one. The link opens the setup
+// flow, which sets the password of the new local user and registers a passkey and asks for no authenticator app;
+// afterwards the new administrator signs in to the portal with that passkey. The same link used again, after the
+// passkey was removed, is refused instead of offering the passkey setup, while a new link does offer it; the audit
+// event names the user but never carries the link.
+func TestMF3EnrolmentLink(t *testing.T) {
+	ctx := testContext(t, 8*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := login(t, env.Alice)
+	u := createLocalUser(t, alice, "mf3")
+	// The administrator role comes before the link (the advice of the user page), and the development skip of the
+	// second factor is off for this account, so its sign-in needs the passkey the link sets up.
+	if err := ak.AddToGroup(ctx, u.Username, env.RoleGroup("acme", "admins")); err != nil {
+		t.Fatal(err)
+	}
+	enforceMFA(ctx, t, ak, u.Username, false)
+	path := "/api/v1/users/" + u.ID + "/enrolment-link"
+
+	opName, opPassword := tempUser(t, "mf3-operator", env.RootGroup("acme"), env.RoleGroup("acme", "operators"))
+	operator, err := loginAs(t, opName, opPassword)
+	if err != nil {
+		t.Fatalf("operator sign-in: %v", err)
+	}
+	expectStatus(t, call(t, operator, http.MethodPost, path, nil), http.StatusForbidden, "forbidden")
+
+	res := call(t, alice, http.MethodPost, path, nil)
+	expectStatus(t, res, http.StatusForbidden, "step_up_required")
+	expectOneEvent(t, alice, res.RequestID, "user.enrolment_link_created", "denied")
+
+	stepUp(t, alice, env.Alice, true)
+	requested := time.Now()
+	res = call(t, alice, http.MethodPost, path, nil)
+	expectStatus(t, res, http.StatusCreated, "")
+	var link struct {
+		Link      string    `json:"link"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if err := res.JSON(&link); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(link.Link, "/if/flow/paddock-recovery/") ||
+		link.ExpiresAt.Before(requested.Add(24*time.Hour-time.Minute)) || link.ExpiresAt.After(time.Now().Add(24*time.Hour)) {
+		t.Fatalf("link %q expiring %s, want the setup flow for 24 hours", link.Link, link.ExpiresAt)
+	}
+	ev := expectOneEvent(t, alice, res.RequestID, "user.enrolment_link_created", "success")
+	params, _ := json.Marshal(ev.Params)
+	token := link.Link[strings.LastIndex(link.Link, "=")+1:]
+	if ev.Params["username"] != u.Username || ev.Params["link"] != nil || strings.Contains(string(params), token) {
+		t.Fatalf("audit params %s, want the username and never the link", params)
+	}
+
+	browser, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := "pw-" + uuid.NewString()
+	passkey, err := authflow.NewWebAuthn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := authflow.SetupLink(ctx, browser, link.Link, password, passkey)
+	want := []string{"ak-stage-prompt", "ak-stage-authenticator-webauthn", "xak-flow-redirect"}
+	if err != nil || !slices.Equal(seen, want) {
+		t.Fatalf("setup link: %v, stages %v, want %v (password, passkey, no authenticator app)", err, seen, want)
+	}
+
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signedIn, err := authflow.LoginMFA(ctx, client, stack.AdminURL(), u.Username, password, passkey)
+	if err != nil {
+		t.Fatalf("sign-in with the new passkey: %v", err)
+	}
+	if got := whoami(t, &env.Portal{User: u.Username, Client: signedIn.Client}); got.Role != "org_admin" {
+		t.Fatalf("signed in as %+v, want the acme administrator", got)
+	}
+
+	// Single use, decided by the passkey step: once the account's passkey is removed, a link whose token were still
+	// valid would show the passkey setup again (the password step stays skipped, the account has one now).
+	accountPK, err := ak.UserPK(ctx, u.Username)
+	if err != nil || accountPK == 0 {
+		t.Fatalf("user %s: pk %d, %v", u.Username, accountPK, err)
+	}
+	removePasskeys(ctx, t, ak, accountPK)
+	again, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err = authflow.SetupLink(ctx, again, link.Link, "pw-"+uuid.NewString(), nil)
+	if slices.Contains(seen, "ak-stage-authenticator-webauthn") || slices.Contains(seen, "ak-stage-prompt") {
+		t.Fatalf("the link used twice: %v, stages %v, want it refused: no passkey and no password step", err, seen)
+	}
+	// Only a refusal Authentik answered counts: a transport error or timeout says nothing about the token.
+	var stageErr *authflow.StageError
+	var execErr *authflow.ExecutorError
+	if !errors.Is(err, authflow.ErrAccessDenied) && !errors.As(err, &stageErr) && !errors.As(err, &execErr) {
+		t.Fatalf("the link used twice: %v, stages %v, want a refusal by Authentik", err, seen)
+	}
+	// Positive control: a new link for the same account, still without a passkey, does show the passkey setup, so the
+	// check above fails for a link that still works.
+	stepUp(t, alice, env.Alice, true)
+	res = call(t, alice, http.MethodPost, path, nil)
+	expectStatus(t, res, http.StatusCreated, "")
+	var fresh struct {
+		Link string `json:"link"`
+	}
+	if err := res.JSON(&fresh); err != nil {
+		t.Fatal(err)
+	}
+	control, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err = authflow.SetupLink(ctx, control, fresh.Link, "", nil)
+	var stage *authflow.StageError
+	if !errors.As(err, &stage) || stage.Component != "ak-stage-authenticator-webauthn" || slices.Contains(seen, "ak-stage-prompt") {
+		t.Fatalf("a new link without a passkey: %v, stages %v, want the passkey setup and no password step", err, seen)
+	}
+}
+
+// TestMF3EnrolmentLinkPlatformAdministrator (plan M12h-2 amendment f point 4, ADR 0045): an account of acme that is
+// also a direct member of paddock.platform.admins gets no setup link from acme's administrator. The request answers
+// 409 invalid_state, records exactly one failure and returns no link; the host command issues that account's link.
+func TestMF3EnrolmentLinkPlatformAdministrator(t *testing.T) {
+	ctx := testContext(t, 2*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := login(t, env.Alice)
+	u := createLocalUser(t, alice, "mf3-dual")
+	for _, group := range []string{env.RoleGroup("acme", "admins"), platformAdminsGroup} {
+		if err := ak.AddToGroup(ctx, u.Username, group); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _ = ak.RemoveFromGroup(context.Background(), u.Username, platformAdminsGroup) })
+
+	stepUp(t, alice, env.Alice, true)
+	res := call(t, alice, http.MethodPost, "/api/v1/users/"+u.ID+"/enrolment-link", nil)
+	expectStatus(t, res, http.StatusConflict, "invalid_state")
+	if !strings.Contains(string(res.Body), "platform administrators receive their setup link from the host operator") ||
+		strings.Contains(string(res.Body), "/if/flow/") {
+		t.Fatalf("refusal %s, want the host operator detail and no link", res.Body)
+	}
+	if ev := expectOneEvent(t, alice, res.RequestID, "user.enrolment_link_created", "failure"); ev.ErrorCode != "invalid_state" {
+		t.Fatalf("event error code %q, want invalid_state", ev.ErrorCode)
+	}
+}
+
+// removePasskeys deletes every WebAuthn device of the Authentik user pk and confirms that none is left.
+func removePasskeys(ctx context.Context, t *testing.T, ak *env.Authentik, pk int) {
+	t.Helper()
+	list := func() []string {
+		var devices []struct {
+			PK   any    `json:"pk"`
+			Type string `json:"type"`
+		}
+		if err := ak.Get(ctx, fmt.Sprintf("/authenticators/admin/all/?user=%d", pk), &devices); err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, d := range devices {
+			if strings.EqualFold(d.Type, "authentik_stages_authenticator_webauthn.webauthndevice") {
+				out = append(out, fmt.Sprint(d.PK))
+			}
+		}
+		return out
+	}
+	passkeys := list()
+	if len(passkeys) == 0 {
+		t.Fatalf("user %d has no passkey to remove", pk)
+	}
+	for _, d := range passkeys {
+		if err := ak.Delete(ctx, "/authenticators/admin/webauthn/"+d+"/"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if left := list(); len(left) != 0 {
+		t.Fatalf("user %d still has the passkeys %v", pk, left)
+	}
+}

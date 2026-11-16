@@ -48,6 +48,10 @@ type IdentityUser struct {
 // (ADR 0053 decision 3); the sign-in denies an administrator without one otherwise.
 const AttrMFAEnrolAtLogin = "paddock_mfa_enrol_at_login"
 
+// RecoveryLinkValidity is how long a link of UserDirectory.RecoveryLink stays usable (plan M3a decision 18, ADR 0053
+// decision 1); the identity provider adapter requests exactly this duration.
+const RecoveryLinkValidity = 24 * time.Hour
+
 // Authenticators are the kinds of second factor a user has registered in the identity provider.
 type Authenticators struct{ WebAuthn, TOTP bool }
 
@@ -71,7 +75,8 @@ type UserDirectory interface {
 	UpdateUser(ctx context.Context, pk, name, email string) error
 	// DeleteUser deletes a user; a missing user is not an error.
 	DeleteUser(ctx context.Context, pk string) error
-	// RecoveryLink creates a one-time link (valid 24 h) with which the user sets a password.
+	// RecoveryLink creates a one-time link (valid RecoveryLinkValidity) with which the user sets a password if it has
+	// none and sets up a passkey if it has none (ADR 0053 decision 2).
 	RecoveryLink(ctx context.Context, pk string) (string, error)
 	// UserActive reports whether the user is active (not deactivated) in the identity provider.
 	UserActive(ctx context.Context, pk string) (bool, error)

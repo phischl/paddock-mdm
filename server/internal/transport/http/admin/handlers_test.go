@@ -61,6 +61,10 @@ type fakeIdP struct {
 	onLock func()
 	// onEnsure runs at the start of EnsureOrganization with its context; its error is returned.
 	onEnsure func(ctx context.Context) error
+	// roleGroups are the direct members of the role groups RoleGroupsMembers lists; a group without a key is missing.
+	roleGroups map[string][]ports.IdentityUser
+	// failRoleGroups makes only RoleGroupsMembers fail, so a caller that swallowed a listing error would be caught.
+	failRoleGroups bool
 }
 
 // fakePKs numbers the users of every fake identity provider of the test binary.
@@ -172,8 +176,19 @@ func (f *fakeIdP) OrganizationUsers(context.Context, string) ([]ports.IdentityUs
 	return nil, f.err()
 }
 
-func (f *fakeIdP) RoleGroupsMembers(context.Context, []string) (map[string][]ports.IdentityUser, error) {
-	return nil, f.err()
+func (f *fakeIdP) RoleGroupsMembers(_ context.Context, names []string) (map[string][]ports.IdentityUser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string][]ports.IdentityUser{}
+	for _, n := range names {
+		if m, ok := f.roleGroups[n]; ok {
+			out[n] = m
+		}
+	}
+	if f.failRoleGroups {
+		return nil, problem.UpstreamUnavailable
+	}
+	return out, f.err()
 }
 
 func (f *fakeIdP) Superusers(context.Context) ([]ports.IdentityUser, error) {

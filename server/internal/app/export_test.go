@@ -70,3 +70,9 @@ func (s *VulnerabilitySLASummary) CountLoads() func() int {
 	}
 	return func() int { return n }
 }
+
+// SetClock replaces the clock of the second-factor announcement.
+func (n *MFAEnrolmentNotices) SetClock(now func() time.Time) { n.now = now }
+
+// SetClock replaces the clock of the platform administrators' sign-in setup links.
+func (p *PlatformEnrolmentLinks) SetClock(now func() time.Time) { p.now = now }

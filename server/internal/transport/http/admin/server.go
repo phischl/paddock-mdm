@@ -27,6 +27,8 @@ type Deps struct {
 	Organizations *app.Organizations
 	Accounts      *app.Accounts
 	AuditLog      *app.AuditLog
+	// MFANotices answer mfa_enrolment_notice of GET and PATCH /api/v1/me (ADR 0053 decision 6); nil: never.
+	MFANotices *app.MFAEnrolmentNotices
 	// AuditIntegrity reads the sealed days and the chain verification runs (plan M8b decision 31).
 	AuditIntegrity *app.AuditIntegrity
 	// AuditExports requests and reads the evidence exports (plan M10 decision 29).
@@ -220,6 +222,7 @@ var privileged = map[string]struct {
 	"DELETE /api/v1/users/{id}":                                            {app.ScopeOrg, app.SpecUserDelete},
 	"POST /api/v1/users/{id}/lock":                                         {app.ScopeOrg, app.SpecUserLock},
 	"POST /api/v1/users/{id}/unlock":                                       {app.ScopeOrg, app.SpecUserUnlock},
+	"POST /api/v1/users/{id}/enrolment-link":                               {app.ScopeOrg, app.SpecUserEnrolmentLink},
 	"POST /api/v1/user-groups":                                             {app.ScopeOrg, app.SpecUserGroupCreate},
 	"PATCH /api/v1/user-groups/{id}":                                       {app.ScopeOrg, app.SpecUserGroupUpdate},
 	"DELETE /api/v1/user-groups/{id}":                                      {app.ScopeOrg, app.SpecUserGroupDelete},
@@ -369,6 +372,7 @@ func NewHandler(d Deps) http.Handler {
 		mcpAccess:    d.MCPAccess,
 		imports:      d.ReleaseImports,
 		stepUpWindow: tokenTTL, serverVersion: d.ServerVersion,
+		mfaNotices: d.MFANotices,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}

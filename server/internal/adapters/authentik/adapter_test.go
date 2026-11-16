@@ -1079,3 +1079,11 @@ func TestEndUserSessionsAfterRetryReportsWhatWasLeft(t *testing.T) {
 		t.Fatalf("EndUserSessions: %d %v after %d deletes, want 0 after 2", n, err, deletes)
 	}
 }
+
+// TestRecoveryLinkValidityMatchesPort keeps the token duration the adapter requests equal to the validity the use cases
+// report as the sign-in setup link's expires_at (ADR 0053 decision 1).
+func TestRecoveryLinkValidityMatchesPort(t *testing.T) {
+	if want := fmt.Sprintf("hours=%d", int(ports.RecoveryLinkValidity.Hours())); authentik.RecoveryLinkValidity != want {
+		t.Fatalf("RecoveryLinkValidity %q, want %q", authentik.RecoveryLinkValidity, want)
+	}
+}
