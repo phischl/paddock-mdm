@@ -247,3 +247,119 @@ Decisions 8 and 11 are therefore made precise, so that the guarantee holds by co
 - **12 (precise).** The plan test covers every listed name that reads or updates a table (not the plain inserts).
   Further tests check that every listed name exists among the generated queries, and that on the view a listed
   statement is cached while an unlisted one is not.
+
+## Amendment 2026-11-16 (3) — The view's admission rule holds under worst-case statistics (main §89)
+
+Status of this amendment: Accepted (architect, 2026-11-16; approved by main, main §90). It replaces decision 11 and its clarification, and makes
+decisions 8 and 12 precise. Decisions 9 and 10 stay. Implementation: PDK-1079d, as a fix forward on the integration
+head (no revert of PDK-1079b, main §89).
+
+### Finding
+
+Decision 11 admitted a statement to the view if it reached each table "by its primary key or by a device key that
+every index led by `organization_id` on that table contains". The primary-key half of that rule is unsound:
+
+- A generic plan is costed with the organization that is active when the plan is built: the planner evaluates
+  `current_setting('paddock.org_id')` of the RLS predicate for its selectivity estimate.
+- If the `ANALYZE` sample holds no row of a small organization, `organization_id` gets `n_distinct = 1` and the large
+  organization as its only most common value. The small organization's estimate then clamps to one row, and any index
+  led by `organization_id` costs no more than the primary key. The generic plan built in the small organization takes
+  that index and, executed in the large organization, reads all of the large organization's rows in it.
+- Measured on PostgreSQL 18.6 (PDK-1079c, 70 000-device organization next to a 5-device one):
+  - over 120 repeated `ANALYZE` runs the generic plan flipped to an organization index **7 times**; with a sample of
+    30 000 rows an organization of 5 devices is missed in about 6 % of the runs, one of 1 device nearly always;
+  - with the statistics forced to that worst case (`ANALYZE` while the small organization's rows are absent), **14 of
+    the 23** listed reads and updates fail the 100-buffer bound of decision 12: the 7 `device` statements by `id`
+    (about 1 330 buffers via `device_org_state_idx`), the 6 `device_status` statements by `device_id` (about 2 316 via
+    `device_status_disk_state_idx`) and `CloseOpenDeviceEventGaps` (1 069 via `device_event_gap_org_reported_idx`,
+    which migration 00158 did not touch);
+  - safe under the same worst case: the statements on `device_event_seen` and `device_event_dropped`, the inserts and
+    the upserts that conflict on a unique key;
+  - with `plan_cache_mode = auto`, as in production, a connection adopted the bad generic plan on the sixth
+    execution.
+- `FinishAction` (on `action` by `id`) passed only because the test did not analyze `action` under the worst case;
+  `action` has `action_org_idx (organization_id)`, so it falls under the same failure.
+
+The N2 numbers this rests on: per-execution planning of everything costs +28 % CPU per event; the view as merged
++0.7 % (series 1). The 14 failing statements are on the heartbeat path; the event path is mostly inserts.
+
+### Options
+
+- **1 — Strict rule: the view caches only statements whose plan cannot be captured.** A name stays on the list only
+  if it is an insert, or every table it reads or updates has no index led by `organization_id` that lacks the lookup
+  key as its second column. `device`, `device_status`, `CloseOpenDeviceEventGaps` and `FinishAction` leave the list
+  and run per execution. + Sound by a static property of the schema; no new mechanism. − The heartbeat's device and
+  status lookups pay planning again; estimated between +5 % and +15 % CPU per event (4 of about 7 cached statements
+  of each heartbeat move back; the event path is unchanged).
+- **1 + extension — replace the organization indexes of `device` and `device_status` by variants that contain the
+  key, as 00158 did.** Rejected. Those indexes exist for their second column: `device_org_hostname_idx`,
+  `device_org_enrolled_idx`, `device_org_state_idx`, `device_org_name_key`, `device_status_org_contact_idx` and
+  `device_status_disk_state_idx` serve the portal lists, the attention view and the rounds by sorting or filtering
+  within an organization. With the key in second place (`(organization_id, id, …)`) they are unique per row and can no
+  longer serve that sort or filter, which brings back the timeouts ADR 0055 removed. The partial indexes
+  (`device_org_uninstall_idx`, `device_org_config_mode_idx`, `device_status_org_outdated_idx`,
+  `device_event_gap_org_reported_idx`) serve rounds the same way. No variant both keeps their purpose and contains the
+  key.
+- **2 — Cached statements with `plan_cache_mode = force_custom_plan`.** The organization pools' connections get the
+  parameter `plan_cache_mode = force_custom_plan`, next to `jit = off`. It only acts on named prepared statements:
+  the pool's own unnamed statements (describe mode) are planned per execution anyway, and a statement without
+  parameters keeps its single plan in either mode. So it reaches exactly the view's cached statements: they keep
+  parse, analysis and rewrite cached and get a custom plan, costed for the current organization and the real
+  parameters, on every execution. No statement is added per transaction. + Sound for every listed statement with a
+  parameter, including `device` and `device_status`; the list can stay as merged. − Planning per execution for all
+  cached statements, the safe ones too; the saving over option 1 is only parse and analysis, so its cost may equal or
+  exceed option 1's. Setting it per transaction instead (`set_config('plan_cache_mode', …, true)` in the view's
+  existing `set_config` statement) would be equally free but adds a second mode switch to maintain; the connection
+  parameter is chosen.
+- **3 — Other mechanisms, judged for soundness:**
+  - a higher statistics target on `organization_id`: lowers the chance of a missed organization, does not remove it,
+    and fails the worst-case test; not sound;
+  - extended statistics: they model correlation between columns, not a missed value in the sample; not sound;
+  - an `n_distinct` override: the most common value list still holds only the large organization, so the small
+    organization's estimate still clamps to one row; not sound;
+  - making the organization indexes partial: they stay led by `organization_id`, so the plan can still take them;
+    not sound;
+  - an explicit `organization_id = $n` parameter or cast tricks in the SQL: the RLS predicate is added regardless and
+    is still estimated with the folded `current_setting`; not sound;
+  - planner hints (`pg_hint_plan`): a new extension in the database image, against the dependency rule; rejected.
+
+### Decision
+
+11. **Admission rule (replaces decision 11 and its clarification).** A sqlc name may be on the allow list of the view
+    only if one of these holds, each checked mechanically by a test:
+    - **(a) insert:** its SQL is an `INSERT … VALUES` without `SELECT` in its text, optionally with
+      `ON CONFLICT (<columns of a unique index>) DO UPDATE | DO NOTHING`;
+    - **(b) device-keyed:** its SQL compares `device_id` with a parameter, and every table in its plan has no index
+      whose first column is `organization_id` unless that index's second column is `device_id` (an expression in
+      second place does not count);
+    - **(c) custom-planned (only if decision 13 is in force):** its SQL has at least one parameter.
+
+    Primary-key access alone is **not** a reason for admission. No name may be added that is not on the list as merged
+    in PDK-1079b; a name leaves the list only through this rule or a main decision (main §88).
+12. **Proof (makes decision 12 precise).**
+    - `TestIngestViewGenericPlans` analyzes, before the measured runs, **every** table with an `organization_id`
+      column with the small organization's rows absent (the deterministic worst case of PDK-1079c, extended from six
+      tables to all organization tables), and asserts at most 100 shared buffers in the large organization for every
+      listed name that reads or updates a table. Under option 1 it runs with `plan_cache_mode = force_generic_plan`;
+      once decision 13 is in force, with the pool's own setting.
+    - A static test checks rules (a), (b) and (c) for every listed name against the SQL text of
+      `server/internal/adapters/postgres/queries/*.sql` and, for (b), against `pg_index` of the migrated schema.
+13. **Order of paths, decided by N2.**
+    - **Path 1 first:** the list shrinks to the names that pass (a) or (b). N2 (main §16 method, three clean
+      alternating pairs, A = the integration head with the list as merged, B = A plus path 1): median CPU per event of
+      B at most 5 % above A → path 1 is final.
+    - **Path 2 if path 1 exceeds 5 %:** organization pools get `plan_cache_mode = force_custom_plan` as a connection
+      parameter, and the list returns to the names of PDK-1079b, each passing (a), (b) or (c). N2 again against the
+      same A. The cheaper path within 5 % is final; if neither is within 5 %, main decides with both numbers.
+    - Path 1 is merged to the integration branch as soon as its tests are green, before N2: it removes the unsound
+      plans, and costs only CPU.
+
+### Consequences
+
+- + The view's guarantee no longer depends on the `ANALYZE` sample; the test checks the worst case on every run.
+- + No migration and no new dependency.
+- − The heartbeat may cost more CPU than series 1 showed; N2 decides between path 1 and path 2, and main between
+  them and the budget if neither fits.
+- − A new organization index led by `organization_id` without `device_id` second on `device_event_seen` or
+  `device_event_dropped` fails the static test and takes their statements off the list; that is intended.
+- Follow-up: the "Query planning" section of `docs/operations/capacity.md` names the final path and its N2 result.
