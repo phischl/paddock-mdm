@@ -158,8 +158,9 @@ func (o *Offboarding) Run(ctx context.Context) error {
 // every organization is done, waits or fails, or OffboardingRoundBudget is used; a failing organization does not stop
 // the others, and a long deletion cannot starve them. An organization whose step polls for an acknowledgement
 // (audit_final) or waits for older transactions (devices, tombstone) is asked again every offboardingPollInterval; when
-// only such organizations remain, the round sleeps until the next poll is due. Every step is its own transaction: the round holds only the leader connection between steps. The lock is held
-// only while the round runs (amendment c point 3).
+// only such organizations remain, the round sleeps until the next poll is due. Every step is its own transaction: the
+// round holds only the leader connection between steps. The lock is held only while the round runs (amendment c point
+// 3).
 func (o *Offboarding) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	leader, err := o.lock.Lead(sys, offboardingLockKey, offboardingLeaderCheck, func(ctx context.Context) error {
