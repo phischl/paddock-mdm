@@ -499,7 +499,10 @@ cache sync and new sessions fail and log it) but keeps serving reads and deletio
 an organization deletion go on; it never evicts a key, because an evicted counter or nonce weakens replay protection
 and an evicted device key looks like an outage. The remaining 40 % is the copy-on-write headroom of an AOF rewrite. A
 container without a limit gets no `maxmemory` (the entrypoint logs one line). `./paddock check --online` warns
-(`valkey: memory headroom`) when Valkey uses more than half of its limit.
+(`valkey: memory headroom`) when Valkey uses more than half of its limit. While Valkey is at its ceiling, a device's
+suspension or revocation cannot be written to its cache entry either; the device still cannot authenticate, because the
+gateway's nonce write is refused too, and the next cache reconcile (at most a minute after memory is free) writes the
+new status.
 
 The vulnerability figure for `fleet` is the cgroup peak (`memory.peak`, page cache included) of one run of
 `fleet vuln_processing` that downloaded every feed into an empty volume (850 MiB on disk), measured on a scratch stack
