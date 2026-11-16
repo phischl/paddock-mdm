@@ -365,16 +365,17 @@ func gateF5Evasions(t *testing.T, d *Device, query string) {
 		{"renamed child", "ln -sfn /var/lib/paddock-f5s " + current + " && systemctl restart paddock-supervisor", sleep},
 	} {
 		d.MustRoot(c.setup)
-		supervisorChild(t, d, c.exe)
+		supervisorChild(t, d, c.exe, "")
 		if n := osqueryRows(t, d, query); n != 0 {
 			t.Errorf("%s: %s: %d rows, want 0", d.Name, c.name, n)
 		}
 		d.MustRoot(reset)
-		supervisorChild(t, d, active+"/paddockd")
+		supervisorChild(t, d, active+"/paddockd", "")
 		if n := osqueryRows(t, d, query); n != 1 {
 			t.Fatalf("%s: restored after %s: %d rows, want 1", d.Name, c.name, n)
 		}
 	}
+	gateF5ReplacedSupervisor(t, d, query, active, sleep, reset)
 	started := time.Now().UTC()
 	d.MustRoot(startOrbit)
 	done = true
@@ -392,20 +393,54 @@ func gateF5Evasions(t *testing.T, d *Device, query string) {
 	}
 }
 
-// supervisorChild waits until paddock-supervisor runs a child that executed exe ("" any program but the supervisor
-// itself). A Go program forks from any of its threads, so the children of every task count.
-func supervisorChild(t *testing.T, d *Device, exe string) {
+// gateF5ReplacedSupervisor runs while orbit is masked (plan M5a addendum 2026-11-16, review round 2, A12): with the
+// supervisor's file renamed over itself, its genuine child passes (the window of a regular supervisor upgrade) and a
+// child that is neither paddockd nor below the slots fails. reset restores current and restarts the supervisor.
+func gateF5ReplacedSupervisor(t *testing.T, d *Device, query, active, sleep, reset string) {
+	const supervisor, current = "/usr/sbin/paddock-supervisor", "/opt/paddock/agent/current"
+	d.MustRoot("cp " + supervisor + " " + supervisor + ".new && mv " + supervisor + ".new " + supervisor)
+	t.Cleanup(func() { d.MustRoot("systemctl restart paddock-supervisor") })
+	pid := supervisorChild(t, d, active+"/paddockd", "")
+	d.MustRoot("kill " + pid)
+	supervisorChild(t, d, active+"/paddockd", pid)
+	if n := osqueryRows(t, d, query); n != 1 {
+		t.Fatalf("%s: genuine child of a renamed-over supervisor: %d rows, want 1", d.Name, n)
+	}
+	pid = supervisorChild(t, d, active+"/paddockd", "")
+	d.MustRoot("ln -sfn /var/lib/paddock-f5s " + current + " && kill " + pid)
+	supervisorChild(t, d, sleep, "")
+	if n := osqueryRows(t, d, query); n != 0 {
+		t.Errorf("%s: foreign child of a renamed-over supervisor: %d rows, want 0", d.Name, n)
+	}
+	d.MustRoot(reset)
+	supervisorChild(t, d, active+"/paddockd", "")
+	if n := osqueryRows(t, d, query); n != 1 {
+		t.Fatalf("%s: restored after the renamed-over supervisor: %d rows, want 1", d.Name, n)
+	}
+}
+
+// supervisorChild waits until paddock-supervisor runs a child other than notPID that executed exe ("" any program but
+// the supervisor itself) and returns the child's PID. A Go program forks from any of its threads, so the children of
+// every task count; a supervisor whose file was renamed over runs from "… (deleted)".
+func supervisorChild(t *testing.T, d *Device, exe, notPID string) string {
 	t.Helper()
+	var pid string
 	Until(t, fmt.Sprintf("%s: paddock-supervisor runs %q", d.Name, exe), 2*time.Minute, 2*time.Second, nil, func() bool {
 		children := d.MustRoot(`m=$(systemctl show -p MainPID --value paddock-supervisor); [ "$m" != 0 ] || exit 0` +
-			`; for c in $(cat /proc/$m/task/*/children); do readlink /proc/$c/exe || true; done`)
-		for _, c := range strings.Fields(children) {
-			if c != "/usr/sbin/paddock-supervisor" && (exe == "" || c == exe) {
+			`; for c in $(cat /proc/$m/task/*/children); do printf '%s\t%s\n' "$c" "$(readlink /proc/$c/exe || true)"; done`)
+		for _, line := range strings.Split(children, "\n") {
+			c, path, _ := strings.Cut(line, "\t")
+			if c == "" || c == notPID || path == "" || strings.HasPrefix(path, "/usr/sbin/paddock-supervisor") {
+				continue
+			}
+			if exe == "" || path == exe {
+				pid = c
 				return true
 			}
 		}
 		return false
 	})
+	return pid
 }
 
 // fleetHost is a host as Fleet's API returns it.

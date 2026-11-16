@@ -43,8 +43,9 @@ func TestAgentBinaryPolicy(t *testing.T) {
   WHERE p.path != ''
     AND (p.name = 'paddockd' OR p.path LIKE '%/paddockd' OR p.path LIKE '%/paddockd (deleted)'
       OR p.path LIKE '/opt/paddock/agent/%'
-      OR (p.parent IN (SELECT pid FROM processes WHERE path = '/usr/sbin/paddock-supervisor')
-        AND p.path != '/usr/sbin/paddock-supervisor'))
+      OR (p.parent IN (SELECT pid FROM processes
+            WHERE path IN ('/usr/sbin/paddock-supervisor', '/usr/sbin/paddock-supervisor (deleted)'))
+        AND p.path NOT IN ('/usr/sbin/paddock-supervisor', '/usr/sbin/paddock-supervisor (deleted)')))
     AND COALESCE((SELECT sha256 FROM hash WHERE path = '/proc/' || p.pid || '/exe'),
       (SELECT sha256 FROM hash WHERE path = p.path), '') NOT IN ('` + a + `', '` + b + `'));`
 	if p.Query != want {

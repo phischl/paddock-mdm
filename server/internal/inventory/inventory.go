@@ -58,7 +58,8 @@ func KnownAgentHashes(hashes []string) []string {
 // AgentBinaryPolicy builds the policy PolicyAgentBinaryKnown from the published agent artifact hashes (plan M5a
 // amendment 2026-11-16, review round 1, A8): it fails while a judged process runs an executable whose SHA-256 is none
 // of the hashes. Judged is every process named paddockd, running a file named paddockd or a file below
-// /opt/paddock/agent/, or started by paddock-supervisor (other than before its exec). The hash is that of
+// /opt/paddock/agent/, or started by paddock-supervisor (other than before its exec), also by a supervisor whose file
+// was renamed over (plan M5a addendum 2026-11-16, review round 2, A12). The hash is that of
 // /proc/<pid>/exe, the executable the process actually runs, with its path as fallback for a process that exits during
 // the evaluation. No judged process passes (that is paddock_agent_running's case). With no valid hash the policy is
 // SELECT 1;, which always passes.
@@ -78,8 +79,9 @@ func AgentBinaryPolicy(hashes []string) ports.PolicyDefinition {
 		"  WHERE p.path != ''\n" +
 		"    AND (p.name = 'paddockd' OR p.path LIKE '%/paddockd' OR p.path LIKE '%/paddockd (deleted)'\n" +
 		"      OR p.path LIKE '/opt/paddock/agent/%'\n" +
-		"      OR (p.parent IN (SELECT pid FROM processes WHERE path = '/usr/sbin/paddock-supervisor')\n" +
-		"        AND p.path != '/usr/sbin/paddock-supervisor'))\n" +
+		"      OR (p.parent IN (SELECT pid FROM processes\n" +
+		"            WHERE path IN ('/usr/sbin/paddock-supervisor', '/usr/sbin/paddock-supervisor (deleted)'))\n" +
+		"        AND p.path NOT IN ('/usr/sbin/paddock-supervisor', '/usr/sbin/paddock-supervisor (deleted)')))\n" +
 		"    AND COALESCE((SELECT sha256 FROM hash WHERE path = '/proc/' || p.pid || '/exe'),\n" +
 		"      (SELECT sha256 FROM hash WHERE path = p.path), '') NOT IN ('" + strings.Join(known, "', '") + "'));"
 	return def
