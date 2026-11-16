@@ -279,7 +279,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	wc := newWorkerConsumers(mqCfg, offboardingConnected)
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
 	deviceCommands := app.NewDeviceCommands(runner, pool)
-	offboarded := app.NewOffboardedDevices(runner, platformPool, cache)
+	offboarded := app.NewOffboardedDevices(runner, platformPool, cache).WithCacheSync(devicecache.NewSyncer(cache))
 	// The heartbeat and event consumers run their listed statements cached on a view of the same pool: planning each of
 	// their short, keyed statements per execution cost about 30 % CPU per event (ADR 0055 amendment 2 decisions 8 and 9).
 	ingestPool := pool.WithStatementCache()

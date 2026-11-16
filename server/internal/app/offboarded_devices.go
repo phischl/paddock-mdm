@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -27,6 +28,9 @@ const StoreOffboardedDevice = "offboarded_device"
 // offboardedBatch bounds the records one purge transaction deletes.
 const offboardedBatch = 500
 
+// offboardedRestorePage is the number of records one restore transaction reads (plan M17 amendment s point 4.2).
+const offboardedRestorePage = 1000
+
 // offboardedKey is one element of offboarded_device.keys: [{"key_id": "...", "public_key": "<base64 SPKI DER>"}].
 type offboardedKey struct {
 	KeyID     string `json:"key_id"`
@@ -40,10 +44,15 @@ type offboardedCommand struct {
 	Envelope  []byte    `json:"envelope"`
 }
 
-// OffboardedDeviceCache is what a device of a deleted organization keeps in Valkey (devicecache.Cache).
+// OffboardedDeviceCache deletes what a device of a deleted organization keeps in Valkey (devicecache.Cache).
 type OffboardedDeviceCache interface {
-	PutOffboardedDevice(ctx context.Context, d devicecache.OffboardedDevice, lastSeq int64) error
 	DeleteOffboardedDevice(ctx context.Context, device uuid.UUID, keyIDs []string) error
+}
+
+// OffboardedDeviceSyncer caches devices of deleted organizations and writes only what differs from what Valkey holds
+// (devicecache.Syncer, plan M17 amendment s point 4.1).
+type OffboardedDeviceSyncer interface {
+	SyncOffboardedDevices(ctx context.Context, devices []devicecache.OffboardedDevice) (int, error)
 }
 
 // OffboardedDevices are the devices of deleted organizations that had not reported their removal (plan M17 decision
@@ -53,11 +62,18 @@ type OffboardedDevices struct {
 	runner   *ActionRunner
 	platform *db.PlatformPool
 	cache    OffboardedDeviceCache
+	sync     OffboardedDeviceSyncer
 }
 
 // NewOffboardedDevices creates the use cases; platform is the worker's platform pool.
 func NewOffboardedDevices(runner *ActionRunner, platform *db.PlatformPool, cache OffboardedDeviceCache) *OffboardedDevices {
 	return &OffboardedDevices{runner: runner, platform: platform, cache: cache}
+}
+
+// WithCacheSync sets the writer Restore uses; without it Restore fails.
+func (o *OffboardedDevices) WithCacheSync(s OffboardedDeviceSyncer) *OffboardedDevices {
+	o.sync = s
+	return o
 }
 
 func offboardedSystem(ctx context.Context) context.Context {
@@ -124,21 +140,55 @@ func (o *OffboardedDevices) Uninstalled(ctx context.Context, device uuid.UUID) (
 	return recorded, nil
 }
 
-// Restore rewrites the cached keys and the uninstall of every offboarded device (the cache sync, after Valkey lost its
-// data). A missing counter restarts at 0: the device's check-in counter left with its organization's rows, and the
-// gateway records no heartbeat for such a device. Keys of a record deleted while they were rewritten are deleted
+// OffboardedRestore is what one Restore did.
+type OffboardedRestore struct {
+	Devices int // records that still exist after their keys were synced
+	Pages   int // page reads of offboarded_device
+	Written int // Valkey keys written (devicecache.Syncer)
+}
+
+// Restore caches the keys and the uninstall of every offboarded device (the cache sync, after Valkey lost its data),
+// writing only what differs from what Valkey holds. It reads the records in keyset pages of offboardedRestorePage,
+// each in its own transaction, so it never holds every record in memory or in one transaction (plan M17 amendment s
+// point 4.2). A missing counter restarts at 0: the device's check-in counter left with its organization's rows, and
+// the gateway records no heartbeat for such a device. Keys of a record deleted while they were synced are deleted
 // again, so a device that reported its removal meanwhile keeps nothing.
-func (o *OffboardedDevices) Restore(ctx context.Context) (int, error) {
-	ctx = offboardedSystem(ctx)
-	var rows []pgstore.OffboardedDevice
-	err := o.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		var err error
-		rows, err = q.ListOffboardedDevices(ctx)
-		return err
-	})
-	if err != nil || len(rows) == 0 {
-		return 0, err
+func (o *OffboardedDevices) Restore(ctx context.Context) (OffboardedRestore, error) {
+	var res OffboardedRestore
+	if o.sync == nil {
+		return res, errors.New("offboarded devices: restore without a cache syncer")
 	}
+	ctx = offboardedSystem(ctx)
+	after := uuid.Nil
+	for {
+		var rows []pgstore.OffboardedDevice
+		err := o.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			var err error
+			rows, err = q.ListOffboardedDevicesPage(ctx, pgstore.ListOffboardedDevicesPageParams{AfterDevice: after,
+				MaxRows: offboardedRestorePage})
+			return err
+		})
+		if err != nil {
+			return res, err
+		}
+		res.Pages++
+		present, written, err := o.restorePage(ctx, rows)
+		res.Devices += present
+		res.Written += written
+		if err != nil || len(rows) < offboardedRestorePage {
+			return res, err
+		}
+		after = rows[len(rows)-1].DeviceID
+	}
+}
+
+// restorePage syncs the keys of one page of records and deletes them again for every record gone meanwhile; it
+// returns the records still present and the keys written.
+func (o *OffboardedDevices) restorePage(ctx context.Context, rows []pgstore.OffboardedDevice) (int, int, error) {
+	if len(rows) == 0 {
+		return 0, 0, nil
+	}
+	devices := make([]devicecache.OffboardedDevice, 0, len(rows))
 	ids := make([]uuid.UUID, 0, len(rows))
 	keysOf := map[uuid.UUID][]string{}
 	for _, r := range rows {
@@ -147,13 +197,15 @@ func (o *OffboardedDevices) Restore(ctx context.Context) (int, error) {
 			slog.WarnContext(ctx, "an offboarded device's record is unusable; not cached", "device_id", r.DeviceID, "error", err)
 			continue
 		}
-		if err := o.cache.PutOffboardedDevice(ctx, d, 0); err != nil {
-			return 0, err
-		}
+		devices = append(devices, d)
 		ids = append(ids, r.DeviceID)
 		for _, k := range d.Keys {
 			keysOf[r.DeviceID] = append(keysOf[r.DeviceID], k.KeyID)
 		}
+	}
+	written, err := o.sync.SyncOffboardedDevices(ctx, devices)
+	if err != nil {
+		return 0, written, err
 	}
 	var present []uuid.UUID
 	err = o.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -162,7 +214,7 @@ func (o *OffboardedDevices) Restore(ctx context.Context) (int, error) {
 		return err
 	})
 	if err != nil {
-		return 0, err
+		return 0, written, err
 	}
 	still := make(map[uuid.UUID]bool, len(present))
 	for _, id := range present {
@@ -171,11 +223,11 @@ func (o *OffboardedDevices) Restore(ctx context.Context) (int, error) {
 	for _, id := range ids {
 		if !still[id] {
 			if err := o.cache.DeleteOffboardedDevice(ctx, id, keysOf[id]); err != nil {
-				return 0, err
+				return len(present), written, err
 			}
 		}
 	}
-	return len(present), nil
+	return len(present), written, nil
 }
 
 // cachedOffboardedDevice is the cache entry of a record; each command's expiry is read from its signed payload.

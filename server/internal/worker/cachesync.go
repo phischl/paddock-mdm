@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -18,6 +21,22 @@ import (
 
 // ReconcileInterval is how often the cache sync rewrites every entry from PostgreSQL (plan M2a risk R2).
 const ReconcileInterval = 60 * time.Second
+
+// OffboardedRestoreInterval is how often the reconcile restores the devices of deleted organizations, besides the
+// first reconcile after start (plan M17 amendment s point 4.2): such a device only fetches its uninstall, valid for 365
+// days, so after a Valkey data loss it waits at most this much longer.
+const OffboardedRestoreInterval = 15 * time.Minute
+
+var metricReconcileWrites = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "paddock_device_cache_reconcile_writes_total",
+	Help: "Valkey keys the periodic device cache reconcile wrote because they differed from PostgreSQL, by kind; flat in the steady state.",
+}, []string{"kind"})
+
+// Kinds of paddock_device_cache_reconcile_writes_total.
+const (
+	reconcileWritesDeviceKey  = "device_key"
+	reconcileWritesOffboarded = "offboarded_device"
+)
 
 // notifyChannel is the PostgreSQL channel of the device_cache_notify trigger (migration 00003).
 const notifyChannel = "device_cache"
@@ -28,9 +47,15 @@ const notifyChannel = "device_cache"
 type CacheSync struct {
 	pool       *db.OrgPool
 	cache      *devicecache.Cache
+	syncer     *devicecache.Syncer
 	offboarded offboardedRestorer
 	interval   time.Duration
 	now        func() time.Time
+	// restoredAt is when Restore last succeeded; zero until then, so the first reconcile restores.
+	restoredAt time.Time
+	// skippedMu guards skipped, the organizations whose refused change notifications were already logged.
+	skippedMu sync.Mutex
+	skipped   map[uuid.UUID]bool
 	// pageSize overrides ReconcilePageSize in tests; zero keeps it.
 	pageSize int
 	// beforeListen, if set, runs before each LISTEN attempt; tests use it to hold the listener back.
@@ -40,10 +65,10 @@ type CacheSync struct {
 // offboardedRestorer rewrites the cached keys and uninstalls of the devices of deleted organizations
 // (app.OffboardedDevices).
 type offboardedRestorer interface {
-	Restore(ctx context.Context) (int, error)
+	Restore(ctx context.Context) (app.OffboardedRestore, error)
 }
 
-// WithOffboardedDevices makes every reconcile also restore the devices of deleted organizations (plan M17 decision
+// WithOffboardedDevices makes the reconcile also restore the devices of deleted organizations (plan M17 decision
 // 15): their rows left with the organization, so only their platform records can rebuild them.
 func (s *CacheSync) WithOffboardedDevices(o offboardedRestorer) *CacheSync {
 	s.offboarded = o
@@ -52,7 +77,8 @@ func (s *CacheSync) WithOffboardedDevices(o offboardedRestorer) *CacheSync {
 
 // NewCacheSync creates the sync.
 func NewCacheSync(pool *db.OrgPool, cache *devicecache.Cache) *CacheSync {
-	return &CacheSync{pool: pool, cache: cache, interval: ReconcileInterval, now: time.Now}
+	return &CacheSync{pool: pool, cache: cache, syncer: devicecache.NewSyncer(cache), interval: ReconcileInterval, now: time.Now,
+		skipped: map[uuid.UUID]bool{}}
 }
 
 // Run listens for changes and reconciles periodically until ctx ends. It also reconciles whenever LISTEN is
@@ -85,11 +111,7 @@ func (s *CacheSync) listen(ctx context.Context, listening chan<- struct{}) {
 			case listening <- struct{}{}:
 			default:
 			}
-		}, func(payload string) {
-			if err := s.Changed(ctx, payload); err != nil {
-				slog.WarnContext(ctx, "device cache update failed; the reconcile loop repairs it", "change", payload, "error", err)
-			}
-		})
+		}, func(payload string) { s.applyChange(ctx, payload) })
 		if ctx.Err() == nil {
 			slog.WarnContext(ctx, "device cache LISTEN failed; reconciling continues", "error", err)
 			select {
@@ -97,6 +119,29 @@ func (s *CacheSync) listen(ctx context.Context, listening chan<- struct{}) {
 			case <-time.After(5 * time.Second):
 			}
 		}
+	}
+}
+
+// applyChange applies one change notification and logs a failure. A refusal because the organization is deleting is
+// logged once per organization at Info, not per notification (plan M17 amendment s point 6.2): a deletion refuses
+// every change of its devices, and its valkey step removes their keys.
+func (s *CacheSync) applyChange(ctx context.Context, payload string) {
+	err := s.Changed(ctx, payload)
+	if err == nil {
+		return
+	}
+	var u *db.OrganizationUnavailableError
+	if !errors.As(err, &u) {
+		slog.WarnContext(ctx, "device cache update failed; the reconcile loop repairs it", "change", payload, "error", err)
+		return
+	}
+	s.skippedMu.Lock()
+	logged := s.skipped[u.Organization]
+	s.skipped[u.Organization] = true
+	s.skippedMu.Unlock()
+	if !logged {
+		slog.InfoContext(ctx, "device cache changes of a deleting organization are skipped; the deletion removes its keys",
+			"organization", u.Organization, "status", u.Status)
 	}
 }
 
@@ -163,17 +208,28 @@ func (s *CacheSync) ReconcileAll(ctx context.Context) error {
 		errs = append(errs, err)
 	}
 	for _, org := range orgs {
-		if err := s.Reconcile(ctx, org); err != nil {
+		err := s.Reconcile(ctx, org)
+		if db.IsOrganizationUnavailable(err) {
+			// The organization started deleting after the listing; its deletion removes its keys (amendment s point 6.2).
+			continue
+		}
+		if err != nil {
 			slog.WarnContext(ctx, "device cache reconcile of an organization failed", "organization", org, "error", err)
 			errs = append(errs, fmt.Errorf("organization %s: %w", org, err))
 		}
 	}
 	// The offboarded devices are platform records, independent of the organization list: they are restored also when
-	// that list failed.
-	if s.offboarded != nil {
-		if _, err := s.offboarded.Restore(ctx); err != nil {
+	// that list failed. Only a successful restore counts for the interval, so a failed one is retried by the next
+	// reconcile.
+	if s.offboarded != nil && (s.restoredAt.IsZero() || !s.now().Before(s.restoredAt.Add(OffboardedRestoreInterval))) {
+		started := s.now()
+		res, err := s.offboarded.Restore(ctx)
+		metricReconcileWrites.WithLabelValues(reconcileWritesOffboarded).Add(float64(res.Written))
+		if err != nil {
 			slog.WarnContext(ctx, "device cache reconcile of the offboarded devices failed", "error", err)
 			errs = append(errs, fmt.Errorf("offboarded devices: %w", err))
+		} else {
+			s.restoredAt = started
 		}
 	}
 	return errors.Join(errs...)
@@ -223,7 +279,7 @@ func (s *CacheSync) Reconcile(ctx context.Context, org uuid.UUID) error {
 		}); err != nil {
 			return err
 		}
-		if err := s.putKeys(ctx, org, keys); err != nil {
+		if err := s.syncKeys(ctx, org, keys); err != nil {
 			return err
 		}
 		if len(keys) < pageSize {
@@ -263,8 +319,24 @@ func (s *CacheSync) putToken(ctx context.Context, tok pgstore.EnrollmentToken) e
 	}, s.now())
 }
 
-// putKeys caches identity keys read by Reconcile or Changed; keys of pending devices are not cached (plan M2a
-// decision 10).
+// syncKeys caches the identity keys of one reconcile page, writing only those that differ from what Valkey holds (plan
+// M17 amendment s point 4.1); keys of pending devices are not cached (plan M2a decision 10).
+func (s *CacheSync) syncKeys(ctx context.Context, org uuid.UUID, keys []cachedKey) error {
+	entries := make([]devicecache.DeviceKeyEntry, 0, len(keys))
+	for _, k := range keys {
+		if k.State == "pending" {
+			continue
+		}
+		entries = append(entries, devicecache.DeviceKeyEntry{KeyID: k.KeyID, LastSeq: k.LastSeq, Key: devicecache.DeviceKey{
+			DeviceID: k.DeviceID, OrganizationID: org, Status: devicecache.KeyStatus(k.KeyStatus, k.State), PublicKey: k.PublicKey}})
+	}
+	written, err := s.syncer.SyncDeviceKeys(ctx, entries)
+	metricReconcileWrites.WithLabelValues(reconcileWritesDeviceKey).Add(float64(written))
+	return err
+}
+
+// putKeys caches the identity keys read by Changed unconditionally, since a notification names one changed device;
+// keys of pending devices are not cached (plan M2a decision 10).
 func (s *CacheSync) putKeys(ctx context.Context, org uuid.UUID, keys []cachedKey) error {
 	for _, k := range keys {
 		if k.State == "pending" {

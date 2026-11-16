@@ -485,6 +485,16 @@ case "$cmd" in
         "$BUNDLE_DIR/scripts/offboard-users-check.sh" || offboard_failed=1
       fi
     fi
+    # Valkey's memory headroom (plan M17 amendment s point 4.6): the container's usage against its limit from docker
+    # stats, without a Valkey credential. A WARN only; an empty usage (listing failed, container down) reads as not
+    # checked.
+    if [[ -n "$online" && ("$PADDOCK_HOST" == controlplane || "$PADDOCK_HOST" == lab) ]]; then
+      valkey_usage=""
+      if valkey_id="$(compose ps -q valkey </dev/null)" && [[ -n "$valkey_id" ]]; then
+        valkey_usage="$(docker stats --no-stream --format '{{.MemUsage}}' "$valkey_id" 2>/dev/null)" || valkey_usage=""
+      fi
+      "$BUNDLE_DIR/scripts/valkey-headroom.sh" "$valkey_usage"
+    fi
     rc=0
     PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
       docker run --rm -i --user 0:0 "${network[@]}" "${mounts[@]}" "${containers_mount[@]}" "${broker_mount[@]}" \

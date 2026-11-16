@@ -467,7 +467,7 @@ without a limit yet are listed in `deploy/compose/hardening-exceptions.yaml`.
 | `postgres` | control plane | 2 GiB | `PADDOCK_POSTGRES_MEM_LIMIT` | 190–245 MiB |
 | `authentik-postgres` | control plane | 1 GiB | `PADDOCK_AUTHENTIK_POSTGRES_MEM_LIMIT` | 210–215 MiB |
 | `audit-postgres` | audit | 1 GiB | `PADDOCK_AUDIT_POSTGRES_MEM_LIMIT` | 50–75 MiB |
-| `valkey` | control plane | 512 MiB | `PADDOCK_VALKEY_MEM_LIMIT` | 6–12 MiB |
+| `valkey` | control plane | 1 GiB | `PADDOCK_VALKEY_MEM_LIMIT` | 6–12 MiB |
 | `fleet-redis` | control plane | 512 MiB | `PADDOCK_FLEET_REDIS_MEM_LIMIT` | 4–5 MiB |
 | `fleet-mysql` | control plane | 2 GiB | `PADDOCK_FLEET_MYSQL_MEM_LIMIT` | 645–655 MiB |
 | `rabbitmq` | control plane | 1 GiB | `PADDOCK_RABBITMQ_MEM_LIMIT` | 155–170 MiB |
@@ -483,8 +483,23 @@ without a limit yet are listed in `deploy/compose/hardening-exceptions.yaml`.
 The snapshot is the resident memory (`docker stats`) of two idle development stacks after their acceptance runs, not
 a peak under load. PostgreSQL's page cache does not count against the limit beyond what the kernel can reclaim, so a
 larger database grows into the host's page cache instead; raise `PADDOCK_POSTGRES_MEM_LIMIT` when you raise
-`shared_buffers` or the number of connections. Valkey holds sessions, device keys, nonces and counters only; a limit
-reached there points to a leak, not to a larger installation.
+`shared_buffers` or the number of connections.
+
+Valkey grows with the devices it serves: every live device keeps its identity key, counters and pending commands, and
+every device of a deleted organization that has not reported its removal keeps its key and its signed uninstall for
+365 days after the deletion (about 2.3 KB each). Size the limit by
+
+`PADDOCK_VALKEY_MEM_LIMIT ≥ 2 × (64 MiB + live devices × 2.0 KB + offboarded devices × 2.3 KB)`
+
+Measured on the development stack (plan M17 amendment s): 220 MiB for 110 000 live devices, 175 MiB more once their
+organization was deleted and they were handed over. For example, 70 000 live plus 70 000 offboarded devices need
+2 × (64 MiB + 137 MiB + 157 MiB) ≈ 716 MiB (a KB here is 1 024 bytes), so the default of 1 GiB fits. The entrypoint sets Valkey's `maxmemory` to
+60 % of the container's limit with the policy `noeviction`: at that point Valkey refuses writes that need memory (the
+cache sync and new sessions fail and log it) but keeps serving reads and deletions, so check-ins of known devices and
+an organization deletion go on; it never evicts a key, because an evicted counter or nonce weakens replay protection
+and an evicted device key looks like an outage. The remaining 40 % is the copy-on-write headroom of an AOF rewrite. A
+container without a limit gets no `maxmemory` (the entrypoint logs one line). `./paddock check --online` warns
+(`valkey: memory headroom`) when Valkey uses more than half of its limit.
 
 The vulnerability figure for `fleet` is the cgroup peak (`memory.peak`, page cache included) of one run of
 `fleet vuln_processing` that downloaded every feed into an empty volume (850 MiB on disk), measured on a scratch stack
@@ -504,7 +519,14 @@ RustFS's resident memory grows with the objects it serves: 90 MiB on a fresh vol
 development stack's `audit-rustfs` after many acceptance runs (anonymous memory; its cgroup's `memory.peak`, page
 cache included, reached 7.4 GiB, which the kernel reclaims below the limit). When an object store is killed at its
 limit, clients see failed uploads and the audit writer retries; raise `PADDOCK_AUDIT_RUSTFS_MEM_LIMIT` (or
-`PADDOCK_RUSTFS_MEM_LIMIT`) and the host's RAM together. OpenBao holds its keys and the Raft index in memory and stays
+`PADDOCK_RUSTFS_MEM_LIMIT`) and the host's RAM together.
+
+The control plane's `rustfs` needs **1 GiB of `PADDOCK_RUSTFS_MEM_LIMIT` per 20 000 objects, at least 2 GiB**. Every
+managed device keeps one bundle object, plus its escrow objects (one LUKS header per encrypted disk, diagnostics while
+they are retained). The figure comes from the §62 measurement of plan M17 amendment s on RustFS 1.0.4: at 2 GiB the
+store was killed in a loop with 110 000 bundle objects (330 000 directories), from RustFS's own scanner, and stayed
+below the limit from about 55 000 objects on; 20 000 per GiB leaves headroom. For example, 70 000 devices with one
+LUKS header each hold 140 000 objects and need 7 GiB. The default of 2 GiB fits about 40 000 objects. OpenBao holds its keys and the Raft index in memory and stays
 small.
 
 ## PostgreSQL connection budget

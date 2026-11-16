@@ -162,7 +162,8 @@ func TestCacheSyncRestoresOffboardedDevices(t *testing.T) {
 	dev := f.device(t, "active")
 	disarm, cmd := f.offboard(t, dev, "k-"+dev.String())
 	f.markDeleted(t)
-	sync := NewCacheSync(f.pool, f.cache).WithOffboardedDevices(app.NewOffboardedDevices(runner, platform, f.cache))
+	sync := NewCacheSync(f.pool, f.cache).WithOffboardedDevices(app.NewOffboardedDevices(runner, platform, f.cache).
+		WithCacheSync(devicecache.NewSyncer(f.cache)))
 	if err := sync.ReconcileAll(context.Background()); err != nil && strings.Contains(err.Error(), "offboarded devices") {
 		t.Fatal(err)
 	}
@@ -335,7 +336,8 @@ func TestCacheSyncRestoresOffboardedDevicesWithoutOrganizations(t *testing.T) {
 		t.Fatal(err)
 	}
 	broken.Close()
-	sync := NewCacheSync(broken, f.cache).WithOffboardedDevices(app.NewOffboardedDevices(runner, platform, f.cache))
+	sync := NewCacheSync(broken, f.cache).WithOffboardedDevices(app.NewOffboardedDevices(runner, platform, f.cache).
+		WithCacheSync(devicecache.NewSyncer(f.cache)))
 	if err := sync.ReconcileAll(context.Background()); err == nil {
 		t.Fatal("ReconcileAll hid the failed organization list")
 	}

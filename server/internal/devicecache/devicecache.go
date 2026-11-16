@@ -102,10 +102,15 @@ func (c *Cache) PutDeviceKey(ctx context.Context, keyID string, k DeviceKey, las
 	if err := c.RestoreSeq(ctx, k.DeviceID, lastSeq); err != nil {
 		return err
 	}
-	return c.putHash(ctx, deviceKeyKey(keyID), time.Time{}, map[string]string{
+	return c.putHash(ctx, deviceKeyKey(keyID), time.Time{}, deviceKeyFields(k))
+}
+
+// deviceKeyFields is the hash dk:<key_id> holds for k.
+func deviceKeyFields(k DeviceKey) map[string]string {
+	return map[string]string{
 		"device": k.DeviceID.String(), "org": k.OrganizationID.String(), "status": k.Status,
 		"public_key": base64.StdEncoding.EncodeToString(k.PublicKey),
-	})
+	}
 }
 
 // DeviceKey reads a cached identity key.

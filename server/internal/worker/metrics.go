@@ -19,6 +19,7 @@ func RegisterMetrics(reg prometheus.Registerer) error {
 		metricDirectoryRefusals, metricUnknownEvents, metricDropped, metricConfigRollouts, metricUnmappedHosts,
 		metricOSVLastSuccess, metricOSVStale, metricOSVEntries,
 		metricOpenBaoSealed, metricOpenBaoReachable, metricTLSExpiry, metricTLSProbeSuccess, metricTLSProbeHosts,
+		metricReconcileWrites,
 	} {
 		if err := reg.Register(c); err != nil {
 			return fmt.Errorf("worker: register metrics: %w", err)
