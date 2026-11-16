@@ -687,3 +687,40 @@ is now:
     clock and are not affected.
 - **Correction to M2.** One retry of a kept log blocks the loop for up to four version calls, not two: two in
   `rebuildProbation`, one in `resumeRequest`, one in `onRequest`. That is at most 40 s, still below `WatchdogSec=60`.
+
+**Correction to fix round 2: resume writes nothing before the first rename (architect, 2026-11-16).** The claim above
+that a resumed ADR 0024 `rollback_failed` log "makes the rename first" on its first tick was false. Two synced writes
+in `resumeProbation` still ran before READY, and so before the first tick:
+
+- the re-report of a recorded `rollback_failed` (`s.report(&p, true)` in the pending branch, whose `finishAt` writes
+  the result);
+- writing back a decision taken over from the result (`p.unrecorded = writeJSON(…) != nil`).
+
+The probe that showed it: a pending rollback, every sync stalling, and `current` still on `ToSlot` after a restart.
+The binding fix:
+
+1. `probation` gets an in-memory field `unreported bool`, meaning "the recorded `rollback_failed` result must be
+   written again". In the pending branch of `resumeProbation`, `s.report(&p, true)` becomes `p.unreported = true`.
+2. `keepRollbackPending`: if `p.Outcome == outcomeRollbackFailed` and `p.unreported`, it sets `p.unreported = false`
+   and calls `s.report(p, true)`. Otherwise it behaves as today, with `conclude rollback_failed` for a log without an
+   outcome. So the result is written again only after a retry's flip back has failed, never before the rename.
+3. When the decision is taken over from the result, the write-back becomes `p.unrecorded = true` without a write.
+   `recordPending` (a retry that is not yet due, or `keepRollbackPending`) or `report` writes it later.
+4. If the retry's flip back succeeds, `confirmRollback` concludes `rolled_back` with a new `at`, and that replaces a
+   `rollback_failed` result that was not delivered. This is the live path's behaviour since ADR 0024. The rollout
+   counts the failure either way, and the intermediate `rollback_failed` event can be lost only if its result had
+   already been lost (power loss or a failed result write).
+- **Exactly once per `at`:** the re-report writes the recorded `DecidedAt` and clears `unreported`, so later failed
+  retries write nothing. A result that the agent already delivered and deleted is written again with the same `at`,
+  as it was before at resume. The agent turns one `at` into one event, and the server counts an outcome once per
+  device and release.
+- **The resumed `rolled_back` with `current` on `ToSlot`** (the flip back was lost with the power): no write before
+  the first rename, as today. The report condition needs `rollback_failed`, and that branch writes nothing.
+  Unchanged: a successful flip concludes `rolled_back` with a new `at`, and a failed one concludes `rollback_failed`.
+- **Budget:** +4 lines (the field 1, the branch in `keepRollbackPending` 3). That makes about 864 of 865. If the
+  count is over 865, stop and report.
+- **Tests:**
+  - The implementer's probe as a test: a pending rollback, every sync stalling, three restarts. After the first
+    restart `current` is on `FromSlot`, and `rolled_back` is then reported.
+  - A resumed `rollback_failed` log with a flip back that keeps failing writes its result again exactly once, with the
+    recorded `at`, after the first failed retry.
