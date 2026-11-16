@@ -1074,6 +1074,17 @@ replaced binary would become the new baseline. A reset is therefore reported onc
    "a corrupt or deleted baseline is reported as `baseline_reset`; the binary that becomes the new baseline is not
    judged against the old one". The runbook subsection of R13 gets one row for `baseline_reset`: check the slots
    against the published release hashes (PDK-1122b) and the packages with `dpkg --verify`.
+8. **Residual: baseline and agent state reset together (main §150 follow-up, no R15).** `IntegrityEstablishedAt`
+   lives in the agent's local `state.json`, which root can edit. Root who removes that field (or deletes `state.json`
+   and re-creates its enrollment fields) together with `integrity.json` makes the device look like a first
+   installation, and no `baseline_reset` is sent. A server-side anchor was weighed and rejected: the device sends no
+   signal of a completed integrity pass today, so the server could only learn of one through a new event, a new
+   report field or a new `reason` value on a regular pass, which is a protocol or audit-contract change; a heuristic
+   on existing data (agent version, event history) cannot tell a reset from an upgrade of a pre-PDK-1122a agent. Any
+   device-side anchor is editable by root (RR-01). RR-148 MUST name this case exactly as: "root resets the integrity
+   baseline and the agent state together: the device looks freshly installed and no `baseline_reset` is sent; a
+   replaced agent binary is still caught by the Fleet policy `paddock_agent_binary_known` (PDK-1122b), a stopped agent
+   by the mutual watch (PDK-1122c), and a silenced fleetd by PDK-1122d."
 
 ### Files
 

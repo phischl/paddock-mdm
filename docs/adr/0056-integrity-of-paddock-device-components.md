@@ -129,6 +129,9 @@ decision:
    `device.tamper_protected_file_changed` with `file` the baseline file and `reason` `baseline_reset`. The episode
    ends with the next valid record. The re-initialization after an update result without a matching staged release
    stays a `Warn` without an event, because a rollback to an older agent causes it on a regular flow.
+   Root who resets the agent state together with the baseline makes the device look freshly installed and stays
+   silent here (RR-148); a server-side anchor would need a protocol or audit-contract change and was not taken. The
+   Fleet policy (decision 2) and the mutual watches of PDK-1122c and PDK-1122d remain independent of the agent's state.
 
 Consequences: RR-148 also names short-lived changes within one drift interval, the staged-guard, conversion and
 re-sync windows, and that changes during a suspension are reported only as the suspension. An unwritable baseline
