@@ -260,7 +260,9 @@ maximum 5.6 ms. The round trips are unchanged (one per query), so plan M17 amend
 transaction" still holds. `TestOrganizationPoolPlansPerExecution` seeds 70 000 devices and bounds each of the former
 catastrophic queries to 1 s in the large organization after six runs in a small one on the same connection.
 
-Ingest CPU per event with and without per-execution planning (N2 method, ADR 0055 decision 3): TODO-LEAD.
+Ingest CPU per event with and without per-execution planning (N2 method, ADR 0055 decision 3): +28 % CPU seconds per
+1 000 events (median, postgres +36 %; two pairs, +32 % and +24 %), far above the 5 % budget. This led to the
+statement-cache view below.
 
 The heartbeat and event ingest keeps cached statements (ADR 0055 amendment 2026-11-15 (2), PDK-1079b): planning its
 short, keyed statements per execution cost about 30 % more CPU per event in the first N2 measurement. The worker's
@@ -275,8 +277,17 @@ that takes the organization index still reads only one device's rows (7 000 shar
 `MaxDeviceEventSeenBefore` at 70 000 devices). `TestIngestViewGenericPlans` forces generic plans and bounds every
 listed read and write, and the two event-gap lookups, to 100 shared buffers in a 70 000-device organization.
 
-Ingest CPU per event with the statement-cache view (N2 method, ADR 0055 amendment 2 decision 12, series 1 and 2):
-TODO-LEAD.
+Ingest CPU per event with the statement-cache view (N2 method, ADR 0055 amendment 2 decision 12, series 1 and 2;
+5 000 events/s offered, two ingest workers, 150 connections):
+
+- Series 1, view against the build without per-execution planning: +0.7 % (median of three alternating pairs, 1.715
+  against 1.703 CPU seconds per 1 000 events; pairs −15.1 %, +6.5 %, −1.0 %). Within the 5 % budget.
+- Series 2a, the `(organization_id, device_id)` event-table indexes of migration 00158 against the organization-only
+  ones: −20.7 % (postgres −31.5 %). The composite indexes are cheaper.
+- Series 2b, `outbox_org_idx` (PDK-1068) present against absent: median +10.3 %, but the pairs range from −35 % to
+  +55 % with a mean of +5.9 % and the present variant always ran second on a host whose load drifted, so the
+  measurement does not separate the index's cost from noise. The index stays for the offboarding database step; a
+  re-measurement with randomized order on a quiet host follows (decisions recorded with the release).
 
 The organization pools also open their connections with `jit = off` (connection runtime parameter, no statement per
 transaction; ADR 0055 amendment 2026-11-15, PDK-1081); the other pools keep the server's default. At 70 000 active

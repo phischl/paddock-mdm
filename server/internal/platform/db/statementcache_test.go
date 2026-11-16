@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -170,5 +171,70 @@ func TestIngestViewCachesListedStatements(t *testing.T) {
 	}
 	if got := preparedStatements(t, view, f.orgA, "-- name: ListDevices %"); len(got) != 0 {
 		t.Errorf("unlisted ListDevices: prepared as %v, want none", got)
+	}
+}
+
+// TestIngestViewCachedPlanKeepsOrganizationIsolation: a GetDevice plan cached on the view's connection in organization
+// A does not leak A's device into organization B; B sees only its own device. MaxConns 1 forces every transaction onto
+// the one connection that holds the cached statement, and the backend PID check proves it.
+func TestIngestViewCachedPlanKeepsOrganizationIsolation(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	parent, err := db.NewOrgPool(ctx, sharedPaddock(t).API, db.Options{MaxConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(parent.Close)
+	view := parent.WithStatementCache()
+	devA, devB := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	super, err := pgx.Connect(ctx, sharedPaddock(t).Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	if _, err := super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, $3, 'active'), ($4, $5, $6, 'active')",
+		devA, f.orgA, "cache-"+devA.String(), devB, f.orgB, "cache-"+devB.String()); err != nil {
+		t.Fatalf("seed devices: %v", err)
+	}
+	backendPID := func(org uuid.UUID) int32 {
+		var pid int32
+		if err := db.InOrgTx(view, orgCtx(org), func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return pid
+	}
+
+	pidA := backendPID(f.orgA)
+	err = view.InOrg(orgCtx(f.orgA), func(ctx context.Context, q *pgstore.Queries) error {
+		_, err := q.GetDevice(ctx, devA)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("org A reads its own device: %v", err)
+	}
+	cached := preparedStatements(t, view, f.orgA, "-- name: GetDevice %")
+	if len(cached) != 1 {
+		t.Fatalf("GetDevice after org A: prepared as %v, want one named statement", cached)
+	}
+
+	err = view.InOrg(orgCtx(f.orgB), func(ctx context.Context, q *pgstore.Queries) error {
+		if _, err := q.GetDevice(ctx, devA); !db.IsNoRows(err) {
+			t.Errorf("org B reads org A's device through the cached plan: err = %v, want no rows", err)
+		}
+		if _, err := q.GetDevice(ctx, devB); err != nil {
+			t.Errorf("org B reads its own device: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preparedStatements(t, view, f.orgB, "-- name: GetDevice %"); len(got) != 1 || got[0] != cached[0] {
+		t.Errorf("GetDevice after org B: prepared as %v, want the statement %v cached in org A", got, cached)
+	}
+	if pidB := backendPID(f.orgB); pidB != pidA {
+		t.Errorf("backend PID %d in org B, %d in org A: the cached plan did not stay on one connection", pidB, pidA)
 	}
 }
