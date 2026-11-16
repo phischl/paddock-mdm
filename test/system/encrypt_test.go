@@ -306,6 +306,7 @@ func TestInPlaceEncryptionPlain(t *testing.T) {
 		w.waitConversion(t, "cancelled", 5*time.Minute, func(c apiConversion) bool { return c.ID == id && c.Phase == "cancelled" })
 		w.waitAbortCleaned(t)
 		// The agent's own preparation and cleanup of disk-setup.json are no tamper (ADR 0056).
+		w.WaitIntegrityPass(t)
 		w.Checkin()
 		if files := w.tamperFiles(nil, "/etc/paddock/disk-setup.json"); len(files) != 0 {
 			t.Fatalf("the agent's own preparation and cleanup reported %v", files)

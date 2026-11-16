@@ -155,7 +155,8 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string, opts ...InstallOptio
 }
 
 // SetDriftInterval sets the agent's drift interval to 30 s (development build) and restarts the supervisor. A
-// report-only device does not drift, so a gate of report-only calls it after the enforcement.
+// report-only device does not drift, so a gate of report-only calls it after the enforcement. The edit is a write
+// outside Paddock: it raises one /etc/paddock/agent.yml tamper event once the first integrity pass ran (ADR 0056).
 func (d *Device) SetDriftInterval() {
 	d.t.Helper()
 	d.Must("echo 'drift_interval_s: 30' | sudo tee -a /etc/paddock/agent.yml >/dev/null && sudo systemctl restart paddock-supervisor")

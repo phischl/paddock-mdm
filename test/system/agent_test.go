@@ -66,9 +66,13 @@ func TestAgentGates(t *testing.T) {
 		t.Run("S3 agent outage", func(t *testing.T) { d.Bind(t); gateS3(t, d) })
 		t.Run("S4 agent update", func(t *testing.T) {
 			d.Bind(t)
+			// The seen set follows the last hand edit of the harness and one whole pass (plan M5a R12).
+			d.WaitIntegrityPass(t)
+			d.Checkin()
 			seen := d.eventIDs(TamperFileChanged)
 			gateS4(t, d)
 			// Regular updates, rollbacks and refusals move the integrity baseline without a report (ADR 0056).
+			d.WaitIntegrityPass(t)
 			d.Checkin()
 			if files := d.tamperFiles(seen, "/opt/paddock/", "/usr/sbin/", "/etc/paddock/"); len(files) != 0 {
 				t.Fatalf("the update gates reported %v", files)

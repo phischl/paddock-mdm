@@ -555,11 +555,46 @@ slots. Make the active slot answer again, as root on the device:
 
 The agent then stages the current release again, and the supervisor processes it as usual: signature check, downgrade
 refusal against the version that the active slot now reports, self-test and probation. The agent's integrity check
-(ADR 0056) reports either step once as `device.tamper_protected_file_changed`: step 2 with `file`
-`/opt/paddock/agent/current`, step 3 with `/opt/paddock/agent/<slot>/paddockd`. That event is expected after this
+(ADR 0056) reports step 3 once as `device.tamper_protected_file_changed` with `file`
+`/opt/paddock/agent/<slot>/paddockd`. Step 2 is usually not reported, because the agent stages the release again and
+the supervisor's result moves the baseline; it is reported with `file` `/opt/paddock/agent/current` only when the
+re-staged release is refused. That event is expected after this
 repair: resolve the tamper finding with a note on the intervention, and record it in your own change log as an
 intended intervention.
 The device then reports the agent version of the slot it runs.
+
+### When the integrity check is suspended
+
+The agent's integrity check of Paddock's own components (ADR 0056) skips an object or a whole pass while something
+blocks it: a running update, a held dpkg lock, a state file it cannot read. Regular flows end well within a fixed
+bound: 15 minutes for the baseline itself, 6 hours for everything else, counted only while the device runs. A cause
+that lasts longer is reported once as `device.tamper_protected_file_changed` with `reason` `check_suspended`, and
+`file` names the path that blocks the check. While the check is suspended, changes behind it are not reported
+individually. Investigate every such event:
+
+| `file` | Likely cause | What to check as root |
+| --- | --- | --- |
+| `/var/lib/paddock/state/integrity.lock` | another process holds the lock | `fuser -v /var/lib/paddock/state/integrity.lock` |
+| `/var/lib/paddock/state/integrity.json` | the baseline cannot be read or written (not a regular file, too large, full or read-only disk), or it keeps changing while a pass observes | `ls -l /var/lib/paddock/state/`, `df -h /var/lib/paddock`, `journalctl -u paddock-supervisor -g integrity` |
+| `/var/lib/paddock/staging/request.json` | an agent update that never finishes (see "An update that waits for the active agent") | `cat /var/lib/paddock/staging/request.json`, `journalctl -u paddock-supervisor` |
+| `/var/lib/paddock/state/probation.json` | a probation or a pending rollback that does not end | `cat /var/lib/paddock/state/probation.json`, `systemctl status paddock-supervisor` |
+| `/var/lib/paddock/state/update-result.json` | an update result the agent cannot read or does not process | `cat /var/lib/paddock/state/update-result.json` |
+| `/var/lib/paddock/state/supervisor-upgrade.json` | a supervisor upgrade marker that stays | `cat /var/lib/paddock/state/supervisor-upgrade.json`, `systemctl status paddock-supervisor-upgrade` |
+| `/var/lib/paddock/state/supervisor-upgrade-result.json` | a supervisor upgrade result the agent cannot read or does not process | `cat /var/lib/paddock/state/supervisor-upgrade-result.json` |
+| `/opt/paddock/agent/A/paddockd`, `/opt/paddock/agent/B/paddockd` or `/opt/paddock/agent/current` | the slot holds the release the agent staged, and its result never came | `ls -l /opt/paddock/agent/`, `journalctl -u paddock-supervisor` |
+| `/etc/paddock/disk-setup.json` | the in-place encryption's preparation or cleanup does not return | `journalctl -u paddock-supervisor`, the conversion state in the portal |
+| `/var/lib/dpkg/lock-frontend` | a package run that holds dpkg's locks | `fuser -v /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock`, `ps -ef \| grep -E 'apt\|dpkg'` |
+| `/var/lib/dpkg/info/<package>.md5sums` | dpkg's checksums of a Paddock package cannot be read, `dpkg-query` fails, or dpkg rewrites the package in every pass | `ls -l /var/lib/dpkg/info/<package>.md5sums`, `dpkg-query -W <package>`, `dpkg --audit` |
+| `/etc/systemd/system/<unit>.d` | systemd cannot be asked for the unit's files, or a drop-in path does not parse | `systemctl show -p FragmentPath -p DropInPaths <unit>` |
+| any other path | a checked file cannot be read | `ls -l <file>` |
+
+The check never changes anything on the device. The tamper finding is resolved after the cause is removed and one
+drift pass ran.
+
+A baseline that was corrupt or missing is reported the same way with `reason` `baseline_reset` and `file`
+`/var/lib/paddock/state/integrity.json`: the agent recorded its baseline anew, so whatever was on the device at that
+moment became the baseline. Check the agent slots against the published release hashes (PDK-1122b) and the packages
+with `dpkg --verify paddock-agent paddock-supervisor paddock-revoke paddock-self-service fleet-osquery`.
 
 ## Update policy
 
