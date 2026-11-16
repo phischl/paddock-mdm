@@ -2189,7 +2189,7 @@ func (s *Syncer) SyncOffboardedDevices(ctx context.Context, devices []Offboarded
 
 ## Amendment 2026-11-16 t — no Valkey peak during a deletion, no fixed two-minute wait, bundle versions that are never pruned, the size of a deletion request (architect decision; main §94)
 
-Status: Proposed.
+Status: Accepted (approved by main, main §96).
 
 Binding once accepted. It refines amendment s point 4 (Valkey sizing), amendment j's addendum point 4 (how the job
 reacts to `paddock_offboard_quiesce` returning `false`) and amendment s point 5 (RustFS sizing). ADRs 0051 and 0052 are
