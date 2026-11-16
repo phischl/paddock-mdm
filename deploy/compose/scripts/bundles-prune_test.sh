@@ -41,6 +41,14 @@ expect "the newest version of a device is never selected" "" "$(printf '%s\t%s\n
 newest="$(fixture | bundles_prune_select 2 "$CUT" | grep -c "/$DA/bundles/1000004.dsse" || true)"
 expect "keep 2 never selects a device's newest version" 0 "$newest"
 expect "an unreadable time keeps the key" "" "$(printf '%s\t%s\n' "$(key "$DA" 1)" "x" "$(key "$DA" 2)" "" "$(key "$DA" 3)" "x" | bundles_prune_select 2 "$CUT")"
+# The key test is exact: a dot is a dot, a UUID has 36 characters, nothing else around the pattern.
+odd=""
+for k in "org/$ORG/devices/$DA/bundles/1xdsse" "org/$ORG/devices/$DA/bundles/1.dsse.bak" "org/$ORG/devices/$DA/bundles/-1.dsse" \
+  "org/${ORG}0/devices/$DA/bundles/1.dsse" "org/$ORG/devices/${DA%?}/bundles/1.dsse" "org/${ORG^^}/devices/$DA/bundles/1.dsse" \
+  "x/org/$ORG/devices/$DA/bundles/1.dsse" "org/$ORG/devices/$DA/bundles/sub/1.dsse"; do
+  odd+="$(printf '%s\t%s\n' "$k" "$OLD")"$'\n'
+done
+expect "near misses are no bundle keys" "0 0" "$(printf '%s' "$odd" | bundles_prune_stats)"
 expect "stats count bundle keys and devices" "11 3" "$(fixture | bundles_prune_stats)"
 
 for bad in "--keep 1" "--keep 0" "--keep x" "--keep 1001" "--keep" "--bogus"; do
@@ -66,6 +74,7 @@ aws() {
       body="$(cat)"
       n="$(grep -o '"Key"' <<<"$body" | wc -l)"
       echo "delete $n" >>"$calls"
+      if [[ -n "${FAKE_AWS_DIES_AT:-}" && "$(grep -c '^delete' "$calls")" == "$FAKE_AWS_DIES_AT" ]]; then return 255; fi
       if [[ -n "${FAKE_ERRORS_AT:-}" && "$(grep -c '^delete' "$calls")" == "$FAKE_ERRORS_AT" ]]; then
         printf '{"Errors":[\n'
         grep -o '"Key":"[^"]*"' <<<"$body" | sed 's/^/ {/;s/$/,"Code":"InternalError"}/'
@@ -80,10 +89,21 @@ compose() {
   [[ -z "${FAKE_RECORD_FAILS:-}" || "$*" == *--check* ]] || return 1
 }
 reset() { : >"$calls"; : >"$adminlog"; }
-run() { bundles_prune_main "$@" >"$work/out" 2>"$work/err" && rc=0 || rc=$?; }
+# main runs in a subshell with errexit on, as ./paddock runs it, with its own work directory.
+run() {
+  local w
+  w="$(mktemp -d -p "$work")"
+  set +e
+  (
+    set -e
+    BUNDLES_PRUNE_WORK="$w"
+    bundles_prune_main "$@"
+  ) >"$work/out" 2>"$work/err"
+  rc=$?
+  set -e
+}
 
-# 4 devices x 3 versions plus 2 501 old versions of a fifth: 2 501 + 4 selected... build it exactly: one device with
-# 2 503 versions selects 2 501 keys at keep 2.
+# One device with 2 503 versions selects 2 501 keys at keep 2.
 big=00000000-0000-0000-0000-0000000000ee
 for v in $(seq 1 2503); do printf '%s\t%s\n' "$(key "$big" "$v")" "$OLD"; done >"$LISTING"
 printf '%s\t%s\n' "$(key "$DB" 7)" "$OLD" "$(key "$DB" 8)" "$OLD" >>"$LISTING"
@@ -102,7 +122,7 @@ expect "--yes: exit 0" 0 "$rc"
 expect "--yes: three batches of 1000, 1000 and 501" "delete 1000 delete 1000 delete 501 " "$(tr '\n' ' ' <"$calls")"
 expect "--yes: the printed line" "deleted 2501 of 2505 bundle objects of 2 devices" "$(cat "$work/out")"
 expect "--yes: --check precedes the first delete and one record follows" \
-  "run --rm --no-deps -T paddock-api admin record-bundle-prune --check|run --rm --no-deps -T paddock-api admin record-bundle-prune --keep 2 --listed 2505 --devices 2 --selected 2501 --deleted 2501 --failed 0" \
+  "--profile paddock run --rm --no-deps -T paddock-worker admin record-bundle-prune --check|--profile paddock run --rm --no-deps -T paddock-worker admin record-bundle-prune --keep 2 --listed 2505 --devices 2 --selected 2501 --deleted 2501 --failed 0" \
   "$(paste -sd'|' "$adminlog")"
 if grep -qE 'rustfs_root|AWS_SECRET' "$work/out" "$work/err" "$adminlog"; then fail "a credential name leaked"; else ok "no credential in the output"; fi
 
@@ -113,6 +133,13 @@ expect "errors in batch 2: no third batch" "delete 1000 delete 1000 " "$(tr '\n'
 expect "errors in batch 2: stderr names deleted and failed" "deleted 1000 of 2505 bundle objects of 2 devices; 1000 keys failed" "$(cat "$work/err")"
 expect "errors in batch 2: one record with failed 1000" 1 "$(grep -c 'record-bundle-prune --keep 2 --listed 2505 --devices 2 --selected 2501 --deleted 1000 --failed 1000' "$adminlog")"
 expect "errors in batch 2: exactly one record" 1 "$(grep -c -- '--failed' "$adminlog")"
+
+reset
+FAKE_AWS_DIES_AT=2 run --yes
+expect "aws dies in batch 2: exit 1" 1 "$rc"
+expect "aws dies in batch 2: no third batch" "delete 1000 delete 1000 " "$(tr '\n' ' ' <"$calls")"
+expect "aws dies in batch 2: stderr names deleted and failed" "deleted 1000 of 2505 bundle objects of 2 devices; 1000 keys failed" "$(cat "$work/err")"
+expect "aws dies in batch 2: one record with the counts" 1 "$(grep -c -- 'record-bundle-prune --keep 2 --listed 2505 --devices 2 --selected 2501 --deleted 1000 --failed 1000' "$adminlog")"
 
 reset
 FAKE_CHECK_FAILS=1 run --yes

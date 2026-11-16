@@ -15,7 +15,14 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 
 BUNDLES_PRUNE_BATCH=1000
-BUNDLES_PRUNE_KEY='^org/[0-9a-f-]{36}/devices/[0-9a-f-]{36}/bundles/[0-9]+\.dsse$'
+# The awk function that decides whether a key is a bundle object: org/<uuid>/devices/<uuid>/bundles/<digits>.dsse. It
+# uses no interval expression and no backslash, which awk implementations read differently (mawk before 1.3.4-20200717
+# has no {36}; gawk and mawk process escapes in a -v value).
+BUNDLES_PRUNE_AWK_KEY='function is_bundle(key,   p, n) {
+  n = split(key, p, "/")
+  return n == 6 && p[1] == "org" && length(p[2]) == 36 && p[2] ~ /^[0-9a-f-]+$/ && p[3] == "devices" &&
+    length(p[4]) == 36 && p[4] ~ /^[0-9a-f-]+$/ && p[5] == "bundles" && p[6] ~ /^[0-9]+[.]dsse$/
+}'
 
 bundles_prune_usage() {
   echo "usage: bundles-prune.sh [--keep N] [--yes]   (N is a number from 2 to 1000, default 2)" >&2
@@ -34,13 +41,13 @@ aws() {
 # read: when in doubt a key stays.
 bundles_prune_select() {
   local keep="$1" cutoff="$2"
-  LC_ALL=C awk -F'\t' -v re="$BUNDLES_PRUNE_KEY" '
-    $1 ~ re {
+  LC_ALL=C awk -F'\t' "$BUNDLES_PRUNE_AWK_KEY"'
+    is_bundle($1) {
       key = $1
       n = split(key, p, "/")
       dir = substr(key, 1, length(key) - length(p[n]))
       ver = p[n]
-      sub(/\.dsse$/, "", ver)
+      sub(/[.]dsse$/, "", ver)
       print dir "\t" ver "\t" key "\t" $2
     }' |
     LC_ALL=C sort -t$'\t' -k1,1 -k2,2nr -k3,3 |
@@ -57,8 +64,8 @@ bundles_prune_select() {
 
 # bundles_prune_stats: reads the same lines and prints "<bundle keys> <device directories>".
 bundles_prune_stats() {
-  LC_ALL=C awk -F'\t' -v re="$BUNDLES_PRUNE_KEY" '
-    $1 ~ re {
+  LC_ALL=C awk -F'\t' "$BUNDLES_PRUNE_AWK_KEY"'
+    is_bundle($1) {
       m++
       n = split($1, p, "/")
       dir = substr($1, 1, length($1) - length(p[n]))
@@ -67,15 +74,17 @@ bundles_prune_stats() {
     END { print m + 0, c + 0 }'
 }
 
-# bundles_prune_record <keep> <listed> <devices> <selected> <deleted> <failed>: the audit event, through the API image
-# as ./paddock agent-rollout does; --check only proves that the platform database is reachable.
+# bundles_prune_record <keep> <listed> <devices> <selected> <deleted> <failed>: the audit event, in a one-off worker as
+# the restore commands run (restore_admin): only the worker has the database credential this admin command reads, the
+# API image does not. --check only proves that the platform database is reachable.
 bundles_prune_record() {
   if [[ "$1" == --check ]]; then
-    compose run --rm --no-deps -T paddock-api admin record-bundle-prune --check >/dev/null
+    compose --profile paddock run --rm --no-deps -T paddock-worker admin record-bundle-prune --check \
+      </dev/null >/dev/null
     return
   fi
-  compose run --rm --no-deps -T paddock-api admin record-bundle-prune --keep "$1" --listed "$2" --devices "$3" \
-    --selected "$4" --deleted "$5" --failed "$6" >/dev/null
+  compose --profile paddock run --rm --no-deps -T paddock-worker admin record-bundle-prune --keep "$1" --listed "$2" \
+    --devices "$3" --selected "$4" --deleted "$5" --failed "$6" </dev/null >/dev/null
 }
 
 bundles_prune_main() {
@@ -108,10 +117,7 @@ bundles_prune_main() {
     return 1
   fi
 
-  local work listing selected cutoff listed devices count
-  work="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$work'" EXIT
+  local work="${BUNDLES_PRUNE_WORK:?}" listing selected cutoff listed devices count
   listing="$work/listing" selected="$work/selected"
   aws s3api list-objects-v2 --bucket "$BUCKET" --prefix org/ --query 'Contents[].[Key,LastModified]' \
     --output text </dev/null >"$listing"
@@ -130,9 +136,14 @@ bundles_prune_main() {
   if ((count > 0)); then
     split -l "$BUNDLES_PRUNE_BATCH" -d -a 6 "$selected" "$work/batch."
     for batch in "$work"/batch.*; do
-      resp="$(awk 'BEGIN { printf "{\"Objects\":[" } { printf "%s{\"Key\":\"%s\"}", (NR > 1 ? "," : ""), $0 }
+      # A transport failure is a failed batch like a response with Errors: the run still records what it did.
+      if ! resp="$(awk 'BEGIN { printf "{\"Objects\":[" } { printf "%s{\"Key\":\"%s\"}", (NR > 1 ? "," : ""), $0 }
         END { printf "],\"Quiet\":true}\n" }' "$batch" |
-        aws s3api delete-objects --bucket "$BUCKET" --delete file:///dev/stdin)"
+        aws s3api delete-objects --bucket "$BUCKET" --delete file:///dev/stdin)"; then
+        failed="$(wc -l <"$batch")"
+        failed=$((failed + 0))
+        break
+      fi
       if [[ "$resp" == *'"Errors"'* ]]; then
         failed="$(grep -c '"Key"' <<<"$resp" || true)"
         ((failed > 0)) || failed=1
@@ -158,5 +169,7 @@ bundles_prune_main() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  BUNDLES_PRUNE_WORK="$(mktemp -d)"
+  trap 'rm -rf "$BUNDLES_PRUNE_WORK"' EXIT
   bundles_prune_main "$@"
 fi
