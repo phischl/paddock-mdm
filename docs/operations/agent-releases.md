@@ -566,11 +566,16 @@ The device then reports the agent version of the slot it runs.
 ### When the integrity check is suspended
 
 The agent's integrity check of Paddock's own components (ADR 0056) skips an object or a whole pass while something
-blocks it: a running update, a held dpkg lock, a state file it cannot read. Regular flows end well within a fixed
-bound: 15 minutes for the baseline itself, 6 hours for everything else, counted only while the device runs. A cause
-that lasts longer is reported once as `device.tamper_protected_file_changed` with `reason` `check_suspended`, and
-`file` names the path that blocks the check. While the check is suspended, changes behind it are not reported
-individually. Investigate every such event:
+blocks it: a running update, a held dpkg lock, a state file it cannot read. The bound holds per blocked object (the
+baseline, the agent slots, each package, each agent-written file, each unit): 15 minutes for the baseline itself,
+6 hours for everything else, in observed time while the agent runs. A gap between two passes counts at most twice the
+check's interval, and that interval is at most 1 hour; a pass also runs at every agent start. The bound survives
+agent restarts and an unwritable or locked baseline, because the agent keeps it in its state; root who edits the
+agent state resets it. An object blocked longer is reported once as `device.tamper_protected_file_changed` with
+`reason` `check_suspended`, and `file` names the path that blocks it. While the check is suspended, changes behind it
+are not reported individually. A suspension of a path the check also judges (a slot, `current`, an agent-written file)
+counts on the same tamper finding as a change of that path; the audit event's `reason` tells them apart. Investigate
+every such event:
 
 | `file` | Likely cause | What to check as root |
 | --- | --- | --- |
@@ -583,13 +588,13 @@ individually. Investigate every such event:
 | `/var/lib/paddock/state/supervisor-upgrade-result.json` | a supervisor upgrade result the agent cannot read or does not process | `cat /var/lib/paddock/state/supervisor-upgrade-result.json` |
 | `/opt/paddock/agent/A/paddockd`, `/opt/paddock/agent/B/paddockd` or `/opt/paddock/agent/current` | the slot holds the release the agent staged, and its result never came | `ls -l /opt/paddock/agent/`, `journalctl -u paddock-supervisor` |
 | `/etc/paddock/disk-setup.json` | the in-place encryption's preparation or cleanup does not return | `journalctl -u paddock-supervisor`, the conversion state in the portal |
-| `/var/lib/dpkg/lock-frontend` | a package run that holds dpkg's locks | `fuser -v /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock`, `ps -ef \| grep -E 'apt\|dpkg'` |
+| `/var/lib/dpkg/lock-frontend` and `/var/lib/dpkg/lock` | Likely an apt or dpkg prompt left open in a terminal (users have administrator rights), or a long package run; finish or cancel it. | `fuser -v /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock`, `ps -ef \| grep -E 'apt\|dpkg'` |
 | `/var/lib/dpkg/info/<package>.md5sums` | dpkg's checksums of a Paddock package cannot be read, `dpkg-query` fails, or dpkg rewrites the package in every pass | `ls -l /var/lib/dpkg/info/<package>.md5sums`, `dpkg-query -W <package>`, `dpkg --audit` |
 | `/etc/systemd/system/<unit>.d` | systemd cannot be asked for the unit's files, or a drop-in path does not parse | `systemctl show -p FragmentPath -p DropInPaths <unit>` |
 | any other path | a checked file cannot be read | `ls -l <file>` |
 
-The check never changes anything on the device. The tamper finding is resolved after the cause is removed and one
-drift pass ran.
+The check never changes anything on the device. Close the tamper finding by hand once the cause is removed and an
+integrity pass ran without a new report.
 
 A baseline that was corrupt or missing is reported the same way with `reason` `baseline_reset` and `file`
 `/var/lib/paddock/state/integrity.json`: the agent recorded its baseline anew, so whatever was on the device at that
