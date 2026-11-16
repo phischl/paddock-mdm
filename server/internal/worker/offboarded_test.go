@@ -183,11 +183,11 @@ func TestCacheSyncRestoresOffboardedDevices(t *testing.T) {
 
 type nopBucket struct{}
 
-func (nopBucket) PurgeObjects(context.Context, string) (objectstore.Purge, error) {
-	return objectstore.Purge{}, nil
+func (nopBucket) PurgeObjects(context.Context, string, time.Time) (objectstore.Purge, error) {
+	return objectstore.Purge{Done: true}, nil
 }
-func (nopBucket) PurgeVersions(context.Context, string) (objectstore.Purge, error) {
-	return objectstore.Purge{}, nil
+func (nopBucket) PurgeVersions(context.Context, string, time.Time) (objectstore.Purge, error) {
+	return objectstore.Purge{Done: true}, nil
 }
 
 type nopIdentity struct{}
