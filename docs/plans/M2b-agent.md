@@ -609,3 +609,34 @@ is replaced by M2. PDK-1118b above stays as written.
   The ceiling is **865**. `test/supervisor-budget.sh`, `test/supervisor-budget_test.sh` and the `Makefile` comment
   change in the same commit as this paragraph. The principle of contract 1 is unchanged: one loop goroutine, no new
   dependency. A batch that needs more than 865 stops and goes back to the architect.
+
+**PDK-1118b correction: the intent is written without fsync (architect, 2026-11-16).** This replaces "writes the
+probation log (`writeJSON`, synced)" in the PDK-1118b paragraph above. If the intent write were synced, two fsyncs
+would come before the rename of the flip back. On a disk where every fsync stalls for about 33 s, those two alone go
+past `WatchdogSec=60`. Each kill would then land before the rename, and the sick release would never be rolled back,
+which breaks the convergence of Part 1. The binding order of a rollback pass is now:
+
+1. Intent: `writeJSON(ProbationLog, p, noSync)` with `RollingBack = true`. `noSync` is a package function that does
+   nothing and returns nil, so the pass writes the temporary file and renames it, and makes no fsync.
+2. The flip back's rename (`flip`), then its `SyncDir` of the slots.
+3. As today: `conclude` with the synced log and result, or the `RollingBack` wait for `confirmFlip`. No separate
+   sync of the intent follows.
+
+The rename of the flip back is again the first operation that a disk stall cannot delay. A watchdog kill keeps the page
+cache, so an intent that was not synced survives a kill, and rows 3–5 of the kill matrix are unchanged. Row 2 shrinks
+to a write and a rename without fsync.
+
+**Power loss**, by what survives:
+
+| Intent | Flip back | State on restart | Result |
+|---|---|---|---|
+| lost | lost | Undecided log, `current` on ToSlot | The probation runs again (row 1). |
+| kept | lost | `RollingBack`, `current` on ToSlot | The flip back runs again; `rolled_back` once it lands. |
+| lost | kept | Undecided log, `current` on FromSlot | The log is dropped with no result. This is the earlier residual, now possible only after a power loss. |
+| kept | kept | `RollingBack`, `current` on FromSlot | `confirmFlip`, then `rolled_back`. |
+| torn (empty) | either | Unreadable log, rebuilt from the slots | ToSlot active: a probation forward. FromSlot active: dropped, because it is not newer. No false result. |
+
+In every row, `rolled_back` is written only after `confirmFlip(FromSlot)`, so never while `current` points at ToSlot.
+Test: a `SyncFile` and a `SyncDir` that stall on every call (a watchdog kill at the first sync) converge to the
+previous slot within one pass, and a later restart reports `rolled_back`. Budget: `noSync` adds +1 line and fits the
+buffer, so the ceiling stays 865.
