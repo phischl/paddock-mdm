@@ -309,37 +309,172 @@ func (f *fake) expectRolledBackAfterRestart(written bool) {
 	f.waitNoProbationLog()
 }
 
-// TestRollbackUnderStalledSyncsConverges (PDK-1118b correction, plan M2b): on a disk where every sync stalls past the
-// watchdog, each pass is killed at its first sync; the flip back lands before it in the first pass, the failed release
-// never runs again, and a restart once the disk answers reports rolled_back.
-func TestRollbackUnderStalledSyncsConverges(t *testing.T) {
-	f := newFake(t)
-	stall := func(kill func()) {
+// stalledRestarts restarts the supervisor n times on a disk whose every sync stalls past the watchdog, so that each
+// restart is killed at its first sync, and expects current on the previous slot and no result after each.
+func (f *fake) stalledRestarts(n int) {
+	f.t.Helper()
+	for i := range n {
+		var kills atomic.Int32
+		kill := func() { kills.Add(1); runtime.Goexit() }
 		f.cfg.SyncDir = func(string) error { kill(); return nil }
 		f.cfg.SyncFile = func(*os.File) error { kill(); return nil }
-	}
-	f.killPass(stall)
-	if f.active() != "A" {
-		t.Fatalf("current → %s after the first killed pass, want A", f.active())
-	}
-	for i := range int32(2) {
-		var kills atomic.Int32
-		stall(func() { kills.Add(1); runtime.Goexit() })
 		s, done := f.startKillable()
-		f.waitReady()
 		f.killed(s, done, &kills, 1)
 		if f.active() != "A" {
-			t.Fatalf("restart %d: current → %s, want A", i+1, f.active())
+			f.t.Fatalf("restart %d: current → %s, want A: the flip back did not land before the first sync", i+1, f.active())
 		}
-		f.expectNoResult()
 	}
 	f.cfg.SyncDir, f.cfg.SyncFile = nil, nil
+}
+
+// TestRollbackUnderStalledSyncsConverges (PDK-1118b correction and fix round 2, plan M2b): on a disk where every sync
+// stalls past the watchdog, each pass is killed at its first sync; the flip back's rename comes before any sync, in a
+// fresh rollback pass as in a resumed one, so the failed release never runs again, and a restart once the disk answers
+// reports rolled_back.
+func TestRollbackUnderStalledSyncsConverges(t *testing.T) {
+	t.Run("rollback pass", func(t *testing.T) {
+		f := newFake(t)
+		f.killPass(func(kill func()) {
+			f.cfg.SyncDir = func(string) error { kill(); return nil }
+			f.cfg.SyncFile = func(*os.File) error { kill(); return nil }
+		})
+		if f.active() != "A" {
+			t.Fatalf("current → %s after the first killed pass, want A", f.active())
+		}
+		f.stalledRestarts(2)
+		f.expectNoResult()
+		f.expectRolledBackAfterRestart(false)
+	})
+	t.Run("resumed intent whose flip back did not land", func(t *testing.T) {
+		f := newFake(t)
+		f.killPass(func(kill func()) { f.blockFlip(); f.cfg.Sleep = func(time.Duration) { kill() } })
+		if p := f.probationOnDisk(); !p.RollingBack || f.active() != "B" {
+			t.Fatalf("log %+v, current %s; want the recorded intent on B", p, f.active())
+		}
+		f.unblockFlip()
+		f.stalledRestarts(3)
+		f.expectNoResult()
+		f.expectRolledBackAfterRestart(false)
+	})
+	t.Run("resumed rollback_failed log", func(t *testing.T) {
+		f := newFake(t)
+		f.runRecordingPID("A")
+		f.pendingRollback()
+		f.stop()
+		f.unblockFlip()
+		f.stalledRestarts(3)
+		f.expectRolledBackAfterRestart(true)
+	})
+}
+
+// syncsBeforeReady counts the syncs a supervisor makes before its READY notice; ready.Store(false) before each start.
+func (f *fake) syncsBeforeReady() (early *atomic.Int32, ready *atomic.Bool) {
+	early, ready = &atomic.Int32{}, &atomic.Bool{}
+	notify := f.cfg.Notify
+	f.cfg.Notify = func(state string) {
+		if state == "READY=1" {
+			ready.Store(true)
+		}
+		notify(state)
+	}
+	f.cfg.SyncFile = func(file *os.File) error {
+		if !ready.Load() {
+			early.Add(1)
+		}
+		return file.Sync()
+	}
+	f.cfg.SyncDir = func(dir string) error {
+		if !ready.Load() {
+			early.Add(1)
+		}
+		return syncDir(dir)
+	}
+	return early, ready
+}
+
+// TestResumedRollbackFailedReportsOnce (PDK-1118 fix round 2, ADR 0024): a resumed rollback_failed log whose flip back
+// keeps failing writes nothing before READY; it writes its result again exactly once, with the recorded at, after the
+// first failed retry of each start, and never rolled_back.
+func TestResumedRollbackFailedReportsOnce(t *testing.T) {
+	log := captureLog(t)
+	f := newFake(t)
+	mc := &manualClock{now: time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)}
+	f.cfg.Now = mc.get
+	failed := f.pendingRollback()
+	f.stop()
+	early, ready := f.syncsBeforeReady()
+	for i := range 3 {
+		// The agent delivered and deleted the result.
+		if err := os.Remove(f.cfg.Result); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		base := retries(log)
+		ready.Store(false)
+		f.start()
+		f.waitReady()
+		if r := f.waitResult(10 * time.Second); r != failed || f.active() != "B" || retries(log) != base+1 {
+			t.Fatalf("restart %d: result %+v after %d retries, current %s; want %+v after the first retry on B",
+				i+1, r, retries(log)-base, f.active(), failed)
+		}
+		if err := os.Remove(f.cfg.Result); err != nil {
+			t.Fatal(err)
+		}
+		mc.advance(pendingRetryMax)
+		f.waitFor("a second failed retry", func() bool { return retries(log) == base+2 })
+		f.waitTicks(3)
+		f.expectNoResult()
+		if n := early.Load(); n != 0 {
+			t.Fatalf("restart %d: %d syncs before READY", i+1, n)
+		}
+		f.stop()
+	}
+}
+
+// TestResultTakeoverWritesNothingBeforeReady (PDK-1118 fix round 2): an undecided log whose rollback_failed the result
+// names is taken over without a write at the resume; the log records it after the first failed retry.
+func TestResultTakeoverWritesNothingBeforeReady(t *testing.T) {
+	f := newFake(t)
+	mc := &manualClock{now: time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)}
+	f.expiredProbation(mc, mc.now, "boot-1")
+	at := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	res := map[string]any{"version": "1.1.0", "from_version": "1.0.0", "outcome": outcomeRollbackFailed, "at": at}
+	if err := writeJSON(f.cfg.Result, res, syncFile); err != nil {
+		t.Fatal(err)
+	}
+	f.blockFlip()
+	early, _ := f.syncsBeforeReady()
 	f.start()
 	f.waitReady()
-	if r := f.waitOutcome(outcomeRolledBack); r.Version != "1.1.0" || f.active() != "A" {
-		t.Fatalf("result %+v, current %s", r, f.active())
+	f.waitFor("the log records the taken-over decision", func() bool {
+		data, err := os.ReadFile(f.cfg.ProbationLog)
+		return err == nil && strings.Contains(string(data), `"outcome":"rollback_failed"`)
+	})
+	if p := f.probationOnDisk(); !p.DecidedAt.Equal(at) || f.active() != "B" {
+		t.Fatalf("log %+v, current %s; want the result's decision on B", p, f.active())
 	}
-	f.waitAgentRuns("A")
+	if n := early.Load(); n != 0 {
+		t.Fatalf("%d syncs before READY", n)
+	}
+}
+
+// TestPendingMarkerIsWrittenWhileTheRetryWaits (PDK-1118 fix round 2): a marker that the failed flip back could not
+// write is written on the next tick whose retry is not due, without another flip attempt.
+func TestPendingMarkerIsWrittenWhileTheRetryWaits(t *testing.T) {
+	log := captureLog(t)
+	f := newFake(t)
+	f.cfg.Now = (&manualClock{now: time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)}).get
+	var failedOnce atomic.Bool
+	f.cfg.SyncFile = func(file *os.File) error {
+		if file.Name() == f.marker()+".tmp" && failedOnce.CompareAndSwap(false, true) {
+			return errors.New("injected")
+		}
+		return file.Sync()
+	}
+	f.pendingRollback()
+	f.waitFor("the marker on a waiting tick", f.marked)
+	if !failedOnce.Load() || retries(log) != 0 {
+		t.Fatalf("marker write failed once: %v, retries %d; want the marker from a tick without a retry", failedOnce.Load(), retries(log))
+	}
 }
 
 // TestSwitchKilledInItsLogWriteReportsNothing (PDK-1118b regression): a supervisor killed while the switch's own log

@@ -468,7 +468,6 @@ func (s *Supervisor) flipBack(slot string, attempts int) (durable bool, err erro
 // confirmRollback reports a rollback once its flip back is durable; a pending rollback first retries its flip back.
 func (s *Supervisor) confirmRollback() {
 	p := s.rolledBack
-	s.recordPending(p)
 	retried := p.RollbackPending
 	if retried && !s.retryFlipBack(p) {
 		return
@@ -486,7 +485,10 @@ func (s *Supervisor) confirmRollback() {
 // retryFlipBack makes one attempt per retry slot to flip current back to FromSlot. A current that already points there
 // (an operator flipped it by hand) succeeds as well; the caller restarts the old agent and makes the flip durable.
 func (s *Supervisor) retryFlipBack(p *probation) bool {
+	// A due retry renames before it syncs anything, so a resumed rollback flips back even on a disk whose every sync
+	// stalls past the watchdog; the pending record is written on the ticks that wait, and by keepRollbackPending.
 	if s.cfg.Now().Before(p.retryAt) {
+		s.recordPending(p)
 		return false
 	}
 	p.retries++
@@ -511,6 +513,10 @@ func (s *Supervisor) keepRollbackPending(p *probation) {
 	s.rolledBack = p
 	if p.Outcome != outcomeRollbackFailed {
 		p.unrecorded = !s.conclude(p, outcomeRollbackFailed)
+	}
+	if p.Outcome == outcomeRollbackFailed && p.unreported {
+		p.unreported = false
+		s.report(p, true)
 	}
 	s.recordPending(p)
 }

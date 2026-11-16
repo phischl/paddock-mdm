@@ -42,6 +42,9 @@ type probation struct {
 	// log; recordPending rewrites it on every tick until the write succeeds.
 	unrecorded bool
 	marked     bool // the pending marker exists (recordPending)
+	// unreported: the recorded rollback_failed is written again after the first failed retry of a resumed rollback,
+	// not at the resume, so no synced write comes before the flip back's rename (plan M2b, 2026-11-16).
+	unreported bool
 	retryAt    time.Time
 	retryWait  time.Duration
 	retries    int
@@ -156,7 +159,7 @@ func (s *Supervisor) resumeProbation() {
 	if data, err := os.ReadFile(s.cfg.Result); p.Outcome == "" && (s.activeSlot() == p.ToSlot || s.activeSlot() == p.FromSlot) && err == nil &&
 		json.Unmarshal(data, &res) == nil && res.Version == p.Version && (res.Outcome == outcomeRollbackFailed || res.Outcome == outcomeRolledBack) {
 		p.Outcome, p.DecidedAt, p.RollbackPending = res.Outcome, res.At, res.Outcome == outcomeRollbackFailed
-		p.unrecorded = writeJSON(s.cfg.ProbationLog, &p, s.cfg.SyncFile) != nil
+		p.unrecorded = true
 	}
 	// A pending rollback, a rolled_back whose flip back was lost with the power, or a recorded rollback whose flip back
 	// did not land (PDK-1118b), retries the flip back; with current on FromSlot (flipped by hand, or the rename landed
@@ -164,7 +167,7 @@ func (s *Supervisor) resumeProbation() {
 	// time: its result was delivered, so none is written again.
 	if p.RollbackPending || (p.Outcome == outcomeRolledBack || p.RollingBack) && s.activeSlot() == p.ToSlot {
 		if p.RollbackPending = s.activeSlot() != p.FromSlot; p.RollbackPending && p.Outcome == outcomeRollbackFailed && !p.DecidedAt.IsZero() {
-			s.report(&p, true)
+			p.unreported = true
 		}
 		s.rolledBack = &p
 		slog.Warn("resuming a pending rollback", "version", p.Version, "active_slot", s.activeSlot(), "target_slot", p.FromSlot)
