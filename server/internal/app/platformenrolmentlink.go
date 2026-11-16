@@ -36,6 +36,12 @@ var ErrAmbiguousPortalRole = problem.InvalidState.WithDetail("the user's role as
 	"member of role groups of several organizations, or of several role groups of one organization; remove the extra " +
 	"group memberships in the identity provider so that it holds exactly one organization role, then run the command again")
 
+// ErrPortalAccountOrganizationOffboarding refuses a sign-in setup link on the host for an account whose role group
+// belongs to an organization that is being deleted or was deleted (PDK-1112): the offboarding ends the setup links of
+// the organization's members, so a link issued meanwhile would outlive it.
+var ErrPortalAccountOrganizationOffboarding = problem.InvalidState.WithDetail("the user's organization is being " +
+	"deleted or was deleted; it gets no sign-in setup link")
+
 // PasswordByLinkDirectory finds the account the operator named, tells whether its password belongs to an upstream
 // source and marks the accounts whose sign-in setup link may set a password (authentik.Client).
 type PasswordByLinkDirectory interface {
@@ -140,7 +146,9 @@ type portalAccount struct {
 }
 
 // portalAccount finds the account username and the portal role its direct groups grant, by the rule of the portal
-// sign-in (organization.ResolveRole): an account the sign-in denies gets no link either.
+// sign-in (organization.ResolveRole): an account the sign-in denies gets no link either, and neither does an account
+// of an organization that is being deleted or was deleted (ErrPortalAccountOrganizationOffboarding, returned with the
+// account so the event names its organization).
 func (p *PlatformEnrolmentLinks) portalAccount(ctx context.Context, username string) (portalAccount, error) {
 	if username == "" {
 		return portalAccount{}, ErrNoPortalRole
@@ -172,8 +180,14 @@ func (p *PlatformEnrolmentLinks) portalAccount(ctx context.Context, username str
 			return fmt.Errorf("organization %s: %w", role.Slug, err)
 		}
 		acct.organization = o.ID
+		if organization.Offboarding(o.Status) {
+			return ErrPortalAccountOrganizationOffboarding
+		}
 		return nil
 	})
+	if errors.Is(err, ErrPortalAccountOrganizationOffboarding) {
+		return acct, err
+	}
 	if err != nil {
 		return portalAccount{}, err
 	}

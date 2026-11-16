@@ -18,8 +18,10 @@ import (
 // first, so the organization's devices admit no new login while the rest goes, then its policy bindings, provider,
 // access policy and groups mapping, the users Paddock created in the organization (path paddock/<slug> and attribute
 // paddock_managed), and the groups paddock.<slug> and paddock.<slug>.*, children before their parent. Users synced from
-// upstream stay, only their memberships go with the groups. Policies counts the access policy and its bindings. A
-// failure leaves the rest for the next attempt, which finds only what is left.
+// upstream stay, only their memberships go with the groups; before any user or group goes, the sign-in setup links of
+// every direct member of the groups are ended and its mark paddock_password_by_link removed (PDK-1112), because once
+// the groups are gone nothing ties a surviving account to the organization any more. Policies counts the access
+// policy and its bindings. A failure leaves the rest for the next attempt, which finds only what is left.
 func (c *Client) DeleteOrganization(ctx context.Context, slug string) (ports.OrgIdentityDeletion, error) {
 	var d ports.OrgIdentityDeletion
 	app := organization.DeviceLoginApp(slug)
@@ -59,13 +61,17 @@ func (c *Client) DeleteOrganization(ctx context.Context, slug string) (ports.Org
 	if d.Mappings, err = c.deleteNamed(ctx, "/api/v3/propertymappings/provider/scope/", GroupsMappingName(slug)); err != nil {
 		return d, err
 	}
+	links, err := c.endMembersLinks(ctx, slug)
+	if err != nil {
+		return d, err
+	}
 	if d.Users, err = c.deleteManagedUsers(ctx, slug); err != nil {
 		return d, err
 	}
 	if d.Groups, err = c.deleteOrganizationGroups(ctx, slug); err != nil {
 		return d, err
 	}
-	slog.InfoContext(ctx, "authentik organization deleted", "slug", slug, "groups", d.Groups, "users", d.Users,
+	slog.InfoContext(ctx, "authentik organization deleted", "slug", slug, "groups", d.Groups, "users", d.Users, "links", links,
 		"applications", d.Applications, "providers", d.Providers, "policies", d.Policies, "mappings", d.Mappings)
 	return d, nil
 }
@@ -135,10 +141,52 @@ func (c *Client) deleteManagedUsers(ctx context.Context, slug string) (int, erro
 	return deleted, nil
 }
 
-// deleteOrganizationGroups deletes paddock.<slug> and every group whose name starts with paddock.<slug>., deepest
-// first, so no group is deleted while it is still a parent. Slugs contain no ".", so the prefix matches no other
-// organization's groups.
-func (c *Client) deleteOrganizationGroups(ctx context.Context, slug string) (int, error) {
+// endMembersLinks ends the sign-in setup links of every direct member of paddock.<slug> and paddock.<slug>.* and
+// removes its mark paddock_password_by_link, and returns how many unexpired links it ended. A member gone meanwhile is
+// skipped and a link or mark already gone is no error, so a retried deletion finds only what is left.
+func (c *Client) endMembersLinks(ctx context.Context, slug string) (int, error) {
+	groups, err := c.organizationGroups(ctx, slug)
+	if err != nil || len(groups) == 0 {
+		return 0, err
+	}
+	names := make([]string, 0, len(groups))
+	for _, g := range groups {
+		names = append(names, g.Name)
+	}
+	members, err := c.RoleGroupsUsers(ctx, names)
+	if err != nil {
+		return 0, err
+	}
+	ended := 0
+	seen := make(map[string]bool, len(members))
+	for _, m := range members {
+		if seen[m.PK] {
+			continue
+		}
+		seen[m.PK] = true
+		n, err := c.RevokeRecoveryLinks(ctx, m.PK)
+		ended += n
+		var st *errStatus
+		if errors.As(err, &st) && st.code == http.StatusNotFound {
+			continue
+		}
+		if err != nil {
+			return ended, err
+		}
+		err = c.SetUserAttribute(ctx, m.PK, ports.AttrPasswordByLink, nil)
+		if errors.As(err, &st) && st.code == http.StatusNotFound {
+			continue
+		}
+		if err != nil {
+			return ended, err
+		}
+	}
+	return ended, nil
+}
+
+// organizationGroups lists paddock.<slug> and every group whose name starts with paddock.<slug>.. Slugs contain no
+// ".", so the prefix matches no other organization's groups.
+func (c *Client) organizationGroups(ctx context.Context, slug string) ([]group, error) {
 	root := organization.RootGroup(slug)
 	var groups []group
 	err := pages(ctx, c, "/api/v3/core/groups/", url.Values{"search": {root}, "include_users": {"false"}}, func(g group) {
@@ -146,6 +194,13 @@ func (c *Client) deleteOrganizationGroups(ctx context.Context, slug string) (int
 			groups = append(groups, g)
 		}
 	})
+	return groups, err
+}
+
+// deleteOrganizationGroups deletes the organization's groups (organizationGroups), deepest first, so no group is
+// deleted while it is still a parent.
+func (c *Client) deleteOrganizationGroups(ctx context.Context, slug string) (int, error) {
+	groups, err := c.organizationGroups(ctx, slug)
 	if err != nil {
 		return 0, err
 	}

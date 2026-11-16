@@ -452,6 +452,46 @@ func TestPlatformEnrolmentLinkOrganizationAccount(t *testing.T) {
 	})
 }
 
+// TestPlatformEnrolmentLinkDeletingOrganization (PDK-1112): the host command issues no link for an account of an
+// organization that is being deleted or was deleted: invalid_state before the identity provider is asked to end or
+// create a link or to mark the account, recorded as one failure in the platform pseudo-organization. A deleting
+// organization is named in the event; a deleted one no longer holds its slug, so its role group belongs to no
+// organization (ErrNoPortalRole).
+func TestPlatformEnrolmentLinkDeletingOrganization(t *testing.T) {
+	for _, c := range []struct {
+		name, status string
+		want         error
+		named        bool
+	}{
+		{"deleting", `status = 'deleting', deletion_requested_at = now(), deletion_requested_by = 'platform admin',
+			deletion_reason = 'contract ended', delete_after = now(), offboarding_step = 'database'`,
+			app.ErrPortalAccountOrganizationOffboarding, true},
+		{"deleted", `status = 'deleted', deleted_at = now(), deletion_requested_at = now(), deletion_requested_by = 'platform admin',
+			deletion_reason = 'contract ended', delete_after = now()`, app.ErrNoPortalRole, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newLinkWorld(t)
+			if _, err := w.super.Exec(context.Background(), "UPDATE organization SET "+c.status+" WHERE id = $1", w.org); err != nil {
+				t.Fatal(err)
+			}
+			w.dir.open["3"] = 1
+			_, err := w.links.CreateCLI(context.Background(), "alice@acme.test")
+			if !errors.Is(err, problem.InvalidState) || !errors.Is(err, c.want) {
+				t.Fatalf("CreateCLI: %v, want %v", err, c.want)
+			}
+			if len(w.dir.links) != 0 || w.dir.open["3"] != 1 || len(w.dir.attrs["3"]) != 0 {
+				t.Fatalf("links %v, open %v, attributes %v: want the identity provider untouched", w.dir.links, w.dir.open, w.dir.attrs)
+			}
+			ev, params, n := w.event(t)
+			if n != 1 || ev != "failure invalid_state system:paddock-server admin "+platformOrg ||
+				strings.Contains(params, `"organization_id": "`+w.org.String()+`"`) != c.named ||
+				strings.Contains(params, "passkey_only") || strings.Contains(params, "previous_links_revoked") {
+				t.Fatalf("%d events, %q %s, want one invalid_state failure, naming %s: %v", n, ev, params, w.org, c.named)
+			}
+		})
+	}
+}
+
 // paramsOfEvents returns the params of every platform.enrolment_link_created event of the world, oldest first.
 func (w *linkWorld) paramsOfEvents(t *testing.T) []string {
 	t.Helper()
