@@ -156,10 +156,11 @@ func (o *Offboarding) Run(ctx context.Context) error {
 
 // Round starts the due deletions and advances the pending ones step by step, one step per organization in turn, until
 // every organization is done, waits or fails, or OffboardingRoundBudget is used; a failing organization does not stop
-// the others, and a long deletion cannot starve them. An organization whose step polls for an acknowledgement is asked
-// again every offboardingPollInterval; when only such organizations remain, the round sleeps until the next poll is
-// due. Every step is its own transaction: the round holds only the leader connection between steps. The lock is held
-// only while the round runs (amendment c point 3).
+// the others, and a long deletion cannot starve them. An organization whose step polls for an acknowledgement
+// (audit_final) or waits for older transactions (devices, tombstone) is asked again every offboardingPollInterval; when
+// only such organizations remain, the round sleeps until the next poll is due. Every step is its own transaction: the
+// round holds only the leader connection between steps. The lock is held only while the round runs (amendment c point
+// 3).
 func (o *Offboarding) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	leader, err := o.lock.Lead(sys, offboardingLockKey, offboardingLeaderCheck, func(ctx context.Context) error {
@@ -190,6 +191,7 @@ func (o *Offboarding) Round(ctx context.Context) error {
 		sort.SliceStable(active, func(i, j int) bool { return o.advanced[active[i]].Before(o.advanced[active[j]]) })
 		deadline := o.now().Add(OffboardingRoundBudget)
 		polled := map[uuid.UUID]time.Time{}
+		busy := map[uuid.UUID]bool{}
 		for len(active) > 0 && ctx.Err() == nil && o.now().Before(deadline) {
 			next := active[:0]
 			progressed := false
@@ -201,7 +203,7 @@ func (o *Offboarding) Round(ctx context.Context) error {
 					next = append(next, id)
 					continue
 				}
-				switch o.advance(ctx, id, deadline) {
+				switch o.advance(ctx, id, deadline, busy) {
 				case stepAgain:
 					delete(polled, id)
 					progressed = true
@@ -275,17 +277,19 @@ func (o *Offboarding) awaitPoll(ctx context.Context, active []uuid.UUID, polled 
 type stepOutcome int
 
 const (
-	// stepStop: the organization takes no further step in this round (done, waiting, failing or in backoff).
+	// stepStop: the organization takes no further step in this round (done, failing or in backoff).
 	stepStop stepOutcome = iota
 	// stepAgain: the step completed or yielded and the deletion is unfinished; the organization stays in the passes.
 	stepAgain
-	// stepPolling: the step waits for an acknowledgement; the organization is asked again after offboardingPollInterval.
+	// stepPolling: the step waits for an acknowledgement (audit_final) or for older transactions (devices, tombstone); the
+	// organization is asked again after offboardingPollInterval.
 	stepPolling
 )
 
 // advance runs one step of org within the round's deadline unless its backoff has not elapsed and reports what the
-// organization does for the rest of the round.
-func (o *Offboarding) advance(ctx context.Context, org uuid.UUID, deadline time.Time) stepOutcome {
+// organization does for the rest of the round. The waiting steps and audit_final are polled; busy holds the organizations
+// already counted in this round's finalize-busy metric.
+func (o *Offboarding) advance(ctx context.Context, org uuid.UUID, deadline time.Time, busy map[uuid.UUID]bool) stepOutcome {
 	now := o.now()
 	r := o.retries[org]
 	if r != nil && now.Before(r.next) {
@@ -309,8 +313,12 @@ func (o *Offboarding) advance(ctx context.Context, org uuid.UUID, deadline time.
 		delete(o.retries, org)
 		return stepPolling
 	case errors.Is(err, app.ErrOffboardingWaiting):
-		metricOffboardingFinalizeBusy.Inc()
+		if !busy[org] {
+			busy[org] = true
+			metricOffboardingFinalizeBusy.Inc()
+		}
 		delete(o.retries, org)
+		return stepPolling
 	case ctx.Err() != nil:
 	default:
 		if r == nil {
