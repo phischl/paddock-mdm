@@ -498,3 +498,58 @@ Binding; it refines the addendum above for organization accounts.
      command;
    - an account in no role group is refused;
    - the portal endpoint still never sets the attribute.
+
+## Amendment 2026-11-16 g — Authentik blueprints apply in a fixed order, without nesting (architect decision; main §66 B, alpha.11 blocker)
+
+Binding. It replaces every `authentik_blueprints.metaapplyblueprint` entry in Paddock's blueprints.
+
+**Finding (CI run 43731878343, offboarding integration branch).**
+- Authentik's `blueprints_discovery` runs twice at start, so each blueprint is applied twice, concurrently.
+- The blueprints also nest `metaapplyblueprint`: mcp→portal, stepup→portal, device→portal (new with #659),
+  dev→portal+device (new with #659)+stepup.
+- Concurrent applies upsert the same objects (unique violations on flow slug, stage name and RBAC role name). Two
+  apply threads then wait on each other's row locks until dramatiq's time limit (about 11 minutes). The instance stays
+  in error, the portal, step-up and MCP providers never appear, the api never gets ready, and `make up` times out.
+- Before #659 the nesting was smaller and passed.
+
+**Decision: remove the nesting (B2) and apply serially in dependency order after Authentik is healthy (B1).** Making
+the blueprints self-contained was rejected. The device and dev blueprints refer to the portal's policies with `!Find`.
+A self-contained copy would redefine those policies under the same names, so two blueprints would again upsert the
+same objects concurrently, which is the cause of the deadlock. With the nesting removed, each object belongs to exactly
+one blueprint, and concurrent applies of different blueprints no longer contend for rows.
+
+1. **Files changed (committed by main).** Remove every `authentik_blueprints.metaapplyblueprint` entry, and nothing
+   else, from:
+   - `deploy/compose/authentik/blueprints/paddock-device.yaml` (→ portal);
+   - `deploy/compose/authentik/blueprints/paddock-stepup.yaml` (→ portal);
+   - `deploy/compose/authentik/blueprints/paddock-mcp.yaml` (→ portal);
+   - `deploy/compose/authentik/dev/paddock-dev.yaml` (→ portal, device, stepup).
+
+   `paddock-portal.yaml` and `paddock-recovery.yaml` have none. A blueprint test fails when any Paddock blueprint
+   contains `metaapplyblueprint`.
+2. **Serial apply (new script `deploy/compose/scripts/authentik-apply-blueprints.sh`).** After the `authentik-server`
+   and `authentik-worker` containers are healthy, the script runs, one after another,
+   `compose exec -T authentik-worker ak apply_blueprint /blueprints/paddock/<file>` for `paddock-portal.yaml`,
+   `paddock-device.yaml`, `paddock-stepup.yaml`, `paddock-recovery.yaml`, `paddock-mcp.yaml`. On a development stack
+   only, it then applies `/blueprints/paddock-dev/paddock-dev.yaml`.
+   - A file whose apply exits non-zero, or prints that the blueprint is invalid, stops the script with exit 1 and names
+     the file.
+   - It retries a file up to 3 times, 20 s apart, for the case where Authentik's own startup apply of that file is
+     still running. It never runs two applies at once.
+   - This re-applies the files themselves, not the instances. An instance that Authentik's own startup apply left in
+     error shows that until Authentik's next scheduled apply. Paddock's readiness and `./paddock check` do not read
+     instance status.
+3. **Where it runs.**
+   - `make up` (development) and the bundle's `./paddock up` and `./paddock upgrade` (production) call it after waiting
+     for the Authentik containers and **before** waiting for `paddock-api`, whose readiness needs the providers.
+   - In the bundle, `deploy/bundle/paddock` calls the bundled copy, with the same `compose exec` the bundle already uses
+     for OpenBao. No new rights, users or secrets.
+   - `./paddock up` fails visibly when the script fails.
+4. **Proof (main).**
+   - An acceptance CI run on the integration branch where **all** shards and e2e come up.
+   - A test (`deploy/compose/scripts/authentik-apply-blueprints_test.sh` against the dev stack's Authentik, run by the
+     acceptance setup) applies all blueprints twice in a row: both runs exit 0, with no unique violation or lock-wait
+     error in the Authentik worker log.
+   - `bundle_test.sh` covers the order and the stop on failure with a stubbed `compose`.
+5. **No ADR impact.** ADR 0007 and ADR 0053 describe the objects, not how the blueprints are applied. Authentik's own
+   instances stay as they are (drift repair by its scheduled apply is kept).

@@ -175,6 +175,43 @@ var identityAuditCases = map[string][]auditCase{
 	"DELETE /api/v1/users/{id}":      itemCases(http.MethodDelete, "/api/v1/users", "", "user.deleted", http.StatusNoContent, localUser, nil),
 	"POST /api/v1/users/{id}/lock":   itemCases(http.MethodPost, "/api/v1/users", "/lock", "user.locked", http.StatusOK, localUser, nil),
 	"POST /api/v1/users/{id}/unlock": itemCases(http.MethodPost, "/api/v1/users", "/unlock", "user.unlocked", http.StatusOK, localUser, nil),
+	"POST /api/v1/users/{id}/enrolment-link": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			user := w.admins.take()
+			admin := login(t, user)
+			stepUp(t, admin, user, true)
+			res := call(t, admin, http.MethodPost, "/api/v1/users/"+localUser(t, w)+"/enrolment-link", nil)
+			expectStatus(t, res, http.StatusCreated, "")
+			expectOneEvent(t, w.alice, res.RequestID, "user.enrolment_link_created", "success")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.Alice), http.MethodPost, "/api/v1/users/"+localUser(t, w)+"/enrolment-link", nil)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "user.enrolment_link_created", "denied")
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			// The step-up check runs before the binder's 400, so only a stepped-up admin reaches validation.
+			user := w.admins.take()
+			admin := login(t, user)
+			stepUp(t, admin, user, true)
+			res := call(t, admin, http.MethodPost, "/api/v1/users/not-a-uuid/enrolment-link", nil)
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "user.enrolment_link_created", "failure")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodPost, "/api/v1/users/"+localUser(t, w)+"/enrolment-link", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "user.enrolment_link_created", "denied")
+		}},
+		{"not found", func(t *testing.T, w *auditWorld) {
+			user := w.admins.take()
+			admin := login(t, user)
+			stepUp(t, admin, user, true)
+			res := call(t, admin, http.MethodPost, "/api/v1/users/"+uuid.NewString()+"/enrolment-link", nil)
+			expectStatus(t, res, http.StatusNotFound, "not_found")
+			expectOneEvent(t, w.alice, res.RequestID, "user.enrolment_link_created", "failure")
+		}},
+	},
 
 	"POST /api/v1/user-groups": {
 		{"success", func(t *testing.T, w *auditWorld) {

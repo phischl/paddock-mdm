@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -112,6 +113,8 @@ type handlers struct {
 	stepUpWindow time.Duration
 	// serverVersion is server_version of GET and PATCH /api/v1/me.
 	serverVersion string
+	// mfaNotices answer mfa_enrolment_notice of GET and PATCH /api/v1/me (ADR 0053 decision 6).
+	mfaNotices *app.MFAEnrolmentNotices
 
 	// backupKeys is the platform backup key (plan M15 decision 7).
 	backupKeys *app.BackupKeys
@@ -176,6 +179,7 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
 	out.RoleFallback = roleFallback(ctx)
+	out.MfaEnrolmentNotice = h.mfaEnrolmentNotice(ctx, p, me)
 	if h.stepUpTiming != nil {
 		out.StepUp = &adminapi.MeStepUp{
 			WindowSeconds:     int(h.stepUpTiming.window.Seconds()),
@@ -212,7 +216,32 @@ func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObj
 	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	out.AlternateRole = h.alternateRole(ctx)
 	out.RoleFallback = roleFallback(ctx)
+	out.MfaEnrolmentNotice = h.mfaEnrolmentNotice(ctx, p, me)
 	return adminapi.UpdateMe200JSONResponse(out), nil
+}
+
+// mfaEnrolmentNotice is Me.mfa_enrolment_notice: only portal sessions see the announcement. It is informational, so
+// an identity provider that cannot be read hides it instead of failing the request.
+func (h *handlers) mfaEnrolmentNotice(ctx context.Context, p principal.Principal, me app.Me) *adminapi.MeMfaEnrolmentNotice {
+	if h.mfaNotices == nil || meChannel(p) != "portal" {
+		return nil
+	}
+	slug := ""
+	if p.Kind != principal.KindPlatformAdmin {
+		if me.Organization == nil {
+			return nil
+		}
+		slug = me.Organization.Slug
+	}
+	n, err := h.mfaNotices.Notice(ctx, slug)
+	if err != nil {
+		slog.WarnContext(ctx, "the second-factor announcement is hidden: its count could not be read", "error", err)
+		return nil
+	}
+	if n == nil {
+		return nil
+	}
+	return &adminapi.MeMfaEnrolmentNotice{Until: n.Until, Pending: n.Pending}
 }
 
 // meChannel is Me.channel: how the request authenticated (ADR 0044).

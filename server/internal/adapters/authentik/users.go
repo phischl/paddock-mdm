@@ -99,6 +99,94 @@ func (c *Client) RecoveryLink(ctx context.Context, pk string) (string, error) {
 	return res.Link, nil
 }
 
+type token struct {
+	Identifier string    `json:"identifier"`
+	User       int       `json:"user"`
+	Expiring   bool      `json:"expiring"`
+	Expires    time.Time `json:"expires"`
+}
+
+// RevokeRecoveryLinks ends the one-time link of the user pk and returns how many unexpired links it ended (0 or 1).
+// Authentik keeps one link token per account, identified by <uid>-password-reset, and reuses its key for every new link
+// (core/api/users.py _create_recovery_link, update_or_create): without deleting the token, the next link would be the
+// old URL. The token is found by that identifier (GET /api/v3/core/tokens/) and matched again by identifier and user
+// pk, so a filter Authentik ignored can never delete another token: the account's other flow and verification tokens,
+// API tokens and app passwords stay. An expired link token is deleted too but not counted: update_or_create does not
+// see expired rows, so its create would collide with the unique identifier and Authentik would answer 500 until its
+// cleanup removed the row. A token gone meanwhile (404, a link used concurrently) is not counted.
+func (c *Client) RevokeRecoveryLinks(ctx context.Context, pk string) (int, error) {
+	owner, err := strconv.Atoi(pk)
+	if err != nil {
+		return 0, upstream(fmt.Errorf("user pk %q is not a number", pk))
+	}
+	var u user
+	if err := c.do(ctx, http.MethodGet, userPath(pk), nil, &u); err != nil {
+		return 0, upstream(err)
+	}
+	if u.PK != owner || u.Username == "" || u.UID == "" {
+		return 0, upstream(fmt.Errorf("user %s answered as %d %q without a uid", pk, u.PK, u.Username))
+	}
+	identifier := u.UID + "-password-reset"
+	now := time.Now()
+	var links []token
+	err = pages(ctx, c, "/api/v3/core/tokens/", url.Values{"identifier": {identifier}, "user__username": {u.Username}},
+		func(t token) {
+			if t.Identifier == identifier && t.User == owner {
+				links = append(links, t)
+			}
+		})
+	if err != nil {
+		return 0, err
+	}
+	revoked := 0
+	for _, t := range links {
+		err := c.do(ctx, http.MethodDelete, "/api/v3/core/tokens/"+url.PathEscape(t.Identifier)+"/", nil, nil)
+		var st *errStatus
+		if errors.As(err, &st) && st.code == http.StatusNotFound {
+			continue
+		}
+		if err != nil {
+			return revoked, upstream(err)
+		}
+		if !t.Expiring || t.Expires.After(now) {
+			revoked++
+		}
+	}
+	return revoked, nil
+}
+
+// sourceConnection is an entry of Authentik's user source connections.
+type sourceConnection struct {
+	User int `json:"user"`
+}
+
+// HasSourceConnection reports whether the user pk is connected to an upstream source of Authentik: its password then
+// belongs to that source. Two listings answer it: the user source connections (GET
+// /api/v3/sources/user_connections/all/ filtered by user, LDAP, OAuth, SAML and the like) and the SCIM source users
+// (GET /api/v3/sources/scim_users/ filtered by user__id), because Authentik keeps a SCIM-provisioned account as a
+// SCIMSourceUser and not as a user source connection (PDK-1055). Each listing is matched again by user pk, so a filter
+// Authentik ignored never counts another account's connection.
+func (c *Client) HasSourceConnection(ctx context.Context, pk string) (bool, error) {
+	owner, err := strconv.Atoi(pk)
+	if err != nil {
+		return false, upstream(fmt.Errorf("user pk %q is not a number", pk))
+	}
+	found := false
+	err = pages(ctx, c, "/api/v3/sources/user_connections/all/", url.Values{"user": {pk}}, func(s sourceConnection) {
+		found = found || s.User == owner
+	})
+	if err != nil || found {
+		return found, err
+	}
+	err = pages(ctx, c, "/api/v3/sources/scim_users/", url.Values{"user__id": {pk}}, func(s sourceConnection) {
+		found = found || s.User == owner
+	})
+	if err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
 // SetUserAttribute sets the attribute key of the user pk to value; a nil value removes it. Authentik replaces the
 // whole attributes object on a change, so the user's attributes are read and written back with the one key changed.
 func (c *Client) SetUserAttribute(ctx context.Context, pk, key string, value any) error {
@@ -188,8 +276,19 @@ func (c *Client) PortalRoleGroupNames(ctx context.Context) ([]string, error) {
 	return slices.Compact(out), nil
 }
 
+// UserByUsername reads the user named exactly username with the names of its direct groups; found is false when there
+// is none. paddock-server admin enrolment-link finds the account the operator named with it (PDK-1055).
+func (c *Client) UserByUsername(ctx context.Context, username string) (ports.IdentityUser, []string, bool, error) {
+	return c.userNamed(ctx, username, func(u user) bool { return u.Username == username })
+}
+
 // UserMembership reads the user username directly, with its groups, and requires its UID: a username can be reused.
 func (c *Client) UserMembership(ctx context.Context, username, uid string) (ports.IdentityUser, []string, bool, error) {
+	return c.userNamed(ctx, username, func(u user) bool { return u.UID == uid })
+}
+
+// userNamed reads the users named username with their groups and returns the first that match accepts.
+func (c *Client) userNamed(ctx context.Context, username string, match func(user) bool) (ports.IdentityUser, []string, bool, error) {
 	q := url.Values{"username": {username}, "include_groups": {"true"}, "page": {"1"}, "page_size": {strconv.Itoa(pageSize)}}
 	var page struct {
 		Results []user `json:"results"`
@@ -198,7 +297,7 @@ func (c *Client) UserMembership(ctx context.Context, username, uid string) (port
 		return ports.IdentityUser{}, nil, false, upstream(err)
 	}
 	for _, u := range page.Results {
-		if u.UID != uid {
+		if !match(u) {
 			continue
 		}
 		groups := make([]string, 0, len(u.GroupsObj))

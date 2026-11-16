@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -83,6 +84,24 @@ type fakeAuthentik struct {
 	// group deleted while another group still named it as parent.
 	deletedGroups  []string
 	deletingParent []string
+	// coreTokens are the tokens of /api/v3/core/tokens/. As in Authentik, a recovery link creates or updates the one
+	// link token of the account (identifier <uid>-password-reset, the model's default intent verification) and
+	// keeps its key: the link of an account changes only once its token was deleted. keys numbers the new keys.
+	coreTokens []*fakeToken
+	keys       int
+	// sourceConnections are the user pks of /api/v3/sources/user_connections/all/, one entry per connection.
+	sourceConnections []int
+	// scimUsers are the user pks of /api/v3/sources/scim_users/, one entry per SCIM source user.
+	scimUsers []int
+	// ignoreFilters answers the token, source connection and SCIM source user listings unfiltered (an Authentik that ignores the
+	// filter).
+	ignoreFilters bool
+}
+
+type fakeToken struct {
+	identifier, intent, key string
+	user                    int
+	expires                 time.Time // zero: not expiring
 }
 
 type fakeRequest struct {
@@ -271,6 +290,7 @@ func (f *fakeAuthentik) userJSON(u *fakeUser, includeGroups bool) map[string]any
 var (
 	reGroup       = regexp.MustCompile(`^/api/v3/core/groups/([^/]+)/(add_user/|remove_user/)?$`)
 	reUser        = regexp.MustCompile(`^/api/v3/core/users/([0-9]+)/(recovery/)?$`)
+	reToken       = regexp.MustCompile(`^/api/v3/core/tokens/([^/]+)/$`)
 	reApplication = regexp.MustCompile(`^/api/v3/core/applications/([^/]+)/$`)
 	reBrand       = regexp.MustCompile(`^/api/v3/core/brands/([^/]+)/$`)
 	reObject      = regexp.MustCompile(`^/api/v3/(providers/oauth2|propertymappings/provider/scope|policies/expression|policies/bindings)/([^/]+)/$`)
@@ -431,8 +451,12 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 		}
 		switch {
 		case m[2] == "recovery/":
+			tok := f.linkToken(pk)
+			if tok == nil {
+				return http.StatusInternalServerError, map[string]any{"detail": "IntegrityError: duplicate identifier"}
+			}
 			link := f.fixture("post_core_users_id_recovery.json")
-			link["link"] = "https://auth.example.org/if/flow/paddock-recovery/?flow_token=t" + m[1] + "&d=" + key(body["token_duration"])
+			link["link"] = "https://auth.example.org/if/flow/paddock-recovery/?flow_token=" + tok.key + "&d=" + key(body["token_duration"])
 			return http.StatusOK, link
 		case r.Method == http.MethodGet:
 			j := f.fixture("get_core_users_id.json")
@@ -485,6 +509,37 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 			}
 		}
 		return http.StatusOK, items
+	case p == "/api/v3/core/tokens/" && r.Method == http.MethodGet:
+		return f.listTokens(q)
+	case p == "/api/v3/sources/user_connections/all/" && r.Method == http.MethodGet:
+		var items []map[string]any
+		for i, owner := range f.sourceConnections {
+			if f.ignoreFilters || q.Get("user") == "" || q.Get("user") == strconv.Itoa(owner) {
+				j := f.fixture("get_sources_user_connections_all.json")["results"].([]any)[0].(map[string]any)
+				j["pk"], j["user"] = i+1, owner
+				items = append(items, j)
+			}
+		}
+		return http.StatusOK, f.page(items)
+	case p == "/api/v3/sources/scim_users/" && r.Method == http.MethodGet:
+		var items []map[string]any
+		for _, owner := range f.scimUsers {
+			if f.ignoreFilters || q.Get("user__id") == "" || q.Get("user__id") == strconv.Itoa(owner) {
+				j := f.fixture("get_sources_scim_users.json")["results"].([]any)[0].(map[string]any)
+				j["user"] = owner
+				items = append(items, j)
+			}
+		}
+		return http.StatusOK, f.page(items)
+	case reToken.MatchString(p) && r.Method == http.MethodDelete:
+		id := reToken.FindStringSubmatch(p)[1]
+		for i, tok := range f.coreTokens {
+			if tok.identifier == id {
+				f.coreTokens = slices.Delete(f.coreTokens, i, i+1)
+				return http.StatusNoContent, nil
+			}
+		}
+		return http.StatusNotFound, f.fixture("delete_core_users_id_404.json")
 	case p == "/api/v3/core/brands/" && r.Method == http.MethodGet:
 		var items []map[string]any
 		for _, b := range f.brands {
@@ -698,6 +753,62 @@ func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
 		f.afterUserPage()
 	}
 	return http.StatusOK, out
+}
+
+// linkToken is Authentik's _create_recovery_link: update_or_create of the token <uid>-password-reset with a new expiry,
+// keeping the key of an unexpired token. The token manager hides expired rows, so an expired row with the identifier
+// makes the create collide with the unique identifier: nil, which the route answers with 500.
+func (f *fakeAuthentik) linkToken(pk int) *fakeToken {
+	id := "uid-" + strconv.Itoa(pk) + "-password-reset"
+	now := time.Now()
+	for _, tok := range f.coreTokens {
+		if tok.identifier == id {
+			if !tok.expires.IsZero() && !tok.expires.After(now) {
+				return nil
+			}
+			tok.user, tok.expires = pk, now.Add(24*time.Hour)
+			return tok
+		}
+	}
+	expires := now.Add(24 * time.Hour)
+	f.keys++
+	tok := &fakeToken{identifier: id, intent: "verification", key: "key" + strconv.Itoa(f.keys), user: pk, expires: expires}
+	f.coreTokens = append(f.coreTokens, tok)
+	return tok
+}
+
+// listTokens is Authentik's token listing filtered by identifier and user__username, paged like every listing.
+func (f *fakeAuthentik) listTokens(q url.Values) (int, any) {
+	var match []*fakeToken
+	for _, tok := range f.coreTokens {
+		u := f.users[tok.user]
+		byUser := q.Get("user__username") == "" || (u != nil && u.username == q.Get("user__username"))
+		byID := q.Get("identifier") == "" || tok.identifier == q.Get("identifier")
+		if f.ignoreFilters || (byUser && byID) {
+			match = append(match, tok)
+		}
+	}
+	size, _ := strconv.Atoi(q.Get("page_size"))
+	page, _ := strconv.Atoi(q.Get("page"))
+	from := min((page-1)*size, len(match))
+	to := min(from+size, len(match))
+	tmpl := f.fixture("get_core_tokens.json")
+	items := []map[string]any{}
+	for _, tok := range match[from:to] {
+		j := maps.Clone(tmpl["results"].([]any)[0].(map[string]any))
+		j["pk"], j["identifier"], j["intent"], j["user"] = uuid.NewString(), tok.identifier, tok.intent, tok.user
+		j["expiring"], j["expires"] = !tok.expires.IsZero(), nil
+		if !tok.expires.IsZero() {
+			j["expires"] = tok.expires.UTC().Format(time.RFC3339Nano)
+		}
+		items = append(items, j)
+	}
+	tmpl["results"] = items
+	tmpl["pagination"].(map[string]any)["count"] = len(match)
+	if to < len(match) {
+		tmpl["pagination"].(map[string]any)["next"] = page + 1
+	}
+	return http.StatusOK, tmpl
 }
 
 func (f *fakeAuthentik) sortedGroups() []*fakeGroup {

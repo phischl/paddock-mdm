@@ -79,6 +79,18 @@ func (e *StageError) Error() string {
 	return fmt.Sprintf("authflow: unsupported stage %q in flow %s: %s", e.Component, e.Flow, e.Raw)
 }
 
+// ExecutorError is an answer of the flow executor API other than 200 or a redirect: Authentik refused the request.
+type ExecutorError struct {
+	Method, Path string
+	Status       int
+	// Body is the start of the answer.
+	Body string
+}
+
+func (e *ExecutorError) Error() string {
+	return fmt.Sprintf("authflow: %s %s: HTTP %d: %s", e.Method, e.Path, e.Status, e.Body)
+}
+
 // Login signs in username/password at adminURL ("https://admin.paddock.localhost:8443"). On a Paddock denial it
 // returns the result together with ErrDenied.
 func Login(ctx context.Context, client *http.Client, adminURL, username, password string) (*Result, error) {
@@ -300,7 +312,7 @@ func executor(ctx context.Context, client *http.Client, method string, u *url.UR
 		return executor(ctx, client, http.MethodGet, loc, nil)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return challenge{}, fmt.Errorf("authflow: %s %s: HTTP %d: %s", method, u.Path, resp.StatusCode, truncate(data))
+		return challenge{}, &ExecutorError{Method: method, Path: u.Path, Status: resp.StatusCode, Body: truncate(data)}
 	}
 	var ch challenge
 	if err := json.Unmarshal(data, &ch); err != nil {

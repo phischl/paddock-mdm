@@ -77,6 +77,7 @@ func (d *directory) CreateUser(context.Context, string, ports.NewIdentityUser) (
 func (d *directory) UpdateUser(context.Context, string, string, string) error { return nil }
 func (d *directory) DeleteUser(context.Context, string) error                 { return nil }
 func (d *directory) RecoveryLink(context.Context, string) (string, error)     { return "", nil }
+func (d *directory) RevokeRecoveryLinks(context.Context, string) (int, error) { return 0, nil }
 func (d *directory) UserActive(context.Context, string) (bool, error)         { return true, d.fail }
 func (d *directory) LockUser(context.Context, string, string, bool) error     { return d.fail }
 func (d *directory) UnlockUser(context.Context, string, string, bool) error   { return d.fail }

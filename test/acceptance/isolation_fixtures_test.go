@@ -847,6 +847,7 @@ var isolationFixtures = map[string]isolationFixture{
 	"DELETE /api/v1/users/{id}":                itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser }, nil),
 	"POST /api/v1/users/{id}/lock":             itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/lock" }, nil),
 	"POST /api/v1/users/{id}/unlock":           itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/unlock" }, nil),
+	"POST /api/v1/users/{id}/enrolment-link":   itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/enrolment-link" }, nil),
 	"GET /api/v1/users/{id}/devices":           itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/devices" }, nil),
 	"GET /api/v1/users/{id}/effective-profile": itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/effective-profile" }, nil),
 

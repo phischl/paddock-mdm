@@ -248,7 +248,7 @@ describe('the deletion banner for organization administrators', () => {
     role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme', domains: [] },
     locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7', step_up_valid_until: null,
     server_version: '0.1.0-alpha.6', alternate_role: null, channel: 'portal', mcp_write_enabled: false,
-    mcp_write_enabled_at: null, organization_deletion: null,
+    mcp_write_enabled_at: null, organization_deletion: null, mfa_enrolment_notice: null,
   }
 
   function mountBanner(value: Me): VueWrapper {

@@ -42,6 +42,7 @@ const admin: Me = {
   server_version: '0.1.0-alpha.5', alternate_role: null, channel: 'portal', mcp_write_enabled: false,
   mcp_write_enabled_at: null,
   organization_deletion: null,
+  mfa_enrolment_notice: null,
 }
 
 let wrapper: VueWrapper | null = null

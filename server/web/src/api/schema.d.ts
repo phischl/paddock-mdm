@@ -1708,6 +1708,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{id}/enrolment-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). A one-time sign-in setup link
+         *     for the user (ADR 0053 decision 1), valid 24 hours: the account sets up a passkey if it has none, and a
+         *     password only if Paddock created the account and it has none. The link is returned once and never stored,
+         *     logged or audited; responses are never cached. A locked user, a user deactivated in the identity provider, a
+         *     user not provisioned there and a platform administrator (a direct member of paddock.platform.admins, who
+         *     receives the setup link from the host operator) get none (409 invalid_state). A new link ends every older one;
+         *     when the older links cannot be ended, no link is issued (502 upstream_unavailable).
+         */
+        post: operations["createUserEnrolmentLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/{id}/effective-profile": {
         parameters: {
             query?: never;
@@ -5268,6 +5295,30 @@ export interface components {
             /** @description DNS domains of the organization's users; the first is the primary domain of the device login. */
             domains: string[];
         };
+        UserEnrolmentLink: {
+            /**
+             * Format: uri
+             * @description The one-time sign-in setup link; shown once.
+             */
+            link: string;
+            /**
+             * Format: date-time
+             * @description When the link expires at the latest.
+             */
+            expires_at: string;
+        };
+        MeMfaEnrolmentNotice: {
+            /**
+             * Format: date-time
+             * @description The end of the announcement (30 days after the upgrade's seed).
+             */
+            until: string;
+            /**
+             * @description Administrators still marked to set up a passkey at their next sign-in: of the organization's role groups
+             *     for an organization role, of every portal role group for the platform administrator.
+             */
+            pending: number;
+        };
         MeOrganizationDeletion: {
             /**
              * Format: date-time
@@ -5299,6 +5350,12 @@ export interface components {
              *     while no deletion is pending, and for platform administrators.
              */
             organization_deletion: components["schemas"]["MeOrganizationDeletion"] | null;
+            /**
+             * @description The announcement of the second-factor change to administrators (ADR 0053 decision 6) for 30 days after
+             *     the upgrade's seed; null before the seed, afterwards, for API tokens and MCP sessions, and while the
+             *     identity provider cannot be read.
+             */
+            mfa_enrolment_notice: components["schemas"]["MeMfaEnrolmentNotice"] | null;
             /** @enum {string} */
             locale: "en" | "de";
             /**
@@ -12974,6 +13031,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    createUserEnrolmentLink: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserEnrolmentLink"];
                 };
             };
             400: components["responses"]["Problem"];

@@ -380,6 +380,11 @@ const (
 	CodePlatformMFAEnrolMarksCleared Code = "platform.mfa_enrol_marks_cleared"
 	// An action refused because its organization is deleting or deleted (plan M17 amendment 2026-11-14 f point 1).
 	CodeOrganizationInactiveDenied Code = "organization.inactive_denied"
+
+	// Sign-in setup links (ADR 0053 decision 1): one-time links with which an account sets its password if missing and
+	// a passkey. The link itself is never part of an event.
+	CodeUserEnrolmentLinkCreated     Code = "user.enrolment_link_created"
+	CodePlatformEnrolmentLinkCreated Code = "platform.enrolment_link_created"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -910,8 +915,9 @@ var registry = map[Code]Definition{
 	CodeUserCreated: {
 		Code: CodeUserCreated, Emitted: true,
 		Description: "A local user was created in Authentik (without password) and in Paddock; the one-time recovery link is shown once and never recorded.",
-		Params:      []string{"username", "display_name"},
+		Params:      []string{"username", "display_name", "previous_links_revoked"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "previous_links_revoked counts the account's older one-time links ended before the new link was issued (a new link ends every older one); absent when the attempt failed before that.",
 	},
 	CodeUserUpdated: {
 		Code: CodeUserUpdated, Emitted: true,
@@ -2274,6 +2280,20 @@ var registry = map[Code]Definition{
 		Params:      []string{"organization_id", "attempted_code", "status"},
 		Outcomes:    []Outcome{OutcomeDenied},
 		Note:        "Platform pseudo-organization: nothing is written into an organization that is being deleted. organization_id names the refused organization, attempted_code the action's own code (not recorded in addition), status is deleting or deleted.",
+	},
+	CodeUserEnrolmentLinkCreated: {
+		Code: CodeUserEnrolmentLinkCreated, Emitted: true,
+		Description: "An organization administrator created a one-time sign-in setup link for a user of the organization (ADR 0053 decision 1): valid 24 hours; the account sets up a passkey if it has none, and a password only if Paddock created the account and it has none. A new link ends every older one.",
+		Params:      []string{"username", "previous_links_revoked"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "The link is shown once to the administrator and never recorded. previous_links_revoked counts the account's older links ended before it was issued; when they cannot be ended no link is issued (failure upstream_unavailable, param absent). Denied with step_up_required without a fresh step-up, forbidden for another role. Failure with not_found, invalid_state (the user is locked, deactivated, not provisioned in the identity provider, or a direct member of paddock.platform.admins) or upstream_unavailable.",
+	},
+	CodePlatformEnrolmentLinkCreated: {
+		Code: CodePlatformEnrolmentLinkCreated, Emitted: true,
+		Description: "The operator created a one-time sign-in setup link for an administrator account with paddock-server admin enrolment-link (ADR 0053 decision 1, plan M12h-2 amendment f addendum b): a platform administrator or an organization account with a portal role (admins, operators or auditors) created by hand in the identity provider; valid 24 hours; the account sets up a passkey if it has none, and a password if it has none unless it is connected to an upstream identity source (SCIM included). A new link ends every older one.",
+		Params:      []string{"username", "organization_id", "passkey_only", "previous_links_revoked"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeUnknown},
+		Note:        "The link is printed once on the host and never recorded. organization_id is the organization of the account's role group, absent for a platform administrator without an organization role and when the attempt failed before the account was found; the target type is user for an organization account, platform_admin otherwise. passkey_only is false when the command marked the account (attribute paddock_password_by_link) so that the link may set a password, true for an account connected to an upstream identity source (a source connection or a SCIM source user), whose link sets up only the passkey; absent when the attempt failed before that. previous_links_revoked counts the account's older links ended before it was issued; when they cannot be ended no link is issued (failure upstream_unavailable, param absent). Failure with invalid_state when the account holds no portal role (not a direct member of paddock.platform.admins or of an organization's admins, operators or auditors group, or the group's organization does not exist), when its role assignment is ambiguous (role groups of several organizations, or several role groups of one organization, as the portal sign-in denies it too; the fix is to remove the extra group memberships in the identity provider), or when it is deactivated, upstream_unavailable when the identity provider failed. Actor is the system actor paddock-server admin. Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

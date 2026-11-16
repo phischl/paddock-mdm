@@ -594,3 +594,12 @@ func intPtr(v *int32) *int {
 	n := int(*v)
 	return &n
 }
+
+// CreateUserEnrolmentLink returns a one-time sign-in setup link for a user (ADR 0053 decision 1).
+func (h *handlers) CreateUserEnrolmentLink(ctx context.Context, req adminapi.CreateUserEnrolmentLinkRequestObject) (adminapi.CreateUserEnrolmentLinkResponseObject, error) {
+	l, err := h.users.EnrolmentLink(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.CreateUserEnrolmentLink201JSONResponse{Link: l.Link, ExpiresAt: l.ExpiresAt.UTC()}, nil
+}
