@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
@@ -300,6 +301,73 @@ func TestUserEnrolmentLinkRevocationFails(t *testing.T) {
 		if u.Username == "lena@"+domain {
 			t.Fatalf("the identity provider user stayed after the failed creation")
 		}
+	}
+}
+
+// TestEnrolmentLinkRefusedForDeletingOrganization (PDK-1112): once an organization is deleting, its administrator gets
+// no sign-in setup link even with a step-up: 403 organization_inactive, the identity provider is not asked to end or
+// create a link, and the attempt is recorded once as organization.inactive_denied in the platform pseudo-organization
+// and adds no event to the deleting organization.
+func TestEnrolmentLinkRefusedForDeletingOrganization(t *testing.T) {
+	e := newEnv(t)
+	org := e.org("leaving")
+	alice := e.session(org, principal.RoleOrgAdmin)
+	user := e.localUser(org, alice, "nora")
+	pk := e.authentikPK(user)
+	stepped := e.steppedUp(alice, time.Now())
+	e.idp.mu.Lock()
+	linksBefore := e.idp.links[pk]
+	e.idp.mu.Unlock()
+	if linksBefore != 1 {
+		t.Fatalf("%d open links before, want the password link of the creation", linksBefore)
+	}
+	if _, err := e.super.Exec(context.Background(), `UPDATE organization SET status = 'deleting',
+		deletion_requested_at = now(), deletion_requested_by = 'platform admin', deletion_reason = 'contract ended',
+		delete_after = now(), offboarding_step = 'database' WHERE id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.orgPool.RefreshOrganizationStatus(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	inOrg := func() int {
+		var n int
+		if err := e.super.QueryRow(context.Background(), "SELECT count(*) FROM action WHERE organization_id = $1", org).
+			Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	// The user's creation was recorded in the organization while it was active.
+	eventsBefore := inOrg()
+
+	res := e.do(call{method: "POST", path: "/api/v1/users/" + user.String() + "/enrolment-link", cookie: stepped})
+	if res.status != http.StatusForbidden || res.problemCode(t) != "organization_inactive" {
+		t.Fatalf("deleting organization: %d %s, want 403 organization_inactive", res.status, res.body)
+	}
+	if strings.Contains(string(res.body), "flow_token") {
+		t.Fatalf("the refusal carries a link: %s", res.body)
+	}
+	e.idp.mu.Lock()
+	linksAfter := e.idp.links[pk]
+	e.idp.mu.Unlock()
+	if linksAfter != linksBefore {
+		t.Fatalf("open links %d after the refusal, want %d: the identity provider ended or created a link", linksAfter, linksBefore)
+	}
+	var events int
+	var attempted, status string
+	if err := e.super.QueryRow(context.Background(), `SELECT count(*), coalesce(max(params->>'attempted_code'), ''),
+		coalesce(max(params->>'status'), '') FROM action WHERE code = 'organization.inactive_denied'
+		AND organization_id = $1 AND outcome = 'denied' AND error_code = 'organization_inactive'
+		AND params->>'organization_id' = $2`, audit.PlatformOrganizationID, org.String()).
+		Scan(&events, &attempted, &status); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 || attempted != "user.enrolment_link_created" || status != "deleting" {
+		t.Errorf("platform events: %d, attempted %q, status %q; want one user.enrolment_link_created, deleting",
+			events, attempted, status)
+	}
+	if after := inOrg(); after != eventsBefore {
+		t.Errorf("events in the deleting organization: %d after the refusal, want %d", after, eventsBefore)
 	}
 }
 

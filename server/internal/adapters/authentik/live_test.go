@@ -243,13 +243,32 @@ func TestLiveAuthentik(t *testing.T) {
 }
 
 // deleteLiveOrganization runs DeleteOrganization with the service token (plan M17 decision 10) and checks with the
-// admin token that every object it counts is gone, so a permission missing from the service role fails here.
+// admin token that every object it counts is gone, so a permission missing from the service role fails here. A member
+// of the root group that Paddock did not create survives with its sign-in setup link ended and its mark
+// paddock_password_by_link removed (PDK-1112).
 func deleteLiveOrganization(ctx context.Context, t *testing.T, c *authentik.Client, admin *rawAPI, slug string) {
 	t.Helper()
 	managed := "gone-" + uuid.NewString()[:8] + "@" + slug + ".test"
 	userPK, err := c.CreateUser(ctx, slug, ports.NewIdentityUser{Username: managed, Name: "Deleted With The Organization", Email: managed})
 	if err != nil {
 		t.Fatalf("CreateUser before DeleteOrganization: %v", err)
+	}
+	stays := "stays-" + uuid.NewString()[:8] + "@" + slug + ".test"
+	survivorPK, err := c.CreateUser(ctx, slug, ports.NewIdentityUser{Username: stays, Name: "Survives The Organization", Email: stays})
+	if err != nil {
+		t.Fatalf("CreateUser before DeleteOrganization: %v", err)
+	}
+	t.Cleanup(func() { admin.call(http.MethodDelete, "/core/users/"+survivorPK+"/") })
+	if err := c.SetUserAttribute(ctx, survivorPK, "paddock_managed", nil); err != nil {
+		t.Fatalf("unmark the surviving member: %v", err)
+	}
+	for _, pk := range []string{userPK, survivorPK} {
+		if _, err := c.RecoveryLink(ctx, pk); err != nil {
+			t.Fatalf("RecoveryLink before DeleteOrganization: %v", err)
+		}
+		if err := c.SetUserAttribute(ctx, pk, ports.AttrPasswordByLink, true); err != nil {
+			t.Fatalf("mark %s before DeleteOrganization: %v", pk, err)
+		}
 	}
 	app := organization.DeviceLoginApp(slug)
 	appPK := admin.first("/core/applications/?superuser_full_list=true&slug=" + app)["pk"].(string)
@@ -292,6 +311,20 @@ func deleteLiveOrganization(ctx context.Context, t *testing.T, c *authentik.Clie
 		if code, body := admin.call(http.MethodGet, path); code != http.StatusNotFound {
 			t.Errorf("GET %s after DeleteOrganization: %d %s", path, code, body)
 		}
+	}
+	code, body := admin.call(http.MethodGet, "/core/users/"+survivorPK+"/")
+	var survivor struct {
+		UID        string         `json:"uid"`
+		Attributes map[string]any `json:"attributes"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &survivor) != nil || survivor.UID == "" {
+		t.Fatalf("GET the surviving member after DeleteOrganization: %d %s", code, body)
+	}
+	if _, marked := survivor.Attributes[ports.AttrPasswordByLink]; marked {
+		t.Errorf("the surviving member keeps %s: %v", ports.AttrPasswordByLink, survivor.Attributes)
+	}
+	if links := admin.list("/core/tokens/?identifier=" + survivor.UID + "-password-reset"); len(links) != 0 {
+		t.Errorf("the surviving member keeps its sign-in setup link: %v", links)
 	}
 	if again, err := c.DeleteOrganization(ctx, slug); err != nil || again != (ports.OrgIdentityDeletion{}) {
 		t.Errorf("second DeleteOrganization: %+v, %v", again, err)
