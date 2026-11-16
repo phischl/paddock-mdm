@@ -202,6 +202,7 @@ export const auditCodes = [
   'platform.backup_target_updated',
   'platform.bundle_seq_bumped',
   'platform.bundle_seq_raised',
+  'platform.bundle_versions_pruned',
   'platform.cache_rebuilt',
   'platform.deleted_organization_audit_read',
   'platform.ip_allowlist_changed',

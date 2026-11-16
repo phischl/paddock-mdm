@@ -192,6 +192,7 @@ const (
 	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
 	CodePlatformBundleSeqBumped        Code = "platform.bundle_seq_bumped"
 	CodePlatformBundleSeqRaised        Code = "platform.bundle_seq_raised"
+	CodePlatformBundleVersionsPruned   Code = "platform.bundle_versions_pruned"
 	CodePlatformCacheRebuilt           Code = "platform.cache_rebuilt"
 
 	// IP allow list of the administrative surfaces (plan M7a decision 14).
@@ -1391,6 +1392,12 @@ var registry = map[Code]Definition{
 		Params:      []string{"at_least", "devices"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "./paddock restore runs it with the highest sequence before the restore plus 1,000,000 (ADR 0046, amendment 2026-11-07).",
+	},
+	CodePlatformBundleVersionsPruned: {
+		Code: CodePlatformBundleVersionsPruned, Emitted: true,
+		Description: "An operator ran ./paddock bundles prune --yes on the control-plane host: superseded bundle versions were deleted from the bundles bucket, keeping the newest keep per device (actor: system, platform pseudo-organization).",
+		Params:      []string{"keep", "listed", "devices", "selected", "deleted", "failed"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 	},
 	CodePlatformCacheRebuilt: {
 		Code: CodePlatformCacheRebuilt, Emitted: true,

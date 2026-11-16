@@ -36,10 +36,11 @@ var adminActor = audit.Actor{Type: audit.ActorSystem, Display: "paddock-server a
 
 // Specs of the restore commands.
 var (
-	SpecBundleSeqBump      = ActionSpec{Code: audit.CodePlatformBundleSeqBumped, Actor: &adminActor}
-	SpecBundleSeqRaise     = ActionSpec{Code: audit.CodePlatformBundleSeqRaised, Actor: &adminActor}
-	SpecRecompileRequested = ActionSpec{Code: audit.CodeOrganizationRecompileRequested, Actor: &adminActor}
-	SpecCacheRebuilt       = ActionSpec{Code: audit.CodePlatformCacheRebuilt, Actor: &adminActor}
+	SpecBundleSeqBump        = ActionSpec{Code: audit.CodePlatformBundleSeqBumped, Actor: &adminActor}
+	SpecBundleSeqRaise       = ActionSpec{Code: audit.CodePlatformBundleSeqRaised, Actor: &adminActor}
+	SpecBundleVersionsPruned = ActionSpec{Code: audit.CodePlatformBundleVersionsPruned, Actor: &adminActor}
+	SpecRecompileRequested   = ActionSpec{Code: audit.CodeOrganizationRecompileRequested, Actor: &adminActor}
+	SpecCacheRebuilt         = ActionSpec{Code: audit.CodePlatformCacheRebuilt, Actor: &adminActor}
 	// SpecSecurityReviewRequired records the start of the review of existing data (ADR 0034 decision 7).
 	SpecSecurityReviewRequired = ActionSpec{Code: audit.CodeOrganizationSecurityReviewRequired, Actor: &adminActor}
 )
@@ -106,6 +107,33 @@ func (a *Admin) RaiseBundleSeq(ctx context.Context, atLeast int64) (int64, error
 		return nil
 	})
 	return devices, err
+}
+
+// BundlePrune is the outcome of one ./paddock bundles prune --yes run, as the host reports it.
+type BundlePrune struct{ Keep, Listed, Devices, Selected, Deleted, Failed int64 }
+
+// ErrBundlePruneIncomplete is returned by RecordBundlePrune when keys could not be deleted; the event is then
+// recorded with outcome failure.
+var ErrBundlePruneIncomplete = errors.New("the prune ended with failed deletions")
+
+// RecordBundlePrune records one ./paddock bundles prune --yes run (audited: platform.bundle_versions_pruned). The
+// actor is always the system actor: the person is known from the host's own access control, never from input (plan
+// M17 amendment t, addendum point 4).
+func (a *Admin) RecordBundlePrune(ctx context.Context, p BundlePrune) error {
+	spec := SpecBundleVersionsPruned
+	err := a.runner.RunTx(system(ctx, uuid.Nil), ScopePlatform, spec, func(_ context.Context, _ *pgstore.Queries, rec Recorder) error {
+		rec.SetParam("keep", p.Keep)
+		rec.SetParam("listed", p.Listed)
+		rec.SetParam("devices", p.Devices)
+		rec.SetParam("selected", p.Selected)
+		rec.SetParam("deleted", p.Deleted)
+		rec.SetParam("failed", p.Failed)
+		if p.Failed > 0 {
+			return ErrBundlePruneIncomplete
+		}
+		return nil
+	})
+	return err
 }
 
 // RecompileAll requests a forced recompile of every organization (audited once per organization:
