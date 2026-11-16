@@ -554,10 +554,11 @@ slots. Make the active slot answer again, as root on the device:
    ```
 
 The agent then stages the current release again, and the supervisor processes it as usual: signature check, downgrade
-refusal against the version that the active slot now reports, self-test and probation. Paddock does not report either
-step as a tamper event: no
-check watches the slots or `current`, and the Fleet policy `paddock_agent_running` only checks that a `paddockd` runs
-from a slot below `/opt/paddock/agent/`. Record the intervention in your own change log as an intended intervention.
+refusal against the version that the active slot now reports, self-test and probation. The agent's integrity check
+(ADR 0056) reports either step once as `device.tamper_protected_file_changed`: step 2 with `file`
+`/opt/paddock/agent/current`, step 3 with `/opt/paddock/agent/<slot>/paddockd`. That event is expected after this
+repair: resolve the tamper finding with a note on the intervention, and record it in your own change log as an
+intended intervention.
 The device then reports the agent version of the slot it runs.
 
 ## Update policy

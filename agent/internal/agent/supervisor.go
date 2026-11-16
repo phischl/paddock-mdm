@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
@@ -121,6 +122,12 @@ func (a *Agent) reportSupervisorUpgrade() {
 		a.retrySupervisor(r)
 	default:
 		a.st.FailedSupervisorVersion = r.Version
+	}
+	if r.Outcome != protocol.SupervisorOutcomeUpdated {
+		// The helper copied the previous binary and unit back, so dpkg's md5sums describe the failed version (ADR 0056).
+		if err := integrity.SupervisorRolledBack(a.d.Layout, runtime.GOARCH); err != nil {
+			slog.Warn("recording the restored supervisor in the integrity baseline failed", "error", err)
+		}
 	}
 	at := r.At
 	a.st.ReportedSupervisorUpgradeAt = &at

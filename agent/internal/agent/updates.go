@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -22,6 +23,10 @@ func (a *Agent) reportUpdate() {
 		return
 	}
 	slog.Info("agent update finished", "version", r.Version, "from_version", r.FromVersion, "outcome", r.Outcome)
+	// Before the event: once the result counts as processed, the next pass compares the slots again (ADR 0056).
+	if err := integrity.UpdateResult(a.d.Layout, r.Version); err != nil {
+		slog.Warn("moving the integrity baseline for the update result failed", "error", err)
+	}
 	a.event(r.EventType(), map[string]string{"version": r.Version, "from_version": r.FromVersion, "outcome": r.Outcome})
 	if r.Outcome != update.OutcomeUpdated {
 		a.st.FailedUpdateVersion = r.Version
@@ -98,6 +103,10 @@ func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
 	if err != nil {
 		slog.WarnContext(ctx, "agent update offered but not installable", "version", offer.Version, "error", err)
 		return
+	}
+	if err := integrity.RecordStaged(a.d.Layout, offer.Version, offer.SHA256); err != nil {
+		// Without the record the result re-initializes the slots instead of moving them: a Warn, never an event.
+		slog.WarnContext(ctx, "recording the staged release in the integrity baseline failed", "version", offer.Version, "error", err)
 	}
 	if err := update.Stage(ctx, a.d.Layout, a.d.Client, *offer); err != nil {
 		slog.WarnContext(ctx, "staging the agent update failed; retrying at the next check-in", "version", offer.Version, "error", err)

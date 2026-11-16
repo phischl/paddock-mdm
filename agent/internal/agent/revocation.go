@@ -60,6 +60,7 @@ func (a *Agent) applyRevocation(b *bundle.Bundle) {
 		slog.Error("pinning the revocation keys failed", "error", err)
 		return
 	}
+	a.syncIntegrity(a.d.Layout.RevokeTrust())
 	slog.Warn("pinned the revocation keys of the bundle (trust on first use; re-enroll to replace them)")
 	a.event(protocol.EventRevocationTrustPinnedTOFU, map[string]any{"file": RevokeTrustFile})
 }

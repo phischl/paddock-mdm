@@ -305,6 +305,11 @@ func TestInPlaceEncryptionPlain(t *testing.T) {
 		w.WaitEvent(t, "device.disk_conversion_aborted", 5*time.Minute, func(p map[string]any) bool { return p["conversion_id"] == id && p["by"] == "operator" })
 		w.waitConversion(t, "cancelled", 5*time.Minute, func(c apiConversion) bool { return c.ID == id && c.Phase == "cancelled" })
 		w.waitAbortCleaned(t)
+		// The agent's own preparation and cleanup of disk-setup.json are no tamper (ADR 0056).
+		w.Checkin()
+		if files := w.tamperFiles(nil, "/etc/paddock/disk-setup.json"); len(files) != 0 {
+			t.Fatalf("the agent's own preparation and cleanup reported %v", files)
+		}
 		w.reboot(t)
 		w.requireUnencrypted(t)
 		w.waitHealth(t, "eligible after the abort", 10*time.Minute, func(h conversionHealth) bool { return h.eligible("plain") })

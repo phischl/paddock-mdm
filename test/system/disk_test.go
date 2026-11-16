@@ -90,7 +90,11 @@ type diskWorld struct {
 // boot PIN, the reconciler reaches compliant (recovery key and header escrowed, install passphrase removed), and the
 // next boot unlocks with the PIN.
 func gateDiskFlow(t *testing.T, w *diskWorld) {
+	seen := w.eventIDs(TamperFileChanged)
 	w.PrepareDisk(t)
+	// The hand-written disk-setup.json simulates the autoinstall: a write outside Paddock, reported once (ADR 0056).
+	isDiskSetup := func(p map[string]any) bool { return p["file"] == "/etc/paddock/disk-setup.json" }
+	w.waitNewEvent(t, TamperFileChanged, seen, 5*time.Minute, isDiskSetup)
 	w.RebootWithPassphrase(t)
 	w.AnswerDiskSetup(t, w.pin)
 	if kinds := w.Keyslots(t); !slices.Contains(kinds, "tpm2+pin") {
@@ -112,6 +116,10 @@ func gateDiskFlow(t *testing.T, w *diskWorld) {
 	w.RebootWithPIN(t, w.pin)
 	if out := w.Must("systemctl is-active paddock-supervisor"); out != "active" {
 		t.Fatalf("supervisor after the PIN boot: %s", out)
+	}
+	w.Checkin()
+	if n := len(w.newEvents(TamperFileChanged, seen, isDiskSetup)); n != 1 {
+		t.Fatalf("%d %s events for /etc/paddock/disk-setup.json, want exactly 1", n, TamperFileChanged)
 	}
 }
 

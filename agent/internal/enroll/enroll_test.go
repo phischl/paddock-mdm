@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/config"
 	"github.com/phischl/paddock-mdm/agent/internal/enroll"
 	"github.com/phischl/paddock-mdm/agent/internal/identity"
+	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
@@ -488,5 +489,60 @@ func TestMissingConfigurationFailsWhilePending(t *testing.T) {
 	}
 	if st, _ := state.Load(f.layout.State()); st.Status == state.StatusActive {
 		t.Fatal("resumed with a missing configuration")
+	}
+}
+
+// noUnits is a device without Paddock's units and packages, for the integrity check.
+type noUnits struct{}
+
+func (noUnits) Systemctl(context.Context, ...string) (string, int, error) {
+	return "LoadState=not-found\n", 0, nil
+}
+func (noUnits) Output(context.Context, string, ...string) ([]byte, error) {
+	return nil, errors.New("dpkg-query: exit 1")
+}
+
+// TestEnrollSyncsIntegrityBaseline (ADR 0056): the files an enrollment writes, also again on a re-run, are no change
+// for the integrity check; a hand edit is.
+func TestEnrollSyncsIntegrityBaseline(t *testing.T) {
+	f := newFixture(t)
+	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollPending, DeviceID: testgw.DeviceID})
+	if err := os.MkdirAll(f.layout.Join("/usr/bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/opt/paddock/agent/current/paddockd", f.layout.Join("/usr/bin/paddockd")); err != nil {
+		t.Fatal(err)
+	}
+	var reported []string
+	c := integrity.New(f.layout, noUnits{})
+	c.DpkgBusy = func() bool { return false }
+	c.Emit = func(file string) { reported = append(reported, file) }
+	run := func(proxy string) {
+		t.Helper()
+		data, _ := json.Marshal(f.g.EnrollmentConfig())
+		if err := os.WriteFile(f.cfgPath, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		o := f.options(f.cfgPath)
+		o.NoWait, o.Proxy = true, proxy
+		if code, err := enroll.Run(context.Background(), o); code != enroll.ExitPending || err != nil {
+			t.Fatalf("enroll: %d, %v", code, err)
+		}
+	}
+	run("")
+	c.Check(context.Background(), integrity.Pass{})
+	run("http://proxy.example:3128")
+	for range 3 {
+		c.Check(context.Background(), integrity.Pass{})
+	}
+	if cfg, _ := config.LoadAgent(f.layout.AgentConfig()); cfg.Proxy != "http://proxy.example:3128" || len(reported) != 0 {
+		t.Fatalf("proxy %q, reported %v", cfg.Proxy, reported)
+	}
+	if err := os.WriteFile(f.layout.AgentConfig(), []byte("server_url: https://elsewhere\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c.Check(context.Background(), integrity.Pass{})
+	if len(reported) != 1 || reported[0] != "/etc/paddock/agent.yml" {
+		t.Fatalf("reported %v", reported)
 	}
 }
