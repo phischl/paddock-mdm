@@ -8,11 +8,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/agent/internal/encrypt"
 	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
@@ -190,6 +193,10 @@ func TestIntegritySupervisorRollback(t *testing.T) {
 			}
 			install("v1")
 			ticks(t, a, nil, 1)
+			// handleSupervisorPackage records the files before it launches the upgrade (TestIntegritySupervisorCapture).
+			if err := integrity.RecordSupervisorPre(l, runtime.GOARCH, "2.0.0"); err != nil {
+				t.Fatal(err)
+			}
 			install("v2")
 			writeFile(t, l.Join(supervisorpkg.Binary), "v1"+supervisorpkg.Binary)
 			writeFile(t, l.Join(supervisorpkg.UnitFile), "v1"+supervisorpkg.UnitFile)
@@ -297,4 +304,237 @@ func TestIntegritySkipsDiskSetupWhileConverting(t *testing.T) {
 	a.syncIntegrity(a.d.Layout.DiskSetupConfig())
 	a.conversionBusy = false
 	ticks(t, a, g, 2)
+}
+
+// preparedIntegrity is a device whose in-place encryption is prepared, with the integrity baseline recorded.
+func preparedIntegrity(t *testing.T) *Agent {
+	t.Helper()
+	a, _, _ := convAgent(t)
+	a = withIntegrity(t, a)
+	ticks(t, a, nil, 1)
+	a.encryptDiskCommand(context.Background(), encryptCmd(command.TypeEncryptDisk, "c-1", `{"conversion_id":"`+testConversionID+`"}`))
+	runWorker(t, a)
+	if _, err := os.Stat(a.d.Layout.DiskSetupConfig()); err != nil || a.st.Conversion.Phase != state.ConversionPrepared {
+		t.Fatalf("not prepared: %v", err)
+	}
+	_ = os.Remove(a.d.Layout.Spool())
+	ticks(t, a, nil, 2)
+	return a
+}
+
+// TestIntegrityRefusedAbortKeepsHandEdit (plan M5a R8, T1): a refused abort request and a refused abort command do
+// not move the baseline, so a prior hand edit of disk-setup.json is reported once.
+func TestIntegrityRefusedAbortKeepsHandEdit(t *testing.T) {
+	a := preparedIntegrity(t)
+	writeFile(t, a.d.Layout.DiskSetupConfig(), `{"hand":"edit"}`)
+	req, _ := json.Marshal(encrypt.AbortRequest{Nonce: "n1", ConversionID: "c-unknown", By: "operator", RequestedAt: a.d.Now()})
+	writeFile(t, a.d.Layout.EncryptAbortRequest(), string(req))
+	a.handleAbortRequest(context.Background())
+	if status, _ := a.encryptDiskAbortCommand(context.Background(), encryptCmd(command.TypeEncryptDiskAbort, "c-a",
+		`{"conversion_id":"c-unknown"}`)); status != protocol.CommandFailed {
+		t.Fatal(status)
+	}
+	for range 3 {
+		a.tickIntegrity(context.Background())
+		if files := tampered(t, a, nil); !slices.Equal(files, []string{"/etc/paddock/disk-setup.json"}) {
+			t.Fatalf("reported %v", files)
+		}
+	}
+}
+
+// breakBaseline makes integrity.json unreadable (a directory) until the returned func restores it.
+func breakBaseline(t *testing.T, a *Agent) func() {
+	t.Helper()
+	path := a.d.Layout.Integrity()
+	if err := os.Rename(path, path+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(path+".saved", path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestIntegrityFailedSyncDeferred (plan M5a R7.1, T7): Paddock's own write whose sync failed is taken as the baseline
+// by the next pass instead of being reported.
+func TestIntegrityFailedSyncDeferred(t *testing.T) {
+	a := preparedIntegrity(t)
+	restore := breakBaseline(t, a)
+	writeFile(t, a.d.Layout.DiskSetupConfig(), `{"written":"by Paddock"}`)
+	a.syncIntegrity(a.d.Layout.DiskSetupConfig())
+	restore()
+	ticks(t, a, nil, 3)
+	writeFile(t, a.d.Layout.DiskSetupConfig(), `{"hand":"edit"}`)
+	a.tickIntegrity(context.Background())
+	if files := tampered(t, a, nil); !slices.Equal(files, []string{"/etc/paddock/disk-setup.json"}) {
+		t.Fatalf("reported %v", files)
+	}
+}
+
+// holdIntegrityLock holds integrity.lock from a second open file description until the returned func releases it.
+func holdIntegrityLock(t *testing.T, a *Agent) func() {
+	t.Helper()
+	f, err := os.OpenFile(a.d.Layout.IntegrityLock(), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // a file descriptor fits an int
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return func() { _ = f.Close() }
+}
+
+// updatedTo stages version as the agent does and installs it as the supervisor does: into slot, current switched,
+// the request removed and the result written at at.
+func updatedTo(t *testing.T, a *Agent, g *testgw.Gateway, version, slot string, at time.Time) {
+	t.Helper()
+	offer(g, version, []byte("agent "+version))
+	a.Cycle(context.Background())
+	if !update.Pending(a.d.Layout) {
+		t.Fatal("not staged")
+	}
+	g.Mu.Lock()
+	g.Checkin.AgentUpdate = nil
+	g.Mu.Unlock()
+	writeFile(t, filepath.Join(a.d.Layout.Slots(), slot, "paddockd"), "agent "+version)
+	if err := os.Remove(a.d.Layout.UpdateRequest()); err != nil {
+		t.Fatal(err)
+	}
+	replaceLink(t, slot, filepath.Join(a.d.Layout.Slots(), "current"))
+	res, _ := json.Marshal(update.Result{Version: version, FromVersion: "1.0.0", Outcome: update.OutcomeUpdated, At: at})
+	writeFile(t, a.d.Layout.UpdateResult(), string(res))
+}
+
+func updateEvents(t *testing.T, a *Agent) int {
+	t.Helper()
+	n := 0
+	for _, e := range spooled(t, a) {
+		if e.Type == protocol.EventAgentUpdated {
+			n++
+		}
+	}
+	return n
+}
+
+// TestIntegrityUpdateResultWaitsForTheBaseline (plan M5a R7.2, R7.3, T6): while integrity.lock is held the update
+// result is neither reported nor marked processed; afterwards it is reported once and a later update raises no
+// tamper event. Past StateBound the result is reported without the bookkeeping.
+func TestIntegrityUpdateResultWaitsForTheBaseline(t *testing.T) {
+	setup := func(t *testing.T) (*Agent, *testgw.Gateway, *time.Time) {
+		g := testgw.New(t)
+		a := newAgent(t, g)
+		now := time.Now().UTC()
+		a.d.Now = func() time.Time { return now }
+		a = withIntegrity(t, a)
+		a.d.Supervisor = func() (int, error) { return 1, nil }
+		a.d.Signal = func(int) error { return nil }
+		ticks(t, a, g, 1)
+		return a, g, &now
+	}
+	t.Run("lock released", func(t *testing.T) {
+		a, g, now := setup(t)
+		updatedTo(t, a, g, "9.1.0", "B", now.Add(time.Minute))
+		release := holdIntegrityLock(t, a)
+		a.reportUpdate()
+		if a.st.ReportedUpdateAt != nil || updateEvents(t, a) != 0 {
+			t.Fatalf("reported while the baseline could not move: %v", a.st.ReportedUpdateAt)
+		}
+		release()
+		a.reportUpdate()
+		a.reportUpdate()
+		if a.st.ReportedUpdateAt == nil || updateEvents(t, a) != 1 {
+			t.Fatalf("reported at %v with %d events", a.st.ReportedUpdateAt, updateEvents(t, a))
+		}
+		ticks(t, a, g, 2)
+		updatedTo(t, a, g, "9.2.0", "A", now.Add(time.Hour))
+		a.reportUpdate()
+		ticks(t, a, g, 2)
+	})
+	t.Run("past the bound", func(t *testing.T) {
+		a, g, now := setup(t)
+		updatedTo(t, a, g, "9.1.0", "B", now.Add(time.Minute))
+		holdIntegrityLock(t, a)
+		a.reportUpdate()
+		*now = now.Add(integrity.StateBound)
+		a.reportUpdate()
+		if a.st.ReportedUpdateAt == nil || updateEvents(t, a) != 1 {
+			t.Fatalf("not reported past the bound: %v", a.st.ReportedUpdateAt)
+		}
+	})
+}
+
+// TestIntegritySupervisorCapture (plan M5a R10, R7.2, T8): the agent records the supervisor files before it launches
+// the upgrade, so a regular rollback raises no event; while the record fails nothing is launched.
+func TestIntegritySupervisorCapture(t *testing.T) {
+	a, _, launched := supervisorAgent(t, "")
+	a = withIntegrity(t, a, supervisorpkg.Package)
+	l := a.d.Layout
+	install := func(content string) {
+		var sums strings.Builder
+		for _, f := range []string{supervisorpkg.Binary, supervisorpkg.UnitFile} {
+			writeFile(t, l.Join(f), content+f)
+			sum := md5.Sum([]byte(content + f)) //nolint:gosec // dpkg's format
+			sums.WriteString(hex.EncodeToString(sum[:]) + "  " + strings.TrimPrefix(f, "/") + "\n")
+		}
+		writeFile(t, l.Join("/var/lib/dpkg/info/paddock-supervisor.md5sums"), sums.String())
+	}
+	install("v1")
+	ticks(t, a, nil, 1)
+	restore := breakBaseline(t, a)
+	a.handleSupervisorPackage(context.Background())
+	if len(*launched) != 0 {
+		t.Fatalf("launched without the record: %v", *launched)
+	}
+	restore()
+	a.handleSupervisorPackage(context.Background())
+	if len(*launched) != 1 {
+		t.Fatalf("launched %v", *launched)
+	}
+	install("v2")
+	writeFile(t, l.Join(supervisorpkg.Binary), "v1"+supervisorpkg.Binary)
+	writeFile(t, l.Join(supervisorpkg.UnitFile), "v1"+supervisorpkg.UnitFile)
+	if err := os.Remove(l.SupervisorUpgrade()); err != nil {
+		t.Fatal(err)
+	}
+	if err := supervisorpkg.WriteResult(l, supervisorpkg.Result{Version: buildinfo.Version, FromVersion: "0.0.0~alpha.1",
+		Outcome: protocol.SupervisorOutcomeRolledBack, At: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	a.reportSupervisorUpgrade()
+	ticks(t, a, nil, 3)
+}
+
+// TestIntegrityBaselineReset (plan M5a R14, T15): a fresh device is established silently; a deleted baseline on an
+// established device is reported once as baseline_reset.
+func TestIntegrityBaselineReset(t *testing.T) {
+	g := testgw.New(t)
+	a := withIntegrity(t, newAgent(t, g))
+	ticks(t, a, g, 1)
+	if a.st.IntegrityEstablishedAt == nil {
+		t.Fatal("not established after the first pass")
+	}
+	if err := os.Remove(a.d.Layout.Integrity()); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		a.tickIntegrity(context.Background())
+	}
+	var reasons []string
+	for _, e := range append(spooled(t, a), eventsOf(g, protocol.EventTamperProtectedFileChanged)...) {
+		if e.Type == protocol.EventTamperProtectedFileChanged {
+			d := eventData(t, e)
+			reasons = append(reasons, d["file"].(string)+"#"+d["reason"].(string))
+		}
+	}
+	if want := "/var/lib/paddock/state/integrity.json#" + protocol.TamperReasonBaselineReset; !slices.Equal(reasons, []string{want}) {
+		t.Fatalf("reported %v", reasons)
+	}
 }

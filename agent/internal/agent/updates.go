@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/agent/internal/integrity"
@@ -22,11 +23,12 @@ func (a *Agent) reportUpdate() {
 	if r == nil || (a.st.ReportedUpdateAt != nil && a.st.ReportedUpdateAt.Equal(r.At)) {
 		return
 	}
-	slog.Info("agent update finished", "version", r.Version, "from_version", r.FromVersion, "outcome", r.Outcome)
-	// Before the event: once the result counts as processed, the next pass compares the slots again (ADR 0056).
-	if err := integrity.UpdateResult(a.d.Layout, r.Version); err != nil {
-		slog.Warn("moving the integrity baseline for the update result failed", "error", err)
+	// Before the event: once the result counts as processed, the next pass compares the slots again (ADR 0056). While
+	// it stays unprocessed the slots are not judged, so waiting for the baseline raises no false report (plan M5a R7).
+	if a.integrityRetry("update-result:"+r.At.Format(time.RFC3339Nano), integrity.UpdateResult(a.d.Layout, r.Version)) {
+		return
 	}
+	slog.Info("agent update finished", "version", r.Version, "from_version", r.FromVersion, "outcome", r.Outcome)
 	a.event(r.EventType(), map[string]string{"version": r.Version, "from_version": r.FromVersion, "outcome": r.Outcome})
 	if r.Outcome != update.OutcomeUpdated {
 		a.st.FailedUpdateVersion = r.Version
@@ -104,9 +106,9 @@ func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
 		slog.WarnContext(ctx, "agent update offered but not installable", "version", offer.Version, "error", err)
 		return
 	}
-	if err := integrity.RecordStaged(a.d.Layout, offer.Version, offer.SHA256); err != nil {
-		// Without the record the result re-initializes the slots instead of moving them: a Warn, never an event.
-		slog.WarnContext(ctx, "recording the staged release in the integrity baseline failed", "version", offer.Version, "error", err)
+	// Without the record the result re-initializes the slots instead of moving them (plan M5a R7.2).
+	if a.integrityRetry("staged:"+offer.Version, integrity.RecordStaged(a.d.Layout, offer.Version, offer.SHA256)) {
+		return
 	}
 	if err := update.Stage(ctx, a.d.Layout, a.d.Client, *offer); err != nil {
 		slog.WarnContext(ctx, "staging the agent update failed; retrying at the next check-in", "version", offer.Version, "error", err)

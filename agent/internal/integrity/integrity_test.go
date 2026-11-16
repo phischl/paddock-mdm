@@ -58,6 +58,8 @@ type device struct {
 	c      *Checker
 	events []string
 	logs   *logs
+	// clock is the checker's time when set.
+	clock time.Time
 }
 
 func show(fragment string, dropIns ...string) string {
@@ -106,7 +108,18 @@ func (d *device) restart() {
 	d.c = New(d.l, d.sys)
 	d.c.DpkgBusy = func() bool { return d.busy }
 	d.c.Sleep = func(time.Duration) {}
-	d.c.Emit = func(f string) { d.events = append(d.events, f) }
+	d.c.Now = func() time.Time {
+		if d.clock.IsZero() {
+			return time.Now()
+		}
+		return d.clock
+	}
+	d.c.Emit = func(f, reason string) {
+		if reason != "" {
+			f += "#" + reason
+		}
+		d.events = append(d.events, f)
+	}
 }
 
 func (d *device) write(path, content string) {
@@ -629,6 +642,9 @@ func TestSupervisorRollbackException(t *testing.T) {
 			d.quiet(1, Pass{})
 			old, _ := os.ReadFile(d.l.Join("/usr/sbin/paddock-supervisor"))
 			oldUnit, _ := os.ReadFile(d.l.Join("/usr/lib/systemd/system/paddock-supervisor.service"))
+			if err := RecordSupervisorPre(d.l, d.c.Arch, "2.0.0"); err != nil {
+				t.Fatal(err)
+			}
 			d.write("/var/lib/paddock/state/supervisor-upgrade.json", "{}")
 			upgradeSupervisor(d, "v2")
 			// The helper copies the previous binary and unit back; md5sums keep the failed version.
@@ -638,7 +654,7 @@ func TestSupervisorRollbackException(t *testing.T) {
 			at := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
 			writeSupervisorResult(t, d, outcome, at)
 			d.quiet(1, Pass{})
-			if err := SupervisorRolledBack(d.l, d.c.Arch); err != nil {
+			if err := SupervisorResult(d.l, d.c.Arch, "2.0.0", outcome); err != nil {
 				t.Fatal(err)
 			}
 			p := Pass{ReportedSupervisorAt: &at}
@@ -689,7 +705,7 @@ func TestCorruptBaseline(t *testing.T) {
 	d.write("/var/lib/paddock/state/integrity.json", "{not json")
 	d.write("/etc/paddock/agent.yml", "changed while the baseline was corrupt")
 	d.logs.reset()
-	d.quiet(3, Pass{})
+	d.changedOnce(reset, Pass{})
 	if n := d.logs.count(slog.LevelWarn); n != 1 {
 		t.Fatalf("%d warnings, want 1", n)
 	}

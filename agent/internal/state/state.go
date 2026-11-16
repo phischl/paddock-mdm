@@ -45,6 +45,9 @@ type State struct {
 	// result already turned into an event.
 	FailedSupervisorVersion     string     `json:"failed_supervisor_version,omitempty"`
 	ReportedSupervisorUpgradeAt *time.Time `json:"reported_supervisor_upgrade_at,omitempty"`
+	// IntegrityEstablishedAt is when an integrity pass first saved a baseline with the agent slots; from then on a
+	// baseline without them is a reset that is reported (ADR 0056, plan M5a R14).
+	IntegrityEstablishedAt *time.Time `json:"integrity_established_at,omitempty"`
 	// SupervisorRetry is the supervisor package version rolled back only because the server was unreachable, with
 	// its attempts and the earliest next attempt (design contract 8, ADR 0037 amendment 2026-10-18).
 	SupervisorRetry *SupervisorRetry `json:"supervisor_retry,omitempty"`

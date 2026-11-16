@@ -516,7 +516,7 @@ func TestEnrollSyncsIntegrityBaseline(t *testing.T) {
 	var reported []string
 	c := integrity.New(f.layout, noUnits{})
 	c.DpkgBusy = func() bool { return false }
-	c.Emit = func(file string) { reported = append(reported, file) }
+	c.Emit = func(file, _ string) { reported = append(reported, file) }
 	run := func(proxy string) {
 		t.Helper()
 		data, _ := json.Marshal(f.g.EnrollmentConfig())

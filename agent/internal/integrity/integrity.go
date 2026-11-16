@@ -10,22 +10,27 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
-// agentLink is the symlink of paddock-agent and its expected target (plan M5a C2).
+// agentLink is the symlink of paddock-agent and its expected target (plan M5a C2); slotsDir is the file param of a
+// failed slot read (R3).
 const (
 	agentLink   = "/usr/bin/paddockd"
 	agentTarget = "/opt/paddock/agent/current/paddockd"
+	slotsDir    = "/opt/paddock/agent"
 )
 
 // warnEvery bounds the Warn lines per object (plan M5a C9).
@@ -37,21 +42,31 @@ type System interface {
 	Output(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-// Checker runs the integrity check of the drift pass. It keeps the hash cache and the Warn throttle in memory, so
-// every file is hashed anew after an agent start; it is used by the agent's loop only.
+// integrityFile is the device path of the baseline, the file param of its own causes and of a reset (plan M5a R3).
+const integrityFile = "/var/lib/paddock/state/integrity.json"
+
+// Checker runs the integrity check of the drift pass. It keeps the hash cache, the Warn throttle and the suspension
+// state in memory, so every file is hashed anew after an agent start; Check is used by the agent's loop only, Defer
+// by any goroutine.
 type Checker struct {
 	Layout paths.Layout
 	Sys    System
 	// DpkgBusy reports a held dpkg lock, tested with F_GETLK only: taking dpkg's locks would make apt fail.
 	DpkgBusy func() bool
 	Arch     string
-	// Emit spools device.tamper_protected_file_changed for a device path.
-	Emit  func(file string)
+	// Emit spools device.tamper_protected_file_changed for a device path; reason is "" for a change (plan M5a R5).
+	Emit  func(file, reason string)
 	Now   func() time.Time
 	Sleep func(time.Duration) // between polls of integrity.lock; nil is time.Sleep
 
-	hash   hasher
-	warned map[string]time.Time
+	hash          hasher
+	warned        map[string]time.Time
+	suspended     map[string]Suspension
+	resetReported bool
+
+	mu       sync.Mutex
+	deferred map[string]uint64 // device path → token of its latest Defer
+	deferSeq uint64
 }
 
 // New returns the check of a device.
@@ -71,46 +86,210 @@ type Pass struct {
 	// SkipFiles are agent-written files (layout paths) a running Paddock writer may change before its sync: the
 	// conversion worker writes and removes disk-setup.json minutes before it returns.
 	SkipFiles []string
+	// Interval is the drift interval; a gap between passes counts as at most two of it (plan M5a R4).
+	Interval time.Duration
+	// Established is whether a pass on this device ever saved a baseline with the slots (plan M5a R14).
+	Established bool
 }
 
-// Check runs one pass. Errors are logged and skip their object; nothing blocks longer than LockWait.
-func (c *Checker) Check(ctx context.Context, p Pass) {
+// Defer marks agent-written files (layout paths) whose sync failed after Paddock's own write: a later pass takes
+// their observed value as the baseline instead of comparing it (plan M5a R7.1).
+func (c *Checker) Defer(files ...string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.deferred == nil {
+		c.deferred = map[string]uint64{}
+	}
+	for _, f := range files {
+		c.deferSeq++
+		c.deferred[devicePath(c.Layout, f)] = c.deferSeq
+	}
+}
+
+func (c *Checker) deferredNow() map[string]uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return maps.Clone(c.deferred)
+}
+
+// snapshot is what a pass observed without the lock (plan M5a R1).
+type snapshot struct {
+	slots          map[string]string   // nil: the slots are not judged in this pass
+	files          map[string]string   // agent-written files
+	obs            map[string]observed // judged without the baseline: the paddockd link and foreign unit files
+	pkgFiles       map[string]pkgFile
+	supervisorSums map[string]string // the md5sums of a completely observed supervisor package
+	unitsComplete  bool
+	deferred       map[string]uint64 // the deferred paths when the observation started
+	applied        map[string]uint64 // the deferred paths the baseline took
+	causes         causes
+}
+
+// Check runs one pass: it observes without integrity.lock, then classifies and saves under it, then reports
+// (plan M5a R1). Errors are logged and suspend their object or the pass; a suspension that lasts past its bound is
+// reported once (R4). established is true after a save of a baseline that holds current (R14).
+func (c *Checker) Check(ctx context.Context, p Pass) (established bool) {
 	if c.hash.cache == nil {
 		c.hash.cache = map[string]cached{}
 	}
-	quiet := c.quiescent(p.ReportedUpdateAt)
-	supervisorBusy := c.supervisorBusy(p.ReportedSupervisorAt)
-	var changed []string
-	err := newStore(c.Layout, c.Sleep).update(func(b *Baseline) {
-		obs := map[string]observed{}
-		var fresh []string
-		if quiet {
-			fresh = append(fresh, c.checkSlots(b, obs)...)
+	now := c.Now()
+	gen0 := peekGeneration(c.Layout)
+	s := c.observe(ctx, p)
+	var changed, report []string
+	var raced, resetDue bool
+	keepWrite := func(k string) bool { return k == causeBaselineWrite }
+	err := newStore(c.Layout, c.Sleep).update(func(b *Baseline) bool {
+		c.adopt(b.Suspended)
+		if b.Generation != gen0 {
+			raced = true
+			return false
 		}
-		fresh = append(fresh, c.checkFiles(b, p.SkipFiles, obs)...)
-		if v, err := linkValue(c.Layout, agentLink); err != nil {
-			c.warn(agentLink, "reading the paddockd link failed", err)
-		} else {
-			obs[agentLink] = observed{value: v, expected: v == agentTarget}
-		}
-		c.checkPackages(ctx, b, supervisorBusy, obs)
-		unitsComplete := c.checkUnits(ctx, obs)
-		if len(fresh) > 0 {
-			slices.Sort(fresh)
-			slog.Info("integrity baseline initialized", "paths", fresh)
-		}
-		changed = mark(b, obs, unitsComplete)
+		changed = c.classify(b, s, p.Established, now)
+		resetDue, b.Reset = b.Reset != nil, nil
+		report = c.track(s.causes, keepWrite, now, p.Interval)
+		b.Suspended = c.persisted(causeBaselineWrite)
+		b.CheckedAt = now.UTC()
+		_, established = b.Expected[current]
+		return true
 	})
-	if err != nil {
+	switch {
+	case err == nil && raced:
+		s.causes.add(causeBaselineRaced, integrityFile)
+		report = c.track(s.causes, keepWrite, now, p.Interval)
+	case errors.Is(err, errBaselineWrite):
+		c.warn("baseline", "the integrity check could not save this pass", err)
+		report = append(report, c.track(causes{causeBaselineWrite: integrityFile},
+			func(k string) bool { return k != causeBaselineWrite }, now, p.Interval)...)
+	case errors.Is(err, errBaselineRead):
 		c.warn("baseline", "the integrity check skipped this pass", err)
-		return
+		s.causes.add(causeBaselineRead, integrityFile)
+		report = c.track(s.causes, func(k string) bool { return k == causeBaselineWrite || k == causeBaselineRaced },
+			now, p.Interval)
+	case err != nil:
+		c.warn("baseline", "the integrity check skipped this pass", err)
+		s.causes.add(causeLock, devicePath(c.Layout, c.Layout.IntegrityLock()))
+		report = c.track(s.causes, func(k string) bool {
+			return k == causeBaselineRead || k == causeBaselineWrite || k == causeBaselineRaced
+		}, now, p.Interval)
 	}
-	for _, f := range changed {
-		slog.Warn("a protected Paddock file changed outside Paddock", "file", f)
-		if c.Emit != nil {
-			c.Emit(f)
+	saved := err == nil && !raced
+	if saved {
+		delete(c.suspended, causeBaselineWrite)
+		c.forgetApplied(s.applied)
+		for _, f := range changed {
+			slog.Warn("a protected Paddock file changed outside Paddock", "file", f)
+			c.emit(f, "")
 		}
 	}
+	if resetDue && !c.resetReported {
+		c.emit(integrityFile, protocol.TamperReasonBaselineReset)
+		c.resetReported = true
+	}
+	if saved {
+		c.resetReported = false
+	}
+	slices.Sort(report)
+	for _, f := range report {
+		slog.Warn("the integrity check is suspended past its bound", "file", f)
+		c.emit(f, protocol.TamperReasonCheckSuspended)
+	}
+	return established && saved
+}
+
+func (c *Checker) emit(file, reason string) {
+	if c.Emit != nil {
+		c.Emit(file, reason)
+	}
+}
+
+// forgetApplied ends the deferral of the paths the saved baseline took, unless they were deferred again meanwhile.
+func (c *Checker) forgetApplied(applied map[string]uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for p, tok := range applied {
+		if c.deferred[p] == tok {
+			delete(c.deferred, p)
+		}
+	}
+}
+
+// observe evaluates the flow conditions and hashes every checked path, without the lock (plan M5a R1).
+func (c *Checker) observe(ctx context.Context, p Pass) *snapshot {
+	s := &snapshot{files: map[string]string{}, obs: map[string]observed{}, pkgFiles: map[string]pkgFile{},
+		deferred: c.deferredNow(), applied: map[string]uint64{}, causes: causes{}}
+	if c.quiescent(p.ReportedUpdateAt, s.causes) {
+		if v, err := c.hash.slots(c.Layout); err != nil {
+			c.warn("slots", "reading the agent slots failed", err)
+			s.causes.add("object:"+slotsDir, slotsDir)
+		} else {
+			s.slots = v
+		}
+	}
+	c.observeFiles(p.SkipFiles, s)
+	if v, err := linkValue(c.Layout, agentLink); err != nil {
+		c.warn(agentLink, "reading the paddockd link failed", err)
+		s.causes.add("object:"+agentLink, agentLink)
+	} else {
+		s.obs[agentLink] = observed{value: v, expected: v == agentTarget}
+	}
+	c.observePackages(ctx, s, c.supervisorBusy(p.ReportedSupervisorAt, s.causes))
+	c.observeUnits(ctx, s)
+	return s
+}
+
+// classify judges the snapshot against the baseline under the lock and returns the paths to report (plan M5a R1).
+func (c *Checker) classify(b *Baseline, s *snapshot, established bool, now time.Time) []string {
+	obs := maps.Clone(s.obs)
+	_, hadCurrent := b.Expected[current]
+	var fresh []string
+	// A value equal to the staged release is a result still to come: the supervisor writes the slot, removes the
+	// request and only then writes the result, so a pass may fall in between (C4).
+	for p, v := range s.slots {
+		exp, ok := b.Expected[p]
+		switch {
+		case !ok:
+			b.expect(p, v)
+			fresh = append(fresh, p)
+		case b.Staged != nil && (v == b.Staged.SHA256 || p == current && s.slots[slotPath(v)] == b.Staged.SHA256):
+			s.causes.add("staged:"+p, p)
+		default:
+			obs[p] = observed{value: v, expected: v == exp}
+		}
+	}
+	deferred := c.deferredNow()
+	for p, v := range s.files {
+		exp, ok := b.Expected[p]
+		if tok, isDeferred := deferred[p]; isDeferred {
+			// A path deferred after the observation started is taken by a later pass, whose snapshot follows the write.
+			if s.deferred[p] == tok {
+				b.expect(p, v)
+				s.applied[p] = tok
+			}
+			continue
+		}
+		if !ok {
+			b.expect(p, v)
+			fresh = append(fresh, p)
+			continue
+		}
+		obs[p] = observed{value: v, expected: v == exp}
+	}
+	for p, f := range s.pkgFiles {
+		obs[p] = observed{value: f.sha, expected: f.md5 == f.entry || excepted(b, p, f.entry, f.sha)}
+	}
+	if s.supervisorSums != nil {
+		b.Exceptions = slices.DeleteFunc(b.Exceptions, func(e Exception) bool { return s.supervisorSums[e.Path] != e.MD5 })
+	}
+	// The slots are recorded by trust on first use on an established device: that is a reset of the baseline (R14).
+	if established && !hadCurrent && b.Reset == nil && slices.Contains(fresh, current) {
+		b.Reset = &Reset{Kind: "missing", At: now.UTC()}
+		slog.Warn("the integrity baseline lost the agent slots; it is recorded anew")
+	}
+	if len(fresh) > 0 {
+		slices.Sort(fresh)
+		slog.Info("integrity baseline initialized", "paths", fresh)
+	}
+	return mark(b, obs, s.unitsComplete)
 }
 
 // mark applies the once-per-change rule (plan M5a C8) and returns the paths to report. A foreign unit file that is
@@ -138,80 +317,59 @@ func mark(b *Baseline, obs map[string]observed, unitsComplete bool) []string {
 	return changed
 }
 
-// checkSlots observes both slots and current while the update is quiescent (plan M5a C4) and returns the paths it
-// initialized. A value equal to the staged release is a result still to come: the supervisor writes the slot,
-// removes the request and only then writes the result, so a pass may fall in between.
-func (c *Checker) checkSlots(b *Baseline, obs map[string]observed) []string {
-	s, err := c.hash.slots(c.Layout)
-	if err != nil {
-		c.warn("slots", "reading the agent slots failed", err)
-		return nil
-	}
-	var fresh []string
-	for p, v := range s {
-		exp, ok := b.Expected[p]
-		switch {
-		case !ok:
-			b.expect(p, v)
-			fresh = append(fresh, p)
-		case b.Staged != nil && (v == b.Staged.SHA256 || p == current && s[slotPath(v)] == b.Staged.SHA256):
-		default:
-			obs[p] = observed{value: v, expected: v == exp}
-		}
-	}
-	return fresh
-}
-
-// checkFiles observes the agent-written configuration files (plan M5a C7) and returns the paths it initialized.
-func (c *Checker) checkFiles(b *Baseline, skip []string, obs map[string]observed) []string {
+// observeFiles hashes the agent-written configuration files (plan M5a C7). A file a running writer owns is skipped
+// and suspends its check (R3 conversion).
+func (c *Checker) observeFiles(skip []string, s *snapshot) {
 	l := c.Layout
-	var fresh []string
 	for _, full := range []string{l.AgentConfig(), l.Trust(), l.RevokeTrust(), l.DiskSetupConfig()} {
+		p := devicePath(l, full)
 		if slices.Contains(skip, full) {
+			s.causes.add("conversion", p)
 			continue
 		}
-		p := devicePath(l, full)
 		v, err := c.hash.value(l, p)
 		if err != nil {
 			c.warn(p, "hashing an agent-written file failed", err)
+			s.causes.add("object:"+p, p)
 			continue
 		}
-		exp, ok := b.Expected[p]
-		if !ok {
-			b.expect(p, v)
-			fresh = append(fresh, p)
-			continue
-		}
-		obs[p] = observed{value: v, expected: v == exp}
+		s.files[p] = v
 	}
-	return fresh
 }
 
 // quiescent reports that no agent update runs: no request, no probation, and no unprocessed result (plan M5a C4).
-func (c *Checker) quiescent(reportedAt *time.Time) bool {
-	if update.Pending(c.Layout) {
-		return false
+// Each condition that holds is a suspension cause (R3).
+func (c *Checker) quiescent(reportedAt *time.Time, cs causes) bool {
+	l := c.Layout
+	if update.Pending(l) {
+		cs.add("update_request", devicePath(l, l.UpdateRequest()))
 	}
-	if _, err := os.Lstat(c.Layout.Probation()); !errors.Is(err, fs.ErrNotExist) {
-		return false
+	if _, err := os.Lstat(l.Probation()); !errors.Is(err, fs.ErrNotExist) {
+		cs.add("probation", devicePath(l, l.Probation()))
 	}
-	r, err := update.ReadResult(c.Layout)
-	if err != nil {
-		return false
+	if r, err := update.ReadResult(l); err != nil || r != nil && (reportedAt == nil || !reportedAt.Equal(r.At)) {
+		cs.add("update_result", devicePath(l, l.UpdateResult()))
 	}
-	return r == nil || reportedAt != nil && reportedAt.Equal(r.At)
+	_, a := cs["update_request"]
+	_, b := cs["probation"]
+	_, r := cs["update_result"]
+	return !a && !b && !r
 }
 
-// supervisorBusy reports a supervisor upgrade that runs or whose result is not processed (plan M5a C2).
-func (c *Checker) supervisorBusy(reportedAt *time.Time) bool {
-	if _, err := os.Lstat(c.Layout.SupervisorUpgrade()); !errors.Is(err, fs.ErrNotExist) {
-		return true
+// supervisorBusy reports a supervisor upgrade that runs or whose result is not processed (plan M5a C2); each
+// condition that holds is a suspension cause (R3).
+func (c *Checker) supervisorBusy(reportedAt *time.Time, cs causes) bool {
+	l := c.Layout
+	busy := false
+	if _, err := os.Lstat(l.SupervisorUpgrade()); !errors.Is(err, fs.ErrNotExist) {
+		cs.add("supervisor_marker", devicePath(l, l.SupervisorUpgrade()))
+		busy = true
 	}
-	r, err := supervisorpkg.ReadResult(c.Layout)
-	if err != nil {
-		return true
+	if r, err := supervisorpkg.ReadResult(l); err != nil || r != nil && (reportedAt == nil || !reportedAt.Equal(r.At)) {
+		cs.add("supervisor_result", devicePath(l, l.SupervisorUpgradeResult()))
+		busy = true
 	}
-	return r != nil && (reportedAt == nil || !reportedAt.Equal(r.At))
+	return busy
 }
 
 // warn logs an error of an object at most once per warnEvery (plan M5a C9).

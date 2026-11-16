@@ -141,6 +141,8 @@ type Agent struct {
 	policySkipped string
 	// supervisorSkipped is the last supervisor package version and reason not installed, logged once.
 	supervisorSkipped string
+	// integrityFailed is the first failure of the integrity bookkeeping per key (integrityRetry).
+	integrityFailed map[string]time.Time
 	// markerSeen is the first sighting of the current supervisor-upgrade.json (supervisorMarker).
 	markerSeen markerSeen
 	// conversionJobs feeds the conversion worker (plan M8e decision 12); conversionCalls carries its reads and changes
@@ -298,8 +300,8 @@ func New(d Deps) (*Agent, error) {
 	}
 	if a.d.Integrity != nil {
 		a.d.Integrity.Now = d.Now
-		a.d.Integrity.Emit = func(file string) {
-			a.event(protocol.EventTamperProtectedFileChanged, protocol.TamperProtectedFileChanged{File: file})
+		a.d.Integrity.Emit = func(file, reason string) {
+			a.event(protocol.EventTamperProtectedFileChanged, protocol.TamperProtectedFileChanged{File: file, Reason: reason})
 		}
 	}
 	if a.d.Revoke == nil {

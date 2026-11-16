@@ -16,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/agent/internal/commands"
 	"github.com/phischl/paddock-mdm/agent/internal/encrypt"
+	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/pkg/command"
@@ -116,12 +117,13 @@ func (a *Agent) encryptDiskAbortCommand(ctx context.Context, c *command.Command)
 		}
 		// Without ctx's cancel, as on the worker: an agent stop must not kill an initrd rebuild halfway.
 		store := a.directStore()
+		before := integrity.FingerprintOf(a.d.Layout.DiskSetupConfig())
 		aborted, reason := encrypt.Abort(context.WithoutCancel(ctx), a.d.Encrypt, a.d.Layout, store, id, encrypt.ByAdmin,
 			false, a.neutralizeReport(store))
-		a.syncIntegrity(a.d.Layout.DiskSetupConfig())
 		if !aborted {
 			return refuse(reason)
 		}
+		a.syncIntegrityIfChanged(a.d.Layout.DiskSetupConfig(), before)
 		return protocol.CommandSucceeded, map[string]any{"aborted": true}
 	}
 	return refuse(encrypt.ReasonNotAbortable)
@@ -426,9 +428,12 @@ func (a *Agent) handleAbortRequest(ctx context.Context) {
 	if a.d.Encrypt != nil {
 		// Without ctx's cancel, as on the worker: an agent stop must not kill an initrd rebuild halfway.
 		store := a.directStore()
+		before := integrity.FingerprintOf(a.d.Layout.DiskSetupConfig())
 		aborted, reason = encrypt.Abort(context.WithoutCancel(ctx), a.d.Encrypt, a.d.Layout, store, req.ConversionID,
 			encrypt.ByOperator, false, a.neutralizeReport(store))
-		a.syncIntegrity(a.d.Layout.DiskSetupConfig())
+		if aborted {
+			a.syncIntegrityIfChanged(a.d.Layout.DiskSetupConfig(), before)
+		}
 	}
 	slog.InfoContext(ctx, "encrypt-abort request handled", "aborted", aborted, "reason", reason)
 	if err := encrypt.WriteAbortResponse(a.d.Layout, encrypt.AbortResponse{Nonce: req.Nonce, State: encrypt.AbortDone,
@@ -527,8 +532,9 @@ func (a *Agent) runConversions(ctx context.Context) {
 		}
 		outcome := encrypt.Stopped
 		if p != nil {
+			before := integrity.FingerprintOf(a.d.Layout.DiskSetupConfig())
 			outcome = p.Prepare(context.WithoutCancel(ctx))
-			a.syncIntegrity(a.d.Layout.DiskSetupConfig())
+			a.syncIntegrityIfChanged(a.d.Layout.DiskSetupConfig(), before)
 		}
 		if a.onLoop(ctx, func() {
 			a.conversionBusy = false
@@ -651,8 +657,9 @@ func (a *Agent) retryCleanup(ctx context.Context, disk encrypt.Disk) (attempted,
 	}
 	store := a.loopStore(ctx)
 	a.disarmPending(context.WithoutCancel(ctx), store)
+	before := integrity.FingerprintOf(a.d.Layout.DiskSetupConfig())
 	done, err := encrypt.RunCleanup(context.WithoutCancel(ctx), a.d.Encrypt, a.d.Layout, store)
-	a.syncIntegrity(a.d.Layout.DiskSetupConfig())
+	a.syncIntegrityIfChanged(a.d.Layout.DiskSetupConfig(), before)
 	// A package run holding dpkg's locks is no failure of the cleanup: it is retried at the next pass, not backed off.
 	return !errors.Is(err, encrypt.ErrPackagesBusy), done, err
 }

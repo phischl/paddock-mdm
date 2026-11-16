@@ -71,6 +71,10 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 		slog.WarnContext(ctx, "staging the supervisor package failed; retrying at the next check-in", "version", ref.Version, "error", err)
 		return
 	}
+	// The rollback exception needs the files as they are before the upgrade (plan M5a R10).
+	if a.integrityRetry("supervisor-pre:"+ref.Version, integrity.RecordSupervisorPre(a.d.Layout, runtime.GOARCH, ref.Version)) {
+		return
+	}
 	// Before Launch, which writes the new marker first: a sighting of the replaced one would count the new marker as
 	// stale while systemd-run starts the helper (PDK-479, review 1 m1).
 	a.markerSeen.reset()
@@ -113,6 +117,12 @@ func (a *Agent) reportSupervisorUpgrade() {
 		a.deferSupervisor(r)
 		return
 	}
+	// Before the event: after a rollback the helper copied the previous binary and unit back, so dpkg's md5sums
+	// describe the failed version (ADR 0056, plan M5a R10).
+	if a.integrityRetry("supervisor-result:"+r.At.Format(time.RFC3339Nano),
+		integrity.SupervisorResult(a.d.Layout, runtime.GOARCH, r.Version, r.Outcome)) {
+		return
+	}
 	slog.Info("supervisor upgrade finished", "version", r.Version, "from_version", r.FromVersion, "outcome", r.Outcome)
 	a.event(protocol.EventAgentSupervisorUpdated, map[string]string{"version": r.Version, "from_version": r.FromVersion, "outcome": r.Outcome})
 	switch r.Outcome {
@@ -122,12 +132,6 @@ func (a *Agent) reportSupervisorUpgrade() {
 		a.retrySupervisor(r)
 	default:
 		a.st.FailedSupervisorVersion = r.Version
-	}
-	if r.Outcome != protocol.SupervisorOutcomeUpdated {
-		// The helper copied the previous binary and unit back, so dpkg's md5sums describe the failed version (ADR 0056).
-		if err := integrity.SupervisorRolledBack(a.d.Layout, runtime.GOARCH); err != nil {
-			slog.Warn("recording the restored supervisor in the integrity baseline failed", "error", err)
-		}
 	}
 	at := r.At
 	a.st.ReportedSupervisorUpgradeAt = &at

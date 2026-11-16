@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
@@ -59,22 +59,21 @@ func debianArch(goarch string) string {
 	return goarch
 }
 
-// readMD5Sums reads dpkg's md5sums of a package as device path → MD5, with the raw content for the race guard; ok is
-// false when the package has no md5sums file (it is not installed). The arch-qualified name comes first (plan M5a
-// C5).
-func readMD5Sums(l paths.Layout, pkg, arch string) (map[string]string, []byte, error) {
-	var raw []byte
-	var err error
+// readMD5Sums reads dpkg's md5sums of a package as device path → MD5, with the raw content for the race guard and the
+// file name it read (the last one tried when none exists, which is a not-exist error: the package is not installed).
+// The arch-qualified name comes first (plan M5a C5).
+func readMD5Sums(l paths.Layout, pkg, arch string) (sums map[string]string, raw []byte, file string, err error) {
 	for _, name := range []string{pkg + ":" + debianArch(arch), pkg} {
-		raw, err = os.ReadFile(l.Join("/var/lib/dpkg/info/" + name + ".md5sums")) //nolint:gosec // dpkg's database below the layout
+		file = "/var/lib/dpkg/info/" + name + ".md5sums"
+		raw, err = readRegular(l.Join(file), maxMD5Sums)
 		if !errors.Is(err, fs.ErrNotExist) {
 			break
 		}
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, file, err
 	}
-	sums := map[string]string{}
+	sums = map[string]string{}
 	sc := bufio.NewScanner(bytes.NewReader(raw))
 	for sc.Scan() {
 		sum, entry, ok := strings.Cut(sc.Text(), "  ")
@@ -82,7 +81,7 @@ func readMD5Sums(l paths.Layout, pkg, arch string) (map[string]string, []byte, e
 			sums["/"+entry] = sum
 		}
 	}
-	return sums, raw, sc.Err()
+	return sums, raw, file, sc.Err()
 }
 
 // packageStatus is dpkg's db:Status-Status of a package ("installed" when it is fully installed).
@@ -91,17 +90,18 @@ func (c *Checker) packageStatus(ctx context.Context, pkg string) (string, error)
 	return strings.TrimSpace(string(out)), err
 }
 
-// checkPackages compares the files of the dpkg packages with their md5sums (plan M5a C5). supervisorBusy skips the
-// supervisor package while its upgrade runs or its result is not processed.
-func (c *Checker) checkPackages(ctx context.Context, b *Baseline, supervisorBusy bool, obs map[string]observed) {
+// observePackages hashes the files of the dpkg packages with their md5sums entries (plan M5a C5, R1). supervisorBusy
+// skips the supervisor package while its upgrade runs or its result is not processed.
+func (c *Checker) observePackages(ctx context.Context, s *snapshot, supervisorBusy bool) {
 	if c.DpkgBusy() {
+		s.causes.add("dpkg_lock", reconcile.DpkgFrontendLock)
 		return
 	}
 	for _, spec := range packageSpecs() {
 		if spec.name == supervisorPackage && supervisorBusy {
 			continue
 		}
-		c.checkPackage(ctx, b, spec, obs)
+		c.observePackage(ctx, spec, s)
 	}
 }
 
@@ -111,22 +111,30 @@ type observed struct {
 	expected bool
 }
 
-func (c *Checker) checkPackage(ctx context.Context, b *Baseline, spec pkgSpec, obs map[string]observed) {
-	sums, raw, err := readMD5Sums(c.Layout, spec.name, c.Arch)
+// pkgFile is a package file as observed, with its md5sums entry.
+type pkgFile struct {
+	sha, md5, entry string
+}
+
+func (c *Checker) observePackage(ctx context.Context, spec pkgSpec, s *snapshot) {
+	sums, raw, file, err := readMD5Sums(c.Layout, spec.name, c.Arch)
 	if errors.Is(err, fs.ErrNotExist) {
 		return
 	}
+	key := "package:" + spec.name
 	if err != nil {
-		c.warn("package:"+spec.name, "reading dpkg's md5sums failed", err)
+		c.warn(key, "reading dpkg's md5sums failed", err)
+		s.causes.add(key, file)
 		return
 	}
 	if status, err := c.packageStatus(ctx, spec.name); err != nil || status != "installed" {
 		if err != nil {
-			c.warn("package:"+spec.name, "asking dpkg for the package status failed", err)
+			c.warn(key, "asking dpkg for the package status failed", err)
+			s.causes.add(key, file)
 		}
 		return
 	}
-	found := map[string]observed{}
+	found := map[string]pkgFile{}
 	for path, sum := range sums {
 		if !spec.checked(strings.TrimPrefix(path, "/")) {
 			continue
@@ -134,20 +142,24 @@ func (c *Checker) checkPackage(ctx context.Context, b *Baseline, spec pkgSpec, o
 		sha, md5sum, err := c.hash.file(c.Layout, path)
 		if err != nil {
 			c.warn(path, "hashing a package file failed", err)
+			s.causes.add("object:"+path, path)
 			continue
 		}
-		found[path] = observed{value: sha, expected: md5sum == sum || excepted(b, path, sum, sha)}
+		found[path] = pkgFile{sha: sha, md5: md5sum, entry: sum}
 	}
 	// dpkg may have rewritten the package meanwhile: its result is checked in the next pass (race guard, C5).
-	_, again, err := readMD5Sums(c.Layout, spec.name, c.Arch)
-	if err != nil || !bytes.Equal(raw, again) || c.DpkgBusy() {
+	_, again, _, err := readMD5Sums(c.Layout, spec.name, c.Arch)
+	if c.DpkgBusy() {
+		s.causes.add("dpkg_lock", reconcile.DpkgFrontendLock)
 		return
 	}
-	for path, o := range found {
-		obs[path] = o
+	if err != nil || !bytes.Equal(raw, again) {
+		s.causes.add(key, file)
+		return
 	}
+	maps.Copy(s.pkgFiles, found)
 	if spec.name == supervisorPackage {
-		b.Exceptions = slices.DeleteFunc(b.Exceptions, func(e Exception) bool { return sums[e.Path] != e.MD5 })
+		s.supervisorSums = sums
 	}
 }
 
@@ -168,7 +180,7 @@ type unitSpec struct {
 
 func (c *Checker) unitSpecs() []unitSpec {
 	orbit := ""
-	if sums, _, err := readMD5Sums(c.Layout, reconcile.FleetdPackage, c.Arch); err == nil {
+	if sums, _, _, err := readMD5Sums(c.Layout, reconcile.FleetdPackage, c.Arch); err == nil {
 		for path := range sums {
 			if strings.HasSuffix(path, "/systemd/system/"+reconcile.FleetdUnit) {
 				orbit = path
@@ -189,10 +201,11 @@ func allowedUnitFile(path string) bool {
 	return path == reconcile.FleetdDropIn || path == reconcile.RegularService || path == reconcile.RegularTimer
 }
 
-// checkUnits finds foreign overrides and drop-ins of the five units (plan M5a C6). A foreign path is observed as
-// "present:<SHA-256>" against the expected absence. complete is false when systemd could not be asked for a unit.
-func (c *Checker) checkUnits(ctx context.Context, obs map[string]observed) (complete bool) {
-	complete = true
+// observeUnits finds foreign overrides and drop-ins of the five units (plan M5a C6). A foreign path is observed as
+// "present:<SHA-256>" against the expected absence. unitsComplete is false when systemd could not be asked for a
+// unit or a foreign file could not be hashed.
+func (c *Checker) observeUnits(ctx context.Context, s *snapshot) {
+	s.unitsComplete = true
 	foreign := map[string]bool{}
 	for _, u := range c.unitSpecs() {
 		for _, dir := range []string{"/etc/systemd/system/", "/run/systemd/system/"} {
@@ -209,7 +222,8 @@ func (c *Checker) checkUnits(ctx context.Context, obs map[string]observed) (comp
 		fragment, dropIns, loaded, err := c.show(ctx, u.name)
 		if err != nil {
 			c.warn("unit:"+u.name, "asking systemd for the unit's files failed", err)
-			complete = false
+			s.causes.add("unit:"+u.name, "/etc/systemd/system/"+u.name+".d")
+			s.unitsComplete = false
 			continue
 		}
 		if !loaded {
@@ -228,16 +242,16 @@ func (c *Checker) checkUnits(ctx context.Context, obs map[string]observed) (comp
 		sha, _, err := c.hash.file(c.Layout, p)
 		if err != nil {
 			c.warn(p, "hashing a foreign unit file failed", err)
-			complete = false
+			s.causes.add("object:"+p, p)
+			s.unitsComplete = false
 			continue
 		}
-		obs[p] = observed{value: "present:" + sha}
+		s.obs[p] = observed{value: "present:" + sha}
 	}
-	return complete
 }
 
 // show asks systemd for the effective fragment and drop-ins of a unit; loaded is false for a unit systemd does not
-// know (plan M5a C6).
+// know (plan M5a C6). DropInPaths that does not parse is an error, never a clean unit (R9).
 func (c *Checker) show(ctx context.Context, unit string) (fragment string, dropIns []string, loaded bool, err error) {
 	out, exit, err := c.Sys.Systemctl(ctx, "show", "-p", "LoadState", "-p", "FragmentPath", "-p", "DropInPaths", "--", unit)
 	if err == nil && exit != 0 {
@@ -254,10 +268,48 @@ func (c *Checker) show(ctx context.Context, unit string) (fragment string, dropI
 		case "FragmentPath":
 			fragment = value
 		case "DropInPaths":
-			dropIns = strings.Fields(value)
+			if dropIns, err = splitQuoted(value); err != nil {
+				return "", nil, false, fmt.Errorf("systemctl show DropInPaths: %w", err)
+			}
 		}
 	}
 	return fragment, dropIns, loaded, nil
+}
+
+// splitQuoted splits a list of systemctl show: elements are separated by single spaces, systemd quotes an element
+// that needs it with ", and a backslash escapes the next character inside and outside quotes (plan M5a R9). An
+// unterminated quote is an error: a path with a newline splits the line.
+func splitQuoted(s string) ([]string, error) {
+	var out []string
+	var cur strings.Builder
+	quoted, escaped, started := false, false, false
+	for _, r := range s {
+		switch {
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			escaped, started = true, true
+		case r == '"':
+			quoted, started = !quoted, true
+		case r == ' ' && !quoted:
+			if started {
+				out = append(out, cur.String())
+				cur.Reset()
+				started = false
+			}
+		default:
+			cur.WriteRune(r)
+			started = true
+		}
+	}
+	if quoted || escaped {
+		return nil, fmt.Errorf("unterminated quote in %q", s)
+	}
+	if started {
+		out = append(out, cur.String())
+	}
+	return out, nil
 }
 
 // canonical resolves the directory of a unit path, because /lib is a symlink to /usr/lib (plan M5a C6).
