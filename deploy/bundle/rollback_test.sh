@@ -137,7 +137,7 @@ setup() {
   mkdir -p "$work/t/new/scripts" "$work/t/old/scripts" "$work/t/old/.secrets"
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
-  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
+  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh valkey-headroom.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
   sed -i 's/^version=.*/version=0.1.0-alpha.10/' "$work/t/new/VERSION"
   printf '%s\n' "$schema" >"$work/t/new/RELEASE-NOTES"
   echo "FLEET_IMAGE=fleetdm/fleet:v4.94.0" >>"$work/t/new/versions.env"

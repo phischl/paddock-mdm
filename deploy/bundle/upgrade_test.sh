@@ -103,7 +103,7 @@ setup() {
   mkdir -p "$work/t/new/scripts" "$work/t/old"
   cp -a "$fixtures/new/." "$work/t/new/"
   cp "$here/paddock" "$work/t/new/paddock"
-  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
+  for s in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh valkey-headroom.sh; do cp "$scripts/$s" "$work/t/new/scripts/$s"; done
   # The item reads the running object store; a stub shows that ./paddock check calls it where the host has one.
   # shellcheck disable=SC2016 # the stub expands FIXTURE_CALLS when it runs
   printf '#!/usr/bin/env bash\necho "offboard-users-check" >>"$FIXTURE_CALLS"\necho "PASS  object store: one organization deletion user per policy"\n' \
@@ -766,7 +766,7 @@ if [[ ! -e "$work/t/old/.upgrade-rollback" && -f "$work/t/old/.upgrade-rollback.
 else fail "the old directory's rollback point stays: $(ls -a "$work/t/old")"; fi
 cp "$here/paddock" "$work/t/old/paddock"
 mkdir -p "$work/t/old/scripts"
-for f in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh; do cp "$scripts/$f" "$work/t/old/scripts/$f"; done
+for f in lib.sh upgrade-check.sh upgrade.sh rollback.sh legacy-alpha8.sh openbao-restore.sh bundle-seq.sh valkey-headroom.sh; do cp "$scripts/$f" "$work/t/old/scripts/$f"; done
 for f in compose.yaml compose.prod.yaml compose.backup.yaml; do cp "$fixtures/new/$f" "$work/t/old/$f"; done
 echo "Schema: unchanged" >"$work/t/old/RELEASE-NOTES"
 : >"$calls"
