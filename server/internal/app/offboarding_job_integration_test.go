@@ -70,11 +70,17 @@ func (f *fakeOffboardFleet) DeleteHost(_ context.Context, ref ports.HostRef) err
 
 // fakeOffboardCache is the device keys in Valkey, by organization; it records the devices of every deletion and the
 // devices handed over by the step devices. A call of DeleteOrganization deletes the organization's keys in keys, the
-// first time, and with perDevice one key per device it is given.
+// first time, and with perDevice one key per device it is given. Every DeleteHandedDeviceKeys call records its devices
+// in freed, and order records it ("free") and every PutOffboardedDevice ("put") in the order they ran; freeErr fails
+// DeleteHandedDeviceKeys only, and onFree runs after each of its calls.
 type fakeOffboardCache struct {
 	mu         sync.Mutex
 	keys       map[uuid.UUID]int
 	err        error
+	freeErr    error
+	freed      [][]uuid.UUID
+	order      []string
+	onFree     func()
 	devices    []devicecache.OffboardDevice
 	refs       devicecache.OffboardOrgKeys
 	calls      []valkeyCall
@@ -110,7 +116,27 @@ func (f *fakeOffboardCache) PutOffboardedDevice(_ context.Context, d devicecache
 		f.offboarded = map[uuid.UUID]devicecache.OffboardedDevice{}
 	}
 	f.offboarded[d.ID] = d
+	f.order = append(f.order, "put")
 	return nil
+}
+
+func (f *fakeOffboardCache) DeleteHandedDeviceKeys(_ context.Context, devices []uuid.UUID) (int64, error) {
+	f.mu.Lock()
+	f.freed = append(f.freed, slices.Clone(devices))
+	f.order = append(f.order, "free")
+	err := f.err
+	if err == nil {
+		err = f.freeErr
+	}
+	hook := f.onFree
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(devices)), nil
 }
 
 // fakeCommandSigner signs with command-signing:v1 and a constant signature; err fails every call.

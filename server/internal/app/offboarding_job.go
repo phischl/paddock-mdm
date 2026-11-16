@@ -68,7 +68,8 @@ func (y OffboardingYield) Error() string {
 }
 
 // ErrOffboardingWaiting means the tombstone waits for organization transactions that started before the deletion was
-// visible to every process (paddock_offboard_quiesce returned false); the job asks again next round. It is no failure.
+// visible to every process (paddock_offboard_quiesce returned false); the step is asked again after the round's poll
+// interval. It is no failure.
 var ErrOffboardingWaiting = errors.New("offboarding: the tombstone waits for older organization transactions")
 
 // OffboardingIdentity deletes the organization's identity provider objects (ports.IdentityProvider).
@@ -86,6 +87,7 @@ type OffboardingCache interface {
 	PutOffboardedDevice(ctx context.Context, d devicecache.OffboardedDevice, lastSeq int64) error
 	DeleteCommand(ctx context.Context, device, id uuid.UUID) error
 	DeleteOrganization(ctx context.Context, org uuid.UUID, devices []devicecache.OffboardDevice, refs devicecache.OffboardOrgKeys) (int64, error)
+	DeleteHandedDeviceKeys(ctx context.Context, devices []uuid.UUID) (int64, error)
 }
 
 // OffboardingSessions ends the portal and MCP sessions of an administrator account (sessions.Store).
@@ -342,12 +344,15 @@ const (
 // devices hands every device of the organization that may still contact the server over to offboarded_device (plan
 // M17 decision 15, amendments e point 10, m point 2 and n) and returns how many it recorded and has not stored yet.
 // Its first unit waits, like the tombstone, until no transaction that passed the gate on a stale status is open
-// (amendment j addendum): such a transaction may still insert or approve a device, which then gets its record too.
+// (amendment j addendum), asked again after the round's poll interval: such a transaction may still insert or approve
+// a device, which then gets its record too.
 // paddock_offboard_reissue_uninstalls (migration 00135) then locks the devices, gives each the disarm of its dead
 // man's switch and an uninstall valid for the retention, in one transaction with a constant number of statements. Both
 // run only while the step's cursor is NULL; afterwards the cursor is the last device handed over (the nil UUID right
 // after the reissue), and every further unit hands over one page of devices after it (amendment 2026-11-16 s point
-// 1.3). A crash between the reissue and its stored cursor repeats it, which issues nothing new.
+// 1.3). A crash between the reissue and its stored cursor repeats it, which issues nothing new. Each page first frees
+// its devices' live Valkey entries and then writes their offboarded ones (amendment 2026-11-16 t point 1), so a
+// deleting organization never holds both sets.
 func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization, until time.Time) (int, error) {
 	orgCtx := offboardingContext(ctx, row.ID)
 	cursor := row.OffboardingCursor
@@ -408,17 +413,23 @@ func (o *Offboarding) devices(ctx context.Context, row pgstore.Organization, unt
 }
 
 // handOver hands one page of the devices after the device after over and returns how many records it added, the last
-// device of the page and whether the page was full, so another may follow. Signing, the cache and the platform record
-// follow the page's transaction, each idempotent: a repeated page keeps the commands it issued, re-adds them to the
-// cache and adds only missing records, so the count never grows twice. The cache is written before the record, so a
-// device's final report, which deletes both, cannot run before the keys it deletes exist. Nothing here waits for a
-// device: a device that never comes back is purged with its record after OffboardedDeviceRetention.
+// device of the page and whether the page was full, so another may follow. Right after the page's transaction it
+// deletes the live cache keys of every device of the page (bp:, hb:, au:, enr:; amendment 2026-11-16 t point 1), even
+// when the page has no commands: Valkey serves a DEL at its maxmemory, so the memory freed lets the page's offboarded
+// entries be written. Nothing restores them: an organization in status deleting can no longer cancel its deletion.
+// Signing, the cache and the platform record follow, each idempotent: a repeated page deletes nothing new, keeps the
+// commands it issued, re-adds them to the cache and adds only missing records, so the count never grows twice. The
+// cache is written before the record, so a device's final report, which deletes both, cannot run before the keys it
+// deletes exist. Nothing here waits for a device: a device that never comes back is purged with its record after
+// OffboardedDeviceRetention.
 func (o *Offboarding) handOver(ctx context.Context, row pgstore.Organization, after uuid.UUID) (n int, last uuid.UUID, more bool, err error) {
+	var page []uuid.UUID
 	var cmds []pgstore.DeviceCommand
 	var keys []pgstore.ListOffboardingDeviceIdentitiesRow
 	var cancelled []pgstore.ListOffboardingCancelledUninstallsRow
 	err = o.deps.Worker.InOrgOffboarding(offboardingContext(ctx, row.ID), func(ctx context.Context, q *pgstore.Queries) error {
-		page, err := q.ListOffboardingHandedDevicesPage(ctx, pgstore.ListOffboardingHandedDevicesPageParams{
+		var err error
+		page, err = q.ListOffboardingHandedDevicesPage(ctx, pgstore.ListOffboardingHandedDevicesPageParams{
 			AfterDevice: after, MaxDevices: offboardingDevicePage})
 		if err != nil || len(page) == 0 {
 			return err
@@ -437,6 +448,11 @@ func (o *Offboarding) handOver(ctx context.Context, row pgstore.Organization, af
 	})
 	if err != nil {
 		return 0, last, false, stepError(offboarding.ErrorDatabase, fmt.Errorf("list the devices to hand over: %w", err))
+	}
+	if len(page) > 0 {
+		if _, err := o.deps.Cache.DeleteHandedDeviceKeys(ctx, page); err != nil {
+			return 0, last, false, stepError(offboarding.ErrorValkeyUnavailable, err)
+		}
 	}
 	if len(cmds) == 0 {
 		return 0, last, more, nil
@@ -782,10 +798,10 @@ func (o *Offboarding) database(ctx context.Context, row pgstore.Organization, un
 }
 
 // tombstone asks paddock_offboard_quiesce whether every transaction that could have passed the gate on a stale status
-// has ended (plan M17 amendment j addendum point 4). While it has not, the step stays and the job asks again next
-// round; after FinalizeWaitAlert it records finalize_waiting once. Once it has, paddock_offboard_finalize re-counts the
-// rows and writes the tombstone: rows a straggler wrote (40001) send the deletion back to the database step, keeping
-// the stored wait set.
+// has ended (plan M17 amendment j addendum point 4). While it has not, the step stays and is asked again after the
+// round's poll interval; after FinalizeWaitAlert it records finalize_waiting once. Once it has,
+// paddock_offboard_finalize re-counts the rows and writes the tombstone: rows a straggler wrote (40001) send the
+// deletion back to the database step, keeping the stored wait set.
 func (o *Offboarding) tombstone(ctx context.Context, row pgstore.Organization) (bool, error) {
 	orgCtx := offboardingContext(ctx, row.ID)
 	var ready bool

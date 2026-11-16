@@ -373,6 +373,140 @@ func TestOffboardingDevicesRepeatable(t *testing.T) {
 	}
 }
 
+// sameIDs fails unless got holds exactly the IDs of want, in any order.
+func sameIDs(t *testing.T, what string, got, want []uuid.UUID) {
+	t.Helper()
+	a, b := slices.Clone(got), slices.Clone(want)
+	cmp := func(x, y uuid.UUID) int { return strings.Compare(x.String(), y.String()) }
+	slices.SortFunc(a, cmp)
+	slices.SortFunc(b, cmp)
+	if !slices.Equal(a, b) {
+		t.Fatalf("%s: %v, want %v", what, got, want)
+	}
+}
+
+// TestOffboardingFreesLiveKeysFirst (plan M17 amendment 2026-11-16 t point 1, main §96): the step devices frees the
+// live cache keys of exactly the page's handed devices, before it writes the first offboarded entry; pending and
+// retired devices are not in it. Freeing them cannot be undone, so the deletion must no longer be cancellable then: a
+// cancel at the step's start and one issued while the keys are freed are both refused, and the organization stays
+// deleting.
+func TestOffboardingFreesLiveKeysFirst(t *testing.T) {
+	w := newOffboardWorld(t)
+	t.Cleanup(func() { w.exec(t, "DELETE FROM offboarded_device WHERE organization_id = $1", w.org) })
+	job := w.job()
+	second, _ := w.newDevice(t, w.org, "active")
+	third, _ := w.newDevice(t, w.org, "quarantined")
+	pending, _ := w.newDevice(t, w.org, "pending")
+	retired, _ := w.newDevice(t, w.org, "retired")
+	handed := []uuid.UUID{w.device, second, third}
+	w.requestDueWithDevices(t, job)
+	w.advanceTo(t, job, offboarding.StepDevices)
+
+	refused := func(when string) {
+		t.Helper()
+		ctx := w.root(false)
+		_, err := w.devOrgs.CancelDeletion(ctx, w.org)
+		expectUninstallProblem(t, err, "invalid_state", 409, "no deletion is pending")
+		expectAttempt(t, w.attempt(t, ctx), audit.CodeOrganizationDeletionCancelled, audit.OutcomeFailure, "invalid_state",
+			audit.PlatformOrganizationID)
+		if status, _, _ := w.state(t); status != organization.StatusDeleting {
+			t.Fatalf("%s: status %s after the refused cancel", when, status)
+		}
+	}
+	refused("at the start of the step devices")
+	var freeing int
+	w.cache.onFree = func() {
+		freeing++
+		refused("while the live keys are freed")
+	}
+	w.advanceTo(t, job, offboarding.StepOutbox)
+	if freeing != 1 || len(w.cache.freed) != 1 {
+		t.Fatalf("%d calls of DeleteHandedDeviceKeys, want 1", len(w.cache.freed))
+	}
+	sameIDs(t, "devices freed", w.cache.freed[0], handed)
+	for _, id := range []uuid.UUID{pending, retired} {
+		if slices.Contains(w.cache.freed[0], id) {
+			t.Fatalf("the live keys of device %s were freed", id)
+		}
+	}
+	if len(w.cache.order) == 0 || w.cache.order[0] != "free" || !slices.Contains(w.cache.order, "put") {
+		t.Fatalf("cache calls %v; want the live keys freed before the first offboarded entry", w.cache.order)
+	}
+	if n := w.count(t, "SELECT count(*) FROM offboarded_device WHERE organization_id = $1", w.org); n != len(handed) {
+		t.Fatalf("%d records, want %d", n, len(handed))
+	}
+}
+
+// TestOffboardingFreeLiveKeysFails (plan M17 amendment 2026-11-16 t point 1): a Valkey error while the page's live keys
+// are freed fails the step with valkey_unavailable before anything of the page is cached or recorded; the repeated
+// step frees the same devices again and hands the page over once, counted once.
+func TestOffboardingFreeLiveKeysFails(t *testing.T) {
+	w := newOffboardWorld(t)
+	t.Cleanup(func() { w.exec(t, "DELETE FROM offboarded_device WHERE organization_id = $1", w.org) })
+	job := w.job()
+	second, _ := w.newDevice(t, w.org, "active")
+	handed := []uuid.UUID{w.device, second}
+	w.requestDueWithDevices(t, job)
+	w.advanceTo(t, job, offboarding.StepDevices)
+	w.cache.freeErr = errors.New("valkey down")
+	var oe *app.OffboardingError
+	for {
+		_, err := job.Advance(context.Background(), w.org)
+		if errors.Is(err, app.ErrOffboardingWaiting) {
+			w.passCutoff(t)
+			continue
+		}
+		if !errors.As(err, &oe) || oe.Code != offboarding.ErrorValkeyUnavailable {
+			t.Fatalf("Advance with a failing cache: %v", err)
+		}
+		break
+	}
+	if _, _, code := w.state(t); code != offboarding.ErrorValkeyUnavailable {
+		t.Fatalf("error code %q, want %s", code, offboarding.ErrorValkeyUnavailable)
+	}
+	if slices.Contains(w.cache.order, "put") || len(w.cache.offboarded) != 0 {
+		t.Fatalf("cache calls %v after the failed freeing", w.cache.order)
+	}
+	if n := w.count(t, "SELECT count(*) FROM offboarded_device WHERE organization_id = $1", w.org); n != 0 {
+		t.Fatalf("%d records after the failed freeing", n)
+	}
+
+	w.cache.freeErr = nil
+	w.advanceTo(t, job, offboarding.StepOutbox)
+	if len(w.cache.freed) != 2 {
+		t.Fatalf("%d calls of DeleteHandedDeviceKeys, want the failed one and its repetition", len(w.cache.freed))
+	}
+	sameIDs(t, "devices freed by the repetition", w.cache.freed[1], handed)
+	if n := w.count(t, "SELECT count(*) FROM offboarded_device WHERE organization_id = $1", w.org); n != len(handed) {
+		t.Fatalf("%d records, want %d", n, len(handed))
+	}
+	if ev := w.devicesStepEvent(t); ev.Params["count"] != float64(len(handed)) {
+		t.Fatalf("devices step event %+v; want count %d", ev.Params, len(handed))
+	}
+}
+
+// TestOffboardingFreesLiveKeysPerPage (plan M17 amendment 2026-11-16 t point 1): 501 handed devices are freed in two
+// calls, one per page, with 500 and 1 devices.
+func TestOffboardingFreesLiveKeysPerPage(t *testing.T) {
+	w := newOffboardWorld(t)
+	t.Cleanup(func() { w.exec(t, "DELETE FROM offboarded_device WHERE organization_id = $1", w.org) })
+	job := w.job()
+	w.exec(t, `INSERT INTO device (id, organization_id, hostname, state)
+		SELECT gen_random_uuid(), $1, 'page-' || g, 'active' FROM generate_series(1, 500) g`, w.org)
+	w.requestDueWithDevices(t, job)
+	w.advanceTo(t, job, offboarding.StepOutbox)
+	if len(w.cache.freed) != 2 || len(w.cache.freed[0]) != 500 || len(w.cache.freed[1]) != 1 {
+		sizes := make([]int, len(w.cache.freed))
+		for i, f := range w.cache.freed {
+			sizes[i] = len(f)
+		}
+		t.Fatalf("DeleteHandedDeviceKeys got pages of %v devices, want [500 1]", sizes)
+	}
+	if n := w.count(t, "SELECT count(*) FROM offboarded_device WHERE organization_id = $1", w.org); n != 501 {
+		t.Fatalf("%d records, want 501", n)
+	}
+}
+
 // TestOffboardingDevicesWaitForOlderTransactions (amendment e point 10 on the gate of amendment j): a transaction that
 // entered the organization before the deletion started and inserts a device later keeps the step devices waiting until
 // it ends; the device it inserted gets a record.

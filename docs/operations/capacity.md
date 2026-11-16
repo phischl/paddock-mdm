@@ -491,6 +491,9 @@ every device of a deleted organization that has not reported its removal keeps i
 
 `PADDOCK_VALKEY_MEM_LIMIT ≥ 2 × (64 MiB + live devices × 2.0 KB + offboarded devices × 2.3 KB)`
 
+Count the devices of an organization from the moment its deletion runs as offboarded devices. The deletion frees each
+device's live entries before it writes its offboarded ones, page by page, so a deleting organization never holds both.
+
 Measured on the development stack (plan M17 amendment s): 220 MiB for 110 000 live devices, 175 MiB more once their
 organization was deleted and they were handed over. For example, 70 000 live plus 70 000 offboarded devices need
 2 × (64 MiB + 137 MiB + 157 MiB) ≈ 716 MiB (a KB here is 1 024 bytes), so the default of 1 GiB fits. The entrypoint sets Valkey's `maxmemory` to
@@ -531,6 +534,26 @@ store was killed in a loop with 110 000 bundle objects (330 000 directories), fr
 below the limit from about 55 000 objects on; 20 000 per GiB leaves headroom. For example, 70 000 devices with one
 LUKS header each hold 140 000 objects and need 7 GiB. The default of 2 GiB fits about 40 000 objects. OpenBao holds its keys and the Raft index in memory and stays
 small.
+
+## Organization deletion
+
+The deletion request issues every active device's uninstall before it answers `202`, within a budget of 2 minutes
+(plan M17 amendment t point 4). Its duration grows with the organization's devices, faster than linearly:
+
+| Devices | Request duration (development stack) |
+| --- | --- |
+| 110 000 | 9.2 s |
+| 218 034 | 27.3 s |
+
+- The request is **supported up to about 250 000 devices per organization**.
+- Above that, or behind a proxy whose read timeout is below 60 s, raise the proxy's read timeout to at least 120 s for
+  `/api/platform/`. The server's own write timeout is 120 s. The bundled Caddy sets no response timeout, and
+  `deploy/compose/nginx/paddock.conf.example` sets 300 s.
+- A request that timed out at the client is either complete or withdrawn as a whole: when the request ends early,
+  the server cancels the issue and withdraws the deletion. Read the organization's status before you repeat the
+  request.
+- The deletion steps that run after the grace period have no such limit: every step whose work grows with the
+  organization yields and continues in the next round.
 
 ## PostgreSQL connection budget
 

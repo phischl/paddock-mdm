@@ -103,6 +103,11 @@ device key caches (`et:`, `dk:`) and restores sequence numbers (`seq:`) from Pos
 rewrites the bundle pointers (`bp:`) every 60 s. Until then devices get 401 `invalid_signature` and retry. Lost
 nonces only reopen the ±300 s replay window for that time.
 
+A development stack that kept the offboarded devices of a load-seeded organization's deletion needs more memory than
+the default of 1 GiB: size `PADDOCK_VALKEY_MEM_LIMIT` by the rule in `docs/operations/capacity.md` (section "Memory
+limits"). Set it in `deploy/compose/.env`, e.g. `PADDOCK_VALKEY_MEM_LIMIT=2g`, and apply it with
+`docker compose up -d --force-recreate valkey`. A shell export is lost at the next `make up`.
+
 ## Trying the device API
 
 There is no agent yet (M2b). The reference client of the acceptance gates enrolls a simulated device: create an
