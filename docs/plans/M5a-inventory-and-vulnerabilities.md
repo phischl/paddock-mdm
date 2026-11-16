@@ -424,15 +424,17 @@ this amendment contradicts N3, N5, N6.3 or N9, it wins.
 
 ## Amendment 2026-11-16 (architect, PDK-1122) — integrity of Paddock's own device components (ADR 0056)
 
-The maintainer decided on 2026-11-16 (§137) that both options ship in 0.1.0-alpha.11, C before A. ADR 0056 records
-the decision. The architecture text §11.5/§11.6 and the root `CLAUDE.md` item 3 are corrected in the same change.
+The maintainer decided on 2026-11-16 (§137) that both options ship in 0.1.0-alpha.11, and confirmed it despite the
+size (§142): C after PDK-1118 is merged, A in parallel to C. ADR 0056 records the decision. The architecture text
+§11.5/§11.6 and the root `CLAUDE.md` item 3 are corrected in the same change. The new checks appear in §11.5 marked
+"Planned (PDK-1122a/b), not yet implemented"; the merge commit of each ticket removes its marker.
 Tickets: PDK-1122a (C) and PDK-1122b (A), under the umbrella PDK-1122. Both are risk high. Each needs positive and
 negative tests, and among them a test that a regular update or rollback raises no event.
 
 ### C — agent-side baseline, report-only (PDK-1122a)
 
 **C1 Where and when.** C is a new package, `agent/internal/integrity`. The agent runs `integrity.Check` once per
-drift tick, in the `drift.C` case of `Agent.loop`, after `a.drift(ctx)`. Two conditions apply:
+drift pass (`drift_interval_s`, at least 300 s in production), in the `drift.C` case of `Agent.loop`, after `a.drift(ctx)`. Two conditions apply:
 
 - the device is enrolled, and the check runs in both enforcement modes;
 - the check only reads. It never restores, stops or rewrites anything (design contract 8).
@@ -446,18 +448,25 @@ new event type, code or param is added.
 | --- | --- | --- |
 | `/opt/paddock/agent/A/paddockd`, `/opt/paddock/agent/B/paddockd` | SHA-256 from the baseline (`""` = absent) | update not quiescent (C4) |
 | `/opt/paddock/agent/current` | link target from the baseline (`A` or `B`) | update not quiescent (C4) |
-| `/usr/sbin/paddock-supervisor`, `/usr/lib/systemd/system/paddock-supervisor.service` | dpkg `md5sums` of `paddock-supervisor`, or the rollback exception (C5) | dpkg busy, package not `installed`, supervisor upgrade marker present or result not yet processed |
-| `/opt/paddock/revoke/paddock-revoke` | dpkg `md5sums` of `paddock-revoke` | dpkg busy, package not `installed` |
+| every regular file in the `md5sums` of `paddock-supervisor` (`/usr/sbin/paddock-supervisor`, `/usr/lib/systemd/system/paddock-supervisor.service`) | dpkg `md5sums`, or the rollback exception (C5) | dpkg busy, package not `installed`, supervisor upgrade marker present or result not yet processed |
+| every regular file in the `md5sums` of `paddock-agent` (among them `/usr/lib/paddock/paddockd`, `/usr/lib/systemd/system/paddock-disk-setup.service`, `/usr/share/pam-configs/paddock-deny`), `paddock-revoke` (`/opt/paddock/revoke/paddock-revoke`) and `paddock-self-service` (`/usr/lib/paddock-self-service/…`, the desktop file and icon), except entries below `usr/share/doc/` and `usr/share/lintian/` | dpkg `md5sums` of the package | dpkg busy, package not `installed` (`paddock-self-service` is optional) |
+| `/usr/bin/paddockd` (symlink of `paddock-agent`) | link target `/opt/paddock/agent/current/paddockd` | never |
 | every `md5sums` entry of `fleet-osquery` below `opt/orbit/bin/` and the entry ending in `systemd/system/orbit.service` | dpkg `md5sums` of `fleet-osquery` | dpkg busy, package not `installed` |
 | `/etc/paddock/agent.yml`, `/etc/paddock/trust.json`, `/etc/paddock/revoke-trust.json`, `/etc/paddock/disk-setup.json` | SHA-256 the agent last wrote (`""` = absent) | never |
-| unit overrides and drop-ins of `paddock-supervisor.service`, `orbit.service`, `paddock-updates.service`, `paddock-updates.timer` (C6) | absent, except the allow list | never |
+| unit overrides and drop-ins of `paddock-supervisor.service`, `paddock-disk-setup.service`, `orbit.service`, `paddock-updates.service`, `paddock-updates.timer` (C6) | absent, except the allow list | never |
 
 Not covered, as a documented residual:
 
 - `/etc/paddock/enroll.json` and `/etc/paddock/autoinstall.marker`. The autoinstall writes them, not the agent, and
   they are read only at enrollment.
-- The files that reconcilers already restore and report: `orbit.env`, `login-deny`, `notice`, `sudo_lecture`,
-  `revoke-enabled` and the `encrypt-*` files.
+- `/etc/paddock/orbit.env` is not in C because the inventory reconciler already restores it and reports
+  `device.tamper_protected_file_changed`.
+- `/etc/paddock/login-deny`, `/etc/paddock/notice` and `/etc/paddock/sudo_lecture` are rewritten by their reconcilers
+  only in enforce mode, and then only as drift (`device.config_drift_corrected`), never as a tamper event; in
+  report-only mode a change stays unreported. `/etc/paddock/revoke-enabled` is re-created silently while the bundle
+  enables revocation. These four are residuals named in RR-148, not C objects.
+- Package symlinks are not in `md5sums` (dpkg lists regular files only). Only `current` (C4) and `/usr/bin/paddockd`
+  are checked; the others, among them `/opt/orbit/bin/orbit/orbit`, are residuals named in RR-148.
 - The supervisor's public key. It is compiled into the binary, and the binary is checked.
 
 **C3 Baseline file.** The baseline is `/var/lib/paddock/state/integrity.json` (0600). Every read-modify-write holds
@@ -497,7 +506,8 @@ blocks the agent. The baseline holds:
   `"!absent"`. A slot without `paddockd` is observed as `""`, which is the normal baseline for slot B after the
   package installed only slot A.
 
-**C5 dpkg-installed files.**
+**C5 dpkg-installed files.** The packages are `paddock-agent`, `paddock-supervisor`, `paddock-revoke`,
+`paddock-self-service` and `fleet-osquery`, with the entry filters of C2.
 
 - **md5sums file.** The expected MD5 comes from `/var/lib/dpkg/info/<pkg>:<arch>.md5sums`, where `<arch>` is the
   Debian name of `runtime.GOARCH`. When that file is missing, it comes from `/var/lib/dpkg/info/<pkg>.md5sums`. A
@@ -525,7 +535,7 @@ blocks the agent. The baseline holds:
 - **Hashing cost.** Hashes are cached in memory per path by `(dev, inode, size, mtime_ns, ctime_ns)`. A file is
   rehashed only when its fingerprint changes, and every file is rehashed at agent start.
 
-**C6 Unit drop-ins.** For each of the four units, the agent applies two checks:
+**C6 Unit drop-ins.** For each of the five units, the agent applies two checks:
 
 1. **Override and drop-in files.** The files present as `/etc/systemd/system/<unit>`,
    `/run/systemd/system/<unit>`, `/etc/systemd/system/<unit>.d/*.conf` and `/run/systemd/system/<unit>.d/*.conf`.
@@ -539,6 +549,7 @@ The allow list holds exactly one drop-in: `/etc/systemd/system/orbit.service.d/9
 | Unit | Expected `FragmentPath` |
 | --- | --- |
 | `paddock-supervisor.service` | `/usr/lib/systemd/system/paddock-supervisor.service` |
+| `paddock-disk-setup.service` | `/usr/lib/systemd/system/paddock-disk-setup.service` |
 | `orbit.service` | the unit path from `fleet-osquery`'s `md5sums` |
 | `paddock-updates.service` | `/etc/systemd/system/paddock-updates.service` |
 | `paddock-updates.timer` | `/etc/systemd/system/paddock-updates.timer` |
@@ -555,8 +566,9 @@ know (`LoadState=not-found`), or whose `show` fails, is skipped. Its absence is 
   - `enroll.Run`, after it wrote `agent.yml`, `trust.json` and `revoke-trust.json`. This also covers
     `paddockd enroll`.
   - `Agent` revocation trust-on-first-use (`agent/internal/agent/revocation.go`), after `SaveRevokeTrust`.
-  - `agent/internal/agent/encrypt.go`, after every return of `Preparer.Prepare` and of `encrypt.Abort`, for
-    `disk-setup.json`.
+  - `agent/internal/agent/encrypt.go`, for `disk-setup.json`, after every return of `Preparer.Prepare` (it writes
+    the file and, on a failure, runs `encrypt.RunCleanup`), of both `encrypt.Abort` calls (an abort runs
+    `RunCleanup`, and `encrypt.Cleanup` removes the file), and of `encrypt.RunCleanup` in `retryCleanup`.
 - **Initialization.** It applies in the first pass without the file flag. Every one of the four paths that has no
   baseline yet is recorded as observed, with `""` for an absent file. The autoinstall's `disk-setup.json` is
   covered this way.
@@ -684,8 +696,13 @@ switch that fails the queries containing `FROM processes p LEFT JOIN hash`, for 
 
 - **RR-148** (C): device-side baselines are only as trustworthy as root on the device. Root can do any of the
   following, and none is detected:
-  - rewrite `integrity.json`, dpkg's `md5sums` or an update result;
+  - rewrite `integrity.json`, dpkg's `md5sums` or an update result, or corrupt `integrity.json` to force a
+    re-initialization (C4, C9);
   - change a file between a Paddock write and its sync.
+
+  Not checked by C at all: `enroll.json`, `autoinstall.marker`; `login-deny`, `notice` and `sudo_lecture` (drift
+  only in enforce mode, unreported in report-only mode); `revoke-enabled` (re-created silently); package symlinks
+  other than `current` and `/usr/bin/paddockd`.
 
   Paddock's own regular paths never raise an event.
 - **RR-149** (A): a genuine older published `paddockd` passes `paddock_agent_binary_known`. A process whose binary

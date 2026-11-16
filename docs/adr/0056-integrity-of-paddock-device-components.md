@@ -1,6 +1,6 @@
 # 0056 — Integrity of Paddock's own device components: agent-side baseline and a server-generated hash policy
 Status: Accepted (architect, 2026-11-16; maintainer decision §137 of 2026-11-16: PDK-1122 ships in 0.1.0-alpha.11
-with both options; plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 (architect,
+with both options, confirmed despite the size in §142; plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 (architect,
 PDK-1122)")
 
 ## Context
@@ -9,8 +9,8 @@ The binding rules (root `CLAUDE.md`, "Protected areas", item 3) and architecture
 the agent, the supervisor, `fleetd`, the update timer and their files and units is a tamper event. On `7f8ab8d7` only
 the files that the inventory and updates reconcilers render are compared. Nothing reports a replaced agent or
 supervisor binary, a flipped `current` slot, a foreign systemd drop-in, or a changed `agent.yml` or trust file.
-The mutual-watch policy `paddock_agent_running` checks only the process name and path. Architecture line 1625 claims a
-binary-hash check that does not exist.
+The mutual-watch policy `paddock_agent_running` checks only the process name and path. The architecture's mutual-watch
+paragraph in §11.5 claimed a binary-hash check that does not exist.
 
 Facts that bound the design:
 
@@ -38,8 +38,9 @@ Facts that bound the design:
    - Pro: independent of the agent, so it catches a replaced agent binary.
    - Con: covers only the running agent binary. It needs a new audit code (public contract), and policy updates
      race with releases.
-3. **B: supervisor self-check.** Rejected, as already decided in §134. The supervisor's line budget (design
-   contract 1) leaves no room, and the supervisor must stay simple enough to need no updates.
+3. **B: supervisor self-check.** Not chosen. This was the architect's recommendation in the estimate requested in
+   §134, and §137 took up only C and A. The supervisor's line budget (design contract 1) leaves no room, and the
+   supervisor must stay simple enough to need no updates.
 
 For A's downgrade handling:
 
@@ -59,7 +60,11 @@ For A's downgrade handling:
    - its initialization (trust on first use);
    - an agent update result whose release the agent staged itself;
    - a supervisor upgrade result;
-   - the agent's own writes of its configuration files.
+   - the agent's own writes of its configuration files;
+   - a re-initialization from what the agent observes, with a `Warn` and no event, in two cases: an update result
+     without a matching staged record (C4), and a corrupt baseline file (C9).
+
+   The last case and a forged update result are the paths a local root user can use to move the baseline (RR-148).
 
    For dpkg-installed files the baseline is dpkg's `md5sums`, plus a recorded exception after a supervisor rollback.
 2. A uses the policy `paddock_agent_binary_known`. It passes unless a `paddockd` process that runs from
@@ -72,18 +77,22 @@ For A's downgrade handling:
    harmless. With no published release, the policy is `SELECT 1;`.
 4. **Binding for future work:** a future "yank", withdrawal or deletion of a published release MUST keep that
    release's hashes in the policy. A withdrawn release still runs legitimately on devices until they update.
-   Every new Paddock component installed on devices MUST join C's checked set in the same change.
+   Every new Paddock component or package installed on devices MUST join C's checked set (C5, C6) in the same
+   change, or be named as a residual in RR-148.
 5. A new code in the closed registry is an additive change of the audit event contract (the SIEM integrations and the
    generated `docs/compliance/audit-codes.md`). Its MSGID alias is `device.tamper_agent_bin_changed`, because the
    code is longer than 32 characters. ADR 0031's alias table is add-only.
 
 ## Consequences
 
-- Positive: every object of protected area 3 has a check. Architecture §11.5 and the binding rules become true. A
-  replaced agent is caught independently of itself.
+- Positive: once PDK-1122a and PDK-1122b are merged, every binary, unit and agent-written configuration file of
+  protected area 3 has a check, with the exceptions named in RR-148. Until then, architecture §11.5 marks these checks
+  as planned. A replaced agent is caught independently of itself.
 - Negative:
   - Two residuals are accepted. RR-148 (C): a local root user can rewrite the baseline file, a dpkg `md5sums` file or
-    an update result. RR-149 (A2): a genuine older published release passes the policy.
+    an update result, or corrupt the baseline file to force a re-initialization; package symlinks other than
+    `current` and `/usr/bin/paddockd` and some reconciler-written files are not checked (plan M5a, C2). RR-149 (A2):
+    a genuine older published release passes the policy.
   - dpkg `md5sums` are MD5. Here they are only a change detector, not a signature, and root can rewrite them anyway.
   - The system-test harness must publish the binaries it installs on the VMs. Otherwise A reports every VM.
 - Follow-up work: PDK-1122a (C) and PDK-1122b (A). A future yank feature must honor decision 4.
