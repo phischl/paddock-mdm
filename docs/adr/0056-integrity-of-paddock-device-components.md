@@ -131,3 +131,48 @@ A7 to A11.
 Consequences: the description of `device.tamper_agent_binary_changed` changes before its first release (code,
 params and MSGID alias unchanged). The policy query is longer by a constant; its size still grows with the number of
 published hashes, which the worker logs.
+
+## Amendment 2026-11-16 b (architect, PDK-1122c) — a check-in does not prove the genuine agent
+
+Status: **proposed**, pending the maintainer's approval of the estimate (`decisions-alpha11.md` §146). Details, texts
+and tests: plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 b (architect, PDK-1122c)".
+
+**Context.** Item 3 of the previous amendment left a gap: a local root user stops the genuine agent and lets a
+foreign program under another name and unit check in with the device's credentials. `paddock_agent_binary_known` does
+not judge that program, and `paddock_agent_running` fails without a report, because plan M5a decision 8 reports only
+devices that have not checked in for 15 minutes.
+
+**Options.**
+
+1. **Prove the genuine agent in the check-in** (a challenge only the published binary answers, a process-identity
+   binding between osquery and the check-in, TPM attestation).
+   - Pro: would make the check-in itself trustworthy.
+   - Con: root holds the device key (file or TPM) and can run the genuine binary as an oracle or relay its signed
+     requests; Fleet policies are global and pass/fail, so no per-device binding reaches osquery; attestation shows
+     what ran since boot, not what signs now. Every variant costs a device API change and proves nothing against root.
+2. **Report the agent's absence from osquery evaluations regardless of check-ins (chosen).**
+   - Pro: no device API, agent or supervisor change; uses data the server already stores (Fleet's
+     `policy_updated_at`, migration 00161).
+   - Con: a decoy that keeps `paddock_agent_running` passing, or a stopped fleetd, defeats it.
+3. **Leave decision 8 and document the gap.** Cheapest; leaves the cheapest impersonation unreported.
+
+**Decision.** Option 2.
+
+1. A check-in is never treated as proof that the genuine agent runs. The device API (`api/openapi/device.yaml`
+   1.0.0) does not change; agents of every supported release keep working unchanged in both directions.
+2. Plan M5a decision 8 reports `device.tamper_agent_not_running` also when `paddock_agent_running` failed in two
+   evaluations at least 15 minutes apart (Fleet's clock) with no stored pass between them, whether or not the device
+   checks in. The silence rule stays. Report only (design contract 8).
+3. The existing code `device.tamper_agent_not_running` is reused; it gains the optional params `failing_since` and
+   `evaluated_at` and a new description (additive change of the audit event contract).
+4. RR-149 is rewritten: the gap of item 3 is closed for a foreign program while fleetd evaluates and no decoy runs;
+   a decoy and a stopped fleetd stay residual. Detecting a fleetd that falls silent while the device checks in is
+   proposed as PDK-1122d.
+
+**Consequences.**
+
+- Positive: the naive impersonation is reported within about 40 minutes at the default policy interval, with no
+  contract cost beyond one nullable column and two audit params.
+- Negative: a root user who also keeps a decoy `paddockd` running or stops fleetd is not reported (RR-149, RR-01).
+  A device whose `/opt` is a symbolic link elsewhere is reported (unsupported layout, documented).
+- Follow-up: PDK-1122c (implementation, after PDK-1122b), PDK-1122d (proposed, maintainer decision).
