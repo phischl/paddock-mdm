@@ -58,12 +58,42 @@ func (c *Cache) DeleteOrganization(ctx context.Context, org uuid.UUID, devices [
 		owned = append(owned, escrowKey(id))
 	}
 	deleteOnly = append(deleteOnly, ticketKey(org))
+	total, err := c.deleteGroups(ctx, owned, deleteOnly)
+	if err != nil {
+		return total, fmt.Errorf("delete the device keys of organization %s: %w", org, err)
+	}
+	return total, nil
+}
+
+// DeleteHandedDeviceKeys deletes the live keys bp:, hb:, au: and enr: of devices the devices step hands over (plan M17
+// amendment 2026-11-16 t point 1) and returns how many existed. An offboarded device needs none of them: the gateway
+// serves it its commands only, from dk:, cmd:, seq: and sd:, which stay. Freeing them page by page keeps a deleting
+// organization from holding its live and its offboarded entries at the same time; DeleteOrganization still deletes
+// whatever a late writer re-created. bp: goes in DEL calls of its own for the worker's delete-only selector.
+func (c *Cache) DeleteHandedDeviceKeys(ctx context.Context, devices []uuid.UUID) (int64, error) {
+	owned := make([]string, 0, 3*len(devices))
+	deleteOnly := make([]string, 0, len(devices))
+	for _, d := range devices {
+		owned = append(owned, heartbeatKey(d), updateRequestKey(d), enrollmentKey(d))
+		deleteOnly = append(deleteOnly, bundleKey(d))
+	}
+	total, err := c.deleteGroups(ctx, owned, deleteOnly)
+	if err != nil {
+		return total, fmt.Errorf("delete the handed devices' live keys: %w", err)
+	}
+	return total, nil
+}
+
+// deleteGroups deletes each group of keys in DEL calls of at most deleteChunk keys that never mix two groups, and
+// returns how many keys existed. Valkey allows a DEL only when the root permissions or one selector cover every key of
+// it, so a caller passes the keys of each selector as a group of their own.
+func (c *Cache) deleteGroups(ctx context.Context, groups ...[]string) (int64, error) {
 	var total int64
-	for _, keys := range [][]string{owned, deleteOnly} {
+	for _, keys := range groups {
 		for start := 0; start < len(keys); start += deleteChunk {
 			n, err := c.c.Do(ctx, c.c.B().Del().Key(keys[start:min(start+deleteChunk, len(keys))]...).Build()).AsInt64()
 			if err != nil {
-				return total, fmt.Errorf("delete the device keys of organization %s: %w", org, err)
+				return total, err
 			}
 			total += n
 		}

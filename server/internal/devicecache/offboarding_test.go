@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	vk "github.com/valkey-io/valkey-go"
 
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/valkeytest"
@@ -135,5 +136,92 @@ func TestOffboardedDeviceKeys(t *testing.T) {
 	keys := []string{"cmd:" + dev.String(), "seq:" + dev.String(), "sd:" + dev.String(), "dk:key-1", "dk:key-2"}
 	if n, err := admin.Do(ctx, admin.B().Exists().Key(keys...).Build()).AsInt64(); err != nil || n != 0 {
 		t.Fatalf("%d keys of the uninstalled device remain (%v)", n, err)
+	}
+}
+
+// TestDeleteHandedDeviceKeys (plan M17 amendment 2026-11-16 t point 1): under the worker's real ACL user the devices
+// step frees bp:, hb:, au: and enr: of the devices it hands over, in chunks, without NOPERM, and returns how many
+// existed. What an offboarded device still needs, dk:, seq:, cmd: and sd:, stays byte-identical, as does every key of
+// a device not in the list.
+func TestDeleteHandedDeviceKeys(t *testing.T) {
+	srv := valkeytest.StartACL(t)
+	admin, worker := srv.Client(t, "acceptance"), srv.Client(t, "worker")
+	cache := devicecache.New(worker)
+	ctx := context.Background()
+
+	const handed = 1200
+	devices := make([]uuid.UUID, handed)
+	var live, kept []string
+	for i := range devices {
+		d := uuid.New()
+		devices[i] = d
+		live = append(live, "bp:"+d.String(), "hb:"+d.String(), "enr:"+d.String())
+		// A device without a pending agent update has no au:; the count reports only keys that existed.
+		if i%3 != 0 {
+			live = append(live, "au:"+d.String())
+		}
+		kept = append(kept, "dk:key-"+d.String(), "seq:"+d.String(), "cmd:"+d.String(), "sd:"+d.String())
+	}
+	other := uuid.New().String()
+	kept = append(kept, "bp:"+other, "hb:"+other, "au:"+other, "enr:"+other)
+	set := func(keys []string) {
+		cmds := make(vk.Commands, 0, len(keys))
+		for _, k := range keys {
+			cmds = append(cmds, admin.B().Set().Key(k).Value("value of "+k).Build())
+		}
+		for _, r := range admin.DoMulti(ctx, cmds...) {
+			if err := r.Error(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	set(live)
+	set(kept)
+
+	n, err := cache.DeleteHandedDeviceKeys(ctx, devices)
+	if err != nil || n != int64(len(live)) {
+		t.Fatalf("DeleteHandedDeviceKeys = %d, %v; want %d", n, err, len(live))
+	}
+	if left, err := admin.Do(ctx, admin.B().Exists().Key(live...).Build()).AsInt64(); err != nil || left != 0 {
+		t.Fatalf("%d live keys remain (%v)", left, err)
+	}
+	values, err := admin.Do(ctx, admin.B().Mget().Key(kept...).Build()).AsStrSlice()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, k := range kept {
+		if values[i] != "value of "+k {
+			t.Fatalf("%s = %q, want it unchanged", k, values[i])
+		}
+	}
+	if n, err := cache.DeleteHandedDeviceKeys(ctx, devices); err != nil || n != 0 {
+		t.Fatalf("repeated deletion = %d, %v", n, err)
+	}
+}
+
+// TestDeleteHandedDeviceKeysCommands (plan M17 amendment 2026-11-16 t point 1): an empty page sends no DEL, and 1 200
+// devices go in chunks of at most 500 keys, bp: in calls of its own. The ACL users may not run INFO, so this counts on
+// a server without ACL.
+func TestDeleteHandedDeviceKeysCommands(t *testing.T) {
+	c := valkeytest.Start(t).Client(t)
+	cache := devicecache.New(c)
+	ctx := context.Background()
+	del := commandCalls(t, c, "del")
+	if n, err := cache.DeleteHandedDeviceKeys(ctx, []uuid.UUID{}); err != nil || n != 0 {
+		t.Fatalf("empty list = %d, %v", n, err)
+	}
+	if d := commandCalls(t, c, "del"); d != del {
+		t.Fatalf("an empty list sent %d DEL", d-del)
+	}
+	devices := make([]uuid.UUID, 1200)
+	for i := range devices {
+		devices[i] = uuid.New()
+	}
+	if _, err := cache.DeleteHandedDeviceKeys(ctx, devices); err != nil {
+		t.Fatal(err)
+	}
+	// 3 600 keys of hb:, au: and enr: in 8 calls, 1 200 bp: in 3.
+	if d := commandCalls(t, c, "del") - del; d != 11 {
+		t.Fatalf("%d DEL calls, want 11", d)
 	}
 }
