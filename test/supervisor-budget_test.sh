@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regression test of test/supervisor-budget.sh (PDK-062, `make test`): the supervisor as it is passes; a copy of it
-# padded to 836 counted lines fails with the count (mutation proof of the ceiling), at exactly 835 it passes; blank
+# padded to 866 counted lines fails with the count (mutation proof of the ceiling), at exactly 865 it passes; blank
 # lines, // and /* */ comments and _test.go files do not count, code after a closing */ does; directories without Go
 # files fail.
 set -euo pipefail
@@ -32,15 +32,15 @@ counted() { bash "$check" "$@" | sed -E 's/^supervisor line budget: ([0-9]+) of.
 # pad <file> <n>: appends n counted lines.
 pad() { for ((i = 0; i < $2; i++)); do echo "var _ = $i"; done >>"$1"; }
 
-expect "the supervisor as it is" pass "of 835 counted lines in"
+expect "the supervisor as it is" pass "of 865 counted lines in"
 
 cp -r "$root/agent/internal/supervisor" "$work/supervisor"
 cp -r "$root/agent/cmd/paddock-supervisor" "$work/cmd"
 real="$(counted "$work/supervisor" "$work/cmd")"
-pad "$work/supervisor/probation.go" $((835 - real))
-expect "the supervisor padded to 835 lines" pass "835 of 835 counted lines" "$work/supervisor" "$work/cmd"
+pad "$work/supervisor/probation.go" $((865 - real))
+expect "the supervisor padded to 865 lines" pass "865 of 865 counted lines" "$work/supervisor" "$work/cmd"
 pad "$work/cmd/main.go" 1
-expect "the supervisor padded to 836 lines" fail "exceeded: 836 counted lines in 4 files, ceiling 835" "$work/supervisor" "$work/cmd"
+expect "the supervisor padded to 866 lines" fail "exceeded: 866 counted lines in 4 files, ceiling 865" "$work/supervisor" "$work/cmd"
 
 mkdir "$work/synthetic"
 {
@@ -57,16 +57,16 @@ mkdir "$work/synthetic"
   echo "var code = 3 // trailing comment"
 } >"$work/synthetic/x.go"
 pad "$work/synthetic/x_test.go" 900
-expect "comments, blanks and tests do not count" pass "3 of 835 counted lines in 1 files" "$work/synthetic"
+expect "comments, blanks and tests do not count" pass "3 of 865 counted lines in 1 files" "$work/synthetic"
 
 mkdir -p "$work/outside/sub" "$work/linked"
-pad "$work/outside/big.go" 836
+pad "$work/outside/big.go" 866
 pad "$work/outside/sub/more.go" 2
 ln -s "$work/outside/big.go" "$work/linked/big.go"
-expect "a symlinked file counts" fail "exceeded: 836 counted lines in 1 files" "$work/linked"
+expect "a symlinked file counts" fail "exceeded: 866 counted lines in 1 files" "$work/linked"
 rm "$work/linked/big.go"
 ln -s "$work/outside/sub" "$work/linked/sub"
-expect "a symlinked directory counts" pass "2 of 835 counted lines in 1 files" "$work/linked"
+expect "a symlinked directory counts" pass "2 of 865 counted lines in 1 files" "$work/linked"
 
 mkdir "$work/empty"
 echo "not go" >"$work/empty/README"

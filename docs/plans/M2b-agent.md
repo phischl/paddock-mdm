@@ -513,3 +513,99 @@ The rollback therefore records its intent before it flips back:
   condition +1, and the removed `p.RollingBack = false` −1. That gives about 834 of 835. The ceiling stays 835; a
   change that needs more stops and goes back to the architect. PDK-1118b ships after PDK-1118, in the same
   distribution package (contract 1).
+
+**PDK-1118 fix batch after the external review (architect, 2026-11-16); line budget 865.** This paragraph is binding
+and replaces the sentences above that it contradicts. The rule of Part 2 that a kept log waits "until the next start"
+is replaced by M2. PDK-1118b above stays as written.
+
+- **M1 — a resume after a reboot starts the window anew, and records that.** In `resumeProbation`, a log whose
+  `boot_id` is empty or differs from a non-empty `Config.BootID` gets `SwitchedAt = Now()` and `BootID =
+  Config.BootID`, and is written back with `writeJSON` before the window is computed. If the write fails, an error is
+  logged and the new values hold in memory. `remaining` is then always the formula `min(max(SwitchedAt + Probation -
+  Now(), Probation/5), Probation)`; the separate assignment `remaining = Probation` is removed. A watchdog restart
+  later in the same boot therefore gets at most the rest of the window, never a new one.
+  - *Residual:* with an unreadable boot ID (`Config.BootID == ""`), every resume keeps the full window, as before.
+    Item m5 makes this visible.
+- **M2 — a kept log is retried during the run, and no request is processed meanwhile.**
+  - `Supervisor` gains `keptLog bool`. `resumeProbation` sets it to `false` on entry. Its `versionTimedOut` branch
+    sets it to `true` and schedules a retry through the deferral back-off of Part 2. That back-off becomes the helper
+    `deferRetry()`, which doubles `deferWait` from `pendingRetryStart` up to `pendingRetryMax` and sets `deferredAt`;
+    `onRequest` calls the same helper.
+  - `onRequest` ignores requests while `keptLog` is set, with the existing "update in progress" warning. `resumeRequest`
+    returns without doing anything while it is set. So a request left from the switch can never produce a
+    `downgrade_refused` or `signature_invalid` for the running release (PDK-066).
+  - When `deferredAt` is due, the tick handler checks `keptLog`. If it is set, the handler calls `resumeProbation()`
+    and then `resumeRequest(ctx)`; otherwise it calls `onRequest(ctx)` as today. Each retry blocks the loop for at
+    most two version calls (20 s), well below `WatchdogSec=60`.
+  - A rebuilt probation forward runs with the agent of `current` that is already running. A rebuilt pending rollback
+    continues through `confirmRollback`. A log that is dropped also has its request removed (`dropProbation`).
+    `cleanup` resets `deferWait`, as before.
+  - *Residual:* a sick release keeps running for the duration of the stall plus one window from the rebuild. That
+    window is bounded and the rollback follows (contract 4).
+- **m3 — the self-test after a stall.** `onSelfTest` no longer calls `version` for `from`. The struct `selfTest` gets
+  a field `from string`, which `onRequest` fills with the `from` it has already checked. So `" timed out"` can no
+  longer reach the log, the result or an audit param.
+  - *Residual, accepted:* a version check inside `runSelfTest` that times out stays `self_test_failed`. The run of
+    `paddockd self-test` itself, with its `SelfTest` timeout, has the same exposure to the stalled disk. There a stall
+    cannot be told apart from a new binary that hangs, and a hanging binary must fail closed (contract 3).
+- **m4 — clock and the passed state.** Both are accepted residuals; neither is fixed.
+  - `CLOCK_BOOTTIME` is rejected: reading it needs either a new import for the supervisor or an uptime field and a
+    `/proc/uptime` reader with a seam, about 10 lines. A clock step within one boot moves the window: forward, it
+    leaves at least `Probation/5` at the next restart; backward, it is capped at one window.
+  - `passed` is not persisted. A kill while a passed probation confirms its switch re-judges it with at least
+    `Probation/5`. The agent checks in at its start, so only an agent that cannot reach the server within that time is
+    rolled back, which is the same class as a failed probation.
+- **m5 — an unreadable boot ID is visible.** If `New` cannot read `/proc/sys/kernel/random/boot_id`, it logs one
+  warning (`slog.Warn`, with the error) and keeps `BootID` empty.
+- **m6 — no real short timeouts in tests (flake rule).**
+  - `Config` gains the seam `Version func(dir string) string`. When nil, the default is the real call. The current
+    body of the `version` method moves unchanged into the package function `runVersion(dir string, timeout
+    time.Duration) string`. The method returns `s.cfg.Version(dir)` when the seam is set, and otherwise
+    `runVersion(dir, cmp.Or(s.cfg.VersionTimeout, 10*time.Second))`.
+  - `stallVersion` in `stall_test.go` injects a `Version` that returns `versionTimedOut` for the stalled slot until
+    `release()`, and otherwise `runVersion(dir, 10*time.Second)`. The tests no longer set `VersionTimeout`.
+  - Exactly one unit test still exercises the real timeout: `runVersion` on a script that only runs `exec sleep 300`,
+    with a 500 ms timeout, returns `versionTimedOut`. No healthy call runs under a short timeout.
+- **m7 — runbook.** In `docs/operations/agent-releases.md`, *An update that waits for the active agent* gets a new
+  first step, before `current` is flipped or the binary is replaced. The operator removes the waiting request and its
+  release:
+  `rm -f /var/lib/paddock/staging/request.json && rm -rf /var/lib/paddock/staging/<version>`, where `<version>` is
+  the `version` in `request.json`, read beforehand. The text says why: a waiting request compared against the other
+  slot could pass the downgrade refusal. The agent stages the server's target release again on its own.
+  - The sentence "The supervisor then processes the waiting request …" becomes: "The agent then stages the current
+    release again, and the supervisor processes it as usual …".
+  - Steps 1–3 become 2–4.
+- **Internal Review 1 minors.**
+  - A test pins the back-off reset in `cleanup`: defer a request, let it end (`downgrade_refused`), stage a second
+    request while the agent stalls again, and expect `next_attempt_in=10s`.
+  - The ticket and the closure note that AC 1 is superseded by Part 1 of this amendment, including M1.
+- **Kill and stall matrix.** Each row is a test.
+  - M1: (a) the log names `boot-0` and the supervisor runs as `boot-1`. The first resume gets a full window, the log
+    then holds `boot-1` and the resume time, and a second resume at `P-1s` gets only the floor. (This is the external
+    review's sketch `TestExtRestartAfterRebootKeepsTheWindow`.) (b) The write-back fails: the first run still keeps the
+    full window. (c) With `BootID == ""` the window stays full and the warning is logged once (m5).
+  - M2: (a) a torn log and a stalled B at start keep the log. After `release()` and the next due retry, the rebuild runs,
+    and a release that never checks in is rolled back within one window plus the back-off (`rolled_back`). (b) As (a),
+    with a leftover `request.json` for the running release: no `downgrade_refused` or `signature_invalid` result
+    while the log is kept and after it. (c) As (a), with the stall never released: the retries back off 10 s, 20 s, …
+    up to 5 min, and the log and the request stay. (d) As (a), with the pending marker: after the rebuild the pending
+    rollback continues (`rolled_back` once the flip back lands).
+  - m3: a stall of `paddockd version` on the active slot between `onRequest` and `onSelfTest` leaves `from_version`
+    as checked in `onRequest`, never `" timed out"`.
+  - PDK-1118b: rows 1–5 of the kill matrix above, plus the regression for the switch's own log write or flip.
+- **Budget, counted lines (`test/supervisor-budget.sh`), measured 834 at 02e94b07.**
+
+  | Part | Lines |
+  |---|---|
+  | M1 | +3 |
+  | M2 | +11 (field 1, flags 2, call 1, `deferRetry` net +3, tick branch +4) |
+  | m3 | 0 |
+  | m5 | +3 |
+  | m6 | +6 |
+  | PDK-1118b | +1 (conservative) |
+  | Sum | 858 |
+  | Buffer | 7 |
+
+  The ceiling is **865**. `test/supervisor-budget.sh`, `test/supervisor-budget_test.sh` and the `Makefile` comment
+  change in the same commit as this paragraph. The principle of contract 1 is unchanged: one loop goroutine, no new
+  dependency. A batch that needs more than 865 stops and goes back to the architect.
