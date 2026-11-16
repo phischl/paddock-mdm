@@ -422,6 +422,39 @@ instead of rebuilding or dropping it from a slot that only looked version-less. 
 failed); moving helpers out of the supervisor to make room (it would split the A/B logic across components that update
 on different channels).
 
+**Part 2, persistent stall — visibility and the way out.** If `paddockd version` of the active slot hangs on every
+call (an agent binary that deadlocks, or reads of `/opt/paddock/agent` that never complete), the request is deferred
+for good. While `staging/request.json` exists the agent stages nothing (`update.Pending`) and installs no supervisor
+package, so neither the rollout nor *Update agent now* reaches the device. No new outcome code is introduced (that
+would change the result contract and needs its own decision); the rules are:
+
+- **Retry rate.** Each attempt blocks the loop for up to the 10 s timeout, so a deferred request is not retried on
+  every tick: the wait between attempts starts at `pendingRetryStart` (10 s) and doubles up to `pendingRetryMax`
+  (5 min), the constants of a pending rollback; it resets when a request is processed or removed. A restart retries
+  at once through `resumeRequest`.
+- **Device.** Every deferred attempt logs one warning, `update request deferred: the active agent did not report its
+  version in time`, with the requested version and the next wait (at most 12 lines an hour). It is in the
+  supervisor's journal and in the diagnostics bundle (`journal/paddock-supervisor.log`), which an administrator
+  requests from the portal.
+- **Fleet.** The device keeps checking in with its old agent version: the fleet overview counts it as outdated
+  against the current release (`agent_outdated`), the device page shows the old version, and an *Update agent now*
+  request ends after 24 hours without a report. The fleet shows that the update does not arrive, not why; the why
+  is in the diagnostics bundle. Accepted residual for alpha.11; a reason visible in the portal needs a new event or
+  check-in field and a separate decision.
+- **Way out (operator, on the device, root).** A supervisor restart alone, *Update agent now* and `apt install
+  --reinstall paddock-agent` do not help: the restart asks the same binary again, the agent does not stage while the
+  request waits, and the package's postinst never touches an existing `current` or the slots. What works is to make
+  the active slot answer again and restart the supervisor, which then processes the waiting request with signature
+  check, downgrade refusal, self-test and probation: (1) if the other slot holds a working agent
+  (`timeout 15 /opt/paddock/agent/<slot>/paddockd version` prints a version), point `current` at it with the same
+  `ln -sfn` and `mv -T` commands as in *A rollback that failed*; otherwise (2) copy the packaged binary into the active
+  slot (`install -m 0755 /usr/lib/paddock/paddockd /opt/paddock/agent/<active>/paddockd.new`, then `mv -f` over
+  `paddockd`); then `systemctl restart paddock-supervisor`. PDK-1118 documents this in
+  `docs/operations/agent-releases.md` as a new subsection `### An update that waits for the active agent` under
+  *On the device*, after *A rollback that failed*, together with the journal query
+  `journalctl -u paddock-supervisor | grep 'update request deferred'`, and adds a `changelog.d/` fragment.
+- **Budget.** The back-off and the warning take up to 5 lines from the buffer of 6 below; the ceiling stays 835.
+
 **Budget.** The supervisor counts 797 lines at 64382b2f. Part 1 is estimated at 11 counted lines (`Config.BootID` 1,
 reading it in `New` 4, the `probation` field 1, the two struct literals +1 each, the resumed deadline +3); part 2 at
 21 (implementer's estimate). 797 + 11 + 21 = 829, plus a buffer of 6: the ceiling is **835**
