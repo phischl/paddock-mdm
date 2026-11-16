@@ -461,3 +461,55 @@ reading it in `New` 4, the `probation` field 1, the two struct literals +1 each,
 (`test/supervisor-budget.sh`, its regression test and the `Makefile` comment change with it). The principle of design
 contract 1 is unchanged: the supervisor stays one goroutine's loop with no new dependency, simple enough to need no
 updates; only the number changes. A change that needs more than 835 lines stops and goes back to the architect.
+
+**PDK-1118b rollback ordering (architect, 2026-11-16).** Today a supervisor killed by the watchdog after `rollback`'s
+flip back has landed, but before the log records `rolling_back` or the outcome, leaves an undecided log with `current`
+on `FromSlot`. On disk that looks the same as a switch whose flip never landed, so `resumeProbation` drops the log and
+reports nothing. The rollout then does not count the failure (contract 6), and the agent may stage the release again.
+The rollback therefore records its intent before it flips back:
+
+- `rollback` sets `RollingBack = true` and writes the probation log (`writeJSON`, synced) **before** `flipBack`.
+  The write after a flip whose sync failed is removed; that branch only sets `s.rolledBack`. If the intent write fails,
+  the flip back runs anyway: a rollback never waits for the disk (contract 4). The residual is today's behaviour: a
+  kill in that window reports nothing.
+- An undecided log with `current` on `FromSlot` and without `rolling_back` now means only "the switch never landed".
+  It is still dropped without a result.
+- `RollingBack` with `current` on `FromSlot`: as today, the supervisor resumes the rollback, makes the flip back
+  durable (`confirmFlip`) and reports `rolled_back`.
+- `RollingBack` with `current` on `ToSlot` (the intent is recorded, but the flip back did not land or was lost with
+  the power): the probation does **not** run again. `resumeProbation` takes the existing pending-rollback branch: its
+  condition gains `|| p.RollingBack && s.activeSlot() == p.ToSlot`, so `RollbackPending = true` and
+  `s.rolledBack = &p`, with no result written at the restart. At the first tick, `confirmRollback` flips back once
+  (`retryFlipBack`).
+  - If the flip succeeds, `confirmFlip` makes it durable, then `rolled_back` is reported and the previous agent
+    restarts.
+  - If it fails, the existing ADR 0024 path runs: `keepRollbackPending` reports `rollback_failed` once, and the retries
+    back off until a flip back lands, which then reports `rolled_back`.
+  - `rolled_back` is never reported while `current` points at `ToSlot`. Until the first tick, the failed release runs,
+    as in every pending rollback (contract 8).
+  - `p.RollingBack = false` before the resumed probation forward is removed. That line can no longer be reached with
+    `RollingBack` set.
+- `RollingBack` with `current` on neither slot is dropped as before. The decision names `FromSlot`, but an
+  unknown `current` is not overwritten.
+- **Kill matrix.** The tests in `window_test.go` cover each point; `TestWatchdogKillAfterTheFlipBackConverges` changes
+  to expect `rolled_back` where it expected no result.
+  1. *Before the intent write.* The log is undecided and `current` is on `ToSlot`. The probation resumes (Part 1 window,
+     floor `Probation/5`) and decides anew. No result is written at the restart; the new decision reports.
+  2. *During the intent write.* `writeJSON` is atomic: the log is the old one (row 1) or the complete new one (row 3),
+     never torn.
+  3. *After the intent write, before the flip.* `RollingBack` with `current` on `ToSlot`, handled as the pending
+     rollback above. The result is `rolled_back` once the flip back lands, or first `rollback_failed` and later
+     `rolled_back` if the flip back fails.
+  4. *After the flip, before the outcome is recorded* (a stall in the flip's `SyncDir`, or in `conclude`'s `SyncFile`
+     before the rename). `RollingBack` with `current` on `FromSlot` resumes the rollback, then `confirmFlip`, then
+     `rolled_back`. If `conclude`'s rename landed already, the log holds `outcome: rolled_back`, and the restart
+     writes that same result again.
+  5. *After the outcome* (the log records `rolled_back`; the result is written or not). The restart writes the
+     recorded result again with the same `at`, or nothing if the log is already gone. The agent reports it once.
+  - Regression that must stay green: a kill in the switch's own log write or flip (an undecided log, no
+    `rolling_back`, `current` on `FromSlot`) reports nothing and drops the log.
+- **Protocol, audit, budget.** The result contract, the device protocol and the audit registry do not change.
+  `rolled_back` and `rollback_failed` exist already. Estimate: moving the intent write is net 0, the extended
+  condition +1, and the removed `p.RollingBack = false` −1. That gives about 834 of 835. The ceiling stays 835; a
+  change that needs more stops and goes back to the architect. PDK-1118b ships after PDK-1118, in the same
+  distribution package (contract 1).
