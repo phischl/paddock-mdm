@@ -176,3 +176,37 @@ devices that have not checked in for 15 minutes.
 - Negative: a root user who also keeps a decoy `paddockd` running or stops fleetd is not reported (RR-149, RR-01).
   A device whose `/opt` is a symbolic link elsewhere is reported (unsupported layout, documented).
 - Follow-up: PDK-1122c (implementation, after PDK-1122b), PDK-1122d (proposed, maintainer decision).
+
+## Amendment 2026-11-16 c (architect, PDK-1122d) — the server watches fleetd
+
+Status: **proposed**, pending main's approval of the estimate (`decisions-alpha11.md` §147). Details, texts and
+tests: plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 c (architect, PDK-1122d)".
+
+**Context.** After amendment b, a root user who replaces the agent and also stops fleetd is not reported: the impostor
+does not report the stopped `orbit.service`, and fleetd evaluates no policy. The maintainer put the fix into
+alpha.11 (§147) with a guard against alarm waves during inventory-system outages.
+
+**Options.**
+
+1. **Server-side watch of Fleet's contact times (chosen).** Each round, a device that keeps checking in while its
+   fleetd's last contact with Fleet is 15 min older than the newest contact of any host, for 15 more minutes, is
+   reported, if at least one and at least half of the live devices reach Fleet.
+   - Pro: no agent, device API or supervisor change; uses the host list the worker already reads every round.
+   - Con: blind on single-device installations and when most devices are cut off; a site that blocks only Fleet's
+     address is reported.
+2. **Per-organization quorum** (the maintainer's example). Weaker: one Fleet serves every organization, and an
+   organization with one device could never be judged.
+3. **Agent-reported fleetd state.** Useless here: the impostor reports what it wants.
+
+**Decision.** Option 1, report only, with the new registry code `device.tamper_fleetd_silent` (params
+`fleetd_seen_at`, `last_contact_at`, `silent_since`), a tamper finding and no attention kind. The state lives in the
+database (two columns on `device_inventory_ref`), so worker restarts change nothing. All freshness judgements use
+Fleet's clock relative to its newest contact, so a Fleet that stops recording contacts looks fresh, not silent.
+
+**Consequences.**
+
+- Positive: the "stopped fleetd" gap of RR-149 is closed while most devices reach Fleet; an operator sees an
+  installation-wide Fleet reachability problem as a suppression log line and gauge.
+- Negative: residuals stay in RR-149 (a decoy agent; a replaced or simulated osquery; single-device installations;
+  a root user controlling more than half of the live devices). One more additive code in the audit event contract.
+- Follow-up: PDK-1122d, after PDK-1122c.

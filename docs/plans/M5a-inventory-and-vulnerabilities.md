@@ -1405,3 +1405,418 @@ the semantics of section 6 hold; log wording.
 
 Not protocol-breaking: no device API, bundle, command or event type change; one additive migration and an additive
 audit description and params change. VM time: F6 adds about 20 minutes per VM (VMs run in parallel).
+
+## Amendment 2026-11-16 c (architect, PDK-1122d) — the server reports a fleetd that falls silent while the device checks in
+
+Status: **proposed**, pending main's approval of the estimate (`decisions-alpha11.md` §147: the maintainer put
+PDK-1122d into alpha.11; design and estimate go to main before any implementation). ADR 0056 records the decision in
+its amendment "c" of the same date. Ticket PDK-1122d, risk high. Implementation starts after PDK-1122c is merged (it
+extends gate F6, RR-149 and the migration sequence).
+
+### 1. Goal
+
+A local root user who replaces the agent with a foreign program **and** stops or cuts off fleetd is reported to the
+organization admin as `device.tamper_fleetd_silent`. An outage, restart or upgrade of the inventory system raises no
+event. Report only; no device API change.
+
+### 2. Context
+
+- **Gap after PDK-1122c (amendment b, D8).** The genuine agent reports a stopped `orbit.service`
+  (`tamper.service_stopped`); an impostor does not. fleetd that does not talk to Fleet evaluates no policy, so
+  amendment b's rule (b) never fires, and the silence rule (a) does not fire because the impostor checks in.
+- **Data available in every round.** `Inventory.Round` already pages through **all** Fleet hosts each round
+  (`fleet.Client.ListHostsChangedSince` fetches every page and filters client-side). Each listed host carries Fleet's
+  `seen_time`: the last time osquery or orbit talked to Fleet, in Fleet's clock (osquery asks for distributed queries
+  every few seconds). Today the adapter drops it for unchanged hosts.
+- **Inventory is installation-wide.** One Fleet serves every organization; every device whose bundle has an
+  `inventory` section installs fleetd (compiler `inventory`, the same for every organization). A device has a
+  `device_inventory_ref` row once one of its hosts was mapped.
+- **Contact.** `device_status.last_contact_at` is updated only by materialized check-ins (gateway → worker), not by
+  events or the uninstall helper.
+
+### 3. Binding decisions
+
+**E1 Signal.** Per round, the worker computes, from the complete host list:
+
+- `R` = the newest `seen_time` of any listed host (Fleet's clock); `seen(d)` = the newest `seen_time` of the hosts
+  whose hardware UUID (lower case) equals the device's; a device with a ref and no listed host uses the stored
+  `device_inventory_ref.last_seen_at` (host deleted in Fleet), and is stale when that is NULL.
+- **fresh(d)**: `seen(d) >= R - FleetSilence`; otherwise **stale(d)**. `FleetSilence = 15 min`.
+- **live(d)**: `last_contact_at >= now - app.AgentSilence` (15 min, server clock).
+
+Comparing with `R` instead of the server clock keeps all freshness judgements in Fleet's clock and makes a Fleet that
+stops recording contacts for every host look fresh, not silent (fail safe).
+
+**E2 State machine (per device, stored, no in-memory state).** Two new columns on `device_inventory_ref`:
+`fleet_silent_since` (server time of the first round that found the device stale and live) and
+`fleet_silent_reported_at`. For every active device with a ref, each round:
+
+| Condition | Transition |
+| --- | --- |
+| fresh | `fleet_silent_since = NULL`, `fleet_silent_reported_at = NULL` (the silence ended; a later one is reported again) |
+| stale, live, `fleet_silent_since` NULL | `fleet_silent_since = now` (start) |
+| stale, live, `fleet_silent_reported_at` NULL, `now - fleet_silent_since >= FleetSilenceConfirm` (15 min) | **due** |
+| stale, not live | `fleet_silent_since = NULL` (the device stopped checking in too: network loss, suspend, shutdown); `fleet_silent_reported_at` stays |
+
+A due device is reported only if the round's guards hold (E3). Reporting sets `fleet_silent_reported_at = now` in the
+event's transaction (once per silence).
+
+**E3 Guards against an alarm wave (installation-wide, per round).** Let `Live` = live devices with a ref, `Fresh` =
+live and fresh devices, over all organizations (counts only; nothing crosses an organization boundary).
+
+1. **Complete list.** The watch runs only after every page of the host list was read in this round; any Fleet API
+   error fails the round before the watch (as today), so no transition and no report happens while Fleet's API is
+   down, restarting or being upgraded.
+2. **A fresh peer.** `Fresh >= 1`: some live device demonstrably reaches Fleet now.
+3. **A fresh majority.** `2 × Fresh >= Live`: at least half of the live devices reach Fleet normally.
+
+If 2 or 3 fails, no device is reported this round; transitions of E2 still apply; the worker logs one `Warn`
+(`fleet silence watch suppressed`, attrs `reason` = `no_fresh_peer` | `fresh_minority`, `due`, `live`, `fresh`) and
+sets the gauge `paddock_inventory_fleet_silent_suppressed` to the number of due devices (0 otherwise). A due device
+stays due and is reported in the first round whose guards hold.
+
+Option not chosen: a per-organization quorum (the maintainer's example). An organization with one device could never
+be judged, an organization-wide outage is the same as an installation-wide one (one Fleet), and installation-wide
+counts are stronger evidence. A health probe of Fleet's `/healthz` (not chosen) proves that Fleet's process runs, not
+that devices reach `fleet.<domain>` (certificate, DNS, proxy), which the peer and majority guards do prove.
+
+**E4 Why no false alarm (each MUST hold; tests in section 8).** A report needs: stale for 15 min relative to `R`,
+live, for 15 more minutes of rounds (`since` is reset the moment the device is not live, and cleared the moment it is
+fresh), with a fresh majority.
+
+| Situation | Why no event |
+| --- | --- |
+| Fleet API down, Fleet restart or upgrade | The list fails → no watch. After the restart hosts reconnect within minutes; a host stale meanwhile gets `since` and is cleared when fresh, long before 15 min confirmation. While most hosts are still stale, guard 3 holds the reports back. |
+| Devices cannot reach Fleet (certificate, DNS, Caddy route, Fleet's MySQL stalls `seen_time`) | Every host stops at about the same time → all fresh relative to `R`, or the fresh share drops below half → guard 3. |
+| Worker restart, leader change, missed rounds | State is in the database; a restarted worker makes the same decisions. Missed rounds only delay. |
+| Device suspend, shutdown, network loss | The device stops checking in → not live → `since` reset. |
+| Resume or boot after a long time off | The agent checks in, orbit is stale until it reconnects (seconds to minutes) → `since` set, then cleared when fresh; never 15 min. |
+| orbit restart, fleetd upgrade by Paddock's inventory reconciler | Seconds to minutes. A fleetd that does not come back after an upgrade is reported, which is correct (the genuine agent reports `tamper.service_stopped` too). |
+| Enrollment before fleetd is installed | No `device_inventory_ref` → not watched. |
+| Uninstall, retire, offboarding | The device leaves `active` or stops checking in. |
+
+Accepted, documented: a site that blocks only `fleet.<domain>` while `device.<domain>` stays reachable raises the
+event for its devices if they are a minority; the description names this cause.
+
+**E5 Fail safe.** Report only: an audit event and a tamper finding. No command, lock, quarantine or bundle change.
+
+**E6 New code in the closed registry** (`server/internal/domain/audit/codes.go`, next to
+`CodeDeviceTamperAgentBinaryChanged`; 27 characters, no MSGID alias):
+
+```go
+CodeDeviceTamperFleetdSilent Code = "device.tamper_fleetd_silent"
+
+CodeDeviceTamperFleetdSilent: {
+	Code: CodeDeviceTamperFleetdSilent, Emitted: true,
+	Description: "The inventory system has not heard from fleetd on a device for at least 15 minutes while the device kept checking in with Paddock, confirmed for 15 more minutes while most other devices reached the inventory system (actor: system). fleetd was stopped, removed or cut off from the inventory system's address only, or something other than the genuine agent checks in for the device. fleetd_seen_at is the device's last contact with the inventory system in its clock (absent when unknown); last_contact_at is the device's last check-in; silent_since is when the worker first found the silence.",
+	Params:   []string{"fleetd_seen_at", "last_contact_at", "silent_since"},
+	Outcomes: []Outcome{OutcomeSuccess},
+	Note:     "Recorded once per silence; fleetd reaching the inventory system again ends it.",
+},
+```
+
+- Tamper finding: `tamperFindingCodes` gets `audit.CodeDeviceTamperFleetdSilent: ""`; the finding is opened in the
+  event's transaction (`UpsertTamperFinding`, `at = now`).
+- Portal messages `audit.device.tamper_fleetd_silent`: EN "The inventory system no longer hears from fleetd on
+  {target} while the device keeps checking in"; DE "Das Inventarsystem hört von fleetd auf {target} nichts mehr,
+  während sich das Gerät weiter meldet".
+- **No new attention kind** (option not chosen): it would rewrite the 157-line attention function in a migration and
+  extend the admin API enum; `device.tamper_agent_binary_changed` set the precedent of a tamper finding without an
+  attention kind, and the finding is listed on the device and in the findings list.
+- No secret or personal data in the params.
+
+**E7 Contract and compatibility.**
+
+- Device API (`api/openapi/device.yaml` 1.0.0, `pkg/protocol`): **unchanged**; no agent change; old and new agents
+  behave the same against the new server.
+- Admin API and generated client: unchanged. Audit event contract: one new code (additive, registry and
+  `docs/compliance/audit-codes.md`, `auditCodes.gen.ts` by `make gen`).
+- Internal port `ports.HostPage` gains a field (not a public contract).
+- Database: one forward-only migration (next free number at merge; `00163` after PDK-1122c's `00162`): two nullable
+  columns and one platform function.
+
+### 4. Non-goals
+
+No change to `agent/` (in particular `agent/internal/revoke/`), the supervisor, `pkg/`, `api/openapi/*.yaml`, the
+Fleet settings and policies, the attention function; no detection of a replaced or simulated osquery; no alerting
+rule for the new gauge (operators MAY add one).
+
+### 5. Files
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `server/migrations/paddock/00163_fleet_silence_watch.sql` (next free number) | new | columns and function (section 6) |
+| `server/internal/adapters/postgres/queries/inventory.sql` + generated `pgstore` | change | queries of section 6 |
+| `server/internal/ports/inventory.go` | change | `HostPage.Seen` |
+| `server/internal/adapters/fleet/hosts.go`, `hosts_test.go` | change | fill `Seen` for every listed host |
+| `server/internal/inventory/fleetwatch.go`, `fleetwatch_test.go` | new | `WatchFleet` (pure decision function) |
+| `server/internal/app/inventory.go`, `inventory_integration_test.go` | change | `FleetWatchDevices`, `ApplyFleetWatch` |
+| `server/internal/app/findings.go` | change | finding entry |
+| `server/internal/worker/inventory.go`, `inventory_test.go` | change | collect `seen`, call the watch, gauge, log |
+| `server/internal/domain/audit/codes.go` + `make gen` outputs | change | E6 |
+| `server/web/src/locales/en.json`, `de.json` | change | E6 messages |
+| `test/acceptance/inventory_test.go` | change | `TestInventoryFleetdSilent` |
+| `test/system/inventory_test.go` | change | gate F7 inside the impostor gate, peers, counts |
+| `docs/compliance/residual-risks.md`, `docs/architecture.md` §11.5, `docs/operations/fleet.md` | change | texts below |
+| `changelog.d/pdk-1122d.security.md` | new | fragment |
+
+### 6. Interfaces and data model
+
+```sql
+-- 00163_fleet_silence_watch.sql
+-- The server-side watch of fleetd (plan M5a amendment 2026-11-16 c, E2): fleet_silent_since is the worker's time of
+-- the first round that found the device's fleetd silent while the device checked in; fleet_silent_reported_at when
+-- device.tamper_fleetd_silent was recorded for the current silence. Forward-only: there is no Down migration.
+-- +goose Up
+ALTER TABLE device_inventory_ref ADD COLUMN fleet_silent_since timestamptz,
+                                 ADD COLUMN fleet_silent_reported_at timestamptz;
+
+CREATE FUNCTION paddock_fleet_watch_devices()
+  RETURNS TABLE (device_id uuid, organization_id uuid, hardware_uuid text, last_contact_at timestamptz,
+                 last_seen_at timestamptz, fleet_silent_since timestamptz, fleet_silent_reported_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
+  $$ SELECT d.id, d.organization_id, lower(d.hardware_uuid), s.last_contact_at, i.last_seen_at,
+            i.fleet_silent_since, i.fleet_silent_reported_at
+     FROM device d JOIN device_inventory_ref i ON i.device_id = d.id
+          LEFT JOIN device_status s ON s.device_id = d.id
+     WHERE d.state = 'active' $$;
+REVOKE ALL ON FUNCTION paddock_fleet_watch_devices() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paddock_fleet_watch_devices() TO paddock_platform;
+
+-- +goose Down
+```
+
+```sql
+-- name: FleetWatchDevices :many   (platform pool)
+SELECT * FROM paddock_fleet_watch_devices() ORDER BY device_id;
+
+-- name: StartFleetSilence :exec   (organization pool)
+UPDATE device_inventory_ref SET fleet_silent_since = @at
+WHERE device_id = ANY(@device_ids::uuid[]) AND fleet_silent_since IS NULL;
+
+-- name: ResetFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = NULL WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- name: ClearFleetSilence :exec
+UPDATE device_inventory_ref SET fleet_silent_since = NULL, fleet_silent_reported_at = NULL
+WHERE device_id = ANY(@device_ids::uuid[]);
+
+-- name: MarkFleetSilentReported :execrows
+UPDATE device_inventory_ref SET fleet_silent_reported_at = @at
+WHERE device_id = @device_id AND fleet_silent_reported_at IS NULL;
+```
+
+```go
+// server/internal/ports/inventory.go
+// HostPage: Seen lists every host of the page that has a hardware UUID and a contact time, changed or not (plan M5a
+// amendment 2026-11-16 c, E1).
+Seen []HostSeen
+
+// HostSeen is when a host last talked to the inventory system, in the inventory system's clock.
+type HostSeen struct {
+	HardwareUUID string
+	SeenAt       time.Time
+}
+
+// server/internal/inventory/fleetwatch.go
+const (
+	FleetSilence        = 15 * time.Minute // stale relative to the newest contact of any host
+	FleetSilenceConfirm = 15 * time.Minute // how long a stale, live device must stay so before it is due
+)
+
+// WatchedDevice is an active device with an inventory reference, as paddock_fleet_watch_devices returns it.
+type WatchedDevice struct {
+	DeviceID, OrganizationID uuid.UUID
+	HardwareUUID             string // lower case
+	LastContactAt, LastSeenAt, SilentSince, ReportedAt *time.Time
+}
+
+// SilentDevice is a device to report, with the contact time the decision used (nil when unknown).
+type SilentDevice struct {
+	WatchedDevice
+	FleetdSeenAt *time.Time
+}
+
+// FleetWatch are the decisions of one round.
+type FleetWatch struct {
+	Start, Reset, Clear []uuid.UUID
+	Report              []SilentDevice
+	Due, Live, Fresh    int
+	Suppressed          string // "", "no_fresh_peer" or "fresh_minority"
+}
+
+// WatchFleet decides one round (E1 to E3). seen maps lower-case hardware UUIDs to their newest contact; live is
+// app.AgentSilence. It is pure: no clock, no I/O.
+func WatchFleet(devices []WatchedDevice, seen map[string]time.Time, now time.Time, live time.Duration) FleetWatch
+
+// server/internal/app/inventory.go
+// FleetWatchDevices reads every active device with an inventory reference across organizations (platform pool).
+func (s *InventorySync) FleetWatchDevices(ctx context.Context) ([]inventory.WatchedDevice, error)
+
+// ApplyFleetWatch applies the decisions of w that concern the organization in ctx: Start, Reset and Clear in one
+// transaction, then each report through ActionRunner.RunTx (MarkFleetSilentReported; a 0-row result skips the report
+// as already done; UpsertTamperFinding). It returns the reported devices.
+func (s *InventorySync) ApplyFleetWatch(ctx context.Context, w inventory.FleetWatch, now time.Time) ([]uuid.UUID, error)
+```
+
+Worker (`Inventory.Round`): `changedHosts` also collects `page.Seen` into `seen` (newest per UUID); after
+`reportBinaries`, `watchFleet(ctx, seen, start)` reads `FleetWatchDevices`, calls `inventory.WatchFleet(devices, seen,
+start, app.AgentSilence)`, logs and sets the gauge per E3, and calls `ApplyFleetWatch` once per organization that
+has a device in `w` (org from `WatchedDevice.OrganizationID`, `systemContext`). An error fails the round like the
+other report steps.
+
+Texts:
+
+- **RR-149**, in the text set by amendment b, replace "a foreign program that checks in while fleetd is stopped
+  (PDK-1122d proposed);" by "a foreign program that checks in while fleetd is stopped, as long as fewer than half of
+  the live devices reach the inventory system, or on an installation with a single live device (the server reports a
+  silent fleetd as `device.tamper_fleetd_silent` only with a fresh majority; amendment c); a replaced osquery, or a
+  program that answers Fleet with the device's osquery node key;".
+- **`docs/architecture.md` §11.5**, new row after `paddock_agent_binary_known`: "fleetd talks to Fleet while the
+  device checks in (worker, from Fleet's `seen_time`; only while at least half of the live devices reach Fleet) |
+  every inventory round | `device.tamper_fleetd_silent` after 15 min of silence confirmed for 15 more min". In the
+  mutual-watch paragraph, after the sentence added by amendment b: "The server reports a fleetd that falls silent
+  while the device keeps checking in (`device.tamper_fleetd_silent`)."
+- **`docs/operations/fleet.md` step 5**, append: "It also reports, once per silence, `device.tamper_fleetd_silent` for
+  an active device whose fleetd has not talked to Fleet for 15 minutes (measured against the newest contact of any
+  host) while the device kept checking in, confirmed over 15 more minutes. Reports wait while fewer than half of the
+  live devices reach Fleet or none does: the worker then logs `fleet silence watch suppressed` and sets
+  `paddock_inventory_fleet_silent_suppressed`; a value above 0 for longer than a few rounds means devices cannot reach
+  `fleet.<domain>` (certificate, DNS, proxy) and needs the operator. A site that blocks only `fleet.<domain>` raises
+  the event for its devices."
+- **Changelog** `changelog.d/pdk-1122d.security.md`: "Paddock now reports a device whose fleetd stops talking to the
+  inventory system while the device keeps checking in. Outages of the inventory system do not raise it."
+
+### 7. Steps
+
+1. **Migration, queries, port, adapter.** Check: `go test ./server/internal/adapters/fleet/ -run TestListHosts`;
+   `make gen` leaves no diff; `make lint-migrations-frozen` green.
+2. **`WatchFleet`.** Check: `go test ./server/internal/inventory/ -run TestWatchFleet`.
+3. **App, registry, finding, messages.** Check: `go test ./server/internal/app/ -run 'TestApplyFleetWatch|TestFleetWatchDevices'`,
+   `go test ./server/internal/domain/audit/`, `make gen` no diff.
+4. **Worker.** Check: `go test ./server/internal/worker/ -run 'TestInventoryRoundFleet'`.
+5. **Acceptance.** Check: `make acceptance` runs `TestInventoryFleetdSilent` green.
+6. **System gate F7.** Check: `make system-test VM=all SUITE=misc` green, serially to acceptance.
+7. Docs, changelog, quality gate (`make typecheck`, full Go suite with `nice -n 19`, `make lint test`).
+
+### 8. Tests
+
+All times are injected or seeded; no test sleeps for a duration; "regression" tests are proven by mutation.
+
+- **Unit** `TestWatchFleet` (table, `now` and `seen` injected), each row asserting `Start`, `Reset`, `Clear`,
+  `Report`, `Suppressed`:
+  - impostor: stale 16 min, live, `since = now - 15m` → reported; `since = now - 14m59s` → due not yet (boundary).
+  - first sight: stale, live, no `since` → `Start`.
+  - fresh again (marked reported) → `Clear`.
+  - not live (suspend, network loss) → `Reset`, no report; reported mark kept.
+  - resume: live, stale, `since` NULL → `Start` only; next round fresh → `Clear` (no report in either).
+  - host missing from `seen`: stale by `LastSeenAt`; NULL `LastSeenAt` → stale.
+  - duplicate hosts of one UUID: the newest `seen` counts.
+  - **Fleet devices unreachable**: every host's `seen` frozen at the same instant → all fresh relative to `R` → nothing.
+  - **Fleet restart**: one host reconnected (`R = now`), the others 20 min stale and live, `since` NULL → `Start` only;
+    with `since = now - 15m` and 1 fresh of 4 live → `Suppressed = "fresh_minority"`, no report.
+  - **no fresh peer**: one live device, stale and due → `no_fresh_peer`.
+  - majority boundary: 2 fresh of 4 live → reported; 1 fresh of 3 live → suppressed.
+  - empty `seen` → nothing reported.
+- **Adapter** `TestListHostsSeen`: a page with a changed host, an unchanged host and a host without UUID → `Seen` has
+  both UUID hosts with their `seen_time`, `Hosts` only the changed one; a zero `seen_time` is left out.
+- **App** `TestApplyFleetWatch` (Postgres): `Start` keeps an existing `since`; `Clear` clears both columns; a report
+  records exactly one event with the three params, sets the mark and opens a tamper finding; applying the same report
+  again records nothing (0 rows); a device of another organization in `w` is not touched in this organization's call
+  (RLS) and its own call reports it there only.
+- **App** `TestFleetWatchDevices`: returns active devices with a ref of two organizations; a retired device and a
+  device without a ref are absent.
+- **Worker** `TestInventoryRoundFleetSilence` (fake source and clock, Postgres): rounds every 5 min; the device's host
+  stops advancing `seen` while three peers advance and the device keeps `last_contact_at` fresh → no event until the
+  round where both thresholds hold, then exactly one; further rounds none; the host advances again → mark cleared; a
+  second silence → a second event.
+- **Worker** `TestInventoryRoundFleetOutage` (regression for the guards): (1) `ListHostsChangedSince` fails for six
+  rounds → no transition, no event, the round returns the error; (2) then every host reconnects in the same round
+  except the watched device, which reconnects one round later → no event; (3) all hosts' `seen` frozen for 40 min
+  with fresh check-ins → no event; (4) 3 of 4 live devices stale for 40 min → no event, the gauge is 3 and one
+  `WARN` per round with `reason=fresh_minority`.
+- **Worker** `TestInventoryRoundFleetWorkerRestart`: a fresh `Inventory` instance over the same database continues
+  the state: a device with `since = now - 16m` in the database is reported in the new instance's first round, exactly
+  once across both instances.
+- **Acceptance** `TestInventoryFleetdSilent` (`test/acceptance/inventory_test.go`), acme devices, 10-minute failure
+  bound, waits on conditions only:
+  1. Three peers: `activeDevice` + `enrollFleetHost`; every loop iteration checks them in and lets their hosts
+     answer.
+  2. `silent`: `activeDevice`, checking in every iteration, never enrolled in Fleet. Seed through the owner DB a
+     `device_inventory_ref` row (`external_id` `'acceptance-missing'`, `last_seen_at = now() - interval '20
+     minutes'`, `fleet_silent_since = now() - interval '16 minutes'`): the host-deleted branch of E1, already confirmed.
+  3. `quiet`: like `silent` but `fleet_silent_since` NULL and `last_seen_at = now() - interval '20 minutes'`, and it
+     stops checking in after step 1 (its last contact ages; it is live only until `AgentSilence` passes).
+  4. Wait until alice sees exactly one `device.tamper_fleetd_silent` for `silent` with `fleetd_seen_at`,
+     `last_contact_at`, `silent_since`, and its tamper finding. `quiet` gets `fleet_silent_since` set (it is still
+     live) and no event within this test.
+  5. Two further worker rounds (each peer's `synced_at` advanced twice): `silent` still 1 event, peers 0; carol
+     (globex) sees none.
+  6. Cleanup deletes the seeded refs.
+- **System F7** (in the impostor gate of amendment b, after F6's assertions and **before** F6's restore):
+  1. Start two simulated peers for the duration of F7: `devicesim` devices of the stack's organization with Fleet
+     hosts (`devicesim.EnrollFleet` with the stack's enroll secret as `test/acceptance/fleethost.go` reads it),
+     checking in and answering Fleet every 30 s in a goroutine stopped by `t.Cleanup`. Each VM starts its own peers,
+     so the gate needs no other VM and both VMs can run F7 in parallel (2 stale VMs, 4 fresh peers).
+  2. Record `m0` = `device.tamper_fleetd_silent` events of the device; `systemctl stop orbit.service`; the impostor
+     keeps checking in; nobody reports the stop (the supervisor is stopped).
+  3. `WaitEvent(device.tamper_fleetd_silent)` with match: `fleetd_seen_at` present and `last_contact_at` later than
+     it; failure bound 50 min; log the latency.
+  4. `systemctl start orbit.service`; wait until `device_inventory_ref.fleet_silent_reported_at` is NULL
+     (`paddockSQL`); then two further `synced_at` values; assert `m0 + 1`.
+  5. The F6 restore follows; `t.Cleanup` starts orbit if a step failed.
+- **System counts** at the end of `TestInventoryGates`, per VM: `device.tamper_agent_not_running` 2 (F2, F6),
+  `device.tamper_agent_binary_changed` 1 (F5), `device.tamper_fleetd_silent` 1 (F7); each simulated peer 0 of all
+  three. F2 and F5 stop orbit for a few minutes, which MUST NOT raise `device.tamper_fleetd_silent`.
+
+### 9. Acceptance criteria
+
+| # | Given / When / Then | Req. | Observed by |
+| --- | --- | --- | --- |
+| AC-D1 | Given a device whose fleetd stopped talking to Fleet while the device keeps checking in and most live devices reach Fleet, then after the silence is confirmed the org admin sees exactly one `device.tamper_fleetd_silent` and a tamper finding; nothing is locked or blocked | F9, RR-149 | Org admin (audit log, findings) |
+| AC-D2 | Given a Fleet outage, restart or upgrade, a worker restart, or devices that cannot reach Fleet, then no event (worker tests); the operator sees the suppression in the log and the gauge | F9 | Org admin; platform operator (metrics) |
+| AC-D3 | Given suspend, boot, network loss, orbit restart or a fleetd upgrade, then no event (unit tests; F2/F5 counts) | F9 | Org admin |
+| AC-D4 | Given another organization, then its admin never sees the event | F10 | Org admin of globex |
+| AC-D5 | Device API, admin API and agent unchanged | ADR 0047 | Maintainer (diff, CI `upgrade`) |
+
+### 10. Freedoms
+
+Internal helper names; how `seen` is accumulated across pages; whether `ApplyFleetWatch` groups the three updates in
+one statement; log wording except the `reason`, `due`, `live`, `fresh` attributes.
+
+### 11. Stop conditions
+
+- PDK-1122c is not merged into the cluster branch.
+- Fleet's list response does not carry `seen_time` for every host, or `seen_time` does not advance at least every
+  2 minutes for a running fleetd on the VM (probe in step 6 before the gate: read the host twice 3 minutes apart).
+- `paddock_fleet_watch_devices` does not return rows of every organization to the platform role (RLS); do not weaken
+  any policy, report.
+- An existing acceptance or system gate starts recording `device.tamper_fleetd_silent`, or the acceptance positive is
+  suppressed by the guards through devices of other tests.
+- The change would need an agent, supervisor, `pkg/`, device or admin API change, or a new dependency.
+
+### 12. Risks and open points
+
+- **Installations with one live device, or where most devices cannot reach Fleet,** are never judged (guards 2 and
+  3). Accepted; RR-149.
+- **A root user who controls more than half of the live devices** suppresses the reports. Accepted; RR-149.
+- **A site that blocks only `fleet.<domain>`** raises the event for its devices; documented in fleet.md and the
+  description.
+- **A replaced osquery or a program that answers Fleet with the device's node key** keeps `seen_time` fresh. RR-01,
+  RR-149.
+- **Detection latency** about 35 minutes (15 min silence, up to one round, 15 min confirmation, one round).
+- **Large installations:** one row per active device with a ref per round through the platform function; the same
+  order as `MapHosts` today. Accepted.
+
+### Size (estimate)
+
+| Part | Lines | Files |
+| --- | --- | --- |
+| Production, hand-written (migration ~30, queries ~25, port/adapter ~25, `fleetwatch.go` ~110, app ~90, worker ~45, registry/finding/messages ~15) | about 340 | 10 |
+| Generated (`pgstore`, audit doc, TS codes) | about 70 | 3 |
+| Tests (unit ~260, adapter ~30, app ~150, worker ~200, acceptance ~130, system ~170) | about 940 | 6 |
+| Docs by the implementer (RR-149, architecture, fleet.md, changelog) | about 35 | 4 |
+| Design docs (this amendment, ADR 0056 amendment c) | about 380 | 2 |
+
+Not protocol-breaking: no device API, admin API, bundle, command or event-type change; one new audit code, one
+additive migration. VM time: F7 adds about 35 minutes per VM (VMs in parallel), on top of F6.
