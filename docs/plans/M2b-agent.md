@@ -640,3 +640,50 @@ In every row, `rolled_back` is written only after `confirmFlip(FromSlot)`, so ne
 Test: a `SyncFile` and a `SyncDir` that stall on every call (a watchdog kill at the first sync) converge to the
 previous slot within one pass, and a later restart reports `rolled_back`. Budget: `noSync` adds +1 line and fits the
 buffer, so the ceiling stays 865.
+
+**PDK-1118 fix round 2: the flip back comes before every synced write of a resumed rollback (architect, 2026-11-16;
+this absorbs PDK-1118c).** A resumed rollback with `RollingBack` and `current` on `ToSlot` (kill-matrix row 3, or the
+power-loss case "intent kept, flip lost"), and equally a resumed ADR 0024 `rollback_failed` log, used to call
+`recordPending` (two fsyncs) on the first tick of `confirmRollback`, before `retryFlipBack`. Under a persistent stall
+the watchdog killed the supervisor inside that write, and `current` stayed on the failed release. The binding order
+is now:
+
+- `confirmRollback` no longer calls `recordPending` itself. It begins with `retried := p.RollbackPending` and
+  `if retried && !s.retryFlipBack(p) { return }`; everything after that is unchanged (`confirmFlip`, `conclude
+  rolled_back`, `restartChild`).
+- `retryFlipBack` calls `s.recordPending(p)` in its branch for a retry that is not yet due (`Now() < retryAt`), before
+  `return false`. When the retry is due, it first makes the flip attempt (`flipBack(FromSlot, 1)`, rename before
+  sync). A failed attempt records through `keepRollbackPending`, which calls `conclude rollback_failed` once and
+  then `recordPending`, as today. A successful attempt sets `RollbackPending = false`, and `confirmRollback` goes on
+  to `confirmFlip`.
+- A resumed rollback has `retryAt` at zero, so after every restart its first tick makes the rename first. A kill in a
+  later sync leaves `current` on `FromSlot`, and the next restart goes through `RollingBack` with `FromSlot`, then
+  `confirmFlip`, then `rolled_back`.
+- Budget: net 0 lines (−1 in `confirmRollback`, +1 in `retryFlipBack`).
+- **`rollback_failed` exactly once** while the flip back keeps failing:
+  - The first failed attempt of a log without an outcome calls `conclude rollback_failed` (log first, then the
+    result, one `at`).
+  - Every later failed attempt finds `Outcome == rollback_failed` and only re-arms the back-off.
+  - After a kill, a log that already records the outcome writes the same result again with the same `at`
+    (`resumeProbation`). The agent turns one `at` into one event.
+  - A result already written while the log could not record it is taken over from the result (`resumeProbation`
+    `:156`), not decided again.
+  - Tests:
+    - The external reviewer's sketch `TestExt2Row3UnderStalledSyncs`: with every sync stalling, `current` is on
+      `FromSlot` after the first restart, and the device later reports `rolled_back`.
+    - A resumed `rollback_failed` log whose flip back keeps failing across three restarts produces exactly one
+      `rollback_failed` result per `at`, and no `rolled_back`.
+    - The pending marker is written in a tick whose retry is not due.
+- **Accepted residuals (RR-150 completed).**
+  - (a) M1(b): if writing back the boot ID and `SwitchedAt` fails with an error (not a stall: a stalled write
+    completes), every restart in that boot gets a full window again. This needs a disk that fails writes, plus
+    repeated watchdog kills; the error is logged each time.
+  - (b) An intent written without fsync that is lost or torn by a power loss while the flip back survived: the log is
+    dropped with no result. The agent stages the release again, and the rollout does not count this failure until its
+    next probation reports.
+  - (c) Clock steps, which corrects m4 above. A forward step within one boot shortens the rest of the window to at
+    least `Probation/5` at the next restart. A backward step of X postpones the rollback by up to X in total across
+    the restarts of that boot; it is not capped at one window. The deferral and retry timers count on the monotonic
+    clock and are not affected.
+- **Correction to M2.** One retry of a kept log blocks the loop for up to four version calls, not two: two in
+  `rebuildProbation`, one in `resumeRequest`, one in `onRequest`. That is at most 40 s, still below `WatchdogSec=60`.
