@@ -140,10 +140,7 @@ bundles_prune_main() {
     trap 'stop=1' INT TERM HUP
     trap '' PIPE
     for batch in "$work"/batch.*; do
-      if ((stop)); then
-        failed=$((count - deleted))
-        break
-      fi
+      ((!stop)) || break
       size="$(wc -l <"$batch")"
       size=$((size + 0))
       # Only Errors is inspected: with Quiet a successful call has no other content to check. A transport failure is a
@@ -165,6 +162,9 @@ bundles_prune_main() {
       fi
       deleted=$((deleted + size))
     done
+    # A signal to the whole process group also kills the running aws call, which looks like a failed batch of its size;
+    # every key not confirmed deleted is failed, so deleted + failed always equals selected.
+    if ((stop)); then failed=$((count - deleted)); fi
   fi
 
   trap '' INT TERM HUP

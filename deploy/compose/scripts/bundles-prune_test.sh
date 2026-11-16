@@ -207,6 +207,33 @@ reset
 FAKE_SLEEP_AT=2 run_signal HUP
 expect "HUP during batch 2: one record" 1 "$(grep -c -- '--failed 501' "$adminlog")"
 
+# The signal goes to the whole process group (as a terminal Ctrl-C does), so the running fake aws dies with main.
+run_group_signal() {
+  local w pid
+  w="$(mktemp -d -p "$work")"
+  set +e
+  # Job control puts the background subshell into its own process group, so the signal cannot reach the test itself.
+  set -m
+  (
+    set -e
+    BUNDLES_PRUNE_WORK="$w"
+    bundles_prune_main --yes
+  ) >"$work/out" 2>"$work/err" &
+  pid=$!
+  until [[ "$(grep -c '^delete' "$calls")" == "${FAKE_SLEEP_AT:?}" ]]; do sleep 0.1; done
+  kill "-$1" -- "-$pid"
+  wait "$pid"
+  rc=$?
+  set +m -e
+}
+
+reset
+FAKE_SLEEP_AT=2 run_group_signal TERM
+expect "group TERM during batch 2: exit 1" 1 "$rc"
+expect "group TERM during batch 2: exactly one record" 1 "$(grep -c -- '--failed' "$adminlog")"
+expect "group TERM during batch 2: deleted + failed == selected" 1 \
+  "$(grep -E -- '--selected 2501 --deleted ([0-9]+) --failed ([0-9]+)' "$adminlog" | sed -E 's/.*--deleted ([0-9]+) --failed ([0-9]+).*/\1 \2/' | awk '{ print ($1 + $2 == 2501) }')"
+
 reset
 run_closed_stdout
 expect "closed stdout: exit 0" 0 "$rc"
