@@ -161,9 +161,9 @@ func TestRunEnrolmentLink(t *testing.T) {
 	if out.String() != want || links.got != "root@example.test" {
 		t.Fatalf("output %q for %q, want %q", out.String(), links.got, want)
 	}
-	links.err = app.ErrNotPlatformAdministrator
+	links.err = app.ErrNoPortalRole
 	out.Reset()
-	if err := runEnrolmentLink(context.Background(), links, "alice@acme.test", &out); !errors.Is(err, app.ErrNotPlatformAdministrator) ||
+	if err := runEnrolmentLink(context.Background(), links, "plain@acme.test", &out); !errors.Is(err, app.ErrNoPortalRole) ||
 		out.Len() != 0 {
 		t.Fatalf("refusal: %v, output %q", err, out.String())
 	}

@@ -47,7 +47,7 @@ entries:
         return bool(request.context.get("is_restored"))
 
   # The password stages run only for an account without a usable password that Paddock created (paddock_managed) or
-  # that paddock-server admin enrolment-link marked (paddock_password_by_link, a platform administrator the operator
+  # that paddock-server admin enrolment-link marked (paddock_password_by_link, an administrator the operator
   # created by hand); an account with a password keeps it (ADR 0053 decision 2). An account synced from the
   # organization's identity source never gets a password here: its link only sets up the passkey (plan M12h-2
   # amendment f point 2 and its addendum). Only paddock-server writes either attribute: no prompt of a Paddock flow
@@ -56,9 +56,11 @@ entries:
     id: password-missing
     identifiers:
       name: paddock-recovery-password-missing
+    # A visitor without a link token is anonymous and has no attributes: the policy refuses quietly instead of raising a
+    # policy exception into the event log on every such visit (the deny stage refuses the visit itself).
     attrs:
       expression: |
-        attrs = request.user.attributes
+        attrs = getattr(request.user, "attributes", None) or {}
         allowed = attrs.get("paddock_managed") is True or attrs.get("paddock_password_by_link") is True
         return allowed and not request.user.has_usable_password()
 

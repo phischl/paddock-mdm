@@ -87,7 +87,9 @@ type fakeAuthentik struct {
 	keys       int
 	// sourceConnections are the user pks of /api/v3/sources/user_connections/all/, one entry per connection.
 	sourceConnections []int
-	// ignoreFilters answers the token and source connection listings unfiltered (an Authentik that ignores the
+	// scimUsers are the user pks of /api/v3/sources/scim_users/, one entry per SCIM source user.
+	scimUsers []int
+	// ignoreFilters answers the token, source connection and SCIM source user listings unfiltered (an Authentik that ignores the
 	// filter).
 	ignoreFilters bool
 }
@@ -501,6 +503,16 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 			if f.ignoreFilters || q.Get("user") == "" || q.Get("user") == strconv.Itoa(owner) {
 				j := f.fixture("get_sources_user_connections_all.json")["results"].([]any)[0].(map[string]any)
 				j["pk"], j["user"] = i+1, owner
+				items = append(items, j)
+			}
+		}
+		return http.StatusOK, f.page(items)
+	case p == "/api/v3/sources/scim_users/" && r.Method == http.MethodGet:
+		var items []map[string]any
+		for _, owner := range f.scimUsers {
+			if f.ignoreFilters || q.Get("user__id") == "" || q.Get("user__id") == strconv.Itoa(owner) {
+				j := f.fixture("get_sources_scim_users.json")["results"].([]any)[0].(map[string]any)
+				j["user"] = owner
 				items = append(items, j)
 			}
 		}

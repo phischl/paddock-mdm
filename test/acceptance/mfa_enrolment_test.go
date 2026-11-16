@@ -1167,6 +1167,90 @@ func TestMF3EnrolmentLinkHandCreatedPlatformAdmin(t *testing.T) {
 	}
 }
 
+// TestMF3EnrolmentLinkHandCreatedOrganizationAdmin is gate MF3 for plan M12h-2 amendment f addendum b (PDK-1055): an
+// organization administrator the operator created by hand in Authentik, without a password and without an
+// authenticator (the first administrator of install §9 step 2), gets a link from paddock-server admin enrolment-link
+// that asks for the password and then sets up the passkey. The event stays in the platform pseudo-organization and
+// names the account's organization.
+func TestMF3EnrolmentLinkHandCreatedOrganizationAdmin(t *testing.T) {
+	ctx := testContext(t, 6*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	org := orgOf(t, login(t, env.Alice))
+	username := "mf3-hand-org-" + uniqueSuffix() + "@acceptance.test"
+	pk, err := ak.CreateUserWithoutPassword(ctx, username, env.RootGroup("acme"), env.RoleGroup("acme", "admins"))
+	t.Cleanup(func() {
+		if pk != 0 {
+			_ = ak.DeleteUser(context.Background(), pk)
+		}
+	})
+	if err != nil {
+		t.Fatalf("create user %s: %v", username, err)
+	}
+
+	since := time.Now().Add(-time.Second)
+	out := runAdmin(t, "enrolment-link", "--username", username)
+	if strings.Contains(out, "upstream identity source") {
+		t.Fatalf("enrolment-link printed %q, want a link that sets the password", out)
+	}
+	var link string
+	for line := range strings.Lines(out) {
+		if l := strings.TrimSpace(line); strings.HasPrefix(l, "https://") {
+			link = l
+		}
+	}
+	if link == "" {
+		t.Fatalf("enrolment-link printed no link: %q", out)
+	}
+	if v, err := ak.UserAttribute(ctx, pk, "paddock_password_by_link"); err != nil || v != true {
+		t.Fatalf("paddock_password_by_link %v, %v, want true before the link is used", v, err)
+	}
+	ev := expectIndexEventSince(t, auditIndex(t), platformOrg, "platform.enrolment_link_created", since)
+	if ev.Params["passkey_only"] != false || ev.Params["username"] != username ||
+		ev.Params["organization_id"] != org.String() {
+		t.Fatalf("platform.enrolment_link_created params %v, want passkey_only false and organization %s for %s",
+			ev.Params, org, username)
+	}
+
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	passkey, err := authflow.NewWebAuthn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := authflow.SetupLink(ctx, client, link, "pw-"+uuid.NewString(), passkey)
+	if want := []string{"ak-stage-prompt", "ak-stage-authenticator-webauthn", "xak-flow-redirect"}; err != nil || !slices.Equal(seen, want) {
+		t.Fatalf("the hand-created organization administrator's link: %v, stages %v, want %v", err, seen, want)
+	}
+	if v, err := ak.UserAttribute(ctx, pk, "paddock_password_by_link"); err != nil || v != "used" {
+		t.Fatalf("paddock_password_by_link %v, %v after the password was set, want used", v, err)
+	}
+
+	// An account in no portal role group gets no link from the host command.
+	plain := "mf3-hand-plain-" + uniqueSuffix() + "@acceptance.test"
+	plainPK, err := ak.CreateUserWithoutPassword(ctx, plain, env.RootGroup("acme"))
+	t.Cleanup(func() {
+		if plainPK != 0 {
+			_ = ak.DeleteUser(context.Background(), plainPK)
+		}
+	})
+	if err != nil {
+		t.Fatalf("create user %s: %v", plain, err)
+	}
+	out, err = stack.Compose(testContext(t, 5*time.Minute), nil, "run", "--rm", "--no-deps", "paddock-worker", "admin",
+		"enrolment-link", "--username", plain)
+	if err == nil || strings.Contains(out, "https://") {
+		t.Fatalf("enrolment-link for an account without a portal role: %q, %v, want a refusal without a link", out, err)
+	}
+	if v, err := ak.UserAttribute(ctx, plainPK, "paddock_password_by_link"); err != nil || v != nil {
+		t.Fatalf("paddock_password_by_link %v, %v on a refused account, want none", v, err)
+	}
+}
+
 // removePasskeys deletes every WebAuthn device of the Authentik user pk and confirms that none is left.
 func removePasskeys(ctx context.Context, t *testing.T, ak *env.Authentik, pk int) {
 	t.Helper()

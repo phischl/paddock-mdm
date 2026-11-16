@@ -42,8 +42,18 @@ role that carries out steps 5 to 8.*
 
 Connect the organization's upstream source (Entra ID, LDAP, SCIM, ...) in Authentik and map its users to be direct
 members of `paddock.<slug>`: `docs/operations/identity-sources.md`, "Connecting an upstream source". Make the first
-organization administrator a member of `paddock.<slug>.admins`. That person signs in to the portal as organization
-administrator; an identity that is also a platform administrator switches roles from the user menu.
+organization administrator a member of `paddock.<slug>.admins`.
+
+An organization's administrators come either from its identity source or from Paddock itself (created by an
+organization administrator in the portal under *Users*). Before an administrator can sign in, they need a one-time
+sign-in setup link to set up their passkey. For the first one, nobody in the organization can create it yet, so the
+operator creates it on the control-plane host:
+`./paddock compose run --rm --no-deps paddock-worker admin enrolment-link --username <name>`. For an administrator
+account that was created by hand in Authentik, this command gives the only setup link that gives a password; an
+account from the identity source keeps the password of its source. Details: `docs/operations/install.md` section 9, step 2.
+
+That person then signs in to the portal as organization administrator; an identity that is also a platform
+administrator switches roles from the user menu.
 
 ## 4. First agent release (Host or Portal, platform administrator)
 

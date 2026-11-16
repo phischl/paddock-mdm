@@ -177,7 +177,7 @@ func TestRecoveryFlowPasswordOnlyForManagedAccounts(t *testing.T) {
 			bound[value(e.Attrs, "target")] = true
 		}
 	}
-	want := `attrs = request.user.attributes
+	want := `attrs = getattr(request.user, "attributes", None) or {}
 allowed = attrs.get("paddock_managed") is True or attrs.get("paddock_password_by_link") is True
 return allowed and not request.user.has_usable_password()
 `
@@ -340,9 +340,10 @@ func TestRecoveryFlowSpendsPasswordByLink(t *testing.T) {
 	t.Fatal("password prompt stage missing")
 }
 
-// TestServiceRoleReadsSourceConnections (plan M12h-2 amendment f addendum point 1): the paddock-service role may list
-// every account's upstream source connections; without the global permission Authentik answers only the role's own,
-// and the host command would let a synced platform administrator's link set a password.
+// TestServiceRoleReadsSourceConnections (plan M12h-2 amendment f addendum point 1, PDK-1055): the paddock-service role
+// may list every account's upstream source connections and SCIM source users; without the global permissions
+// Authentik answers only the role's own connections and refuses the SCIM listing, and the host command would let a
+// synced administrator's link set a password. Both are read-only: the role may not create, change or delete either.
 func TestServiceRoleReadsSourceConnections(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "deploy", "compose", "authentik", "blueprints", "paddock-portal.yaml"))
 	if err != nil {
@@ -361,8 +362,16 @@ func TestServiceRoleReadsSourceConnections(t *testing.T) {
 	}
 	for _, e := range doc.Entries {
 		if e.ID == "service-role" {
-			if !slices.Contains(e.Attrs.Permissions, "authentik_core.view_usersourceconnection") {
-				t.Fatalf("permissions %v lack authentik_core.view_usersourceconnection", e.Attrs.Permissions)
+			for _, want := range []string{"authentik_core.view_usersourceconnection", "authentik_sources_scim.view_scimsourceuser"} {
+				if !slices.Contains(e.Attrs.Permissions, want) {
+					t.Fatalf("permissions %v lack %s", e.Attrs.Permissions, want)
+				}
+			}
+			for _, p := range e.Attrs.Permissions {
+				if (strings.HasSuffix(p, "_usersourceconnection") || strings.HasSuffix(p, "_scimsourceuser")) &&
+					!strings.Contains(p, ".view_") {
+					t.Fatalf("permission %s writes source connections or SCIM source users, want view only", p)
+				}
 			}
 			return
 		}

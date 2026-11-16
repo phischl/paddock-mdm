@@ -104,6 +104,9 @@ func TestLiveAuthentik(t *testing.T) {
 	if connected, err := c.HasSourceConnection(ctx, pk); err != nil || connected {
 		t.Fatalf("HasSourceConnection of a user Paddock created: %v, %v, want false", connected, err)
 	}
+	if u, _, found, err := c.UserByUsername(ctx, username); err != nil || !found || u.PK != pk {
+		t.Fatalf("UserByUsername: %+v, %v, %v, want the user %s", u, found, err, pk)
+	}
 	if err := c.UpdateUser(ctx, pk, "Live Test Renamed", username); err != nil {
 		t.Fatalf("UpdateUser: %v", err)
 	}
