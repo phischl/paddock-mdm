@@ -136,3 +136,13 @@ decision:
 Consequences: RR-148 also names short-lived changes within one drift interval, the staged-guard, conversion and
 re-sync windows, and that changes during a suspension are reported only as the suspension. An unwritable baseline
 delays staging, supervisor upgrades and update results by at most 15 minutes before they proceed.
+
+### Addendum 2026-11-16 (round 2, main and user decision §152)
+
+The bounds of point 1 hold per **blocked object** (the baseline, the slots, each package, each agent-written file,
+each unit), not per cause, so alternating causes no longer restart them. They are kept in observed time while the
+agent runs. A gap between passes counts at most twice the check's interval, and that interval is capped at 1 hour
+whatever `drift_interval_s` says. A pass runs at every agent start. The suspension state lives in the agent's
+`state.json`, so restarts, a held lock or an unwritable baseline no longer reset it. Root who edits the agent state
+resets it, the same residual as the joint reset in point 5. Plan M5a R15 holds the detail.
+
