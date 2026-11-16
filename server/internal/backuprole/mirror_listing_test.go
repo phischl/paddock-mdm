@@ -24,8 +24,8 @@ type slowListS3 struct {
 	objects map[string]string
 	pages   int
 	delay   time.Duration
-	// clock, when set, replaces the real wait: each page steps it by delay, so the watchdog sees the listing take
-	// pages*delay without the test depending on how fast the host schedules it.
+	// clock, when set, is stepped by delay after each page, so the watchdog measures the listing as pages*delay on
+	// its virtual clock while the real pacing keeps its ticker running between pages.
 	clock *stepClock
 }
 
@@ -96,8 +96,12 @@ func (s *slowListS3) ListSizes(ctx context.Context, prefix string) (map[string]i
 func (s *slowListS3) ListSizesPaged(ctx context.Context, prefix string, page func()) (map[string]int64, error) {
 	for range s.pages {
 		if s.clock != nil {
-			if err := ctx.Err(); err != nil {
-				return nil, err
+			// The real wait stays so the watchdog's own ticker runs mid-listing: without it a missing progress
+			// tick could not be seen. Load only makes this slower, the stall window itself is virtual.
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(s.delay):
 			}
 			page()
 			s.clock.Advance(s.delay)
@@ -221,7 +225,7 @@ func TestSlowListingReachesDeletions(t *testing.T) {
 		"openbao/20261105T060000Z.snap.enc": "a", "openbao/20261105T070000Z.snap.enc": "b"})
 	set := "site/" + backupset.SetRoot + "/"
 	s3 := &slowListS3{objects: map[string]string{set + "openbao/20200101T000000Z.snap.enc": "old",
-		set + "openbao/20200102T000000Z.snap.enc": "old"}, pages: 8, delay: 50 * time.Millisecond,
+		set + "openbao/20200102T000000Z.snap.enc": "old"}, pages: 12, delay: 50 * time.Millisecond,
 		clock: clock}
 	rec := f.addTarget(t, backupset.TypeS3, NewS3Target(s3, "site"))
 	if _, err := f.engine.mirrorTarget(context.Background(), repo, idx, rec, testRetention(time.Now())); err != nil {
