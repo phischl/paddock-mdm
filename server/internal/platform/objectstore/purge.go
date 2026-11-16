@@ -66,6 +66,8 @@ func (p Purge) result(prefix string) (Purge, error) {
 
 // yields reports whether the purge stops after the page it just finished: only once until has passed and the call
 // has deleted something, so a call that meets only retained entries lists to the end and the step terminates.
+// It compares until with the wall clock: the caller derives until from its own clock (injectable in its tests), and the
+// store has none; with a real clock both agree, and the tests here pass until in the past or zero.
 func (p Purge) yields(until time.Time) bool {
 	return !until.IsZero() && p.Deleted > 0 && !time.Now().Before(until)
 }
@@ -144,15 +146,14 @@ func (s *Store) deleteBatch(ctx context.Context, ids []types.ObjectIdentifier, o
 	if len(ids) == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, PurgeRequestTimeout)
-	defer cancel()
-	res, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{Bucket: &s.bucket,
+	rctx, cancel := context.WithTimeout(ctx, PurgeRequestTimeout)
+	res, err := s.client.DeleteObjects(rctx, &s3.DeleteObjectsInput{Bucket: &s.bucket,
 		Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)}})
+	cancel()
 	if err != nil {
 		return err
 	}
 	out.Deleted += len(ids) - len(res.Errors)
-	var failed error
 	for _, e := range res.Errors {
 		code, msg := aws.ToString(e.Code), aws.ToString(e.Message)
 		retained := retainedKeyError(code, msg)
@@ -172,17 +173,18 @@ func (s *Store) deleteBatch(ctx context.Context, ids []types.ObjectIdentifier, o
 			out.Retained = append(out.Retained, aws.ToString(e.Key))
 			continue
 		}
-		if failed == nil {
-			failed = fmt.Errorf("objectstore: delete %s: %s: %s", aws.ToString(e.Key), code, msg)
-		}
+		// The call fails anyway: probing the page's other keys would only cost requests before the error is reported.
+		return fmt.Errorf("objectstore: delete %s: %s: %s", aws.ToString(e.Key), code, msg)
 	}
-	return failed
+	return nil
 }
 
 // deleteOne deletes one key or version whose deletion DeleteObjects refused with AccessDenied, and reports whether it
 // is gone now or retained by Object Lock; any other refusal is retained false without an error, and the caller reports
 // the original one.
 func (s *Store) deleteOne(ctx context.Context, key, version *string) (deleted, retained bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, PurgeRequestTimeout)
+	defer cancel()
 	_, err = s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: key, VersionId: version})
 	switch {
 	case err == nil:

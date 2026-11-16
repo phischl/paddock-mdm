@@ -35,6 +35,8 @@ type fakeVersionedStore struct {
 	code          string
 	message       string
 	singleMessage string
+	singleDelay   time.Duration
+	pageSize      int // 0: 2
 	gone          map[string]bool
 	deleted       []string
 	lists         int
@@ -63,7 +65,7 @@ func (f *fakeVersionedStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if f.gone[k] || (marker != "" && k <= marker) {
 				continue
 			}
-			if len(page) == 2 {
+			if len(page) == max(f.pageSize, 2) {
 				truncated = true
 				break
 			}
@@ -115,6 +117,7 @@ func (f *fakeVersionedStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete:
 		key := strings.TrimPrefix(r.URL.Path, "/b/")
 		f.singles++
+		time.Sleep(f.singleDelay)
 		if f.refuse[key] {
 			w.WriteHeader(http.StatusForbidden)
 			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>%s</Code><Message>%s</Message></Error>`, f.code, f.singleMessage)
@@ -187,6 +190,46 @@ func TestPurgeVersionsRustFSAccessDenied(t *testing.T) {
 				t.Fatalf("retained %v", p.Retained)
 			}
 		})
+	}
+}
+
+// TestPurgeVersionsSingleDeleteTimeouts (PDK-1087 fix round 1): every single delete that classifies a per-key
+// AccessDenied gets its own PurgeRequestTimeout, so a page of locked versions whose single deletes together take longer
+// than one timeout still ends with every version retained, not with a deadline error. This test takes about 32 s.
+func TestPurgeVersionsSingleDeleteTimeouts(t *testing.T) {
+	keys := make([]string, 16)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("org/o/devices/d/luks-header/%02d", i)
+	}
+	f := newFakeVersioned(keys...)
+	for _, k := range keys {
+		f.refuse[k] = true
+	}
+	f.code, f.message, f.singleMessage = "AccessDenied", "Access Denied.", "Object is WORM protected and cannot be overwritten"
+	f.pageSize, f.singleDelay = len(keys), objectstore.PurgeRequestTimeout/time.Duration(len(keys))+time.Second/8
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	p, err := objectstore.New(srv.URL, "k", "s", "b").PurgeVersions(context.Background(), "org/o/", time.Time{})
+	if !errors.Is(err, objectstore.ErrRetained) || len(p.Retained) != len(keys) || !p.Done || f.singles != len(keys) {
+		t.Fatalf("purge = %d retained, done %v, err = %v after %d single deletes; want all %d retained", len(p.Retained), p.Done,
+			err, f.singles, len(keys))
+	}
+}
+
+// TestPurgeVersionsStopsAtFirstDenied (PDK-1087 fix round 1): a plain AccessDenied that the single delete confirms
+// ends the call at that key; the page's other refused keys are not probed.
+func TestPurgeVersionsStopsAtFirstDenied(t *testing.T) {
+	f := newFakeVersioned("org/o/a", "org/o/b", "org/o/c", "org/o/d")
+	f.pageSize = 4
+	for _, k := range f.versions {
+		f.refuse[k] = true
+	}
+	f.code, f.message, f.singleMessage = "AccessDenied", "Access Denied.", "Access Denied."
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	p, err := objectstore.New(srv.URL, "k", "s", "b").PurgeVersions(context.Background(), "org/o/", time.Time{})
+	if err == nil || errors.Is(err, objectstore.ErrRetained) || len(p.Retained) != 0 || f.singles != 1 {
+		t.Fatalf("purge = %+v, err = %v after %d single deletes; want the error after the first", p, err, f.singles)
 	}
 }
 
