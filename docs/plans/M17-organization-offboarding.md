@@ -2439,3 +2439,71 @@ Record in the result documents:
 - `bp:` and `enr:` counts of the deleting organization right after its step `devices`, which MUST be 0 for handed
   devices;
 - the step `valkey`'s count.
+
+## Addendum 2026-11-16 to amendment t point 3 — `./paddock bundles prune` is audited (main §96)
+
+Status: Accepted (main §96; this addendum only implements main's condition).
+
+Main's decision §96 overrides amendment t point 3.1's sentence "It is not an audited action". The command deletes
+data, so a deleting run records one audit event in the platform pseudo-organization. Everything else in point 3.1
+stays: the selection, the `--keep` rules, the 10-minute guard, the batching and the dry run.
+
+1. **Audit code.** `platform.bundle_versions_pruned` is added to the closed registry
+   (`server/internal/domain/audit/codes.go`) as `audit.CodePlatformBundleVersionsPruned`, `Emitted: true`.
+   - Description: "An operator ran ./paddock bundles prune --yes on the control-plane host: superseded bundle versions
+     were deleted from the bundles bucket, keeping the newest keep per device (actor: system, platform
+     pseudo-organization)."
+   - Params: `keep`, `listed`, `devices`, `selected`, `deleted`, `failed` (all integers).
+   - Outcomes: `success`, `failure`.
+   - The portal message key is `audit.platform.bundle_versions_pruned` in `server/web/src/locales/en.json` and
+     `de.json`. `make gen` regenerates the generated registry outputs.
+2. **Admin subcommand.** `paddock-server admin record-bundle-prune --keep K --listed M --devices D --selected N
+   --deleted X --failed F`.
+   - Every flag is required and is a decimal integer.
+   - Usage error (exit 2) unless `2 ≤ K ≤ 1000`, `0 ≤ M, D, N, X, F ≤ 1 000 000 000`, `N ≤ M` and `X + F ≤ N`.
+   - It calls the new use case `func (a *Admin) RecordBundlePrune(ctx context.Context, p BundlePrune) error` with
+     `type BundlePrune struct{ Keep, Listed, Devices, Selected, Deleted, Failed int64 }`. The use case runs
+     `a.runner.RunTx(system(ctx, uuid.Nil), ScopePlatform, SpecBundleVersionsPruned, fn)`, with
+     `SpecBundleVersionsPruned = ActionSpec{Code: audit.CodePlatformBundleVersionsPruned, Actor: &adminActor}`. `fn`
+     sets the six params and writes nothing else.
+   - It returns `ErrBundlePruneIncomplete` ("the prune ended with failed deletions") when `Failed > 0`, so the runner
+     records outcome `failure` with the same params and the command exits 1. Otherwise the outcome is `success`.
+   - `paddock-server admin record-bundle-prune --check` (no other flag) opens both pools, pings the platform pool,
+     records nothing and exits 0. It exists so the host command can refuse to delete while the event could not be
+     recorded.
+3. **Host command flow** (`bundles-prune.sh`, run by `./paddock bundles prune`). The script runs the subcommand as
+   `./paddock agent-rollout` does: `docker compose run --rm --no-deps paddock-api admin …`, through the `compose`
+   helper of `lib.sh`.
+   - **Dry run (no `--yes`): not audited.** It deletes nothing and only lists keys, like the read-only commands
+     (`backup status`, `upgrade-check`), none of which is audited.
+   - `--yes`, before the first deletion: `record-bundle-prune --check`. If it fails, the script exits 1 with "the audit
+     log cannot be written; nothing was deleted".
+   - `--yes` with `selected = 0`: no deletion. The event is still recorded with `deleted 0`, so every confirmed run is
+     on record.
+   - After the last batch, or after the batch that returned errors: `record-bundle-prune` with the run's counts.
+     `failed` is the number of keys reported in `Errors`, and later batches are not sent.
+   - If recording fails after deleting, the script exits 1 and prints the counts and "the audit event could not be
+     recorded". The counts on stdout are the only record of that run. RR-146 names this residual gap.
+4. **Identity.** The event records the fixed system actor `paddock-server admin`, the same actor as
+   `bump-bundle-seq`, `raise-bundle-seq` and the rollout commands (RR-90).
+   - The subcommand has **no** flag for an actor, user or reason, and the use case takes none. Nothing typed in the
+     shell can put a person's name into the audit log.
+   - The person is established by the host's own access control: whoever can run `docker compose run` on the control
+     plane, from the operating system's login and sudo records.
+   - This is the same boundary as RR-90, and the runbook says so.
+   - A free-text `--by` was rejected: it would be self-asserted, so it proves nothing and makes a false name possible.
+5. **Docs.**
+   - `docs/operations/capacity.md` says the command is audited (`platform.bundle_versions_pruned`) and the dry run is
+     not.
+   - RR-146's mitigation names the event and its system actor. Its ISMS column adds: tie host access to persons (as
+     for RR-90), and keep the command's output if the event could not be recorded.
+6. **Ticket.** PDK-1099 gains the server scope: the code, the subcommand, the use case and their tests. It now has
+   risk high: it adds an audit code and an admin entry point. Its files grow by:
+   - `server/internal/domain/audit/codes.go`;
+   - `server/internal/app/admin.go`;
+   - `server/internal/app/admin_integration_test.go`;
+   - `server/cmd/paddock-server/admin.go` and its parse test;
+   - `server/web/src/locales/en.json` and `server/web/src/locales/de.json`;
+   - the generated registry outputs.
+
+   PDK-1097 and PDK-1098 touch none of these files. PDK-1079d touches `cmd/paddock-server/worker.go`, not `admin.go`.
