@@ -19,6 +19,8 @@ type probation struct {
 	FromSlot    string    `json:"from_slot"`
 	ToSlot      string    `json:"to_slot"`
 	SwitchedAt  time.Time `json:"switched_at"`
+	// BootID is the kernel boot ID at the switch: a resume in the same boot keeps the window of SwitchedAt.
+	BootID string `json:"boot_id,omitempty"`
 	// RollingBack marks a rollback whose flip to FromSlot happened but is not known to be durable; its result waits.
 	RollingBack bool `json:"rolling_back,omitempty"`
 	// RollbackPending marks a rollback whose flip back failed; the outcome is rollback_failed, the log stays and the
@@ -188,8 +190,15 @@ func (s *Supervisor) resumeProbation() {
 	p.RollingBack = false
 	// The previous supervisor may have seen the switch's sync fail; only a confirmed flip may end in "updated".
 	p.unsynced = true
-	p.SwitchedAt = s.cfg.Now()
-	p.deadline = p.SwitchedAt.Add(s.cfg.Probation)
+	// Within one boot the window stays the one that started at the switch, so watchdog restarts during a stalled rollback
+	// pass postpone it by at most the floor, which leaves a healthy agent that the restart killed time to check in again.
+	// After a reboot, or with a log that names no boot, the network may need minutes: the window starts anew (plan M2b
+	// amendment 2026-11-16). The deadline counts from Now, so a clock set back cannot stretch it past one window.
+	remaining := min(max(p.SwitchedAt.Add(s.cfg.Probation).Sub(s.cfg.Now()), s.cfg.Probation/5), s.cfg.Probation)
+	if p.BootID == "" || p.BootID != s.cfg.BootID {
+		remaining = s.cfg.Probation
+	}
+	p.deadline = s.cfg.Now().Add(remaining)
 	s.probation = &p
 	// Rolling back here would start the old agent before Run starts the current one; checkProbation does it.
 	p.markKept = s.forgetCheckin() != nil
@@ -215,7 +224,8 @@ func (s *Supervisor) rebuildProbation() (*probation, string) {
 	if version == versionTimedOut || fromVersion == versionTimedOut {
 		return nil, versionTimedOut
 	}
-	p := &probation{Version: version, FromVersion: fromVersion, FromSlot: from, ToSlot: to, SwitchedAt: s.cfg.Now(), Rebuilt: true}
+	p := &probation{Version: version, FromVersion: fromVersion, FromSlot: from, ToSlot: to, SwitchedAt: s.cfg.Now(), Rebuilt: true,
+		BootID: s.cfg.BootID}
 	var res probation
 	if data, err := os.ReadFile(s.cfg.Result); err != nil || json.Unmarshal(data, &res) != nil || res.Version != version {
 		res = probation{}

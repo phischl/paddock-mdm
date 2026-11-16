@@ -57,6 +57,8 @@ type Config struct {
 	SyncFile     func(*os.File) error   // syncs a state file before its rename and its directory after; nil is fsync (tests inject failures)
 	// VersionTimeout bounds a `paddockd version` call; 0 is 10 s (tests inject a short one for a stalled call).
 	VersionTimeout time.Duration
+	// BootID is the kernel's boot ID, recorded at a switch; "" is read from /proc/sys/kernel/random/boot_id (tests inject one).
+	BootID string
 }
 
 // versionTimedOut is what version returns for a call that hit VersionTimeout. It cannot be an agent's output, which
@@ -113,6 +115,10 @@ func New(cfg Config) *Supervisor {
 	}
 	if cfg.SyncFile == nil {
 		cfg.SyncFile = syncFile
+	}
+	if cfg.BootID == "" {
+		id, _ := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		cfg.BootID = strings.TrimSpace(string(id))
 	}
 	return &Supervisor{cfg: cfg, exited: make(chan error, 1), tested: make(chan selfTest, 1), backoff: time.Second}
 }
@@ -310,7 +316,8 @@ func (s *Supervisor) onSelfTest(r selfTest) {
 		s.finish(r.version, from, outcomeSelfTestFailed)
 		return
 	}
-	p := &probation{Version: r.version, FromVersion: from, FromSlot: s.activeSlot(), ToSlot: r.slot, SwitchedAt: s.cfg.Now()}
+	p := &probation{Version: r.version, FromVersion: from, FromSlot: s.activeSlot(), ToSlot: r.slot, SwitchedAt: s.cfg.Now(),
+		BootID: s.cfg.BootID}
 	err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile)
 	if err == nil {
 		err = flip(s.cfg.Slots, r.slot, s.cfg.SyncDir)
