@@ -248,7 +248,7 @@ services:
     read_only: true
     pids_limit: 256
     # Tunable in .env (RR-120, docs/operations/capacity.md "Memory limits").
-    mem_limit: ${PADDOCK_VALKEY_MEM_LIMIT:-512m}
+    mem_limit: ${PADDOCK_VALKEY_MEM_LIMIT:-1g}
     # One ACL user per role (plan M12h §14): the entrypoint renders /run/valkey/users.acl with hashed passwords.
     entrypoint: ["/usr/local/bin/paddock-entrypoint.sh"]
     command: ["valkey-server", "/etc/valkey/valkey.conf"]

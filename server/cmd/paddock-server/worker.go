@@ -279,7 +279,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	wc := newWorkerConsumers(mqCfg, offboardingConnected)
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
 	deviceCommands := app.NewDeviceCommands(runner, pool)
-	offboarded := app.NewOffboardedDevices(runner, platformPool, cache)
+	offboarded := app.NewOffboardedDevices(runner, platformPool, cache).WithCacheSync(devicecache.NewSyncer(cache))
 	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache).WithOffboardedDevices(offboarded)
 	commands := worker.NewCommands(deviceCommands, app.NewRevocationReports(runner, pool), pool, platformPool, cache, signer)
 	diagnostics := worker.NewDiagnostics(app.NewDiagnostics(runner, pool, escrowObjects, retentionDay), pool, platformPool)

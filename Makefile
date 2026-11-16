@@ -137,6 +137,8 @@ test-selfservice: ## Unit tests of the self-service app (python3 -m unittest, no
 lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
 	shellcheck -s sh deploy/compose/valkey/entrypoint.sh
+	shellcheck -s bash deploy/compose/valkey/entrypoint_test.sh deploy/compose/scripts/valkey-headroom.sh \
+		deploy/compose/scripts/valkey-headroom_test.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
 	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
 	shellcheck -s bash test/system-test-run.sh test/system-test-run_test.sh
@@ -276,6 +278,8 @@ test: ## Unit and integration tests (requires Docker)
 	go test -count=1 -run '^TestSuitesComplete$$' ./test/system/
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
+	bash $(COMPOSE_DIR)/scripts/valkey-headroom_test.sh
+	VALKEY_IMAGE=$(VALKEY_IMAGE) bash $(COMPOSE_DIR)/valkey/entrypoint_test.sh
 	bash $(COMPOSE_DIR)/scripts/wait-healthy_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
 	bash $(COMPOSE_DIR)/scripts/restore_test.sh

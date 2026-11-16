@@ -83,6 +83,7 @@ shipped=(
   scripts/rustfs-audit-bootstrap.sh scripts/fleet-bootstrap.sh scripts/wait-healthy.sh scripts/postgres-unsealer-role.sh
   scripts/upgrade-check.sh scripts/upgrade.sh scripts/rollback.sh scripts/restore.sh
   scripts/openbao-restore.sh scripts/legacy-alpha8.sh scripts/bundle-seq.sh scripts/offboard-users-check.sh
+  scripts/valkey-headroom.sh
   scripts/rabbitmq-definitions.sh scripts/authentik-apply-blueprints.sh
 )
 for f in "$src"/authentik/blueprints/*.yaml; do shipped+=("authentik/blueprints/$(basename "$f")"); done
