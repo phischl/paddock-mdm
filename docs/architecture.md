@@ -1628,7 +1628,7 @@ types (N5). **Mutual watch:** an osquery policy in Fleet checks that a process n
 the executable every running agent process runs against the published agent artifacts (ADR 0056); the agent checks that `fleetd` runs.
 Disabling one is reported by the other. A check-in does not prove
 that the genuine agent sends it; a foreign program that checks in while the agent is stopped is reported through
-`paddock_agent_running` (plan M5a decision 8, ADR 0056 amendment b). *Planned, not yet implemented (ADR 0056):* the agent checks the
+`paddock_agent_running` (plan M5a decision 8, ADR 0056 amendment b), except the cases RR-149 lists. *Planned, not yet implemented (ADR 0056):* the agent checks the
 `fleet-osquery` binaries against dpkg's checksums (PDK-1122a).
 
 > **Amendment 2026-11-02 (M11, ADR 0033):** `bundle.applied` gains `mode` (`enforce` or `report_only`) and `resources`, one

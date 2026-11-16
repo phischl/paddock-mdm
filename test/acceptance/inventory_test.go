@@ -545,13 +545,14 @@ func TestInventoryAgentAbsentWhileCheckingIn(t *testing.T) {
 			time.Sleep(10 * time.Second)
 		}
 	}
-	result := func(name string) (passing, since bool) {
-		err := db.QueryRow(testContext(t, time.Minute), `SELECT coalesce(bool_or(passing), true), coalesce(bool_or(failing_since IS NOT NULL), false)
-			FROM inventory_policy_result WHERE device_id = $1 AND policy_key = 'paddock_agent_running'`, devices[name].DeviceID).Scan(&passing, &since)
-		if err != nil {
+	passingCleared := func(name string) bool {
+		var n int
+		if err := db.QueryRow(testContext(t, time.Minute), `SELECT count(*) FROM inventory_policy_result
+			WHERE device_id = $1 AND policy_key = 'paddock_agent_running' AND passing AND failing_since IS NULL`,
+			devices[name].DeviceID).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
-		return passing, since
+		return n == 1
 	}
 	failingWithStart := func(name string) bool {
 		var n int
@@ -567,8 +568,7 @@ func TestInventoryAgentAbsentWhileCheckingIn(t *testing.T) {
 	})
 	hosts["restart"].AgentNotRunning = false
 	waitFor("restart passes again with failing_since cleared", func() bool {
-		passing, since := result("restart")
-		return passing && !since
+		return passingCleared("restart")
 	})
 	if _, err := db.Exec(testContext(t, time.Minute), `UPDATE inventory_policy_result SET failing_since = failing_since - interval '16 minutes'
 		WHERE device_id = $1 AND policy_key = 'paddock_agent_running'`, devices["impostor"].DeviceID); err != nil {

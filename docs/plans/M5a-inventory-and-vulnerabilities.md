@@ -1250,8 +1250,10 @@ at least one of two conditions:
 Consequences of (b), each binding:
 
 - **Duration and evaluations.** Both times are Fleet's clock, so device and server clocks play no part. `E - F >= 15
-  min` with `E > F` means at least two distinct failing evaluations, 15 minutes apart, with no stored passing
-  evaluation between them (a stored pass clears `failing_since`). With the production interval of 10 min it takes the
+  min` with `E > F` normally means at least two distinct failing evaluations, 15 minutes apart, with no stored passing
+  evaluation between them (a stored pass clears `failing_since`); Fleet may advance `policy_updated_at` on a partial
+  result batch without evaluating this policy again, so it is not guaranteed (PDK-1122c external review, L2; RR-149).
+  With the production interval of 10 min it takes the
   third failing evaluation; the report comes at most about 40 minutes after the stop (first failing evaluation within
   10 min, third 20 min later, sync within 5 min, plus Fleet's distributed-query delay).
 - **No check-in condition in (b).** (b) does not look at check-ins. A device that stops checking in is reported by (a)

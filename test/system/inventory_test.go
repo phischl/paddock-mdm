@@ -35,9 +35,13 @@ func TestInventoryGates(t *testing.T) {
 			t.FailNow()
 		}
 		t.Run("F4 old package version", func(t *testing.T) { d.Bind(t); gateF4(t, d) })
-		t.Run("F2 mutual watch", func(t *testing.T) { d.Bind(t); gateF2(t, d) })
+		f2 := t.Run("F2 mutual watch", func(t *testing.T) { d.Bind(t); gateF2(t, d) })
 		t.Run("F5 agent binary policy", func(t *testing.T) { d.Bind(t); gateF5(t, d) })
-		t.Run("F6 agent absent while checking in", func(t *testing.T) { d.Bind(t); gateF6(t, d) })
+		f6 := t.Run("F6 agent absent while checking in", func(t *testing.T) { d.Bind(t); gateF6(t, d) })
+		// A failed F2 or F6 already fails the gate; their missing event would only repeat it as a count error.
+		if !f2 || !f6 {
+			return
+		}
 		if n := len(s.Events(t, agentNotRunningCode, d.ID)); n != 2 {
 			t.Errorf("%s: %d %s events over the inventory gates, want exactly 2 (F2 and F6)", d.Name, n, agentNotRunningCode)
 		}
@@ -536,10 +540,11 @@ func gateF6(t *testing.T, d *Device) {
 			restore()
 		}
 	})
-	started := time.Now().UTC()
 	d.MustRoot("mkdir -p " + dir + " && cp /opt/paddock/agent/current/paddockd " + dir + "/" + unit +
-		" && systemctl stop paddock-supervisor && ! pgrep -x paddockd" +
-		" && systemd-run --unit=" + unit + " --property=RuntimeDirectory=paddock " + dir + "/" + unit + " run")
+		" && systemctl stop paddock-supervisor && ! pgrep -x paddockd")
+	// Taken after the stop: a check-in by the genuine agent cannot count as the impostor's.
+	started := time.Now().UTC()
+	d.MustRoot("systemd-run --unit=" + unit + " --property=RuntimeDirectory=paddock " + dir + "/" + unit + " run")
 	contact := fmt.Sprintf(`SELECT count(*) FROM device_status WHERE device_id = '%s' AND last_contact_at > '%s'`, d.ID, started.Format(time.RFC3339Nano))
 	Until(t, d.Name+": the impostor checks in", 5*time.Minute, 15*time.Second, func() {
 		d.Must("sudo pkill -HUP -x " + unit + " || true")
