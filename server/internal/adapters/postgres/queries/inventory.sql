@@ -62,8 +62,12 @@ ON CONFLICT (device_id, policy_key) DO UPDATE
       updated_at = CASE WHEN inventory_policy_result.passing = EXCLUDED.passing THEN inventory_policy_result.updated_at ELSE now() END,
       alerted_at = CASE WHEN EXCLUDED.passing THEN NULL ELSE inventory_policy_result.alerted_at END;
 
+-- A reported result whose policy the host has not answered since its query changed keeps its row and mark, so that the
+-- same failure is not reported again (plan M5a amendment 2026-11-16, review round 1, A7).
 -- name: DeleteMissingPolicyResults :exec
-DELETE FROM inventory_policy_result WHERE device_id = @device_id AND NOT (policy_key = ANY(@keys::text[]));
+DELETE FROM inventory_policy_result
+WHERE device_id = @device_id AND NOT (policy_key = ANY(@keys::text[]))
+  AND NOT (policy_key = ANY(@unanswered::text[]) AND alerted_at IS NOT NULL);
 
 -- Active devices whose agent-running policy fails, not yet reported, and that have not checked in since before (plan
 -- M5a decision 8).

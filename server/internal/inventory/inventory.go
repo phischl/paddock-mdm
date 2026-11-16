@@ -21,8 +21,8 @@ var policyFiles embed.FS
 // PolicyAgentRunning is the key of the mutual watch policy: paddockd runs.
 const PolicyAgentRunning = "paddock_agent_running"
 
-// PolicyAgentBinaryKnown is the key of the agent binary hash policy (plan M5a amendment 2026-11-16, ADR 0056 part
-// A): a running paddockd has the hash of a published agent release.
+// PolicyAgentBinaryKnown is the key of the agent binary hash policy (plan M5a amendments 2026-11-16, ADR 0056 part
+// A): every running Paddock agent process runs a published agent release.
 const PolicyAgentBinaryKnown = "paddock_agent_binary_known"
 
 // isAgentHash reports whether h has the form of a published agent artifact hash, ^[0-9a-f]{64}$; only this form is
@@ -55,15 +55,18 @@ func KnownAgentHashes(hashes []string) []string {
 	return slices.Compact(out)
 }
 
-// AgentBinaryPolicy builds the policy PolicyAgentBinaryKnown from the published agent artifact hashes: it fails
-// only while a paddockd process runs from an A/B slot with its binary on disk and that binary's SHA-256 is none of
-// the hashes. No paddockd running passes (that is paddock_agent_running's case), and so does a process whose binary
-// was replaced by a rename (on_disk = 0; RR-149). With no valid hash the policy is SELECT 1;, which always passes.
+// AgentBinaryPolicy builds the policy PolicyAgentBinaryKnown from the published agent artifact hashes (plan M5a
+// amendment 2026-11-16, review round 1, A8): it fails while a judged process runs an executable whose SHA-256 is none
+// of the hashes. Judged is every process named paddockd, running a file named paddockd or a file below
+// /opt/paddock/agent/, or started by paddock-supervisor (other than before its exec). The hash is that of
+// /proc/<pid>/exe, the executable the process actually runs, with its path as fallback for a process that exits during
+// the evaluation. No judged process passes (that is paddock_agent_running's case). With no valid hash the policy is
+// SELECT 1;, which always passes.
 func AgentBinaryPolicy(hashes []string) ports.PolicyDefinition {
 	def := ports.PolicyDefinition{
 		Key: PolicyAgentBinaryKnown,
-		Description: "The running Paddock agent's binary matches a published agent release (plan M5a amendment " +
-			"2026-11-16, ADR 0056). The policy returns pass or fail only, never a hash.",
+		Description: "A running Paddock agent process runs a published agent release (plan M5a amendments 2026-11-16, " +
+			"ADR 0056). The policy returns pass or fail only, never a hash.",
 		Query: "SELECT 1;",
 	}
 	known := KnownAgentHashes(hashes)
@@ -71,9 +74,14 @@ func AgentBinaryPolicy(hashes []string) ports.PolicyDefinition {
 		return def
 	}
 	def.Query = "SELECT 1 WHERE NOT EXISTS (\n" +
-		"  SELECT 1 FROM processes p LEFT JOIN hash h ON h.path = p.path\n" +
-		"  WHERE p.name = 'paddockd' AND p.path LIKE '/opt/paddock/agent/%' AND p.on_disk = 1\n" +
-		"    AND (h.sha256 IS NULL OR h.sha256 NOT IN ('" + strings.Join(known, "', '") + "')));"
+		"  SELECT 1 FROM processes p\n" +
+		"  WHERE p.path != ''\n" +
+		"    AND (p.name = 'paddockd' OR p.path LIKE '%/paddockd' OR p.path LIKE '%/paddockd (deleted)'\n" +
+		"      OR p.path LIKE '/opt/paddock/agent/%'\n" +
+		"      OR (p.parent IN (SELECT pid FROM processes WHERE path = '/usr/sbin/paddock-supervisor')\n" +
+		"        AND p.path != '/usr/sbin/paddock-supervisor'))\n" +
+		"    AND COALESCE((SELECT sha256 FROM hash WHERE path = '/proc/' || p.pid || '/exe'),\n" +
+		"      (SELECT sha256 FROM hash WHERE path = p.path), '') NOT IN ('" + strings.Join(known, "', '") + "'));"
 	return def
 }
 

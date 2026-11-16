@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +29,8 @@ type FleetHost struct {
 	// policy (paddock_agent_binary_known) fails unless its query lists this hash, as osquery would answer it.
 	AgentBinarySHA256 string
 	nodeKey           string
+	mu                sync.Mutex
+	listedAt          map[string]time.Time
 }
 
 // FleetHardware are the asset facts of a simulated host as osquery reports them.
@@ -84,6 +88,7 @@ func (h *FleetHost) Answer(ctx context.Context) (int, error) {
 	}
 	results, statuses := map[string]any{}, map[string]int{}
 	for name, query := range read.Queries {
+		h.recordListed(query, time.Now())
 		statuses[name] = 0
 		results[name] = h.rows(name, query)
 	}
@@ -112,7 +117,36 @@ func (h *FleetHost) WaitAnswered(ctx context.Context) error {
 
 // agentBinaryPolicyMarker identifies the agent binary policy by its query (inventory.AgentBinaryPolicy); Fleet names
 // policy queries by their ID only.
-const agentBinaryPolicyMarker = "FROM processes p LEFT JOIN hash"
+const agentBinaryPolicyMarker = "SELECT sha256 FROM hash WHERE path = '/proc/'"
+
+// listedHash is a hash in the agent binary policy's list.
+var listedHash = regexp.MustCompile(`'([0-9a-f]{64})'`)
+
+// recordListed notes at as the first time a received agent binary policy listed each of its hashes.
+func (h *FleetHost) recordListed(sql string, at time.Time) {
+	if !strings.Contains(sql, agentBinaryPolicyMarker) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, m := range listedHash.FindAllStringSubmatch(sql, -1) {
+		if _, ok := h.listedAt[m[1]]; !ok {
+			if h.listedAt == nil {
+				h.listedAt = map[string]time.Time{}
+			}
+			h.listedAt[m[1]] = at
+		}
+	}
+}
+
+// BinaryPolicyListedAt reports when Answer first received an agent binary policy that lists hash (plan M5a amendment
+// 2026-11-16, review round 1, A11): Fleet held a definition with the hash no later than then.
+func (h *FleetHost) BinaryPolicyListedAt(hash string) (time.Time, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	at, ok := h.listedAt[hash]
+	return at, ok
+}
 
 func (h *FleetHost) rows(query, sql string) []map[string]string {
 	switch {

@@ -1295,7 +1295,7 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperAgentBinaryChanged: {
 		Code: CodeDeviceTamperAgentBinaryChanged, Emitted: true,
-		Description: "fleetd reports that a Paddock agent running from /opt/paddock/agent/ has a binary that matches no published agent release: it was replaced or modified on the device (actor: system; the inventory system's policy paddock_agent_binary_known). evaluated_at is when the host last evaluated its policies; agent_version is the version the agent last reported, which a replaced agent may forge; known_hashes is the number of published hashes the policy accepts. A genuine older published release passes (RR-149).",
+		Description: "fleetd reports a running Paddock agent process whose executable matches no published agent release: the agent binary, the place it runs from, or the process the supervisor started was replaced or modified on the device (actor: system; the inventory system's policy paddock_agent_binary_known). evaluated_at is when the host last evaluated its policies; agent_version is the version the agent last reported, which a replaced agent may forge; known_hashes is the number of published hashes the policy accepts. A genuine older published release passes (RR-149).",
 		Params:      []string{"policy", "evaluated_at", "agent_version", "known_hashes"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it. No hash of the device's binary is recorded: the policy returns pass or fail only.",

@@ -484,7 +484,8 @@ authenticator (RR-62).
 ## Appendix: installing from source
 
 Without a published release (for example to test a branch), build the images and a local bundle on a machine with
-the repository, Docker and Go, then copy the bundle to the hosts:
+the repository, Docker and Go, then copy the bundle to the hosts. Once any agent release is published, a device that
+runs such a locally built `paddockd` raises `device.tamper_agent_binary_changed`.
 
 ```sh
 make image image-compiler image-pgbackrest      # paddock-server:dev, paddock-compiler:dev, paddock-pgbackrest:dev

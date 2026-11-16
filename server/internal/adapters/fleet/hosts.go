@@ -147,6 +147,8 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	for _, p := range h.Policies {
 		if p.Response == "pass" || p.Response == "fail" {
 			inv.Policies = append(inv.Policies, ports.PolicyResult{Key: p.Name, Passing: p.Response == "pass"})
+		} else {
+			inv.UnansweredPolicies = append(inv.UnansweredPolicies, p.Name)
 		}
 	}
 	return inv, nil

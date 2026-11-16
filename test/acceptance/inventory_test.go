@@ -351,6 +351,9 @@ func publishAgentBinary(t *testing.T, root *env.Portal) string {
 //   - genuine runs a published binary: every policy passes, no event.
 //   - updated switches to the binary of a release published during the gate (a regular update): its evaluations of
 //     the previous definition fail but predate the worker's apply, so no event; the new definition passes.
+//
+// After the second publish the gate waits until Fleet sent the new definition, every host evaluated it 2 minutes
+// later and two more sync rounds ran; then changed still has exactly one event and its result is still marked.
 func TestInventoryAgentBinaryPolicy(t *testing.T) {
 	root, alice := login(t, env.PlatformAdmin), login(t, env.Alice)
 	suffix := uniqueSuffix()
@@ -398,10 +401,75 @@ func TestInventoryAgentBinaryPolicy(t *testing.T) {
 	}
 	t.Logf("%s after %s", agentBinaryCode, time.Since(start).Round(time.Second))
 
-	hosts["updated"].AgentBinarySHA256 = publishAgentBinary(t, root)
-	for until := time.Now().Add(4 * time.Minute); time.Now().Before(until); time.Sleep(10 * time.Second) {
-		answer() // three sync rounds and more, with the hosts evaluating every 30 s
+	// Phase 2 waits on observed conditions only (plan M5a amendment 2026-11-16, review round 1, A11). The publish also
+	// makes Fleet reset every host's binary policy result, so the changed device staying at one event proves A7.
+	newHash := publishAgentBinary(t, root)
+	hosts["updated"].AgentBinarySHA256 = newHash
+	db := ownerDB(t)
+	ids := []string{}
+	for _, d := range devices {
+		ids = append(ids, d.DeviceID)
 	}
+	deadline := time.Now().Add(10 * time.Minute)
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("not within 10 minutes of the second publish: %s", what)
+			}
+			answer()
+			time.Sleep(10 * time.Second)
+		}
+	}
+	var bound time.Time
+	waitFor("Fleet's agent binary policy lists the new release", func() bool {
+		var ok bool
+		bound, ok = hosts["updated"].BinaryPolicyListedAt(newHash)
+		return ok
+	})
+	waitFor("every gate host evaluated the new definition and updated passes it", func() bool {
+		var evaluated int
+		var passing bool
+		err := db.QueryRow(testContext(t, time.Minute), `SELECT
+			(SELECT count(*) FROM device_inventory_ref WHERE device_id::text = ANY($1::text[]) AND policy_updated_at >= $2),
+			coalesce((SELECT passing FROM inventory_policy_result WHERE device_id = $3 AND policy_key = 'paddock_agent_binary_known'), false)`,
+			ids, bound.Add(2*time.Minute), devices["updated"].DeviceID).Scan(&evaluated, &passing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return evaluated == len(ids) && passing
+	})
+	synced := func() map[string]time.Time {
+		rows, err := db.Query(testContext(t, time.Minute), "SELECT device_id::text, synced_at FROM device_inventory_ref WHERE device_id::text = ANY($1::text[])", ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]time.Time{}
+		for rows.Next() {
+			var id string
+			var at time.Time
+			if err := rows.Scan(&id, &at); err != nil {
+				t.Fatal(err)
+			}
+			out[id] = at
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	last, rounds := synced(), map[string]int{}
+	waitFor("two further sync rounds of every gate device", func() bool {
+		done := true
+		for id, at := range synced() {
+			if at.After(last[id]) {
+				last[id] = at
+				rounds[id]++
+			}
+			done = done && rounds[id] >= 2
+		}
+		return done && len(rounds) == len(ids)
+	})
 	for name, want := range map[string]int{"changed": 1, "genuine": 0, "updated": 0} {
 		if n := events(devices[name].DeviceID); n != want {
 			t.Errorf("%s: %d %s events, want %d", name, n, agentBinaryCode, want)
@@ -417,9 +485,9 @@ func TestInventoryAgentBinaryPolicy(t *testing.T) {
 			t.Errorf("%s: tamper findings %+v", name, got)
 		}
 	}
-	var passing bool
-	if err := ownerDB(t).QueryRow(testContext(t, time.Minute), `SELECT passing FROM inventory_policy_result
-		WHERE device_id = $1 AND policy_key = 'paddock_agent_binary_known'`, devices["updated"].DeviceID).Scan(&passing); err != nil || !passing {
-		t.Errorf("updated: the binary policy of the new release is not passing (%v, %v)", passing, err)
+	var alerted bool
+	if err := db.QueryRow(testContext(t, time.Minute), `SELECT alerted_at IS NOT NULL FROM inventory_policy_result
+		WHERE device_id = $1 AND policy_key = 'paddock_agent_binary_known'`, devices["changed"].DeviceID).Scan(&alerted); err != nil || !alerted {
+		t.Errorf("changed: the binary policy result is not marked as reported (%v, %v)", alerted, err)
 	}
 }

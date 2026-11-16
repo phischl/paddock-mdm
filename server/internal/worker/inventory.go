@@ -29,8 +29,16 @@ const inventoryRetryInterval = 15 * time.Second
 const inventoryFullEvery = 12
 
 // binaryEvaluationLag is how long after the worker applied a new agent binary policy a host's evaluation counts (plan
-// M5a amendment 2026-11-16, A3): an earlier evaluation may still use the previous definition.
+// M5a amendment 2026-11-16, A3): an earlier evaluation may still use the previous definition. Fleet's
+// policy_updated_at is when Fleet stored the result, not when the host evaluated: a host that read the previous
+// definition before the apply and posts its result more than binaryEvaluationLag later passes the gate with a result of
+// the previous definition. That needs a device that already runs a release the previous definition did not list, so it
+// is accepted (plan M5a amendment 2026-11-16, review round 1, A10).
 const binaryEvaluationLag = 2 * time.Minute
+
+// binaryHashesWarn is the size of the hash set above which the worker warns: Fleet must accept the whole policy query
+// (plan M5a amendment 2026-11-16, review round 1, A10).
+const binaryHashesWarn = 1000
 
 // inventorySyncLockKey is the advisory lock of the sync round ("padd inv").
 const inventorySyncLockKey = 0x7061646420696e76
@@ -155,6 +163,11 @@ func (i *Inventory) Round(ctx context.Context) error {
 	}
 	if fp := hashSetPrint(known); fp != i.binaryPrint {
 		i.binaryPrint, i.binaryAppliedAt = fp, i.now()
+		slog.InfoContext(ctx, "applied the agent binary policy", "hashes", len(known))
+		if len(known) > binaryHashesWarn {
+			slog.WarnContext(ctx, "the agent binary policy accepts many published hashes; Fleet must accept the whole query",
+				"hashes", len(known), "warn_above", binaryHashesWarn)
+		}
 	}
 	vulnState, err := i.source.VulnerabilityState(ctx)
 	if err != nil {

@@ -287,8 +287,6 @@ func gateF5(t *testing.T, d *Device) {
 	}
 
 	// A rename over the slot binary keeps the running process on the old inode; the restart runs the modified one.
-	d.MustRoot("cp " + slot + " /root/paddockd.genuine && cp " + slot + " " + slot + ".new && printf x >> " + slot + ".new" +
-		" && chmod --reference=" + slot + " " + slot + ".new && mv " + slot + ".new " + slot + " && systemctl restart paddock-supervisor")
 	restored := false
 	restore := func() {
 		d.MustRoot("cp /root/paddockd.genuine " + slot + ".new && chmod --reference=" + slot + " " + slot + ".new && mv " + slot + ".new " +
@@ -300,6 +298,14 @@ func gateF5(t *testing.T, d *Device) {
 			restore()
 		}
 	})
+	d.MustRoot("cp " + slot + " /root/paddockd.genuine && cp " + slot + " " + slot + ".new && printf x >> " + slot + ".new" +
+		" && chmod --reference=" + slot + " " + slot + ".new && mv " + slot + ".new " + slot)
+	// The policy hashes /proc/<pid>/exe: the running image is still genuine although its file was replaced (plan M5a
+	// amendment 2026-11-16, review round 1, F5 step 1).
+	if n := osqueryRows(t, d, query); n != 1 {
+		t.Fatalf("%s: genuine image of a replaced file: %d rows, want 1", d.Name, n)
+	}
+	d.MustRoot("systemctl restart paddock-supervisor")
 	replaced := time.Now()
 	Until(t, d.Name+": the modified paddockd runs", 2*time.Minute, 5*time.Second, nil, func() bool {
 		return d.Must("pgrep -x paddockd >/dev/null && sudo sha256sum "+slot+" | cut -d ' ' -f 1") != genuine
@@ -327,6 +333,79 @@ func gateF5(t *testing.T, d *Device) {
 	if n := len(d.s.Events(t, agentBinaryCode, d.ID)); n != 1 {
 		t.Errorf("%s: %d %s events, want exactly 1", d.Name, n, agentBinaryCode)
 	}
+	gateF5Evasions(t, d, query)
+}
+
+// gateF5Evasions checks that the policy judges an agent started from another place, through a bind mount, or under
+// another name (plan M5a amendment 2026-11-16, review round 1, A8 and F5 steps 2 and 3). Orbit is stopped meanwhile,
+// so no evaluation reaches Fleet and the event count stays 1; the policy runs in osquery's shell. The stop is a
+// runtime mask: the agent's mutual watch starts a merely stopped orbit again.
+func gateF5Evasions(t *testing.T, d *Device, query string) {
+	const current, dropIn = "/opt/paddock/agent/current", "/run/systemd/system/paddock-supervisor.service.d/99-f5.conf"
+	link := d.MustRoot("readlink " + current)
+	active := d.MustRoot("readlink -f " + current)
+	sleep := d.MustRoot("readlink -f /usr/bin/sleep")
+	reset := "rm -f " + dropIn + " && systemctl daemon-reload && ln -sfn " + link + " " + current + " && systemctl restart paddock-supervisor"
+	const startOrbit = "systemctl unmask --runtime orbit.service && systemctl start orbit.service"
+	done := false
+	t.Cleanup(func() {
+		if !done {
+			d.MustRoot(reset + " && " + startOrbit)
+		}
+	})
+	d.MustRoot("systemctl mask --runtime orbit.service && systemctl stop orbit.service && mkdir -p /var/lib/paddock-f5 /var/lib/paddock-f5s" +
+		" && cp /root/paddockd.genuine /var/lib/paddock-f5/paddockd && printf x >> /var/lib/paddock-f5/paddockd" +
+		" && chmod 755 /var/lib/paddock-f5/paddockd && printf '#!/bin/sh\\nexec sleep infinity\\n' > /var/lib/paddock-f5s/paddockd" +
+		" && chmod 755 /var/lib/paddock-f5s/paddockd")
+	for _, c := range []struct{ name, setup, exe string }{
+		{"redirected current", "ln -sfn /var/lib/paddock-f5 " + current + " && systemctl restart paddock-supervisor", "/var/lib/paddock-f5/paddockd"},
+		// The path a bind-mounted executable shows depends on the reader's mount namespace, so any child counts.
+		{"bind mount", "mkdir -p $(dirname " + dropIn + ") && printf '[Service]\\nBindReadOnlyPaths=/var/lib/paddock-f5/paddockd:" + active +
+			"/paddockd\\n' > " + dropIn + " && systemctl daemon-reload && systemctl restart paddock-supervisor", ""},
+		{"renamed child", "ln -sfn /var/lib/paddock-f5s " + current + " && systemctl restart paddock-supervisor", sleep},
+	} {
+		d.MustRoot(c.setup)
+		supervisorChild(t, d, c.exe)
+		if n := osqueryRows(t, d, query); n != 0 {
+			t.Errorf("%s: %s: %d rows, want 0", d.Name, c.name, n)
+		}
+		d.MustRoot(reset)
+		supervisorChild(t, d, active+"/paddockd")
+		if n := osqueryRows(t, d, query); n != 1 {
+			t.Fatalf("%s: restored after %s: %d rows, want 1", d.Name, c.name, n)
+		}
+	}
+	started := time.Now().UTC()
+	d.MustRoot(startOrbit)
+	done = true
+	evaluated := fmt.Sprintf(`SELECT count(*) FROM inventory_policy_result r JOIN device_inventory_ref i USING (device_id)
+		WHERE r.device_id = '%s' AND r.policy_key = 'paddock_agent_binary_known' AND r.passing AND i.policy_updated_at > '%s'`,
+		d.ID, started.Format(time.RFC3339Nano))
+	Until(t, d.Name+": a passing agent binary policy evaluated after orbit started", 25*time.Minute, 15*time.Second, d.Checkin, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		out, err := paddockSQL(ctx, evaluated)
+		return err == nil && out == "1"
+	})
+	if n := len(d.s.Events(t, agentBinaryCode, d.ID)); n != 1 {
+		t.Errorf("%s: %d %s events after the evasion checks, want still 1", d.Name, n, agentBinaryCode)
+	}
+}
+
+// supervisorChild waits until paddock-supervisor runs a child that executed exe ("" any program but the supervisor
+// itself). A Go program forks from any of its threads, so the children of every task count.
+func supervisorChild(t *testing.T, d *Device, exe string) {
+	t.Helper()
+	Until(t, fmt.Sprintf("%s: paddock-supervisor runs %q", d.Name, exe), 2*time.Minute, 2*time.Second, nil, func() bool {
+		children := d.MustRoot(`m=$(systemctl show -p MainPID --value paddock-supervisor); [ "$m" != 0 ] || exit 0` +
+			`; for c in $(cat /proc/$m/task/*/children); do readlink /proc/$c/exe || true; done`)
+		for _, c := range strings.Fields(children) {
+			if c != "/usr/sbin/paddock-supervisor" && (exe == "" || c == exe) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // fleetHost is a host as Fleet's API returns it.

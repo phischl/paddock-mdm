@@ -267,16 +267,21 @@ func (q *Queries) DeleteMissingFindings(ctx context.Context, arg DeleteMissingFi
 }
 
 const deleteMissingPolicyResults = `-- name: DeleteMissingPolicyResults :exec
-DELETE FROM inventory_policy_result WHERE device_id = $1 AND NOT (policy_key = ANY($2::text[]))
+DELETE FROM inventory_policy_result
+WHERE device_id = $1 AND NOT (policy_key = ANY($2::text[]))
+  AND NOT (policy_key = ANY($3::text[]) AND alerted_at IS NOT NULL)
 `
 
 type DeleteMissingPolicyResultsParams struct {
-	DeviceID uuid.UUID
-	Keys     []string
+	DeviceID   uuid.UUID
+	Keys       []string
+	Unanswered []string
 }
 
+// A reported result whose policy the host has not answered since its query changed keeps its row and mark, so that the
+// same failure is not reported again (plan M5a amendment 2026-11-16, review round 1, A7).
 func (q *Queries) DeleteMissingPolicyResults(ctx context.Context, arg DeleteMissingPolicyResultsParams) error {
-	_, err := q.db.Exec(ctx, deleteMissingPolicyResults, arg.DeviceID, arg.Keys)
+	_, err := q.db.Exec(ctx, deleteMissingPolicyResults, arg.DeviceID, arg.Keys, arg.Unanswered)
 	return err
 }
 

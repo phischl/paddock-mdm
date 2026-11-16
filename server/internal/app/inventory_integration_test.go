@@ -323,6 +323,73 @@ func TestReportAgentBinaryUnknown(t *testing.T) {
 	}
 }
 
+// TestStoreHostKeepsReportedUnansweredPolicy (plan M5a amendment 2026-11-16, review round 1, A7): a reported result
+// whose policy the host has not answered since Fleet reset it keeps its row and mark; an unreported one and one Fleet
+// no longer lists are deleted; an unanswered policy never creates a row.
+func TestStoreHostKeepsReportedUnansweredPolicy(t *testing.T) {
+	h := newInventoryHarness(t)
+	ctx := context.Background()
+	org, dev := h.device(t, uuid.Nil, uuid.NewString(), "active")
+	failing := ports.HostInventory{Policies: []ports.PolicyResult{{Key: "paddock_agent_binary_known"}, {Key: "paddock_agent_running"}, {Key: "dropped"}}}
+	if err := h.sync.StoreHost(systemCtx(org), dev, "1", failing); err != nil {
+		t.Fatal(err)
+	}
+	alerted := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	if _, err := h.super.Exec(ctx, `UPDATE inventory_policy_result SET alerted_at = $2
+		WHERE device_id = $1 AND policy_key IN ('paddock_agent_binary_known', 'dropped')`, dev, alerted); err != nil {
+		t.Fatal(err)
+	}
+	unanswered := ports.HostInventory{UnansweredPolicies: []string{"paddock_agent_binary_known", "paddock_agent_running", "never_stored"}}
+	if err := h.sync.StoreHost(systemCtx(org), dev, "1", unanswered); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := h.super.Query(ctx, "SELECT policy_key, passing, alerted_at FROM inventory_policy_result WHERE device_id = $1", dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct {
+		key     string
+		passing bool
+		alerted *time.Time
+	}
+	got, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (row, error) {
+		var x row
+		err := r.Scan(&x.key, &x.passing, &x.alerted)
+		return x, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].key != "paddock_agent_binary_known" || got[0].passing || got[0].alerted == nil || !got[0].alerted.Equal(alerted) {
+		t.Fatalf("stored results %+v, want only the reported unanswered failure unchanged", got)
+	}
+}
+
+// TestReportAgentNotRunningKeepsMarkWhileUnanswered (plan M5a amendment 2026-11-16, review round 1, A7): a reported
+// stop whose policy is unanswered for one sync and then fails again, with no check-in in between, is not reported a
+// second time.
+func TestReportAgentNotRunningKeepsMarkWhileUnanswered(t *testing.T) {
+	h := newInventoryHarness(t)
+	org, dev := h.device(t, uuid.Nil, uuid.NewString(), "active")
+	now := time.Now().UTC()
+	if _, err := h.super.Exec(context.Background(), "INSERT INTO device_status (device_id, organization_id, last_contact_at) VALUES ($1, $2, $3)",
+		dev, org, now.Add(-20*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	fail := ports.HostInventory{Policies: []ports.PolicyResult{{Key: "paddock_agent_running"}}}
+	for _, inv := range []ports.HostInventory{fail, {UnansweredPolicies: []string{"paddock_agent_running"}}, fail} {
+		if err := h.sync.StoreHost(systemCtx(org), dev, "1", inv); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.sync.ReportAgentNotRunning(systemCtx(org), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := h.count(t, "SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'device.tamper_agent_not_running'", org); n != 1 {
+		t.Fatalf("%d events for one stop, want 1", n)
+	}
+}
+
 // TestPublishedAgentHashes (plan M5a amendment 2026-11-16, A2): the hash set holds every artifact of every published
 // release, all architectures, and no artifact of a draft.
 func TestPublishedAgentHashes(t *testing.T) {

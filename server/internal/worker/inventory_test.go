@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -75,6 +76,7 @@ type fakeSource struct {
 	// results and evaluatedAt are every host's policy results and policy evaluation time; applied is the last set
 	// of policies applied, applyErr fails ApplyPolicies.
 	results     []ports.PolicyResult
+	unanswered  []string
 	evaluatedAt *time.Time
 	applied     []ports.PolicyDefinition
 	applyErr    error
@@ -93,7 +95,7 @@ func (s *fakeSource) ListHostsChangedSince(_ context.Context, since time.Time, c
 func (s *fakeSource) HostInventory(_ context.Context, ref ports.HostRef) (ports.HostInventory, error) {
 	s.read = append(s.read, ref)
 	return ports.HostInventory{OSVersion: "Ubuntu 26.04.1 LTS", Software: []ports.SoftwarePackage{{Name: "bash", Version: "5.2", Source: "deb_packages"}},
-		Policies: s.results, PolicyUpdatedAt: s.evaluatedAt}, nil
+		Policies: s.results, UnansweredPolicies: s.unanswered, PolicyUpdatedAt: s.evaluatedAt}, nil
 }
 
 // DeleteHost records the deleted hosts (ports.InventoryAdmin of the retention round).
@@ -305,8 +307,14 @@ func newBinaryRig(t *testing.T, hashes ...string) *binaryRig {
 // host sets the host's agent binary result, evaluated at the given offset from the last apply.
 func (r *binaryRig) host(passing bool, sinceApplied time.Duration) {
 	at := r.inv.binaryAppliedAt.Add(sinceApplied)
-	r.src.results = []ports.PolicyResult{{Key: inventory.PolicyAgentBinaryKnown, Passing: passing}}
+	r.src.results, r.src.unanswered = []ports.PolicyResult{{Key: inventory.PolicyAgentBinaryKnown, Passing: passing}}, nil
 	r.src.evaluatedAt = &at
+}
+
+// unansweredAt sets the host's agent binary policy as listed without an answer, as Fleet does after a query change,
+// with the host's evaluation time at.
+func (r *binaryRig) unansweredAt(at time.Time) {
+	r.src.results, r.src.unanswered, r.src.evaluatedAt = nil, []string{inventory.PolicyAgentBinaryKnown}, &at
 }
 
 func (r *binaryRig) round(t *testing.T) {
@@ -453,5 +461,119 @@ func TestInventoryRoundAgentBinaryNoRelease(t *testing.T) {
 	}
 	if r.hashes.reads != 2 {
 		t.Fatalf("%d hash reads, want one per round and no second read for an empty set", r.hashes.reads)
+	}
+}
+
+// TestInventoryRoundAgentBinaryUnansweredAfterPublish (plan M5a amendment 2026-11-16, review round 1, A7): a reported
+// device whose binary policy Fleet resets at a publish and that fails again with the new definition is not reported a
+// second time.
+func TestInventoryRoundAgentBinaryUnansweredAfterPublish(t *testing.T) {
+	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	r := newBinaryRig(t, a)
+	r.round(t)
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.host(false, 3*time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 1 {
+		t.Fatalf("%d reports for the failure, want 1", n)
+	}
+	r.hashes.hashes = []string{a, b}
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.unansweredAt(r.clock)
+	r.round(t)
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.host(false, 3*time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 1 {
+		t.Fatalf("%d reports after the publish reset the policy and it failed again, want still 1", n)
+	}
+}
+
+// TestInventoryRoundAgentBinaryUnansweredNotReported (A7): an unreported failure of the previous definition is not
+// kept while the policy is unanswered, so an unanswered policy evaluated after the new gate reports nothing, and
+// neither does passing afterwards.
+func TestInventoryRoundAgentBinaryUnansweredNotReported(t *testing.T) {
+	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	r := newBinaryRig(t, a)
+	r.round(t)
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.host(false, time.Minute)
+	r.round(t)
+	r.hashes.hashes = []string{a, b}
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.unansweredAt(r.clock.Add(3 * time.Minute)) // the round below applies the new definition at r.clock
+	r.round(t)
+	if n := r.reports(t); n != 0 {
+		t.Fatalf("%d reports for an unanswered policy, want 0", n)
+	}
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.host(true, 4*time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 0 {
+		t.Fatalf("%d reports after passing, want 0", n)
+	}
+}
+
+// TestInventoryRoundAgentBinaryNewReleaseSelfTest (decision alpha11 §146): the supervisor's self-test and version
+// call of a staged release are judged processes. A device stages only a published release, so a host that evaluated
+// the previous definition while such a child ran is never reported, and once the new definition is applied the
+// child passes.
+func TestInventoryRoundAgentBinaryNewReleaseSelfTest(t *testing.T) {
+	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	r := newBinaryRig(t, a)
+	r.round(t)
+	r.clock = r.clock.Add(10 * time.Minute)
+	r.hashes.hashes = []string{a, b}             // published; the device then stages b and runs its self-test
+	r.host(false, 10*time.Minute+30*time.Second) // the previous definition, which does not list b, during the self-test
+	r.clock = r.clock.Add(time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 0 {
+		t.Fatalf("%d reports for an evaluation of the previous definition during the self-test, want 0", n)
+	}
+	r.clock = r.clock.Add(2 * time.Minute)
+	r.host(false, time.Minute) // still the previous definition, 1 minute after the apply
+	r.round(t)
+	if n := r.reports(t); n != 0 {
+		t.Fatalf("%d reports for an evaluation within the lag after the apply, want 0", n)
+	}
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.host(true, 3*time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 0 || !strings.Contains(r.binaryPolicy(t).Query, b) {
+		t.Fatalf("%d reports once the policy lists the staged release, want 0; policy %q", n, r.binaryPolicy(t).Query)
+	}
+}
+
+// TestInventoryRoundAgentBinaryManyHashes (plan M5a amendment 2026-11-16, review round 1, A10): the round that
+// applies more than 1,000 hashes warns once with their number; the next round and a set of 1,000 do not warn.
+func TestInventoryRoundAgentBinaryManyHashes(t *testing.T) {
+	set := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("%064x", i)
+		}
+		return out
+	}
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	warns := func() int {
+		return strings.Count(logs.String(), "level=WARN msg=\"the agent binary policy accepts many")
+	}
+
+	r := newBinaryRig(t, set(1000)...)
+	r.round(t)
+	if n := warns(); n != 0 || !strings.Contains(logs.String(), "hashes=1000") {
+		t.Fatalf("%d warnings for 1,000 hashes, want 0 and one hashes line: %s", n, logs.String())
+	}
+	r.hashes.hashes = set(1001)
+	r.round(t)
+	if n := warns(); n != 1 || !strings.Contains(logs.String(), "hashes=1001 warn_above=1000") {
+		t.Fatalf("%d warnings for 1,001 hashes, want 1: %s", n, logs.String())
+	}
+	r.round(t)
+	if n := warns(); n != 1 {
+		t.Fatalf("%d warnings after an unchanged round, want still 1", n)
 	}
 }

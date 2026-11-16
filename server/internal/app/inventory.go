@@ -102,7 +102,11 @@ func (s *InventorySync) StoreHost(ctx context.Context, device uuid.UUID, ref por
 				return err
 			}
 		}
-		return q.DeleteMissingPolicyResults(ctx, pgstore.DeleteMissingPolicyResultsParams{DeviceID: device, Keys: keys})
+		// Not nil: a NULL array would keep every reported row.
+		unanswered := append([]string{}, inv.UnansweredPolicies...)
+		return q.DeleteMissingPolicyResults(ctx, pgstore.DeleteMissingPolicyResultsParams{
+			DeviceID: device, Keys: keys, Unanswered: unanswered,
+		})
 	})
 }
 

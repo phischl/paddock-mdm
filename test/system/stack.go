@@ -37,6 +37,9 @@ type Stack struct {
 	// lab is set when the Stack drives the lab-profile installation of the backup gates (lab.go) instead of the
 	// development stack: alice is then the lab organization's administrator, who signs in and steps up with WebAuthn.
 	lab *Lab
+	// publishMu serializes PublishInstalledAgent's check and publish: the VMs install in parallel, and the second one
+	// must see the release the first published (plan M5a amendment 2026-11-16, review round 1, A9).
+	publishMu sync.Mutex
 }
 
 func newStack(t *testing.T) *Stack {
@@ -355,6 +358,8 @@ func (s *Stack) PublishInstalledAgent(t *testing.T, vm *VM) {
 		t.Fatalf("%s: the installed paddockd %v differs from %s (%s): the packages under test were not built from it",
 			vm.Name, installed, bin, local)
 	}
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	out, err := paddockSQL(ctx, fmt.Sprintf(`SELECT count(*) FROM agent_artifact a JOIN agent_release r ON r.version = a.version

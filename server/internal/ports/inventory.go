@@ -34,7 +34,11 @@ type HostInventory struct {
 	Software        []SoftwarePackage
 	// Policies are the results of the policies the host has answered.
 	Policies []PolicyResult
-	Hardware HostHardware
+	// UnansweredPolicies are the keys of the policies the inventory system lists for the host without a pass or fail
+	// answer: not yet evaluated since the policy changed, or the query did not run (plan M5a amendment 2026-11-16,
+	// review round 1, A7).
+	UnansweredPolicies []string
+	Hardware           HostHardware
 }
 
 // HostHardware are the asset facts of a host (ADR 0037 decision 7): empty strings and zero values when the

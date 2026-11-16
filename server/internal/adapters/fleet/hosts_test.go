@@ -69,6 +69,22 @@ func TestHostInventory(t *testing.T) {
 	}
 }
 
+// TestHostInventoryUnansweredPolicies (plan M5a amendment 2026-11-16, review round 1, A7): a policy Fleet lists
+// without a pass or fail answer, as after a query change, is reported as unanswered and not as a result.
+func TestHostInventoryUnansweredPolicies(t *testing.T) {
+	_, srv := newFake(t)
+	inv, err := client(srv.URL).HostInventory(context.Background(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(inv.UnansweredPolicies, []string{"paddock_agent_binary_known"}) {
+		t.Fatalf("unanswered policies %q", inv.UnansweredPolicies)
+	}
+	if !slices.Equal(inv.Policies, []ports.PolicyResult{{Key: "disk_encrypted", Passing: true}, {Key: "paddock_agent_running"}}) {
+		t.Fatalf("policies %+v", inv.Policies)
+	}
+}
+
 // TestDeleteHost (plan M10 decision 17): the host is deleted through Fleet's API; a host Fleet no longer knows counts
 // as deleted; an unavailable Fleet is upstream_unavailable after the retries; an invalid reference never reaches Fleet
 // and is invalid_state.
