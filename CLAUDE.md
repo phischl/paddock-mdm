@@ -32,8 +32,8 @@ Treat these as protected: changes are tamper events and the agent must re-verify
 
 1. `/etc/sudoers`, `/etc/sudoers.d/` and all files managed by Paddock's configuration.
 2. LUKS keyslots and headers.
-3. The agent, the supervisor, `fleetd`, the configuration timer and the log shipper (`/opt/paddock/`, `/etc/paddock/`,
-   their systemd units).
+3. The agent, the supervisor, `paddock-revoke`, `fleetd` and the update timer (`/opt/paddock/`, `/etc/paddock/`, their
+   systemd units and drop-ins; checks in architecture §11.5, ADR 0056).
 4. Identity configuration: Himmelblau, PAM, NSS (`/etc/himmelblau/`, `/etc/pam.d/`, `/etc/nsswitch.conf`,
    `/etc/security/`).
 5. Paddock-managed APT sources, keyrings and pins (`/etc/apt/sources.list.d/paddock-*.sources`,
