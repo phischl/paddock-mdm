@@ -82,7 +82,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 .PHONY: lint
 lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose lint-selfservice renovate-check ## Run all linters, govulncheck, the license gate and the server image build
 
-# The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
+# The supervisor's line budget (plan M2b decision 15, amendment 2026-11-16): at most 835 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
 .PHONY: lint-supervisor-budget
 lint-supervisor-budget:
