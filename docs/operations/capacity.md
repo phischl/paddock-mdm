@@ -269,16 +269,26 @@ short, keyed statements per execution cost about 30 % more CPU per event in the 
 `ingest.heartbeat` and `ingest.event` consumers run on `OrgPool.WithStatementCache()`, a view of the worker's
 organization pool with the same connections, role, offboarding gate and `jit = off`; it adds no connection. The view
 runs a statement as a named, cached one only if its sqlc name is on the closed allow list `ingestStatementCached`
-(`server/internal/platform/db/statementcache.go`): `device` by `id`, `device_status` by `device_id`, the device-keyed
-queries of `device_event_seen`, `device_event_gap` and `device_event_dropped`, `InsertAction`, `FinishAction`,
-`InsertOutbox` and plain inserts. Every other statement, also on the view, is planned per execution. Migration 00158
+(`server/internal/platform/db/statementcache.go`). Since ADR 0055 amendment 2026-11-16 (3) (PDK-1079d) a name is
+listed only if it is an insert (`INSERT … VALUES` without `SELECT`, a conflict target only on a unique index:
+`InsertDeviceEventSeen`, `InsertDeviceEventDropped`, `InsertAction`, `InsertOutbox`, `InsertDeviceLoginEvent`,
+`InsertAgentUpdateReport`, `UpsertDeviceStatus`, `SetDeviceLoginState`, `UpsertDeviceUserSeen`) or a device-keyed
+statement on a table without an index led by `organization_id` that lacks `device_id` in second place
+(`MaxDeviceEventSeenBefore`, `DeleteDeviceEventSeenBefore` on `device_event_seen`, `DeleteDeviceEventDropped` on
+`device_event_dropped`). Lookups of `device` and `device_status` by their primary key, `CloseOpenDeviceEventGaps` and
+`FinishAction` are planned per execution again: when an `ANALYZE` sample misses a small organization, a generic plan
+built there takes an index led by `organization_id` and, in a 70 000-device organization, read 1 300 to 2 300 shared
+buffers instead of a handful. Every other statement, also on the view, is planned per execution. Migration 00158
 replaced the organization-only indexes of the three event tables by `(organization_id, device_id)`, so a generic plan
 that takes the organization index still reads only one device's rows (7 000 shared buffers before, 13 after, for
-`MaxDeviceEventSeenBefore` at 70 000 devices). `TestIngestViewGenericPlans` forces generic plans and bounds every
-listed read and write, and the two event-gap lookups, to 100 shared buffers in a 70 000-device organization.
+`MaxDeviceEventSeenBefore` at 70 000 devices). `TestIngestViewAdmissionRule` checks the rule against the query files
+and the schema's indexes; `TestIngestViewGenericPlans` analyzes every organization table without the small
+organization's rows, forces generic plans and bounds every listed read and write, and the two event-gap lookups, to
+100 shared buffers in a 70 000-device organization.
 
 Ingest CPU per event with the statement-cache view (N2 method, ADR 0055 amendment 2 decision 12, series 1 and 2;
-5 000 events/s offered, two ingest workers, 150 connections):
+5 000 events/s offered, two ingest workers, 150 connections). These series measured the list as merged in PDK-1079b;
+the shorter list of PDK-1079d needs a new measurement (ADR 0055 amendment 2026-11-16 (3) decision 13):
 
 - Series 1, view against the build without per-execution planning: +0.7 % (median of three alternating pairs, 1.715
   against 1.703 CPU seconds per 1 000 events; pairs −15.1 %, +6.5 %, −1.0 %). Within the 5 % budget.
