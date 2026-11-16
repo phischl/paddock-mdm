@@ -2574,13 +2574,12 @@ paths:
       tags: [users]
       description: |
         Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). A one-time sign-in setup link
-        for the user (ADR 0053 decision 1), valid 24 hours: the account sets its password if it has none and a passkey
-        if it has none. The link is returned once and never stored, logged or audited; responses are never cached. A
-        locked user, a user deactivated in the identity provider, a user not provisioned there and a platform
-        administrator (a direct member of paddock.platform.admins, who receives the setup link from the host operator)
-        get none (409 invalid_state). A link created while the user has no portal role stays usable for its 24 hours and a newer
-        link does not end it: give the user a portal role only after the link was used, or create a fresh link after
-        the promotion and hand only that one over.
+        for the user (ADR 0053 decision 1), valid 24 hours: the account sets up a passkey if it has none, and a
+        password only if Paddock created the account and it has none. The link is returned once and never stored,
+        logged or audited; responses are never cached. A locked user, a user deactivated in the identity provider, a
+        user not provisioned there and a platform administrator (a direct member of paddock.platform.admins, who
+        receives the setup link from the host operator) get none (409 invalid_state). A new link ends every older one;
+        when the older links cannot be ended, no link is issued (502 upstream_unavailable).
       x-paddock-audit: user.enrolment_link_created
       parameters:
         - $ref: "#/components/parameters/Csrf"

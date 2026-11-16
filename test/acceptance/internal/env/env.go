@@ -568,8 +568,14 @@ func (a *Authentik) CreateUser(ctx context.Context, username, password string, g
 	return a.CreateUserWithEmail(ctx, username, username, password, groups...)
 }
 
+// CreateUserWithoutPassword creates an internal user without a password, as the operator creates a platform
+// administrator by hand (install §9 step 1), and returns its pk.
+func (a *Authentik) CreateUserWithoutPassword(ctx context.Context, username string, groups ...string) (int, error) {
+	return a.CreateUserWithEmail(ctx, username, username, "", groups...)
+}
+
 // CreateUserWithEmail is CreateUser with a separate email, for a username that is no email address (Authentik
-// validates the email).
+// validates the email). An empty password leaves the user without one.
 func (a *Authentik) CreateUserWithEmail(ctx context.Context, username, email, password string, groups ...string) (int, error) {
 	var u struct {
 		PK int `json:"pk"`
@@ -579,8 +585,10 @@ func (a *Authentik) CreateUserWithEmail(ctx context.Context, username, email, pa
 	}, &u); err != nil {
 		return 0, err
 	}
-	if err := a.do(ctx, http.MethodPost, fmt.Sprintf("/core/users/%d/set_password/", u.PK), map[string]any{"password": password}, nil); err != nil {
-		return u.PK, err
+	if password != "" {
+		if err := a.do(ctx, http.MethodPost, fmt.Sprintf("/core/users/%d/set_password/", u.PK), map[string]any{"password": password}, nil); err != nil {
+			return u.PK, err
+		}
 	}
 	for _, g := range groups {
 		if err := a.AddToGroup(ctx, username, g); err != nil {

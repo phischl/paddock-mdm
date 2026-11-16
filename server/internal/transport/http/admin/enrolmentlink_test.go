@@ -2,6 +2,7 @@ package admin_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -82,9 +83,15 @@ func TestUserEnrolmentLink(t *testing.T) {
 	if got := created.header.Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control %q, want no-store", got)
 	}
+	// previous_links_revoked is the only key besides the username, so no key can carry the link.
 	params := e.actionParams(created)
-	if !strings.Contains(params, `"username": "erin@`) || strings.Contains(params, "flow_token") || strings.Contains(params, "link") {
-		t.Fatalf("params %s, want the username and never the link", params)
+	var keys map[string]any
+	if err := json.Unmarshal([]byte(params), &keys); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(params, `"username": "erin@`) || len(keys) != 2 || keys["previous_links_revoked"] == nil ||
+		strings.Contains(params, "flow_token") || strings.Contains(params, "auth.test") {
+		t.Fatalf("params %s, want the username and the count of older links and never the link", params)
 	}
 
 	operator := e.steppedUp(e.session(e.acme, principal.RoleOrgOperator), time.Now())
@@ -201,6 +208,98 @@ func TestUserEnrolmentLinkPlatformListingFails(t *testing.T) {
 	e.expectEvent(res, "user.enrolment_link_created:failure:upstream_unavailable")
 	if strings.Contains(string(res.body), "flow_token") {
 		t.Fatalf("listing failure carries a link: %s", res.body)
+	}
+}
+
+// TestUserEnrolmentLinkEndsOlderLinks (plan M12h-2 amendment f point 1): every link of an account ends the account's
+// older ones first, and the event says how many it ended: the new user's password link ends none, the first setup
+// link ends the password link, the second ends the first.
+func TestUserEnrolmentLinkEndsOlderLinks(t *testing.T) {
+	e := newEnv(t)
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	stepped := e.steppedUp(alice, time.Now())
+	domain := "l" + e.acme.String()[24:] + ".test"
+	if res := e.domains(e.acme, domain); res.status != http.StatusOK {
+		t.Fatalf("domains: %d %s", res.status, res.body)
+	}
+	created := e.do(call{method: "POST", path: "/api/v1/users", cookie: alice, body: map[string]any{
+		"username": "jack@" + domain, "display_name": "jack",
+	}})
+	if created.status != http.StatusCreated {
+		t.Fatalf("create: %d %s", created.status, created.body)
+	}
+	if params := e.actionParams(created); !strings.Contains(params, `"previous_links_revoked": 0`) {
+		t.Fatalf("user.created params %s, want previous_links_revoked 0", params)
+	}
+	var c adminapi.UserCreated
+	created.decode(t, &c)
+	pk := e.authentikPK(c.User.Id)
+	path := "/api/v1/users/" + c.User.Id.String() + "/enrolment-link"
+	for i := range 2 {
+		res := e.do(call{method: "POST", path: path, cookie: stepped})
+		if res.status != http.StatusCreated {
+			t.Fatalf("link %d: %d %s", i+1, res.status, res.body)
+		}
+		e.expectEvent(res, "user.enrolment_link_created:success:")
+		if params := e.actionParams(res); !strings.Contains(params, `"previous_links_revoked": 1`) {
+			t.Fatalf("link %d params %s, want previous_links_revoked 1", i+1, params)
+		}
+	}
+	e.idp.mu.Lock()
+	open, attrs := e.idp.links[pk], e.idp.attrs[pk]
+	e.idp.mu.Unlock()
+	if open != 1 {
+		t.Fatalf("%d open links, want only the newest", open)
+	}
+	// Only the host command lets a link set a password on an account Paddock did not create (plan M12h-2 amendment f
+	// addendum point 3).
+	if _, ok := attrs[ports.AttrPasswordByLink]; ok {
+		t.Fatalf("the portal set %s: %v", ports.AttrPasswordByLink, attrs)
+	}
+}
+
+// TestUserEnrolmentLinkRevocationFails (plan M12h-2 amendment f point 1): when the older links cannot be ended, no new
+// link is issued: 502 upstream_unavailable, one failure event without previous_links_revoked, and the older link is
+// the only one. A new local user is not created either, as when its link fails.
+func TestUserEnrolmentLinkRevocationFails(t *testing.T) {
+	e := newEnv(t)
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	stepped := e.steppedUp(alice, time.Now())
+	user := e.localUser(e.acme, alice, "kim")
+	pk := e.authentikPK(user)
+
+	e.idp.mu.Lock()
+	e.idp.failRevoke = true
+	e.idp.mu.Unlock()
+	res := e.do(call{method: "POST", path: "/api/v1/users/" + user.String() + "/enrolment-link", cookie: stepped})
+	if res.status != http.StatusBadGateway || res.problemCode(t) != "upstream_unavailable" {
+		t.Fatalf("revocation fails: %d %s", res.status, res.body)
+	}
+	e.expectEvent(res, "user.enrolment_link_created:failure:upstream_unavailable")
+	if params := e.actionParams(res); strings.Contains(params, "previous_links_revoked") || strings.Contains(string(res.body), "flow_token") {
+		t.Fatalf("params %s, body %s: want neither a count nor a link", params, res.body)
+	}
+	e.idp.mu.Lock()
+	open := e.idp.links[pk]
+	e.idp.mu.Unlock()
+	if open != 1 {
+		t.Fatalf("%d open links, want only the password link of the creation", open)
+	}
+
+	domain := "l" + e.acme.String()[24:] + ".test"
+	created := e.do(call{method: "POST", path: "/api/v1/users", cookie: alice, body: map[string]any{
+		"username": "lena@" + domain, "display_name": "lena",
+	}})
+	if created.status != http.StatusBadGateway {
+		t.Fatalf("create while revocation fails: %d %s", created.status, created.body)
+	}
+	e.expectEvent(created, "user.created:failure:upstream_unavailable")
+	e.idp.mu.Lock()
+	defer e.idp.mu.Unlock()
+	for _, u := range e.idp.users {
+		if u.Username == "lena@"+domain {
+			t.Fatalf("the identity provider user stayed after the failed creation")
+		}
 	}
 }
 

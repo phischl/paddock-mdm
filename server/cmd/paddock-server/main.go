@@ -51,7 +51,7 @@ commands:
   admin agent-rollout-halt --version <x.y.z>
   admin agent-rollout-resume --version <x.y.z>
   admin upgrade-check --target-version <x.y.z> [--json]
-  admin enrolment-link --username <name>   (prints a platform administrator's one-time sign-in setup link)
+  admin enrolment-link --username <name>   (prints a platform administrator's one-time sign-in setup link; a new link ends every older one)
   admin backup-targets render [--local-root <dir>]   (for ./paddock backup-target apply; prints share passwords)
   admin backup-targets revisions
   admin backup-targets purge <id>...

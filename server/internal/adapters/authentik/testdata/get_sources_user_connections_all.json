@@ -1,0 +1,31 @@
+{
+  "pagination": {
+    "next": 0,
+    "previous": 0,
+    "count": 1,
+    "current": 1,
+    "total_pages": 1,
+    "start_index": 1,
+    "end_index": 1
+  },
+  "results": [
+    {
+      "pk": 1,
+      "user": 5,
+      "source": "6f1d6c1e-2b8a-4c55-9a3e-0d3a5b7e9c21",
+      "source_obj": {
+        "pk": "6f1d6c1e-2b8a-4c55-9a3e-0d3a5b7e9c21",
+        "name": "Fixture directory",
+        "slug": "fixture-directory",
+        "enabled": true,
+        "component": "ak-source-ldap-form",
+        "meta_model_name": "authentik_sources_ldap.ldapsource",
+        "managed": null
+      },
+      "identifier": "redacted",
+      "created": "2026-11-15T10:00:00.000000Z",
+      "last_updated": "2026-11-15T10:00:00.000000Z"
+    }
+  ],
+  "autocomplete": {}
+}

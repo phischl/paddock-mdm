@@ -86,7 +86,7 @@ describe('the sign-in setup link of a user (ADR 0053 decision 1)', () => {
   it('shows the link once after the confirmation and drops it when the dialog closes', async () => {
     createEnrolmentLink.mockResolvedValueOnce(link)
     await mountAt('org_admin')
-    expect(el('enrolment-link-help')?.textContent).toContain('Give the user a portal role only after they have used the link')
+    expect(el('enrolment-link-help')?.textContent).toContain('A new link ends every older one')
     await requestLink(true)
     expect(createEnrolmentLink).toHaveBeenCalledWith('u1')
     const field = el('enrolment-link-value')?.querySelector('input') as HTMLInputElement

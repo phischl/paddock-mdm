@@ -262,7 +262,8 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 	case "upgrade-check":
 		return runUpgradeCheck(ctx, cmd, pool, platformPool, vkCfg, baoAddr, os.Stdout)
 	case "enrolment-link":
-		links := app.NewPlatformEnrolmentLinks(admin.Runner(), authentik.New(akCfg.URL, akCfg.Token))
+		ak := authentik.New(akCfg.URL, akCfg.Token)
+		links := app.NewPlatformEnrolmentLinks(admin.Runner(), ak, ak)
 		return runEnrolmentLink(ctx, links, cmd.user, os.Stdout)
 	}
 	return nil
@@ -274,13 +275,22 @@ type enrolmentLinkCreator interface {
 }
 
 // runEnrolmentLink is paddock-server admin enrolment-link (ADR 0053 decision 1): it prints the platform
-// administrator's one-time sign-in setup link once, on stdout only; the link is never logged or audited.
+// administrator's one-time sign-in setup link once, on stdout only; the link is never logged or audited. Creating it
+// ended every older link of the account (plan M12h-2 amendment f). For an account connected to an upstream source it
+// says why the link sets up only the passkey.
 func runEnrolmentLink(ctx context.Context, links enrolmentLinkCreator, username string, out io.Writer) error {
 	l, err := links.CreateCLI(ctx, username)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "sign-in setup link for %s (valid until %s, usable once):\n%s\n", strings.TrimSpace(username),
+	username = strings.TrimSpace(username)
+	if l.PasskeyOnly {
+		if _, err := fmt.Fprintf(out, "%s signs in with the password of its upstream identity source: the link sets up only the passkey\n",
+			username); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(out, "sign-in setup link for %s (valid until %s, usable once; every older link of the account no longer works):\n%s\n", username,
 		l.ExpiresAt.UTC().Format(time.RFC3339), l.Link)
 	return err
 }

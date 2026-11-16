@@ -906,8 +906,9 @@ var registry = map[Code]Definition{
 	CodeUserCreated: {
 		Code: CodeUserCreated, Emitted: true,
 		Description: "A local user was created in Authentik (without password) and in Paddock; the one-time recovery link is shown once and never recorded.",
-		Params:      []string{"username", "display_name"},
+		Params:      []string{"username", "display_name", "previous_links_revoked"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "previous_links_revoked counts the account's older one-time links ended before the new link was issued (a new link ends every older one); absent when the attempt failed before that.",
 	},
 	CodeUserUpdated: {
 		Code: CodeUserUpdated, Emitted: true,
@@ -2245,17 +2246,17 @@ var registry = map[Code]Definition{
 	},
 	CodeUserEnrolmentLinkCreated: {
 		Code: CodeUserEnrolmentLinkCreated, Emitted: true,
-		Description: "An organization administrator created a one-time sign-in setup link for a user of the organization (ADR 0053 decision 1): valid 24 hours, the account sets its password if it has none and a passkey if it has none.",
-		Params:      []string{"username"},
+		Description: "An organization administrator created a one-time sign-in setup link for a user of the organization (ADR 0053 decision 1): valid 24 hours; the account sets up a passkey if it has none, and a password only if Paddock created the account and it has none. A new link ends every older one.",
+		Params:      []string{"username", "previous_links_revoked"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
-		Note:        "The link is shown once to the administrator and never recorded. Denied with step_up_required without a fresh step-up, forbidden for another role. Failure with not_found, invalid_state (the user is locked, deactivated, not provisioned in the identity provider, or a direct member of paddock.platform.admins) or upstream_unavailable.",
+		Note:        "The link is shown once to the administrator and never recorded. previous_links_revoked counts the account's older links ended before it was issued; when they cannot be ended no link is issued (failure upstream_unavailable, param absent). Denied with step_up_required without a fresh step-up, forbidden for another role. Failure with not_found, invalid_state (the user is locked, deactivated, not provisioned in the identity provider, or a direct member of paddock.platform.admins) or upstream_unavailable.",
 	},
 	CodePlatformEnrolmentLinkCreated: {
 		Code: CodePlatformEnrolmentLinkCreated, Emitted: true,
-		Description: "The operator created a one-time sign-in setup link for a platform administrator account with paddock-server admin enrolment-link (ADR 0053 decision 1): valid 24 hours, the account sets its password if it has none and a passkey if it has none.",
-		Params:      []string{"username"},
+		Description: "The operator created a one-time sign-in setup link for a platform administrator account with paddock-server admin enrolment-link (ADR 0053 decision 1): valid 24 hours; the account sets up a passkey if it has none, and a password if it has none unless it is connected to an upstream identity source. A new link ends every older one.",
+		Params:      []string{"username", "passkey_only", "previous_links_revoked"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeUnknown},
-		Note:        "The link is printed once on the host and never recorded. Failure with invalid_state when the account is not a direct member of paddock.platform.admins or is deactivated, upstream_unavailable when the identity provider failed. Actor is the system actor paddock-server admin. Platform pseudo-organization.",
+		Note:        "The link is printed once on the host and never recorded. passkey_only is false when the command marked the account (attribute paddock_password_by_link) so that the link may set a password, true for an account connected to an upstream identity source, whose link sets up only the passkey; absent when the attempt failed before that. previous_links_revoked counts the account's older links ended before it was issued; when they cannot be ended no link is issued (failure upstream_unavailable, param absent). Failure with invalid_state when the account is not a direct member of paddock.platform.admins or is deactivated, upstream_unavailable when the identity provider failed. Actor is the system actor paddock-server admin. Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

@@ -65,6 +65,11 @@ type fakeIdP struct {
 	roleGroups map[string][]ports.IdentityUser
 	// failRoleGroups makes only RoleGroupsMembers fail, so a caller that swallowed a listing error would be caught.
 	failRoleGroups bool
+	// links counts the unexpired one-time links per user pk; failRevoke makes only ending them fail.
+	links      map[string]int
+	failRevoke bool
+	// attrs are the user attributes set per pk, so a test sees an attribute the portal must never set.
+	attrs map[string]map[string]any
 }
 
 // fakePKs numbers the users of every fake identity provider of the test binary.
@@ -72,7 +77,7 @@ var fakePKs atomic.Int64
 
 func newFakeIdP() *fakeIdP {
 	return &fakeIdP{users: map[string]ports.NewIdentityUser{}, groups: map[string]string{}, members: map[string][]string{},
-		locked: map[string]bool{}, inactive: map[string]bool{}}
+		locked: map[string]bool{}, inactive: map[string]bool{}, links: map[string]int{}, attrs: map[string]map[string]any{}}
 }
 
 func (f *fakeIdP) err() error {
@@ -130,7 +135,37 @@ func (f *fakeIdP) DeleteUser(_ context.Context, pk string) error {
 }
 
 func (f *fakeIdP) RecoveryLink(_ context.Context, pk string) (string, error) {
-	return "https://auth.test/if/flow/paddock-recovery/?flow_token=" + pk, f.err()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.err(); err != nil {
+		return "", err
+	}
+	f.links[pk]++
+	return "https://auth.test/if/flow/paddock-recovery/?flow_token=" + pk, nil
+}
+
+func (f *fakeIdP) RevokeRecoveryLinks(_ context.Context, pk string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.err(); err != nil {
+		return 0, err
+	}
+	if f.failRevoke {
+		return 0, problem.UpstreamUnavailable
+	}
+	n := f.links[pk]
+	delete(f.links, pk)
+	return n, nil
+}
+
+func (f *fakeIdP) SetUserAttribute(_ context.Context, pk, key string, value any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.attrs[pk] == nil {
+		f.attrs[pk] = map[string]any{}
+	}
+	f.attrs[pk][key] = value
+	return f.err()
 }
 
 func (f *fakeIdP) UserActive(_ context.Context, pk string) (bool, error) {

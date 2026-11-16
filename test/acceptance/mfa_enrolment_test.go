@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -297,8 +298,8 @@ func TestMFAEnrolmentSignInScope(t *testing.T) {
 }
 
 // TestMFAEnrolmentRecoveryFlow is the structure of the sign-in setup link's flow (ADR 0053 decision 2 and amendment d,
-// gate MF3's flow part): the password stages only for an account without a password, then the passkey, all behind the
-// link token, and no authenticator app stage.
+// gate MF3's flow part): a deny stage first for a visitor without a valid link, the password stages only for an account
+// without a password, then the passkey, all behind the link token, and no authenticator app stage.
 func TestMFAEnrolmentRecoveryFlow(t *testing.T) {
 	ctx := testContext(t, time.Minute)
 	ak, err := env.NewAuthentik()
@@ -319,6 +320,7 @@ func TestMFAEnrolmentRecoveryFlow(t *testing.T) {
 		order    int
 		policies []string
 	}{
+		"paddock-recovery-link-invalid":        {0, []string{"paddock-recovery-link-token"}},
 		"paddock-recovery-password":            {10, []string{"paddock-recovery-link-token", "paddock-recovery-password-missing"}},
 		"paddock-recovery-user-write":          {20, []string{"paddock-recovery-link-token", "paddock-recovery-password-missing"}},
 		"default-authenticator-webauthn-setup": {30, []string{"paddock-recovery-link-token", "paddock-recovery-webauthn-missing"}},
@@ -334,8 +336,27 @@ func TestMFAEnrolmentRecoveryFlow(t *testing.T) {
 		if len(b.Policies) > 1 && b.EngineMode != "all" {
 			t.Errorf("%s evaluates its policies in mode %q, want all", name, b.EngineMode)
 		}
+		// Only the deny stage runs without the link token; it fails closed when the policy itself fails.
+		deny := name == "paddock-recovery-link-invalid"
+		for policy, negated := range b.Negated {
+			if want := deny && policy == "paddock-recovery-link-token"; negated != want {
+				t.Errorf("%s: policy %s negated %v, want %v", name, policy, negated, want)
+			}
+		}
+		if deny && !b.FailClosed["paddock-recovery-link-token"] {
+			t.Errorf("%s: link token binding without failure_result true", name)
+		}
 	}
-	// Without a one-time link the flow has no user: a visitor sees neither the password prompt nor the passkey setup.
+	if b, ok := stages["paddock-recovery-link-invalid"]; ok {
+		var deny struct {
+			Name string `json:"name"`
+		}
+		if err := ak.Get(ctx, "/stages/deny/"+b.Stage+"/", &deny); err != nil || deny.Name != "paddock-recovery-link-invalid" {
+			t.Errorf("paddock-recovery-link-invalid is no deny stage: %+v %v", deny, err)
+		}
+	}
+	// Without a one-time link the flow has no user: a visitor sees neither the password prompt nor the passkey setup
+	// but Authentik's refusal.
 	hc, err := env.NewHTTPClient()
 	if err != nil {
 		t.Fatal(err)
@@ -353,12 +374,13 @@ func TestMFAEnrolmentRecoveryFlow(t *testing.T) {
 	}
 	err = json.NewDecoder(res.Body).Decode(&ch)
 	_ = res.Body.Close()
-	if err != nil || ch.Component == "ak-stage-prompt" || ch.Component == "ak-stage-authenticator-webauthn" {
-		t.Errorf("paddock-recovery without a link answers %q (%d, %v), want no prompt and no passkey setup", ch.Component,
+	if err != nil || ch.Component != "ak-stage-access-denied" {
+		t.Errorf("paddock-recovery without a link answers %q (%d, %v), want ak-stage-access-denied", ch.Component,
 			res.StatusCode, err)
 	}
 	names := slices.Sorted(maps.Keys(stages))
-	want := []string{"default-authenticator-webauthn-setup", "paddock-recovery-password", "paddock-recovery-user-write"}
+	want := []string{"default-authenticator-webauthn-setup", "paddock-recovery-link-invalid", "paddock-recovery-password",
+		"paddock-recovery-user-write"}
 	if !slices.Equal(names, want) {
 		t.Errorf("paddock-recovery binds %v, want exactly %v (no authenticator app stage)", names, want)
 	}
@@ -811,6 +833,7 @@ func TestMF3EnrolmentLink(t *testing.T) {
 		t.Fatalf("user %s: pk %d, %v", u.Username, accountPK, err)
 	}
 	removePasskeys(ctx, t, ak, accountPK)
+	before := readLinkState(ctx, t, ak, accountPK, u.Username)
 	again, err := env.NewHTTPClient()
 	if err != nil {
 		t.Fatal(err)
@@ -825,6 +848,7 @@ func TestMF3EnrolmentLink(t *testing.T) {
 	if !errors.Is(err, authflow.ErrAccessDenied) && !errors.As(err, &stageErr) && !errors.As(err, &execErr) {
 		t.Fatalf("the link used twice: %v, stages %v, want a refusal by Authentik", err, seen)
 	}
+	before.expectUnchanged(t, readLinkState(ctx, t, ak, accountPK, u.Username), "the link used twice")
 	// Positive control: a new link for the same account, still without a passkey, does show the passkey setup, so the
 	// check above fails for a link that still works.
 	stepUp(t, alice, env.Alice, true)
@@ -874,6 +898,272 @@ func TestMF3EnrolmentLinkPlatformAdministrator(t *testing.T) {
 	}
 	if ev := expectOneEvent(t, alice, res.RequestID, "user.enrolment_link_created", "failure"); ev.ErrorCode != "invalid_state" {
 		t.Fatalf("event error code %q, want invalid_state", ev.ErrorCode)
+	}
+}
+
+// createEnrolmentLink requests a setup link for the user id as the stepped-up administrator p, expects the success
+// event and returns the link with the event's previous_links_revoked.
+func createEnrolmentLink(t *testing.T, p *env.Portal, id string) (string, any) {
+	t.Helper()
+	res := call(t, p, http.MethodPost, "/api/v1/users/"+id+"/enrolment-link", nil)
+	expectStatus(t, res, http.StatusCreated, "")
+	var link struct {
+		Link string `json:"link"`
+	}
+	if err := res.JSON(&link); err != nil {
+		t.Fatal(err)
+	}
+	ev := expectOneEvent(t, p, res.RequestID, "user.enrolment_link_created", "success")
+	return link.Link, ev.Params["previous_links_revoked"]
+}
+
+// linkState is what a setup link can change on an account. It never holds a token key.
+type linkState struct {
+	// Passkeys are the pks of the account's WebAuthn devices, sorted.
+	Passkeys []string
+	// PasswordMissing is the shipped policy paddock-recovery-password-missing for the account; for an account Paddock
+	// manages it is whether the account has no usable password (Authentik's API does not expose it directly).
+	PasswordMissing bool
+	// PasswordChanged is password_change_date, which every password Authentik sets moves.
+	PasswordChanged string
+	PasswordByLink  any
+	// LinkTokens are the pk and expiry of each of the account's <uid>-password-reset tokens, sorted.
+	LinkTokens []string
+}
+
+// readLinkState reads the linkState of the Authentik user pk with the given username.
+func readLinkState(ctx context.Context, t *testing.T, ak *env.Authentik, pk int, username string) linkState {
+	t.Helper()
+	var u struct {
+		UID             string         `json:"uid"`
+		PasswordChanged string         `json:"password_change_date"`
+		Attributes      map[string]any `json:"attributes"`
+	}
+	if err := ak.Get(ctx, fmt.Sprintf("/core/users/%d/", pk), &u); err != nil || u.UID == "" {
+		t.Fatalf("user %d: uid %q, %v", pk, u.UID, err)
+	}
+	s := linkState{PasswordChanged: u.PasswordChanged, PasswordByLink: u.Attributes["paddock_password_by_link"]}
+	var devices []struct {
+		PK   any    `json:"pk"`
+		Type string `json:"type"`
+	}
+	if err := ak.Get(ctx, fmt.Sprintf("/authenticators/admin/all/?user=%d", pk), &devices); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range devices {
+		if strings.EqualFold(d.Type, "authentik_stages_authenticator_webauthn.webauthndevice") {
+			s.Passkeys = append(s.Passkeys, fmt.Sprint(d.PK))
+		}
+	}
+	slices.Sort(s.Passkeys)
+	policy := flowStages(ctx, t, ak, "paddock-recovery")["paddock-recovery-password"].PolicyPKs["paddock-recovery-password-missing"]
+	if policy == "" {
+		t.Fatal("paddock-recovery-password-missing is not bound to the password prompt")
+	}
+	missing, err := ak.TestPolicy(ctx, policy, pk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.PasswordMissing = missing
+	identifier := u.UID + "-password-reset"
+	var tokens struct {
+		Results []struct {
+			PK         any    `json:"pk"`
+			Identifier string `json:"identifier"`
+			User       int    `json:"user"`
+			Expires    string `json:"expires"`
+		} `json:"results"`
+	}
+	q := url.Values{"identifier": {identifier}, "user__username": {username}, "page_size": {"100"}}
+	if err := ak.Get(ctx, "/core/tokens/?"+q.Encode(), &tokens); err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range tokens.Results {
+		if tk.Identifier == identifier && tk.User == pk {
+			s.LinkTokens = append(s.LinkTokens, fmt.Sprint(tk.PK)+"@"+tk.Expires)
+		}
+	}
+	slices.Sort(s.LinkTokens)
+	return s
+}
+
+// expectUnchanged fails unless after equals s: a refused link set no passkey and no password, did not spend the host
+// command's permission and left no new link token behind.
+func (s linkState) expectUnchanged(t *testing.T, after linkState, what string) {
+	t.Helper()
+	if fmt.Sprintf("%+v", after) != fmt.Sprintf("%+v", s) {
+		t.Fatalf("%s changed the account: before %+v, after %+v", what, s, after)
+	}
+}
+
+// expectLinkRefused runs link and fails unless Authentik refused it: neither the password prompt nor the passkey setup,
+// an answer of Authentik rather than a transport error, and the account of the Authentik user pk unchanged. The account
+// must hold exactly linkTokens link tokens beforehand, so that the token comparison cannot pass on an empty list.
+func expectLinkRefused(ctx context.Context, t *testing.T, ak *env.Authentik, pk int, username, link, what string,
+	linkTokens int) {
+	t.Helper()
+	before := readLinkState(ctx, t, ak, pk, username)
+	if len(before.LinkTokens) != linkTokens {
+		t.Fatalf("%s: the account holds %d link tokens before, want %d", what, len(before.LinkTokens), linkTokens)
+	}
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := authflow.SetupLink(ctx, client, link, "pw-"+uuid.NewString(), nil)
+	if slices.Contains(seen, "ak-stage-authenticator-webauthn") || slices.Contains(seen, "ak-stage-prompt") {
+		t.Fatalf("%s: %v, stages %v, want it refused: no passkey and no password step", what, err, seen)
+	}
+	var stageErr *authflow.StageError
+	var execErr *authflow.ExecutorError
+	if !errors.Is(err, authflow.ErrAccessDenied) && !errors.As(err, &stageErr) && !errors.As(err, &execErr) {
+		t.Fatalf("%s: %v, stages %v, want a refusal by Authentik", what, err, seen)
+	}
+	before.expectUnchanged(t, readLinkState(ctx, t, ak, pk, username), what)
+}
+
+// TestMF3EnrolmentLinkEndsOlderLinks is gate MF3 for plan M12h-2 amendment f point 1: a new setup link ends every
+// older link of the account. Of two links created one after the other, the first is refused by Authentik and the
+// second works (the link of a new user Paddock created still asks for the password first); each event counts one older
+// link ended
+// (the creation's password link, then the first setup link).
+func TestMF3EnrolmentLinkEndsOlderLinks(t *testing.T) {
+	ctx := testContext(t, 4*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := login(t, env.Alice)
+	u := createLocalUser(t, alice, "mf3-older")
+	pk, err := ak.UserPK(ctx, u.Username)
+	if err != nil || pk == 0 {
+		t.Fatalf("user %s: pk %d, %v", u.Username, pk, err)
+	}
+	stepUp(t, alice, env.Alice, true)
+
+	first, revoked := createEnrolmentLink(t, alice, u.ID)
+	if revoked != float64(1) {
+		t.Fatalf("first link: previous_links_revoked %v, want 1 (the password link of the creation)", revoked)
+	}
+	second, revoked := createEnrolmentLink(t, alice, u.ID)
+	if revoked != float64(1) {
+		t.Fatalf("second link: previous_links_revoked %v, want 1", revoked)
+	}
+	if first == second {
+		t.Fatalf("both links are %q, want a new link", first)
+	}
+
+	// The newer link's token is the account's only one: the older link shares its identifier and was replaced.
+	expectLinkRefused(ctx, t, ak, pk, u.Username, first, "the older link", 1)
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	passkey, err := authflow.NewWebAuthn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := authflow.SetupLink(ctx, client, second, "pw-"+uuid.NewString(), passkey)
+	if want := []string{"ak-stage-prompt", "ak-stage-authenticator-webauthn", "xak-flow-redirect"}; err != nil || !slices.Equal(seen, want) {
+		t.Fatalf("the newest link: %v, stages %v, want %v", err, seen, want)
+	}
+}
+
+// TestMF3EnrolmentLinkSyncedAccount is gate MF3 for plan M12h-2 amendment f point 2: the link of an account Paddock
+// does not manage (no paddock_managed, as every account synced from the organization's identity source) and that has
+// no password only sets up the passkey and never asks for a password. The account is a new user Paddock created whose
+// paddock_managed is switched off in Authentik, which gives exactly that state: no password and not managed.
+func TestMF3EnrolmentLinkSyncedAccount(t *testing.T) {
+	ctx := testContext(t, 4*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := login(t, env.Alice)
+	u := createLocalUser(t, alice, "mf3-synced")
+	pk, err := ak.UserPK(ctx, u.Username)
+	if err != nil || pk == 0 {
+		t.Fatalf("user %s: pk %d, %v", u.Username, pk, err)
+	}
+	if err := ak.SetUserAttribute(ctx, pk, "paddock_managed", false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ak.SetUserAttribute(context.Background(), pk, "paddock_managed", true) })
+	stepUp(t, alice, env.Alice, true)
+
+	link, _ := createEnrolmentLink(t, alice, u.ID)
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	passkey, err := authflow.NewWebAuthn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := authflow.SetupLink(ctx, client, link, "pw-"+uuid.NewString(), passkey)
+	if want := []string{"ak-stage-authenticator-webauthn", "xak-flow-redirect"}; err != nil || !slices.Equal(seen, want) {
+		t.Fatalf("a synced account's link: %v, stages %v, want %v (the passkey only, no password)", err, seen, want)
+	}
+}
+
+// TestMF3EnrolmentLinkHandCreatedPlatformAdmin is gate MF3 for the addendum to plan M12h-2 amendment f: a platform
+// administrator the operator created by hand in Authentik, without a password and without an authenticator (install
+// §9 step 1), gets a link from paddock-server admin enrolment-link that asks for the password and then sets up the
+// passkey. The command marks the account (paddock_password_by_link true, passkey_only false in its event) before
+// it issues the link, and the link overwrites the mark once the password is set.
+func TestMF3EnrolmentLinkHandCreatedPlatformAdmin(t *testing.T) {
+	ctx := testContext(t, 6*time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	username := "mf3-hand-" + uniqueSuffix() + "@acceptance.test"
+	pk, err := ak.CreateUserWithoutPassword(ctx, username, "paddock.platform.admins")
+	t.Cleanup(func() {
+		if pk != 0 {
+			_ = ak.DeleteUser(context.Background(), pk)
+		}
+	})
+	if err != nil {
+		t.Fatalf("create user %s: %v", username, err)
+	}
+
+	since := time.Now().Add(-time.Second)
+	out := runAdmin(t, "enrolment-link", "--username", username)
+	if strings.Contains(out, "upstream identity source") {
+		t.Fatalf("enrolment-link printed %q, want a link that sets the password", out)
+	}
+	var link string
+	for line := range strings.Lines(out) {
+		if l := strings.TrimSpace(line); strings.HasPrefix(l, "https://") {
+			link = l
+		}
+	}
+	if link == "" {
+		t.Fatalf("enrolment-link printed no link: %q", out)
+	}
+	if v, err := ak.UserAttribute(ctx, pk, "paddock_password_by_link"); err != nil || v != true {
+		t.Fatalf("paddock_password_by_link %v, %v, want true before the link is used", v, err)
+	}
+	ev := expectIndexEventSince(t, auditIndex(t), platformOrg, "platform.enrolment_link_created", since)
+	if ev.Params["passkey_only"] != false || ev.Params["username"] != username {
+		t.Fatalf("platform.enrolment_link_created params %v, want passkey_only false for %s", ev.Params, username)
+	}
+
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	passkey, err := authflow.NewWebAuthn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := authflow.SetupLink(ctx, client, link, "pw-"+uuid.NewString(), passkey)
+	if want := []string{"ak-stage-prompt", "ak-stage-authenticator-webauthn", "xak-flow-redirect"}; err != nil || !slices.Equal(seen, want) {
+		t.Fatalf("the hand-created platform administrator's link: %v, stages %v, want %v", err, seen, want)
+	}
+	if v, err := ak.UserAttribute(ctx, pk, "paddock_password_by_link"); err != nil || v != "used" {
+		t.Fatalf("paddock_password_by_link %v, %v after the password was set, want used", v, err)
 	}
 }
 

@@ -28,6 +28,45 @@ type linkDirectory struct {
 	inactive map[string]bool
 	links    []string // pks a link was created for
 	linkFail error
+	// open counts the unexpired links per pk; revokeFail makes ending them fail.
+	open       map[string]int
+	revokeFail error
+	// connected are the pks with an upstream source connection; connFail makes the lookup fail. attrs are the
+	// attributes set per pk; a nil value removes one, as in Authentik.
+	connected map[string]bool
+	connFail  error
+	attrs     map[string]map[string]any
+}
+
+func (d *linkDirectory) HasSourceConnection(_ context.Context, pk string) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.connected[pk], d.connFail
+}
+
+func (d *linkDirectory) SetUserAttribute(_ context.Context, pk, key string, value any) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.attrs[pk] == nil {
+		d.attrs[pk] = map[string]any{}
+	}
+	if value == nil {
+		delete(d.attrs[pk], key)
+		return nil
+	}
+	d.attrs[pk][key] = value
+	return nil
+}
+
+func (d *linkDirectory) RevokeRecoveryLinks(_ context.Context, pk string) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.revokeFail != nil {
+		return 0, d.revokeFail
+	}
+	n := d.open[pk]
+	delete(d.open, pk)
+	return n, nil
 }
 
 func (d *linkDirectory) UserActive(_ context.Context, pk string) (bool, error) {
@@ -43,6 +82,7 @@ func (d *linkDirectory) RecoveryLink(_ context.Context, pk string) (string, erro
 		return "", d.linkFail
 	}
 	d.links = append(d.links, pk)
+	d.open[pk]++
 	return "https://auth.test/if/flow/paddock-recovery/?flow_token=secret-" + pk, nil
 }
 
@@ -72,15 +112,18 @@ func newLinkWorld(t *testing.T) *linkWorld {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = super.Close(ctx) })
-	dir := &linkDirectory{directory: newDirectory(), inactive: map[string]bool{}}
+	dir := &linkDirectory{directory: newDirectory(), inactive: map[string]bool{}, open: map[string]int{},
+		connected: map[string]bool{}, attrs: map[string]map[string]any{}}
 	dir.roleGroups = map[string][]ports.IdentityUser{
-		organization.PlatformAdminsGroup():                       {{PK: "1", Username: "root@example.test", Active: true}, {PK: "2", Username: "off@example.test"}},
+		organization.PlatformAdminsGroup(): {{PK: "1", Username: "root@example.test", Active: true}, {PK: "2", Username: "off@example.test"},
+			{PK: "4", Username: "synced@example.test", Active: true}},
 		organization.RoleGroup("acme", organization.GroupAdmins): {{PK: "3", Username: "alice@acme.test", Active: true}},
 	}
 	dir.inactive["2"] = true
 	corr := "corr-link-" + uuid.NewString()
 	runner := app.NewActionRunner(worker, platform, func(context.Context) string { return corr })
-	links := app.NewPlatformEnrolmentLinks(runner, dir)
+	dir.connected["4"] = true
+	links := app.NewPlatformEnrolmentLinks(runner, dir, dir)
 	links.SetClock(func() time.Time { return time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC) })
 	return &linkWorld{super: super, dir: dir, links: links, corr: corr}
 }
@@ -128,6 +171,78 @@ func TestPlatformEnrolmentLink(t *testing.T) {
 	}
 }
 
+// TestPlatformEnrolmentLinkPasswordByLink (plan M12h-2 amendment f addendum points 1 and 6): the host command marks a
+// hand-created platform administrator so the link may set a password, before the link is issued (passkey_only
+// false); an account connected to an upstream source is not marked and its link sets up only the passkey
+// (passkey_only true).
+func TestPlatformEnrolmentLinkPasswordByLink(t *testing.T) {
+	t.Run("hand-created account", func(t *testing.T) {
+		w := newLinkWorld(t)
+		l, err := w.links.CreateCLI(context.Background(), "root@example.test")
+		if err != nil || l.PasskeyOnly {
+			t.Fatalf("CreateCLI: %+v %v, want a link that may set a password", l, err)
+		}
+		if got := w.dir.attrs["1"][ports.AttrPasswordByLink]; got != true {
+			t.Fatalf("attribute %v, want true", got)
+		}
+		if _, params, n := w.event(t); n != 1 || !strings.Contains(params, `"passkey_only": false`) {
+			t.Fatalf("%d events, params %s, want passkey_only false", n, params)
+		}
+	})
+	t.Run("account with an upstream source", func(t *testing.T) {
+		w := newLinkWorld(t)
+		l, err := w.links.CreateCLI(context.Background(), "synced@example.test")
+		if err != nil || !l.PasskeyOnly || len(w.dir.links) != 1 {
+			t.Fatalf("CreateCLI: %+v %v, want a passkey-only link", l, err)
+		}
+		if v := w.dir.attrs["4"][ports.AttrPasswordByLink]; v != nil {
+			t.Fatalf("attribute %v, want none", v)
+		}
+		if _, params, n := w.event(t); n != 1 || !strings.Contains(params, `"passkey_only": true`) {
+			t.Fatalf("%d events, params %s, want passkey_only true", n, params)
+		}
+	})
+	t.Run("connected after an earlier mark", func(t *testing.T) {
+		w := newLinkWorld(t)
+		w.dir.attrs["4"] = map[string]any{ports.AttrPasswordByLink: true}
+		l, err := w.links.CreateCLI(context.Background(), "synced@example.test")
+		if err != nil || !l.PasskeyOnly {
+			t.Fatalf("CreateCLI: %+v %v, want a passkey-only link", l, err)
+		}
+		if v, ok := w.dir.attrs["4"][ports.AttrPasswordByLink]; ok {
+			t.Fatalf("attribute %v, want the earlier mark removed", v)
+		}
+		if _, params, n := w.event(t); n != 1 || !strings.Contains(params, `"passkey_only": true`) {
+			t.Fatalf("%d events, params %s, want passkey_only true", n, params)
+		}
+	})
+	t.Run("source lookup fails", func(t *testing.T) {
+		w := newLinkWorld(t)
+		w.dir.open["1"] = 1
+		w.dir.connFail = problem.UpstreamUnavailable
+		if _, err := w.links.CreateCLI(context.Background(), "root@example.test"); !errors.Is(err, problem.UpstreamUnavailable) {
+			t.Fatalf("CreateCLI: %v, want upstream_unavailable", err)
+		}
+		if len(w.dir.links) != 0 || len(w.dir.attrs) != 0 || w.dir.open["1"] != 1 {
+			t.Fatalf("links %v, attributes %v, open %d: want nothing changed", w.dir.links, w.dir.attrs, w.dir.open["1"])
+		}
+		ev, params, n := w.event(t)
+		if n != 1 || ev != "failure upstream_unavailable system:paddock-server admin "+platformOrg ||
+			strings.Contains(params, "passkey_only") || strings.Contains(params, "previous_links_revoked") {
+			t.Fatalf("%d events, %q %s, want one failure without passkey_only", n, ev, params)
+		}
+	})
+	t.Run("deactivated account", func(t *testing.T) {
+		w := newLinkWorld(t)
+		if _, err := w.links.CreateCLI(context.Background(), "off@example.test"); !errors.Is(err, problem.InvalidState) {
+			t.Fatalf("CreateCLI: %v, want invalid_state", err)
+		}
+		if len(w.dir.attrs) != 0 {
+			t.Fatalf("attributes set %v on a deactivated account", w.dir.attrs)
+		}
+	})
+}
+
 // TestPlatformEnrolmentLinkRefusals (ADR 0053 decision 1): no link for an account that is not a direct member of
 // paddock.platform.admins (an organization administrator, an unknown name), nor for a deactivated platform
 // administrator; each attempt records exactly one failure.
@@ -169,6 +284,59 @@ func TestPlatformEnrolmentLinkRefusals(t *testing.T) {
 			t.Fatalf("%d events, %q, want one failure invalid_state", n, ev)
 		}
 	})
+}
+
+// paramsOfEvents returns the params of every platform.enrolment_link_created event of the world, oldest first.
+func (w *linkWorld) paramsOfEvents(t *testing.T) []string {
+	t.Helper()
+	rows, err := w.super.Query(context.Background(), `SELECT outcome || ' ' || params::text FROM action
+		WHERE code = 'platform.enrolment_link_created' AND correlation_id = $1 ORDER BY id`, w.corr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// TestPlatformEnrolmentLinkEndsOlderLinks (plan M12h-2 amendment f point 1): the host command ends the account's
+// older links before it creates a new one, so only the newest works, and each event says how many it ended.
+func TestPlatformEnrolmentLinkEndsOlderLinks(t *testing.T) {
+	w := newLinkWorld(t)
+	for range 2 {
+		if _, err := w.links.CreateCLI(context.Background(), "root@example.test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w.dir.open["1"] != 1 {
+		t.Fatalf("%d open links, want only the newest", w.dir.open["1"])
+	}
+	got := w.paramsOfEvents(t)
+	if len(got) != 2 || !strings.Contains(got[0], `"previous_links_revoked": 0`) ||
+		!strings.Contains(got[1], `"previous_links_revoked": 1`) {
+		t.Fatalf("events %v, want 0 then 1 older links ended", got)
+	}
+}
+
+// TestPlatformEnrolmentLinkRevocationFails (plan M12h-2 amendment f point 1): when the older links cannot be ended the
+// host command creates no link and records exactly one failure upstream_unavailable without a count.
+func TestPlatformEnrolmentLinkRevocationFails(t *testing.T) {
+	w := newLinkWorld(t)
+	w.dir.open["1"] = 1
+	w.dir.revokeFail = problem.UpstreamUnavailable
+	if _, err := w.links.CreateCLI(context.Background(), "root@example.test"); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("CreateCLI: %v, want upstream_unavailable", err)
+	}
+	if len(w.dir.links) != 0 || w.dir.open["1"] != 1 {
+		t.Fatalf("links created %v, open %d: want none created and the older one untouched", w.dir.links, w.dir.open["1"])
+	}
+	ev, params, n := w.event(t)
+	if n != 1 || ev != "failure upstream_unavailable system:paddock-server admin "+platformOrg ||
+		strings.Contains(params, "previous_links_revoked") {
+		t.Fatalf("%d events, %q %s, want one failure upstream_unavailable without a count", n, ev, params)
+	}
 }
 
 // noticeWorld is the announcement of ADR 0053 decision 6 against the shared database.

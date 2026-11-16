@@ -2174,11 +2174,11 @@
     "enrolmentLink": {
       "create": "Create sign-in setup link",
       "title": "Sign-in setup link",
-      "confirm": "Create a one-time sign-in setup link for {username}? With it, the account sets its password if it has none and a passkey if it has none. The link is valid for 24 hours and is shown only once.",
+      "confirm": "Create a one-time sign-in setup link for {username}? With it, the account sets up a passkey if it has none, and a password only if Paddock created the account and it has none. A new link ends every older one. The link is valid for 24 hours and is shown only once.",
       "link": "Sign-in setup link",
       "copyFailed": "The link could not be copied. Select it in the field and copy it by hand.",
       "shownOnce": "Give this one-time link to {username} on a trusted channel. It is valid until {at} and is shown only now.",
-      "help": "A sign-in setup link lets the account set its password and a passkey once, within 24 hours. A link created while the user has no portal role, such as the password link of a new user, stays usable for its 24 hours, and a newer link does not end it: its holder could set up the passkey of the account once it has become an administrator. Give the user a portal role only after they have used the link, or create a fresh link after the promotion and hand only that one over."
+      "help": "A sign-in setup link lets the account set up a passkey once within 24 hours; an account Paddock created that has no password also sets one. A new link ends every older one: after giving the user a portal role, create a fresh link and hand only that one over, unless they have already used theirs."
     },
     "syncedHint": "This user is synced from an upstream directory: name, email and password are managed there. Lock, groups and permissions are managed here.",
     "lock": "Lock",

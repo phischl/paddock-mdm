@@ -312,8 +312,10 @@ saves a policy: `docs/operations/mcp.md`.
 ## 9. First platform administrator, first organization, first device
 
 1. Sign in to `https://auth.<domain>/if/admin/` as `akadmin` with the password of
-   `.secrets/authentik_bootstrap_password`. Create the platform administrator's user, enroll a WebAuthn
-   authenticator for it (step-up requires one) and add it to the group `paddock.platform.admins`. Then deactivate
+   `.secrets/authentik_bootstrap_password`. Create the platform administrator's user without a password and without
+   an authenticator, add it to the group `paddock.platform.admins`, then run
+   `./paddock compose run --rm --no-deps paddock-worker admin enrolment-link --username <name>` and hand the printed
+   link over: with it the administrator sets the password and the passkey (step-up requires one). Then deactivate
    `akadmin` or give it a new password held by the custodians.
 2. Sign in to `https://admin.<domain>` as the platform administrator (every sign-in asks for the second factor) and
    create the first organization (*Platform* → *Organizations*) **with the domains of its users** (the create dialog
@@ -322,18 +324,18 @@ saves a policy: `docs/operations/mcp.md`.
    and make its first administrator a member of `paddock.<slug>.admins`. The sign-in never sets up a second factor for
    an administrator (a member of `paddock.platform.admins` or of an organization's `.admins`, `.operators` or
    `.auditors` group) and denies one without a passkey (ADR 0053): give the new administrator a one-time sign-in setup
-   link, valid 24 hours, with which they set their password if they have none and enrol a passkey. An organization
-   administrator creates it on the user's page in the portal (*Users* → the user → *Create sign-in setup link*, with a
-   step-up; the link is shown once). For a platform administrator account the operator creates it on the
+   link, valid 24 hours, with which they enrol a passkey and, for an account Paddock created, set their password if
+   they have none (an account from the identity source never gets a password in Paddock's identity provider). An
+   organization administrator creates it on the user's page in the portal (*Users* → the user → *Create sign-in setup
+   link*, with a step-up; the link is shown once). For a platform administrator account the operator creates it on the
    control-plane host: `./paddock compose run --rm --no-deps paddock-worker admin enrolment-link --username <name>`
    prints the link once and refuses an account that is not a direct member of `paddock.platform.admins` (audited as
-   `platform.enrolment_link_created`). For an organization's first administrator, before anyone of the organization
-   can create links in the portal, create it in Authentik's admin interface (*Directory* → *Users* → the user →
-   *Create recovery link*), which opens the same setup. A link created for a user without a portal
-   role, such as a new local user's password link, stays usable for 24 hours, and a newer link does not end it:
-   whoever holds it can set up the account's passkey once the account has become an administrator. Give a user a
-   portal role only after they have used their link, or create a fresh link after the promotion and hand only that
-   one over. Device users still set up their second factor at their first device sign-in.
+   `platform.enrolment_link_created`); its link also sets the password of an account created by hand that has none,
+   but not of an account connected to an upstream identity source, and the command says so. For an organization's
+   first administrator, before anyone of the organization can create links in the portal, create it in Authentik's
+   admin interface (*Directory* → *Users* → the user → *Create recovery link*), which opens the same setup. A new link
+   ends every older one: after giving a user a portal role, create a fresh link and hand only that one over, unless
+   they have already used theirs. Device users still set up their second factor at their first device sign-in.
 3. One identity may be a member of `paddock.platform.admins` and of one organization's role group: it signs in to
    the organization and switches to platform administration from the user menu (a new sign-in that ends the
    current session; privileged actions then need a new step-up). An identity with role groups of several

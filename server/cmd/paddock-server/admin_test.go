@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 func TestParseAdmin(t *testing.T) {
@@ -155,7 +156,7 @@ func TestRunEnrolmentLink(t *testing.T) {
 	if err := runEnrolmentLink(context.Background(), links, "root@example.test", &out); err != nil {
 		t.Fatal(err)
 	}
-	want := "sign-in setup link for root@example.test (valid until 2026-11-15T10:00:00Z, usable once):\n" +
+	want := "sign-in setup link for root@example.test (valid until 2026-11-15T10:00:00Z, usable once; every older link of the account no longer works):\n" +
 		"https://auth.example.test/if/flow/paddock-recovery/?flow_token=x\n"
 	if out.String() != want || links.got != "root@example.test" {
 		t.Fatalf("output %q for %q, want %q", out.String(), links.got, want)
@@ -165,5 +166,23 @@ func TestRunEnrolmentLink(t *testing.T) {
 	if err := runEnrolmentLink(context.Background(), links, "alice@acme.test", &out); !errors.Is(err, app.ErrNotPlatformAdministrator) ||
 		out.Len() != 0 {
 		t.Fatalf("refusal: %v, output %q", err, out.String())
+	}
+	// The older links could not be ended (plan M12h-2 amendment f): no link is printed.
+	links.err = problem.UpstreamUnavailable
+	if err := runEnrolmentLink(context.Background(), links, "root@example.test", &out); !errors.Is(err, problem.UpstreamUnavailable) ||
+		out.Len() != 0 {
+		t.Fatalf("older links not ended: %v, output %q", err, out.String())
+	}
+	// An account connected to an upstream source (plan M12h-2 amendment f addendum point 1): the command says why the
+	// link sets up only the passkey.
+	links.err, links.link.PasskeyOnly = nil, true
+	if err := runEnrolmentLink(context.Background(), links, " synced@example.test ", &out); err != nil {
+		t.Fatal(err)
+	}
+	want = "synced@example.test signs in with the password of its upstream identity source: the link sets up only the passkey\n" +
+		"sign-in setup link for synced@example.test (valid until 2026-11-15T10:00:00Z, usable once; every older link of the account no longer works):\n" +
+		"https://auth.example.test/if/flow/paddock-recovery/?flow_token=x\n"
+	if out.String() != want {
+		t.Fatalf("passkey-only output %q, want %q", out.String(), want)
 	}
 }

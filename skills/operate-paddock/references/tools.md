@@ -318,7 +318,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `createNotificationDestination` | notifications | Creates a destination. |
 | `createPlatformNotificationDestination` | platform | Creates a destination. |
 | `createSoftwareSource` | software | Adds a package source with its signing key: an APT repository (kind apt, the default) or a Flatpak remote (kind flatpak: exactly one URI, the remote's URL, and no suites, components or architectures, else 400 invalid_request; the signing key is the remote's GPG key). |
-| `createUserEnrolmentLink` | users | A one-time sign-in setup link for the user (ADR 0053 decision 1), valid 24 hours: the account sets its password if it has none and a passkey if it has none. |
+| `createUserEnrolmentLink` | users | A one-time sign-in setup link for the user (ADR 0053 decision 1), valid 24 hours: the account sets up a passkey if it has none, and a password only if Paddock created the account and it has none. |
 | `deleteBackupTarget` | platform | Deletes the target; the backup sets already on it stay. |
 | `deleteIpAllowlistEntry` | platform | Removes the entry. |
 | `deleteNotificationDestination` | notifications | Deletes the destination with its delivery state and history. |

@@ -1,10 +1,12 @@
 # yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
-# Paddock account recovery (plan M3a decision 18): the one-time links paddock-server creates for new local users
-# (POST /api/v3/core/users/<pk>/recovery/, valid 24 h) open this flow with the user already identified by the link
-# token. The flow sets up the sign-in (ADR 0053 decision 2 as amended): a password of at least 12 characters if the
-# account has none, then a passkey if it has none; an account with a password and a passkey changes nothing. There is
-# no authenticator app stage (ADR 0053 amendment d): portal sign-in and step-up accept only a passkey, and an account
-# adds an authenticator app in Authentik's user settings. paddock-server's worker makes it the default brand's recovery flow (plan M3.1 decision 5).
+# Paddock account recovery (plan M3a decision 18): the one-time links paddock-server creates for new users and the
+# sign-in setup links (POST /api/v3/core/users/<pk>/recovery/, valid 24 h) open this flow with the user already
+# identified by the link token. The flow sets up the sign-in (ADR 0053 decision 2 as amended): a password of at least
+# 12 characters if the account has none and Paddock created it or paddock-server admin enrolment-link allowed it, then
+# a passkey if it has none; an account with a password and a passkey changes nothing. There is no authenticator app
+# stage (ADR 0053 amendment d): portal sign-in and step-up accept only a passkey, and an account adds an authenticator
+# app in Authentik's user settings. paddock-server's worker makes it the default brand's recovery flow (plan M3.1
+# decision 5).
 version: 1
 metadata:
   name: Paddock - Recovery
@@ -44,15 +46,21 @@ entries:
       expression: |
         return bool(request.context.get("is_restored"))
 
-  # The password stages run only for an account without a usable password (a new local user); an account with one
-  # keeps it (ADR 0053 decision 2).
+  # The password stages run only for an account without a usable password that Paddock created (paddock_managed) or
+  # that paddock-server admin enrolment-link marked (paddock_password_by_link, a platform administrator the operator
+  # created by hand); an account with a password keeps it (ADR 0053 decision 2). An account synced from the
+  # organization's identity source never gets a password here: its link only sets up the passkey (plan M12h-2
+  # amendment f point 2 and its addendum). Only paddock-server writes either attribute: no prompt of a Paddock flow
+  # lets a user write attributes.
   - model: authentik_policies_expression.expressionpolicy
     id: password-missing
     identifiers:
       name: paddock-recovery-password-missing
     attrs:
       expression: |
-        return not request.user.has_usable_password()
+        attrs = request.user.attributes
+        allowed = attrs.get("paddock_managed") is True or attrs.get("paddock_password_by_link") is True
+        return allowed and not request.user.has_usable_password()
 
   - model: authentik_policies_expression.expressionpolicy
     id: webauthn-missing
@@ -88,6 +96,24 @@ entries:
       order: 1
       placeholder_expression: false
 
+  # Spends the host command's permission once the password is set: the user-write stage stores "used" over
+  # paddock_password_by_link, which the policy above no longer accepts. Authentik's user-write stage can only set
+  # attributes, not remove them. A hidden field takes its value from the server, never from the browser.
+  - model: authentik_stages_prompt.prompt
+    id: field-password-by-link-used
+    identifiers:
+      name: paddock-recovery-field-password-by-link-used
+    attrs:
+      field_key: attributes.paddock_password_by_link
+      label: Password set by link
+      type: hidden
+      required: false
+      placeholder: used
+      initial_value: used
+      order: 2
+      placeholder_expression: false
+      initial_value_expression: false
+
   - model: authentik_stages_prompt.promptstage
     id: prompt
     identifiers:
@@ -96,8 +122,18 @@ entries:
       fields:
         - !KeyOf field-password
         - !KeyOf field-password-repeat
+        - !KeyOf field-password-by-link-used
       validation_policies:
         - !KeyOf password-policy
+
+  # A used, older, expired or unknown link restores no plan; without this stage every other stage would be skipped and
+  # the empty flow would end in a silent redirect, so the visitor would not learn that the link no longer works.
+  - model: authentik_stages_deny.denystage
+    id: link-invalid
+    identifiers:
+      name: paddock-recovery-link-invalid
+    attrs:
+      deny_message: This link is invalid, has expired or has already been used. Ask your administrator for a new link.
 
   - model: authentik_stages_user_write.userwritestage
     id: user-write
@@ -106,6 +142,16 @@ entries:
     attrs:
       user_creation_mode: never_create
 
+  - model: authentik_flows.flowstagebinding
+    id: link-invalid-binding
+    identifiers:
+      target: !KeyOf flow
+      stage: !KeyOf link-invalid
+      order: 0
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
   - model: authentik_flows.flowstagebinding
     id: prompt-binding
     identifiers:
@@ -171,6 +217,16 @@ entries:
       order: 1
     attrs:
       target: !KeyOf webauthn-binding
+  # The deny stage runs exactly when the link token is missing. Authentik applies negate only to a policy that ran; a
+  # policy that fails with an error takes failure_result as is, so true keeps the deny stage on that path too.
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf link-token
+      order: 2
+    attrs:
+      target: !KeyOf link-invalid-binding
+      negate: true
+      failure_result: true
   - model: authentik_policies.policybinding
     identifiers:
       policy: !KeyOf webauthn-missing
