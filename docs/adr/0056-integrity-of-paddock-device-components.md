@@ -96,3 +96,38 @@ For A's downgrade handling:
   - dpkg `md5sums` are MD5. Here they are only a change detector, not a signature, and root can rewrite them anyway.
   - The system-test harness must publish the binaries it installs on the VMs. Otherwise A reports every VM.
 - Follow-up work: PDK-1122a (C) and PDK-1122b (A). A future yank feature must honor decision 4.
+
+## Amendment 2026-11-16 (architect, PDK-1122b review round 1)
+
+The reviews of PDK-1122b showed two gaps in decision 2. Details, tests and texts: plan
+`docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 (architect, PDK-1122b review round 1)",
+A7 to A11.
+
+1. **Judged processes (replaces the first sentence of decision 2).** The policy `paddock_agent_binary_known` passes
+   unless a running process that is named `paddockd`, runs a file named `paddockd` or a file below
+   `/opt/paddock/agent/`, or was started by `paddock-supervisor` (other than in the instant before `exec`) runs an
+   executable whose SHA-256 is outside the set of published agent artifacts. The hash is taken from
+   `/proc/<pid>/exe`, the executable the process actually runs, with the process's path as fallback for a process
+   that exits during the evaluation. The filter on `/opt/paddock/agent/` and the exception for `on_disk = 0` are
+   dropped.
+   - Reason: with the old filter, pointing `current` elsewhere, a `BindReadOnlyPaths=` drop-in or a changed process
+     name hid a replaced agent from the only check that does not run inside it. The maintainer's mandate is that a
+     change of protected area 3 is detected.
+   - Option not chosen: keep the filter and only name the evasions in RR-149. It is cheaper but leaves the cheapest
+     evasion, one symlink, undetected.
+   - False alarms: Paddock runs only slot binaries of published releases; no `paddockd` running still passes; a
+     locally built `paddockd` on a device fails, which is the intended meaning and documented.
+2. **Once per failure across unanswered results.** Fleet resets a policy's results when its query changes, which
+   happens at every publish. A stored failure that was already reported keeps its row and mark while Fleet lists the
+   policy without an answer; an unreported one is deleted as before. This holds for every Paddock policy, including
+   `paddock_agent_running`.
+3. **RR-149** now reads: the policy trusts every published release and judges only processes it recognizes as the
+   agent. A foreign program that is none of the above and checks in while the genuine agent is stopped is not
+   reported by this policy, nor by `paddock_agent_running`, which stays silent while the device checks in (plan M5a
+   decision 8). Closing that gap changes decision 8 and is proposed as PDK-1122c, pending the maintainer's approval.
+   Swapping the executable link (`PR_SET_MM_EXE_FILE`), code injection into the genuine agent, an LSM policy against
+   osquery and a replaced osquery stay residual (RR-01).
+
+Consequences: the description of `device.tamper_agent_binary_changed` changes before its first release (code,
+params and MSGID alias unchanged). The policy query is longer by a constant; its size still grows with the number of
+published hashes, which the worker logs.

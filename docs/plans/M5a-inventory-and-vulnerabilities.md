@@ -710,3 +710,309 @@ switch that fails the queries containing `FROM processes p LEFT JOIN hash`, for 
 
 If either number is taken when the ticket merges, the next free number is used, and this amendment and ADR 0056 are
 updated in the same commit.
+
+## Amendment 2026-11-16 (architect, PDK-1122b review round 1) — unanswered policies, the judged process set, harness and gate timing
+
+Both reviews of PDK-1122b (commit `c0f4ddf6`) are not approved. This amendment decides their findings. It changes
+the query of A1 and the residual RR-149, which ADR 0056 records in its amendment of the same date. A2, A3 (except the
+storage rule A7), A4's params and messages, A5 and A6 stay in force. The ticket stays PDK-1122b, risk high.
+
+### Decisions
+
+**A7 Unanswered policy results keep a reported failure (internal B1, external 2).** Fleet v4.94.1
+(`server/datastore/mysql/policies.go`, `ApplyPolicySpecs`) deletes a policy's `policy_membership` when its query
+changes, so every publish turns each host's `paddock_agent_binary_known` answer into `""` until the host evaluates
+again. Fleet also stores a NULL result (`""`) when the query did not execute on the host
+(`RecordPolicyQueryExecutions`). Today the adapter drops `""`, and `DeleteMissingPolicyResults` deletes the row
+together with `alerted_at`, so the next failure is reported a second time.
+
+- The adapter MUST report every policy that Fleet lists for the host with a response other than `pass` or `fail` in
+  the new field `ports.HostInventory.UnansweredPolicies` (keys, in Fleet's order).
+- `StoreHost` MUST pass these keys to `DeleteMissingPolicyResults`. A row whose key is unanswered **and** whose
+  `alerted_at` is set is kept unchanged. A row whose key is unanswered and whose `alerted_at` is null is deleted, as
+  today. A row whose key Fleet does not list is deleted, as today. Unanswered keys are never upserted.
+- Why not keep every unanswered row (the reviewer's variant): a kept, not yet reported failure of the old definition
+  would meet `ListAgentBinaryUnknown` as soon as the host's `policy_updated_at` passes the gate while its new answer
+  is a NULL (query error). Keeping only reported rows can never create an event, because every report query requires
+  `alerted_at IS NULL`.
+- `paddock_agent_running` is not affected by publishes: its query is static, and Fleet clears memberships only when
+  the query text changes. It is affected the same way when a Paddock release changes its query text and when the query
+  fails on the host; both used to repeat `device.tamper_agent_not_running` for the same stop. A7 is generic in
+  `StoreHost` and covers it.
+
+**A8 The judged process set replaces A1's query (external 1).** The query of A1 judged only a `paddockd` running from
+`/opt/paddock/agent/` and hashed the path osquery sees. Redirecting `current` to another directory, a
+`BindReadOnlyPaths=` drop-in, or a process name changed with `prctl` defeated it, and C runs inside the replaced agent.
+The policy MUST be, for a non-empty hash set, exactly:
+
+```sql
+SELECT 1 WHERE NOT EXISTS (
+  SELECT 1 FROM processes p
+  WHERE p.path != ''
+    AND (p.name = 'paddockd' OR p.path LIKE '%/paddockd' OR p.path LIKE '%/paddockd (deleted)'
+      OR p.path LIKE '/opt/paddock/agent/%'
+      OR (p.parent IN (SELECT pid FROM processes WHERE path = '/usr/sbin/paddock-supervisor')
+        AND p.path != '/usr/sbin/paddock-supervisor'))
+    AND COALESCE((SELECT sha256 FROM hash WHERE path = '/proc/' || p.pid || '/exe'),
+      (SELECT sha256 FROM hash WHERE path = p.path), '') NOT IN ('<hash 1>', '<hash 2>'));
+```
+
+`<hash n>` are the sorted, deduplicated, validated hashes of A1; the empty set stays `SELECT 1;`. Each clause has
+one purpose:
+
+| Clause | Purpose |
+| --- | --- |
+| `p.path != ''` | A zombie or exiting process has no readable executable; judging it would raise a false alarm. |
+| `p.name = 'paddockd'`, `p.path LIKE '%/paddockd'` (and its `(deleted)` form) | A `paddockd` anywhere: a redirected `current`, a copy elsewhere, the uninstall helper `/root/paddock-uninstall/paddockd` (genuine, passes). |
+| `p.path LIKE '/opt/paddock/agent/%'` | Anything that runs from the slots, whatever its name. |
+| child of `/usr/sbin/paddock-supervisor`, except a child whose executable is the supervisor itself | Whatever the supervisor started, whatever its name or path (`prctl`, a script as `current/paddockd`). The exception covers the instant between `fork` and `exec`. |
+| hash of `/proc/<pid>/exe` | The executable the process actually runs, also in another mount namespace (bind mount) and after a rename over the file (`on_disk = 0` is now judged, and passes while the old genuine image runs). |
+| fallback hash of `p.path` | A short-lived genuine process (`paddockd version`, `self-test`) that exits between the process scan and the hash: its slot file is still there. |
+
+False-alarm safety (each MUST hold and is covered by section "Tests"):
+
+- Regular update and rollback: the supervisor runs only slot binaries (`run`, `self-test`, `version`), whose
+  releases are published; the evaluation gate of A3 covers the lag. Unchanged.
+- No `paddockd` running: no judged process, the policy passes; the stop belongs to `paddock_agent_running`. Unchanged.
+- The supervisor's `fork` before `exec`: excluded by the supervisor-path exception.
+- A process that exits during the evaluation: excluded by `p.path != ''` or passes by the path fallback.
+- Package installation and upgrade: `paddock-agent`'s postinst writes slot A only when `current` is absent; dpkg never
+  replaces a running slot binary.
+- Uninstall: the helper runs a copy of the genuine binary; it passes.
+- A device that runs a `paddockd` built locally (a developer's machine, an unpublished build) fails. This is the
+  intended meaning and is documented (A10, Low 5).
+
+The description of the policy in `inventory.AgentBinaryPolicy` MUST read: "A running Paddock agent process runs a
+published agent release (plan M5a amendments 2026-11-16, ADR 0056). The policy returns pass or fail only, never a
+hash."
+
+The registry description of `device.tamper_agent_binary_changed` (A4) MUST read:
+
+```go
+Description: "fleetd reports a running Paddock agent process whose executable matches no published agent release: the agent binary, the place it runs from, or the process the supervisor started was replaced or modified on the device (actor: system; the inventory system's policy paddock_agent_binary_known). evaluated_at is when the host last evaluated its policies; agent_version is the version the agent last reported, which a replaced agent may forge; known_hashes is the number of published hashes the policy accepts. A genuine older published release passes (RR-149).",
+```
+
+Code, params, outcomes, note, MSGID alias, finding entry and portal messages stay as in A4.
+
+**A9 The harness publishes once per stack (internal M1).** `test/system/stack.go` gains the field
+`publishMu sync.Mutex` on `Stack`. `PublishInstalledAgent` MUST hold it from before the `count(*)` query until after
+`agentrelease` returned (`defer` unlock), after the lab guard. The second VM then sees the published hash and
+publishes nothing.
+
+**A10 Lows of the external review.**
+
+| Low | Decision | Where |
+| --- | --- | --- |
+| 3 osquery hash cache, `touch -r` | Resolved by A8: the primary hash is keyed per process (`/proc/<pid>/exe`), and a running executable cannot be overwritten in place (`ETXTBSY`), so a cached entry cannot outlive a change. The remaining case (pid reuse with the same inode, size and mtime) is listed under "Risks". | this amendment; F5 step "rename over the running binary passes" proves the `/proc` hash |
+| 4 old-definition results written late | Documented, not changed. A false alarm needs a device that already runs the new release before the apply, and a result posted more than 2 minutes after it was read. | doc comment of `binaryEvaluationLag` in `server/internal/worker/inventory.go`, text below |
+| 5 devices installed from an unpublished build | Documented. | `docs/operations/fleet.md` step 5; `docs/operations/install.md`, appendix "installing from source" |
+| 6 unbounded hash set | One `Info` log line when the fingerprint changes (`hashes=<n>`), plus one `Warn` line in the same round when `n > 1000`. No metric, no cap. | `server/internal/worker/inventory.go`; `docs/operations/fleet.md` step 5 |
+
+Text for the `binaryEvaluationLag` doc comment (Low 4), appended to the existing comment: "Fleet's
+policy_updated_at is when Fleet stored the result, not when the host evaluated: a host that read the previous
+definition before the apply and posts its result more than binaryEvaluationLag later passes the gate with a result of
+the previous definition. That needs a device that already runs a release the previous definition did not list, so it
+is accepted (plan M5a amendment 2026-11-16, review round 1, A10)."
+
+Text for `docs/operations/fleet.md` step 5 (append to the paragraph of `paddock_agent_binary_known`): "A device
+installed from packages whose `paddockd` is not a published release (a local build or a draft release) fails this
+policy as soon as any release is published; publish that build or install a published release. The worker logs the
+number of accepted hashes whenever it changes and warns above 1,000, because Fleet must accept the whole query." The
+same step MUST replace "a `paddockd` running from `/opt/paddock/agent/` has a binary that matches no published release"
+by "a running agent process (named `paddockd`, running a file named `paddockd` or a file below `/opt/paddock/agent/`, or
+started by `paddock-supervisor`) runs an executable that matches no published release", and add: "A failure that
+Fleet resets after a new definition stays reported until the host answers again, so a publish does not repeat the
+event."
+
+Text for `docs/operations/install.md`, appendix "installing from source", appended to its first paragraph: "Once any
+agent release is published, a device that runs such a locally built `paddockd` raises
+`device.tamper_agent_binary_changed`."
+
+**A11 Acceptance timing without wall-clock windows (internal review).** Phase 2 of
+`TestInventoryAgentBinaryPolicy` MUST wait only on observed conditions. It MUST NOT sleep or answer for a fixed
+duration, and it MUST NOT raise any deadline of the gate. The flake rule (`docs/operations/testing-strategy.md`) applies.
+
+1. `devicesim.FleetHost` records, per hash, the first time `Answer` received a binary policy query that lists it:
+   `func (h *FleetHost) BinaryPolicyListedAt(hash string) (time.Time, bool)`.
+2. After the second publish, the gate answers until `hosts["updated"].BinaryPolicyListedAt(newHash)` returns true.
+   That time is `bound`; Fleet held the new definition no later than then.
+3. It answers until every gate device's `device_inventory_ref.policy_updated_at >= bound + 2 min` and the `updated`
+   device's `paddock_agent_binary_known` row is passing.
+4. It records each gate device's `device_inventory_ref.synced_at`, then answers until each device's `synced_at` has
+   taken two further, increasing values (two worker rounds after the condition of step 3).
+5. Then it asserts: `changed` 1 event, `genuine` 0, `updated` 0; the `changed` device's binary policy row has
+   `alerted_at` set.
+
+Steps 2 to 4 share one failure bound of 10 minutes from the second publish, the bound phase 1 already uses. Exceeding
+it fails the gate with the unmet condition in the message. `devicesim.agentBinaryPolicyMarker` becomes
+`"SELECT sha256 FROM hash WHERE path = '/proc/'"`.
+
+### Files
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `server/internal/ports/inventory.go` | change | `HostInventory.UnansweredPolicies []string` (A7) |
+| `server/internal/adapters/fleet/hosts.go` | change | fill `UnansweredPolicies` (A7) |
+| `server/internal/adapters/fleet/testdata/get_host.json`, `hosts_test.go` | change | a listed policy with response `""` (A7) |
+| `server/internal/adapters/postgres/queries/inventory.sql` + generated `pgstore` | change | `DeleteMissingPolicyResults` keeps reported unanswered rows (A7) |
+| `server/internal/app/inventory.go`, `inventory_integration_test.go` | change | `StoreHost` passes the unanswered keys; tests (A7) |
+| `server/internal/worker/inventory.go`, `inventory_test.go` | change | Low 4 comment, Low 6 logs; tests (A7, A10) |
+| `server/internal/inventory/inventory.go`, `inventory_test.go` | change | A8 query and description |
+| `server/internal/domain/audit/codes.go` + `make gen` outputs | change | A8 registry description |
+| `test/acceptance/devicesim/fleet.go`, `fleet_test.go` | change | new marker, `BinaryPolicyListedAt` (A11) |
+| `test/acceptance/inventory_test.go` | change | phase 2 per A11 |
+| `test/system/stack.go` | change | `publishMu` (A9) |
+| `test/system/inventory_test.go` | change | F5 additions (section "Tests") |
+| `docs/compliance/residual-risks.md` | change | RR-149 text below |
+| `docs/compliance/privacy.md` | change | policy row text below |
+| `docs/operations/fleet.md`, `docs/operations/install.md` | change | A8, A10 texts |
+| `docs/architecture.md` §11.5 | change | row and mutual-watch sentence below |
+| `changelog.d/pdk-1122b.security.md` | change | sentence below |
+
+Not touched: `agent/` (no agent change; in particular `agent/internal/revoke/`), `server/internal/inventory/policies/`
+(`paddock_agent_running` stays as it is), the migrations (A7 needs no schema change), ADR 0056 decisions other than its
+amendment, and A3's gate and publish-race logic.
+
+```sql
+-- name: DeleteMissingPolicyResults :exec
+DELETE FROM inventory_policy_result
+WHERE device_id = @device_id AND NOT (policy_key = ANY(@keys::text[]))
+  AND NOT (policy_key = ANY(@unanswered::text[]) AND alerted_at IS NOT NULL);
+```
+
+```go
+// ports.HostInventory
+// UnansweredPolicies are the keys of the policies the inventory system lists for the host without a pass or fail
+// answer: not yet evaluated since the policy changed, or the query did not run (plan M5a amendment 2026-11-16,
+// review round 1, A7).
+UnansweredPolicies []string
+```
+
+Texts:
+
+- RR-149 (replaces the row): "**The binary policy trusts every published release and judges only processes it
+  recognizes as the agent.** The policy `paddock_agent_binary_known` accepts the SHA-256 of every published agent
+  artifact, because Fleet policies are global and the expected version of a device is ambiguous during waves, holds,
+  the manual update policy and rollbacks (ADR 0056, A2); a local root user who installs a genuine older published
+  `paddockd` is not reported by it. It judges every process that is named `paddockd`, runs a file named `paddockd` or a
+  file below `/opt/paddock/agent/`, or was started by `paddock-supervisor`, and hashes the executable the process
+  actually runs. Not reported by it: a foreign program that is none of these and checks in for the device while the
+  genuine agent is stopped (the mutual watch `paddock_agent_running` stays silent while the device checks in, plan M5a
+  decision 8); a process that swaps its executable link (`PR_SET_MM_EXE_FILE`); code injected into the running genuine
+  agent; a security policy that denies osquery access to `/proc`; a replaced osquery." Mitigation column: "The
+  agent-side baseline reports a changed slot, `current` or unit drop-in (ADR 0056, C) while the agent itself is
+  genuine; the fleet view counts the device as outdated (`components_outdated`); the supervisor refuses downgrades
+  through Paddock's own channel." ISMS column: "Accept that these cases need a local root user with custom code;
+  restrict root on devices and review tamper findings."
+- `docs/compliance/privacy.md`, row `paddock_agent_binary_known`, second column: "no process that is named
+  `paddockd`, runs a file named `paddockd` or below `/opt/paddock/agent/`, or was started by `paddock-supervisor` runs
+  an executable whose SHA-256 is outside the published agent releases (ADR 0056). The query hashes those executables on
+  the device to answer one yes/no question; no hash, path or process data is collected."
+- `docs/architecture.md` §11.5, the row of `paddock_agent_binary_known`, first column: "The executable of every running
+  agent process (named `paddockd`, running a file named `paddockd` or below `/opt/paddock/agent/`, or started by
+  `paddock-supervisor`) is a published agent artifact (osquery policy `paddock_agent_binary_known`, regenerated by the
+  worker from every published release; a genuine older release passes, RR-149)". In the mutual-watch sentence,
+  "checks the running binary's SHA-256" becomes "checks the SHA-256 of the executable every running agent process
+  runs".
+- Changelog fragment, after the first sentence: "This includes an agent started from another location or under
+  another name."
+
+### Steps
+
+1. **Probe (before any code).** On one system-test VM with the stack's fleetd, run as root with `osqueryi --json`:
+   the A8 query with the genuine hash (expect 1 row); `SELECT sha256 FROM hash WHERE path = '/proc/<pid of paddockd>/exe'`
+   (expect the slot file's SHA-256). Record both outputs in the result document. Check: outputs as expected; else stop.
+2. **A7.** Port field, adapter, SQL, `make gen`, `StoreHost`. Check: `go test` of `adapters/fleet`, `app` (inventory
+   tests), `worker` (`TestInventory*`).
+3. **A8.** Query, description, registry text, `make gen`, devicesim marker. Check: `go test` of `inventory`,
+   `domain/audit`, `test/acceptance/devicesim`; `make gen` leaves no diff.
+4. **A9, A10.** Mutex, comment, logs, docs texts. Check: `go vet` in `test/system`; worker tests.
+5. **A11.** devicesim recording, phase 2. Check: `make acceptance` runs `TestInventoryAgentBinaryPolicy` green.
+6. **F5.** Additions below. Check: `make system-test VM=all` green, run serially to `make acceptance`.
+7. Quality gate of the repository (`make typecheck`, the full Go test run with `nice -n 19`, `make lint test`).
+
+### Tests
+
+Each test named "regression" MUST fail without its fix (prove by mutation in the result document).
+
+- **Adapter** `TestHostInventoryUnansweredPolicies` (regression A7): fixture lists `paddock_agent_binary_known` with
+  response `""` and `paddock_agent_running` with `pass` → `UnansweredPolicies == ["paddock_agent_binary_known"]`,
+  `Policies` holds only `paddock_agent_running`.
+- **App** `TestStoreHostKeepsReportedUnansweredPolicy` (regression A7, Postgres): a failing row with `alerted_at` set
+  and its key unanswered → row unchanged (`passing = false`, same `alerted_at`); a failing row with `alerted_at` null
+  and its key unanswered → deleted; a row with `alerted_at` set whose key is neither answered nor unanswered →
+  deleted; an unanswered key without a row → no row created.
+- **Worker** `TestInventoryRoundAgentBinaryUnansweredAfterPublish` (regression A7): a device is reported (1 event);
+  a new hash is published; the next round the source reports the binary policy unanswered; after the new
+  `binaryAppliedAt + 3 min` it fails again → still exactly 1 event.
+- **Worker** `TestInventoryRoundAgentBinaryUnansweredNotReported` (false-alarm guard A7): a failure older than the
+  gate (0 events); a new hash; the binary policy unanswered with `policy_updated_at` past the new gate → 0 events; then
+  passing → 0 events. It MUST fail when unanswered rows are kept regardless of `alerted_at`.
+- **Worker or app** `TestReportAgentNotRunningKeepsMarkWhileUnanswered` (regression A7): `paddock_agent_running`
+  reported once; one sync with it unanswered; failing again with no check-in → still 1
+  `device.tamper_agent_not_running`.
+- **Worker** `TestInventoryRoundAgentBinaryManyHashes` (A10 Low 6): 1,001 hashes → exactly one `WARN` line with
+  `hashes=1001` in the round that applies them and none in the next round; 1,000 hashes → no `WARN`.
+- **Inventory** `TestAgentBinaryPolicy`: pins the exact A8 query for `[b, a, a]`; the existing empty-set and
+  invalid-hash tests stay.
+- **devicesim** `TestFleetHostAgentBinaryPolicy`: the new marker; `BinaryPolicyListedAt` returns the first time only.
+- **Acceptance** `TestInventoryAgentBinaryPolicy`: phase 2 per A11. Real Fleet resets the membership at the second
+  publish, so this gate also proves A7 end to end.
+- **System F5** (`test/system/inventory_test.go`, `gateF5`): keep every existing step; the osquery checks use the
+  query Fleet holds (`agentBinaryQuery`).
+  1. In the existing rename step, after the rename over the slot binary and **before** the supervisor restart, the
+     query MUST return 1 row: the running image is genuine. This proves the `/proc/<pid>/exe` hash of a deleted
+     executable. The existing step then restarts the supervisor as today.
+  2. After the existing final check ("the agent binary policy passes again") and the existing event count of exactly
+     1, F5 stops orbit (`systemctl stop orbit`) so that no further evaluation reaches Fleet, and runs `osqueryi`
+     standalone as today. The modified binary is `/root/paddockd.genuine` with one byte appended, as today. Each case
+     is followed by its restore and the check that the query returns 1 row again:
+     - redirected `current`: the modified binary as `/var/lib/paddock-f5/paddockd`, `current` pointed at
+       `/var/lib/paddock-f5`, supervisor restarted → 0 rows; restore `current` to the slot it pointed at before;
+     - bind mount: a drop-in `/run/systemd/system/paddock-supervisor.service.d/99-f5.conf` with
+       `BindReadOnlyPaths=/var/lib/paddock-f5/paddockd:<active slot>/paddockd`, `daemon-reload`, supervisor
+       restarted → 0 rows; restore by deleting the drop-in, `daemon-reload`, restart;
+     - renamed child: `current` pointed at a directory whose `paddockd` is the script `#!/bin/sh` + `exec sleep
+       infinity`, supervisor restarted → 0 rows; restore `current`.
+  3. F5 starts orbit again, waits until the stored binary policy result is passing with a `policy_updated_at` later
+     than the orbit start, and asserts the event count is still exactly 1.
+
+  Every wait is on a condition: the supervisor's child being present (`/proc/<MainPID>/task/<MainPID>/children`
+  non-empty) or a stored result; never a fixed duration. Process checks use `pgrep -x`, never `pgrep -f`. The cleanup
+  (`t.Cleanup`) MUST restore `current`, delete the drop-in and start orbit when a step fails.
+
+### Acceptance criteria
+
+- AC-A7 (org admin, audit log and findings of the device): Given a device reported once for an unknown binary, when a
+  release is published and the device keeps failing, then the org admin sees exactly one
+  `device.tamper_agent_binary_changed` for it (acceptance gate, F5).
+- AC-A8 (org admin): Given a device whose supervisor runs a modified agent from outside `/opt/paddock/agent/`, through
+  a bind mount, or under another name, then the policy fails on the device (F5 osquery checks), and a failure of the
+  stored policy is reported as in A3.
+- AC-A8-safe (org admin): Given a regular update, a rollback, a stopped agent or the genuine agent, then no event
+  (existing worker tests, acceptance `genuine` and `updated`, F5's first 0-event check).
+- AC-A9 (maintainer, system-test log): `make system-test VM=all` publishes the installed binary at most once per run.
+- AC-A11 (maintainer, CI): the acceptance gate contains no fixed waiting window.
+
+### Freedoms
+
+Names of internal helpers; the order of clauses inside the A8 `OR` list as long as the pinned test string and this
+amendment agree (update both); log message wording other than the `hashes` attribute.
+
+### Stop conditions
+
+- Step 1 shows no hash for `/proc/<pid>/exe`, or the A8 query does not return 1 row for the genuine agent.
+- Fleet rejects the A8 query (the `||` operator or the subqueries).
+- F5 step 1 returns 0 rows (osquery cannot hash a deleted executable through `/proc`).
+- A regular Paddock flow (update, rollback, self-test, uninstall, enrollment) runs a judged process whose executable
+  is not a published release.
+- A7 would need a schema change.
+
+### Risks
+
+- Pid reuse within one evaluation could hash an unrelated executable (false alarm); pid space and timing make it
+  negligible. Accepted.
+- osquery's `hash` table reads at most `--read_max` (50 MiB by default); a `paddockd` above that size would fail
+  everywhere. Today it is about 9 MB. Accepted; the stop condition of step 1 would show it.
+- RR-149's first gap (a foreign program checking in while the genuine agent is stopped) is closed only by a change to
+  the mutual watch (decision 8), which is proposed as PDK-1122c and needs the maintainer's approval.
