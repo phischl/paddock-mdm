@@ -152,6 +152,9 @@ type Engine struct {
 	fleetFailed map[string]time.Time
 	stall       time.Duration
 	budget      time.Duration
+	// watch is the monotonic clock of the mirror watchdog (stall deadline and copy budget); tests step it instead of
+	// racing the wall clock under host load.
+	watch func() time.Time
 	// minRate is the throughput a target must reach on the file it copies when the budget ends (bytes per second).
 	minRate int64
 	// busy holds the targets whose mirror outlived its round: a blocked file system call cannot be interrupted, so
@@ -205,7 +208,7 @@ func NewEngine(cfg Config, lock LeaderLocker, store Store, keys Decrypter, snap 
 	return &Engine{cfg: cfg, lock: lock, store: store, keys: keys, snap: snap, escrow: escrow, targets: targets,
 		metrics: metrics, now: now, hashes: map[string]hashEntry{}, mirrored: map[string]map[string]time.Time{},
 		pushed: map[uuid.UUID]map[string]fileInfo{}, fleetFailed: map[string]time.Time{}, stall: mirrorStall,
-		budget: mirrorBudget, minRate: mirrorMinRate, busy: map[uuid.UUID]bool{}, checking: map[uuid.UUID]bool{}, testing: map[uuid.UUID]bool{},
+		budget: mirrorBudget, watch: time.Now, minRate: mirrorMinRate, busy: map[uuid.UUID]bool{}, checking: map[uuid.UUID]bool{}, testing: map[uuid.UUID]bool{},
 		held: map[uuid.UUID]int{}, lanes: map[uuid.UUID]*lane{}, reachable: map[uuid.UUID]bool{},
 		waiting: map[uuid.UUID][]*mirrorPass{}, longLane: map[uuid.UUID]bool{}}
 }
@@ -1092,7 +1095,7 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 	var phase atomic.Pointer[string]
 	inCopy := func() time.Duration {
 		if s := copyStart.Load(); s != 0 {
-			return time.Since(time.Unix(0, s))
+			return e.watch().Sub(time.Unix(0, s))
 		}
 		return 0
 	}
@@ -1110,7 +1113,7 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 				tick:  func() { progress.Add(1) },
 				phase: func(name string) { phase.Store(&name) },
 				begin: func(size int64) {
-					copyStart.CompareAndSwap(0, time.Now().UnixNano())
+					copyStart.CompareAndSwap(0, e.watch().UnixNano())
 					copying.Store(size)
 				},
 				end:  func() { copying.Store(-1) },
@@ -1123,7 +1126,7 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 	}()
 	check := time.NewTicker(e.stall / 4)
 	defer check.Stop()
-	last, since := int64(0), time.Now()
+	last, since := int64(0), e.watch()
 	for {
 		select {
 		case r := <-done:
@@ -1133,8 +1136,8 @@ func (e *Engine) mirrorTarget(ctx context.Context, repo *os.Root, idx repoIndex,
 			return 0, ctx.Err()
 		case <-check.C:
 			if n := progress.Load(); n != last {
-				last, since = n, time.Now()
-			} else if time.Since(since) >= e.stall {
+				last, since = n, e.watch()
+			} else if e.watch().Sub(since) >= e.stall {
 				name := "opening the target"
 				if p := phase.Load(); p != nil {
 					name = *p
