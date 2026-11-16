@@ -71,7 +71,9 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
 `paddock-worker`:
 
 1. pushes Paddock's policies (`server/internal/inventory/policies/*.sql`: `paddock_agent_running`,
-   `disk_encrypted`) as global Fleet policies for Linux; they return pass or fail, never rows;
+   `disk_encrypted`, and `paddock_agent_binary_known`, which the worker builds from the SHA-256 of every published
+   agent artifact; ADR 0056) as global Fleet policies for Linux; they return pass or fail, never rows. Applying them is
+   idempotent, so a release published since the previous round reaches Fleet in this round;
 2. reads the hosts whose details, software or policy results changed since the previous round, and every host after a
    start, whenever Fleet's set of vulnerable software versions changed (Fleet matches vulnerabilities on its own
    schedule, about hourly, without marking hosts as changed) and every 12th round;
@@ -88,7 +90,12 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
 5. reports, once per failure, `device.tamper_agent_not_running` for every active device whose `paddock_agent_running`
    policy fails while it has not checked in for 15 minutes (fleetd's half of the mutual watch). The reported failure
    stays on the attention page and on the device as *Agent not running* (kind `agent_not_running`) until the policy
-   passes again.
+   passes again. It also reports, once per failure, `device.tamper_agent_binary_changed` for every active device whose
+   `paddock_agent_binary_known` policy fails: a `paddockd` running from `/opt/paddock/agent/` has a binary that matches
+   no published release. Only an evaluation made at least 2 minutes after the worker applied the current hash set
+   counts, so a host that has not yet evaluated a newly published release is not reported; a round in which a release
+   was published skips these reports. The failure opens a tamper finding on the device. A genuine older published
+   release passes (RR-149). If no release is published, the policy always passes.
 
 Fleet free reports CVEs without CVSS score, severity or fixed version (Fleet Premium only). Paddock adds Ubuntu's
 priority, the fixed version and the CVSS vector from Ubuntu's OSV data when it stores a host's findings

@@ -76,6 +76,7 @@ device and are never stored:
 | --- | --- |
 | `paddock_agent_running` | a process named `paddockd` runs from `/opt/paddock/agent/`. The query reads the process table on the device to answer one yes/no question; it is not a process list, and no process name, command line or user is collected. |
 | `disk_encrypted` | the root file system is on an encrypted (dm-crypt) device |
+| `paddock_agent_binary_known` | no `paddockd` running from `/opt/paddock/agent/` has a binary whose SHA-256 is outside the published agent releases (ADR 0056). The query hashes that one binary on the device to answer one yes/no question; no hash, path or process data is collected. |
 
 There is no time synchronization policy: osquery has no table for it on Linux; Paddock measures drift from the check-in instead (*Paddock agent* table).
 

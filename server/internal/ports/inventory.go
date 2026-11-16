@@ -29,7 +29,9 @@ type HostInventory struct {
 	// AgentVersion is the version of the inventory agent (fleetd, else osquery).
 	AgentVersion string
 	LastSeenAt   *time.Time
-	Software     []SoftwarePackage
+	// PolicyUpdatedAt is when the host last evaluated its policies; nil when the inventory system reports none.
+	PolicyUpdatedAt *time.Time
+	Software        []SoftwarePackage
 	// Policies are the results of the policies the host has answered.
 	Policies []PolicyResult
 	Hardware HostHardware

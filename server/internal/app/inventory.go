@@ -63,6 +63,7 @@ func (s *InventorySync) StoreHost(ctx context.Context, device uuid.UUID, ref por
 			HardwareVendor: inv.Hardware.Vendor, HardwareModel: inv.Hardware.Model, HardwareSerial: inv.Hardware.Serial,
 			CpuBrand: inv.Hardware.CPUBrand, CpuCores: int32(min(inv.Hardware.CPUCores, math.MaxInt32)), //nolint:gosec // bounded
 			MemoryBytes: inv.Hardware.MemoryBytes, DiskTotalBytes: inv.Hardware.DiskTotalBytes,
+			PolicyUpdatedAt: inv.PolicyUpdatedAt,
 		}); err != nil {
 			return err
 		}
@@ -177,6 +178,69 @@ func (s *InventorySync) ReportAgentNotRunning(ctx context.Context, now time.Time
 				return err
 			}
 			return UpsertTamperFinding(ctx, q, org, r.DeviceID, audit.CodeDeviceTamperAgentNotRunning, "", rec.ActionID(), now)
+		})
+		if err != nil {
+			return reported, err
+		}
+		reported = append(reported, r.DeviceID)
+	}
+	return reported, nil
+}
+
+// PublishedAgentHashes returns the SHA-256 of every artifact of every published agent release, all architectures:
+// the hash set of the agent binary policy (plan M5a amendment 2026-11-16, A2).
+func (s *InventorySync) PublishedAgentHashes(ctx context.Context) ([]string, error) {
+	var hashes []string
+	err := s.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		hashes, err = q.ListPublishedAgentHashes(ctx)
+		return err
+	})
+	return hashes, err
+}
+
+// ReportAgentBinaryUnknown records device.tamper_agent_binary_changed for every active device of the organization in
+// ctx whose agent binary policy fails and whose host evaluated its policies at or after evaluatedAfter (plan M5a
+// amendment 2026-11-16, A3), once per failure: the event, the mark and the tamper finding are one transaction. There
+// is no check-in silence rule, because a replaced agent keeps checking in. knownHashes is the size of the hash set the
+// policy accepts. It returns the reported devices.
+func (s *InventorySync) ReportAgentBinaryUnknown(ctx context.Context, evaluatedAfter time.Time, knownHashes int) ([]uuid.UUID, error) {
+	var rows []pgstore.ListAgentBinaryUnknownRow
+	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		rows, err = q.ListAgentBinaryUnknown(ctx, pgstore.ListAgentBinaryUnknownParams{
+			PolicyKey: inventory.PolicyAgentBinaryKnown, EvaluatedAfter: evaluatedAfter,
+		})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	var reported []uuid.UUID
+	for _, r := range rows {
+		params := map[string]any{
+			"policy":       inventory.PolicyAgentBinaryKnown,
+			"evaluated_at": audit.Timestamp(r.EvaluatedAt).Format(time.RFC3339Nano),
+			"known_hashes": knownHashes,
+		}
+		if r.AgentVersion != nil {
+			params["agent_version"] = *r.AgentVersion
+		}
+		spec := ActionSpec{
+			Code: audit.CodeDeviceTamperAgentBinaryChanged, Target: &audit.Target{Type: "device", ID: r.DeviceID.String()},
+			Params: params,
+		}
+		err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+			if err := q.MarkAgentNotRunningReported(ctx, pgstore.MarkAgentNotRunningReportedParams{
+				DeviceID: r.DeviceID, PolicyKey: inventory.PolicyAgentBinaryKnown,
+			}); err != nil {
+				return err
+			}
+			org, err := orgOf(ctx)
+			if err != nil {
+				return err
+			}
+			return UpsertTamperFinding(ctx, q, org, r.DeviceID, audit.CodeDeviceTamperAgentBinaryChanged, "", rec.ActionID(), r.EvaluatedAt)
 		})
 		if err != nil {
 			return reported, err

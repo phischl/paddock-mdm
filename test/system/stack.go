@@ -2,6 +2,8 @@ package system
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -329,6 +331,47 @@ func (s *Stack) ReleaseSupervisor(t *testing.T, version string, supervisorTags [
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("agentrelease %s: %v\n%s", version, err, out)
 	}
+}
+
+// PublishInstalledAgent publishes the paddockd the guest just installed from the packages under test, as a release
+// without rollout that no device updates to, unless a published release already has its hash (plan M5a amendment
+// 2026-11-16, A6): the agent binary policy accepts only published binaries, and would otherwise report every VM. The
+// binary is bin/agent/amd64/paddockd, the one `make deb` packaged; the gate fails if the guest's slot binary differs
+// from it. The lab installation of the backup gates publishes nothing.
+func (s *Stack) PublishInstalledAgent(t *testing.T, vm *VM) {
+	t.Helper()
+	if s.lab != nil {
+		return
+	}
+	installed := strings.Fields(vm.Must("sudo sha256sum /opt/paddock/agent/current/paddockd"))
+	bin := filepath.Join(s.root, "bin", "agent", "amd64", "paddockd")
+	data, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatalf("the packaged agent binary: %v", err)
+	}
+	sum := sha256.Sum256(data)
+	local := hex.EncodeToString(sum[:])
+	if len(installed) == 0 || installed[0] != local {
+		t.Fatalf("%s: the installed paddockd %v differs from %s (%s): the packages under test were not built from it",
+			vm.Name, installed, bin, local)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	out, err := paddockSQL(ctx, fmt.Sprintf(`SELECT count(*) FROM agent_artifact a JOIN agent_release r ON r.version = a.version
+		WHERE r.status = 'published' AND a.sha256 = '%s'`, local))
+	if err != nil {
+		t.Fatalf("published agent hashes: %v: %s", err, out)
+	}
+	if out != "0" {
+		return
+	}
+	v := version(4, "installed")
+	cmd := exec.CommandContext(ctx, agentRelease(s.root), "--version", v, "--artifact", "amd64="+bin, "--publish")
+	cmd.Dir = s.root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("agentrelease %s: %v\n%s", v, err, out)
+	}
+	t.Logf("%s: published the installed paddockd %s as release %s", vm.Name, local[:12], v)
 }
 
 func agentRelease(root string) string {

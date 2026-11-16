@@ -161,6 +161,8 @@ const (
 	// Inventory (plan M5a decisions 5 and 8): the mutual watch of agent and fleetd.
 	CodeDeviceTamperServiceStopped  Code = "device.tamper_service_stopped"
 	CodeDeviceTamperAgentNotRunning Code = "device.tamper_agent_not_running"
+	// Agent binary hash policy (plan M5a amendment 2026-11-16, ADR 0056 part A).
+	CodeDeviceTamperAgentBinaryChanged Code = "device.tamper_agent_binary_changed"
 	// Update management (plan M5b decisions 1–3 and 6).
 	CodeSettingsUpdatesChanged    Code = "settings.updates_changed"
 	CodePackageHoldCreated        Code = "package_hold.created"
@@ -1290,6 +1292,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"policy", "last_contact_at"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it.",
+	},
+	CodeDeviceTamperAgentBinaryChanged: {
+		Code: CodeDeviceTamperAgentBinaryChanged, Emitted: true,
+		Description: "fleetd reports that a Paddock agent running from /opt/paddock/agent/ has a binary that matches no published agent release: it was replaced or modified on the device (actor: system; the inventory system's policy paddock_agent_binary_known). evaluated_at is when the host last evaluated its policies; agent_version is the version the agent last reported, which a replaced agent may forge; known_hashes is the number of published hashes the policy accepts. A genuine older published release passes (RR-149).",
+		Params:      []string{"policy", "evaluated_at", "agent_version", "known_hashes"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per failure; the policy passing again ends it. No hash of the device's binary is recorded: the policy returns pass or fail only.",
 	},
 	CodeSettingsUpdatesChanged: {
 		Code: CodeSettingsUpdatesChanged, Emitted: true,

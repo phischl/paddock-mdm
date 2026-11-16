@@ -20,8 +20,9 @@ import (
 
 // TestInventoryGates runs the device gates of plan M5a on the VMs in parallel, each from a fresh base-installed: F1
 // (fleetd installed from Paddock's package store, enrolled into Fleet, mapped to the device), F4 (an old package
-// version shows its CVEs) and F2 (mutual watch of agent and fleetd). The fleetd package of this run (make
-// fleetd-deb) is published once, as a release without rollout, for both VMs.
+// version shows its CVEs), F2 (mutual watch of agent and fleetd) and F5 (the agent binary policy, plan M5a amendment
+// 2026-11-16, A6). The fleetd package of this run (make fleetd-deb) is published once, as a release without rollout,
+// for both VMs; Install publishes the installed paddockd the same way, so the genuine agent passes F5's policy.
 func TestInventoryGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Gate(t, "inventory")
@@ -33,6 +34,7 @@ func TestInventoryGates(t *testing.T) {
 		}
 		t.Run("F4 old package version", func(t *testing.T) { d.Bind(t); gateF4(t, d) })
 		t.Run("F2 mutual watch", func(t *testing.T) { d.Bind(t); gateF2(t, d) })
+		t.Run("F5 agent binary policy", func(t *testing.T) { d.Bind(t); gateF5(t, d) })
 	})
 }
 
@@ -208,6 +210,123 @@ func gateF2(t *testing.T, d *Device) {
 	t.Cleanup(func() { d.Must("sudo systemctl start paddock-supervisor") })
 	d.WaitEvent(t, "device.tamper_agent_not_running", 25*time.Minute, nil)
 	t.Logf("%s: agent stop reported after %s", d.Name, time.Since(stopped).Round(time.Second))
+}
+
+// agentBinaryCode is the audit code of the agent binary policy paddock_agent_binary_known.
+const agentBinaryCode = "device.tamper_agent_binary_changed"
+
+// osqueryRows runs query in osquery's shell on the guest (osqueryd -S, the osqueryi of fleet-osquery) and returns
+// the number of rows. The real osquery decides the policy: it depends on the constraint pushdown of path into the
+// hash table, so it is not simulated.
+func osqueryRows(t *testing.T, d *Device, query string) int {
+	t.Helper()
+	out := d.MustRootIn([]byte(query), `q=$(cat) && /opt/orbit/bin/osqueryd/linux/stable/osqueryd -S --json "$q"`)
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("%s: osquery answered %q: %v", d.Name, out, err)
+	}
+	return len(rows)
+}
+
+// agentBinaryQuery returns the agent binary policy as the worker applied it to Fleet (inventory.AgentBinaryPolicy
+// from the stack's published hashes) once it lists hash.
+func agentBinaryQuery(t *testing.T, d *Device, hash string) string {
+	t.Helper()
+	var query string
+	Until(t, d.Name+": Fleet's agent binary policy lists the installed paddockd", 5*time.Minute, 10*time.Second, nil, func() bool {
+		resp, err := fleetAPI(t, http.MethodGet, "/api/latest/fleet/global/policies", nil)
+		if err != nil {
+			t.Logf("fleet policies: %v", err)
+			return false
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var page struct {
+			Policies []struct {
+				Name  string `json:"name"`
+				Query string `json:"query"`
+			} `json:"policies"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil || resp.StatusCode != http.StatusOK {
+			t.Logf("fleet policies: HTTP %d %v", resp.StatusCode, err)
+			return false
+		}
+		for _, p := range page.Policies {
+			if p.Name == "paddock_agent_binary_known" && strings.Contains(p.Query, "'"+hash+"'") {
+				query = p.Query
+				return true
+			}
+		}
+		return false
+	})
+	return query
+}
+
+// gateF5 is the agent binary policy (plan M5a amendment 2026-11-16, A6): the genuine agent, which Install published,
+// raised no device.tamper_agent_binary_changed during the earlier gates. osquery on the guest answers the policy with
+// one row for the genuine binary, one with paddockd stopped and one for SELECT 1; (no release), and none for a
+// modified binary in the active slot. That modified binary is reported exactly once within 25 minutes; once the
+// genuine binary is back the policy passes again and no second event follows.
+func gateF5(t *testing.T, d *Device) {
+	if n := len(d.s.Events(t, agentBinaryCode, d.ID)); n != 0 {
+		t.Fatalf("%s: %d %s events for the genuine agent during the inventory gates, want 0", d.Name, n, agentBinaryCode)
+	}
+	slot := "/opt/paddock/agent/current/paddockd"
+	genuine := strings.Fields(d.Must("sudo sha256sum " + slot))[0]
+	query := agentBinaryQuery(t, d, genuine)
+	if n := osqueryRows(t, d, query); n != 1 {
+		t.Fatalf("%s: genuine binary: %d rows, want 1", d.Name, n)
+	}
+	if n := osqueryRows(t, d, "SELECT 1;"); n != 1 {
+		t.Fatalf("%s: SELECT 1;: %d rows, want 1", d.Name, n)
+	}
+	d.Must("sudo systemctl stop paddock-supervisor && ! pgrep -x paddockd")
+	n := osqueryRows(t, d, query)
+	d.Must("sudo systemctl start paddock-supervisor")
+	if n != 1 {
+		t.Fatalf("%s: paddockd stopped: %d rows, want 1", d.Name, n)
+	}
+
+	// A rename over the slot binary keeps the running process on the old inode; the restart runs the modified one.
+	d.MustRoot("cp " + slot + " /root/paddockd.genuine && cp " + slot + " " + slot + ".new && printf x >> " + slot + ".new" +
+		" && chmod --reference=" + slot + " " + slot + ".new && mv " + slot + ".new " + slot + " && systemctl restart paddock-supervisor")
+	restored := false
+	restore := func() {
+		d.MustRoot("cp /root/paddockd.genuine " + slot + ".new && chmod --reference=" + slot + " " + slot + ".new && mv " + slot + ".new " +
+			slot + " && systemctl restart paddock-supervisor")
+		restored = true
+	}
+	t.Cleanup(func() {
+		if !restored {
+			restore()
+		}
+	})
+	replaced := time.Now()
+	Until(t, d.Name+": the modified paddockd runs", 2*time.Minute, 5*time.Second, nil, func() bool {
+		return d.Must("pgrep -x paddockd >/dev/null && sudo sha256sum "+slot+" | cut -d ' ' -f 1") != genuine
+	})
+	if n := osqueryRows(t, d, query); n != 0 {
+		t.Fatalf("%s: modified binary: %d rows, want 0", d.Name, n)
+	}
+	d.WaitEvent(t, agentBinaryCode, 25*time.Minute, nil)
+	t.Logf("%s: modified agent binary reported after %s", d.Name, time.Since(replaced).Round(time.Second))
+
+	restore()
+	Until(t, d.Name+": the genuine paddockd runs", 2*time.Minute, 5*time.Second, nil, func() bool {
+		return d.Must("pgrep -x paddockd >/dev/null && sudo sha256sum "+slot+" | cut -d ' ' -f 1") == genuine
+	})
+	if n := osqueryRows(t, d, query); n != 1 {
+		t.Fatalf("%s: restored binary: %d rows, want 1", d.Name, n)
+	}
+	passing := fmt.Sprintf(`SELECT passing FROM inventory_policy_result WHERE device_id = '%s' AND policy_key = 'paddock_agent_binary_known'`, d.ID)
+	Until(t, d.Name+": the agent binary policy passes again", 25*time.Minute, 15*time.Second, d.Checkin, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		out, err := paddockSQL(ctx, passing)
+		return err == nil && out == "t"
+	})
+	if n := len(d.s.Events(t, agentBinaryCode, d.ID)); n != 1 {
+		t.Errorf("%s: %d %s events, want exactly 1", d.Name, n, agentBinaryCode)
+	}
 }
 
 // fleetHost is a host as Fleet's API returns it.

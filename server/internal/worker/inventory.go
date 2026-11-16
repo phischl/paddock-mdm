@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -25,6 +27,10 @@ const inventoryRetryInterval = 15 * time.Second
 // inventoryFullEvery is how often a sync round reads every host instead of the changed ones even though the
 // vulnerability state did not change (a safety net).
 const inventoryFullEvery = 12
+
+// binaryEvaluationLag is how long after the worker applied a new agent binary policy a host's evaluation counts (plan
+// M5a amendment 2026-11-16, A3): an earlier evaluation may still use the previous definition.
+const binaryEvaluationLag = 2 * time.Minute
 
 // inventorySyncLockKey is the advisory lock of the sync round ("padd inv").
 const inventorySyncLockKey = 0x7061646420696e76
@@ -54,18 +60,30 @@ type Inventory struct {
 	retry      time.Duration
 	now        func() time.Time
 
+	// hashes reads the hash set of the agent binary policy.
+	hashes agentHashes
+
 	// since is the start of the last complete sync round, vulnState the vulnerability state it stored; rounds counts
 	// them (owned by RunSync).
 	since     time.Time
 	vulnState string
 	rounds    int
+	// binaryPrint is the fingerprint of the hash set this process last applied, binaryAppliedAt when it applied it
+	// (owned by RunSync). A new process starts without one, which only delays reports.
+	binaryPrint     string
+	binaryAppliedAt time.Time
+}
+
+// agentHashes reads the SHA-256 of every published agent artifact (app.InventorySync).
+type agentHashes interface {
+	PublishedAgentHashes(ctx context.Context) ([]string, error)
 }
 
 // NewInventory creates the inventory rounds.
 func NewInventory(settings InventorySettings, source ports.Inventory, sync *app.InventorySync, summary *app.VulnerabilitySummary,
 	org *db.OrgPool, platform *db.PlatformPool, every time.Duration) *Inventory {
 	return &Inventory{settings: settings, source: source, sync: sync, summary: summary, org: org, platform: platform, every: every,
-		retry: inventoryRetryInterval, now: time.Now}
+		retry: inventoryRetryInterval, now: time.Now, hashes: sync}
 }
 
 // slaSummarizer records the daily patch SLA summary of the organization of ctx (app.VulnerabilitySLASummary).
@@ -120,15 +138,23 @@ func (i *Inventory) RunSync(ctx context.Context) error {
 
 // Round pushes Paddock's policies, stores the inventory of every changed host that maps to a device — every host
 // after a start, when the inventory system's vulnerability matches changed and each inventoryFullEvery rounds — and
-// reports devices whose agent fleetd finds not running.
+// reports devices whose agent fleetd finds not running or running from a binary of no published release.
 func (i *Inventory) Round(ctx context.Context) error {
 	start := i.now()
 	policies, err := inventory.Policies()
 	if err != nil {
 		return err
 	}
-	if err := i.source.ApplyPolicies(ctx, policies); err != nil {
+	raw, err := i.hashes.PublishedAgentHashes(ctx)
+	if err != nil {
 		return err
+	}
+	known := inventory.KnownAgentHashes(raw)
+	if err := i.source.ApplyPolicies(ctx, append(policies, inventory.AgentBinaryPolicy(known))); err != nil {
+		return err
+	}
+	if fp := hashSetPrint(known); fp != i.binaryPrint {
+		i.binaryPrint, i.binaryAppliedAt = fp, i.now()
 	}
 	vulnState, err := i.source.VulnerabilityState(ctx)
 	if err != nil {
@@ -169,6 +195,9 @@ func (i *Inventory) Round(ctx context.Context) error {
 		metricUnmappedHosts.Set(float64(unmapped))
 	}
 	if err := i.reportAgents(ctx, start); err != nil {
+		return err
+	}
+	if err := i.reportBinaries(ctx, known); err != nil {
 		return err
 	}
 	if err := i.summarize(ctx, start); err != nil {
@@ -212,6 +241,45 @@ func (i *Inventory) reportAgents(ctx context.Context, now time.Time) error {
 		}
 	}
 	return nil
+}
+
+// reportBinaries reports, in every organization, the devices whose agent binary policy fails in an evaluation made at
+// least binaryEvaluationLag after this process applied the current hash set (plan M5a amendment 2026-11-16, A3). It
+// reports nothing for an empty hash set, and nothing when a release was published during the round: the hosts have
+// not seen that definition yet, and the next round applies it.
+func (i *Inventory) reportBinaries(ctx context.Context, known []string) error {
+	if len(known) == 0 {
+		return nil
+	}
+	raw, err := i.hashes.PublishedAgentHashes(ctx)
+	if err != nil {
+		return err
+	}
+	if hashSetPrint(inventory.KnownAgentHashes(raw)) != i.binaryPrint {
+		slog.InfoContext(ctx, "the published agent releases changed during the inventory round; agent binary reports wait for the next round")
+		return nil
+	}
+	orgs, err := i.org.OrganizationIDs(ctx)
+	if err != nil {
+		return err
+	}
+	after := i.binaryAppliedAt.Add(binaryEvaluationLag)
+	for _, org := range orgs {
+		devices, err := i.sync.ReportAgentBinaryUnknown(systemContext(ctx, org, "inventory-sync"), after, len(known))
+		if err != nil {
+			return fmt.Errorf("organization %s: %w", org, err)
+		}
+		for _, d := range devices {
+			slog.WarnContext(ctx, "fleetd reports an agent binary of no published release", "organization_id", org, "device_id", d)
+		}
+	}
+	return nil
+}
+
+// hashSetPrint is the fingerprint of a sorted hash set: the SHA-256 of its newline-joined hashes.
+func hashSetPrint(sorted []string) string {
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	return hex.EncodeToString(sum[:])
 }
 
 // summarize records the critical CVE summary (plan M9 decision 37) and the patch SLA summary (plan M13c decision 18) of

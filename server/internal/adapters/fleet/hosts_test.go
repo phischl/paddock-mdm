@@ -48,6 +48,9 @@ func TestHostInventory(t *testing.T) {
 	if inv.OSVersion != "Ubuntu 24.04.5 LTS" || inv.AgentVersion != "5.23.1" || inv.LastSeenAt == nil || len(inv.Software) != 3 {
 		t.Fatalf("inventory %+v", inv)
 	}
+	if want := time.Date(2026, 10, 7, 13, 18, 21, 0, time.UTC); inv.PolicyUpdatedAt == nil || !inv.PolicyUpdatedAt.Equal(want) {
+		t.Fatalf("policy evaluation time %v, want %v", inv.PolicyUpdatedAt, want)
+	}
 	apport := inv.Software[2]
 	if apport.Name != "apport" || apport.Source != "deb_packages" ||
 		!slices.Equal(apport.Vulnerabilities, []ports.Vulnerability{{CVE: "CVE-2022-28653"}}) {

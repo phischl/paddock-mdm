@@ -121,6 +121,10 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	}
 	h := out.Host
 	inv := ports.HostInventory{OSVersion: h.OSVersion, AgentVersion: h.OsqueryVersion, LastSeenAt: h.SeenTime}
+	if !h.PolicyUpdatedAt.IsZero() {
+		at := h.PolicyUpdatedAt
+		inv.PolicyUpdatedAt = &at
+	}
 	if h.OrbitVersion != nil && *h.OrbitVersion != "" {
 		inv.AgentVersion = *h.OrbitVersion
 	}

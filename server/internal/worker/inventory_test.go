@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -12,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/inventory"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
@@ -69,6 +72,12 @@ type fakeSource struct {
 	// deleteErr makes every host deletion fail; deleteCalls counts the deletions asked for.
 	deleteErr   error
 	deleteCalls int
+	// results and evaluatedAt are every host's policy results and policy evaluation time; applied is the last set
+	// of policies applied, applyErr fails ApplyPolicies.
+	results     []ports.PolicyResult
+	evaluatedAt *time.Time
+	applied     []ports.PolicyDefinition
+	applyErr    error
 }
 
 func (s *fakeSource) VulnerabilityState(context.Context) (string, error) { return s.vulnState, nil }
@@ -83,7 +92,8 @@ func (s *fakeSource) ListHostsChangedSince(_ context.Context, since time.Time, c
 
 func (s *fakeSource) HostInventory(_ context.Context, ref ports.HostRef) (ports.HostInventory, error) {
 	s.read = append(s.read, ref)
-	return ports.HostInventory{OSVersion: "Ubuntu 26.04.1 LTS", Software: []ports.SoftwarePackage{{Name: "bash", Version: "5.2", Source: "deb_packages"}}}, nil
+	return ports.HostInventory{OSVersion: "Ubuntu 26.04.1 LTS", Software: []ports.SoftwarePackage{{Name: "bash", Version: "5.2", Source: "deb_packages"}},
+		Policies: s.results, PolicyUpdatedAt: s.evaluatedAt}, nil
 }
 
 // DeleteHost records the deleted hosts (ports.InventoryAdmin of the retention round).
@@ -102,7 +112,10 @@ func (s *fakeSource) HostSeenAt(context.Context, ports.HostRef) (time.Time, erro
 }
 
 func (s *fakeSource) ApplyPolicies(_ context.Context, p []ports.PolicyDefinition) error {
-	s.policies = len(p)
+	if s.applyErr != nil {
+		return s.applyErr
+	}
+	s.policies, s.applied = len(p), p
 	return nil
 }
 
@@ -136,7 +149,7 @@ func TestInventoryRound(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if src.policies != 2 || !slices.Equal(src.read[:2], []ports.HostRef{"1", "1"}) {
+	if src.policies != 3 || !slices.Equal(src.read[:2], []ports.HostRef{"1", "1"}) {
 		t.Fatalf("policies %d, read %v", src.policies, src.read)
 	}
 	var n int
@@ -235,5 +248,210 @@ func TestInventoryRoundSurvivesSLASummaryFailure(t *testing.T) {
 	var n int
 	if err := f.super.QueryRow(ctx, "SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'vulnerability.critical_summary'", f.org).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("%d critical summaries, %v", n, err)
+	}
+}
+
+// fakeHashes is the hash set of published agent artifacts; publish replaces it right after the next read, as a
+// release published during a round would.
+type fakeHashes struct {
+	hashes, publish []string
+	reads           int
+}
+
+func (f *fakeHashes) PublishedAgentHashes(context.Context) ([]string, error) {
+	f.reads++
+	out := f.hashes
+	if f.publish != nil {
+		f.hashes, f.publish = f.publish, nil
+	}
+	return out, nil
+}
+
+// binaryRig is an inventory round over one mapped host with a controllable clock and hash set.
+type binaryRig struct {
+	f      fixture
+	dev    uuid.UUID
+	src    *fakeSource
+	hashes *fakeHashes
+	inv    *Inventory
+	clock  time.Time
+	sys    context.Context
+}
+
+func newBinaryRig(t *testing.T, hashes ...string) *binaryRig {
+	t.Helper()
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	hw := uuid.NewString()
+	dev := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state, hardware_uuid) VALUES ($1, $2, 'lt-bin', 'active', $3)",
+		dev, f.org, hw); err != nil {
+		t.Fatal(err)
+	}
+	r := &binaryRig{f: f, dev: dev, hashes: &fakeHashes{hashes: hashes}, clock: time.Now().UTC().Truncate(time.Second),
+		src: &fakeSource{hosts: []ports.InventoryHost{{Ref: "1", HardwareUUID: hw}, {Ref: "2", HardwareUUID: uuid.NewString()}}},
+		sys: principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})}
+	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
+	r.inv = NewInventory(nil, r.src, app.NewInventorySync(runner, f.pool, platform), app.NewVulnerabilitySummary(runner), f.pool, platform, time.Minute)
+	r.inv.hashes, r.inv.now = r.hashes, func() time.Time { return r.clock }
+	return r
+}
+
+// host sets the host's agent binary result, evaluated at the given offset from the last apply.
+func (r *binaryRig) host(passing bool, sinceApplied time.Duration) {
+	at := r.inv.binaryAppliedAt.Add(sinceApplied)
+	r.src.results = []ports.PolicyResult{{Key: inventory.PolicyAgentBinaryKnown, Passing: passing}}
+	r.src.evaluatedAt = &at
+}
+
+func (r *binaryRig) round(t *testing.T) {
+	t.Helper()
+	if err := r.inv.Round(r.sys); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (r *binaryRig) reports(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := r.f.super.QueryRow(context.Background(), "SELECT count(*) FROM action WHERE code = 'device.tamper_agent_binary_changed' AND target ->> 'id' = $1",
+		r.dev.String()).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// binaryPolicy is the agent binary policy of the last apply.
+func (r *binaryRig) binaryPolicy(t *testing.T) ports.PolicyDefinition {
+	t.Helper()
+	for _, p := range r.src.applied {
+		if p.Key == inventory.PolicyAgentBinaryKnown {
+			return p
+		}
+	}
+	t.Fatalf("no agent binary policy in %+v", r.src.applied)
+	return ports.PolicyDefinition{}
+}
+
+// TestInventoryRoundAgentBinary (plan M5a amendment 2026-11-16, A2 and A3): every round applies the binary policy;
+// a failure counts only from an evaluation at least 2 minutes after the current hash set was applied, and is reported
+// once; passing and failing again reports again. An unchanged hash set keeps the apply time, a new hash moves it.
+func TestInventoryRoundAgentBinary(t *testing.T) {
+	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	r := newBinaryRig(t, a)
+	r.src.results = []ports.PolicyResult{{Key: inventory.PolicyAgentBinaryKnown}} // failing, never evaluated
+	r.round(t)
+	applied := r.inv.binaryAppliedAt
+	if !applied.Equal(r.clock) || !strings.Contains(r.binaryPolicy(t).Query, a) || r.reports(t) != 0 {
+		t.Fatalf("first round: applied %v, policy %q, %d reports", applied, r.binaryPolicy(t).Query, r.reports(t))
+	}
+
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.host(false, 3*time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 1 {
+		t.Fatalf("%d reports for a failure evaluated 3 minutes after the apply, want 1", n)
+	}
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 1 {
+		t.Fatalf("%d reports after the next round, want still 1", n)
+	}
+	if !r.inv.binaryAppliedAt.Equal(applied) {
+		t.Fatalf("an unchanged hash set moved the apply time from %v to %v", applied, r.inv.binaryAppliedAt)
+	}
+
+	r.host(true, 4*time.Minute)
+	r.round(t)
+	r.host(false, 5*time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 2 {
+		t.Fatalf("%d reports after passing and failing again, want 2", n)
+	}
+
+	r.hashes.hashes = []string{a, b}
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.host(true, 0)
+	r.round(t)
+	if !r.inv.binaryAppliedAt.Equal(r.clock) || !strings.Contains(r.binaryPolicy(t).Query, b) {
+		t.Fatalf("a new hash: applied %v (want %v), policy %q", r.inv.binaryAppliedAt, r.clock, r.binaryPolicy(t).Query)
+	}
+	r.host(false, time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 2 {
+		t.Fatalf("%d reports for an evaluation 1 minute after the new apply, want still 2", n)
+	}
+	r.host(false, 3*time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 3 {
+		t.Fatalf("%d reports once the host evaluated the new definition, want 3", n)
+	}
+}
+
+// TestInventoryRoundAgentBinaryPublishRace (A3): a release published between the round's two reads of the hash set
+// skips the round's binary reports with one Info line; the next round applies the new set and waits for an evaluation
+// of it.
+func TestInventoryRoundAgentBinaryPublishRace(t *testing.T) {
+	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	r := newBinaryRig(t, a)
+	r.round(t)
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.host(false, 3*time.Minute)
+	r.hashes.publish = []string{a, b}
+
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	r.round(t)
+	if n := r.reports(t); n != 0 {
+		t.Fatalf("%d reports in a round with a publish between the reads, want 0", n)
+	}
+	if n := strings.Count(logs.String(), "agent binary reports wait for the next round"); n != 1 || !strings.Contains(logs.String(), "level=INFO msg=\"the published") {
+		t.Fatalf("%d skip lines: %s", n, logs.String())
+	}
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.round(t)
+	if n := r.reports(t); n != 0 {
+		t.Fatalf("%d reports for an evaluation older than the new definition, want 0", n)
+	}
+}
+
+// TestInventoryRoundAgentBinaryApplyFails (A3): a failing apply fails the round and reports nothing.
+func TestInventoryRoundAgentBinaryApplyFails(t *testing.T) {
+	r := newBinaryRig(t, strings.Repeat("a", 64))
+	r.round(t)
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.host(false, 3*time.Minute)
+	r.src.applyErr = errors.New("fleet: HTTP 502")
+	if err := r.inv.Round(r.sys); err == nil {
+		t.Fatal("the round succeeded although applying the policies failed")
+	}
+	if n := r.reports(t); n != 0 {
+		t.Fatalf("%d reports after a failed apply, want 0", n)
+	}
+}
+
+// TestInventoryRoundAgentBinaryNoRelease (A1, A3): without a published release the policy is SELECT 1; and a failing
+// result is never reported.
+func TestInventoryRoundAgentBinaryNoRelease(t *testing.T) {
+	r := newBinaryRig(t)
+	r.round(t)
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.host(false, 3*time.Minute)
+	r.round(t)
+	if q := r.binaryPolicy(t).Query; q != "SELECT 1;" {
+		t.Fatalf("policy %q", q)
+	}
+	if n := r.reports(t); n != 0 {
+		t.Fatalf("%d reports without a published release, want 0", n)
+	}
+	if r.hashes.reads != 2 {
+		t.Fatalf("%d hash reads, want one per round and no second read for an empty set", r.hashes.reads)
 	}
 }

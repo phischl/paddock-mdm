@@ -43,6 +43,7 @@ var tamperFindingCodes = map[audit.Code]string{
 	audit.CodeDeviceTamperServiceStopped:       "unit",
 	audit.CodeDeviceCloneSuspected:             "",
 	audit.CodeDeviceTamperAgentNotRunning:      "",
+	audit.CodeDeviceTamperAgentBinaryChanged:   "",
 }
 
 // UpsertTamperFinding opens the tamper finding of a device, code and subject for the audit event eventID at at, or
