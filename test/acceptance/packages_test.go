@@ -77,7 +77,7 @@ func TestAgentPackagesPublic(t *testing.T) {
 	for _, path := range []string{"/paddock-agent-artifacts/releases/" + v + "/amd64/paddockd", "/paddock-agent-artifacts/?list-type=2",
 		"/paddock-agent-artifacts/?list-type=2&prefix=packages/", "/packages/", "/packages/some/dir/", "/packages/" + v + "/",
 		"/packages", "/packages//", "/packages/a//", "/packages/a%2F", "/packages/?list-type=2",
-		"/packages/some/dir/..", "/packages/some/dir/%2e%2e", "/packages/some/.", "/PACKAGES/"} {
+		"/packages/some/dir/..", "/packages/some/dir/%2e%2e", "/packages/some/.", "/PACKAGES/", "//packages/", "/./packages/"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			if status, _ := do(method, path); status != http.StatusForbidden {
 				t.Errorf("%s %s without credentials: HTTP %d, want 403", method, path, status)
