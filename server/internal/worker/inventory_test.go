@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/inventory"
@@ -80,6 +81,8 @@ type fakeSource struct {
 	evaluatedAt *time.Time
 	applied     []ports.PolicyDefinition
 	applyErr    error
+	// perHost replaces the policy answers and evaluation time for the hosts it lists.
+	perHost map[ports.HostRef]ports.HostInventory
 }
 
 func (s *fakeSource) VulnerabilityState(context.Context) (string, error) { return s.vulnState, nil }
@@ -94,6 +97,10 @@ func (s *fakeSource) ListHostsChangedSince(_ context.Context, since time.Time, c
 
 func (s *fakeSource) HostInventory(_ context.Context, ref ports.HostRef) (ports.HostInventory, error) {
 	s.read = append(s.read, ref)
+	if h, ok := s.perHost[ref]; ok {
+		return ports.HostInventory{OSVersion: "Ubuntu 26.04.1 LTS", Policies: h.Policies, UnansweredPolicies: h.UnansweredPolicies,
+			PolicyUpdatedAt: h.PolicyUpdatedAt}, nil
+	}
 	return ports.HostInventory{OSVersion: "Ubuntu 26.04.1 LTS", Software: []ports.SoftwarePackage{{Name: "bash", Version: "5.2", Source: "deb_packages"}},
 		Policies: s.results, UnansweredPolicies: s.unanswered, PolicyUpdatedAt: s.evaluatedAt}, nil
 }
@@ -575,5 +582,58 @@ func TestInventoryRoundAgentBinaryManyHashes(t *testing.T) {
 	r.round(t)
 	if n := warns(); n != 1 {
 		t.Fatalf("%d warnings after an unchanged round, want still 1", n)
+	}
+}
+
+// TestInventoryRoundPolicyUnansweredMetric (plan M5a addendum 2026-11-16, review round 2, A13): a full round counts
+// the mapped hosts that evaluated a policy's current definition at least 2 minutes after it was applied and still
+// list it without an answer, and warns once per such policy; a changed-host round sets nothing; a policy whose text
+// just changed counts only once its hosts evaluated the new text.
+func TestInventoryRoundPolicyUnansweredMetric(t *testing.T) {
+	r := newBinaryRig(t, strings.Repeat("a", 64))
+	hw := uuid.NewString()
+	if _, err := r.f.super.Exec(context.Background(), "INSERT INTO device (id, organization_id, hostname, state, hardware_uuid) VALUES ($1, $2, 'lt-bin2', 'active', $3)",
+		uuid.Must(uuid.NewV7()), r.f.org, hw); err != nil {
+		t.Fatal(err)
+	}
+	r.src.hosts[1].HardwareUUID = hw
+	at := func(d time.Duration) *time.Time { v := r.clock.Add(d); return &v }
+	unanswered := func(key string, evaluated *time.Time) ports.HostInventory {
+		return ports.HostInventory{UnansweredPolicies: []string{key}, PolicyUpdatedAt: evaluated}
+	}
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	warns := func() int { return strings.Count(logs.String(), "level=WARN msg=\"a Paddock policy did not run") }
+	gauge := func(key string) float64 { return testutil.ToFloat64(metricPolicyUnanswered.WithLabelValues(key)) }
+
+	// The first round is full and applies every definition at r.clock.
+	r.src.perHost = map[ports.HostRef]ports.HostInventory{
+		"1": unanswered("disk_encrypted", at(3*time.Minute)),
+		"2": unanswered("disk_encrypted", at(time.Minute)),
+	}
+	r.round(t)
+	if g, n := gauge("disk_encrypted"), warns(); g != 1 || n != 1 || !strings.Contains(logs.String(), "policy=disk_encrypted hosts=1") {
+		t.Fatalf("full round: gauge %v, %d warnings, want 1 and 1: %s", g, n, logs.String())
+	}
+
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.src.perHost["2"] = unanswered("disk_encrypted", at(-time.Minute))
+	r.round(t)
+	if g, n := gauge("disk_encrypted"), warns(); g != 1 || n != 1 {
+		t.Fatalf("changed-host round: gauge %v, %d warnings, want 1 and still 1", g, n)
+	}
+
+	r.hashes.hashes = []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}
+	r.src.vulnState = "changed" // a full round
+	r.clock = r.clock.Add(5 * time.Minute)
+	r.src.perHost = map[ports.HostRef]ports.HostInventory{
+		"1": unanswered(inventory.PolicyAgentBinaryKnown, at(time.Minute)),
+		"2": {PolicyUpdatedAt: at(time.Minute)},
+	}
+	r.round(t)
+	if g, b, n := gauge("disk_encrypted"), gauge(inventory.PolicyAgentBinaryKnown), warns(); g != 0 || b != 0 || n != 1 {
+		t.Fatalf("new hash: gauges %v and %v, %d warnings; want 0, 0 and still 1", g, b, n)
 	}
 }

@@ -48,6 +48,11 @@ var metricUnmappedHosts = prometheus.NewGauge(prometheus.GaugeOpts{
 	Help: "Hosts of the inventory system of the last sync round that map to no device or to more than one; never stored.",
 })
 
+var metricPolicyUnanswered = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "paddock_inventory_policy_unanswered_hosts",
+	Help: "Mapped hosts of the last full sync round that evaluated a Paddock policy's current definition without an answer: the query failed there.",
+}, []string{"policy"})
+
 // InventorySettings keeps the data minimization settings of the inventory system (fleet.Client).
 type InventorySettings interface {
 	// EnsureSettings resets drift and returns what it corrected.
@@ -80,6 +85,15 @@ type Inventory struct {
 	// (owned by RunSync). A new process starts without one, which only delays reports.
 	binaryPrint     string
 	binaryAppliedAt time.Time
+	// defined holds, per Paddock policy key, the query text this process last applied and when it first applied that
+	// text (owned by RunSync; plan M5a addendum 2026-11-16, review round 2, A13).
+	defined map[string]definedPolicy
+}
+
+// definedPolicy is a policy's applied query text and when this process first applied it.
+type definedPolicy struct {
+	query string
+	at    time.Time
 }
 
 // agentHashes reads the SHA-256 of every published agent artifact (app.InventorySync).
@@ -158,9 +172,11 @@ func (i *Inventory) Round(ctx context.Context) error {
 		return err
 	}
 	known := inventory.KnownAgentHashes(raw)
-	if err := i.source.ApplyPolicies(ctx, append(policies, inventory.AgentBinaryPolicy(known))); err != nil {
+	policies = append(policies, inventory.AgentBinaryPolicy(known))
+	if err := i.source.ApplyPolicies(ctx, policies); err != nil {
 		return err
 	}
+	i.noteDefinitions(policies)
 	if fp := hashSetPrint(known); fp != i.binaryPrint {
 		i.binaryPrint, i.binaryAppliedAt = fp, i.now()
 		slog.InfoContext(ctx, "applied the agent binary policy", "hashes", len(known))
@@ -189,7 +205,7 @@ func (i *Inventory) Round(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	unmapped := 0
+	unmapped, unanswered := 0, map[string]int{}
 	for _, h := range hosts {
 		dev, ok := mapped[strings.ToLower(h.HardwareUUID)]
 		if !ok {
@@ -203,9 +219,11 @@ func (i *Inventory) Round(ctx context.Context) error {
 		if err := i.sync.StoreHost(systemContext(ctx, dev.OrganizationID, "inventory-sync"), dev.DeviceID, h.Ref, inv); err != nil {
 			return fmt.Errorf("store the inventory of device %s: %w", dev.DeviceID, err)
 		}
+		i.countUnanswered(inv, unanswered)
 	}
 	if since.IsZero() {
 		metricUnmappedHosts.Set(float64(unmapped))
+		i.reportUnanswered(ctx, unanswered)
 	}
 	if err := i.reportAgents(ctx, start); err != nil {
 		return err
@@ -287,6 +305,42 @@ func (i *Inventory) reportBinaries(ctx context.Context, known []string) error {
 		}
 	}
 	return nil
+}
+
+// noteDefinitions records when this process first applied each policy's current query text.
+func (i *Inventory) noteDefinitions(policies []ports.PolicyDefinition) {
+	if i.defined == nil {
+		i.defined = map[string]definedPolicy{}
+	}
+	for _, p := range policies {
+		if d, ok := i.defined[p.Key]; !ok || d.query != p.Query {
+			i.defined[p.Key] = definedPolicy{query: p.Query, at: i.now()}
+		}
+	}
+}
+
+// countUnanswered counts, per Paddock policy, a host that lists it without an answer although it evaluated its
+// policies binaryEvaluationLag or more after the current definition was applied: the query did not run there.
+func (i *Inventory) countUnanswered(inv ports.HostInventory, counts map[string]int) {
+	if inv.PolicyUpdatedAt == nil {
+		return
+	}
+	for _, key := range inv.UnansweredPolicies {
+		if d, ok := i.defined[key]; ok && !inv.PolicyUpdatedAt.Before(d.at.Add(binaryEvaluationLag)) {
+			counts[key]++
+		}
+	}
+}
+
+// reportUnanswered sets the gauge of every Paddock policy and logs one warning per policy that did not run on some
+// host (plan M5a addendum 2026-11-16, review round 2, A13): detection by that policy stops there.
+func (i *Inventory) reportUnanswered(ctx context.Context, counts map[string]int) {
+	for key := range i.defined {
+		metricPolicyUnanswered.WithLabelValues(key).Set(float64(counts[key]))
+		if counts[key] > 0 {
+			slog.WarnContext(ctx, "a Paddock policy did not run on hosts that evaluated it", "policy", key, "hosts", counts[key])
+		}
+	}
 }
 
 // hashSetPrint is the fingerprint of a sorted hash set: the SHA-256 of its newline-joined hashes.

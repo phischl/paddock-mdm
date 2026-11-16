@@ -97,7 +97,11 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    counts, so a host that has not yet evaluated a newly published release is not reported; a round in which a release
    was published skips these reports. The failure opens a tamper finding on the device. A genuine older published
    release passes (RR-149). If no release is published, the policy always passes. A failure that Fleet resets after a
-   new definition stays reported until the host answers again, so a publish does not repeat the event. A device
+   new definition stays reported until the host answers again, so a publish does not repeat the event. If the device
+   was repaired and a publish reset its passing result before the worker read it, a new tamper is reported only after
+   the policy has passed again. A host that evaluated a Paddock policy's current definition without an answer (the
+   query failed there) is counted in `paddock_inventory_policy_unanswered_hosts{policy}` each full round and logged
+   as a warning. A device
    installed from packages whose `paddockd` is not a published release (a local build or a draft release) fails this
    policy as soon as any release is published; publish that build or install a published release. The worker logs the
    number of accepted hashes whenever it changes and warns above 1,000, because Fleet must accept the whole query.
