@@ -171,6 +171,8 @@ func TestUnreadableLogWithARollbackResultResumesTheRollback(t *testing.T) {
 		f.blockFlip()
 		f.start()
 		f.waitFor("the first retry", func() bool { return retries(log) == 1 })
+		// The log records the pending rollback after the retry's error line (keepRollbackPending, PDK-1118).
+		f.waitFor("the pending rollback was recorded in the probation log", f.pendingOnDisk)
 		f.expectPendingLog()
 		if r := f.waitResult(time.Second); r != failed || f.active() != "B" {
 			t.Fatalf("result %+v, current %s; want the recorded %+v on B", r, f.active(), failed)
@@ -210,6 +212,8 @@ func TestUnreadableLogWithARollbackResultResumesTheRollback(t *testing.T) {
 		f.blockFlip()
 		f.start()
 		f.waitFor("the first retry", func() bool { return retries(log) == 1 })
+		// The log records the pending rollback after the retry's error line (keepRollbackPending, PDK-1118).
+		f.waitFor("the pending rollback was recorded in the probation log", f.pendingOnDisk)
 		f.expectPendingLog()
 		if r := f.waitResult(time.Second); r != failed || f.active() != "B" {
 			t.Fatalf("result %+v, current %s; want the recorded %+v on B", r, f.active(), failed)

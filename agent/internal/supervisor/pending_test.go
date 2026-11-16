@@ -315,6 +315,8 @@ func TestRestartBeforeThePendingRollbackIsRecorded(t *testing.T) {
 	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
 	f.start()
 	f.waitFor("a retry of the resumed rollback", func() bool { return retries(log) == 1 })
+	// The log records the pending rollback after the retry's error line (keepRollbackPending, PDK-1118).
+	f.waitFor("the pending rollback was recorded in the probation log", f.pendingOnDisk)
 	f.expectPendingLog()
 	f.clock.set(testProbation + time.Minute)
 	defer f.clock.set(0)
