@@ -40,7 +40,10 @@ expect "keep 3 deletes only A's two oldest" "$(key "$DA" 1) $(key "$DA" 2) " "$(
 expect "the newest version of a device is never selected" "" "$(printf '%s\t%s\n' "$(key "$DB" 5)" "$OLD" | bundles_prune_select 2 "$CUT")"
 newest="$(fixture | bundles_prune_select 2 "$CUT" | grep -c "/$DA/bundles/1000004.dsse" || true)"
 expect "keep 2 never selects a device's newest version" 0 "$newest"
-expect "an unreadable time keeps the key" "" "$(printf '%s\t%s\n' "$(key "$DA" 1)" "x" "$(key "$DA" 2)" "" "$(key "$DA" 3)" "x" | bundles_prune_select 2 "$CUT")"
+for t in "" x "0-garbage" "2026-13"; do
+  expect "an unreadable time [$t] keeps the oldest key" "" \
+    "$(printf '%s\t%s\n' "$(key "$DA" 1)" "$t" "$(key "$DA" 2)" "$OLD" "$(key "$DA" 3)" "$OLD" | bundles_prune_select 2 "$CUT")"
+done
 # The key test is exact: a dot is a dot, a UUID has 36 characters, nothing else around the pattern.
 odd=""
 for k in "org/$ORG/devices/$DA/bundles/1xdsse" "org/$ORG/devices/$DA/bundles/1.dsse.bak" "org/$ORG/devices/$DA/bundles/-1.dsse" \
@@ -75,10 +78,12 @@ aws() {
       n="$(grep -o '"Key"' <<<"$body" | wc -l)"
       echo "delete $n" >>"$calls"
       if [[ -n "${FAKE_AWS_DIES_AT:-}" && "$(grep -c '^delete' "$calls")" == "$FAKE_AWS_DIES_AT" ]]; then return 255; fi
+      [[ -z "${FAKE_SLEEP_AT:-}" || "$(grep -c '^delete' "$calls")" != "$FAKE_SLEEP_AT" ]] || sleep 2
+      # --query 'length(Errors)' --output text: the number of keys that failed.
       if [[ -n "${FAKE_ERRORS_AT:-}" && "$(grep -c '^delete' "$calls")" == "$FAKE_ERRORS_AT" ]]; then
-        printf '{"Errors":[\n'
-        grep -o '"Key":"[^"]*"' <<<"$body" | sed 's/^/ {/;s/$/,"Code":"InternalError"}/'
-        printf ']}\n'
+        echo "${FAKE_ERRORS_N:-$n}"
+      else
+        echo 0
       fi
       ;;
   esac
@@ -100,6 +105,47 @@ run() {
     bundles_prune_main "$@"
   ) >"$work/out" 2>"$work/err"
   rc=$?
+  set -e
+}
+
+# The signal arrives while the fake aws sleeps in the batch named by FAKE_SLEEP_AT; main finishes that batch.
+run_signal() {
+  local w pid
+  w="$(mktemp -d -p "$work")"
+  (
+    set -e
+    BUNDLES_PRUNE_WORK="$w"
+    bundles_prune_main --yes
+  ) >"$work/out" 2>"$work/err" &
+  pid=$!
+  until [[ "$(grep -c '^delete' "$calls")" == "${FAKE_SLEEP_AT:?}" ]]; do sleep 0.1; done
+  kill "-$1" "$pid"
+  set +e
+  wait "$pid"
+  rc=$?
+  set -e
+}
+run_closed_stdout() {
+  local w
+  w="$(mktemp -d -p "$work")"
+  set +e
+  (
+    set -e
+    BUNDLES_PRUNE_WORK="$w"
+    bundles_prune_main --yes
+  ) >&- 2>"$work/err"
+  rc=$?
+  set -e
+}
+run_broken_pipe() {
+  local w
+  w="$(mktemp -d -p "$work")"
+  set +e
+  (
+    set -e
+    BUNDLES_PRUNE_WORK="$w"
+    bundles_prune_main --yes
+  ) 2>"$work/err" | (exit 0)
   set -e
 }
 
@@ -142,6 +188,37 @@ expect "aws dies in batch 2: stderr names deleted and failed" "deleted 1000 of 2
 expect "aws dies in batch 2: one record with the counts" 1 "$(grep -c -- 'record-bundle-prune --keep 2 --listed 2505 --devices 2 --selected 2501 --deleted 1000 --failed 1000' "$adminlog")"
 
 reset
+FAKE_ERRORS_AT=2 FAKE_ERRORS_N=2 run --yes
+expect "two failed keys in batch 2: deleted counts the rest of the batch" \
+  "deleted 1998 of 2505 bundle objects of 2 devices; 2 keys failed" "$(cat "$work/err")"
+expect "two failed keys: one record with deleted 1998 and failed 2" 1 \
+  "$(grep -c -- '--selected 2501 --deleted 1998 --failed 2' "$adminlog")"
+
+reset
+FAKE_SLEEP_AT=2 run_signal TERM
+expect "TERM during batch 2: exit 1" 1 "$rc"
+expect "TERM during batch 2: no third batch" "delete 1000 delete 1000 " "$(tr '\n' ' ' <"$calls")"
+expect "TERM during batch 2: one record, the rest not deleted" 1 \
+  "$(grep -c -- '--selected 2501 --deleted 2000 --failed 501' "$adminlog")"
+expect "TERM during batch 2: exactly one record" 1 "$(grep -c -- '--failed' "$adminlog")"
+expect "TERM during batch 2: stderr" "interrupted: deleted 2000 of 2505 bundle objects of 2 devices; 501 keys not deleted" "$(cat "$work/err")"
+
+reset
+FAKE_SLEEP_AT=2 run_signal HUP
+expect "HUP during batch 2: one record" 1 "$(grep -c -- '--failed 501' "$adminlog")"
+
+reset
+run_closed_stdout
+expect "closed stdout: exit 0" 0 "$rc"
+expect "closed stdout: all batches deleted" "delete 1000 delete 1000 delete 501 " "$(tr '\n' ' ' <"$calls")"
+expect "closed stdout: one record" 1 "$(grep -c -- '--selected 2501 --deleted 2501 --failed 0' "$adminlog")"
+
+reset
+run_broken_pipe
+expect "broken pipe: one record" 1 "$(grep -c -- '--selected 2501 --deleted 2501 --failed 0' "$adminlog")"
+expect "broken pipe: all batches deleted" "delete 1000 delete 1000 delete 501 " "$(tr '\n' ' ' <"$calls")"
+
+reset
 FAKE_CHECK_FAILS=1 run --yes
 expect "failing --check: exit 1" 1 "$rc"
 expect "failing --check: nothing deleted" 0 "$(wc -l <"$calls")"
@@ -160,6 +237,15 @@ run --yes
 expect "selected 0: exit 0" 0 "$rc"
 expect "selected 0: no delete call" 0 "$(wc -l <"$calls")"
 expect "selected 0: one record with deleted 0" 1 "$(grep -c -- '--selected 0 --deleted 0 --failed 0' "$adminlog")"
+
+# The 10-minute guard of the run itself (the cutoff is computed by main): a key modified a minute ago stays, one modified
+# 20 minutes ago goes.
+recent="$(date -u -d '-1 min' +%Y-%m-%dT%H:%M:%S+00:00)" older="$(date -u -d '-20 min' +%Y-%m-%dT%H:%M:%S+00:00)"
+printf '%s\t%s\n' "$(key "$DA" 1)" "$older" "$(key "$DA" 2)" "$recent" "$(key "$DA" 3)" "$OLD" "$(key "$DA" 4)" "$OLD" >"$LISTING"
+reset
+run
+expect "cutoff: only the 20-minute-old key is selected" \
+  "would delete 1 of 4 bundle objects of 1 devices (keeping the newest 2 per device)" "$(cat "$work/out")"
 
 if ((failures)); then
   echo "$failures failures"

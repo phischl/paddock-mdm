@@ -118,22 +118,23 @@ var ErrBundlePruneIncomplete = errors.New("the prune ended with failed deletions
 
 // RecordBundlePrune records one ./paddock bundles prune --yes run (audited: platform.bundle_versions_pruned). The
 // actor is always the system actor: the person is known from the host's own access control, never from input (plan
-// M17 amendment t, addendum point 4).
+// M17 amendment t, addendum point 4). A run with failed keys is recorded with outcome failure and returns
+// ErrBundlePruneIncomplete only once that event is written, so the caller can tell it from a record that failed.
 func (a *Admin) RecordBundlePrune(ctx context.Context, p BundlePrune) error {
-	spec := SpecBundleVersionsPruned
-	err := a.runner.RunTx(system(ctx, uuid.Nil), ScopePlatform, spec, func(_ context.Context, _ *pgstore.Queries, rec Recorder) error {
+	fn := func(_ context.Context, _ *pgstore.Queries, rec Recorder) error {
 		rec.SetParam("keep", p.Keep)
 		rec.SetParam("listed", p.Listed)
 		rec.SetParam("devices", p.Devices)
 		rec.SetParam("selected", p.Selected)
 		rec.SetParam("deleted", p.Deleted)
 		rec.SetParam("failed", p.Failed)
-		if p.Failed > 0 {
-			return ErrBundlePruneIncomplete
-		}
 		return nil
-	})
-	return err
+	}
+	ctx = system(ctx, uuid.Nil)
+	if p.Failed > 0 {
+		return a.runner.RunTxRefusal(ctx, ScopePlatform, SpecBundleVersionsPruned, ErrBundlePruneIncomplete, fn)
+	}
+	return a.runner.RunTx(ctx, ScopePlatform, SpecBundleVersionsPruned, fn)
 }
 
 // RecompileAll requests a forced recompile of every organization (audited once per organization:

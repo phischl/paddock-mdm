@@ -270,7 +270,9 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 		if cmd.check {
 			return platformPool.Ping(ctx)
 		}
-		if err := admin.RecordBundlePrune(ctx, cmd.prune); err != nil {
+		// A run with failed keys is recorded as a failure event: the command succeeds, so the host script can tell a
+		// recorded failure from a record that could not be written (which exits 1).
+		if err := admin.RecordBundlePrune(ctx, cmd.prune); err != nil && !errors.Is(err, app.ErrBundlePruneIncomplete) {
 			return err
 		}
 		fmt.Fprintf(os.Stdout, "recorded the prune of %d bundle versions\n", cmd.prune.Deleted)

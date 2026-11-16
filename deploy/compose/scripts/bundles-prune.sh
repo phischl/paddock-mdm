@@ -132,40 +132,59 @@ bundles_prune_main() {
     return 0
   fi
 
-  local deleted=0 failed=0 batch resp
+  # From here on a run that deleted anything must reach the record call: a signal ends the loop after the running batch
+  # (the rest counts as not deleted), and a closed or broken stdout must not abort the script before the record.
+  local deleted=0 failed=0 stop=0 batch resp n size
   if ((count > 0)); then
     split -l "$BUNDLES_PRUNE_BATCH" -d -a 6 "$selected" "$work/batch."
+    trap 'stop=1' INT TERM HUP
+    trap '' PIPE
     for batch in "$work"/batch.*; do
-      # A transport failure is a failed batch like a response with Errors: the run still records what it did.
+      if ((stop)); then
+        failed=$((count - deleted))
+        break
+      fi
+      size="$(wc -l <"$batch")"
+      size=$((size + 0))
+      # Only Errors is inspected: with Quiet a successful call has no other content to check. A transport failure is a
+      # failed batch like one with Errors: the run still records what it did.
+      # shellcheck disable=SC2016
       if ! resp="$(awk 'BEGIN { printf "{\"Objects\":[" } { printf "%s{\"Key\":\"%s\"}", (NR > 1 ? "," : ""), $0 }
         END { printf "],\"Quiet\":true}\n" }' "$batch" |
-        aws s3api delete-objects --bucket "$BUCKET" --delete file:///dev/stdin)"; then
-        failed="$(wc -l <"$batch")"
-        failed=$((failed + 0))
+        aws s3api delete-objects --bucket "$BUCKET" --delete file:///dev/stdin \
+          --query 'length(Errors || `[]`)' --output text)"; then
+        failed=$size
         break
       fi
-      if [[ "$resp" == *'"Errors"'* ]]; then
-        failed="$(grep -c '"Key"' <<<"$resp" || true)"
-        ((failed > 0)) || failed=1
-        deleted=$((deleted + $(wc -l <"$batch") - failed))
+      if ! [[ "$resp" =~ ^[0-9]+$ ]]; then n=$size; else n=$((10#$resp)); fi
+      if ((n > 0)); then
+        ((n <= size)) || n=$size
+        failed=$n
+        deleted=$((deleted + size - n))
         break
       fi
-      deleted=$((deleted + $(wc -l <"$batch")))
+      deleted=$((deleted + size))
     done
   fi
 
-  local status=0
-  if ((failed > 0)); then
-    echo "deleted $deleted of $listed bundle objects of $devices devices; $failed keys failed" >&2
-    status=1
-  else
-    echo "deleted $deleted of $listed bundle objects of $devices devices"
+  trap '' INT TERM HUP
+  local recorded=1
+  bundles_prune_record "$keep" "$listed" "$devices" "$count" "$deleted" "$failed" || recorded=0
+  trap - INT TERM HUP PIPE
+  if ((!recorded)); then
+    echo "the audit event could not be recorded: keep=$keep listed=$listed devices=$devices selected=$count deleted=$deleted failed=$failed" >&2 || true
   fi
-  if ! bundles_prune_record "$keep" "$listed" "$devices" "$count" "$deleted" "$failed"; then
-    echo "the audit event could not be recorded: keep=$keep listed=$listed devices=$devices selected=$count deleted=$deleted failed=$failed" >&2
+  if ((failed > 0)); then
+    if ((stop)); then
+      echo "interrupted: deleted $deleted of $listed bundle objects of $devices devices; $failed keys not deleted" >&2 || true
+    else
+      echo "deleted $deleted of $listed bundle objects of $devices devices; $failed keys failed" >&2 || true
+    fi
     return 1
   fi
-  return "$status"
+  echo "deleted $deleted of $listed bundle objects of $devices devices" || true
+  ((recorded)) || return 1
+  return 0
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
