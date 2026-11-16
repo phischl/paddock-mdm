@@ -486,34 +486,83 @@ func TestOrganizationDeletionCancelBudget(t *testing.T) {
 
 // TestOrganizationDeletionTenThousandDevices (plan M17 amendment e point 7): request and cancel for 10 000 active
 // devices end to end. Targets on the development host: request ≤ 5 s, cancel ≤ 20 s; the test asserts loose ceilings.
+// The work is pinned independently of the host's load as the rows of table device that each call reads: set-based
+// (points 5 and 6), every statement reads each device a bounded number of times, while a plan that scans the
+// organization's devices once per device reads them 10 000 times (PDK-1091).
 func TestOrganizationDeletionTenThousandDevices(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds 10 000 devices")
 	}
+	const devices, readsPerDevice = 10000, 10
 	d := newDeletionWorld(t)
 	d.exec(t, `INSERT INTO device (id, organization_id, hostname, state)
 		SELECT uuidv7(), $1, 'bulk-' || g, 'active' FROM generate_series(1, 9999) g`, d.org)
+	// The measurement is of a fleet whose statistics know it. Whether an earlier test's autoanalyze recorded the nearly
+	// empty table (one device per organization) depends on timing; with those statistics the foreign-key check of
+	// every device_command row scans all of the organization's devices, 50 million rows here (PDK-1091).
+	d.exec(t, "ANALYZE device")
 
+	reads := d.deviceReads(t)
 	start := time.Now()
 	org, err := d.orgs.RequestDeletion(d.root(true), d.org, d.input(30))
 	request := time.Since(start)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *org.DeletionUninstallsIssued != 10000 || *org.DeletionUninstallsSkipped != 0 {
+	if *org.DeletionUninstallsIssued != devices || *org.DeletionUninstallsSkipped != 0 {
 		t.Fatalf("counts %d/%d", *org.DeletionUninstallsIssued, *org.DeletionUninstallsSkipped)
 	}
+	requestReads := d.awaitDeviceReads(t, reads, devices)
 	start = time.Now()
 	ctx := d.root(false)
 	if _, err := d.orgs.CancelDeletion(ctx, d.org); err != nil {
 		t.Fatal(err)
 	}
 	cancel := time.Since(start)
-	if ev := d.attempt(t, ctx); ev.Params["uninstalls_cancelled"] != float64(10000) {
+	if ev := d.attempt(t, ctx); ev.Params["uninstalls_cancelled"] != float64(devices) {
 		t.Fatalf("cancelled %v", ev.Params["uninstalls_cancelled"])
 	}
-	t.Logf("10 000 devices: request %s (target 5 s), cancel %s (target 20 s)", request, cancel)
+	cancelReads := d.awaitDeviceReads(t, reads+requestReads, devices)
+	t.Logf("10 000 devices: request %s (target 5 s), %d device rows read; cancel %s (target 20 s), %d device rows read", request, requestReads, cancel, cancelReads)
+	if requestReads > devices*readsPerDevice || cancelReads > devices*readsPerDevice {
+		t.Fatalf("device rows read: request %d, cancel %d, want at most %d each (%d per device)", requestReads, cancelReads,
+			devices*readsPerDevice, readsPerDevice)
+	}
 	if request > 30*time.Second || cancel > 60*time.Second {
 		t.Fatalf("request %s (ceiling 30 s), cancel %s (ceiling 60 s)", request, cancel)
+	}
+}
+
+// deviceReads returns the rows of table device that sequential and index scans of all sessions have read so far, as
+// the cumulative statistics show them.
+func (d deletionWorld) deviceReads(t *testing.T) int64 {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := d.super.Exec(ctx, "SELECT pg_stat_clear_snapshot()"); err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	if err := d.super.QueryRow(ctx, `SELECT coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0) FROM pg_stat_user_tables
+		WHERE relid = 'device'::regclass`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// awaitDeviceReads waits until the statistics show at least least device rows read since since and returns how many.
+// A session reports its statistics when it is idle, at most about a second late; the call under measurement read at
+// least least rows in its own transaction, whose counts are reported together.
+func (d deletionWorld) awaitDeviceReads(t *testing.T, since, least int64) int64 {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for {
+		n := d.deviceReads(t) - since
+		if n >= least {
+			return n
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("statistics show %d device rows read, want at least %d", n, least)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
