@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -93,7 +94,7 @@ func pgstoreQueries(t *testing.T) map[string]string {
 	return queries
 }
 
-// TestIngestStatementAllowList (ADR 0055 amendment 2, clarification of decisions 11 and 12): every name the
+// TestIngestStatementAllowList (ADR 0055 amendment 2026-11-16 (3) decisions 11 and 12): every name the
 // statement-cache view caches is a generated query (a typo would silently run it per execution), and every listed name
 // that is not a plain INSERT … VALUES has a case in TestIngestViewGenericPlans, which proves its plan.
 func TestIngestStatementAllowList(t *testing.T) {
@@ -143,12 +144,13 @@ func TestStatementName(t *testing.T) {
 	}
 }
 
-// TestIngestViewCachesListedStatements: on a statement-cache view a listed statement is a named, cached statement of
-// the connection after one execution; an unlisted one (ListDevices) stays unnamed, planned per execution.
+// TestIngestViewCachesListedStatements: on a statement-cache view a listed statement (DeleteDeviceEventDropped) is a
+// named, cached statement of the connection after one execution; unlisted ones (ListDevices, and GetDevice, which left
+// the list with ADR 0055 amendment 2026-11-16 (3)) stay unnamed, planned per execution.
 func TestIngestViewCachesListedStatements(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	parent, err := db.NewOrgPool(ctx, sharedPaddock(t).API, db.Options{MaxConns: 1})
+	parent, err := db.NewOrgPool(ctx, sharedPaddock(t).Worker, db.Options{MaxConns: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,26 +163,29 @@ func TestIngestViewCachesListedStatements(t *testing.T) {
 		if _, err := q.GetDevice(ctx, uuid.New()); !db.IsNoRows(err) {
 			return err
 		}
-		return nil
+		return q.DeleteDeviceEventDropped(ctx, uuid.New())
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := preparedStatements(t, view, f.orgA, "-- name: GetDevice %"); len(got) != 1 {
-		t.Errorf("listed GetDevice: prepared as %v, want one named statement", got)
+	if got := preparedStatements(t, view, f.orgA, "-- name: DeleteDeviceEventDropped %"); len(got) != 1 {
+		t.Errorf("listed DeleteDeviceEventDropped: prepared as %v, want one named statement", got)
+	}
+	if got := preparedStatements(t, view, f.orgA, "-- name: GetDevice %"); len(got) != 0 {
+		t.Errorf("unlisted GetDevice: prepared as %v, want none", got)
 	}
 	if got := preparedStatements(t, view, f.orgA, "-- name: ListDevices %"); len(got) != 0 {
 		t.Errorf("unlisted ListDevices: prepared as %v, want none", got)
 	}
 }
 
-// TestIngestViewCachedPlanKeepsOrganizationIsolation: a GetDevice plan cached on the view's connection in organization
-// A does not leak A's device into organization B; B sees only its own device. MaxConns 1 forces every transaction onto
-// the one connection that holds the cached statement, and the backend PID check proves it.
+// TestIngestViewCachedPlanKeepsOrganizationIsolation: a MaxDeviceEventSeenBefore plan cached on the view's connection
+// in organization A does not leak A's seen events into organization B; B sees only its own device's. MaxConns 1 forces
+// every transaction onto the one connection that holds the cached statement, and the backend PID check proves it.
 func TestIngestViewCachedPlanKeepsOrganizationIsolation(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	parent, err := db.NewOrgPool(ctx, sharedPaddock(t).API, db.Options{MaxConns: 1})
+	parent, err := db.NewOrgPool(ctx, sharedPaddock(t).Worker, db.Options{MaxConns: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +201,10 @@ func TestIngestViewCachedPlanKeepsOrganizationIsolation(t *testing.T) {
 		devA, f.orgA, "cache-"+devA.String(), devB, f.orgB, "cache-"+devB.String()); err != nil {
 		t.Fatalf("seed devices: %v", err)
 	}
+	if _, err := super.Exec(ctx, "INSERT INTO device_event_seen (device_id, event_seq, organization_id, received_at) "+
+		"VALUES ($1, 7, $2, now() - interval '1 day'), ($3, 9, $4, now() - interval '1 day')", devA, f.orgA, devB, f.orgB); err != nil {
+		t.Fatalf("seed seen events: %v", err)
+	}
 	backendPID := func(org uuid.UUID) int32 {
 		var pid int32
 		if err := db.InOrgTx(view, orgCtx(org), func(tx pgx.Tx) error {
@@ -207,32 +216,41 @@ func TestIngestViewCachedPlanKeepsOrganizationIsolation(t *testing.T) {
 	}
 
 	pidA := backendPID(f.orgA)
-	err = view.InOrg(orgCtx(f.orgA), func(ctx context.Context, q *pgstore.Queries) error {
-		_, err := q.GetDevice(ctx, devA)
-		return err
-	})
-	if err != nil {
-		t.Fatalf("org A reads its own device: %v", err)
-	}
-	cached := preparedStatements(t, view, f.orgA, "-- name: GetDevice %")
-	if len(cached) != 1 {
-		t.Fatalf("GetDevice after org A: prepared as %v, want one named statement", cached)
-	}
-
-	err = view.InOrg(orgCtx(f.orgB), func(ctx context.Context, q *pgstore.Queries) error {
-		if _, err := q.GetDevice(ctx, devA); !db.IsNoRows(err) {
-			t.Errorf("org B reads org A's device through the cached plan: err = %v, want no rows", err)
+	maxSeen := func(ctx context.Context, q *pgstore.Queries, device uuid.UUID) int64 {
+		seq, err := q.MaxDeviceEventSeenBefore(ctx, pgstore.MaxDeviceEventSeenBeforeParams{DeviceID: device, Before: time.Now()})
+		if err != nil {
+			t.Fatalf("MaxDeviceEventSeenBefore: %v", err)
 		}
-		if _, err := q.GetDevice(ctx, devB); err != nil {
-			t.Errorf("org B reads its own device: %v", err)
+		return seq
+	}
+	err = view.InOrg(orgCtx(f.orgA), func(ctx context.Context, q *pgstore.Queries) error {
+		if got := maxSeen(ctx, q, devA); got != 7 {
+			t.Errorf("org A reads its own device's events: %d, want 7", got)
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := preparedStatements(t, view, f.orgB, "-- name: GetDevice %"); len(got) != 1 || got[0] != cached[0] {
-		t.Errorf("GetDevice after org B: prepared as %v, want the statement %v cached in org A", got, cached)
+	cached := preparedStatements(t, view, f.orgA, "-- name: MaxDeviceEventSeenBefore %")
+	if len(cached) != 1 {
+		t.Fatalf("MaxDeviceEventSeenBefore after org A: prepared as %v, want one named statement", cached)
+	}
+
+	err = view.InOrg(orgCtx(f.orgB), func(ctx context.Context, q *pgstore.Queries) error {
+		if got := maxSeen(ctx, q, devA); got != 0 {
+			t.Errorf("org B reads org A's events through the cached plan: %d, want 0", got)
+		}
+		if got := maxSeen(ctx, q, devB); got != 9 {
+			t.Errorf("org B reads its own device's events: %d, want 9", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preparedStatements(t, view, f.orgB, "-- name: MaxDeviceEventSeenBefore %"); len(got) != 1 || got[0] != cached[0] {
+		t.Errorf("MaxDeviceEventSeenBefore after org B: prepared as %v, want the statement %v cached in org A", got, cached)
 	}
 	if pidB := backendPID(f.orgB); pidB != pidA {
 		t.Errorf("backend PID %d in org B, %d in org A: the cached plan did not stay on one connection", pidB, pidA)

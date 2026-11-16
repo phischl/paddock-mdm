@@ -59,7 +59,7 @@ func statementName(sql string) string {
 
 // ingestStatementCached is the closed allow list of the statement-cache view (ADR 0055 amendment 2026-11-16 (3),
 // decision 11): a name may be listed only if it is (a) an INSERT … VALUES without SELECT whose ON CONFLICT, if any,
-// names a unique index, or (b) compares device_id with a parameter and every table of its plan has no index led by
+// names a unique index or is a bare ON CONFLICT DO NOTHING (its arbiters are the table's unique indexes), or (b) compares device_id with a parameter and every table of its plan has no index led by
 // organization_id without device_id in second place. Access by primary key alone admits nothing: when ANALYZE misses a
 // small organization, a generic plan built there takes an index led by organization_id and reads the whole large
 // organization. TestIngestViewAdmissionRule checks the rule, TestIngestViewGenericPlans the plans under that worst case;

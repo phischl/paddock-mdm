@@ -20,7 +20,7 @@ import (
 )
 
 // ingestBufferBound is the most shared buffers one execution of a listed statement may touch in the large organization
-// (ADR 0055 amendment 2 decision 12); a device-keyed lookup needs a few, a scan of the organization tens of thousands.
+// (ADR 0055 amendment 2 decision 12, made precise by amendment 2026-11-16 (3)); a device-keyed lookup needs a few, a scan of the organization tens of thousands.
 const ingestBufferBound = 100
 
 // ingestPlanCase runs one query in organization org for device.
@@ -31,8 +31,8 @@ type ingestPlanCase struct {
 
 // ingestPlanCases are the allow-listed queries of the statement-cache view that read, update, upsert or delete, plus
 // ListDeviceEventSeenAbove and CountDeviceEventSeenInRanges of the event-gap round, which runs per execution but whose
-// device-keyed lookups migration 00158 made safe in every mode (ADR 0055 amendment 2026-11-16 (3) decision 12). TestIngestStatementAllowList makes every listed name
-// that is not a plain INSERT … VALUES have a case here.
+// device-keyed lookups migration 00158 made safe in every mode (ADR 0055 amendment 2026-11-16 (3) decision 12).
+// TestIngestStatementAllowList makes every listed name that is not a plain INSERT … VALUES have a case here.
 func ingestPlanCases() []ingestPlanCase {
 	now := time.Now()
 	return []ingestPlanCase{
@@ -107,7 +107,8 @@ func (recordedRow) Scan(...any) error { return errRecorded }
 // errRollback ends a transaction of the test so that its writes are rolled back.
 var errRollback = errors.New("roll back")
 
-// TestIngestViewGenericPlans is the plan test of the statement-cache view (ADR 0055 amendment 2 decision 12): on one
+// TestIngestViewGenericPlans is the plan test of the statement-cache view (ADR 0055 amendment 2026-11-16 (3) decision
+// 12): after analyzeWithoutOrg pinned the statistics of every organization table to the worst case, on one
 // connection with plan_cache_mode = force_generic_plan, every case of ingestPlanCases runs six times in a small
 // organization as a named, cached statement, and its cached plan then executes in an organization of 70 000 devices
 // touching at most ingestBufferBound shared buffers. The listed queries run through the view; the two event-gap

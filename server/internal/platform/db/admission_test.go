@@ -22,7 +22,60 @@ var (
 	onConflict       = regexp.MustCompile(`(?i)\bON\s+CONFLICT\b\s*(\(([^)]*)\))?\s*(ON\s+CONSTRAINT\b)?`)
 	selectKeyword    = regexp.MustCompile(`(?i)select`)
 	deviceKeyedMatch = regexp.MustCompile(`(?i)\bdevice_id\s*=\s*@`)
+	orKeyword        = regexp.MustCompile(`(?i)\bOR\b`)
+	lineComment      = regexp.MustCompile(`--[^\n]*`)
+	blockComment     = regexp.MustCompile(`(?s)/\*.*?\*/`)
 )
+
+// deviceKeyed reports whether sql, without comments, compares device_id with a parameter in a condition that every
+// row must meet: no OR at the parenthesis level of the comparison, so (device_id = @a OR …) does not count, while
+// device_id = @a AND (x OR y) does.
+func deviceKeyed(sql string) bool {
+	text := blockComment.ReplaceAllString(lineComment.ReplaceAllString(sql, ""), "")
+	for _, m := range deviceKeyedMatch.FindAllStringIndex(text, -1) {
+		if !orKeyword.MatchString(levelText(text, m[0])) {
+			return true
+		}
+	}
+	return false
+}
+
+// levelText returns the text of the innermost parenthesized group of sql around position pos, or all of sql at the top
+// level, with every nested group inside it blanked out.
+func levelText(sql string, pos int) string {
+	start, depth := 0, 0
+	for i := pos - 1; i >= 0; i-- {
+		switch sql[i] {
+		case ')':
+			depth++
+		case '(':
+			if depth == 0 {
+				start = i + 1
+				i = -1
+				continue
+			}
+			depth--
+		}
+	}
+	var b strings.Builder
+	depth = 0
+	for i := start; i < len(sql); i++ {
+		c := sql[i]
+		if c == '(' {
+			depth++
+		}
+		if c == ')' && depth == 0 {
+			break
+		}
+		if depth == 0 {
+			b.WriteByte(c)
+		}
+		if c == ')' {
+			depth--
+		}
+	}
+	return b.String()
+}
 
 // positional rewrites the sqlc parameters of a query file's SQL (@name, sqlc.arg(name), sqlc.narg(name)) to $1, $2, …
 // in order of first use, as sqlc generates them, so PostgreSQL can plan the text.
@@ -63,7 +116,7 @@ func admitInsert(ctx context.Context, tx pgx.Tx, sql string) error {
 	}
 	slices.Sort(want)
 	rows, err := tx.Query(ctx, "SELECT i.indexrelid::regclass::text, "+
-		"(SELECT array_agg(pg_get_indexdef(i.indexrelid, k, true) ORDER BY 1) FROM generate_series(1, i.indnkeyatts) k) "+
+		"(SELECT array_agg(pg_get_indexdef(i.indexrelid, k, true)) FROM generate_series(1, i.indnkeyatts) k) "+
 		"FROM pg_index i WHERE i.indrelid = $1::regclass AND i.indisunique AND i.indpred IS NULL", m[1])
 	if err != nil {
 		return fmt.Errorf("unique indexes of %s: %w", m[1], err)
@@ -81,6 +134,7 @@ func admitInsert(ctx context.Context, tx pgx.Tx, sql string) error {
 		return fmt.Errorf("unique indexes of %s: %w", m[1], err)
 	}
 	for _, u := range indexes {
+		slices.Sort(u.cols)
 		if slices.Equal(u.cols, want) {
 			return nil
 		}
@@ -89,11 +143,11 @@ func admitInsert(ctx context.Context, tx pgx.Tx, sql string) error {
 }
 
 // admitDeviceKeyed checks rule (b) of ADR 0055 amendment 2026-11-16 (3) decision 11: the SQL compares device_id with
-// a parameter, and no relation of its generic plan has an index led by organization_id whose second key column is not
-// device_id. It returns the offending indexes.
+// a parameter outside any OR, and no relation of its generic plan has an index led by organization_id whose second
+// key column is not device_id. It returns the offending indexes.
 func admitDeviceKeyed(ctx context.Context, tx pgx.Tx, sql string) error {
-	if !deviceKeyedMatch.MatchString(sql) {
-		return errors.New("compares no device_id with a parameter")
+	if !deviceKeyed(sql) {
+		return errors.New("compares no device_id with a parameter in a condition every row meets")
 	}
 	// pgx demands a value for every $n even in the simple protocol; EXPLAIN (GENERIC_PLAN) takes none, so the text goes
 	// to the server unchanged.
@@ -236,4 +290,22 @@ func TestIngestViewAdmissionRule(t *testing.T) {
 			t.Error("admitDeviceKeyed accepts a statement without device_id = @…")
 		}
 	})
+}
+
+// TestDeviceKeyed: rule (b)'s text check counts a device_id comparison only where every row must meet it.
+func TestDeviceKeyed(t *testing.T) {
+	for sql, want := range map[string]bool{
+		"DELETE FROM device_event_dropped WHERE device_id = @device_id":                                  true,
+		"DELETE FROM device_event_seen WHERE device_id = @device_id AND (received_at IS NULL OR x < @b)": true,
+		"SELECT coalesce((SELECT s FROM t WHERE device_id = @device_id AND (a OR b) LIMIT 1), 0)":        true,
+		"DELETE FROM t WHERE device_id = @device_id OR organization_id = @org":                           false,
+		"DELETE FROM t WHERE (device_id = @device_id OR true) AND x = 1":                                 false,
+		"SELECT 1 FROM device WHERE id = @id -- device_id = @device_id":                                  false,
+		"SELECT 1 FROM device WHERE id = @id /* device_id = @device_id */":                               false,
+		"SELECT 1 FROM device WHERE id = @id":                                                            false,
+	} {
+		if got := deviceKeyed(sql); got != want {
+			t.Errorf("deviceKeyed(%q) = %v, want %v", sql, got, want)
+		}
+	}
 }

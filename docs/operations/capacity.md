@@ -277,7 +277,7 @@ statement on a table without an index led by `organization_id` that lacks `devic
 (`MaxDeviceEventSeenBefore`, `DeleteDeviceEventSeenBefore` on `device_event_seen`, `DeleteDeviceEventDropped` on
 `device_event_dropped`). Lookups of `device` and `device_status` by their primary key, `CloseOpenDeviceEventGaps` and
 `FinishAction` are planned per execution again: when an `ANALYZE` sample misses a small organization, a generic plan
-built there takes an index led by `organization_id` and, in a 70 000-device organization, read 1 300 to 2 300 shared
+built there takes an index led by `organization_id` and, in a 70 000-device organization, read about 1 050 to 2 300 shared
 buffers instead of a handful. Every other statement, also on the view, is planned per execution. Migration 00158
 replaced the organization-only indexes of the three event tables by `(organization_id, device_id)`, so a generic plan
 that takes the organization index still reads only one device's rows (7 000 shared buffers before, 13 after, for
