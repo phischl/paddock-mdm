@@ -363,3 +363,104 @@ The N2 numbers this rests on: per-execution planning of everything costs +28 % C
 - − A new organization index led by `organization_id` without `device_id` second on `device_event_seen` or
   `device_event_dropped` fails the static test and takes their statements off the list; that is intended.
 - Follow-up: the "Query planning" section of `docs/operations/capacity.md` names the final path and its N2 result.
+
+## Amendment 2026-11-16 (4) — Organization foreign keys reference narrow key tables (main §92)
+
+Status of this amendment: Accepted (architect, 2026-11-16; approved by main, main §93). It adds decisions 14 to 16, target alpha.12 (PDK-1095). For alpha.11, decision 17 mitigates the risk until then.
+
+### Finding
+
+The same estimate failure as in amendment 3 hits PostgreSQL's own foreign-key checks, which no execution mode of
+Paddock controls:
+
+- 53 foreign keys reference ten parents by `(organization_id, id)`: `device` (29), `device_group` (10), `app_user`,
+  `software_catalog_entry` (4 each), `notification_destination` (3), `user_group` (2), `permission_profile`,
+  `config_rollout`, `software_source`, `notification_delivery` (1 each). Every child insert runs
+  `SELECT 1 FROM ONLY <parent> x WHERE organization_id = $1 AND id = $2 FOR KEY SHARE OF x`.
+- Every one of the ten parents has further indexes led by `organization_id` (list order, sorting, names, rounds).
+- PDK-1091 (PostgreSQL 18.6): 100 000 one-device organizations analyzed (`n_distinct(organization_id) = -1`), then an
+  organization of 10 000 devices below the autoanalyze threshold. The check takes `device_org_state_idx` and reads
+  all 10 000 devices for every checked row, in the custom and in the generic plan. A young install hits the same
+  while its first large organization enrolls.
+- Reproduced by the architect on the same version with the four device indexes on `(organization_id, …)`: the check
+  took `device_org_name_key`, not `device_org_state_idx` (2 064 buffers, 9 999 rows removed by the filter); 2 000
+  child inserts took 300 ms. Under these statistics every candidate is estimated at one row, so the planner's choice
+  between them is decided by index size, and any index led by `organization_id` can win. The same check against a
+  table whose only index is `(organization_id, id)` read 5 buffers; 2 000 child inserts took 13.5 ms.
+
+### Options
+
+- **i — Append `id` to every index led by `organization_id` on the parents.** − Not possible for the unique keys
+  (`device_org_name_key`, `*_organization_id_name_key`, `*_slug_key`): with `id` appended they no longer enforce
+  uniqueness. − For a high-cardinality middle column (hostname, name, dates) the check becomes a PostgreSQL 18 skip
+  scan that probes every distinct value of the organization, which is the scan it should avoid. Rejected.
+- **ii — Foreign keys on `(id)` alone.** + The check uses the primary key. − The database no longer guarantees that a
+  child row and its parent belong to the same organization; the check bypasses row-level security, so a
+  cross-organization `id` would be accepted. A trigger replacing that guarantee would query the parent under
+  row-level security and face the same index choice. Rejected (organization isolation).
+- **iii — Narrow key tables.** Each parent gets a key table that holds only `(organization_id, id)`; the children
+  reference the key table instead of the parent. All of its indexes contain `id`, which is unique, so every plan the
+  planner can choose for the check reads at most one row, whatever the statistics. The composite guarantee stays.
+  + Sound by construction, checkable on the schema. − Ten tables, two triggers each, 53 foreign keys moved; one
+  extra row written per parent insert. **Chosen.**
+- Statistics measures (higher target, `n_distinct` override, `ANALYZE` after enrolment) are rejected for the reasons
+  of amendment 3 option 3; a statistics target of 0 on `organization_id` would make every check sound but take away
+  the per-organization estimates the portal and the rounds rely on (decision 1).
+
+### Decision
+
+14. **Key tables.** For each of the ten parents `<p>` a table `<p>_org_key`:
+    - columns `organization_id uuid NOT NULL`, `id uuid NOT NULL`; `PRIMARY KEY (organization_id, id)`,
+      `UNIQUE (id)`; no other index;
+    - `ENABLE` and `FORCE ROW LEVEL SECURITY` with the same policies and grants as `<p>`, registered in
+      `offboarding_table` after `<p>` and after all its children;
+    - `<p>` gets `FOREIGN KEY (organization_id, id) REFERENCES <p>_org_key DEFERRABLE INITIALLY DEFERRED`, so every
+      parent row has its key and its organization cannot change. `UNIQUE (id)` keeps a second key with the same `id`
+      in another organization out, so a child cannot point across organizations;
+    - an `AFTER INSERT … FOR EACH ROW` trigger on `<p>` inserts the key (`ON CONFLICT DO NOTHING`); an
+      `AFTER DELETE … FOR EACH STATEMENT` trigger with a transition table deletes the keys of the deleted rows. The
+      delete actions of the children (cascade or no action) move unchanged to the key table.
+15. **Children reference the key table.** Each of the 53 foreign keys is re-created against `<p>_org_key` with the
+    same columns and the same `ON DELETE` action, then the old one is dropped. Migration `00160` runs without a
+    transaction and can be re-run: key tables and triggers first, then the backfill, then per foreign key `ADD … NOT
+    VALID`, `VALIDATE`, `DROP` of the old one.
+16. **Rule and proof.** A static test asserts on the migrated schema: every foreign key whose columns include
+    `organization_id` references a table whose indexes are all unique and all contain the referenced `id` column.
+    A worst-case test reproduces PDK-1091 (one-row organizations analyzed, then a large organization unanalyzed) and
+    asserts at most 10 shared buffers for the check query on `device_org_key`, in the custom and in the generic plan.
+
+### Consequences
+
+- + Foreign-key checks of child inserts cost one index lookup in every statistics state; the heartbeat and event
+  inserts, the uninstall commands of an offboarding request and the identity sync are no longer quadratic.
+- + The organization guarantee of the composite keys stays in the database.
+- − One extra insert per parent insert, one extra statement per parent delete statement.
+- − Not covered: the checks of a parent delete look up the children by `(organization_id, <parent>_id)`, and many
+  children have indexes led by `organization_id` without that column. Offboarding deletes children before parents,
+  so the ranges scanned are empty; single deletions in a live organization scan that organization's child rows once
+  per deleted parent. The offboarding gates measure it; a change needs a further decision.
+
+### alpha.11 mitigation (main §93)
+
+Decisions 14 to 16 ship in alpha.12. Until then, the statistics of the parents that a large organization fills in
+one burst catch up within about a minute.
+
+17. **Earlier autoanalyze for `device`, `app_user` and `user_group`.** A migration sets
+    `autovacuum_analyze_scale_factor = 0.01` and `autovacuum_analyze_threshold = 50` on these three tables. They are
+    the parents a single organization can fill with thousands of rows at once (enrolment, identity sync). The other
+    seven parents grow by administrator action and are small, so the default trigger (50 rows plus 10 %) already
+    fires early. `device_status` is not a foreign-key parent.
+    - Why it works: autoanalyze runs once `n_mod_since_analyze` exceeds threshold + scale factor × rows. With
+      100 000 devices the default needs 10 050 changes, so an organization of 10 000 devices never triggers it
+      (PDK-1091); the new setting needs 1 050. The threshold stays at 50, because a higher one (1 000) would let a
+      young install with fewer than about 10 000 devices wait longer than the default does.
+    - Measured on PostgreSQL 18.6 (default `autovacuum_naptime` of 1 min): 100 000 one-device organizations
+      analyzed, then 10 000 devices of one organization inserted. Autoanalyze ran 58 s later, and the check moved
+      from `device_org_name_key` (2 065 buffers) to `device_organization_id_id_key` (6 buffers).
+    - Cost: one `ANALYZE` of a fixed 30 000-row sample per 1 % of changed rows. `device` rows change rarely after
+      enrolment (hostname and OS release only on change), so this is a few extra runs a day.
+    - Residual risk: during a burst, checks still scan the organization's rows until the next autoanalyze, which is
+      at most about a minute plus the 1 % of rows that trigger it. Rows of an organization added in small steps over
+      a long time are covered by the regular runs. Runbook line in `docs/operations/capacity.md`: after a large
+      enrolment or identity import, run `ANALYZE device;` (or `ANALYZE app_user, user_group;`) if check-ins or
+      writes of that organization slow down before autoanalyze has run.
