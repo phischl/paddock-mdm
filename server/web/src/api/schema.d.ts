@@ -208,6 +208,34 @@ export interface paths {
         patch: operations["updateMe"];
         trace?: never;
     };
+    "/api/v1/recovery-export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin.
+         *     Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
+         *     of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
+         *     (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
+         *     organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until;
+         *     409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
+         *     one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
+         *     16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
+         *     otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
+         *     secret.
+         */
+        post: operations["exportRecoveryKeys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/mcp-write/enable": {
         parameters: {
             query?: never;
@@ -4031,7 +4059,8 @@ export interface paths {
         /**
          * @description Roles: platform_admin. Replaces the domains of the organization (plan M3a decision 1): lowercase DNS names,
          *     each belonging to one organization only (409 domain_taken); the first is the primary domain of device logins
-         *     and local usernames must use one of them.
+         *     and local usernames must use one of them. An organization that is deleting or deleted keeps its domains
+         *     (409 invalid_state, recorded in the platform pseudo-organization).
          */
         patch: operations["updateOrganization"];
         trace?: never;
@@ -4082,6 +4111,119 @@ export interface paths {
          *     still issuing its uninstalls.
          */
         post: operations["cancelOrganizationDeletion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/organizations/{id}/recovery-export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. The export of POST /api/v1/recovery-export for the organization of the path (404
+         *     not_found for an unknown organization); the platform administrator acts inside that organization only while
+         *     its deletion is pending (ADR 0052 amendment b decision 8). 403 organization_inactive when the organization is
+         *     being deleted or was deleted (recorded as organization.inactive_denied in the platform log).
+         *     Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password
+         *     of every non-retired device of the organization, encrypted to the public key or the passphrase of the request
+         *     (ADR 0052 amendment b); after the deletion this file is the only remaining copy. Available only while the
+         *     organization's deletion is pending and until 20 minutes before delete_after (deletion.recovery_export_until;
+         *     409 invalid_state otherwise), at most five successful exports per grace period (409 export_limit). Needs a step-up within the last 5 minutes (403 step_up_required), which counts as
+         *     one decryption of that step-up. recipient public_key needs one ASCII-armoured OpenPGP public key of at most
+         *     16 KiB with an encryption-capable key, recipient passphrase 20 to 1024 characters (400 invalid_request
+         *     otherwise). Every attempt is recorded once in the organization's audit log, never with the passphrase or a
+         *     secret.
+         */
+        post: operations["exportOrganizationRecoveryKeys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/organizations/{id}/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The retained audit log of a deleted organization (ADR 0052 decision 7), with the sort,
+         *     search and filters of /api/v1/audit-events. Its last event is audit.chain_verified or
+         *     audit.chain_verification_failed with param final true. 404 not_found unless the organization exists and is
+         *     deleted, and for every caller who is no platform administrator. Every attempt is recorded as
+         *     platform.deleted_organization_audit_read (resource audit_events) in the platform audit log.
+         */
+        get: operations["listDeletedOrganizationAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/organizations/{id}/audit-exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The evidence exports of a deleted organization, as /api/v1/audit/exports. 404 not_found
+         *     unless the organization is deleted, and for every caller who is no platform administrator. Every attempt is
+         *     recorded as platform.deleted_organization_audit_read (resource audit_exports).
+         */
+        get: operations["listDeletedOrganizationAuditExports"];
+        put?: never;
+        /**
+         * @description Roles: platform_admin, with a step-up within the last 300 s (403 step_up_required). Requests the signed
+         *     evidence package of a deleted organization for its auditors, with the body, checks and answers of
+         *     POST /api/v1/audit/exports; the package verifies offline with paddockctl audit verify-export. 404 not_found
+         *     unless the organization is deleted, and for every caller who is no platform administrator. Recorded as
+         *     platform.deleted_organization_audit_read (resource audit_export_request) in the platform audit log.
+         */
+        post: operations["createDeletedOrganizationAuditExport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/organizations/{id}/audit-exports/{export_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                export_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. Streams the package of a ready export of a deleted organization, with the headers and
+         *     answers of GET /api/v1/audit/exports/{id}/download (409 export_not_ready). 404 not_found for an unknown export,
+         *     unless the organization is deleted, and for every caller who is no platform administrator. Recorded as
+         *     platform.deleted_organization_audit_read (resource audit_export_download) before the first byte is sent.
+         */
+        get: operations["downloadDeletedOrganizationAuditExport"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5183,6 +5325,17 @@ export interface components {
              * @description When the organization's data is deleted.
              */
             delete_after: string;
+            /**
+             * Format: date-time
+             * @description delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
+             *     amendment h).
+             */
+            recovery_export_until: string;
+            /**
+             * @description Devices still pending approval. They never received a bundle and cannot verify an uninstall, so the deletion
+             *     drops them without one; the portal tells administrators to approve and delete them or to remove the packages.
+             */
+            devices_pending: number;
         };
         Me: {
             /** Format: uuid */
@@ -5634,6 +5787,12 @@ export interface components {
              */
             delete_after: string;
             /**
+             * Format: date-time
+             * @description delete_after minus 20 minutes: until then the recovery export of the organization is available (plan M17
+             *     amendment h).
+             */
+            recovery_export_until: string;
+            /**
              * @description The deletion step that runs next; null before the deletion runs.
              * @enum {string|null}
              */
@@ -5646,6 +5805,17 @@ export interface components {
             uninstalls_issued: number;
             /** @description Active devices skipped because of an open uninstall or an open Lock or Destroy. */
             uninstalls_skipped: number;
+            /**
+             * Format: date-time
+             * @description When the audit writer verified the organization's audit chain for the last time (step audit_final).
+             */
+            audit_final_verified_at: string | null;
+            /**
+             * @description The outcome of that final verification; failed means the retained audit evidence did not verify
+             *     (PaddockAuditFinalVerificationFailed). The deletion continues either way. null before step audit_final.
+             * @enum {string|null}
+             */
+            audit_final_outcome: "verified" | "failed" | null;
         };
         OrganizationDeleteRequest: {
             /** @description The organization's slug, typed by the administrator. */
@@ -5653,6 +5823,17 @@ export interface components {
             reason: string;
             /** @description Days until the deletion runs; 7 to 90, 0 to 90 on a development stack. */
             grace_days: number;
+        };
+        RecoveryExportRequest: {
+            /** @enum {string} */
+            recipient: "public_key" | "passphrase";
+            /** @description One ASCII-armoured OpenPGP public key with an encryption-capable key; required for public_key. */
+            public_key?: string;
+            /**
+             * @description 20 to 1024 characters (plan M17 amendment g); required for passphrase. Never logged, never recorded in the
+             *     audit log.
+             */
+            passphrase?: string;
         };
         OrganizationCreate: {
             slug: string;
@@ -10257,6 +10438,45 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    exportRecoveryKeys: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryExportRequest"];
+            };
+        };
+        responses: {
+            /**
+             * @description One ASCII-armoured OpenPGP message (AES-256; a passphrase is stretched with iterated and salted SHA-256,
+             *     which GnuPG 2.4 opens) as the file paddock-recovery-<slug>-<UTC yyyymmddThhmmssZ>.asc. Its plaintext is
+             *     JSON Lines: a header {organization_id, slug, exported_at, devices}, then per non-retired device with escrow
+             *     {device_id, hostname, volumes: [{uuid, recovery_key}], local_admin: {username, password} | null}. The body
+             *     streams; a failure after the first byte cuts it off, and OpenPGP rejects the truncated message.
+             */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pgp-encrypted": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     enableMcpWrite: {
@@ -17078,6 +17298,189 @@ export interface operations {
             };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    exportOrganizationRecoveryKeys: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryExportRequest"];
+            };
+        };
+        responses: {
+            /**
+             * @description One ASCII-armoured OpenPGP message (AES-256; a passphrase is stretched with iterated and salted SHA-256,
+             *     which GnuPG 2.4 opens) as the file paddock-recovery-<slug>-<UTC yyyymmddThhmmssZ>.asc. Its plaintext is
+             *     JSON Lines: a header {organization_id, slug, exported_at, devices}, then per non-retired device with escrow
+             *     {device_id, hostname, volumes: [{uuid, recovery_key}], local_admin: {username, password} | null}. The body
+             *     streams; a failure after the first byte cuts it off, and OpenPGP rejects the truncated message.
+             */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pgp-encrypted": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    listDeletedOrganizationAuditEvents: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The event_id is the tie-breaker. */
+                sort?: components["parameters"]["AuditEventSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Exact target id (for example a device id). */
+                target_id?: string;
+                /** @description RFC 3339; default to - 7 days. */
+                from?: string;
+                /** @description RFC 3339; default now. The range may span at most 92 days (400 range_too_large). */
+                to?: string;
+                /** @description Exact event code; repeatable. */
+                code?: string[];
+                /** @description Repeatable. */
+                outcome?: components["schemas"]["AuditOutcome"][];
+                /** @description Repeatable. */
+                actor_type?: components["schemas"]["AuditActorType"][];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the deleted organization's audit events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeletedOrganizationAuditExports: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["AuditExportSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["AuditExportStatus"][];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of exports. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditExportPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    createDeletedOrganizationAuditExport: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuditExportCreate"];
+            };
+        };
+        responses: {
+            /** @description The pending export. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditExport"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    downloadDeletedOrganizationAuditExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                export_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The package. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    "X-Paddock-Package-SHA256"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-tar": string;
+                };
+            };
+            401: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
         };

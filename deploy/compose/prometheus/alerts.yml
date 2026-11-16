@@ -69,12 +69,37 @@ groups:
         annotations:
           summary: "The audit hash chain failed its nightly verification"
           description: "{{ $value }} organization(s) have a broken or unreadable audit chain; see the evidence integrity page and paddock-server audit verify."
+      # An event of an organization whose audit log is closed (plan M17 decision 16) is kept in the platform log as
+      # audit.event_after_retirement. During a deletion that is rare; a run of them means the log of an organization
+      # that is still in use was closed, for example by a forged retirement request, and its later events lose their
+      # params (main §46). The SIEM rule of the code alerts as well (siemcontent).
+      - alert: PaddockAuditEventAfterRetirement
+        expr: increase(paddock_audit_events_after_retirement_total{role="paddock-audit-writer"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Events arrived for an organization whose audit log is closed"
+          description: "The audit writer recorded events of a retired organization as audit.event_after_retirement in the last hour. Check in the platform audit log (code audit.event_after_retirement, param organization_id) whether that organization is really deleted."
+      # The final verification of a deleted organization's chain (ADR 0052 decision 6, plan M17 amendment
+      # 2026-11-15 o) is not repeated: the nightly cycle skips the retired organization, so PaddockAuditChainBroken never
+      # sees it. The counter is read from audit_verification_run, so a writer restart does not raise it again; the
+      # alert fires for the hour after the failed run, and the deleted organization's detail keeps the outcome.
+      - alert: PaddockAuditFinalVerificationFailed
+        expr: increase(paddock_audit_verify_runs_total{trigger="final", result="failed"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The final audit verification of a deleted organization failed"
+          description: "The audit chain of an organization being deleted did not verify; its retained evidence is incomplete or altered. The organization detail and organization.deleted show audit_final_outcome failed."
       # 36 h leave one missed night of slack; the writer seeds the gauge at start, so a fresh writer does not fire,
       # but leaves it unset (0, fires) while the audit index is unreadable (plan M8b amendment 2026-10-25). A replica
       # that loses the audit-verify lock takes the gauge from the recorded run, so the rule stays per instance
-      # (amendment 2026-10-29, PDK-421).
+      # (amendment 2026-10-29, PDK-421). Only the audit-writer role registers the gauge, and the role selector keeps every
+      # other target out as well: a role that exported the default 0 would fire this for itself (main §46).
       - alert: PaddockAuditVerifyStale
-        expr: time() - paddock_audit_verify_last_run_timestamp_seconds > 36 * 3600
+        expr: time() - paddock_audit_verify_last_run_timestamp_seconds{role="paddock-audit-writer"} > 36 * 3600
         for: 1h
         labels:
           severity: warning
@@ -83,9 +108,9 @@ groups:
           description: "The audit writer's last nightly chain verification finished {{ $value | humanizeDuration }} ago; check the audit writer's log for the 00:45 UTC cycle."
       # The index purge runs at 01:15 UTC (plan M10 decisions 23 and 25); 48 h leave one missed or timed-out night of
       # slack. The writer seeds the gauge at start, so a fresh writer does not fire; a run with a failed or timed-out
-      # partition does not set it.
+      # partition does not set it. Scoped to the audit-writer role like PaddockAuditVerifyStale.
       - alert: PaddockAuditIndexPurgeStale
-        expr: time() - paddock_audit_index_purge_last_success_timestamp_seconds > 48 * 3600
+        expr: time() - paddock_audit_index_purge_last_success_timestamp_seconds{role="paddock-audit-writer"} > 48 * 3600
         for: 1h
         labels:
           severity: warning
@@ -114,6 +139,42 @@ groups:
 
   - name: paddock-control-plane
     rules:
+      # A deletion step that failed long enough to wait the longest backoff (30 min) between attempts (plan M17,
+      # PDK-1015): the job keeps retrying, but its dependency needs an operator; the step and code are on the
+      # organization and in paddock_offboarding_step_failing.
+      - alert: PaddockOrganizationDeletionStuck
+        expr: max(paddock_offboarding_retry_capped) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An organization deletion keeps failing"
+          description: "{{ $value }} organization deletion(s) retry a failing step at the longest backoff; see the organization's deletion step and error code."
+      # A deletion round that took longer than twice the round interval (plan M17 amendment 2026-11-16 s point 2.3,
+      # PDK-1087): every step whose work grows with the organization yields after its slice, so a round lasts at most
+      # the budget plus one slice and one unit; an overrun means a step stopped yielding and holds the other
+      # organizations' deletions.
+      - alert: PaddockOrganizationDeletionRoundOverrun
+        expr: increase(paddock_offboarding_round_overruns_total[30m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An organization deletion round overran"
+          description: "An organization deletion round took longer than 2 minutes in the last 30 minutes; a deletion step stopped yielding to the other organizations. See paddock_offboarding_step_yields_total and the worker's log."
+      # The worker's readiness does not wait for its consumer of worker.offboarding (PDK-1017, main §45), so a broker
+      # that refuses it (the upgrade's step broker did not run) or a lost session shows only here. 15 min cover the
+      # consumer's reconnects (backoff up to 30 s) and a broker restart; while it lasts, step audit_final of an
+      # organization deletion waits for the audit writer's acknowledgement. Only the worker role registers the gauge;
+      # the role selector keeps any other target out as well (main §46).
+      - alert: PaddockWorkerOffboardingConsumerDisconnected
+        expr: paddock_worker_offboarding_consumer_connected{role="paddock-worker"} == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A worker does not consume worker.offboarding"
+          description: "{{ $labels.instance }} has not consumed worker.offboarding for 15 minutes; organization deletions wait in step audit_final. Check the worker's log and the broker's permissions (./paddock check --online, ./paddock bootstrap broker)."
       - alert: PaddockCompileLatencyHigh
         expr: histogram_quantile(0.95, sum by (le) (rate(paddock_compiler_latency_seconds_bucket[10m]))) > 30
         for: 10m
@@ -140,9 +201,10 @@ groups:
         annotations:
           summary: "OpenBao is sealed"
           description: "Bundles, commands and the audit seal stop until three custodians unseal OpenBao (docs/operations/openbao.md)."
-      # Automatic unseal (ADR 0035, plan M8u decision 25), from the worker's observation of the unsealer's report.
+      # Automatic unseal (ADR 0035, plan M8u decision 25), from the worker's observation of the unsealer's report. Only the
+      # worker registers the gauges; the role selector keeps any other target out as well (main §46).
       - alert: PaddockAutoUnsealWithdrawn
-        expr: max(paddock_auto_unseal_enabled) == 0 and max(paddock_auto_unseal_shares_present) == 1
+        expr: max(paddock_auto_unseal_enabled{role="paddock-worker"}) == 0 and max(paddock_auto_unseal_shares_present{role="paddock-worker"}) == 1
         for: 1h
         labels:
           severity: warning
@@ -150,15 +212,17 @@ groups:
           summary: "Automatic unseal was disabled in the portal, but the shares are still on the host"
           description: "Run ./paddock auto-unseal disable on the control-plane host (docs/operations/openbao.md section 6)."
       - alert: PaddockAutoUnsealerDown
-        expr: max(paddock_auto_unseal_enabled) == 1 and max(paddock_auto_unseal_unsealer_up) == 0
+        expr: max(paddock_auto_unseal_enabled{role="paddock-worker"}) == 1 and max(paddock_auto_unseal_unsealer_up{role="paddock-worker"}) == 0
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "Automatic unseal is enabled, but the unsealer does not report"
           description: "OpenBao will stay sealed after the next restart until the unsealer runs or three custodians unseal it."
+      # Only the worker probes OpenBao and registers the gauge; a role that exported the default 0 would hold the min at 0
+      # for good, and one that exported 1 would hide the absence (main §46).
       - alert: PaddockOpenBaoUnreachable
-        expr: min(paddock_openbao_reachable) == 0
+        expr: min(paddock_openbao_reachable{role="paddock-worker"}) == 0
         for: 5m
         labels:
           severity: critical
@@ -314,7 +378,7 @@ groups:
           summary: "The WAL archive lag of some databases is unknown"
           description: "The backup role exports the WAL archive age of fewer stanzas than configured; check its log and the local repository."
       - alert: PaddockOpenBaoHealthMissing
-        expr: absent(paddock_openbao_reachable) and on() max(up{role="paddock-worker"}) == 1
+        expr: absent(paddock_openbao_reachable{role="paddock-worker"}) and on() max(up{role="paddock-worker"}) == 1
         for: 1h
         labels:
           severity: critical

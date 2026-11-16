@@ -53,20 +53,16 @@ func (f *fake) expectPendingLog() {
 }
 
 // waitTicks waits until n ticks of the Run loop began after the call, so at least n-1 checks ran completely after it.
+// It has no wall-clock bound: a loop blocked in file I/O on a busy host ticks late, not never (PDK-1115); a loop that
+// never ticks again fails the test at go test's -timeout.
 func (f *fake) waitTicks(n int) {
 	f.t.Helper()
 	for len(f.notices) > 0 {
 		<-f.notices
 	}
-	deadline := time.After(10 * time.Second)
 	for n > 0 {
-		select {
-		case s := <-f.notices:
-			if s == "WATCHDOG=1" {
-				n--
-			}
-		case <-deadline:
-			f.t.Fatal("timed out waiting for ticks")
+		if <-f.notices == "WATCHDOG=1" {
+			n--
 		}
 	}
 }
@@ -319,6 +315,8 @@ func TestRestartBeforeThePendingRollbackIsRecorded(t *testing.T) {
 	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
 	f.start()
 	f.waitFor("a retry of the resumed rollback", func() bool { return retries(log) == 1 })
+	// The log records the pending rollback after the retry's error line (keepRollbackPending, PDK-1118).
+	f.waitFor("the pending rollback was recorded in the probation log", f.pendingOnDisk)
 	f.expectPendingLog()
 	f.clock.set(testProbation + time.Minute)
 	defer f.clock.set(0)

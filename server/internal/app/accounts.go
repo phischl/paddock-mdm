@@ -345,6 +345,9 @@ type Me struct {
 	MCPWriteEnabled bool
 	// MCPWriteEnabledAt is since when the opt-in holds (plan M14 §6.6 amendment 2026-10-29); nil while it is off.
 	MCPWriteEnabledAt *time.Time
+	// PendingDevices is the number of devices still pending approval, read only while the organization's deletion is
+	// pending (plan M17 amendment m point 1).
+	PendingDevices int
 }
 
 // MeAPIToken is the API token a request authenticated with.
@@ -389,6 +392,13 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 		me.Username, me.DisplayName, me.Locale, me.Theme, me.Organization = acc.Username, acc.DisplayName, acc.Locale, acc.Theme, &org
 		me.MCPWriteEnabled = acc.McpWriteEnabledAt != nil
 		me.MCPWriteEnabledAt = acc.McpWriteEnabledAt
+		if organization.DeletionPending(org.Status, org.DeleteAfter) {
+			n, err := q.CountPendingDevices(ctx)
+			if err != nil {
+				return fmt.Errorf("count pending devices: %w", err)
+			}
+			me.PendingDevices = int(n)
+		}
 		return nil
 	})
 	return me, unauthenticatedIfGone(err)

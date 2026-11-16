@@ -151,3 +151,78 @@ func TestOffboardingRegistry(t *testing.T) {
 		}
 	})
 }
+
+// offboardingIndexProblems checks plan M17 amendment q point 4 on the schema q sees: every table in offboarding_table
+// has a valid, non-partial index whose first key column is organization_id, so the EXISTS of
+// paddock_offboard_delete_batch_from and paddock_offboard_finalize is an index lookup, not a scan of the whole table.
+func offboardingIndexProblems(ctx context.Context, t *testing.T, q querier) []string {
+	t.Helper()
+	rows, err := q.Query(ctx, `SELECT r.table_name FROM offboarding_table r
+		WHERE NOT EXISTS (SELECT 1 FROM pg_index i
+		  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+		  WHERE i.indrelid = format('public.%I', r.table_name)::regclass
+		    AND i.indisvalid AND i.indpred IS NULL AND a.attname = 'organization_id')
+		ORDER BY r.table_name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var problems []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		problems = append(problems, name+": no valid, non-partial index whose first key column is organization_id")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return problems
+}
+
+// TestOffboardingRegistryIndexes enforces plan M17 amendment q point 4 on the migrated schema: a registered table
+// without an index led by organization_id fails here, so a new organization table cannot make the deletion slow.
+func TestOffboardingRegistryIndexes(t *testing.T) {
+	env := sharedPaddock(t)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	if problems := offboardingIndexProblems(ctx, t, conn); len(problems) > 0 {
+		t.Fatalf("offboarding registry indexes:\n  %s", strings.Join(problems, "\n  "))
+	}
+
+	t.Run("detects a dropped, an invalid, a partial and a non-leading index", func(t *testing.T) {
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		for _, stmt := range []string{
+			"DROP INDEX device_event_gap_org_device_idx",
+			// What a failed CREATE INDEX CONCURRENTLY leaves behind.
+			"UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'action_org_idx'::regclass",
+			"DROP INDEX outbox_org_idx",
+			"CREATE INDEX zz_outbox_partial ON outbox (organization_id) WHERE published_at IS NULL",
+			"DROP INDEX bundle_org_idx",
+			"CREATE INDEX zz_bundle_second ON bundle (device_id, organization_id)",
+		} {
+			if _, err := tx.Exec(ctx, stmt); err != nil {
+				t.Fatalf("%s: %v", stmt, err)
+			}
+		}
+		got := strings.Join(offboardingIndexProblems(ctx, t, tx), "\n")
+		for _, want := range []string{"action: no valid", "bundle: no valid", "device_event_gap: no valid", "outbox: no valid"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("problems %q lack %q", got, want)
+			}
+		}
+		if n := strings.Count(got, "\n") + 1; n != 4 {
+			t.Errorf("%d problems, want 4: %q", n, got)
+		}
+	})
+}

@@ -147,6 +147,18 @@ INSERT INTO audit_verification_run (id, organization_id, trigger, from_day, to_d
 VALUES (@id, @organization_id, @trigger, @from_day, @to_day, @started_at, @finished_at, @days, @objects, @ok,
         @problems, @event_id);
 
+-- The final verification of a retired organization (plan M17 amendment o point 2) has a fixed run ID, so a retry after
+-- a crash keeps the first run.
+-- name: InsertAuditVerificationRunOnce :exec
+INSERT INTO audit_verification_run (id, organization_id, trigger, from_day, to_day, started_at, finished_at, days,
+                                    objects, ok, problems, event_id)
+VALUES (@id, @organization_id, @trigger, @from_day, @to_day, @started_at, @finished_at, @days, @objects, @ok,
+        @problems, @event_id)
+ON CONFLICT (id) DO NOTHING;
+
+-- name: GetAuditVerificationRunOK :one
+SELECT ok FROM audit_verification_run WHERE id = @id;
+
 -- name: LatestNightlyRunFinished :one
 -- The end of the newest nightly run of any organization; no row before the first one (plan M8b decision 27).
 SELECT finished_at FROM audit_verification_run WHERE trigger = 'nightly' ORDER BY finished_at DESC LIMIT 1;

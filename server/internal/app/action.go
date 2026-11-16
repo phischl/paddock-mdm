@@ -21,6 +21,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/revocation"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/op"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
@@ -50,6 +51,9 @@ type ActionSpec struct {
 	// CorrelationID replaces the request ID of ctx; events aggregated outside a request (the IP allow list denials
 	// of one window, plan M7a decision 20) share one.
 	CorrelationID string
+	// organization records a ScopePlatform action in this organization's log from the start, its denial included
+	// (RunExternalInPendingDeletion).
+	organization uuid.UUID
 }
 
 // StepUpValidity is how long a step-up authentication satisfies RequiresStepUp (plan M4a decision 6).
@@ -99,6 +103,9 @@ type ActionRunner struct {
 	stepUpWindow  time.Duration
 	// platformTx replaces platform.InPlatform for ScopePlatform (WithPlatformScope).
 	platformTx func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error
+	// pendingOrg is the organization of RunExternalInPendingDeletion, whose refusal for a deleting organization is
+	// recorded as organization.inactive_denied.
+	pendingOrg uuid.UUID
 }
 
 // RunnerOption configures an ActionRunner.
@@ -184,10 +191,17 @@ func (r *recorder) ActionID() uuid.UUID { return r.id }
 
 var secretParamWords = []string{"password", "secret", "token"}
 
+// countParams name a secret word but only count secrets: secrets of organization.recovery_exported (plan M17
+// amendment b decision 25).
+var countParams = map[string]bool{"secrets": true}
+
 // mustBeSafeParam panics on parameter keys that look like secrets: audit events are immutable evidence and must
 // never carry secrets. This is a programming error, caught by tests.
 func mustBeSafeParam(key string) {
 	k := strings.ToLower(key)
+	if countParams[k] {
+		return
+	}
 	for _, w := range secretParamWords {
 		if strings.Contains(k, w) {
 			panic(fmt.Sprintf("app: audit param %q looks like a secret", key))
@@ -225,6 +239,9 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 		rec.org = p.OrganizationID
 	} else {
 		rec.org = audit.PlatformOrganizationID
+		if spec.organization != uuid.Nil {
+			rec.org = spec.organization
+		}
 	}
 	if spec.Actor != nil {
 		rec.actor = *spec.Actor
@@ -336,7 +353,7 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 		errors.Is(err, problem.IPNotAllowed) ||
 		errors.Is(err, problem.MCPDisabled) || errors.Is(err, problem.MCPToolNotAllowed) ||
 		errors.Is(err, problem.MCPWriteNotEnabled) || errors.Is(err, problem.RateLimited) ||
-		errors.Is(err, problem.RepositoryNotReady) {
+		errors.Is(err, problem.RepositoryNotReady) || errors.Is(err, problem.OrganizationInactive) {
 		return audit.OutcomeDenied, p.Code
 	}
 	return audit.OutcomeFailure, p.Code
@@ -349,14 +366,14 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 //     error_code=<problem code>) + outbox row. The original error is returned.
 func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 	fn func(ctx context.Context, q *pgstore.Queries, rec Recorder) error) error {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok {
 		return problem.Unauthenticated
 	}
 	rec := r.newRecorder(ctx, p, scope, spec)
 	if err := r.authorize(p, scope, spec, rec); err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 	defer r.recordPanic(ctx, p, scope, rec)
 	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
@@ -366,8 +383,7 @@ func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 		return r.insertFinished(ctx, q, rec, nil)
 	})
 	if err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 	return nil
 }
@@ -377,14 +393,14 @@ func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 // with its rejected state (plan M4c decision 8). fn's own error rolls everything back and is recorded instead.
 func (r *ActionRunner) RunTxRefusal(ctx context.Context, scope Scope, spec ActionSpec, refusal error,
 	fn func(ctx context.Context, q *pgstore.Queries, rec Recorder) error) error {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok {
 		return problem.Unauthenticated
 	}
 	rec := r.newRecorder(ctx, p, scope, spec)
 	if err := r.authorize(p, scope, spec, rec); err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 	defer r.recordPanic(ctx, p, scope, rec)
 	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
@@ -394,8 +410,7 @@ func (r *ActionRunner) RunTxRefusal(ctx context.Context, scope Scope, spec Actio
 		return r.insertFinished(ctx, q, rec, refusal)
 	})
 	if err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 	return refusal
 }
@@ -431,6 +446,7 @@ func (r *ActionRunner) RecordOnce(ctx context.Context, spec ActionSpec,
 // changes), such as a system transition that must be recorded at most once.
 func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error), after ...AfterFunc) (bool, error) {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
@@ -465,14 +481,14 @@ func (r *ActionRunner) RecordOnceWith(ctx context.Context, spec ActionSpec,
 func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 	enabled func(ctx context.Context, q *pgstore.Queries) (bool, error),
 	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok {
 		return false, problem.Unauthenticated
 	}
 	rec := r.newRecorder(ctx, p, ScopeOrg, spec)
 	if err := r.authorize(p, ScopeOrg, spec, rec); err != nil {
-		r.recordFinal(ctx, p, ScopeOrg, rec, err)
-		return false, err
+		return false, r.recordFinal(ctx, p, ScopeOrg, rec, err)
 	}
 	defer r.recordPanic(ctx, p, ScopeOrg, rec)
 	recorded, on := false, false
@@ -496,8 +512,7 @@ func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
 		if !on {
 			return false, err
 		}
-		r.recordFinal(ctx, p, ScopeOrg, rec, err)
-		return false, err
+		return false, r.recordFinal(ctx, p, ScopeOrg, rec, err)
 	}
 	return recorded, nil
 }
@@ -560,6 +575,7 @@ func (r *ActionRunner) RecordAllOnce(ctx context.Context, scope Scope, specs []A
 // such as the import of the legacy backup key (plan M15 decision 9).
 func (r *ActionRunner) RecordOnceInScope(ctx context.Context, scope Scope, spec ActionSpec,
 	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error) {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
@@ -703,6 +719,7 @@ func (r *ActionRunner) RecordOnceRefusal(ctx context.Context, spec ActionSpec, r
 func (r *ActionRunner) recordOnceRefusal(ctx context.Context, spec ActionSpec, refusal error,
 	claim func(ctx context.Context, q *pgstore.Queries) (bool, error), annotate func(rec Recorder),
 	after ...AfterFunc) (bool, error) {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
 		return false, problem.Unauthenticated
@@ -733,6 +750,7 @@ func (r *ActionRunner) recordOnceRefusal(ctx context.Context, spec ActionSpec, r
 // CSRF header): exactly one event, denied when the principal may not perform the action at all, otherwise with the
 // rejection's outcome. It returns the error to send to the client.
 func (r *ActionRunner) RecordRejected(ctx context.Context, scope Scope, spec ActionSpec, rejection error) error {
+	ctx = op.With(ctx, string(spec.Code))
 	return r.RunTx(ctx, scope, spec, func(context.Context, *pgstore.Queries, Recorder) error { return rejection })
 }
 
@@ -741,19 +759,20 @@ func (r *ActionRunner) RecordRejected(ctx context.Context, scope Scope, spec Act
 // so that an MCP session asking for a step-up action learns that the MCP never offers it rather than that a step-up
 // is missing. It returns the refusal.
 func (r *ActionRunner) RecordRefusal(ctx context.Context, scope Scope, spec ActionSpec, refusal error) error {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok {
 		return problem.Unauthenticated
 	}
-	r.recordFinal(ctx, p, scope, r.newRecorder(ctx, p, scope, spec), refusal)
-	return refusal
+	return r.recordFinal(ctx, p, scope, r.newRecorder(ctx, p, scope, spec), refusal)
 }
 
 // recordPanic records a panicking use case as failure (error_code internal) and re-panics for the HTTP recovery
 // middleware, so even a crash inside a request leaves exactly one event.
 func (r *ActionRunner) recordPanic(ctx context.Context, p principal.Principal, scope Scope, rec *recorder) {
 	if v := recover(); v != nil {
-		r.recordFinal(ctx, p, scope, rec, fmt.Errorf("panic: %v", v))
+		// The panic is re-raised, so there is no caller to report the gate's refusal to.
+		_ = r.recordFinal(ctx, p, scope, rec, fmt.Errorf("panic: %v", v))
 		panic(v)
 	}
 }
@@ -769,14 +788,14 @@ func (r *ActionRunner) RunExternal(ctx context.Context, scope Scope, spec Action
 	prepare func(ctx context.Context, q *pgstore.Queries, rec Recorder) error,
 	external func(ctx context.Context) error,
 	finalize func(ctx context.Context, q *pgstore.Queries, rec Recorder, externalErr error) error) error {
+	ctx = op.With(ctx, string(spec.Code))
 	p, ok := principal.From(ctx)
 	if !ok {
 		return problem.Unauthenticated
 	}
 	rec := r.newRecorder(ctx, p, scope, spec)
 	if err := r.authorize(p, scope, spec, rec); err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 
 	err := func() error {
@@ -789,8 +808,7 @@ func (r *ActionRunner) RunExternal(ctx context.Context, scope Scope, spec Action
 		})
 	}()
 	if err != nil {
-		r.recordFinal(ctx, p, scope, rec, err)
-		return err
+		return r.recordFinal(ctx, p, scope, rec, err)
 	}
 
 	if r.externalDelay > 0 {
@@ -832,6 +850,42 @@ func (r *ActionRunner) RunExternal(ctx context.Context, scope Scope, spec Action
 	return externalErr
 }
 
+// RunExternalInPendingDeletion is RunExternal for a platform administrator acting inside one organization whose
+// deletion is pending: the second narrow exception to architecture §5 rule 4 (ADR 0052 amendment b decision 8), used
+// only by the encrypted recovery export. Its transactions run in the organization through
+// OrgPool.InPendingDeletionOrg, and its event is recorded in the organization's own log, a denial included. When the
+// organization cannot be entered (no deletion pending), the transactions run in the platform scope instead, where
+// prepare finds the organization's state and refuses; the event still names the organization, or, for an unknown
+// organization (known false), the platform pseudo-organization. An organization that is deleting or deleted is never
+// written through the platform pool: InPendingDeletionOrg refuses it with problem.OrganizationInactive, recorded as
+// organization.inactive_denied in the platform pseudo-organization (plan M17 amendment h point 2).
+func (r *ActionRunner) RunExternalInPendingDeletion(ctx context.Context, org uuid.UUID, known bool, spec ActionSpec,
+	prepare func(ctx context.Context, q *pgstore.Queries, rec Recorder) error,
+	external func(ctx context.Context) error,
+	finalize func(ctx context.Context, q *pgstore.Queries, rec Recorder, externalErr error) error) error {
+	platform := r.platform.InPlatform
+	if r.platformTx != nil {
+		platform = r.platformTx
+	}
+	in := *r
+	in.pendingOrg = org
+	in.platformTx = func(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+		// The record of an inactive organization's refusal runs as the system, in the platform scope.
+		if p, _ := principal.From(ctx); p.Kind != principal.KindPlatformAdmin {
+			return platform(ctx, fn)
+		}
+		err := r.org.InPendingDeletionOrg(ctx, r.platform, org, fn)
+		if errors.Is(err, db.ErrNotPendingDeletion) {
+			return platform(ctx, fn)
+		}
+		return err
+	}
+	if known {
+		spec.organization = org
+	}
+	return in.RunExternal(ctx, ScopePlatform, spec, prepare, external, finalize)
+}
+
 func (r *ActionRunner) inScope(ctx context.Context, p principal.Principal, scope Scope,
 	fn func(ctx context.Context, q *pgstore.Queries) error) error {
 	if scope == ScopeOrg && p.OrganizationID != uuid.Nil {
@@ -843,10 +897,17 @@ func (r *ActionRunner) inScope(ctx context.Context, p principal.Principal, scope
 	return r.platform.InPlatform(ctx, fn)
 }
 
-// recordFinal writes action(finished, failure|denied) + outbox in a new transaction after a failed attempt.
-func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, scope Scope, rec *recorder, cause error) {
+// recordFinal writes action(finished, failure|denied) + outbox in a new transaction after a failed attempt. It
+// returns the error to report: cause, or the gate's refusal when the organization turned out to be deleting or
+// deleted.
+func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, scope Scope, rec *recorder,
+	cause error) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
+	if org := r.gatedOrg(p, scope); org != uuid.Nil && errors.Is(cause, problem.OrganizationInactive) {
+		r.recordInactiveDenied(ctx, p, org, rec, cause)
+		return cause
+	}
 	// Denials of organization actions by principals without an organization go to the platform pseudo-organization.
 	if scope == ScopeOrg && p.OrganizationID == uuid.Nil {
 		rec.org = audit.PlatformOrganizationID
@@ -860,9 +921,56 @@ func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, s
 	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
 		return r.insertFinished(ctx, q, rec, cause)
 	})
+	// A refusal that comes before the gate (role, step-up, MCP guard) or a failure after it cannot be recorded in an
+	// organization that is deleting or deleted: the gate refuses the record too, and the event would be lost
+	// (PDK-1113). The organization's unavailability wins, as it would have refused the attempt anyway: the one event
+	// is organization.inactive_denied and the caller gets organization_inactive, matching the event.
+	if org := r.gatedOrg(p, scope); org != uuid.Nil && db.IsOrganizationUnavailable(err) {
+		r.recordInactiveDenied(ctx, p, org, rec, err)
+		return err
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "audit: could not record failed action", "action_id", rec.id, "code", rec.code,
 			"cause", cause, "error", err)
+	}
+	return cause
+}
+
+// gatedOrg is the organization whose offboarding gate the record of an attempt in scope passes, or uuid.Nil.
+func (r *ActionRunner) gatedOrg(p principal.Principal, scope Scope) uuid.UUID {
+	switch {
+	case scope == ScopeOrg && p.OrganizationID != uuid.Nil:
+		return p.OrganizationID
+	case scope == ScopePlatform && r.pendingOrg != uuid.Nil:
+		return r.pendingOrg
+	}
+	return uuid.Nil
+}
+
+// recordInactiveDenied records an organization action refused because its organization is deleting or deleted as
+// organization.inactive_denied in the platform pseudo-organization: the gate refuses every write into the
+// organization, and a row written after the delete loop would make the offboarding's finalize fail (plan M17
+// amendment 2026-11-14 f point 1). The attempt's actor and target are kept; its own code is a param only.
+func (r *ActionRunner) recordInactiveDenied(ctx context.Context, p principal.Principal, org uuid.UUID, rec *recorder,
+	cause error) {
+	if r.platformTx == nil && r.platform == nil {
+		slog.WarnContext(ctx, "audit: no platform scope to record the refusal of an inactive organization",
+			"action_id", rec.id, "code", rec.code, "organization_id", org)
+		return
+	}
+	denied := *rec
+	denied.code = audit.CodeOrganizationInactiveDenied
+	denied.org = audit.PlatformOrganizationID
+	denied.params = map[string]any{"organization_id": org.String(), "attempted_code": string(rec.code),
+		"status": db.OrganizationUnavailableStatus(cause)}
+	denied.changes, denied.commands, denied.approved = nil, nil, nil
+	// The platform scope needs a platform principal; the refused principal stays the event's actor.
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: p.Display})
+	err := r.inScope(sys, principal.Principal{Kind: principal.KindSystem}, ScopePlatform,
+		func(ctx context.Context, q *pgstore.Queries) error { return r.insertFinished(ctx, q, &denied, cause) })
+	if err != nil {
+		slog.ErrorContext(ctx, "audit: could not record the refusal of an inactive organization", "action_id", rec.id,
+			"code", rec.code, "organization_id", org, "error", err)
 	}
 }
 

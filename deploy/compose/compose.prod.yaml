@@ -173,6 +173,10 @@ services:
       - rustfs_escrow_worker_secret_key
       - rustfs_bundles_worker_access_key
       - rustfs_bundles_worker_secret_key
+      - rustfs_bundles_offboard_access_key
+      - rustfs_bundles_offboard_secret_key
+      - rustfs_escrow_offboard_access_key
+      - rustfs_escrow_offboard_secret_key
       - db_paddock_worker_url
       - db_paddock_platform_url
       - rabbitmq_worker_password

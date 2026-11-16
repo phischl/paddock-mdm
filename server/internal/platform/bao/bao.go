@@ -280,6 +280,60 @@ func (c *Client) Decrypt(ctx context.Context, key string, version int, ciphertex
 	return out, nil
 }
 
+// VersionedCiphertext is a raw ciphertext (standard base64) made outside OpenBao with Version of a Transit key.
+type VersionedCiphertext struct {
+	Version    int
+	Ciphertext string
+}
+
+// DecryptBatch is Decrypt for many ciphertexts with batch_input, at most MaxBatch per call (the escrow-reader's
+// encrypted recovery export, plan M17 amendment b decision 24). The result has one plaintext per ciphertext in order;
+// on an error every plaintext decrypted so far is zeroed. The caller zeroes the result after use; the decoded
+// response of the OpenBao client keeps each plaintext as an immutable string until garbage collection.
+func (c *Client) DecryptBatch(ctx context.Context, key string, items []VersionedCiphertext) ([][]byte, error) {
+	if err := c.ensureToken(ctx); err != nil {
+		return nil, err
+	}
+	out := make([][]byte, 0, len(items))
+	fail := func(err error) ([][]byte, error) {
+		for _, b := range out {
+			clear(b)
+		}
+		return nil, err
+	}
+	for start := 0; start < len(items); start += MaxBatch {
+		chunk := items[start:min(start+MaxBatch, len(items))]
+		batch := make([]map[string]any, len(chunk))
+		for i, it := range chunk {
+			batch[i] = map[string]any{"ciphertext": "vault:v" + strconv.Itoa(it.Version) + ":" + it.Ciphertext}
+		}
+		s, err := c.api.Logical().WriteWithContext(ctx, "transit/decrypt/"+key, map[string]any{"batch_input": batch})
+		if err != nil {
+			return fail(fmt.Errorf("bao: decrypt batch: %w", err))
+		}
+		if s == nil {
+			return fail(errors.New("bao: decrypt batch returned no data"))
+		}
+		results, ok := s.Data["batch_results"].([]any)
+		if !ok || len(results) != len(chunk) {
+			return fail(errors.New("bao: decrypt batch returned an unexpected number of results"))
+		}
+		for i, r := range results {
+			m, _ := r.(map[string]any)
+			if e, _ := m["error"].(string); e != "" {
+				return fail(fmt.Errorf("bao: decrypt batch item %d: %s", start+i, e))
+			}
+			plain, _ := m["plaintext"].(string)
+			b, err := base64.StdEncoding.DecodeString(plain)
+			if err != nil || len(b) == 0 {
+				return fail(fmt.Errorf("bao: decrypt batch item %d returned no plaintext", start+i))
+			}
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
 // ContextField names what a ciphertext of a derived key protects; it is part of the Transit context, so a ciphertext of
 // one field never decrypts as another.
 type ContextField string

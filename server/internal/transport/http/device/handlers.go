@@ -125,6 +125,10 @@ func (g *gateway) enrollStatus(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, err)
 		return
 	}
+	if enr.Status == protocol.EnrollRejected && enr.Reason == devicecache.ReasonOrganizationUnavailable {
+		g.fail(w, r, errIdentityRevoked.with("the organization is being deleted"))
+		return
+	}
 	out := protocol.EnrollStatus{Status: enr.Status, Reason: enr.Reason}
 	if enr.DeviceID != uuid.Nil {
 		out.DeviceID = enr.DeviceID.String()
@@ -149,7 +153,7 @@ func (g *gateway) enrollStatus(w http.ResponseWriter, r *http.Request) {
 // a bundle URL nor commands; an agent outside the support window gets the agent update and its
 // safety commands only (revocation tokens and delete_self_lock).
 func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
-	dev, err := g.authenticateDevice(w, r, maxCheckinBody)
+	dev, err := g.authenticateLeaving(w, r, maxCheckinBody)
 	if err != nil {
 		g.fail(w, r, err)
 		return
@@ -185,6 +189,21 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	// ADR 0013 amendment 2026-11-04, PDK-765).
 	outside := g.d.AgentOutsideWindow != nil && g.d.AgentOutsideWindow(req.AgentVersion)
 	switch {
+	case dev.key.Status == devicecache.KeyOffboarded:
+		if out.Commands, _, err = g.commands(r, dev, leavingCommand); err != nil {
+			fail(err)
+			return
+		}
+		// The disarm runs before the uninstall, so a refused or failed uninstall leaves a device that can no longer lock
+		// itself (amendment n point 4).
+		slices.SortStableFunc(out.Commands, func(a, b json.RawMessage) int {
+			return cmpBool(commandType(b) == command.TypeDeleteSelfLock, commandType(a) == command.TypeDeleteSelfLock)
+		})
+		// The organization is gone: no bundle, no agent offer, no time ticket, and no heartbeat to record (plan M17
+		// decision 15).
+		g.markDelivered(r, dev.id, seq)
+		writeJSON(w, http.StatusOK, out)
+		return
 	case dev.key.Status != devicecache.KeyActive:
 	case outside:
 		if out.AgentUpdate, err = g.agentUpdate(r, dev, req, true); err != nil {
@@ -288,6 +307,40 @@ func safetyCommand(envelope []byte) bool {
 	return json.Unmarshal(payload, &c) == nil && c.Type == command.TypeDeleteSelfLock
 }
 
+// commandType is the type of a command envelope, "" for anything else; like safetyCommand it reads the unverified
+// payload of the server's own envelope.
+func commandType(envelope []byte) string {
+	env, payload, err := dsse.Decode(envelope)
+	if err != nil || env.PayloadType != command.PayloadType {
+		return ""
+	}
+	var c struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(payload, &c) != nil {
+		return ""
+	}
+	return c.Type
+}
+
+// leavingCommand reports whether an envelope is one of the commands a device of a deleted organization receives: the
+// disarm of its dead man's switch and the uninstall (plan M17 decision 15, amendment n).
+func leavingCommand(envelope []byte) bool {
+	t := commandType(envelope)
+	return t == command.TypeUninstall || t == command.TypeDeleteSelfLock
+}
+
+// cmpBool compares two booleans with false before true.
+func cmpBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case a:
+		return 1
+	}
+	return -1
+}
+
 // maxCommands bounds the commands of one check-in response; the rest follow with the next check-ins.
 const maxCommands = 20
 
@@ -314,7 +367,7 @@ func (g *gateway) commands(r *http.Request, dev device, keep func(envelope []byt
 // idempotent: the same status again is accepted, another status is a conflict. The result is published before it
 // is claimed in Valkey, so a failed publish is retried by the device and never lost.
 func (g *gateway) commandResult(w http.ResponseWriter, r *http.Request) {
-	dev, err := g.authenticateDevice(w, r, maxBody)
+	dev, err := g.authenticateLeaving(w, r, maxBody)
 	if err != nil {
 		g.fail(w, r, err)
 		return
@@ -331,6 +384,10 @@ func (g *gateway) commandResult(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateResult(req); err != nil {
 		g.fail(w, r, err)
+		return
+	}
+	if dev.key.Status == devicecache.KeyOffboarded {
+		g.offboardedResult(w, r, dev, id, req)
 		return
 	}
 	ctx := r.Context()
@@ -372,6 +429,35 @@ func (g *gateway) commandResult(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case owner != dev.id:
 		g.fail(w, r, errNotFound.with("no pending command with this ID"))
+	case status != req.Status:
+		g.fail(w, r, errConflict.with("the command already has the result "+status))
+	default:
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+// offboardedResult accepts the result of the uninstall or the disarm a device of a deleted organization holds, and
+// refuses every other command with 401 identity_revoked (plan M17 decision 15, amendments m point 3.2 and n point 3).
+// The agent starts its removal only after the server accepted the uninstall's result, so it must be answered 2xx; it
+// is claimed for idempotency but not published, because nothing of the organization is recorded any more (its removal
+// report is, through agent.uninstalled).
+func (g *gateway) offboardedResult(w http.ResponseWriter, r *http.Request, dev device, id uuid.UUID, req protocol.CommandResult) {
+	cmd, pending, err := g.d.Cache.PendingCommand(r.Context(), dev.id, id)
+	if err != nil {
+		g.fail(w, r, err)
+		return
+	}
+	if !pending || !leavingCommand(cmd.Envelope) {
+		g.fail(w, r, errIdentityRevoked.with("the device identity is not active"))
+		return
+	}
+	owner, status, err := g.d.Cache.ClaimResult(r.Context(), dev.id, id, req.Status)
+	switch {
+	case err != nil:
+		g.fail(w, r, err)
+	case owner != dev.id:
+		g.fail(w, r, errIdentityRevoked.with("the device identity is not active"))
 	case status != req.Status:
 		g.fail(w, r, errConflict.with("the command already has the result "+status))
 	default:
@@ -457,7 +543,7 @@ func (g *gateway) bundleRef(r *http.Request, dev device, applied int64) (*protoc
 // newer agent, is forwarded without its data so that the worker claims its number and records it once; the rest of the
 // batch is accepted (PDK-995).
 func (g *gateway) events(w http.ResponseWriter, r *http.Request) {
-	dev, err := g.authenticateDevice(w, r, maxEventsBody)
+	dev, err := g.authenticateLeaving(w, r, maxEventsBody)
 	if err != nil {
 		g.fail(w, r, err)
 		return
@@ -479,6 +565,14 @@ func (g *gateway) events(w http.ResponseWriter, r *http.Request) {
 			g.fail(w, r, errInvalidRequest.with("every event needs event_seq ≥ 0 and occurred_at"))
 			return
 		}
+	}
+	// A device of a deleted organization may report its removal and nothing else; another batch is answered 200 and
+	// dropped, so the agent does not resend it forever (plan M17 decision 15).
+	if dev.key.Status == devicecache.KeyOffboarded &&
+		(len(req.Events) != 1 || req.Events[0].Type != protocol.EventAgentUninstalled) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 	body, err := json.Marshal(ingest.Events{
 		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: g.d.Now().UTC(), Events: req.Events,

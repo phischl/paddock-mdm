@@ -50,9 +50,12 @@ var (
 	SlugTaken           = &Error{Code: "slug_taken", Status: http.StatusConflict}
 	UpstreamUnavailable = &Error{Code: "upstream_unavailable", Status: http.StatusBadGateway}
 	InvalidState        = &Error{Code: "invalid_state", Status: http.StatusConflict}
-	AlreadyExists       = &Error{Code: "already_exists", Status: http.StatusConflict}
-	InUse               = &Error{Code: "in_use", Status: http.StatusConflict}
-	SettingLocked       = &Error{Code: "setting_locked", Status: http.StatusConflict}
+	// ExportLimit: the organization's encrypted recovery export was taken five times during the grace period (plan
+	// M17 amendment b decision 21).
+	ExportLimit   = &Error{Code: "export_limit", Status: http.StatusConflict}
+	AlreadyExists = &Error{Code: "already_exists", Status: http.StatusConflict}
+	InUse         = &Error{Code: "in_use", Status: http.StatusConflict}
+	SettingLocked = &Error{Code: "setting_locked", Status: http.StatusConflict}
 	// Conflict: a unique value is held by another resource of the organization (plan M8h decision 4: a device name).
 	Conflict       = &Error{Code: "conflict", Status: http.StatusConflict}
 	PathNotAllowed = &Error{Code: "path_not_allowed", Status: http.StatusUnprocessableEntity}
@@ -166,7 +169,17 @@ var (
 	TokenExpired   = &Error{Code: "token_expired", Status: http.StatusUnprocessableEntity}
 	TokenExhausted = &Error{Code: "token_exhausted", Status: http.StatusUnprocessableEntity}
 	Internal       = &Error{Code: "internal", Status: http.StatusInternalServerError}
+	// OrganizationInactive: the organization is deleting or deleted, so every organization transaction is refused (plan
+	// M17 amendment 2026-11-14 d; the code of the sign-in's denial reason). Recorded as denied.
+	OrganizationInactive = &Error{Code: "organization_inactive", Status: http.StatusForbidden}
+	// TransactionTimeout: PostgreSQL ended the request's database transaction because it exceeded transaction_timeout
+	// and rolled it back (plan M17 amendment r point 5). Answered 503 with Retry-After: TransactionTimeoutRetryAfter;
+	// recorded as failure.
+	TransactionTimeout = &Error{Code: "transaction_timeout", Status: http.StatusServiceUnavailable}
 )
+
+// TransactionTimeoutRetryAfter is the Retry-After, in seconds, of a 503 transaction_timeout.
+const TransactionTimeoutRetryAfter = 5
 
 // From converts any error into a problem: *Error as is, context cancellation as "canceled", anything else internal.
 func From(err error) *Error {

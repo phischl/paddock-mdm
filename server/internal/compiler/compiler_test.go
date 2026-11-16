@@ -31,10 +31,12 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/valkeytest"
 )
 
-// flakyStore fails uploads while broken is set and counts the uploads by key.
+// flakyStore fails uploads while broken is set, stalls them until their context ends while stall is set, and counts
+// the uploads by key.
 type flakyStore struct {
 	store  *objectstore.Store
 	broken atomic.Bool
+	stall  atomic.Bool
 	mu     sync.Mutex
 	puts   map[string]int
 }
@@ -42,6 +44,10 @@ type flakyStore struct {
 func (f *flakyStore) Put(ctx context.Context, key, contentType, cacheControl string, body []byte) error {
 	if f.broken.Load() {
 		return errors.New("injected upload failure")
+	}
+	if f.stall.Load() {
+		<-ctx.Done()
+		return ctx.Err()
 	}
 	f.mu.Lock()
 	if f.puts == nil {

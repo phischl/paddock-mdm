@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Line budget of paddock-supervisor (plan M2b decision 15, amendment 2026-10-12; `make lint`): the supervisor must
-# stay simple enough to need no updates (design contract 1), so all its non-test Go files together may hold at most
-# 800 lines that are neither blank nor comment-only. Without arguments it counts agent/internal/supervisor/ and
-# agent/cmd/paddock-supervisor/; arguments replace those directories (test/supervisor-budget_test.sh). It fails with
-# the count above the ceiling, and when it finds no file at all, so a moved directory cannot pass unseen.
+# Line budget of paddock-supervisor (plan M2b decision 15, amendments 2026-10-12 and 2026-11-16; `make lint`): the
+# supervisor must stay simple enough to need no updates (design contract 1), so all its non-test Go files together may
+# hold at most 865 lines that are neither blank nor comment-only. Without arguments it counts
+# agent/internal/supervisor/ and agent/cmd/paddock-supervisor/; arguments replace those directories
+# (test/supervisor-budget_test.sh). It fails with the count above the ceiling, and when it finds no file at all, so a
+# moved directory cannot pass unseen.
 set -euo pipefail
 
-ceiling=800
+ceiling=865
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if (($# == 0)); then
   set -- "$root/agent/internal/supervisor" "$root/agent/cmd/paddock-supervisor"

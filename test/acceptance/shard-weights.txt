@@ -14,6 +14,18 @@
 # reports ~400 s but costs ~1730 s that way.
 1733 TestAuditExactlyOnce
 381 TestRoleMembership
+# Estimate, not yet measured (PDK-946): the gate waits for the worker to delete its organization, about ten rounds of
+# a minute (plan M17 amendment p will shorten it).
+660 TestGateOrganizationsAreDeleted
+# Estimate, not yet measured (PDK-1066): OF3, OF4 and OF7 each wait for a grace-0 deletion of their own organization,
+# 2–4 worker rounds of a minute (plan M17 amendment p); OF2 waits for one command round, OF1 for twelve audit lookups.
+260 TestOrganizationDeletedWithinFiveMinutes
+# OF3L (PDK-1087) skips unless PADDOCK_OF3_LARGE_ORG names a seeded large organization; CI seeds none.
+0 TestOrganizationDeletedWithinFiveMinutesNextToLargeOrganization
+280 TestDeletedOrganizationAPITokenRefused
+260 TestDeletedOrganizationSlugReuse
+150 TestOrganizationDeletionUninstallsDevices
+100 TestOrganizationDeletionRequestAndCancel
 # Estimate, not yet measured (PDK-756): the syslog gates wait for a 60 s heartbeat interval, the 1-minute stall of the
 # development notifier and several 5 s rounds.
 300 TestNotificationsSyslog
@@ -142,6 +154,8 @@
 0 TestWithoutOwnFailedAttempts
 0 TestSessionsEndAll
 0 TestSessionsPlatformEmptied
+# Runs in every shard but only does something on a stack with an ingest worker (PDK-1070): CI adds it to shard 1.
+0 TestIngestWorkerConsumes
 0 TestUnknownTestRunsInExactlyOneShard
 0 TestUnparsableTestNameFailsInsteadOfDropping
 0 TestAssignIsDeterministic

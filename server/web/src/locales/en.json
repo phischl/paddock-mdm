@@ -350,9 +350,11 @@
     "notification_lookup_pending": "Another pseudonym lookup of this organization is still pending. Try again in a moment.",
     "rollout_conflict": "A running or halted rollout stages this item. Complete the rollout or revert its change set first.",
     "rollout_running": "A rollout of staged changes is open for this section. Complete it or revert its change set first, or make this change urgent.",
+    "organization_inactive": "This organization is being deleted. Its data can no longer be read or changed.",
     "backup_key_mismatch": "The characters do not match the key.",
     "backup_target_state_unchanged": "The target is already in this state.",
-    "backup_key_discarded_after_mismatches": "The key was discarded after three wrong confirmations. Generate a new key."
+    "backup_key_discarded_after_mismatches": "The key was discarded after three wrong confirmations. Generate a new key.",
+    "export_limit": "The recovery export was taken five times during this grace period already."
   },
   "audit": {
     "vulnerability": {
@@ -413,7 +415,10 @@
       "deletion_cancelled": "{actor} cancelled the deletion of the organization {slug}",
       "deletion_step_completed": "Deletion of {slug}: step {step} completed",
       "deletion_step_failed": "Deletion of {slug}: step {step} failed",
-      "deleted": "The organization {slug} was deleted"
+      "deleted": "The organization {slug} was deleted",
+      "recovery_exported": "{actor} exported the recovery keys and local administrator passwords of {devices, plural, one {# device} other {# devices}}, encrypted to a {recipient, select, public_key {public key} other {passphrase}}",
+      "audit_retirement_requested": "Deletion of {slug}: the final verification of the audit log was requested",
+      "inactive_denied": "{actor} was refused: organization {organization_id} is {status, select, deleted {deleted} other {being deleted}} ({attempted_code})"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -551,6 +556,7 @@
       "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",
       "bundle_seq_bumped": "{actor} raised the bundle sequence of {devices} devices by {by} (restore)",
       "bundle_seq_raised": "{actor} raised the bundle sequence of {devices} devices to at least {at_least} (restore)",
+      "bundle_versions_pruned": "{actor} deleted {deleted} superseded bundle versions, keeping the newest {keep} per device",
       "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)",
       "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)",
       "ip_allowlist_changed": "{action, select, added {{actor} added {cidr} ({label}) to the IP allow list} updated {{actor} changed the IP allow list entry {previous_cidr} to {cidr} ({label})} other {{actor} removed {cidr} ({label}) from the IP allow list}}",
@@ -760,6 +766,54 @@
     "empty": {
       "title": "No organizations yet",
       "description": "Create the first organization to onboard its administrators."
+    },
+    "delete": {
+      "action": "Delete",
+      "title": "Delete {name}?",
+      "message": "All data of {name} is deleted for good after the grace period. Until then the organization stays usable; every device receives the order to remove Paddock.",
+      "confirm": "Delete organization",
+      "reason": "Reason",
+      "reasonHint": "2 to 500 characters; kept in the audit trail.",
+      "grace": "Grace period (days)",
+      "graceHint": "The organization stays usable for this long, then its data is deleted.",
+      "graceInvalid": "Enter a whole number of days from {min} to {max}."
+    },
+    "deletion": {
+      "pending": "Deletion on {date}",
+      "cancel": "Cancel deletion",
+      "cancelTitle": "Cancel the deletion of {name}?",
+      "cancelMessage": "The organization stays as it is. Devices that already received the order to remove Paddock still do so.",
+      "cancelConfirm": "Cancel deletion",
+      "step": "Step: {step}",
+      "lastError": "Last error: {error}",
+      "steps": {
+        "sessions": "sessions",
+        "devices": "devices",
+        "outbox": "outbox",
+        "authentik": "identity provider",
+        "fleet": "fleet",
+        "objects": "stored objects",
+        "valkey": "cache",
+        "audit_final": "final audit export",
+        "database": "database",
+        "tombstone": "tombstone"
+      }
+    },
+    "banner": {
+      "message": "The organization is scheduled for deletion on {date}. All its data is deleted for good then.",
+      "advice": "Secure what you still need before: the recovery keys of the encrypted disks (ask your platform administrator for the encrypted recovery-key export) and the passwords of the local administrators.",
+      "pending": "{count, plural, one {# device is} other {# devices are}} still pending approval and cannot receive an uninstall: they keep the inert Paddock packages. Approve and delete them, or remove the packages by hand with apt purge paddock-agent paddock-supervisor."
+    },
+    "audit": {
+      "open": "Retained audit",
+      "title": "Retained audit of {name}",
+      "back": "Back to organizations",
+      "intro": "The audit log of the deleted organization {slug} stays readable here. Every read is recorded in the platform audit log.",
+      "logTitle": "Audit log",
+      "finalVerified": "The audit chain of the organization was verified before its deletion, on {date}.",
+      "finalFailed": "The final verification of the audit chain on {date} failed: the retained audit evidence did not verify. Do not rely on it as evidence before the cause is clear.",
+      "finalNone": "The audit chain has not been verified at deletion yet.",
+      "finalFailedChip": "Audit verification failed"
     }
   },
   "agentReleases": {
@@ -1420,7 +1474,8 @@
         "skipped_in_use": "not cleared (the disk unlocks with it)",
         "not_requested": "not requested",
         "failed": "clearing failed"
-      }
+      },
+      "offboarding": "Removal for the organization's deletion: the device removes Paddock because its organization is being deleted. Only cancelling the deletion of the organization withdraws it."
     },
     "components": {
       "title": "Components",
@@ -3826,5 +3881,34 @@
     "startInvalid": "Enter a time as HH:MM.",
     "durationInvalid": "Enter 30 to 1440 minutes.",
     "timezoneInvalid": "Enter a timezone name of at most 64 characters."
+  },
+  "recoveryExport": {
+    "button": "Export recovery keys",
+    "title": "Export recovery keys and passwords",
+    "intro": "Downloads every disk recovery key and the newest local administrator password of every device of {slug} as one encrypted file. Open it later with gpg --decrypt.",
+    "lastCopy": "After the deletion this file is the only remaining copy. Paddock keeps no copy. Store it safely; without the key or passphrase nobody can open it.",
+    "recipient": "Encrypt to",
+    "recipientPublicKey": "My OpenPGP public key (recommended)",
+    "recipientPassphrase": "A passphrase (generated, at least 20 characters)",
+    "publicKey": "OpenPGP public key (ASCII-armoured)",
+    "passphrase": "Passphrase",
+    "passphraseRepeat": "Repeat the passphrase",
+    "strength": {
+      "short": "Too short: at least 20 characters.",
+      "fair": "Acceptable. Longer, with mixed characters, is stronger.",
+      "strong": "Strong."
+    },
+    "submit": "Download encrypted file",
+    "done": "The encrypted file was downloaded.",
+    "limit": "At most five exports per grace period.",
+    "errors": {
+      "publicKey": "Paste an ASCII-armoured OpenPGP public key (-----BEGIN PGP PUBLIC KEY BLOCK-----).",
+      "length": "The passphrase needs 20 to 1024 characters.",
+      "mismatch": "The passphrases do not match."
+    },
+    "pending": "This organization will be deleted on {date}. Export its recovery keys and local administrator passwords before then.",
+    "passphraseNote": "Use a generated passphrase of at least 20 characters, for example from a password manager. A public key is safer.",
+    "until": "Recovery export available until {time}.",
+    "closed": "The recovery export closed 20 minutes before the deletion."
   }
 }

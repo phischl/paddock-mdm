@@ -18,6 +18,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/stepupproof"
@@ -33,9 +34,10 @@ type UseCounter interface {
 	Use(ctx context.Context, jti string, until time.Time) (int64, error)
 }
 
-// Decrypter decrypts with escrow-wrap (Reader).
+// Decrypter decrypts with escrow-wrap (Reader): one escrow, or many in Transit batches (the recovery export).
 type Decrypter interface {
 	Decrypt(ctx context.Context, version int, ciphertext string) ([]byte, error)
+	DecryptBatch(ctx context.Context, items []bao.VersionedCiphertext) ([][]byte, error)
 }
 
 // purpose is what a decryption purpose may decrypt and who may ask for it.
@@ -75,10 +77,11 @@ func NewService(secret string, org *db.OrgPool, proofs ProofVerifier, uses UseCo
 	return &Service{secret: []byte(secret), org: org, proofs: proofs, uses: uses, decrypter: decrypter}
 }
 
-// Handler serves POST /internal/v1/decrypt.
+// Handler serves POST /internal/v1/decrypt and POST /internal/v1/recovery-export.
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+DecryptPath, s.decrypt)
+	mux.HandleFunc("POST "+ExportPath, s.export)
 	return mux
 }
 

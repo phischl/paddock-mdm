@@ -15,6 +15,20 @@ type IdentityProvider interface {
 	// EnsureOrganization creates the organization's groups (root, roles, locked) and its device login provider,
 	// application, groups claim mapping and access policy if missing, and corrects them if they drifted; idempotent.
 	EnsureOrganization(ctx context.Context, slug string) (OrgIdentityRefs, error)
+	// DeleteOrganization deletes what EnsureOrganization and the user directory created for the organization (plan M17
+	// decision 10): the device login application, its provider, groups mapping, access policy and binding, every group
+	// paddock.<slug> and paddock.<slug>.*, and every user Paddock created there. Users synced from upstream stay.
+	// Missing objects count as deleted; idempotent.
+	DeleteOrganization(ctx context.Context, slug string) (OrgIdentityDeletion, error)
+}
+
+// OrgIdentityDeletion counts the identity provider objects DeleteOrganization deleted; objects that were already gone
+// are not counted.
+type OrgIdentityDeletion struct{ Groups, Users, Applications, Providers, Policies, Mappings int }
+
+// Total is the number of objects deleted.
+func (d OrgIdentityDeletion) Total() int {
+	return d.Groups + d.Users + d.Applications + d.Providers + d.Policies + d.Mappings
 }
 
 // ErrUsernameTaken means the identity provider already has a user with this username (possibly of another

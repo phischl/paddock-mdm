@@ -70,10 +70,19 @@ func (b *Broker) StartApp(t testing.TB) {
 	b.ctl(t, "await_startup")
 }
 
-func (b *Broker) ctl(t testing.TB, cmd string) {
+func (b *Broker) ctl(t testing.TB, cmd string) { b.Ctl(t, cmd) }
+
+// Ctl runs rabbitmqctl with args inside the container, for example to add the users and permissions of the
+// deployment's definitions.
+func (b *Broker) Ctl(t testing.TB, args ...string) {
 	t.Helper()
-	code, _, err := b.container.Exec(context.Background(), []string{"rabbitmqctl", cmd})
+	code, _, err := b.container.Exec(context.Background(), append([]string{"rabbitmqctl"}, args...))
 	if err != nil || code != 0 {
-		t.Fatalf("mqtest: rabbitmqctl %s: exit %d, %v", cmd, code, err)
+		t.Fatalf("mqtest: rabbitmqctl %v: exit %d, %v", args, code, err)
 	}
+}
+
+// As returns the broker's configuration for another user.
+func (b *Broker) As(user, password string) mq.Config {
+	return mq.Config{URL: b.Config.URL, User: user, Password: password}
 }

@@ -97,6 +97,18 @@ describe('remove Paddock (plan M8d decision 42)', () => {
     expect(started).toEqual(['uninstall'])
   })
 
+  it('labels the removal of an organization deletion and offers no cancel', async () => {
+    await mountZone({ uninstall: { ...pending, reason: 'organization_offboarding' } })
+    expect(text('uninstall-offboarding')).toContain("Removal for the organization's deletion")
+    expect(el('uninstall-cancel-request')).toBeNull()
+  })
+
+  it('shows no offboarding label and still offers cancel for an own uninstall', async () => {
+    await mountZone({ uninstall: pending })
+    expect(el('uninstall-offboarding')).toBeNull()
+    expect(el('uninstall-cancel-request')).not.toBeNull()
+  })
+
   it('hides the row for a device that is not active', async () => {
     await mountZone({ uninstallable: false })
     expect(el('danger-uninstall')).toBeNull()
@@ -217,6 +229,7 @@ describe('remove Paddock (plan M8d decision 42)', () => {
     expect(uninstallCancellable({ ...pending, command_status: 'delivered' })).toBe(false)
     expect(uninstallCancellable({ ...pending, command_status: 'delivered', report_overdue: true })).toBe(true)
     expect(uninstallCancellable({ ...pending, uninstalled_at: '2026-10-18T10:00:00Z' })).toBe(false)
+    expect(uninstallCancellable({ ...pending, reason: 'organization_offboarding' })).toBe(false)
     expect(uninstallCancellable(null)).toBe(false)
     expect(uninstallRunning(pending)).toBe(true)
     expect(uninstallRunning({ ...pending, command_status: 'delivered' })).toBe(true)

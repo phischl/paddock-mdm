@@ -35,9 +35,11 @@ commands:
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD   (recorded as a verification run; prints run <id>)
   audit keys                 (prints the audit-chain key fingerprints: audit-chain v<N> <sha256>)
   audit purge [--dry-run]   (drops expired audit index partitions; prints DROP/KEEP lines)
+  audit deletions --since <RFC3339>   (prints occurred_at, organization_id, slug of every organization.deleted, read from WORM)
   osv import <file>
   admin bump-bundle-seq --by N
   admin raise-bundle-seq --at-least N
+  admin record-bundle-prune --keep K --listed M --devices D --selected N --deleted X --failed F | --check
   admin recompile --all
   admin rebuild-cache
   admin security-review
@@ -74,6 +76,7 @@ commands:
         [--docker-networks [--docker-network <name>=<subnet>[,<subnet>...]]...]
         [--containers <docker inspect file> [--hardening-exceptions FILE]] < config.json
   check-containers [--exceptions FILE] < inspect.json   (the online container matrix of prod-check)
+  check-broker [--definitions FILE] < permissions.json   (the RabbitMQ permissions against the definitions)
   healthcheck
   version
 
@@ -151,6 +154,8 @@ func runOne(ctx context.Context, args []string) int {
 		err = runProdCheck(ctx, args[1:], os.Stdin, os.Stdout)
 	case "check-containers":
 		err = runCheckContainers(args[1:], os.Stdin, os.Stdout)
+	case "check-broker":
+		err = runCheckBroker(args[1:], os.Stdin, os.Stdout)
 	case "admin":
 		err = runAdmin(ctx, l, args[1:])
 	case "provision":

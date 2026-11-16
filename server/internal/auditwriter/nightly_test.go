@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 )
@@ -58,7 +57,7 @@ func (f *nightlyFakes) recordedFor(org uuid.UUID) []verifyCall {
 
 func gaugeValue(t *testing.T, name string) float64 {
 	t.Helper()
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := testGatherer(t).Gather()
 	if err != nil {
 		t.Fatal(err)
 	}

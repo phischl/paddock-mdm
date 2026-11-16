@@ -49,4 +49,19 @@ chmod 0600 "$tmp"
 chown valkey:valkey "$tmp"
 mv "$tmp" "$out"
 
+# maxmemory at 60 % of the container's memory limit (plan M17 amendment s point 4.4, ADR 0051 amendment 2026-11-16):
+# with noeviction (valkey.conf) Valkey then refuses writes that need memory instead of being killed by the kernel, and
+# the remaining 40 % are the copy-on-write headroom of an AOF rewrite's fork.
+if [ "${1:-}" = valkey-server ]; then
+	limit=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo max)
+	case "$limit" in
+	'' | *[!0-9]*)
+		echo "paddock-entrypoint: no container memory limit ($limit), so no maxmemory is set" >&2
+		;;
+	*)
+		set -- "$@" --maxmemory "$((limit * 6 / 10))"
+		;;
+	esac
+fi
+
 exec /usr/local/bin/docker-entrypoint.sh "$@"

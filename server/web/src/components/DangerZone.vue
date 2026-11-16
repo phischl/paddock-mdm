@@ -242,6 +242,12 @@ onMounted(async () => {
           </template>
         </p>
         <p
+          v-if="uninstall!.reason === 'organization_offboarding'"
+          data-testid="uninstall-offboarding"
+        >
+          {{ t('devices.uninstall.offboarding') }}
+        </p>
+        <p
           v-if="uninstall!.refused_reason"
           data-testid="uninstall-refused"
         >

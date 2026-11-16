@@ -32,6 +32,13 @@ func TestOrganizationDeletionAPI(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Two pending devices of acme and one of globex: the banner count is the administrator's own organization's only.
+	for _, org := range []uuid.UUID{e.acme, e.acme, e.globex} {
+		if _, err := e.super.Exec(context.Background(), "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, $3, 'pending')",
+			uuid.Must(uuid.NewV7()), org, "pend-"+uuid.NewString()[:8]); err != nil {
+			t.Fatal(err)
+		}
+	}
 	root := e.platformSession()
 	stepped := e.steppedUp(root, time.Now())
 	alice := e.session(e.acme, principal.RoleOrgAdmin)
@@ -109,6 +116,9 @@ func TestOrganizationDeletionAPI(t *testing.T) {
 	var me adminapi.Me
 	r := e.do(call{method: "GET", path: "/api/v1/me", cookie: alice})
 	r.decode(t, &me)
+	if me.OrganizationDeletion != nil && me.OrganizationDeletion.DevicesPending != 2 {
+		t.Fatalf("me counts %d pending devices, want 2", me.OrganizationDeletion.DevicesPending)
+	}
 	if me.OrganizationDeletion == nil || !me.OrganizationDeletion.DeleteAfter.Equal(o.Deletion.DeleteAfter) {
 		t.Fatalf("me while pending: %+v", me.OrganizationDeletion)
 	}

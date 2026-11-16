@@ -45,6 +45,7 @@ reporting="$work/reporting"
 export_sleep="" # seconds backup target-export takes after printing (touches $exporting first)
 exporting="$work/exporting"
 sealed_polls="$work/sealed-polls" # holds how many more bao status calls answer sealed
+starting_polls="$work/starting-polls" # starting_polls.<service> holds how many more recovery polls PostgreSQL refuses
 step_sleep_on="" # a call matching this pattern sleeps step_sleep seconds (touches $stepping first): a slow step
 step_sleep=""
 stepping="$work/stepping"
@@ -144,7 +145,17 @@ compose() {
       # The record script itself, on the harness's directory instead of the container's mount.
       sh -c "$BUNDLE_SEQ_RECORD_SCRIPT" bundle-seq "$COMPOSE_DIR/bundle-seq" "${*: -1}"
       ;;
-    *" exec -T postgres psql "* | *" exec -T authentik-postgres psql "*) echo "$recovery_state" ;;
+    *" exec -T postgres psql "* | *" exec -T authentik-postgres psql "*)
+      local svc="${line#*" exec -T "}" left=0
+      svc="${svc%%" psql "*}"
+      [[ ! -s "$starting_polls.$svc" ]] || left="$(cat "$starting_polls.$svc")"
+      if ((left > 0)); then
+        echo $((left - 1)) >"$starting_polls.$svc"
+        echo "psql: error: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  the database system is starting up" >&2
+        return 2
+      fi
+      echo "$recovery_state"
+      ;;
     *" --entrypoint sh postgres -c exec pg_controldata")
       printf '%s\n' "pg_control version number:            1800" "wal_level setting:                    replica"
       [[ -z "$controldata_max" ]] || printf 'max_connections setting:              %s\n' "$controldata_max"
@@ -588,6 +599,24 @@ else
   bad "paused recovery: rc $rc, polls $polls, sleeps $(cat "$sleeps"), out: $out"
 fi
 recovery_state=f
+
+# PDK-1086: a recovery poll that PostgreSQL refuses while it starts up (psql exits 2) is retried until the deadline
+# instead of ending the restore under set -e; both databases' waits tolerate it.
+echo 3 >"$starting_polls.postgres"
+echo 2 >"$starting_polls.authentik-postgres"
+: >"$sleeps"
+sleep() { echo "$1" >>"$sleeps"; }
+RESTORE_RECOVERY_TIMEOUT=60 run_restore restore fresh "$set_dir" --only postgres
+unset -f sleep
+polls="$(grep -c -- "exec -T postgres psql .*pg_is_in_recovery" "$calls" || true)"
+apolls="$(grep -c -- "exec -T authentik-postgres psql .*pg_is_in_recovery" "$calls" || true)"
+if ((rc == 0)) && ((polls == 4 && apolls == 3)) && [[ "$out" == *"PostgreSQL: both databases recovered"* ]] &&
+  [[ "$out" != *"failed (exit"* ]] && [[ "$(cat "$starting_polls.postgres" "$starting_polls.authentik-postgres")" == $'0\n0' ]]; then
+  ok "recovery polls refused while PostgreSQL starts up are retried until both databases report recovered"
+else
+  bad "refused polls: rc $rc, polls $polls/$apolls, sleeps $(cat "$sleeps"), out: $out"
+fi
+rm -f "$starting_polls.postgres" "$starting_polls.authentik-postgres"
 
 # PDK-1032 (plan M19 D1.3): the restored cluster starts with the larger of PADDOCK_PG_MAX_CONNECTIONS and the value in
 # its restored control file, read before its first start; both are logged, and every later Compose call of the restore

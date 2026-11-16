@@ -32,6 +32,8 @@ func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io
 	fs.Var(&dockerNets, "docker-network", "an existing Docker network as name=subnet[,subnet...] (repeatable)")
 	containers := fs.String("containers", "", "docker inspect output of the project's running containers (with --online)")
 	exceptions := fs.String("hardening-exceptions", "hardening-exceptions.yaml", "the container hardening exceptions file")
+	brokerPerms := fs.String("broker-permissions", "", "rabbitmqctl list_permissions -p paddock --formatter json of the running broker (with --online)")
+	brokerDefs := fs.String("broker-definitions", brokerDefinitionsFile, "the RabbitMQ definitions template")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return errUsage
 	}
@@ -61,6 +63,18 @@ func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io
 		}
 		opts.Containers = &m
 	}
+	if *online && *brokerPerms != "" {
+		f, err := os.Open(*brokerPerms) //nolint:gosec // G304: ./paddock check names the file it wrote
+		if err != nil {
+			return fmt.Errorf("prod-check --broker-permissions: %w", err)
+		}
+		defer f.Close()
+		b, err := brokerPermissions(f, *brokerDefs)
+		if err != nil {
+			return err
+		}
+		opts.Broker = &b
+	}
 	if *online && *revFile != "" {
 		opts.BackupRevisions = &prodcheck.BackupRevisions{File: *revFile, Database: *revDB}
 	}
@@ -75,6 +89,46 @@ func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io
 		return errProdCheckFailed
 	}
 	return nil
+}
+
+// brokerDefinitionsFile is the definitions template, relative to the bundle directory.
+const brokerDefinitionsFile = "rabbitmq/definitions.json.tmpl"
+
+// runCheckBroker reads `rabbitmqctl list_permissions -p paddock --formatter json` from stdin and compares it with the
+// definitions, the item `./paddock check --online` prints; `./paddock bootstrap broker` runs it after applying the
+// definitions.
+func runCheckBroker(args []string, stdin io.Reader, stdout io.Writer) error {
+	fs := flag.NewFlagSet("check-broker", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	defs := fs.String("definitions", brokerDefinitionsFile, "the RabbitMQ definitions template")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return errUsage
+	}
+	b, err := brokerPermissions(stdin, *defs)
+	if err != nil {
+		return err
+	}
+	if !prodcheck.Write(stdout, []prodcheck.Result{prodcheck.CheckBrokerPermissions(b)}) {
+		return errProdCheckFailed
+	}
+	return nil
+}
+
+func brokerPermissions(list io.Reader, definitionsPath string) (prodcheck.BrokerPermissions, error) {
+	got, err := prodcheck.ParseBrokerPermissions(list)
+	if err != nil {
+		return prodcheck.BrokerPermissions{}, err
+	}
+	f, err := os.Open(definitionsPath) //nolint:gosec // G304: the bundle's definitions template
+	if err != nil {
+		return prodcheck.BrokerPermissions{}, fmt.Errorf("rabbitmq definitions: %w", err)
+	}
+	defer f.Close()
+	want, err := prodcheck.ParseBrokerDefinitions(f)
+	if err != nil {
+		return prodcheck.BrokerPermissions{}, err
+	}
+	return prodcheck.BrokerPermissions{Want: want, Got: got}, nil
 }
 
 // runCheckContainers reads `docker inspect` of a project's containers from stdin and checks them against the hardening

@@ -8,7 +8,8 @@
   Wazuh checks the children of a rule in file order and the first match wins, so the specific rules (including the
   refused API token, 100940, whose only outcome is denied) come before the denied rule 100960, which in turn comes
   before the generic identity, platform and configuration rules, so a denied action is never below level 7. Levels:
-  tamper and revocation 12, reveals, root grants and the start of a restore 10, denied 7, login and configuration 5.
+  tamper and revocation 12, reveals, root grants, the start of a restore and an event after retirement 10, denied 7,
+  login and configuration 5.
 
   The query "which day's event count differs from the checkpoint" is not a rule (Wazuh cannot count a day); it is in
   docs/operations/siem.md.
@@ -65,7 +66,7 @@
 
   <rule id="100912" level="10">
     <if_sid>100900,100901</if_sid>
-    <field name="event.code" type="pcre2">^(?:disk\.recovery_key_revealed|disk\.header_downloaded|local_admin\.revealed)$</field>
+    <field name="event.code" type="pcre2">^(?:disk\.recovery_key_revealed|disk\.header_downloaded|local_admin\.revealed|organization\.recovery_exported)$</field>
     <description>Paddock: secret revealed ($(event.code)) by $(event.actor.display)</description>
   </rule>
 
@@ -87,6 +88,12 @@
     <if_sid>100900,100901</if_sid>
     <field name="event.code" type="pcre2">^device\.(?:clone_suspected|event_gap|event_seq_reset|header_object_rejected|header_escrow_refused|escrow_refused_destroyed)$</field>
     <description>Paddock: device integrity event $(event.code)</description>
+  </rule>
+
+  <rule id="100916" level="10">
+    <if_sid>100900,100901</if_sid>
+    <field name="event.code" type="pcre2">^audit\.event_after_retirement$</field>
+    <description>Paddock: an event arrived for organization $(event.params.organization_id), whose audit log is closed</description>
   </rule>
 </group>
 

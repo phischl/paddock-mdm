@@ -36,6 +36,7 @@ var securityExplicit = []audit.Code{
 	"device.stale_critical", "device.presumed_self_locked", "device.revocation_trust_pinned_tofu",
 	"device.revocation_confirmed", "device.revocation_refused",
 	"local_admin.revealed", "local_admin.login", "disk.recovery_key_revealed", "disk.header_downloaded",
+	"organization.recovery_exported",
 	"user_group.member_added", "user_group.member_removed", "user.locked", "user.unlocked", "admin.login",
 	"agent_rollout.halted", "agent_release.published", "config_rollout.halted",
 	"platform.osv_stale", "platform.ip_allowlist_changed", "platform.ip_allowlist_disabled",

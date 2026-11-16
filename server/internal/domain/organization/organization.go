@@ -42,6 +42,12 @@ func DeletionPending(status string, deleteAfter *time.Time) bool {
 	return Deletable(status) && deleteAfter != nil
 }
 
+// Offboarding reports whether an organization in status is being deleted or was deleted, so no platform action may
+// write into it any more (PDK-1053).
+func Offboarding(status string) bool {
+	return status == StatusDeleting || status == StatusDeleted
+}
+
 // Grace period bounds of a deletion request in days (plan M17 decision 2): development stacks may delete at once.
 const (
 	MinGraceDays            = 7

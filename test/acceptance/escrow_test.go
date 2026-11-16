@@ -71,8 +71,8 @@ func TestEscrowEndpoints(t *testing.T) {
 }
 
 // escrowedDevice enrolls a v2 device of alice's organization whose local administrator password generation 1 is
-// escrowed and confirmed (local_admin.rotated), as an agent does it, and returns the device and the password.
-func escrowedDevice(t *testing.T, alice *env.Portal) (*devicesim.Device, string) {
+// escrowed and confirmed (local_admin.rotated), as an agent does it, and returns the device, the bundle it fetched and the password.
+func escrowedDevice(t *testing.T, alice *env.Portal) (*devicesim.Device, *bundle.Bundle, string) {
 	t.Helper()
 	d := v2Device(t, alice, "", 1, 2)
 	b := latestBundle(t, d, time.Minute, func(b *bundle.Bundle) bool { return b.Keys != nil && b.Keys.EscrowWrap != nil })
@@ -93,7 +93,7 @@ func escrowedDevice(t *testing.T, alice *env.Portal) (*devicesim.Device, string)
 			t.Fatal(err)
 		}
 		if state.Active != nil && *state.Active == 1 {
-			return d, password
+			return d, b, password
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("generation 1 not active")

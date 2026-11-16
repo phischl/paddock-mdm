@@ -76,6 +76,31 @@ func TestSecretFileIsTrimmed(t *testing.T) {
 	}
 }
 
+// TestOptionalSecretFile: present files are read and trimmed; an unset variable, a missing file and an empty file are
+// absent and never a configuration error.
+func TestOptionalSecretFile(t *testing.T) {
+	dir := t.TempDir()
+	present, empty := filepath.Join(dir, "present"), filepath.Join(dir, "empty")
+	if err := os.WriteFile(present, []byte(" k\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(empty, []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l := NewLoaderFrom(map[string]string{"P_FILE": present, "E_FILE": empty, "M_FILE": filepath.Join(dir, "missing")})
+	if v, ok := l.OptionalSecretFile("P_FILE"); !ok || v != "k" {
+		t.Fatalf("present = %q, %v", v, ok)
+	}
+	for _, name := range []string{"E_FILE", "M_FILE", "UNSET_FILE"} {
+		if v, ok := l.OptionalSecretFile(name); ok || v != "" {
+			t.Errorf("%s = %q, %v; want absent", name, v, ok)
+		}
+	}
+	if err := l.Err(); err != nil {
+		t.Fatalf("an absent optional secret is a configuration error: %v", err)
+	}
+}
+
 func TestInvalidEnv(t *testing.T) {
 	l := NewLoaderFrom(map[string]string{"PADDOCK_ENV": "staging"})
 	LoadCommon(l)

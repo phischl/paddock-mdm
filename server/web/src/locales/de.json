@@ -350,9 +350,11 @@
     "notification_lookup_pending": "Eine andere Pseudonym-Auflösung dieser Organisation läuft noch. Versuchen Sie es gleich noch einmal.",
     "rollout_conflict": "Ein laufender oder angehaltener Rollout staffelt diesen Eintrag. Schließen Sie den Rollout ab oder machen Sie seinen Änderungssatz zuerst rückgängig.",
     "rollout_running": "Für diesen Abschnitt ist ein Rollout gestaffelter Änderungen offen. Schließen Sie ihn zuerst ab oder machen Sie seinen Änderungssatz rückgängig, oder machen Sie diese Änderung dringend.",
+    "organization_inactive": "Diese Organisation wird gelöscht. Ihre Daten können nicht mehr gelesen oder geändert werden.",
     "backup_key_mismatch": "Die Zeichen passen nicht zum Schlüssel.",
     "backup_target_state_unchanged": "Das Ziel hat diesen Zustand bereits.",
-    "backup_key_discarded_after_mismatches": "Der Schlüssel wurde nach drei falschen Bestätigungen verworfen. Erzeugen Sie einen neuen."
+    "backup_key_discarded_after_mismatches": "Der Schlüssel wurde nach drei falschen Bestätigungen verworfen. Erzeugen Sie einen neuen.",
+    "export_limit": "Der Wiederherstellungsexport wurde in dieser Frist bereits fünfmal erstellt."
   },
   "audit": {
     "vulnerability": {
@@ -413,7 +415,10 @@
       "deletion_cancelled": "{actor} hat die Löschung der Organisation {slug} abgebrochen",
       "deletion_step_completed": "Löschung von {slug}: Schritt {step} abgeschlossen",
       "deletion_step_failed": "Löschung von {slug}: Schritt {step} fehlgeschlagen",
-      "deleted": "Die Organisation {slug} wurde gelöscht"
+      "deleted": "Die Organisation {slug} wurde gelöscht",
+      "recovery_exported": "{actor} hat die Wiederherstellungsschlüssel und lokalen Administratorpasswörter von {devices, plural, one {# Gerät} other {# Geräten}} exportiert, verschlüsselt mit {recipient, select, public_key {einem öffentlichen Schlüssel} other {einer Passphrase}}",
+      "audit_retirement_requested": "Löschung von {slug}: die abschließende Prüfung des Audit-Protokolls wurde angefordert",
+      "inactive_denied": "{actor} wurde abgewiesen: Die Organisation {organization_id} {status, select, deleted {ist gelöscht} other {wird gelöscht}} ({attempted_code})"
     },
     "device_group": {
       "created": "{actor} hat die Gerätegruppe {name} angelegt",
@@ -551,6 +556,7 @@
       "osv_stale": "Die Schwachstellendaten von Ubuntu wurden seit 3 Tagen nicht aktualisiert",
       "bundle_seq_bumped": "{actor} hat die Bundle-Sequenz von {devices} Geräten um {by} erhöht (Wiederherstellung)",
       "bundle_seq_raised": "{actor} hat die Bundle-Sequenz von {devices} Geräten auf mindestens {at_least} angehoben (Wiederherstellung)",
+      "bundle_versions_pruned": "{actor} hat {deleted} überholte Bundle-Versionen gelöscht und die neuesten {keep} je Gerät behalten",
       "cache_rebuilt": "{actor} hat den Geräte-Cache von {organizations} Organisationen neu aufgebaut (Wiederherstellung)",
       "osv_imported": "Die Schwachstellendaten von Ubuntu wurden aus einer Datei importiert ({entries, number} Einträge)",
       "ip_allowlist_changed": "{action, select, added {{actor} hat {cidr} ({label}) zur IP-Freigabeliste hinzugefügt} updated {{actor} hat den Eintrag {previous_cidr} der IP-Freigabeliste zu {cidr} ({label}) geändert} other {{actor} hat {cidr} ({label}) aus der IP-Freigabeliste entfernt}}",
@@ -760,6 +766,54 @@
     "empty": {
       "title": "Noch keine Organisationen",
       "description": "Legen Sie die erste Organisation an, um ihre Administratoren aufzunehmen."
+    },
+    "delete": {
+      "action": "Löschen",
+      "title": "{name} löschen?",
+      "message": "Alle Daten von {name} werden nach der Karenzzeit endgültig gelöscht. Bis dahin bleibt die Organisation nutzbar; jedes Gerät erhält den Auftrag, Paddock zu entfernen.",
+      "confirm": "Organisation löschen",
+      "reason": "Grund",
+      "reasonHint": "2 bis 500 Zeichen; wird im Audit-Trail festgehalten.",
+      "grace": "Karenzzeit (Tage)",
+      "graceHint": "So lange bleibt die Organisation nutzbar, danach werden ihre Daten gelöscht.",
+      "graceInvalid": "Geben Sie eine ganze Zahl von {min} bis {max} Tagen ein."
+    },
+    "deletion": {
+      "pending": "Löschung am {date}",
+      "cancel": "Löschung abbrechen",
+      "cancelTitle": "Löschung von {name} abbrechen?",
+      "cancelMessage": "Die Organisation bleibt, wie sie ist. Geräte, die den Auftrag zum Entfernen von Paddock schon erhalten haben, führen ihn trotzdem aus.",
+      "cancelConfirm": "Löschung abbrechen",
+      "step": "Schritt: {step}",
+      "lastError": "Letzter Fehler: {error}",
+      "steps": {
+        "sessions": "Sitzungen",
+        "devices": "Geräte",
+        "outbox": "Outbox",
+        "authentik": "Identitätsanbieter",
+        "fleet": "Flotte",
+        "objects": "gespeicherte Objekte",
+        "valkey": "Cache",
+        "audit_final": "abschließender Audit-Export",
+        "database": "Datenbank",
+        "tombstone": "Grabstein"
+      }
+    },
+    "banner": {
+      "message": "Die Organisation ist zur Löschung am {date} vorgemerkt. Alle ihre Daten werden dann endgültig gelöscht.",
+      "advice": "Sichern Sie vorher, was Sie noch brauchen: die Wiederherstellungsschlüssel der verschlüsselten Festplatten (fragen Sie Ihre Plattform-Administration nach dem verschlüsselten Export) und die Passwörter der lokalen Administratoren.",
+      "pending": "{count, plural, one {# Gerät wartet} other {# Geräte warten}} noch auf die Freigabe und {count, plural, one {kann} other {können}} keine Deinstallation erhalten: Die inaktiven Paddock-Pakete bleiben darauf. Geben Sie sie frei und löschen Sie sie, oder entfernen Sie die Pakete von Hand mit apt purge paddock-agent paddock-supervisor."
+    },
+    "audit": {
+      "open": "Aufbewahrtes Audit",
+      "title": "Aufbewahrtes Audit von {name}",
+      "back": "Zurück zu den Organisationen",
+      "intro": "Das Audit-Log der gelöschten Organisation {slug} bleibt hier lesbar. Jeder Lesezugriff wird im Plattform-Audit-Log festgehalten.",
+      "logTitle": "Audit-Log",
+      "finalVerified": "Die Audit-Kette der Organisation wurde vor ihrer Löschung am {date} verifiziert.",
+      "finalFailed": "Die abschließende Verifikation der Audit-Kette am {date} ist fehlgeschlagen: Die aufbewahrten Audit-Nachweise ließen sich nicht verifizieren. Verlassen Sie sich nicht darauf als Nachweis, bevor die Ursache geklärt ist.",
+      "finalNone": "Die Audit-Kette wurde bei der Löschung noch nicht verifiziert.",
+      "finalFailedChip": "Audit-Verifikation fehlgeschlagen"
     }
   },
   "agentReleases": {
@@ -1420,7 +1474,8 @@
         "skipped_in_use": "nicht gelöscht (die Festplatte wird damit entsperrt)",
         "not_requested": "nicht angefordert",
         "failed": "Löschen fehlgeschlagen"
-      }
+      },
+      "offboarding": "Entfernung wegen der Löschung der Organisation: Das Gerät entfernt Paddock, weil seine Organisation gelöscht wird. Nur das Abbrechen der Löschung der Organisation nimmt sie zurück."
     },
     "components": {
       "title": "Komponenten",
@@ -3826,5 +3881,34 @@
     "startInvalid": "Geben Sie eine Uhrzeit als HH:MM ein.",
     "durationInvalid": "Geben Sie 30 bis 1440 Minuten ein.",
     "timezoneInvalid": "Geben Sie einen Zeitzonennamen mit höchstens 64 Zeichen ein."
+  },
+  "recoveryExport": {
+    "button": "Wiederherstellungsschlüssel exportieren",
+    "title": "Wiederherstellungsschlüssel und Passwörter exportieren",
+    "intro": "Lädt alle Festplatten-Wiederherstellungsschlüssel und das neueste lokale Administratorpasswort aller Geräte von {slug} als eine verschlüsselte Datei herunter. Öffnen Sie sie später mit gpg --decrypt.",
+    "lastCopy": "Nach der Löschung ist diese Datei die einzige verbleibende Kopie. Paddock behält keine Kopie. Bewahren Sie sie sicher auf; ohne Schlüssel oder Passphrase kann niemand sie öffnen.",
+    "recipient": "Verschlüsseln mit",
+    "recipientPublicKey": "Meinem öffentlichen OpenPGP-Schlüssel (empfohlen)",
+    "recipientPassphrase": "Einer Passphrase (generiert, mindestens 20 Zeichen)",
+    "publicKey": "Öffentlicher OpenPGP-Schlüssel (ASCII-armoured)",
+    "passphrase": "Passphrase",
+    "passphraseRepeat": "Passphrase wiederholen",
+    "strength": {
+      "short": "Zu kurz: mindestens 20 Zeichen.",
+      "fair": "Ausreichend. Länger und mit gemischten Zeichen ist stärker.",
+      "strong": "Stark."
+    },
+    "submit": "Verschlüsselte Datei herunterladen",
+    "done": "Die verschlüsselte Datei wurde heruntergeladen.",
+    "limit": "Höchstens fünf Exporte pro Frist.",
+    "errors": {
+      "publicKey": "Fügen Sie einen ASCII-armoured öffentlichen OpenPGP-Schlüssel ein (-----BEGIN PGP PUBLIC KEY BLOCK-----).",
+      "length": "Die Passphrase braucht 20 bis 1024 Zeichen.",
+      "mismatch": "Die Passphrasen stimmen nicht überein."
+    },
+    "pending": "Diese Organisation wird am {date} gelöscht. Exportieren Sie vorher ihre Wiederherstellungsschlüssel und lokalen Administratorpasswörter.",
+    "passphraseNote": "Verwenden Sie eine generierte Passphrase mit mindestens 20 Zeichen, zum Beispiel aus einem Passwortmanager. Ein öffentlicher Schlüssel ist sicherer.",
+    "until": "Wiederherstellungsexport verfügbar bis {time}.",
+    "closed": "Der Wiederherstellungsexport wurde 20 Minuten vor der Löschung geschlossen."
   }
 }

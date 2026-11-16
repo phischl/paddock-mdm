@@ -122,3 +122,16 @@ WHERE device_id = @device_id AND kind = 'luks_header' AND volume IS NULL;
 -- The escrow-reader's view of diagnostics bundles (purpose diagnostics, PDK-749): only what unwrapping a bundle's key
 -- needs (the column grant of migration 00106).
 SELECT id, organization_id, device_id, state, wrapped_dek, key_version FROM device_diagnostics WHERE id = ANY(@ids::uuid[]);
+
+-- name: ListRecoveryExportEscrows :many
+-- The escrow-reader's input of an encrypted recovery export (plan M17 amendment b decision 24): per non-retired device
+-- the newest stored recovery key of every volume (as a single reveal, LatestStoredEscrow) and the newest active or
+-- stored local administrator password (the last one a reveal returns, ListLocalAdminSecrets), ordered by device.
+SELECT DISTINCT ON (d.hostname, e.device_id, e.kind, e.volume)
+  e.id, e.device_id, d.hostname, e.kind, e.volume, e.key_version, e.ciphertext
+FROM escrow_secret e
+JOIN device d ON d.id = e.device_id
+WHERE d.state <> 'retired'
+  AND ((e.kind = 'luks_recovery_key' AND e.status = 'stored') OR
+       (e.kind = 'admin_password' AND e.status IN ('active', 'stored')))
+ORDER BY d.hostname, e.device_id, e.kind, e.volume, e.generation DESC;

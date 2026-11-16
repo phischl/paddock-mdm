@@ -68,6 +68,9 @@ func (d *directory) EnsureOrganization(context.Context, string) (ports.OrgIdenti
 	d.ensures++
 	return ports.OrgIdentityRefs{}, d.fail
 }
+func (d *directory) DeleteOrganization(context.Context, string) (ports.OrgIdentityDeletion, error) {
+	return ports.OrgIdentityDeletion{}, errors.New("not used")
+}
 func (d *directory) CreateUser(context.Context, string, ports.NewIdentityUser) (string, error) {
 	return "", errors.New("not used")
 }

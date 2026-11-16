@@ -836,12 +836,11 @@ type NotificationPseudonymLookup struct {
 }
 
 type OffboardedDevice struct {
-	DeviceID        uuid.UUID
-	OrganizationID  uuid.UUID
-	Keys            json.RawMessage
-	CommandID       uuid.UUID
-	CommandEnvelope []byte
-	OffboardedAt    time.Time
+	DeviceID         uuid.UUID
+	OrganizationID   uuid.UUID
+	Keys             json.RawMessage
+	OffboardedAt     time.Time
+	CommandEnvelopes json.RawMessage
 }
 
 type OffboardingTable struct {
@@ -872,24 +871,36 @@ type OpenbaoAutoUnseal struct {
 }
 
 type Organization struct {
-	ID                        uuid.UUID
-	Slug                      string
-	Name                      string
-	Status                    string
-	CreatedAt                 time.Time
-	UpdatedAt                 time.Time
-	Domains                   []string
-	DeletionRequestedAt       *time.Time
-	DeletionRequestedBy       *string
-	DeletionReason            *string
-	DeleteAfter               *time.Time
-	OffboardingStep           *string
-	OffboardingErrorCode      *string
-	DeletedAt                 *time.Time
-	IdpEnsuredAt              *time.Time
-	IdpEnsureRevision         *string
-	DeletionUninstallsIssued  *int32
-	DeletionUninstallsSkipped *int32
+	ID                          uuid.UUID
+	Slug                        string
+	Name                        string
+	Status                      string
+	CreatedAt                   time.Time
+	UpdatedAt                   time.Time
+	Domains                     []string
+	DeletionRequestedAt         *time.Time
+	DeletionRequestedBy         *string
+	DeletionReason              *string
+	DeleteAfter                 *time.Time
+	OffboardingStep             *string
+	OffboardingErrorCode        *string
+	DeletedAt                   *time.Time
+	IdpEnsuredAt                *time.Time
+	IdpEnsureRevision           *string
+	DeletionUninstallsIssued    *int32
+	DeletionUninstallsSkipped   *int32
+	DeletingCommittedAt         *time.Time
+	OffboardingWaitVxids        []string
+	OffboardingWaitTakenAt      *time.Time
+	RecoveryExports             int32
+	RecoveryExportsSince        *time.Time
+	OffboardingCounts           json.RawMessage
+	AuditRetirementRequestedAt  *time.Time
+	AuditFinalVerifiedAt        *time.Time
+	AuditFinalOutcome           *string
+	OffboardingDbOrder          *int32
+	OffboardingCursor           *string
+	OffboardingFailuresRecorded []string
 }
 
 type OrganizationDmsSetting struct {

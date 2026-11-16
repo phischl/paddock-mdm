@@ -314,6 +314,7 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `createAuditExport` | audit | Requests a signed evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; to_day at most 400 days after from_day: 400 range_too_large; a missing day, from_day after to_day, or an empty purpose or one with control characters other than tab, newline and carriage return, C1 controls (U+0080–U+009F) or bidi controls (U+202A–U+202E, U+2066–U+2069): 400 invalid_request). |
 | `createBackupRestorePlan` | platform | Approves a restore plan, which the host executes within 24 hours with ./paddock restore --plan <id> (host_command). |
 | `createBackupTarget` | platform | Adds a target. |
+| `createDeletedOrganizationAuditExport` | platform | Requests the signed evidence package of a deleted organization for its auditors, with the body, checks and answers of POST /api/v1/audit/exports; the package verifies offline with paddockctl audit verify-export. |
 | `createIpAllowlistEntry` | platform | Adds a range. |
 | `createNotificationDestination` | notifications | Creates a destination. |
 | `createPlatformNotificationDestination` | platform | Creates a destination. |
@@ -337,6 +338,8 @@ These operations need a step-up, which an MCP session never satisfies. They are 
 | `enableMcpWrite` | mcp | Enables MCP write access for the caller's own account (ADR 0044 amendment 2026-10-25): their MCP sessions may change data where the scope's MCP policy allows it. |
 | `encryptDevice` | devices | Issues the signed command encrypt_disk (lifetime 7 days, ADR 0039, plan M8e decision 7): the device escrows a recovery key, prepares itself and encrypts its root volume in place after its next restart; disk_conversion follows the phases. |
 | `endAllSessions` | platform | Ends every portal session and every identity-provider browser session of every portal user (platform administrators and organization role members); device logins and API tokens are not affected. |
+| `exportOrganizationRecoveryKeys` | platform | The export of POST /api/v1/recovery-export for the organization of the path (404 not_found for an unknown organization); the platform administrator acts inside that organization only while its deletion is pending (ADR 0052 amendment b decision 8). |
+| `exportRecoveryKeys` | settings | Exports every LUKS recovery key (the newest per volume) and the newest escrowed local administrator password of every non-retired device of the organization, encrypted to the public key or the passphrase of the request (ADR 0052 amendment b); after the deletion this file is the only remaining copy. |
 | `generateBackupKey` | platform | Generates a new backup key (32 random bytes, standard base64) and returns its text exactly once, with six 1-based positions whose characters confirm it (POST /api/platform/v1/backup/key/{id}/confirm). |
 | `importAgentRelease` | platform | Imports the version from the configured release source (ADR 0043): the version must be newer than the newest published release, every file is verified with the release public key before anything is stored, and the release is published without a rollout; paddock-revoke is never imported. |
 | `lockDevice` | revocation | POST /api/v1/devices/{id}/lock |
@@ -376,6 +379,7 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | `checkAgentReleaseSource` | platform | Lists the releases of the source and compares the latest with the newest published release (ADR 0043 decision 3); changes nothing and is not audited. |
 | `disableMcpWrite` | mcp | Disables MCP write access for the caller's own account; no step-up is needed. |
 | `downloadAuditExport` | audit | Streams the package (a tar archive) of a ready export; 409 export_not_ready while it is pending, running, failed or expired, 404 for an unknown export or one of another organization. |
+| `downloadDeletedOrganizationAuditExport` | platform | Streams the package of a ready export of a deleted organization, with the headers and answers of GET /api/v1/audit/exports/{id}/download (409 export_not_ready). |
 | `enforceDevice` | devices | Ends the report-only mode of an adopted device (plan M11 decision 42): its next bundle quarantines foreign sudoers files, removes unexpected members of privileged groups (never the last administrator), installs the login component and applies every managed resource. |
 | `exportAccessReview` | overview | The access review as a download: format json (the same object as the view) or csv (one file for every section, told apart by the section column; cells that a spreadsheet could run as a formula carry a leading apostrophe). |
 | `exportPatchCompliance` | overview | The patch compliance report as a download, with every device (no cap): format json (the report object) or csv (one file for every section, told apart by the section column: summary, severity, group, one breach row per breached finding, catalog; cells that a spreadsheet could run as a formula carry a leading apostrophe). |
@@ -390,6 +394,8 @@ Revoking API tokens, the MCP settings and opt-in, uploads and downloads that are
 | `getPlatformAccessReview` | platform | The access review of the platform: platform role members, platform administrators, privileged platform events and the organizations created in the period. |
 | `getPlatformMcpSettings` | mcp | The MCP policy of the platform (platform administrators' MCP sessions) (ADR 0044 decision 5). |
 | `getSoftwareCatalogIcon` | software | The entry's icon as image/png (Cache-Control: private, max-age=300); 404 not_found without an icon or for another organization's entry. |
+| `listDeletedOrganizationAuditEvents` | platform | The retained audit log of a deleted organization (ADR 0052 decision 7), with the sort, search and filters of /api/v1/audit-events. |
+| `listDeletedOrganizationAuditExports` | platform | The evidence exports of a deleted organization, as /api/v1/audit/exports. |
 | `revokeApiToken` | api-tokens | A request made with an API token cannot revoke (403 forbidden). |
 | `setSoftwareCatalogIcon` | software | Sets or replaces the entry's icon. |
 | `updateMe` | me | PATCH /api/v1/me |

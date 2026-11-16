@@ -199,7 +199,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	}
 	imports := app.NewReleaseImports(runner, platformPool, releases, source, cfgSource)
 	accounts := app.NewAccounts(runner, orgPool, platformPool, sessionStore)
-	escrowAccess := app.NewEscrowAccess(escrowreader.NewClient(escrowReaderURL, escrowReaderToken), stepUpTokens)
+	escrowReader := escrowreader.NewClient(escrowReaderURL, escrowReaderToken)
+	escrowAccess := app.NewEscrowAccess(escrowReader, stepUpTokens)
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
 	stepUp := admin.NewOIDC(stepUpCfg)
@@ -254,6 +255,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		LocalAdmin:       app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:      app.NewAutoinstall(runner, orgPool, bundlesURL),
 		Disk:             app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
+		RecoveryExports:  app.NewRecoveryExports(runner, platformPool, stepUpTokens, escrowReader, time.Now),
 		Revocations:      app.NewRevocations(runner, orgPool, stepUpTokens, devicecache.New(vk), revocationEnabled),
 		DMS:              app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
 		RolloutSettings:  app.NewRolloutSettings(runner, orgPool, common.Development()),
@@ -293,6 +295,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		AuditLog:         app.NewAuditLog(auditReader, orgPool),
 		AuditIntegrity:   app.NewAuditIntegrity(auditReader),
 		AuditExports:     app.NewAuditExports(runner, auditReader),
+		DeletedOrgAudit:  app.NewDeletedOrgAudit(runner, auditReader, platformPool),
 		ServerVersion:    buildinfo.Version,
 		IPAllowlist:      ipAllowlist,
 		IPGuard:          ipGuard,

@@ -114,6 +114,10 @@ func start(t testing.TB, bucket string) *RustFS {
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        pgtest.Image(t, "RUSTFS_IMAGE"),
 			ExposedPorts: []string{"9000/tcp"},
+			// The data in memory: RustFS syncs every object to disk, and on a host whose disk the parallel packages'
+			// databases keep busy one sync took longer than the compiler's 5 s upload bound (PDK-1092). Tests never
+			// restart the container, so nothing needs the data to outlive it. 10001 is the image's rustfs user.
+			Tmpfs: map[string]string{"/data": "rw,uid=10001,gid=10001"},
 			Env: map[string]string{
 				"RUSTFS_ACCESS_KEY": RootUser, "RUSTFS_SECRET_KEY": RootPassword,
 				"RUSTFS_CONSOLE_ENABLE": "false", "RUSTFS_OBS_LOG_DIRECTORY": "",

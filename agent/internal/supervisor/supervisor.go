@@ -5,6 +5,7 @@
 package supervisor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,7 +55,19 @@ type Config struct {
 	Sleep        func(time.Duration)    // waits between rollback flip attempts; nil is time.Sleep (tests inject one)
 	SyncDir      func(dir string) error // syncs slots after a flip, staging before a drop or a result; nil is fsync (tests inject failures)
 	SyncFile     func(*os.File) error   // syncs a state file before its rename and its directory after; nil is fsync (tests inject failures)
+	// VersionTimeout bounds a `paddockd version` call; 0 is 10 s.
+	VersionTimeout time.Duration
+	// Version replaces the `paddockd version` call of a slot directory; nil runs it (tests inject stalls).
+	Version func(dir string) string
+	// BootID is the kernel's boot ID, recorded at a switch; "" is read from BootIDFile (tests inject one).
+	BootID string
+	// BootIDFile holds the boot ID; "" is /proc/sys/kernel/random/boot_id (tests inject an unreadable one).
+	BootIDFile string
 }
+
+// versionTimedOut is what version returns for a call that hit VersionTimeout. It cannot be an agent's output, which
+// version trims, so a slot whose disk stalls is never mistaken for one that reports no valid version (PDK-1118).
+const versionTimedOut = " timed out"
 
 // rollbackAttempts bounds the attempts to flip current back to the previous slot; the waits between them double from
 // rollbackRetryWait. With the waits (3.75 s), five flips and stopping the agent (up to 10 s) the blocked loop stays
@@ -69,8 +82,8 @@ const (
 )
 
 type selfTest struct {
-	version, slot string
-	err           error
+	version, slot, from string // from is the active version that onRequest checked
+	err                 error
 }
 
 // Supervisor runs the agent. All fields are owned by the goroutine that calls Run.
@@ -87,6 +100,14 @@ type Supervisor struct {
 	rolledBack *probation
 	testing    bool
 	tested     chan selfTest
+	// deferredAt is when a decision deferred because a version call timed out is tried again: an update request, or
+	// the rebuild of a kept log; deferWait is the wait before it, reset when a request is removed (plan M2b amendment
+	// 2026-11-16).
+	deferredAt time.Time
+	deferWait  time.Duration
+	// keptLog is an unreadable probation log kept because a slot's version call timed out: it is rebuilt again when
+	// deferredAt is due, and no update request is processed meanwhile (plan M2b, fix batch 2026-11-16, M2).
+	keptLog bool
 }
 
 // New creates a supervisor.
@@ -102,6 +123,13 @@ func New(cfg Config) *Supervisor {
 	}
 	if cfg.SyncFile == nil {
 		cfg.SyncFile = syncFile
+	}
+	if cfg.BootID == "" {
+		id, err := os.ReadFile(cmp.Or(cfg.BootIDFile, "/proc/sys/kernel/random/boot_id"))
+		if err != nil {
+			slog.Warn("reading the boot ID failed; every resumed probation runs a full window", "error", err)
+		}
+		cfg.BootID = strings.TrimSpace(string(id))
 	}
 	return &Supervisor{cfg: cfg, exited: make(chan error, 1), tested: make(chan selfTest, 1), backoff: time.Second}
 }
@@ -138,6 +166,15 @@ func (s *Supervisor) Run(ctx context.Context, usr1 <-chan os.Signal) {
 			// Petting the watchdog from this loop proves that the loop is responsive.
 			s.cfg.Notify("WATCHDOG=1")
 			s.checkProbation()
+			if !s.deferredAt.IsZero() && !s.cfg.Now().Before(s.deferredAt) {
+				s.deferredAt = time.Time{}
+				if s.keptLog {
+					s.resumeProbation()
+					s.resumeRequest(ctx)
+				} else {
+					s.onRequest(ctx)
+				}
+			}
 		}
 	}
 }
@@ -191,7 +228,7 @@ var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+
 
 // onRequest verifies a staged release and starts its self-test in the inactive slot.
 func (s *Supervisor) onRequest(ctx context.Context) {
-	if s.testing || s.probation != nil || s.rolledBack != nil {
+	if s.testing || s.probation != nil || s.rolledBack != nil || s.keptLog {
 		slog.Warn("update request ignored: an update is in progress")
 		return
 	}
@@ -217,6 +254,15 @@ func (s *Supervisor) onRequest(ctx context.Context) {
 	}
 	dir := filepath.Join(s.cfg.Staging, req.Version)
 	from := s.version(s.current())
+	// A stall is no verdict on the active agent: treating it as one that cannot report its version would let any
+	// signed release pass the downgrade refusal, and refusing would count a false failure against the rollout. The
+	// request stays, and no outcome is written. Each attempt can block the loop for the whole timeout, so the retries
+	// back off as a pending rollback's do (plan M2b amendment 2026-11-16).
+	if from == versionTimedOut {
+		s.deferRetry()
+		slog.Warn("update request deferred: the active agent did not report its version in time", "version", req.Version, "next_attempt_in", s.deferWait)
+		return
+	}
 	bin, err := os.ReadFile(filepath.Join(dir, "paddockd")) //nolint:gosec // version validated above
 	if err != nil || !s.verify(bin, filepath.Join(dir, "paddockd.minisig"), req.Version) {
 		slog.Error("release signature invalid or not for this version and architecture; update refused", "version", req.Version, "error", err)
@@ -241,7 +287,7 @@ func (s *Supervisor) onRequest(ctx context.Context) {
 		// The shutdown kills the self-test, and Run's select may pick the error over ctx.Done: that error is no verdict
 		// on the release, so it is dropped and the request stays for the restart (PDK-061, PDK-372).
 		if ctx.Err() == nil {
-			s.tested <- selfTest{version: req.Version, slot: slot, err: err}
+			s.tested <- selfTest{version: req.Version, slot: slot, from: from, err: err}
 		}
 	}()
 }
@@ -279,13 +325,14 @@ func (s *Supervisor) runSelfTest(ctx context.Context, slot, version string) erro
 // onSelfTest switches to the tested slot or reports the failure.
 func (s *Supervisor) onSelfTest(r selfTest) {
 	s.testing = false
-	from := s.version(s.current())
+	from := r.from
 	if r.err != nil {
 		slog.Error("release failed its self-test; not switching", "version", r.version, "error", r.err)
 		s.finish(r.version, from, outcomeSelfTestFailed)
 		return
 	}
-	p := &probation{Version: r.version, FromVersion: from, FromSlot: s.activeSlot(), ToSlot: r.slot, SwitchedAt: s.cfg.Now()}
+	p := &probation{Version: r.version, FromVersion: from, FromSlot: s.activeSlot(), ToSlot: r.slot, SwitchedAt: s.cfg.Now(),
+		BootID: s.cfg.BootID}
 	err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile)
 	if err == nil {
 		err = flip(s.cfg.Slots, r.slot, s.cfg.SyncDir)
@@ -357,20 +404,23 @@ func (s *Supervisor) checkProbation() {
 
 // rollback flips back to the previous slot and restarts the old agent. It reports rolled_back only if current then
 // points at the previous slot; otherwise the new agent keeps running and the rollback stays pending (ADR 0024).
-// A flip back whose directory sync failed reports nothing yet: the probation log, marked RollingBack and synced, stays
-// until confirmRollback has made the flip durable, so a restart after a lost flip still finds the probation.
+// A flip back whose directory sync failed reports nothing yet: the probation log, marked RollingBack before the flip,
+// stays until confirmRollback has made the flip durable, so a restart after a lost flip still finds the rollback.
 func (s *Supervisor) rollback(reason string) {
 	p := s.probation
 	s.probation = nil
 	slog.Error("rolling back", "version", p.Version, "to_version", p.FromVersion, "reason", reason)
+	// The decision is recorded before the flip back, so a restart after the flip finds a rollback, not a switch whose
+	// flip was lost (PDK-1118b). It is not synced: a watchdog kill keeps the page cache, and a sync stalled by the disk
+	// would hold up the flip back past the watchdog in every pass. A failed write does not stop the flip either; the
+	// log written at the switch then still names ToSlot, so a restart resumes the probation or drops it, reporting
+	// nothing.
+	p.RollingBack = true
+	if werr := writeJSON(s.cfg.ProbationLog, p, noSync); werr != nil {
+		slog.Error("recording the rollback in the probation log failed; flipping back all the same", "error", werr)
+	}
 	durable, err := s.flipBack(p.FromSlot, rollbackAttempts)
 	if err == nil && !durable {
-		p.RollingBack = true
-		if werr := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile); werr != nil {
-			// The log written at the switch still names ToSlot, so a restart resumes the probation or drops it, and
-			// reports nothing in either case.
-			slog.Error("marking the probation log as rolling back failed", "error", werr)
-		}
 		s.rolledBack = p
 		s.restartChild()
 		slog.Warn("rolled back; the result waits until the flip back is durable", "version", p.Version, "slot", p.FromSlot)
@@ -418,7 +468,6 @@ func (s *Supervisor) flipBack(slot string, attempts int) (durable bool, err erro
 // confirmRollback reports a rollback once its flip back is durable; a pending rollback first retries its flip back.
 func (s *Supervisor) confirmRollback() {
 	p := s.rolledBack
-	s.recordPending(p)
 	retried := p.RollbackPending
 	if retried && !s.retryFlipBack(p) {
 		return
@@ -436,7 +485,10 @@ func (s *Supervisor) confirmRollback() {
 // retryFlipBack makes one attempt per retry slot to flip current back to FromSlot. A current that already points there
 // (an operator flipped it by hand) succeeds as well; the caller restarts the old agent and makes the flip durable.
 func (s *Supervisor) retryFlipBack(p *probation) bool {
+	// A due retry renames before it syncs anything, so a resumed rollback flips back even on a disk whose every sync
+	// stalls past the watchdog; the pending record is written on the ticks that wait, and by keepRollbackPending.
 	if s.cfg.Now().Before(p.retryAt) {
+		s.recordPending(p)
 		return false
 	}
 	p.retries++
@@ -461,6 +513,10 @@ func (s *Supervisor) keepRollbackPending(p *probation) {
 	s.rolledBack = p
 	if p.Outcome != outcomeRollbackFailed {
 		p.unrecorded = !s.conclude(p, outcomeRollbackFailed)
+	}
+	if p.Outcome == outcomeRollbackFailed && p.unreported {
+		p.unreported = false
+		s.report(p, true)
 	}
 	s.recordPending(p)
 }
@@ -517,6 +573,7 @@ func (s *Supervisor) finishAt(version, from, outcome string, at time.Time) error
 // it let a late RemoveAll delete files the agent had begun to stage anew under the same version, leaving a request
 // without its release in normal operation, not only after a crash between the two removals.
 func (s *Supervisor) cleanup(version string) {
+	s.deferWait = 0
 	if version != "" {
 		_ = os.RemoveAll(filepath.Join(s.cfg.Staging, version))
 	}
@@ -532,7 +589,7 @@ func (s *Supervisor) cleanup(version string) {
 // report the release a second time. A request for the version that current already runs is removed here (PDK-066):
 // it outlived the result of its own switch, whose staging sync failed, and the agent has since deleted that result.
 func (s *Supervisor) resumeRequest(ctx context.Context) {
-	if s.probation != nil || s.rolledBack != nil {
+	if s.probation != nil || s.rolledBack != nil || s.keptLog {
 		return
 	}
 	var req struct{ Version string }
@@ -571,11 +628,32 @@ func (s *Supervisor) inactiveSlot() string {
 	return "A"
 }
 
-// version runs `<dir>/paddockd version`.
+// version reports the version of the agent in dir, through Config.Version if it is set.
 func (s *Supervisor) version(dir string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if s.cfg.Version != nil {
+		return s.cfg.Version(dir)
+	}
+	return runVersion(dir, cmp.Or(s.cfg.VersionTimeout, 10*time.Second))
+}
+
+// deferRetry schedules the next attempt of a decision that a version call's timeout deferred, with the back-off of a
+// pending rollback's retries (plan M2b amendment 2026-11-16).
+func (s *Supervisor) deferRetry() {
+	s.deferWait = min(max(2*s.deferWait, pendingRetryStart), pendingRetryMax)
+	s.deferredAt = s.cfg.Now().Add(s.deferWait)
+}
+
+// noSync is the sync of a write that a stalled disk must not delay; the write survives a kill, not a power loss.
+func noSync(*os.File) error { return nil }
+
+// runVersion runs `<dir>/paddockd version`; a call that hits timeout returns versionTimedOut.
+func runVersion(dir string, timeout time.Duration) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, filepath.Join(dir, "paddockd"), "version").Output() //nolint:gosec // our slot
+	if err != nil && ctx.Err() != nil {
+		return versionTimedOut
+	}
 	if err != nil {
 		return "unknown"
 	}

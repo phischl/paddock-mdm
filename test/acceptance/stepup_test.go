@@ -63,7 +63,7 @@ const expirySlack = 2 * time.Second
 // and for the window are measured from the server's step-up time; the audit event checks run during them.
 func TestStepUp(t *testing.T) {
 	alice := login(t, env.Alice)
-	device, password := escrowedDevice(t, alice)
+	device, _, password := escrowedDevice(t, alice)
 	revealPath := "/api/v1/devices/" + device.DeviceID + "/local-admin/reveal"
 	reveal := func(status int, code string) env.Response {
 		t.Helper()

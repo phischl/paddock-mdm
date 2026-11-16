@@ -236,8 +236,98 @@ func TestLiveAuthentik(t *testing.T) {
 	if err := c.DeleteUser(ctx, pk); err != nil {
 		t.Fatalf("second DeleteUser: %v", err)
 	}
+	deleteLiveOrganization(ctx, t, c, admin, slug)
 	if rec.record {
 		rec.write(t, slug)
+	}
+}
+
+// deleteLiveOrganization runs DeleteOrganization with the service token (plan M17 decision 10) and checks with the
+// admin token that every object it counts is gone, so a permission missing from the service role fails here. A member
+// of the root group that Paddock did not create survives with its sign-in setup link ended and its mark
+// paddock_password_by_link removed (PDK-1112).
+func deleteLiveOrganization(ctx context.Context, t *testing.T, c *authentik.Client, admin *rawAPI, slug string) {
+	t.Helper()
+	managed := "gone-" + uuid.NewString()[:8] + "@" + slug + ".test"
+	userPK, err := c.CreateUser(ctx, slug, ports.NewIdentityUser{Username: managed, Name: "Deleted With The Organization", Email: managed})
+	if err != nil {
+		t.Fatalf("CreateUser before DeleteOrganization: %v", err)
+	}
+	stays := "stays-" + uuid.NewString()[:8] + "@" + slug + ".test"
+	survivorPK, err := c.CreateUser(ctx, slug, ports.NewIdentityUser{Username: stays, Name: "Survives The Organization", Email: stays})
+	if err != nil {
+		t.Fatalf("CreateUser before DeleteOrganization: %v", err)
+	}
+	t.Cleanup(func() { admin.call(http.MethodDelete, "/core/users/"+survivorPK+"/") })
+	if err := c.SetUserAttribute(ctx, survivorPK, "paddock_managed", nil); err != nil {
+		t.Fatalf("unmark the surviving member: %v", err)
+	}
+	for _, pk := range []string{userPK, survivorPK} {
+		if _, err := c.RecoveryLink(ctx, pk); err != nil {
+			t.Fatalf("RecoveryLink before DeleteOrganization: %v", err)
+		}
+		if err := c.SetUserAttribute(ctx, pk, ports.AttrPasswordByLink, true); err != nil {
+			t.Fatalf("mark %s before DeleteOrganization: %v", pk, err)
+		}
+	}
+	app := organization.DeviceLoginApp(slug)
+	appPK := admin.first("/core/applications/?superuser_full_list=true&slug=" + app)["pk"].(string)
+	provPK := admin.first("/providers/oauth2/?name=" + app)["pk"]
+	policyPK := admin.first("/policies/expression/?name=" + authentik.AccessPolicyName(slug))["pk"].(string)
+	mappingPK := admin.first("/propertymappings/provider/scope/?name=" + authentik.GroupsMappingName(slug))["pk"].(string)
+	bindings := map[string]bool{}
+	for _, q := range []string{"target=" + appPK, "policy=" + policyPK} {
+		for _, b := range admin.list("/policies/bindings/?" + q) {
+			bindings[b["pk"].(string)] = true
+		}
+	}
+	var groups []string
+	for _, g := range admin.list("/core/groups/?include_users=false&page_size=100&search=" + organization.RootGroup(slug)) {
+		if name, _ := g["name"].(string); name == organization.RootGroup(slug) || strings.HasPrefix(name, organization.RootGroup(slug)+".") {
+			groups = append(groups, g["pk"].(string))
+		}
+	}
+	if len(bindings) == 0 || len(groups) == 0 {
+		t.Fatalf("fixture organization has %d bindings and %d groups", len(bindings), len(groups))
+	}
+
+	d, err := c.DeleteOrganization(ctx, slug)
+	if err != nil {
+		t.Fatalf("DeleteOrganization with the service token: %v (counts so far %+v)", err, d)
+	}
+	want := ports.OrgIdentityDeletion{Groups: len(groups), Users: 1, Applications: 1, Providers: 1, Policies: len(bindings) + 1, Mappings: 1}
+	if d != want {
+		t.Errorf("DeleteOrganization counts %+v, want %+v", d, want)
+	}
+	gone := []string{"/core/applications/" + app + "/", fmt.Sprintf("/providers/oauth2/%v/", provPK),
+		"/policies/expression/" + policyPK + "/", "/propertymappings/provider/scope/" + mappingPK + "/", "/core/users/" + userPK + "/"}
+	for pk := range bindings {
+		gone = append(gone, "/policies/bindings/"+pk+"/")
+	}
+	for _, pk := range groups {
+		gone = append(gone, "/core/groups/"+pk+"/")
+	}
+	for _, path := range gone {
+		if code, body := admin.call(http.MethodGet, path); code != http.StatusNotFound {
+			t.Errorf("GET %s after DeleteOrganization: %d %s", path, code, body)
+		}
+	}
+	code, body := admin.call(http.MethodGet, "/core/users/"+survivorPK+"/")
+	var survivor struct {
+		UID        string         `json:"uid"`
+		Attributes map[string]any `json:"attributes"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &survivor) != nil || survivor.UID == "" {
+		t.Fatalf("GET the surviving member after DeleteOrganization: %d %s", code, body)
+	}
+	if _, marked := survivor.Attributes[ports.AttrPasswordByLink]; marked {
+		t.Errorf("the surviving member keeps %s: %v", ports.AttrPasswordByLink, survivor.Attributes)
+	}
+	if links := admin.list("/core/tokens/?identifier=" + survivor.UID + "-password-reset"); len(links) != 0 {
+		t.Errorf("the surviving member keeps its sign-in setup link: %v", links)
+	}
+	if again, err := c.DeleteOrganization(ctx, slug); err != nil || again != (ports.OrgIdentityDeletion{}) {
+		t.Errorf("second DeleteOrganization: %+v, %v", again, err)
 	}
 }
 
@@ -293,7 +383,7 @@ func (a *rawAPI) first(path string) map[string]any {
 	return r[0]
 }
 
-// deleteOrganization removes the device login objects and every group of the fixture organization.
+// deleteOrganization removes the device login objects, every group and every user of the fixture organization.
 func (a *rawAPI) deleteOrganization(slug string) {
 	app := organization.DeviceLoginApp(slug)
 	for _, step := range []struct{ list, item, key string }{
@@ -311,6 +401,13 @@ func (a *rawAPI) deleteOrganization(slug string) {
 			if code, body := a.call(http.MethodDelete, fmt.Sprintf(step.item, obj[step.key])); code >= 300 && code != http.StatusNotFound {
 				a.t.Errorf("cleanup %s: %d %s", step.item, code, body)
 			}
+		}
+	}
+	// The users the test created stay behind when it fails before DeleteUser or DeleteOrganization.
+	for _, u := range a.list("/core/users/?include_groups=false&path=paddock/" + slug) {
+		pk, _ := u["pk"].(float64)
+		if code, body := a.call(http.MethodDelete, fmt.Sprintf("/core/users/%.0f/", pk)); code >= 300 && code != http.StatusNotFound {
+			a.t.Errorf("cleanup user %.0f: %d %s", pk, code, body)
 		}
 	}
 }

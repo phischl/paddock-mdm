@@ -30,7 +30,8 @@ export function uninstallRunning(u: DeviceUninstall | null | undefined): boolean
 
 /** Whether a pending uninstall can be cancelled: its command has not reached the device, or its removal report is overdue. */
 export function uninstallCancellable(u: DeviceUninstall | null | undefined): boolean {
-  return uninstallPending(u) && (cancellable.includes(u.command_status) || u.report_overdue)
+  // Only cancelling the organization's deletion withdraws an offboarding uninstall; the server answers 409 on the device.
+  return uninstallPending(u) && u.reason !== 'organization_offboarding' && (cancellable.includes(u.command_status) || u.report_overdue)
 }
 
 /** Whether a disk report lists a TPM keyslot on any volume: then the TPM cannot be cleared. */

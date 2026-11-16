@@ -257,7 +257,9 @@ The decoders hand the JSON body to Wazuh's `JSON_Decoder`, so every key is a fie
 loop is taken by Wazuh's built-in `json` decoder and yields the same names, so a pushed and a pulled event fire the
 same rule (100900 is the base of the push, 100901 of the pull). Levels: tamper and revocation 12, reveals and root
 grants 10, denied 7, sign-in and configuration 5. The rules key on the full `event.code` of the message body, never on
-the `MSGID`, so the nine aliased codes behave like all others. A replayed event that the audit index no longer holds
+the `MSGID`, so the nine aliased codes behave like all others. `audit.event_after_retirement` (an event of an organization
+whose audit log is closed) fires rule 100916 at level 10: outside a deletion it means the log of an organization still
+in use was closed. A replayed event that the audit index no longer holds
 (`MSGID` `paddock.missing`) fires rule 100904 at level 7. Sigma twins of the detections for other engines are in
 `integrations/sigma/`.
 

@@ -307,3 +307,8 @@ DELETE FROM retention_inventory_hold WHERE device_id = @device_id;
 -- 2026-10-30): never another organization's rows.
 -- name: FleetHostInUse :one
 SELECT paddock_fleet_host_in_use(@retired_device::uuid, @host::text)::text;
+
+-- Like FleetHostInUse for the deletion of a whole organization: every device of org is ignored, so only another
+-- organization's reference or hardware keeps the host (platform pool, plan M17 amendment l point 1).
+-- name: FleetHostInUseOutside :one
+SELECT paddock_fleet_host_in_use_outside(@org::uuid, @host::text)::text;

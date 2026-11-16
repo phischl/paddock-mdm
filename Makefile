@@ -82,7 +82,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 .PHONY: lint
 lint: lint-go lint-tidy lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget lint-shell changelog-check lint-migrations-frozen lint-compose lint-selfservice renovate-check ## Run all linters, govulncheck, the license gate and the server image build
 
-# The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
+# The supervisor's line budget (plan M2b decision 15, amendment 2026-11-16): at most 865 non-blank, non-comment lines of
 # non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
 .PHONY: lint-supervisor-budget
 lint-supervisor-budget:
@@ -137,6 +137,8 @@ test-selfservice: ## Unit tests of the self-service app (python3 -m unittest, no
 lint-shell:
 	shellcheck -s sh agent/internal/encrypt/dracut/paddock-encrypt-init.sh
 	shellcheck -s sh deploy/compose/valkey/entrypoint.sh
+	shellcheck -s bash deploy/compose/valkey/entrypoint_test.sh deploy/compose/scripts/valkey-headroom.sh \
+		deploy/compose/scripts/valkey-headroom_test.sh
 	shellcheck -s bash agent/internal/encrypt/dracut/module-setup.sh
 	shellcheck -s bash test/require-tests.sh test/require-tests_test.sh
 	shellcheck -s bash test/system-test-run.sh test/system-test-run_test.sh
@@ -145,11 +147,17 @@ lint-shell:
 	shellcheck -s bash scripts/release-notes-check.sh scripts/release-notes-check_test.sh
 	shellcheck -s bash scripts/acceptance-scope.sh scripts/acceptance-scope_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade-check.sh deploy/bundle/upgrade-check_test.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/rabbitmq-definitions.sh deploy/bundle/ci/assert-broker.sh \
+		deploy/bundle/ci/assert-broker_test.sh deploy/compose/scripts/rabbitmq-definitions_test.sh
 	shellcheck -s bash deploy/compose/scripts/upgrade.sh deploy/compose/scripts/rollback.sh deploy/bundle/upgrade_test.sh \
 		deploy/bundle/rollback_test.sh deploy/compose/scripts/legacy-alpha8.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/offboard-users-check.sh deploy/compose/scripts/offboard-prune_test.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/bundles-prune.sh deploy/compose/scripts/bundles-prune_test.sh
+	shellcheck -x -P SCRIPTDIR -s bash deploy/compose/scripts/authentik-apply-blueprints.sh \
+		deploy/compose/scripts/authentik-apply-blueprints_test.sh
 	shellcheck -x -s bash deploy/bundle/ci/lib-smoke.sh deploy/bundle/ci/upgrade.sh deploy/bundle/ci/upgrade_test.sh \
 		deploy/bundle/ci/seed.sh deploy/bundle/ci/fetch-previous.sh deploy/bundle/ci/fetch-previous_test.sh \
-		deploy/bundle/ci/smoke.sh
+		deploy/bundle/ci/smoke.sh deploy/bundle/ci/assert-buckets.sh deploy/bundle/ci/assert-buckets_test.sh
 
 # Changelog fragments (PDK-518): every change adds changelog.d/<ticket-id>.<section>.md instead of editing the
 # [Unreleased] section of CHANGELOG.md, so parallel pull requests do not conflict; the release manager assembles them
@@ -271,15 +279,22 @@ test: ## Unit and integration tests (requires Docker)
 	go test -count=1 -run '^TestSuitesComplete$$' ./test/system/
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
+	bash $(COMPOSE_DIR)/scripts/valkey-headroom_test.sh
+	VALKEY_IMAGE=$(VALKEY_IMAGE) bash $(COMPOSE_DIR)/valkey/entrypoint_test.sh
 	bash $(COMPOSE_DIR)/scripts/wait-healthy_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
 	bash $(COMPOSE_DIR)/scripts/restore_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-configure_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-policy-removal_test.sh
+	bash $(COMPOSE_DIR)/scripts/offboard-prune_test.sh
+	bash $(COMPOSE_DIR)/scripts/bundles-prune_test.sh
+	bash $(COMPOSE_DIR)/scripts/rustfs-offboard_test.sh
+	bash $(COMPOSE_DIR)/scripts/gen-secrets-upgrade_test.sh
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
 	bash $(COMPOSE_DIR)/scripts/provision-roles_test.sh
 	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh
+	bash $(COMPOSE_DIR)/scripts/rabbitmq-definitions_test.sh
 	bash $(COMPOSE_DIR)/scripts/dev-instance_test.sh
 	bash test/vms/virtualbox/lib_test.sh
 	bash packaging/release_test.sh
@@ -290,7 +305,9 @@ test: ## Unit and integration tests (requires Docker)
 	bash deploy/bundle/rollback_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
 	bash deploy/bundle/ci/assert-hardening_test.sh
+	bash deploy/bundle/ci/assert-broker_test.sh
 	bash deploy/bundle/ci/assert-segmentation_test.sh
+	bash deploy/bundle/ci/assert-buckets_test.sh
 	bash deploy/bundle/ci/upgrade_test.sh
 	bash deploy/bundle/ci/fetch-previous_test.sh
 	bash test/scan-secrets_test.sh
@@ -455,12 +472,18 @@ up: dev-secrets ## Start the full stack (infrastructure, OpenBao/bucket bootstra
 	$(COMPOSE_DIR)/scripts/postgres-unsealer-role.sh
 	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh
+	$(COMPOSE_DIR)/scripts/authentik-apply-blueprints.sh
 	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
 	$(if $(BACKUP),$(COMPOSE_DIR)/scripts/rustfs-backup-bootstrap.sh,)
 	$(COMPOSE) --profile paddock --profile observability up -d --build
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh --profile paddock
+
+.PHONY: authentik-blueprints-test
+# Its own Compose project with throwaway secrets, so it runs beside a development stack and never touches it.
+authentik-blueprints-test: ## Cold start of the pinned Authentik, then the serial blueprint apply twice (plan M12h-2 amendment g)
+	bash $(COMPOSE_DIR)/scripts/authentik-apply-blueprints_test.sh
 
 .PHONY: down
 down: ## Stop the stack (pass V=1 to delete volumes)
@@ -493,6 +516,10 @@ fleet-bootstrap: ## Set up Fleet: admin user, API-only user paddock (token), glo
 .PHONY: dev-seed
 dev-seed: ## Create organizations acme and globex and assign the dev users (BACKUP=1: and a confirmed backup key and the development backup targets)
 	BACKUP=$(BACKUP) go run ./test/acceptance/cmd/devseed
+
+.PHONY: dev-prune-gate-orgs
+dev-prune-gate-orgs: ## Delete the leftover "Gate gate-" organizations of a development stack through the admin API (refuses unless PADDOCK_ENV=development)
+	go run ./test/acceptance/cmd/orgprune
 
 # Guard against hangs; the whole suite took ~85 min on a development machine and ~82 min on a GitHub runner since M8x
 # (measured 2026-10-18) and 101 min on a GitHub runner on 2026-10-21 (PR #118). CI therefore runs it in shards

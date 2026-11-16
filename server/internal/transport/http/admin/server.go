@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/apitoken"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/platform/op"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ratelimit"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -40,21 +41,23 @@ type Deps struct {
 	Managed      *app.ManagedConfig
 	Releases     *app.AgentReleases
 	// ReleaseImports import agent releases from the configured release source (ADR 0043).
-	ReleaseImports  *app.ReleaseImports
-	Users           *app.Users
-	UserGroups      *app.UserGroups
-	Logins          *app.Logins
-	LoginSettings   *app.LoginSettings
-	WatchedUnits    *app.WatchedUnits
-	LoginHistory    *app.LoginHistory
-	AgentUpdates    *app.AgentUpdates
-	Uninstalls      *app.Uninstalls
-	Conversions     *app.DiskConversions
-	Privileges      *app.Privileges
-	Commands        *app.DeviceCommands
-	LocalAdmin      *app.LocalAdmin
-	Autoinstall     *app.Autoinstall
-	Disk            *app.Disk
+	ReleaseImports *app.ReleaseImports
+	Users          *app.Users
+	UserGroups     *app.UserGroups
+	Logins         *app.Logins
+	LoginSettings  *app.LoginSettings
+	WatchedUnits   *app.WatchedUnits
+	LoginHistory   *app.LoginHistory
+	AgentUpdates   *app.AgentUpdates
+	Uninstalls     *app.Uninstalls
+	Conversions    *app.DiskConversions
+	Privileges     *app.Privileges
+	Commands       *app.DeviceCommands
+	LocalAdmin     *app.LocalAdmin
+	Autoinstall    *app.Autoinstall
+	Disk           *app.Disk
+	// RecoveryExports is the encrypted recovery export during a pending deletion (ADR 0052 amendment b).
+	RecoveryExports *app.RecoveryExports
 	Revocations     *app.Revocations
 	DMS             *app.DMS
 	Inventory       *app.Inventory
@@ -160,6 +163,9 @@ type Deps struct {
 	BackupRuns     *app.BackupRuns
 	// BackupRestorePlans are the restore plans (plan M15 decisions 25–26).
 	BackupRestorePlans *app.BackupRestorePlans
+
+	// DeletedOrgAudit reads the retained audit evidence of deleted organizations (ADR 0052 decision 7).
+	DeletedOrgAudit *app.DeletedOrgAudit
 }
 
 // privileged maps route patterns of privileged actions to their audit spec, so that requests rejected before
@@ -242,6 +248,8 @@ var privileged = map[string]struct {
 	"POST /api/v1/devices/{id}/local-admin/rotate":                         {app.ScopeOrg, app.SpecLocalAdminRotate},
 	"POST /api/v1/devices/{id}/local-admin/reveal":                         {app.ScopeOrg, app.SpecLocalAdminReveal},
 	"POST /api/v1/autoinstall":                                             {app.ScopeOrg, app.SpecAutoinstallGenerate},
+	"POST /api/v1/recovery-export":                                         {app.ScopeOrg, app.SpecRecoveryExport},
+	"POST /api/platform/v1/organizations/{id}/recovery-export":             {app.ScopePlatform, app.SpecPlatformRecoveryExport},
 	"POST /api/v1/devices/{id}/disk/recovery-key":                          {app.ScopeOrg, app.SpecDiskRecoveryKeyReveal},
 	"POST /api/v1/devices/{id}/disk/header":                                {app.ScopeOrg, app.SpecDiskHeaderDownload},
 	"POST /api/v1/devices/{id}/lock":                                       {app.ScopeOrg, app.SpecRevocationRequest},
@@ -325,6 +333,12 @@ var privileged = map[string]struct {
 	"POST /api/platform/v1/backup/restore-plans":                           {app.ScopePlatform, app.SpecRestorePlan},
 	"POST /api/platform/v1/backup/restore-plans/{id}/cancel":               {app.ScopePlatform, app.SpecRestoreCancel},
 	"POST /api/platform/v1/backup/restore-plans/{id}/abandon":              {app.ScopePlatform, app.SpecRestoreAbandon},
+
+	// The retained audit evidence of deleted organizations (ADR 0052 decision 7).
+	"GET /api/platform/v1/organizations/{id}/audit-events":                       {app.ScopePlatform, app.SpecDeletedOrgAuditRead},
+	"GET /api/platform/v1/organizations/{id}/audit-exports":                      {app.ScopePlatform, app.SpecDeletedOrgAuditRead},
+	"POST /api/platform/v1/organizations/{id}/audit-exports":                     {app.ScopePlatform, app.SpecDeletedOrgAuditExport},
+	"GET /api/platform/v1/organizations/{id}/audit-exports/{export_id}/download": {app.ScopePlatform, app.SpecDeletedOrgAuditRead},
 }
 
 // ownAccountRoutes act on the caller's own account row: their rejections are recorded in app.AccountScope of the
@@ -355,10 +369,10 @@ func NewHandler(d Deps) http.Handler {
 
 	api := http.NewServeMux()
 	h := &handlers{
-		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, exports: d.AuditExports, tokens: d.Tokens,
+		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, integrity: d.AuditIntegrity, exports: d.AuditExports, deletedAudit: d.DeletedOrgAudit, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, watchedUnits: d.WatchedUnits, loginHistory: d.LoginHistory, agentUpdates: d.AgentUpdates, uninstalls: d.Uninstalls, conversions: d.Conversions, privileges: d.Privileges, commands: d.Commands,
-		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
+		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, recoveryExports: d.RecoveryExports, revocations: d.Revocations, dms: d.DMS,
 		inventory: d.Inventory, configStatus: d.ConfigStatus, updates: d.Updates, rolloutSettings: d.RolloutSettings, configRollouts: d.ConfigRollouts, privacy: d.Privacy, readAudit: d.ReadAudit, attention: d.Attention, findings: d.Findings, notifications: d.Notifications, accountList: d.AccountList, overview: d.Overview, apiTokens: d.APITokens, softwareSources: d.SoftwareSources, softwarePackages: d.SoftwarePackages, softwareCatalog: d.SoftwareCatalog, softwareRequests: d.SoftwareRequests, softwareStatus: d.SoftwareStatus, compileWarnings: d.CompileWarnings, backupTargets: d.BackupTargets, backupSchedule: d.BackupSchedule, backupRuns: d.BackupRuns, backupRestorePlans: d.BackupRestorePlans,
 		securityReview: d.SecurityReview,
 		accessReview:   d.AccessReview,
@@ -377,7 +391,7 @@ func NewHandler(d Deps) http.Handler {
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}
 	}
-	strict := adminapi.NewStrictHandlerWithOptions(h, []adminapi.StrictMiddlewareFunc{uploadDeadlines},
+	strict := adminapi.NewStrictHandlerWithOptions(h, []adminapi.StrictMiddlewareFunc{uploadDeadlines, namedOperation},
 		adminapi.StrictHTTPServerOptions{
 			RequestErrorHandlerFunc:  s.rejected,
 			ResponseErrorHandlerFunc: httpx.WriteProblem,
@@ -587,6 +601,14 @@ func limitBody(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// namedOperation names the request's context by its operation ID, the label op of the metrics of its database work
+// (plan M17 amendment r point 5); an audited action replaces it with its code.
+func namedOperation(f adminapi.StrictHandlerFunc, operationID string) adminapi.StrictHandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
+		return f(op.With(ctx, operationID), w, r, request)
+	}
 }
 
 // uploadDeadlines extends the read and write deadlines of the agent release and package uploads before their handlers

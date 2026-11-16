@@ -5,6 +5,7 @@ package httpx
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -68,6 +69,9 @@ func WriteProblem(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	if p.Status >= 500 {
 		slog.ErrorContext(r.Context(), "request failed", "error", err, "request_id", RequestID(r.Context()))
+	}
+	if errors.Is(p, problem.TransactionTimeout) {
+		w.Header().Set("Retry-After", strconv.Itoa(problem.TransactionTimeoutRetryAfter))
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.Header().Set("Cache-Control", "no-store")

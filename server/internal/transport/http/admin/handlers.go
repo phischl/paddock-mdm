@@ -36,6 +36,8 @@ type handlers struct {
 	imports *app.ReleaseImports
 	// exports are the evidence exports of the audit log (plan M10 decision 29).
 	exports *app.AuditExports
+	// deletedAudit is the retained audit evidence of deleted organizations (ADR 0052 decision 7).
+	deletedAudit *app.DeletedOrgAudit
 	// API tokens and the declarative configuration (plan M6c).
 	apiTokens   *app.APITokens
 	declarative *app.Declarative
@@ -61,6 +63,7 @@ type handlers struct {
 	localAdmin      *app.LocalAdmin
 	autoinstall     *app.Autoinstall
 	disk            *app.Disk
+	recoveryExports *app.RecoveryExports
 	revocations     *app.Revocations
 	dms             *app.DMS
 	inventory       *app.Inventory
@@ -279,7 +282,8 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name,
 			Domains: domains}
 		if organization.DeletionPending(me.Organization.Status, me.Organization.DeleteAfter) {
-			out.OrganizationDeletion = &adminapi.MeOrganizationDeletion{DeleteAfter: me.Organization.DeleteAfter.UTC()}
+			out.OrganizationDeletion = &adminapi.MeOrganizationDeletion{DeleteAfter: me.Organization.DeleteAfter.UTC(),
+				RecoveryExportUntil: app.RecoveryExportUntil(*me.Organization.DeleteAfter).UTC(), DevicesPending: me.PendingDevices}
 		}
 	}
 	if me.MCPWriteEnabledAt != nil {
@@ -555,6 +559,7 @@ func toOrganizationDeletion(o pgstore.Organization) *adminapi.OrganizationDeleti
 	}
 	d := &adminapi.OrganizationDeletion{
 		RequestedAt: o.DeletionRequestedAt.UTC(), DeleteAfter: o.DeleteAfter.UTC(), LastErrorCode: o.OffboardingErrorCode,
+		RecoveryExportUntil: app.RecoveryExportUntil(*o.DeleteAfter).UTC(),
 	}
 	if o.DeletionRequestedBy != nil {
 		d.RequestedBy = *o.DeletionRequestedBy
@@ -575,6 +580,11 @@ func toOrganizationDeletion(o pgstore.Organization) *adminapi.OrganizationDeleti
 	}
 	if o.DeletionUninstallsSkipped != nil {
 		d.UninstallsSkipped = int(*o.DeletionUninstallsSkipped)
+	}
+	if o.AuditFinalVerifiedAt != nil && o.AuditFinalOutcome != nil {
+		at := o.AuditFinalVerifiedAt.UTC()
+		outcome := adminapi.OrganizationDeletionAuditFinalOutcome(*o.AuditFinalOutcome)
+		d.AuditFinalVerifiedAt, d.AuditFinalOutcome = &at, &outcome
 	}
 	return d
 }

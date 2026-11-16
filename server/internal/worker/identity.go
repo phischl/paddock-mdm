@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -40,7 +39,7 @@ const ReconcileAuthentikConcurrency = 1
 // further refusal is logged as a repeated one (PDK-424).
 const refusedRepeatedly = 3
 
-var metricDirectoryRefusals = promauto.NewCounter(prometheus.CounterOpts{
+var metricDirectoryRefusals = prometheus.NewCounter(prometheus.CounterOpts{
 	Name: "paddock_identity_directory_refusals_total",
 	Help: "Organization rounds of admin-accounts and rounds of platform-admins refused because every role group listing " +
 		"was empty and the directory probe did not show that the service token sees the directory (app.ErrDirectoryEmpty, " +

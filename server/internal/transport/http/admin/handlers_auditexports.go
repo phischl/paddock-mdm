@@ -108,15 +108,23 @@ func (b transferBounds) total(size int64) time.Duration {
 // DownloadAuditExport streams the package through a pipe: the use case writes each chunk as it reads it, and the
 // response body reads from the pipe, so the package is never held in memory (plan M10 decision 35).
 func (h *handlers) DownloadAuditExport(ctx context.Context, req adminapi.DownloadAuditExportRequestObject) (adminapi.DownloadAuditExportResponseObject, error) {
-	return streamExport(ctx, req.Id, h.exports.Download,
-		transferBounds{write: exportWriteDeadline, minTotal: exportMinTransfer, minRate: exportMinRate, maxTotal: exportMaxTransfer})
+	s, err := streamExport(ctx, req.Id, h.exports.Download, exportBounds())
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// exportBounds are the transfer bounds of every package download.
+func exportBounds() transferBounds {
+	return transferBounds{write: exportWriteDeadline, minTotal: exportMinTransfer, minRate: exportMinRate, maxTotal: exportMaxTransfer}
 }
 
 // exportDownload is the use case behind a package download (app.AuditExports.Download).
 type exportDownload func(ctx context.Context, id uuid.UUID, begin func(app.ExportPackage), stream func(chunk []byte) error) error
 
 // streamExport runs download in its own goroutine because the headers need the export row it reads first.
-func streamExport(ctx context.Context, id uuid.UUID, download exportDownload, bounds transferBounds) (adminapi.DownloadAuditExportResponseObject, error) {
+func streamExport(ctx context.Context, id uuid.UUID, download exportDownload, bounds transferBounds) (exportStream, error) {
 	type started struct {
 		pkg app.ExportPackage
 		err error
@@ -152,7 +160,7 @@ func streamExport(ctx context.Context, id uuid.UUID, download exportDownload, bo
 	res := <-first
 	if res.err != nil {
 		pr.Close()
-		return nil, res.err
+		return exportStream{}, res.err
 	}
 	disposition := `attachment; filename="` + res.pkg.Filename + `"`
 	sum := hex.EncodeToString(res.pkg.Export.PackageSha256)

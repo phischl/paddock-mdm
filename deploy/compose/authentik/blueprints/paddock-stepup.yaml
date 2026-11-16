@@ -8,12 +8,6 @@ metadata:
   labels:
     blueprints.goauthentik.io/description: Step-up authentication flow and OIDC application of the Paddock portal
 entries:
-  - model: authentik_blueprints.metaapplyblueprint
-    attrs:
-      identifiers:
-        path: paddock/paddock-portal.yaml
-      required: true
-
   # --- Step-up flow: identification (pre-filled with the login hint) -> password -> MFA (never skippable) -> login ---
   - model: authentik_flows.flow
     id: stepup-flow
