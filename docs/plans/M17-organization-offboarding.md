@@ -2482,6 +2482,11 @@ stays: the selection, the `--keep` rules, the 10-minute guard, the batching and 
      on record.
    - After the last batch, or after the batch that returned errors: `record-bundle-prune` with the run's counts.
      `failed` is the number of keys reported in `Errors`, and later batches are not sent.
+   - **Erratum 2026-11-16:** the subcommand runs in `paddock-worker`, as the restore admin commands do
+     (`compose --profile paddock run --rm --no-deps -T paddock-worker admin …`), not in `paddock-api`: `runAdmin`
+     needs the worker database URL, which `paddock-api` does not have. A delete call that fails as a whole (non-zero
+     exit, for example a connection reset) counts its whole batch as `failed`, stops, and is recorded like a batch that
+     returned errors.
    - If recording fails after deleting, the script exits 1 and prints the counts and "the audit event could not be
      recorded". The counts on stdout are the only record of that run. RR-146 names this residual gap.
 4. **Identity.** The event records the fixed system actor `paddock-server admin`, the same actor as
