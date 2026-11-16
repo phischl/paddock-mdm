@@ -1016,3 +1016,180 @@ amendment agree (update both); log message wording other than the `hashes` attri
   everywhere. Today it is about 9 MB. Accepted; the stop condition of step 1 would show it.
 - RR-149's first gap (a foreign program checking in while the genuine agent is stopped) is closed only by a change to
   the mutual watch (decision 8), which is proposed as PDK-1122c and needs the maintainer's approval.
+
+### Addendum 2026-11-16 (architect, PDK-1122b review round 2)
+
+External Review 2 of `8ac7ec76` found no code blocker. It found that RR-149 and the ADR 0056 amendment overstate what
+A detects. Since review round 1, PDK-1122c (amendment 2026-11-16 b, the agent absent while the device checks in) and
+PDK-1122d (amendment 2026-11-16 c, fleetd silent while the device checks in) were accepted for alpha.11 (§147, §148).
+This addendum corrects the wording and gives the RR-149 text of all three tickets. It also hardens the parent clause
+(A12), and decides Lows 2 to 5 (A13).
+
+**What A claims.** At each evaluation, A judges only the processes it recognizes as the agent while they run. It
+detects a replaced agent binary only while such a process runs it. A replaced agent that runs as an unrecognized
+process, or that runs only between evaluations, is outside A. Two sentences of the review-round-1 amendment are
+withdrawn:
+- the ADR 0056 amendment's "the cheapest evasion, one symlink" claim;
+- ADR 0056's original consequence "A replaced agent is caught independently of itself".
+
+ADR 0056's amendment "PDK-1122b review round 2" states the qualified versions.
+
+**Which check covers which evasion.** A is `paddock_agent_binary_known`. C is the agent-side baseline, which reports
+only while the agent is genuine and can deliver. c is PDK-1122c and d is PDK-1122d.
+
+| Shape (External Review 2 and round 1) | Covered by |
+| --- | --- |
+| Modified binary in a slot, redirected `current`, bind mount, changed process name, script or interpreter child of the supervisor, memfd child | A |
+| `current` → a launcher that detaches the impostor (`setsid`) and exits | c: osquery sees no genuine agent while the device checks in. A misses it because no recognized process runs long enough. |
+| The supervisor's own file renamed over itself, then a child that is neither `paddockd` nor below the slots | A, after A12 |
+| The supervisor started from another file through a unit drop-in, with an impostor as its child | c: no genuine agent is seen. C reports the drop-in only while the agent is genuine. |
+| fleetd stopped or masked | d, while at least half of the live devices reach Fleet; otherwise residual, with the suppression alert |
+| osquery confined by an orbit drop-in (`PrivatePIDs=yes` and similar) | c: osquery sees no genuine agent. With a decoy in osquery's view: residual. |
+| The genuine agent kept running but cut off (`PrivateNetwork=yes`, another mount namespace), an impostor checks in | residual (decoy, accepted in §147) |
+| A genuine older published release | residual (A2) |
+| `PR_SET_MM_EXE_FILE`, code injection into the genuine agent, an LSM policy against osquery, a replaced osquery, a program that answers Fleet with the device's node key | residual (RR-01) |
+| A re-tamper after a repair whose pass Fleet reset before the worker stored it | residual until the policy passes again (A13, Low 2) |
+
+**A12 Parent clause also matches a replaced supervisor file.** The parent clause of A8 becomes exactly the following.
+Every other line of the A8 query stays as it is.
+
+```sql
+      OR (p.parent IN (SELECT pid FROM processes
+            WHERE path IN ('/usr/sbin/paddock-supervisor', '/usr/sbin/paddock-supervisor (deleted)'))
+        AND p.path NOT IN ('/usr/sbin/paddock-supervisor', '/usr/sbin/paddock-supervisor (deleted)')))
+```
+
+- Reason: a `cp` plus `mv` of the supervisor over itself leaves the running supervisor's executable `… (deleted)`.
+  Its children were then no longer judged, although dpkg's `md5sums` saw identical content.
+- False alarms: during a regular supervisor upgrade, the old supervisor runs from a deleted file until it is
+  restarted. Its children are still only `paddockd run`, `self-test` and `version` from the slots, which are
+  genuine and pass. The upgrade helper is not a supervisor child. The fork window of a deleted supervisor is excluded
+  by the second line.
+- Tests:
+  - `TestAgentBinaryPolicy` pins the new string.
+  - F5 gains two osquery cases, both run with orbit stopped like the round-1 cases, each followed by its restore and
+    the 1-row check:
+    1. `cp /usr/sbin/paddock-supervisor /usr/sbin/paddock-supervisor.new && mv /usr/sbin/paddock-supervisor.new
+       /usr/sbin/paddock-supervisor`. Then kill the supervisor's child and wait for a new child, which is present in
+       `/proc/<MainPID>/task/<MainPID>/children`. The query returns 1 row: this is the regular-upgrade window.
+    2. In the same state, point `current` at the script directory of round 1 (`exec sleep infinity`). Kill the child
+       and wait for a child whose executable is `/usr/bin/sleep`. The query returns 0 rows.
+
+    Restore: `current` back, then `systemctl restart paddock-supervisor`. The `t.Cleanup` of F5 MUST also restart the
+    supervisor.
+- Stop condition: osquery reports neither form of the supervisor path for a supervisor whose file was renamed over.
+
+**A13 Lows of External Review 2.**
+
+- **Low 2 (A7 can miss a re-tamper after a repair): documented, not changed.** Sequence:
+  1. A reported device is repaired.
+  2. A publish resets the stored pass before the worker reads it.
+  3. A second tamper is then reported only after the policy passes again.
+
+  Changing this would need per-host evidence of a pass that Paddock does not have. Texts:
+  - **`docs/operations/fleet.md` step 5**, appended to the sentence on resets: "If the device was repaired and a
+    publish reset its passing result before the worker read it, a new tamper is reported only after the policy has
+    passed again."
+  - **RR-149:** the texts below include this case.
+- **Low 3 (a policy that stays unanswered): a metric and one log line in this ticket.**
+  - **What is tracked.** For each Paddock policy key, the worker remembers `definedAt[key]`, the time this process
+    first applied the key's current query text. A changed text resets it.
+  - **What is counted, in each full round only (`since.IsZero()`).** The mapped hosts that list the key in
+    `UnansweredPolicies` with `PolicyUpdatedAt >= definedAt[key] + binaryEvaluationLag`. Such a host evaluated the
+    current definition and returned no answer, which means the query failed there.
+  - **Outputs:**
+    - the gauge `paddock_inventory_policy_unanswered_hosts{policy}`, a `prometheus.GaugeVec` next to
+      `metricUnmappedHosts`. Its label values are the fixed Paddock policy keys only;
+    - one `Warn` per key with a count above 0: `"a Paddock policy did not run on hosts that evaluated it"` with
+      `policy` and `hosts`.
+
+    Changed-host rounds set nothing.
+  - **Tests (worker):** `TestInventoryRoundPolicyUnansweredMetric`:
+    - two hosts list `disk_encrypted` as unanswered in a full round, one evaluated after `definedAt + 2 min` and one
+      before → gauge 1, exactly one `WARN`;
+    - a changed-host round → gauge unchanged, no `WARN`;
+    - the binary policy is unanswered right after a new hash was applied → not counted.
+
+    Plus a metrics registration check in `server/internal/worker/metrics_test.go`, in the existing pattern.
+  - **Docs:**
+    - `docs/operations/monitoring.md` lists the gauge with the meaning "a value above 0 for more than one full round
+      means a Paddock policy query fails on those hosts; detection by that policy stops there";
+    - `docs/operations/fleet.md` step 5 names it in one sentence.
+- **Low 4 (wrong false-alarm claim).** The A8 bullet "A process that exits during the evaluation" now reads: "A
+  process that exits during the evaluation: excluded by `p.path != ''`, or passes by the path fallback while its
+  executable is still on disk. A genuine process whose file was already replaced and that exits during the
+  evaluation would fail. No regular flow produces it: slots are rewritten only while nothing runs from them, and the
+  uninstall helper deletes its copy only after it stopped the services." The table row "fallback hash of `p.path`"
+  gains "(not for a deleted executable)". No code change.
+- **Low 5 (acceptance comment).** The comment before phase 2 in `test/acceptance/inventory_test.go` becomes exactly:
+  "// Phase 2 waits on observed conditions only (plan M5a amendment 2026-11-16, review round 1, A11). The publish
+  makes Fleet reset every host's binary policy result; a worker round that reads the changed host before it answers
+  again exercises A7, which this gate does not assert. A7's regression test is
+  TestInventoryRoundAgentBinaryUnansweredAfterPublish."
+
+**RR-149: one text per merge.** All three texts share the mitigation and ISMS columns, which replace the
+round-1 columns:
+- **Mitigation:** "The agent-side baseline reports a changed slot, `current` or unit drop-in (ADR 0056, C) while the
+  agent itself is genuine and can deliver its events; the fleet view counts the device as outdated
+  (`components_outdated`); the supervisor refuses downgrades through Paddock's own channel."
+- **ISMS:** "Accept that a local root user can evade these checks (RR-01); restrict root on devices and review tamper
+  findings."
+
+1. **Merged by PDK-1122b** (risk column):
+
+   "**The binary policy trusts every published release and judges only the processes it recognizes as the agent
+   while they run.** The policy `paddock_agent_binary_known` accepts the SHA-256 of every published agent artifact,
+   because Fleet policies are global and the expected version of a device is ambiguous during waves, holds, the
+   manual update policy and rollbacks (ADR 0056, A2); a local root user who installs a genuine older published
+   `paddockd` is not reported by it. At each evaluation it judges every running process that is named `paddockd`,
+   runs a file named `paddockd` or a file below `/opt/paddock/agent/`, or was started by `paddock-supervisor`, and
+   hashes the executable the process actually runs; a replaced agent is detected only while such a process runs it.
+   Not reported: a foreign program that checks in with the device's credentials while osquery sees no genuine
+   agent (the agent stopped, crash-looping, replaced by a launcher that detaches the foreign program, or hidden from
+   an osquery confined by a unit drop-in), because the mutual watch `paddock_agent_running` stays silent while the
+   device checks in (plan M5a decision 8; PDK-1122c planned); a foreign program that checks in while a decoy keeps
+   `paddock_agent_running` passing (for example the genuine `paddockd` kept running with its network blocked); a
+   foreign program that checks in while fleetd is stopped (PDK-1122d proposed); a second tamper after a repair whose
+   passing result a publish reset before the server stored it, until the policy passes again; a process that swaps
+   its executable link (`PR_SET_MM_EXE_FILE`); code injected into the running genuine agent; a security policy that
+   denies osquery access to `/proc`; a replaced osquery."
+2. **Merged by PDK-1122c.** This **supersedes the RR-149 text in section 6 of amendment 2026-11-16 b**. In text 1,
+   replace "Not reported: a foreign program that checks in with the device's credentials while osquery sees no
+   genuine agent (the agent stopped, crash-looping, replaced by a launcher that detaches the foreign program, or
+   hidden from an osquery confined by a unit drop-in), because the mutual watch `paddock_agent_running` stays silent
+   while the device checks in (plan M5a decision 8; PDK-1122c planned);" with:
+
+   "A foreign program that checks in with the device's credentials while osquery sees no genuine agent (the agent
+   stopped, crash-looping, replaced by a launcher that detaches the foreign program, or hidden from an osquery
+   confined by a unit drop-in) is reported by the mutual watch (`device.tamper_agent_not_running`) once
+   `paddock_agent_running` failed in evaluations 15 minutes apart (plan M5a decision 8, amendment 2026-11-16 b). A
+   check-in cannot prove that the genuine agent sends it: root holds the device key (ADR 0056, amendment b). Not
+   reported:"
+
+   Also change the bold lead to "**The binary policy trusts every published release and judges only the processes it
+   recognizes as the agent while they run; the mutual watch sees only the absence of the agent.**" and the decoy
+   example to "(for example the genuine `paddockd` kept running with its network blocked, or a decoy placed in the
+   view of a confined osquery)". PDK-1122c's stop condition "its RR-149 text differs from the one quoted in the
+   review-round-1 amendment" refers to text 1 of this addendum.
+3. **Merged by PDK-1122d.** Amendment 2026-11-16 c's replacement applies unchanged to text 2: the phrase "a foreign
+   program that checks in while fleetd is stopped (PDK-1122d proposed);" occurs there verbatim. Because d's
+   replacement already names "a replaced osquery", d also MUST drop the final item "; a replaced osquery" of text 2
+   and end the sentence after "access to `/proc`". "Stopped" includes a masked fleetd.
+
+**Files.**
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `server/internal/inventory/inventory.go`, `inventory_test.go` | change | A12 |
+| `server/internal/worker/inventory.go`, `inventory_test.go`, `metrics.go`, `metrics_test.go` | change | Low 3 |
+| `test/acceptance/inventory_test.go` | change | Low 5 comment |
+| `test/system/inventory_test.go` | change | A12 F5 cases |
+| `docs/compliance/residual-risks.md` | change | RR-149 text 1 and columns |
+| `docs/operations/fleet.md`, `docs/operations/monitoring.md` | change | Lows 2 and 3 |
+
+No migration, no new dependency (`prometheus` is already used by the worker), no agent change.
+
+**Size of the implementation delta:** about 200 lines, roughly half a day plus one F5 run on both VMs.
+- A12: about 40 lines (query string plus two F5 cases).
+- Low 3: about 120 lines (about 50 code, 70 test).
+- Docs and comment: about 40 lines.

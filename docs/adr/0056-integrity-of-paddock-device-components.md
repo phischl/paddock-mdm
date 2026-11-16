@@ -131,3 +131,24 @@ A7 to A11.
 Consequences: the description of `device.tamper_agent_binary_changed` changes before its first release (code,
 params and MSGID alias unchanged). The policy query is longer by a constant; its size still grows with the number of
 published hashes, which the worker logs.
+
+## Amendment 2026-11-16 (architect, PDK-1122b review round 2)
+
+Details: plan M5a, "Addendum 2026-11-16 (architect, PDK-1122b review round 2)".
+
+1. **What A claims (qualifies decision 2, the previous amendment's item 1 and the consequence "A replaced agent is
+   caught independently of itself").**
+   - A judges, at each evaluation, only the processes it recognizes as the agent while they run. It catches a replaced
+     agent independently of the agent only while such a process runs the replaced binary.
+   - The previous amendment's reason "it leaves the cheapest evasion, one symlink, undetected" is withdrawn. A symlink
+     to a launcher that detaches the impostor and exits escapes A. The mutual watch of amendment b (PDK-1122c)
+     reports it, because osquery then sees no genuine agent.
+   - Which of A, C, PDK-1122c and PDK-1122d covers each evasion is mapped in the plan addendum.
+2. **Replaced supervisor file.** The parent clause also matches a supervisor whose executable is
+   `/usr/sbin/paddock-supervisor (deleted)`, and excludes that path as a child, the same way as the regular path. A
+   regular supervisor upgrade passes: the old supervisor's children are genuine slot binaries.
+3. **RR-149** is given as one text per merge (PDK-1122b, then c, then d). The text in this amendment's plan addendum
+   supersedes the RR-149 text of amendment b, section 6, and amendment c's replacement applies to it unchanged.
+4. **Unanswered policies.** A Paddock policy that hosts evaluate without an answer is counted in a gauge and logged
+   once per full round. A re-tamper after a repair that a publish reset before the server stored the pass stays
+   unreported until the policy passes again. This is documented, not changed.
