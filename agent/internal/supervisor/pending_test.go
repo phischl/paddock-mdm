@@ -53,20 +53,16 @@ func (f *fake) expectPendingLog() {
 }
 
 // waitTicks waits until n ticks of the Run loop began after the call, so at least n-1 checks ran completely after it.
+// It has no wall-clock bound: a loop blocked in file I/O on a busy host ticks late, not never (PDK-1115); a loop that
+// never ticks again fails the test at go test's -timeout.
 func (f *fake) waitTicks(n int) {
 	f.t.Helper()
 	for len(f.notices) > 0 {
 		<-f.notices
 	}
-	deadline := time.After(10 * time.Second)
 	for n > 0 {
-		select {
-		case s := <-f.notices:
-			if s == "WATCHDOG=1" {
-				n--
-			}
-		case <-deadline:
-			f.t.Fatal("timed out waiting for ticks")
+		if <-f.notices == "WATCHDOG=1" {
+			n--
 		}
 	}
 }

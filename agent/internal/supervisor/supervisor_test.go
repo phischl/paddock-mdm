@@ -35,6 +35,7 @@ type fake struct {
 	done    chan struct{}
 	notices chan string
 	clock   *clock
+	ticks   atomic.Int64 // ticks of the Run loop started by start, counted before Notify
 }
 
 // clock is the supervisor's injected clock: real time plus an offset the test sets to end a probation exactly when
@@ -104,7 +105,14 @@ func (f *fake) writeExec(path string, data []byte) {
 func (f *fake) start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	f.cancel, f.done = cancel, make(chan struct{})
-	s := New(f.cfg)
+	cfg, notify := f.cfg, f.cfg.Notify
+	cfg.Notify = func(s string) {
+		if s == "WATCHDOG=1" {
+			f.ticks.Add(1)
+		}
+		notify(s)
+	}
+	s := New(cfg)
 	go func() { s.Run(ctx, f.usr1); close(f.done) }()
 	f.t.Cleanup(f.stop)
 }
@@ -158,39 +166,45 @@ type result struct {
 	At                            time.Time
 }
 
-func (f *fake) waitResult(timeout time.Duration) result {
-	f.t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		data, err := os.ReadFile(f.cfg.Result)
-		if err == nil {
-			var r struct {
-				Version     string    `json:"version"`
-				FromVersion string    `json:"from_version"`
-				Outcome     string    `json:"outcome"`
-				At          time.Time `json:"at"`
-			}
-			if err := json.Unmarshal(data, &r); err != nil {
-				f.t.Fatal(err)
-			}
-			return result{r.Version, r.FromVersion, r.Outcome, r.At}
-		}
-		if time.Now().After(deadline) {
-			f.t.Fatalf("no update result within %s", timeout)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// waitFor polls cond until it holds.
-func (f *fake) waitFor(what string, cond func() bool) {
-	f.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+// within polls cond until it holds and reports whether it did within bound of the supervisor's time: while start's
+// supervisor runs, bound counts the ticks of its Run loop (bound / Tick), otherwise wall time. A loop blocked in file
+// I/O does not tick, so a host whose disk stalls an fsync or a rename for longer than bound (PDK-1115: 33 s measured
+// under parallel writers) delays the result without failing the test, while a supervisor that keeps ticking without
+// the expected state fails after the same bound as before.
+func (f *fake) within(bound time.Duration, cond func() bool) bool {
+	ticks, deadline := f.ticks.Load()+int64(bound/f.cfg.Tick), time.Now().Add(bound)
 	for !cond() {
-		if time.Now().After(deadline) {
-			f.t.Fatalf("timed out waiting until %s", what)
+		if f.cancel != nil && f.ticks.Load() > ticks || f.cancel == nil && time.Now().After(deadline) {
+			return cond()
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	return true
+}
+
+func (f *fake) waitResult(timeout time.Duration) result {
+	f.t.Helper()
+	var data []byte
+	if !f.within(timeout, func() bool { var err error; data, err = os.ReadFile(f.cfg.Result); return err == nil }) {
+		f.t.Fatalf("no update result within %s of the supervisor's ticks", timeout)
+	}
+	var r struct {
+		Version     string    `json:"version"`
+		FromVersion string    `json:"from_version"`
+		Outcome     string    `json:"outcome"`
+		At          time.Time `json:"at"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		f.t.Fatal(err)
+	}
+	return result{r.Version, r.FromVersion, r.Outcome, r.At}
+}
+
+// waitFor polls cond until it holds, for at most 10 s of the supervisor's time (within).
+func (f *fake) waitFor(what string, cond func() bool) {
+	f.t.Helper()
+	if !f.within(10*time.Second, cond) {
+		f.t.Fatalf("timed out waiting until %s", what)
 	}
 }
 
@@ -229,6 +243,24 @@ func (f *fake) expectStagingClean() {
 	entries, _ := os.ReadDir(f.cfg.Staging)
 	if len(entries) != 0 {
 		f.t.Fatalf("staging not cleaned: %v", entries)
+	}
+}
+
+// TestWaitsCountTheSupervisorsTicks (PDK-1115): the waits of these tests are bounded by the supervisor's ticks, not
+// by wall time. A result whose write stalls in file I/O for longer than the wait's bound, as a busy host's disk does,
+// is still awaited: a wall-clock bound failed the tests then although the supervisor did nothing wrong.
+func TestWaitsCountTheSupervisorsTicks(t *testing.T) {
+	f := newFake(t)
+	f.resumeFailingProbation(func(time.Duration) {})
+	f.cfg.SyncFile = func(file *os.File) error {
+		if file.Name() == f.cfg.Result+".tmp" {
+			time.Sleep(1500 * time.Millisecond)
+		}
+		return file.Sync()
+	}
+	f.start()
+	if r := f.waitResult(time.Second); r.Outcome != outcomeRolledBack || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
 	}
 }
 
@@ -572,23 +604,11 @@ func TestRollbackWhenTheCheckinMarkSurvivesTheResume(t *testing.T) {
 }
 
 // waitSent waits for a watchdog notice that the Run loop sends after the current one; after an update result showed
-// up, its arrival proves that finish returned and so sent the check-in request.
+// up, its arrival proves that finish returned and so sent the check-in request. Like waitTicks, it has no wall-clock
+// bound.
 func (f *fake) waitSent() {
 	f.t.Helper()
-	for len(f.notices) > 0 {
-		<-f.notices
-	}
-	deadline := time.After(10 * time.Second)
-	for {
-		select {
-		case n := <-f.notices:
-			if n == "WATCHDOG=1" {
-				return
-			}
-		case <-deadline:
-			f.t.Fatal("timed out waiting for the next watchdog notice")
-		}
-	}
+	f.waitTicks(1)
 }
 
 // resumeFailingProbation prepares a supervisor that resumes a probation of 1.1.0 in slot B and rolls it back on its
@@ -1194,18 +1214,11 @@ func TestRestartAfterRolledBackDoesNotReportAgain(t *testing.T) {
 }
 
 // waitReady waits for the supervisor's READY notice, which it sends once it has resumed or dropped a probation log.
+// Like waitTicks, it has no wall-clock bound: resuming writes the probation log, which a busy disk can stall for longer
+// than any fixed bound.
 func (f *fake) waitReady() {
 	f.t.Helper()
-	deadline := time.After(10 * time.Second)
-	for {
-		select {
-		case n := <-f.notices:
-			if n == "READY=1" {
-				return
-			}
-		case <-deadline:
-			f.t.Fatal("timed out waiting for READY")
-		}
+	for <-f.notices != "READY=1" {
 	}
 }
 
