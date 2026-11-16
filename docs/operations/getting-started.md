@@ -22,9 +22,12 @@ may hold both and switch between them in the portal's user menu (`docs/operation
 *Why: the portal has no account until someone exists in the group `paddock.platform.admins`, and privileged actions
 need a WebAuthn second factor.*
 
-Sign in to Authentik as `akadmin` with the password in `.secrets/authentik_bootstrap_password`, create the user, enroll
-a WebAuthn authenticator for it and add it to `paddock.platform.admins`. Then deactivate `akadmin` or give it a new
-password held by the custodians. Details: `docs/operations/install.md` section 9, step 1.
+Sign in to Authentik as `akadmin` with the password in `.secrets/authentik_bootstrap_password`, create the user
+without a password and without an authenticator, and add it to `paddock.platform.admins`. Then, on the control-plane
+host, create the administrator's one-time sign-in setup link:
+`./paddock compose run --rm --no-deps paddock-worker admin enrolment-link --username <name>`, and hand the printed link
+over. With it the administrator sets the password and the passkey. Then deactivate `akadmin` or give it a new password
+held by the custodians. Details: `docs/operations/install.md` section 9, step 1.
 
 ## 2. First organization (Portal, platform administrator)
 
