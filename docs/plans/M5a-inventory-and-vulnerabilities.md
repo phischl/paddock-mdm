@@ -421,3 +421,292 @@ this amendment contradicts N3, N5, N6.3 or N9, it wins.
 - Considered for later, not decided: letting the restart go ahead when the lock is held but no fresh marker
   exists (P2's rule), so that a held lock cannot delay a login restriction at all. It touches the ordering between
   a restart and a hold that is about to begin and needs its own review.
+
+## Amendment 2026-11-16 (architect, PDK-1122) — integrity of Paddock's own device components (ADR 0056)
+
+The maintainer decided on 2026-11-16 (§137) that both options ship in 0.1.0-alpha.11, and confirmed it despite the
+size (§142): C after PDK-1118 is merged, A in parallel to C. ADR 0056 records the decision. The architecture text
+§11.5/§11.6 and the root `CLAUDE.md` item 3 are corrected in the same change. The new checks appear in §11.5 marked
+"Planned (PDK-1122a/b), not yet implemented"; the merge commit of each ticket removes its marker.
+Tickets: PDK-1122a (C) and PDK-1122b (A), under the umbrella PDK-1122. Both are risk high. Each needs positive and
+negative tests, and among them a test that a regular update or rollback raises no event.
+
+### C — agent-side baseline, report-only (PDK-1122a)
+
+**C1 Where and when.** C is a new package, `agent/internal/integrity`. The agent runs `integrity.Check` once per
+drift pass (`drift_interval_s`, at least 300 s in production), in the `drift.C` case of `Agent.loop`, after `a.drift(ctx)`. Two conditions apply:
+
+- the device is enrolled, and the check runs in both enforcement modes;
+- the check only reads. It never restores, stops or rewrites anything (design contract 8).
+
+Each change is reported as `device.tamper_protected_file_changed` with the param `file` set to the absolute path. No
+new event type, code or param is added.
+
+**C2 Objects and their expected value.**
+
+| Object (`file` param) | Expected value | Skipped while |
+| --- | --- | --- |
+| `/opt/paddock/agent/A/paddockd`, `/opt/paddock/agent/B/paddockd` | SHA-256 from the baseline (`""` = absent) | update not quiescent (C4) |
+| `/opt/paddock/agent/current` | link target from the baseline (`A` or `B`) | update not quiescent (C4) |
+| every regular file in the `md5sums` of `paddock-supervisor` (`/usr/sbin/paddock-supervisor`, `/usr/lib/systemd/system/paddock-supervisor.service`) | dpkg `md5sums`, or the rollback exception (C5) | dpkg busy, package not `installed`, supervisor upgrade marker present or result not yet processed |
+| every regular file in the `md5sums` of `paddock-agent` (among them `/usr/lib/paddock/paddockd`, `/usr/lib/systemd/system/paddock-disk-setup.service`, `/usr/share/pam-configs/paddock-deny`), `paddock-revoke` (`/opt/paddock/revoke/paddock-revoke`) and `paddock-self-service` (`/usr/lib/paddock-self-service/…`, the desktop file and icon), except entries below `usr/share/doc/` and `usr/share/lintian/` | dpkg `md5sums` of the package | dpkg busy, package not `installed` (`paddock-self-service` is optional) |
+| `/usr/bin/paddockd` (symlink of `paddock-agent`) | link target `/opt/paddock/agent/current/paddockd` | never |
+| every `md5sums` entry of `fleet-osquery` below `opt/orbit/bin/` and the entry ending in `systemd/system/orbit.service` | dpkg `md5sums` of `fleet-osquery` | dpkg busy, package not `installed` |
+| `/etc/paddock/agent.yml`, `/etc/paddock/trust.json`, `/etc/paddock/revoke-trust.json`, `/etc/paddock/disk-setup.json` | SHA-256 the agent last wrote (`""` = absent) | never |
+| unit overrides and drop-ins of `paddock-supervisor.service`, `paddock-disk-setup.service`, `orbit.service`, `paddock-updates.service`, `paddock-updates.timer` (C6) | absent, except the allow list | never |
+
+Not covered, as a documented residual:
+
+- `/etc/paddock/enroll.json` and `/etc/paddock/autoinstall.marker`. The autoinstall writes them, not the agent, and
+  they are read only at enrollment.
+- `/etc/paddock/orbit.env` is not in C because the inventory reconciler already restores it and reports
+  `device.tamper_protected_file_changed`.
+- `/etc/paddock/login-deny`, `/etc/paddock/notice` and `/etc/paddock/sudo_lecture` are rewritten by their reconcilers
+  only in enforce mode, and then only as drift (`device.config_drift_corrected`), never as a tamper event; in
+  report-only mode a change stays unreported. `/etc/paddock/revoke-enabled` is re-created silently while the bundle
+  enables revocation. These four are residuals named in RR-148, not C objects.
+- Package symlinks are not in `md5sums` (dpkg lists regular files only). Only `current` (C4) and `/usr/bin/paddockd`
+  are checked; the others, among them `/opt/orbit/bin/orbit/orbit`, are residuals named in RR-148.
+- The supervisor's public key. It is compiled into the binary, and the binary is checked.
+
+**C3 Baseline file.** The baseline is `/var/lib/paddock/state/integrity.json` (0600). Every read-modify-write holds
+an exclusive `flock` on `/var/lib/paddock/state/integrity.lock`, because `paddockd enroll` writes from another
+process. Taking the lock waits at most 10 s. On a timeout, the check skips this pass and logs one `Warn`; it never
+blocks the agent. The baseline holds:
+
+- the slot hashes, `current`, and the agent-written file hashes, each with its own "initialized" flag;
+- the staged release `{version, sha256}`;
+- the supervisor rollback exceptions;
+- `reported`, the last reported observed value per path.
+
+`reported` persists across restarts, so a restart repeats nothing.
+
+**C4 Slots and `current`.**
+
+- **Quiescent.** The update is quiescent when three conditions hold:
+  - `update.Pending` is false;
+  - `/var/lib/paddock/state/probation.json` does not exist;
+  - `update-result.json` is absent or already processed (`state.ReportedUpdateAt` equals its `at`).
+
+  Slots and `current` are checked only while the update is quiescent.
+- **Initialization (trust on first use).** In the first quiescent pass without the slot flag, the agent records the
+  observed hashes and target. This pass emits no event and logs one `Info` line.
+- **Staging.** `Agent.handleUpdate` records `staged = {offer.Version, offer.SHA256}` before it calls `update.Stage`.
+- **Update result.** `Agent.reportUpdate` moves the baseline before it spools the result event, once per result:
+  - **The result names the staged version.** For each slot, an observed hash equal to the slot's baseline or to
+    `staged.sha256` becomes the slot's baseline. The observed `current` becomes the baseline when it equals the old
+    one, or when the slot it points to now has the baseline `staged.sha256`. Anything else stays and is reported by
+    the next pass. `staged` is cleared.
+  - **No `staged`, or `staged` names another version.** This happens after a rollback to an agent older than C. The
+    agent re-initializes slots and `current` from what it observes, logs one `Warn`, and emits no event. Residual
+    RR-148: root can forge the result.
+  - This one rule covers every outcome: `updated`, `rolled_back`, `rollback_failed`, `self_test_failed`,
+    `signature_invalid` and `downgrade_refused`.
+- **Observed values.** `current` that is not a symlink is observed as `"!symlink"`. A missing `current` is observed as
+  `"!absent"`. A slot without `paddockd` is observed as `""`, which is the normal baseline for slot B after the
+  package installed only slot A.
+
+**C5 dpkg-installed files.** The packages are `paddock-agent`, `paddock-supervisor`, `paddock-revoke`,
+`paddock-self-service` and `fleet-osquery`, with the entry filters of C2.
+
+- **md5sums file.** The expected MD5 comes from `/var/lib/dpkg/info/<pkg>:<arch>.md5sums`, where `<arch>` is the
+  Debian name of `runtime.GOARCH`. When that file is missing, it comes from `/var/lib/dpkg/info/<pkg>.md5sums`. A
+  dpkg upgrade rewrites `md5sums` under dpkg's lock, so a regular package upgrade moves the baseline with no alarm.
+- **Race guard.** Per package, the agent applies four checks:
+  1. dpkg's locks (`/var/lib/dpkg/lock-frontend`, `/var/lib/dpkg/lock`) are tested with `F_GETLK`. The agent never
+     takes them, because apt would fail on them. Any lock held means the agent skips all packages this pass.
+  2. `dpkg-query -W -f='${db:Status-Status}' <pkg>` must print `installed`.
+  3. The agent reads `md5sums`, hashes the files, and then reads `md5sums` and the locks again.
+  4. If anything changed, the agent skips the package this pass.
+
+  A package that is not installed is skipped silently. Its absence is visible elsewhere: the agent stops, or
+  `tamper.service_stopped` reports a missing unit.
+- **Supervisor rollback exception.** The upgrade helper restores the binary and unit by copying them, so dpkg's
+  `md5sums` then describe the failed new version. In `Agent.reportSupervisorUpgrade`, before `saveState`, the agent
+  handles every processed result whose outcome is not `updated` or `deferred` (`rolled_back`,
+  `rolled_back_unreachable`, `install_failed`, including the agent-written stale `install_failed`). For
+  `/usr/sbin/paddock-supervisor` and the unit, it records `{path, md5 from the current md5sums entry, sha256
+  observed now}`. A file then counts as expected in either of two cases:
+  - its MD5 equals the `md5sums` entry;
+  - an exception exists whose recorded `md5sums` entry is still the current one, and whose SHA-256 equals the
+    observed SHA-256.
+
+  An exception whose `md5sums` entry changed is deleted.
+- **Hashing cost.** Hashes are cached in memory per path by `(dev, inode, size, mtime_ns, ctime_ns)`. A file is
+  rehashed only when its fingerprint changes, and every file is rehashed at agent start.
+
+**C6 Unit drop-ins.** For each of the five units, the agent applies two checks:
+
+1. **Override and drop-in files.** The files present as `/etc/systemd/system/<unit>`,
+   `/run/systemd/system/<unit>`, `/etc/systemd/system/<unit>.d/*.conf` and `/run/systemd/system/<unit>.d/*.conf`.
+   Exceptions: `/etc/systemd/system/paddock-updates.service` and `/etc/systemd/system/paddock-updates.timer`, which
+   the updates reconciler owns.
+2. **Effective paths.** `systemctl show -p FragmentPath -p DropInPaths -- <unit>`.
+
+The allow list holds exactly one drop-in: `/etc/systemd/system/orbit.service.d/90-paddock.conf`. The expected
+`FragmentPath` per unit is:
+
+| Unit | Expected `FragmentPath` |
+| --- | --- |
+| `paddock-supervisor.service` | `/usr/lib/systemd/system/paddock-supervisor.service` |
+| `paddock-disk-setup.service` | `/usr/lib/systemd/system/paddock-disk-setup.service` |
+| `orbit.service` | the unit path from `fleet-osquery`'s `md5sums` |
+| `paddock-updates.service` | `/etc/systemd/system/paddock-updates.service` |
+| `paddock-updates.timer` | `/etc/systemd/system/paddock-updates.timer` |
+
+Paths are compared after `filepath.EvalSymlinks` of their directory, because `/lib` is a symlink to `/usr/lib`.
+
+The value observed for a foreign file or path is `"present:" + SHA-256 of its content`. A unit that systemd does not
+know (`LoadState=not-found`), or whose `show` fails, is skipped. Its absence is reported elsewhere.
+
+**C7 Agent-written configuration files.**
+
+- **Writers re-baseline.** After each write by Paddock, the writer calls `integrity.SyncFiles(l, paths...)`, which
+  sets the baseline of the given paths to their current state:
+  - `enroll.Run`, after it wrote `agent.yml`, `trust.json` and `revoke-trust.json`. This also covers
+    `paddockd enroll`.
+  - `Agent` revocation trust-on-first-use (`agent/internal/agent/revocation.go`), after `SaveRevokeTrust`.
+  - `agent/internal/agent/encrypt.go`, for `disk-setup.json`, after every return of `Preparer.Prepare` (it writes
+    the file and, on a failure, runs `encrypt.RunCleanup`), of both `encrypt.Abort` calls (an abort runs
+    `RunCleanup`, and `encrypt.Cleanup` removes the file), and of `encrypt.RunCleanup` in `retryCleanup`.
+- **Initialization.** It applies in the first pass without the file flag. Every one of the four paths that has no
+  baseline yet is recorded as observed, with `""` for an absent file. The autoinstall's `disk-setup.json` is
+  covered this way.
+- **After initialization.** A file that appears, changes or disappears without a sync is a change.
+
+**C8 One event per change.**
+
+- An event is emitted when the observed value differs from the expected value, and `reported[path]` differs from
+  the observed value. After the event, `reported[path]` is set to the observed value.
+- When the observed value equals the expected value, `reported[path]` is deleted.
+- When the baseline of a path moves, its `reported` entry is deleted.
+
+As a consequence:
+
+- A→X reports once.
+- X→Y reports again.
+- X→A reports nothing.
+- A→X after a restore reports again.
+- Events are spooled like every device event. A spool failure is logged, and `reported` is still set.
+
+**C9 Fail safe.** Every error is logged at `Warn` at most once an hour per object, and the object is skipped for this
+pass. The affected errors are: a read error, a lock timeout, a hashing error, a corrupt baseline file, and a
+`systemctl` failure. A corrupt `integrity.json` is renamed to `integrity.json.corrupt` and re-initialized with
+trust on first use, with one `Warn` and no event. No error stops the drift tick or the agent.
+
+**C10 Runbook.** `docs/operations/agent-releases.md`, section "An update that waits for the active agent" (PDK-1118),
+names `device.tamper_protected_file_changed` for `/opt/paddock/agent/current` (step 1) and for
+`/opt/paddock/agent/<slot>/paddockd` (step 2). That event is expected after the manual repair, and the operator
+resolves the finding.
+
+### A — server-generated hash policy (PDK-1122b)
+
+**A1 Policy.** Key `paddock_agent_binary_known` (`inventory.PolicyAgentBinaryKnown`), built by
+`inventory.AgentBinaryPolicy(hashes []string) ports.PolicyDefinition` from the hashes in the hash set (A2). The query
+for a non-empty set:
+
+```sql
+SELECT 1 WHERE NOT EXISTS (
+  SELECT 1 FROM processes p LEFT JOIN hash h ON h.path = p.path
+  WHERE p.name = 'paddockd' AND p.path LIKE '/opt/paddock/agent/%' AND p.on_disk = 1
+    AND (h.sha256 IS NULL OR h.sha256 NOT IN ('<hash 1>', '<hash 2>')));
+```
+
+- The hashes are sorted and deduplicated, and each one must match `^[0-9a-f]{64}$`. A value that does not match is
+  dropped and logged at `Error`, which is defense in depth before the value is interpolated into SQL. For an empty
+  set, the query is `SELECT 1;`.
+- No `paddockd` running passes. The not-running case belongs to `paddock_agent_running`, so the two policies never
+  report the same stop twice.
+- A process whose binary was replaced by a rename (`on_disk = 0`) is not judged. C reports the slot change; residual
+  RR-149.
+- The description says that the policy returns pass or fail, never a hash.
+
+**A2 Hash set and sync.**
+
+- **Hash set.** The hash set is every `agent_artifact.sha256` of every release with `status = 'published'`, for all
+  architectures (query `ListPublishedAgentHashes`, platform pool).
+- **Every round.** `worker.Inventory.Round` reads the hash set first, appends the policy to the static policies and
+  calls `ApplyPolicies`. Applying is idempotent: Fleet's policy spec updates by name. When the fingerprint of the
+  hash set (SHA-256 of the sorted, newline-joined hashes) differs from the last one this process applied, the worker
+  sets `binaryAppliedAt = now` after the apply succeeds. A new leader or a restarted worker starts with no
+  fingerprint and so sets it on its first apply. That only delays reports, so it is conservative.
+- **Publish.** There is no separate trigger: a publish reaches Fleet in the next round, at most 5 minutes later. A
+  device that runs a new release before then fails only an evaluation older than `binaryAppliedAt`, which A3 never
+  reports.
+- **Yank.** Paddock has no yank. ADR 0056 decision 4 binds a future yank to keep the hashes.
+
+**A3 Report.**
+
+- **Who is reported.** After `reportAgents`, the worker calls
+  `InventorySync.ReportAgentBinaryUnknown(ctx, evaluatedAfter, knownHashes)` per organization, with
+  `evaluatedAfter = binaryAppliedAt + 2 min`. It reports every active device that meets three conditions:
+  - its `paddock_agent_binary_known` result fails;
+  - `alerted_at` is null;
+  - `device_inventory_ref.policy_updated_at >= evaluatedAfter`. This is Fleet's `policy_updated_at` of the host,
+    stored in a new column.
+- **Once per failure.** The code is `device.tamper_agent_binary_changed`. Recording the event, setting `alerted_at`
+  (`MarkAgentNotRunningReported` with the new key) and opening the tamper finding happen in one `ActionRunner.RunTx`.
+  A passing result clears `alerted_at`, which the existing `UpsertPolicyResult` already does.
+- **No check-in silence rule.** It fires as soon as the evaluation gate holds.
+- **Publish race.** Before reporting, the round reads the hash set again. If its fingerprint changed during the
+  round, binary reports are skipped for this round and an `Info` line is logged.
+- **Skipped entirely.** The round reports nothing for the binary policy in two cases:
+  - the hash set is empty;
+  - `ApplyPolicies` failed. The round fails as today and is retried in the next round.
+
+**A4 Registry entry** (`server/internal/domain/audit/codes.go`, next to `CodeDeviceTamperAgentNotRunning`):
+
+```go
+CodeDeviceTamperAgentBinaryChanged Code = "device.tamper_agent_binary_changed"
+
+CodeDeviceTamperAgentBinaryChanged: {
+	Code: CodeDeviceTamperAgentBinaryChanged, Emitted: true,
+	Description: "fleetd reports that a Paddock agent running from /opt/paddock/agent/ has a binary that matches no published agent release: it was replaced or modified on the device (actor: system; the inventory system's policy paddock_agent_binary_known). evaluated_at is when the host last evaluated its policies; agent_version is the version the agent last reported, which a replaced agent may forge; known_hashes is the number of published hashes the policy accepts. A genuine older published release passes (RR-149).",
+	Params:   []string{"policy", "evaluated_at", "agent_version", "known_hashes"},
+	Outcomes: []Outcome{OutcomeSuccess},
+	Note:     "Recorded once per failure; the policy passing again ends it. No hash of the device's binary is recorded: the policy returns pass or fail only.",
+},
+```
+
+Alongside the entry:
+
+- **MSGID alias.** `msgid.go` gets the alias `CodeDeviceTamperAgentBinaryChanged: "device.tamper_agent_bin_changed"`.
+- **Tamper finding.** `tamperFindingCodes` gets the entry `audit.CodeDeviceTamperAgentBinaryChanged: ""`.
+- **Portal messages.** Message keys `audit.device.tamper_agent_binary_changed` in `en.json` and `de.json`:
+  - EN: "fleetd reports an agent binary on {target} that matches no published release"
+  - DE: "fleetd meldet auf {target} ein Agent-Binary, das zu keinem veröffentlichten Release passt"
+- **Generated files.** `make gen` regenerates `auditCodes.gen.ts` and `docs/compliance/audit-codes.md`.
+- **Secrets and personal data.** None in the params.
+
+**A5 Downgrade: decided A2 (any published hash).** Fleet policies are global and return pass or fail, and the expected
+version of a device is ambiguous during waves, holds, the manual policy and rollbacks. Comparing per device would
+raise false alarms on regular flows. The residual RR-149 is that a root user who installs a genuine older published
+`paddockd` is not reported by A. Three things reduce it:
+
+- C reports the slot or `current` change.
+- The fleet view counts the device as outdated (`components_outdated`).
+- The supervisor refuses downgrades through Paddock's own channel.
+
+**A6 Test harness.** The system-test VMs install locally built packages. Before installing, `test/system` MUST publish
+the exact `bin/agent/amd64/paddockd` that is inside the installed `paddock-agent` package. It publishes this binary as
+a release without a rollout, next to `PublishFleetd`. Otherwise A reports every VM. `devicesim.FleetHost` gains a
+switch that fails the queries containing `FROM processes p LEFT JOIN hash`, for the acceptance gate.
+
+### Residual risks (added to `docs/compliance/residual-risks.md`)
+
+- **RR-148** (C): device-side baselines are only as trustworthy as root on the device. Root can do any of the
+  following, and none is detected:
+  - rewrite `integrity.json`, dpkg's `md5sums` or an update result, or corrupt `integrity.json` to force a
+    re-initialization (C4, C9);
+  - change a file between a Paddock write and its sync.
+
+  Not checked by C at all: `enroll.json`, `autoinstall.marker`; `login-deny`, `notice` and `sudo_lecture` (drift
+  only in enforce mode, unreported in report-only mode); `revoke-enabled` (re-created silently); package symlinks
+  other than `current` and `/usr/bin/paddockd`.
+
+  Paddock's own regular paths never raise an event.
+- **RR-149** (A): a genuine older published `paddockd` passes `paddock_agent_binary_known`. A process whose binary
+  was replaced by a rename is not judged until it restarts.
+
+If either number is taken when the ticket merges, the next free number is used, and this amendment and ADR 0056 are
+updated in the same commit.
