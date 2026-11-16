@@ -500,6 +500,66 @@ Once the rollback is made, the device reports `device.agent_rolled_back` and the
 disappears when the device reports another agent version. The rollout counts the device once as failed, whether it
 reported `rollback_failed`, `rolled_back` or both.
 
+### An update that waits for the active agent
+
+Before it installs a release, the supervisor asks the active agent for its version (`paddockd version`, at most
+10 seconds) so that it can refuse a release that is not newer. If that call times out, for example while a slow disk
+stalls, the supervisor decides nothing: it keeps the update request, writes no result and tries again later. The
+first retry is 10 seconds later, then the wait doubles up to every 5 minutes. A restart of the supervisor retries at
+once. Every deferred attempt logs one warning with the requested version and the next wait:
+
+```sh
+journalctl -u paddock-supervisor | grep 'update request deferred'
+```
+
+The warning is also in the diagnostics bundle (`journal/paddock-supervisor.log`). A short stall resolves itself on the
+next attempt. The portal shows that the update does not arrive, not why: the device keeps checking in with its old
+agent version, the fleet overview counts it as outdated against the current release, and an *Update agent now*
+request ends after 24 hours without a report.
+
+If every attempt is deferred, the active agent binary hangs or its file system does not answer. While the request
+waits, the agent stages no other release and installs no supervisor package. A supervisor restart, *Update agent now*
+and `apt install --reinstall paddock-agent` do not help: the package never touches an existing `current` or the
+slots. Make the active slot answer again, as root on the device:
+
+1. Remove the waiting request and its release first. Otherwise the supervisor would compare the waiting release with
+   the agent you put in place in the next step, which can be older than the stalled one, and the release could pass
+   the downgrade refusal. The agent stages the release that the server offers again on its own:
+
+   ```sh
+   cat /var/lib/paddock/staging/request.json            # {"version":"<version>"}
+   rm -f /var/lib/paddock/staging/request.json && rm -rf /var/lib/paddock/staging/<version>
+   ```
+
+2. If the other slot holds a working agent, point `current` at it. The other slot is the one `current` does not point
+   at, here A:
+
+   ```sh
+   readlink /opt/paddock/agent/current                  # the active slot, here B
+   timeout 15 /opt/paddock/agent/A/paddockd version     # prints a version: A works
+   ln -sfn A /opt/paddock/agent/.current.new && mv -T /opt/paddock/agent/.current.new /opt/paddock/agent/current
+   ```
+
+3. Otherwise copy the packaged agent into the active slot, here B:
+
+   ```sh
+   install -m 0755 /usr/lib/paddock/paddockd /opt/paddock/agent/B/paddockd.new
+   mv -f /opt/paddock/agent/B/paddockd.new /opt/paddock/agent/B/paddockd
+   ```
+
+4. Restart the supervisor:
+
+   ```sh
+   systemctl restart paddock-supervisor
+   ```
+
+The agent then stages the current release again, and the supervisor processes it as usual: signature check, downgrade
+refusal against the version that the active slot now reports, self-test and probation. Paddock does not report either
+step as a tamper event: no
+check watches the slots or `current`, and the Fleet policy `paddock_agent_running` only checks that a `paddockd` runs
+from a slot below `/opt/paddock/agent/`. Record the intervention in your own change log as an intended intervention.
+The device then reports the agent version of the slot it runs.
+
 ## Update policy
 
 An organization chooses whether its devices take agent releases automatically (*Updates* → *Agent updates*,

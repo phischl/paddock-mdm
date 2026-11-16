@@ -36,6 +36,9 @@ type fake struct {
 	notices chan string
 	clock   *clock
 	ticks   atomic.Int64 // ticks of the Run loop started by start, counted before Notify
+	// versionStalled makes the version calls of the slot that stallVersion names time out; stalledCalls counts them.
+	versionStalled atomic.Bool
+	stalledCalls   atomic.Int32
 }
 
 // clock is the supervisor's injected clock: real time plus an offset the test sets to end a probation exactly when
@@ -77,7 +80,7 @@ func newFake(t *testing.T) *fake {
 		Slots: filepath.Join(dir, "slots"), Staging: filepath.Join(dir, "staging"), Result: filepath.Join(dir, "result.json"),
 		ProbationLog: filepath.Join(dir, "probation.json"), LastCheckin: filepath.Join(dir, "last-checkin"),
 		PublicKey: &pub, Probation: testProbation, SelfTest: 5 * time.Second, Tick: 20 * time.Millisecond,
-		MaxBackoff: 2 * time.Second, Notify: func(s string) { f.notices <- s }, Now: f.clock.now,
+		MaxBackoff: 2 * time.Second, Notify: func(s string) { f.notices <- s }, Now: f.clock.now, BootID: "boot-1",
 	}
 	for _, d := range []string{"slots/A", "slots/B", "staging"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
