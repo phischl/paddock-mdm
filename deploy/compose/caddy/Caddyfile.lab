@@ -40,7 +40,7 @@ http://bundles.{$PADDOCK_DOMAIN} {
 	# object store answers a listing (RustFS 1.0.4 refuses, 1.0.6 answers not found; PDK-1116).
 	@package_dirs {
 		method GET HEAD
-		path_regexp ^/packages/(.*/)?$
+		vars_regexp {path} (?i)^/packages/(.*/)?(\.\.?)?$
 	}
 	handle @package_dirs {
 		respond 403
