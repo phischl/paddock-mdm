@@ -177,6 +177,7 @@ func TestIngestViewGenericPlans(t *testing.T) {
 	}
 	small, large, smallDevice, largeDevice := planOrgs(t)
 	seedEventGaps(t, small, large)
+	analyzeWithoutOrg(t, small)
 	ctx := context.Background()
 	dsn, err := url.Parse(sharedPaddock(t).Worker)
 	if err != nil {
@@ -336,6 +337,52 @@ func seedEventGaps(t *testing.T, orgs ...uuid.UUID) {
 	for _, table := range []string{"device_event_gap", "device_event_dropped"} {
 		if _, err := super.Exec(ctx, "VACUUM ANALYZE "+table); err != nil {
 			t.Fatalf("vacuum %s: %v", table, err)
+		}
+	}
+}
+
+// analyzeWithoutOrg analyzes the tables of the plan test without the rows of organization org, so their statistics are
+// those of an ANALYZE sample that missed a small organization: its organization_id estimate drops to one row, and
+// planning in it prices an index led by organization_id below a primary-key or device-key lookup. A sample of 30 000
+// rows misses an organization of 5 devices in about 6 % of the ANALYZE runs and nearly always one of 1 device, so the
+// test pins this worst case instead of depending on the sample (CI run 43793534819).
+func analyzeWithoutOrg(t *testing.T, org uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	c, err := pgx.Connect(ctx, sharedPaddock(t).Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close(ctx) }()
+	tables := []string{"device", "device_status", "bundle", "device_event_seen", "device_event_gap", "device_event_dropped"}
+	// replica skips the foreign-key triggers, so the rows leave and return without touching their references.
+	if _, err := c.Exec(ctx, "SET session_replication_role = replica"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tb := range tables {
+		for _, s := range []string{
+			"CREATE TEMP TABLE kept_" + tb + " AS SELECT * FROM " + tb + " WHERE organization_id = $1",
+			"DELETE FROM " + tb + " WHERE organization_id = $1",
+		} {
+			if _, err := c.Exec(ctx, s, org); err != nil {
+				t.Fatalf("%s: %v", s, err)
+			}
+		}
+	}
+	for _, tb := range tables {
+		if _, err := c.Exec(ctx, "ANALYZE "+tb); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := len(tables) - 1; i >= 0; i-- {
+		tb := tables[i]
+		var cols string
+		if err := c.QueryRow(ctx, "SELECT string_agg(quote_ident(column_name), ',') FROM information_schema.columns "+
+			"WHERE table_schema = 'public' AND table_name = $1 AND is_generated = 'NEVER'", tb).Scan(&cols); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Exec(ctx, "INSERT INTO "+tb+" ("+cols+") SELECT "+cols+" FROM kept_"+tb); err != nil {
+			t.Fatalf("restore %s: %v", tb, err)
 		}
 	}
 }
