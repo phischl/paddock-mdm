@@ -155,25 +155,114 @@ func TestOffboardingRoundBackoff(t *testing.T) {
 	}
 }
 
-// TestOffboardingRoundWaiting: a tombstone waiting for older transactions is no failure: it is asked again every round
-// and counted in paddock_offboarding_finalize_busy_total.
+// pollClock returns a clock and a sleep that advance it, so a round with only polling organizations runs in no real time.
+func pollClock(r *Offboarding, now *time.Time) {
+	r.WithClock(func() time.Time { return *now })
+	r.sleep = func(_ context.Context, d time.Duration) { *now = now.Add(d) }
+}
+
+// TestOffboardingRoundWaiting (PDK-1098 AC1): a step waiting for older transactions is no failure: it is asked again
+// every offboardingPollInterval within the round, and the round counts it once in paddock_offboarding_finalize_busy_total.
 func TestOffboardingRoundWaiting(t *testing.T) {
-	now := time.Now()
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	org := uuid.New()
+	calls := 0
+	f := &fakeOffboarder{attempts: map[uuid.UUID][]time.Time{}, now: func() time.Time { return now },
+		pending: []pgstore.Organization{deletingOrg(org, offboarding.StepDevices, "")},
+		advance: func(uuid.UUID) error {
+			if calls++; calls <= 3 {
+				return app.ErrOffboardingWaiting
+			}
+			return nil
+		}}
+	r := NewOffboarding(f, &fakeLock{})
+	pollClock(r, &now)
+	busy := testutil.ToFloat64(metricOffboardingFinalizeBusy)
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	at := f.attempts[org]
+	if len(at) != 4 {
+		t.Fatalf("%d calls in one round, want 4", len(at))
+	}
+	for i := 1; i < len(at); i++ {
+		if gap := at[i].Sub(at[i-1]); gap < offboardingPollInterval {
+			t.Fatalf("calls %v apart, want at least %v", gap, offboardingPollInterval)
+		}
+	}
+	if got := testutil.ToFloat64(metricOffboardingFinalizeBusy) - busy; got != 1 {
+		t.Fatalf("busy counter rose by %v, want 1", got)
+	}
+}
+
+// TestOffboardingRoundWaitingWholeRound (PDK-1098 AC2): an organization that waits for the whole round ends the round at
+// its budget, is asked every 2 s, is counted once per round and never backs off.
+func TestOffboardingRoundWaitingWholeRound(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 	org := uuid.New()
 	f := &fakeOffboarder{attempts: map[uuid.UUID][]time.Time{}, now: func() time.Time { return now },
 		pending: []pgstore.Organization{deletingOrg(org, offboarding.StepTombstone, "")},
 		advance: func(uuid.UUID) error { return app.ErrOffboardingWaiting }}
-	r := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return now })
+	r := NewOffboarding(f, &fakeLock{})
+	pollClock(r, &now)
 	busy := testutil.ToFloat64(metricOffboardingFinalizeBusy)
-	for range 5 {
+	for round := range 3 {
+		began := now
+		f.attempts[org] = nil
 		if err := r.Round(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		now = now.Add(time.Minute)
+		if took := now.Sub(began); took < OffboardingRoundBudget || took > OffboardingRoundBudget+offboardingPollInterval {
+			t.Fatalf("round %d took %v, want the budget %v", round, took, OffboardingRoundBudget)
+		}
+		at := f.attempts[org]
+		for i := 1; i < len(at); i++ {
+			if gap := at[i].Sub(at[i-1]); gap < offboardingPollInterval {
+				t.Fatalf("calls %v apart, want at least %v", gap, offboardingPollInterval)
+			}
+		}
+		now = now.Add(OffboardingInterval)
 	}
-	if len(f.attempts[org]) != 5 || testutil.ToFloat64(metricOffboardingFinalizeBusy)-busy != 5 || f.started != 5 {
-		t.Fatalf("attempts %d, busy %v, started %d; want 5 each", len(f.attempts[org]),
-			testutil.ToFloat64(metricOffboardingFinalizeBusy)-busy, f.started)
+	if got := testutil.ToFloat64(metricOffboardingFinalizeBusy) - busy; got != 3 || f.started != 3 {
+		t.Fatalf("busy rose by %v over %d rounds, want 3 and 3", got, f.started)
+	}
+	if len(r.retries) != 0 {
+		t.Fatalf("waiting started a backoff: %v", r.retries)
+	}
+}
+
+// TestOffboardingRoundWaitingNextToYielding (PDK-1098 AC3): next to an organization that yields on every call, a waiting
+// one is asked again after 2 s within the same round and the round does not sleep while the yielding one progresses.
+func TestOffboardingRoundWaitingNextToYielding(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	yields, waits := uuid.New(), uuid.New()
+	f := &fakeOffboarder{attempts: map[uuid.UUID][]time.Time{}, now: func() time.Time { return now },
+		pending: []pgstore.Organization{deletingOrg(yields, offboarding.StepObjects, ""), deletingOrg(waits, offboarding.StepDevices, "")},
+		advance: func(org uuid.UUID) error {
+			if org == yields {
+				now = now.Add(time.Second)
+				return app.OffboardingYield{Step: offboarding.StepObjects}
+			}
+			return app.ErrOffboardingWaiting
+		}}
+	r := NewOffboarding(f, &fakeLock{})
+	pollClock(r, &now)
+	slept := false
+	r.sleep = func(_ context.Context, d time.Duration) { slept = true; now = now.Add(d) }
+	if err := r.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	at := f.attempts[waits]
+	if len(at) < 10 {
+		t.Fatalf("the waiting organization was asked %d times in one round", len(at))
+	}
+	for i := 1; i < len(at); i++ {
+		if gap := at[i].Sub(at[i-1]); gap < offboardingPollInterval {
+			t.Fatalf("calls %v apart, want at least %v", gap, offboardingPollInterval)
+		}
+	}
+	if slept {
+		t.Fatal("the round slept while the yielding organization progressed")
 	}
 }
 
@@ -293,29 +382,37 @@ func TestOffboardingRoundCarriesThroughSteps(t *testing.T) {
 	}
 }
 
-// TestOffboardingRoundStopsAtWaitingStep: a waiting or failing step ends the organization's round; the others go on
-// and the organization is asked again next round.
+// TestOffboardingRoundStopsAtWaitingStep: a failing step ends the organization's round and a waiting step keeps it in
+// the round without a step past the waiting one; the healthy organization completes.
 func TestOffboardingRoundStopsAtWaitingStep(t *testing.T) {
 	waits, failing, healthy := uuid.New(), uuid.New(), uuid.New()
 	s, now := newStepper(time.Second, map[uuid.UUID]int{waits: 10, failing: 10, healthy: 4})
 	f := s.fake(waits, failing, healthy)
 	inner := f.advance
 	f.advance = func(org uuid.UUID) error {
-		_ = inner(org)
 		switch {
-		case org == waits && s.left[org] == 7:
+		case org == waits && s.left[org] <= 7:
+			s.log = append(s.log, org)
 			return app.ErrOffboardingWaiting
-		case org == failing && s.left[org] == 7:
+		case org == failing && s.left[org] == 8:
+			_ = inner(org)
 			return &app.OffboardingError{Code: offboarding.ErrorOutboxPending, Err: errors.New("outbox")}
 		}
-		return nil
+		return inner(org)
 	}
-	r := NewOffboarding(f, &fakeLock{}).WithClock(func() time.Time { return *now })
+	r := NewOffboarding(f, &fakeLock{})
+	pollClock(r, now)
 	if err := r.Round(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if s.left[waits] != 7 || s.left[failing] != 7 || s.left[healthy] != 0 {
 		t.Fatalf("steps left: waiting %d, failing %d, healthy %d; want 7, 7, 0", s.left[waits], s.left[failing], s.left[healthy])
+	}
+	if n := len(f.attempts[failing]); n != 3 {
+		t.Fatalf("the failing organization was called %d times, want 3 (it stops for the round)", n)
+	}
+	if n := len(f.attempts[waits]); n < 10 {
+		t.Fatalf("the waiting organization was called %d times, want it polled through the round", n)
 	}
 }
 
