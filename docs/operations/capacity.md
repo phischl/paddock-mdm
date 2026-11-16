@@ -308,6 +308,16 @@ findings loop would pay it in every round. The organization roles run short, ind
 does not pay off. `TestOrganizationPoolPlansPerExecution` runs with that data and the production pool configuration,
 and `TestPoolQueryExecModes` asserts `jit = off` on the organization pools and the default on the others.
 
+Residual risk until alpha.12 (ADR 0055 amendment 2026-11-16 (4) decision 17): PostgreSQL's foreign-key check on
+`(organization_id, id)` can read a whole organization per written row while that organization is missing from the
+statistics of the parent table, for example right after it grew by thousands of devices or users. Migration 00160
+makes autoanalyze of `device`, `app_user` and `user_group` start after 1 % changed rows plus 50 (instead of 10 %), so
+the statistics catch up about a minute after the burst (measured on PostgreSQL 18.6: 58 s after 10 000 new devices
+next to 100 000, and the check fell from 2 065 to 6 buffers); `TestParentAutoanalyzeSettings` pins the settings. The
+settings are table storage parameters and survive a pgBackRest restore. Runbook: after a large enrolment or identity
+import, if check-ins or writes of that organization slow down, run `ANALYZE device;` (or `ANALYZE app_user,
+user_group;`) in the `paddock` database.
+
 ## Authentik web workers
 
 Every portal login, step-up, device login and every call of the worker's identity rounds is a request to
