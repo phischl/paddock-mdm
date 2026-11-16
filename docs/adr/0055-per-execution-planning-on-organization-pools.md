@@ -250,7 +250,7 @@ Decisions 8 and 11 are therefore made precise, so that the guarantee holds by co
 
 ## Amendment 2026-11-16 (3) — The view's admission rule holds under worst-case statistics (main §89)
 
-Status of this amendment: Proposed (architect, 2026-11-16). It replaces decision 11 and its clarification, and makes
+Status of this amendment: Accepted (architect, 2026-11-16; approved by main, main §90). It replaces decision 11 and its clarification, and makes
 decisions 8 and 12 precise. Decisions 9 and 10 stay. Implementation: PDK-1079d, as a fix forward on the integration
 head (no revert of PDK-1079b, main §89).
 
