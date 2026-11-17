@@ -401,6 +401,114 @@ func TestLoginLocksSessionsOfNewlyLockedUsers(t *testing.T) {
 	}
 }
 
+// TestLoginLockSurvivesConfigFailures (PDK-1126d): once the deny list is written, a failing configuration write, socket
+// drop-in write, daemon-reload or daemon restart no longer ends the apply before the sessions. The next pass sees the
+// user as denied already and would never lock them; the failure is reported after the session action instead.
+func TestLoginLockSurvivesConfigFailures(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, stage, failWrite, failCmd string
+		damage                          string // the managed file made to drift
+	}{
+		{"config write", protocol.LoginStageConfig, reconcile.HimmelblauConf, "", reconcile.HimmelblauConf},
+		{"drop-in write", protocol.LoginStageConfig, reconcile.HimmelblaudSocketDropIn, "", reconcile.HimmelblaudSocketDropIn},
+		{"daemon-reload", protocol.LoginStageConfig, "", "systemctl daemon-reload", reconcile.HimmelblaudSocketDropIn},
+		{"restart", protocol.LoginStageRestart, "", "systemctl restart himmelblaud.service", reconcile.HimmelblauConf},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sys, l, events := loginFixture(t)
+			sys.Sessions = deviceSessions
+			l.Apply(ctx, loginResource(t, loginSpec()))
+			sys.TakeCalls()
+			takeEvents(events)
+
+			if tc.damage == reconcile.HimmelblauConf {
+				sys.Files[tc.damage].Data = []byte("[global]\n")
+			} else {
+				delete(sys.Files, tc.damage)
+			}
+			sys.FailWrite, sys.FailCmd = tc.failWrite, tc.failCmd
+			s := loginSpec()
+			s.LockedUsers = []string{"dave@acme.test"}
+			res := l.Apply(ctx, loginResource(t, s))
+			if res.Status != reconcile.Error || !strings.HasPrefix(res.Message, tc.stage+": ") {
+				t.Fatalf("apply %+v, want an error of stage %s", res, tc.stage)
+			}
+			calls := sys.TakeCalls()
+			if !slices.Contains(calls, "loginctl lock-session 7") || !slices.Contains(calls, "loginctl lock-session 9") {
+				t.Fatalf("the lock's sessions were not locked: %q", calls)
+			}
+			var failed bool
+			for _, e := range takeEvents(events) {
+				failed = failed || (e.typ == protocol.EventLoginApplyFailed && strings.Contains(e.data, `"stage":"`+tc.stage+`"`))
+			}
+			if !failed {
+				t.Fatalf("no login.apply_failed of stage %s", tc.stage)
+			}
+
+			// The failure goes away: the next pass completes the configuration and does not lock again.
+			sys.FailWrite, sys.FailCmd = "", ""
+			if res := l.Apply(ctx, loginResource(t, s)); res.Status == reconcile.Error {
+				t.Fatalf("retry %+v", res)
+			}
+			calls = sys.TakeCalls()
+			if slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "loginctl") }) {
+				t.Fatalf("locked again: %q", calls)
+			}
+			if tc.name == "restart" && !slices.Contains(calls, "systemctl restart himmelblaud.service") {
+				t.Fatalf("the deferred restart was not retried: %q", calls)
+			}
+			if changes, err := l.Plan(ctx, loginResource(t, s)); err != nil || len(changes) != 0 {
+				t.Fatalf("plan after the retry %v %v", changes, err)
+			}
+		})
+	}
+}
+
+// TestLoginInstallsDespiteADropInFailure (PDK-1126): a drop-in that cannot be written before the installation does not
+// stop the apply before the deny list; the packages are installed and the failure is reported as stage config.
+func TestLoginInstallsDespiteADropInFailure(t *testing.T) {
+	sys, l, _ := loginFixture(t)
+	sys.FailWrite = reconcile.HimmelblaudSocketDropIn
+	s := loginSpec()
+	s.LockedUsers = []string{"dave@acme.test"}
+	res := l.Apply(context.Background(), loginResource(t, s))
+	if res.Status != reconcile.Error || !strings.HasPrefix(res.Message, protocol.LoginStageConfig+": ") {
+		t.Fatalf("apply %+v", res)
+	}
+	if f := sys.Files[reconcile.DenyList]; f == nil || string(f.Data) != "dave@acme.test\n" || !l.Sys.PackageInstalled("himmelblau") {
+		t.Fatalf("deny list %+v, himmelblau installed %v", f, l.Sys.PackageInstalled("himmelblau"))
+	}
+}
+
+// TestLoginRetriesAFailedReload (PDK-1126): drop-ins written while the daemon-reload failed are retried by the next
+// pass, which only reloads; Plan reports it meanwhile.
+func TestLoginRetriesAFailedReload(t *testing.T) {
+	ctx := context.Background()
+	sys, l, _ := loginFixture(t)
+	r := loginResource(t, loginSpec())
+	l.Apply(ctx, r)
+	delete(sys.Files, reconcile.HimmelblaudSocketDropIn)
+	sys.FailCmd = "systemctl daemon-reload"
+	if res := l.Apply(ctx, r); res.Status != reconcile.Error {
+		t.Fatalf("apply %+v", res)
+	}
+	sys.FailCmd = ""
+	sys.TakeCalls()
+	if changes, err := l.Plan(ctx, r); err != nil || !slices.Equal(changes, []string{"config"}) {
+		t.Fatalf("plan with the reload pending %v %v", changes, err)
+	}
+	if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
+		t.Fatalf("retry %+v", res)
+	}
+	if calls := sys.TakeCalls(); !slices.Equal(calls, []string{"systemctl daemon-reload"}) {
+		t.Fatalf("retry calls %q", calls)
+	}
+	if changes, err := l.Plan(ctx, r); err != nil || len(changes) != 0 {
+		t.Fatalf("plan after the retry %v %v", changes, err)
+	}
+}
+
 func TestLoginSuspensionTerminatesDirectorySessions(t *testing.T) {
 	ctx := context.Background()
 	sys, l, events := loginFixture(t)

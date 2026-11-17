@@ -620,7 +620,7 @@ func TestResetLeavesEditedNSSLines(t *testing.T) {
 
 	edited := "passwd: files himmelblau systemd\ngroup: files himmelblau [NOTFOUND=return]\nshadow: files himmelblau # Entra\n" +
 		"initgroups: himmelblau\n  passwd: files himmelblau\nhosts: files himmelblau\nnetgroup: nis himmelblau\n" +
-		"passwd: files himmelblau  \ngroup: files himmelblau2\ngroup: files himmelblau himmelblau\n"
+		"passwd: files himmelblau  \ngroup: files himmelblau2\ngroup: files himmelblau himmelblau\npasswd: files # local himmelblau\n"
 	for _, content := range []string{edited, "passwd: files systemd\ngroup: files systemd\n"} {
 		w := newWorld(t)
 		w.write("/etc/nsswitch.conf", content)
@@ -637,7 +637,7 @@ func TestResetLeavesEditedNSSLines(t *testing.T) {
 			t.Fatalf("nsswitch.conf rewritten:\n%s", w.read("/etc/nsswitch.conf"))
 		}
 	}
-	for _, line := range []string{"line=1", "line=2", "line=3", "line=4", "line=5", "line=8", "line=10"} {
+	for _, line := range []string{"line=1", "line=2", "line=3", "line=4", "line=5", "line=8", "line=10", "line=11"} {
 		if !strings.Contains(logs.String(), "names himmelblau; left as it is") || !strings.Contains(logs.String(), line+"\n") {
 			t.Errorf("no log for %s:\n%s", line, logs.String())
 		}
@@ -646,6 +646,30 @@ func TestResetLeavesEditedNSSLines(t *testing.T) {
 		if strings.Contains(logs.String(), line+"\n") {
 			t.Errorf("logged %s, which is no himmelblau database line:\n%s", line, logs.String())
 		}
+	}
+}
+
+// TestResetSkipsASymlinkedNSSFile (PDK-1126): a symlinked /etc/nsswitch.conf is neither followed nor replaced, and
+// the skip is logged.
+func TestResetSkipsASymlinkedNSSFile(t *testing.T) {
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	w := newWorld(t)
+	w.write("/etc/nsswitch.real", nsswitchUbuntu)
+	if err := os.Symlink("nsswitch.real", filepath.Join(w.root, "/etc/nsswitch.conf")); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.helper().himmelblau(context.Background()); got != stepDone {
+		t.Fatalf("step %s", got)
+	}
+	info, err := os.Lstat(filepath.Join(w.root, "/etc/nsswitch.conf"))
+	if err != nil || info.Mode()&os.ModeSymlink == 0 || w.read("/etc/nsswitch.real") != nsswitchUbuntu {
+		t.Fatalf("symlink replaced or target changed: %v %v", info, err)
+	}
+	if !strings.Contains(logs.String(), "not a regular file; left as it is") {
+		t.Fatalf("no log:\n%s", logs.String())
 	}
 }
 

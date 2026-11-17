@@ -357,8 +357,12 @@ func (h *Helper) nsswitch(ctx context.Context) error {
 	} else if err != nil {
 		return err
 	}
+	if !info.Mode().IsRegular() {
+		slog.WarnContext(ctx, "the NSS configuration is not a regular file; left as it is", "file", nsswitchFile)
+		return nil
+	}
 	data, err := os.ReadFile(p)
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil {
 		return err
 	}
 	lines := strings.Split(string(data), "\n")

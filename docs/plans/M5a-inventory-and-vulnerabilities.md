@@ -327,14 +327,18 @@ create a system account; the uninstall helper purges the Himmelblau packages its
 - `docs/operations/software.md`: "What the device does", "Self-service app", "Residual risks" (written with this
   amendment) and the troubleshooting row (PDK-983).
 
-**Addendum 2026-11-17 (PDK-1126).** Himmelblau 4.0.8's `himmelblaud.socket` stops with the daemon (`PartOf`) but
-keeps its socket file (`RemoveOnStop=no`), so during a hold `pam_himmelblau` prints "connection refused" to the
-standard output of every PAM caller; a missing file stays silent. The login reconciler therefore manages the drop-in
-`/etc/systemd/system/himmelblaud.socket.d/90-paddock.conf` (`RemoveOnStop=yes`, nothing else), and the same
-drop-in for `himmelblaud-tasks.socket` and `himmelblaud-broker.socket`, like `himmelblau.conf`: written before the
-installation, rewritten on drift with a `daemon-reload` and reported as `login.applied` (`config`). The `reset` removal takes it out again together
-with the socket files and the `himmelblau` sources nss-himmelblau's postinst appended to `/etc/nsswitch.conf`. The
-PAM wait of about 1 s per authentication during a hold is recorded in RR-133.
+**Addendum 2026-11-17 (PDK-1126).** Himmelblau 4.0.8's `himmelblaud.socket` stops with the daemon (`PartOf`) but keeps
+its socket file (`RemoveOnStop=no`), so during a hold `pam_himmelblau` prints "connection refused" to the standard
+output of every PAM caller; with the file missing, account and session checks (`sudo -u` or `sudo -n` without a
+password prompt) print nothing, while a password authentication still waits about 1 s and prints two Himmelblau
+messages and one "timed out waiting for himmelblaud socket" line, also for local users. The login reconciler therefore
+manages the drop-in `/etc/systemd/system/himmelblaud.socket.d/90-paddock.conf` (`RemoveOnStop=yes`, nothing else), and
+the same drop-in for `himmelblaud-tasks.socket` and `himmelblaud-broker.socket`, like `himmelblau.conf`: written
+before the installation, rewritten on drift with a `daemon-reload` and reported as `login.applied` (`config`); a
+failed reload is retried by the next pass, and a failure after the deny list is reported only after the sessions of a
+lock were handled. The `reset` removal takes them out again together with the socket files and the `himmelblau`
+sources nss-himmelblau's postinst appended to `/etc/nsswitch.conf`. The PAM wait of about 1 s per password
+authentication during a hold is recorded in RR-133.
 
 ## Amendment 2026-11-11 b — the remaining points of the hold (PDK-985, PDK-990, PDK-991; architect decisions)
 

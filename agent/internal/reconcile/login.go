@@ -109,6 +109,8 @@ type Login struct {
 	Shield         *NSSShield
 	daemonStopped  atomic.Bool
 	restartPending atomic.Bool
+	// reloadPending marks socket drop-ins written whose daemon-reload failed; the next pass retries it.
+	reloadPending atomic.Bool
 }
 
 // Type implements Reconciler.
@@ -184,7 +186,7 @@ func (l *Login) Plan(ctx context.Context, r bundle.Resource) ([]string, error) {
 	if !l.installed(s.Himmelblau.PackageVersion) {
 		changes = append(changes, "package")
 	}
-	if !l.fileIs(HimmelblauConf, st.wantConf) || !l.socketDropInsAre() {
+	if !l.fileIs(HimmelblauConf, st.wantConf) || !l.socketDropInsAre() || l.reloadPending.Load() {
 		changes = append(changes, "config")
 	}
 	if !l.fileIs(DenyList, st.wantDeny) {
@@ -285,26 +287,25 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 		}
 		changed = append(changed, "deny_list")
 	}
+	// With the deny list written, a failure from here on is reported after the sessions: the next pass sees the user
+	// as denied already and would never run the session action of the lock (PDK-1126d).
+	var confErr error
+	confStage := protocol.LoginStageConfig
 	if aptErr == nil && (confWritten || !l.fileIs(HimmelblauConf, st.wantConf)) {
-		if err := l.Sys.WriteFileAtomic(HimmelblauConf, st.wantConf, 0o644, 0, 0); err != nil {
-			return l.fail(r.ID, protocol.LoginStageConfig, err)
+		if confErr = l.Sys.WriteFileAtomic(HimmelblauConf, st.wantConf, 0o644, 0, 0); confErr == nil {
+			changed = append(changed, "config")
+			l.restartPending.Store(true)
 		}
-		changed = append(changed, "config")
-		l.restartPending.Store(true)
 	}
-	if aptErr == nil {
+	if aptErr == nil && confErr == nil {
 		written, err := l.ensureSocketDropIn(ctx)
-		if err != nil {
-			return l.fail(r.ID, protocol.LoginStageConfig, err)
-		}
 		if written && !slices.Contains(changed, "config") {
 			changed = append(changed, "config")
 		}
+		confErr = err
 	}
-	if aptErr == nil && l.restartPending.Load() {
-		if err := l.restartAfterHolds(ctx); err != nil {
-			return l.fail(r.ID, protocol.LoginStageRestart, err)
-		}
+	if aptErr == nil && confErr == nil && l.restartPending.Load() {
+		confErr, confStage = l.restartAfterHolds(ctx), protocol.LoginStageRestart
 	}
 	noticeChanged, noticeErr := l.applyNotice(ctx, s.Notice)
 	if noticeChanged && noticeErr == nil {
@@ -321,6 +322,9 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	}
 	if res, ok := l.checkPAM(r.ID); !ok {
 		return res
+	}
+	if confErr != nil {
+		return l.fail(r.ID, confStage, confErr)
 	}
 	if noticeErr != nil {
 		return l.fail(r.ID, protocol.LoginStageNotice, noticeErr)
@@ -447,7 +451,8 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 		confWritten = true
 	}
 	if _, err := l.ensureSocketDropIn(ctx); err != nil {
-		return false, confWritten, fmt.Errorf("%w: %w", errConfig, err)
+		// Not errConfig: Apply would return before the deny list. The drift step after the installation retries it.
+		slog.WarnContext(ctx, "writing the himmelblaud socket drop-ins before the installation failed", "error", err)
 	}
 	err = l.install(ctx, version)
 	switch {
@@ -485,10 +490,15 @@ func (l *Login) ensureSocketDropIn(ctx context.Context) (bool, error) {
 		}
 		written = true
 	}
-	if !written {
+	if !written && !l.reloadPending.Load() {
 		return false, nil
 	}
-	return true, run(ctx, l.Sys, []string{"systemctl daemon-reload"})
+	l.reloadPending.Store(true)
+	if err := run(ctx, l.Sys, []string{"systemctl daemon-reload"}); err != nil {
+		return written, err
+	}
+	l.reloadPending.Store(false)
+	return true, nil
 }
 
 func (l *Login) socketDropInsAre() bool {

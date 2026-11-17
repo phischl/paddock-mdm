@@ -109,6 +109,9 @@ type System struct {
 	FlatpakScript map[string]OutputReply
 	FlatpakCalls  []string
 	FlatpakStdin  [][]byte
+
+	// FailWrite is a path whose WriteFileAtomic fails; FailCmd "systemctl daemon-reload" fails the reload.
+	FailWrite string
 }
 
 // OutputReply is a scripted Output answer: Data with Exit (non-zero: a *reconcile.ExitError), or Err.
@@ -187,6 +190,9 @@ func (s *System) WriteFileAtomic(path string, data []byte, mode fs.FileMode, uid
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Calls = append(s.Calls, "write "+path)
+	if path == s.FailWrite {
+		return fmt.Errorf("write %s: read-only file system", path)
+	}
 	s.Files[path] = &File{Data: append([]byte{}, data...), Mode: mode, UID: uid, GID: gid}
 	return nil
 }
@@ -250,6 +256,9 @@ func (s *System) Systemctl(_ context.Context, args ...string) (string, int, erro
 	defer s.mu.Unlock()
 	if len(args) == 1 && args[0] == "daemon-reload" {
 		s.Calls = append(s.Calls, "systemctl daemon-reload")
+		if s.FailCmd == "systemctl daemon-reload" {
+			return "Failed to reload daemon\n", 1, nil
+		}
 		// Unit files below /etc/systemd/system become known units.
 		for path := range s.Files {
 			if dir, name := filepath.Split(path); dir == "/etc/systemd/system/" && s.Units[name] == nil {
