@@ -810,9 +810,12 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperProtectedFileChanged: {
 		Code: CodeDeviceTamperProtectedFileChanged, Emitted: true,
-		Description: "A device found a protected file changed that the agent does not restore itself, e.g. its PAM configuration (actor: the device).",
-		Params:      deviceEventParams,
-		Outcomes:    []Outcome{OutcomeSuccess},
+		Description: "A device found a protected file changed that the agent does not restore itself, e.g. its PAM configuration or one " +
+			"of Paddock's own components (actor: the device). reason check_suspended: the agent could not check its own components " +
+			"for longer than a fixed bound, and file names the path that blocks the check. reason baseline_reset: the agent's " +
+			"baseline of its own components was corrupt or missing and was recorded anew, and file names the baseline file.",
+		Params:   deviceEventParams,
+		Outcomes: []Outcome{OutcomeSuccess},
 	},
 	CodeManagedFileCreated: {
 		Code: CodeManagedFileCreated, Emitted: true,

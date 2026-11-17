@@ -48,6 +48,7 @@ const crypttabTPM2 = `/^\s*#/! { /tpm2-device=/! s/^(\S+\s+\S+\s+\S+\s+)(\S*luks
 // on 24.04 dracut instead of initramfs-tools, and a rebuilt initramfs.
 func (d *Device) PrepareDisk(t *testing.T) {
 	t.Helper()
+	d.WaitIntegrityBaseline(t)
 	// The marker first: the agent is running already and must not take the passphrase for a finished disk setup.
 	d.Must(`sudo sh -c 'echo "{\"boot_pin_min_length\":8}" > /etc/paddock/disk-setup.json && touch /var/lib/paddock/disk-setup-pending'`)
 	d.MustIn([]byte(credential(t, d.VM, "PADDOCK_LUKS_PASSPHRASE")),

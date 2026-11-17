@@ -233,3 +233,53 @@ Details: plan M5a, "Addendum 2026-11-16 (architect, PDK-1122b review round 2)".
 4. **Unanswered policies.** A Paddock policy that hosts evaluate without an answer is counted in a gauge and logged
    once per full round. A re-tamper after a repair that a publish reset before the server stored the pass stays
    unreported until the policy passes again. This is documented, not changed.
+
+## Amendment 2026-11-16 (architect, PDK-1122a review round 1)
+
+Plan M5a, "Amendment 2026-11-16 (architect, PDK-1122a review round 1)", holds the binding detail. Changes to the
+decision:
+
+1. **A check that cannot run is reported (amends decision 1).** Every reason to skip an object or a pass belongs to a
+   closed table of suspension causes (the lock held, `integrity.json` unreadable or unwritable, a pending update
+   request, probation, an unprocessed result, the supervisor upgrade marker, the staged guard, the conversion skip, a
+   held dpkg lock, a failed read or `systemctl show`). A cause that lasts past its bound in observed time (15 minutes
+   for the baseline itself, 6 hours for Paddock's own flows; a suspend or restart counts as at most two drift
+   intervals) raises `device.tamper_protected_file_changed` once per episode, with `file` naming the blocking path and
+   the new value `check_suspended` of the existing param `reason`. This is an additive change of the released
+   code's audit contract (description text; no new code, param name or MSGID). Options weighed: a new audit code
+   (rejected: a new public code for a variant of the same finding), `file` only without `reason` (rejected: a SIEM
+   and the operator could not tell a suspension from a change; it remains the fallback if the `reason` value is not
+   approved), and a local `Warn` only (rejected by the maintainer guidance §148).
+2. **The supervisor rollback exception needs the pre-upgrade state (amends the last sentence of decision 1).** Before
+   it launches a supervisor upgrade, the agent records the SHA-256 of the supervisor binary and unit that are expected
+   at that moment. After a rollback, a restored file becomes an exception only when its SHA-256 equals that record for
+   the same version. A planted stale marker can no longer turn a replaced supervisor into an accepted exception. No
+   supervisor line changes.
+3. **The baseline moves at two more points, both Paddock's own writes:** a deferred re-sync of an agent-written file
+   whose sync lost the lock, and an update result of the last staged release after a pending rollback.
+4. **The check observes without the lock** and holds `integrity.lock` only to load, compare and save, so a slow pass
+   never makes a Paddock writer give up.
+
+5. **A baseline reset is reported (main §150; amends the re-initialization of a corrupt baseline in decision 1).** A
+   corrupt `integrity.json`, or a missing baseline on a device whose baseline was once established (agent state
+   `integrity_established_at`), is re-initialized as before, and is now reported once per episode as
+   `device.tamper_protected_file_changed` with `file` the baseline file and `reason` `baseline_reset`. The episode
+   ends with the next valid record. The re-initialization after an update result without a matching staged release
+   stays a `Warn` without an event, because a rollback to an older agent causes it on a regular flow.
+   Root who resets the agent state together with the baseline makes the device look freshly installed and stays
+   silent here (RR-148); a server-side anchor would need a protocol or audit-contract change and was not taken. The
+   Fleet policy (decision 2) and the mutual watches of PDK-1122c and PDK-1122d remain independent of the agent's state.
+
+Consequences: RR-148 also names short-lived changes within one drift interval, the staged-guard, conversion and
+re-sync windows, and that changes during a suspension are reported only as the suspension. An unwritable baseline
+delays staging, supervisor upgrades and update results by at most 15 minutes before they proceed.
+
+### Addendum 2026-11-16 (round 2, main and user decision §152)
+
+The bounds of point 1 hold per **blocked object** (the baseline, the slots, each package, each agent-written file,
+each unit), not per cause, so alternating causes no longer restart them. They are kept in observed time while the
+agent runs. A gap between passes counts at most twice the check's interval, and that interval is capped at 1 hour
+whatever `drift_interval_s` says. A pass runs at every agent start. The suspension state lives in the agent's
+`state.json`, so restarts, a held lock or an unwritable baseline no longer reset it. Root who edits the agent state
+resets it, the same residual as the joint reset in point 5. Plan M5a R15 holds the detail.
+

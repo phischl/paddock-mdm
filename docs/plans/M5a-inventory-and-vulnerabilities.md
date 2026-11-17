@@ -2055,3 +2055,614 @@ one statement; log wording except the `reason`, `due`, `live`, `fresh` attribute
 
 Not protocol-breaking: no device API, admin API, bundle, command or event-type change; one new audit code, one
 additive migration. VM time: F7 adds about 35 minutes per VM (VMs in parallel), on top of F6.
+
+## Amendment 2026-11-16 (architect, PDK-1122a review round 1)
+
+Scope: the fix round of PDK-1122a after the external review and review 1 of commit `9b285ad3` (both not approved),
+under the guidance of `decisions-alpha11.md` §148. It amends part C of the amendment "2026-11-16 (architect,
+PDK-1122)" above; where it differs, this amendment wins. ADR 0056 gets an amendment of the same date (the check now
+reports its own suspension, and the supervisor rollback exception rule changes). Everything not named here stays as
+implemented in `9b285ad3`.
+
+### R0 Principle
+
+An integrity check that cannot run MUST NOT go silent. Every reason for skipping an object or a whole pass is a
+**suspension cause** from the closed table in R3. A cause that persists past its bound raises one event the server
+records and shows: the existing code `device.tamper_protected_file_changed`, with `file` set to the path that blocks
+the check and the new value `check_suspended` of the existing param `reason` (R4). A local `Warn` alone is not enough.
+Regular flows MUST NOT reach a bound (R3 lists the longest regular duration per cause).
+
+### R1 B1: observe outside the lock (replaces C3 "Every read-modify-write holds an exclusive flock" for `Check`)
+
+`Checker.Check` MUST run in this order:
+
+1. **Peek.** Read `integrity.json` without the lock through `readRegular` (R2) and keep its `generation` (R6) as
+   `gen0`. A missing or unreadable file gives `gen0 = 0`; the pass continues.
+2. **Observe, without the lock.** Evaluate the flow conditions (quiescence C4, supervisor busy, dpkg busy, the
+   conversion skip), hash the slots, `current`, the four agent-written files and `/usr/bin/paddockd`, read the
+   `md5sums` files, run `dpkg-query` and `systemctl show`, hash the package files and foreign unit files, and apply
+   the md5sums race guard (C5). The result is an in-memory snapshot (type `snapshot`, unexported) that holds, per
+   path, the observed value, and per package file additionally the observed MD5 and the `md5sums` entry. The snapshot
+   also holds the set of active suspension causes (R3) of this pass.
+3. **Classify, under the lock.** `store.update` takes `integrity.lock` (wait at most `LockWait` = 10 s, unchanged),
+   loads the baseline, and:
+   - if `b.Generation != gen0`, changes nothing and records the cause `baseline_raced` (another writer moved the
+     baseline while this pass observed; the pass is dropped, no event);
+   - otherwise applies the deferred re-syncs (R7), the initializations (C4, C7), the staged guard, the exceptions,
+     `mark` (C8) and the exception pruning (C5) to the snapshot, merges the suspension state (R4), sets
+     `b.CheckedAt` to `Now()` and saves.
+4. **Release the lock, then emit**: first the change events of `mark`, then the suspension events of R4.
+
+`Check` MUST NOT run `systemctl` or `dpkg-query`, hash any file, or read an `md5sums` file while it holds the lock;
+under the lock it reads and writes only `integrity.json`. `SyncFiles`, `RecordStaged`, `UpdateResult`, `RecordSupervisorPre` and
+`SupervisorResult` MUST likewise hash before they take the lock and hold it only for load, modify and save.
+
+### R2 External M4: no TOCTOU between `Lstat` and `Open`
+
+1. New unexported helper in `agent/internal/integrity/baseline.go`:
+
+   ```go
+   // openRegular opens path with O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC and Fstats the descriptor.
+   // It returns (nil, info, nil) when the descriptor is not a regular file, so the caller observes its type.
+   func openRegular(path string) (*os.File, fs.FileInfo, error)
+   // readRegular reads a regular file of at most maxBytes through openRegular; a non-regular file or a larger
+   // one is an error.
+   func readRegular(path string, maxBytes int64) ([]byte, error)
+   ```
+
+2. `hasher.file` MUST: `Lstat` (absent → `""`; symlink → `"symlink:" + Readlink`; non-regular → `"!type:<mode>"`,
+   unchanged); then `openRegular`. On `ELOOP` (swapped to a symlink after the `Lstat`) it returns
+   `"symlink:" + Readlink`. When the descriptor is not regular it returns `"!type:" + <mode of the Fstat>`. The
+   fingerprint for the cache MUST come from the `Fstat` of the descriptor, never from the `Lstat`, and the content
+   MUST be read from that descriptor.
+3. Every other file read of package `integrity` MUST go through `readRegular`: `integrity.json` (max 1 MiB) and the
+   `md5sums` files (max 4 MiB). A FIFO, device node or oversized file there is a read error (R3 causes
+   `baseline_read` or `object:<path>`), never a blocking read.
+4. `update.ReadResult`, `supervisorpkg.ReadResult` and `supervisorpkg.ReadMarker` are not changed in this ticket (they
+   are read by pre-existing agent code on the same loop; a FIFO there blocks the agent already today). Follow-up stub
+   **PDK-1122f** (todo): FIFO-safe reads of the agent's state files.
+
+### R3 Suspension causes and bounds (new, closed table)
+
+Two bounds, in **observed time** (R4), as constants in `agent/internal/integrity/suspend.go`:
+
+```go
+const (
+	// StateBound covers causes in the baseline itself; regular holders keep integrity.lock for milliseconds.
+	StateBound = 15 * time.Minute
+	// FlowBound covers causes that Paddock's own flows create; the longest regular one (a dpkg run of a release
+	// upgrade) stays well below it.
+	FlowBound = 6 * time.Hour
+)
+```
+
+| Key | `file` param | Active in a pass when | Bound | Longest regular duration |
+| --- | --- | --- | --- | --- |
+| `lock` | `/var/lib/paddock/state/integrity.lock` | `store.lock` returned `ErrLockTimeout` | State | seconds (enroll, a sync) |
+| `baseline_read` | `/var/lib/paddock/state/integrity.json` | load failed with an error other than not-exist (also non-regular, oversized). The pass is skipped; the baseline is NOT re-initialized (internal L2). A JSON parse error stays C9 (rename, re-initialize, no suspension cause) and is reported by R14. | State | never |
+| `baseline_write` | `/var/lib/paddock/state/integrity.json` | the save of step 3 failed | State | never (full disk is not regular) |
+| `baseline_raced` | `/var/lib/paddock/state/integrity.json` | generation mismatch in step 3 | State | one pass |
+| `update_request` | `/var/lib/paddock/staging/request.json` | `update.Pending` | Flow | minutes (install); a PDK-1118 stall is an anomaly the runbook names |
+| `probation` | `/var/lib/paddock/state/probation.json` | the file exists (any type) | Flow | 10 min probation; a pending rollback (ADR 0024) is an anomaly |
+| `update_result` | `/var/lib/paddock/state/update-result.json` | the result is unreadable, or readable and not processed | Flow | one loop tick |
+| `supervisor_marker` | `/var/lib/paddock/state/supervisor-upgrade.json` | the marker exists (any type) | Flow | 30 min (`supervisorpkg.StaleAfter`) |
+| `supervisor_result` | `/var/lib/paddock/state/supervisor-upgrade-result.json` | the result is unreadable, or readable and not processed | Flow | one loop tick |
+| `staged:<path>` | the slot path or `/opt/paddock/agent/current` | the staged guard of `checkSlots` skipped that path | Flow | install + 10 min probation |
+| `conversion` | `/etc/paddock/disk-setup.json` | `Pass.SkipFiles` holds it | Flow | one preparation or cleanup run (minutes) |
+| `dpkg_lock` | `/var/lib/dpkg/lock-frontend` | `DpkgBusy()` at the start or the end of the package check | Flow | one apt run, < 3 h for a release upgrade |
+| `package:<name>` | `/var/lib/dpkg/info/<the md5sums file that was read>` | reading `md5sums` failed (not not-exist), `dpkg-query` failed, or the race guard skipped the package | Flow | one dpkg run |
+| `object:<path>` | `<path>` | hashing or reading that checked path failed (slots: `/opt/paddock/agent`; `/usr/bin/paddockd`; an agent-written file; a package file; a foreign unit file) | Flow | never |
+| `unit:<unit>` | `/etc/systemd/system/<unit>.d` | `systemctl show` failed or its `DropInPaths` did not parse (R9) | Flow | never |
+
+No other cause exists. "Package not `installed`" and "unit not-found" stay silent skips (C5, C6: their absence is
+reported elsewhere).
+
+### R4 Observed time, one event per episode, persistence
+
+1. **State.** `Baseline.Suspended map[string]Suspension` (`json:"suspended,omitempty"`), keyed by the cause key:
+
+   ```go
+   type Suspension struct {
+       File     string    `json:"file"`
+       Observed int64     `json:"observed_s"` // seconds the cause was seen active
+       Last     time.Time `json:"last"`       // time of the last pass that saw it active
+       Reported bool      `json:"reported"`
+   }
+   ```
+
+   The `Checker` keeps the same map in memory (`Checker.suspended`). Memory is authoritative while the process runs;
+   at each successful load (step 3) a persisted entry the memory lacks is adopted, and on a conflict the entry with
+   the larger `Observed` wins, `Reported` is OR-ed. Every successful save writes the memory map.
+2. **Accumulation.** `Pass.Interval time.Duration` (new field; the agent sets `a.d.Config.DriftInterval`). For every
+   cause active in a pass: a new entry starts with `Observed = 0, Last = now`; an existing entry adds
+   `min(now − Last, 2 × Pass.Interval)` seconds (0 when `now` is before `Last`) and sets `Last = now`. The cap makes a
+   suspend, a shutdown or an agent restart count as at most two intervals, so a request that waits across a night
+   of sleep does not reach `FlowBound` (no false alarm on laptops).
+3. **Episode end.** A cause not active in a pass is deleted from the map. Causes of state (`lock`, `baseline_*`) are
+   evaluated every pass; flow causes too, because R1 evaluates them before the lock. A pass that ends at `lock`
+   still updates the memory map of every cause it evaluated.
+4. **Report.** When `Observed ≥ bound` and `!Reported`, the pass emits once `device.tamper_protected_file_changed`
+   with `{file: Suspension.File, reason: "check_suspended"}` and sets `Reported = true`. A new episode of the same
+   cause reports again. The event is emitted even when the save failed (it is the point of `baseline_*`); the
+   memory map then holds the dedup, so a restart while the baseline stays unwritable reports once more after a new
+   `StateBound` (documented in RR-148).
+5. **Fail safe.** Suspension changes nothing on the device and stops nothing; it only reports.
+
+### R5 The event and the audit contract (needs main's approval, see "Approvals")
+
+- `pkg/protocol/types.go`: `TamperProtectedFileChanged` gains `Reason string \`json:"reason,omitempty"\``, and a
+  constant `TamperReasonCheckSuspended = "check_suspended"` next to it. A change event carries no `reason`.
+- `Checker.Emit` becomes `func(file, reason string)`; `agent.New` maps it to
+  `protocol.TamperProtectedFileChanged{File: file, Reason: reason}`.
+- The server needs no code change: `reason` is already in `deviceEventParams` and in `eventParams`'
+  string list (`server/internal/app/devicereports.go`), and the tamper finding's subject stays `file`
+  (`server/internal/app/findings.go`), so a suspension opens its own finding per blocking path.
+- **Audit contract text changes:** the `Description` of `CodeDeviceTamperProtectedFileChanged` in
+  `server/internal/domain/audit/codes.go` MUST become exactly:
+  "A device found a protected file changed that the agent does not restore itself, e.g. its PAM configuration or one
+  of Paddock's own components (actor: the device). reason check_suspended: the agent could not check its own
+  components for longer than a fixed bound, and file names the path that blocks the check." —
+  and `docs/compliance/audit-codes.md` is regenerated with `make gen`. This is an additive change of the released
+  code's contract: one new value of an existing param, no new code, no MSGID change, no new param name, no i18n key.
+  The portal message (`audit.device.tamper_protected_file_changed`) is not changed.
+
+### R6 Generation and `checked_at`
+
+`Baseline` gains `Generation uint64` (`json:"generation"`) and `CheckedAt time.Time` (`json:"checked_at"`). Every save
+by any writer increments `Generation` by one. `Check` sets `CheckedAt` on every successful classify, so every
+completed pass writes the file (one small write per drift interval; the system gates wait on it, R12).
+
+### R7 Lock timeout never raises a false report (low; B1 alone does not suffice)
+
+B1 shortens every hold to milliseconds, but a stalled disk can still keep a save's fsync past `LockWait`. Therefore:
+
+1. **Deferred re-sync.** New goroutine-safe method `func (c *Checker) Defer(paths ...string)` (mutex inside the
+   `Checker`). `Agent.syncIntegrity` calls it with the same paths when `SyncFiles` returns an error. In step 3 of the
+   next passes, each deferred path takes its snapshot value as its baseline (`b.expect`) and is not compared in that
+   pass; it leaves the deferred set only after a successful save. RR-148 names the window between the write and the
+   deferred re-sync.
+2. **Bookkeeping before a flow.** One rule for the four hooks `RecordStaged` (`handleUpdate`), `RecordSupervisorPre`
+   (R10), `UpdateResult` (`reportUpdate`) and `SupervisorResult` (R10): on an error, the agent returns from the hook's
+   caller **before** the flow step it guards (staging; `Launch`; the event, `FailedUpdateVersion` and
+   `ReportedUpdateAt`; the event, the retry bookkeeping and `ReportedSupervisorUpgradeAt`) and retries at the next
+   tick, until the first failure for the same key is `StateBound` (wall clock, memory only) old. Then it proceeds
+   with one `Warn` naming the missed bookkeeping. Keys: `staged:<version>`, `supervisor-pre:<version>`,
+   `update-result:<at RFC3339Nano>`, `supervisor-result:<at RFC3339Nano>`. Helper in
+   `agent/internal/agent/integrity.go`:
+
+   ```go
+   // integrityRetry reports whether the caller must stop and retry later: err is non-nil and the first failure
+   // for key is younger than integrity.StateBound. A nil err forgets key.
+   func (a *Agent) integrityRetry(key string, err error) bool
+   ```
+
+   Rationale for the bound: an unwritable baseline must not withhold update results or block agent and supervisor
+   updates for good (design contract 8); it is reported by R3 `baseline_write` after the same bound.
+3. This closes internal **B2**: `reportUpdate` calls `UpdateResult` first and, when `integrityRetry` says stop,
+   returns before the event and before `ReportedUpdateAt`. While the result is unprocessed, the slots are not judged
+   (C4), so no false report occurs.
+
+### R8 External H1 and the guarded sync of `disk-setup.json`
+
+1. `encryptDiskAbortCommand` and `handleAbortRequest` MUST sync `disk-setup.json` only when `encrypt.Abort` returned
+   `aborted == true`.
+2. All four `disk-setup.json` sync sites (both aborts, `Prepare` in `runConversions`, `RunCleanup` in
+   `retryCleanup`) MUST use the guarded sync:
+
+   ```go
+   // Fingerprint returns the Lstat fingerprint (dev, inode, size, mtime_ns, ctime_ns, type) of a layout path;
+   // an absent file has the zero Fingerprint.
+   func Fingerprint(l paths.Layout, full string) Fingerprint
+   // SyncFileIfChanged is SyncFiles for one file, applied only when its fingerprint differs from before.
+   // changed is false when it did nothing.
+   func SyncFileIfChanged(l paths.Layout, full string, before Fingerprint) (changed bool, err error)
+   ```
+
+   The agent takes `before` immediately before the call that may write (`Abort`, `Prepare`, `RunCleanup`). A call that
+   did not write leaves the fingerprint unchanged (Paddock writes by temp file and rename, the cleanup removes the
+   file last), so an edit made before the call is never laundered. An edit made during the call is accepted (RR-148,
+   unchanged). On an error, `syncIntegrity` defers the path (R7.1) only when `changed` is true.
+
+### R9 Drop-in paths with spaces (external L4)
+
+systemd 255 quotes a `DropInPaths` element that needs it (verified on Ubuntu 24.04: a drop-in `a b.conf` prints as
+`"…/a b.conf"`). `show` MUST split `DropInPaths` with a new unexported `splitQuoted(s string) ([]string, error)`:
+elements are separated by single spaces; an element starting with `"` runs to the next unescaped `"`, and inside it
+`\x` yields `x`; outside quotes `\x` yields `x` as well. An unterminated quote (a path with a newline splits the
+line) is an error: the unit counts as failed (`complete = false`, cause `unit:<unit>`), never as clean.
+
+### R10 External M3 / internal B3 marker: the rollback exception needs the pre-upgrade state
+
+Replaces the rule "records `{path, md5 from the current md5sums entry, sha256 observed now}`" of C5.
+
+1. **Capture.** In `Agent.handleSupervisorPackage`, after `supervisorpkg.Stage` succeeded and before
+   `a.markerSeen.reset()` and `supervisorpkg.Launch`, the agent calls
+
+   ```go
+   // RecordSupervisorPre records, for the supervisor binary and unit, the SHA-256 of each file that is expected now
+   // (its MD5 equals the md5sums entry, or a valid rollback exception covers it), bound to the version to install.
+   func RecordSupervisorPre(l paths.Layout, arch, version string) error
+   ```
+
+   It stores `Baseline.SupervisorPre *SupervisorPre` (`json:"supervisor_pre,omitempty"`) with
+   `{Version string; Files map[string]string /* path → sha256 */}`, replacing any earlier one. A file that is not
+   expected at capture time is left out. On an error, R7.2 applies (no `Launch` this check-in).
+2. **Result.** In `Agent.reportSupervisorUpgrade`, for every result that is not `deferred` (including the
+   agent-synthesized stale `install_failed`), **before** the event:
+
+   ```go
+   // SupervisorResult consumes SupervisorPre. For an outcome other than updated it records an exception for a
+   // supervisor file only when its observed SHA-256 equals SupervisorPre.Files[path] and SupervisorPre.Version equals
+   // version; the exception holds the current md5sums entry and that SHA-256. Any other file gets no exception and
+   // a Warn, and the next pass reports it.
+   func SupervisorResult(l paths.Layout, arch, version, outcome string) error
+   ```
+
+   It clears `SupervisorPre` in every case. `SupervisorRolledBack` is removed. A planted stale marker with a replaced
+   binary therefore yields no exception (no `SupervisorPre` of that version, or a different SHA-256), and the binary
+   is reported once the supervisor is no longer busy. A chain of rollbacks works, because the capture accepts a file
+   that an earlier exception covers.
+3. No supervisor or `supervisorpkg/upgrade.go` line changes. The capture is entirely agent-side; the supervisor budget
+   stays 865 of 865.
+
+### R11 Internal lows
+
+- **L2:** see R3 `baseline_read`: `load` returns the error, `Check` skips the pass, the writers return the error.
+- **L3 (pending rollback):** `UpdateResult` moves `Staged` to `Baseline.LastStaged` (`json:"last_staged,omitempty"`)
+  instead of dropping it; `RecordStaged` clears `LastStaged`. A result without `Staged` whose version equals
+  `LastStaged.Version` uses `LastStaged` (no re-initialization, no `Warn`). The staged guard of `checkSlots` uses only
+  `Staged`, never `LastStaged`. The rule for `current` in a result of the staged release becomes: the observed
+  `current` becomes the baseline when it is `"A"` or `"B"` and the slot it points to has, after the slot rule, a
+  baseline equal to its observed hash. This covers `rolled_back` after `rollback_failed` (the flip back to the old
+  slot) and a crash between `UpdateResult` and `saveState`. RR-148 names the consequence: within one update result
+  window, `current` may be pointed at the other slot's genuine baseline binary without an event.
+- **L4 (runbook C10):** in `docs/operations/agent-releases.md`, replace "reports either step once as
+  `device.tamper_protected_file_changed`: step 2 with `file` `/opt/paddock/agent/current`, step 3 with
+  `/opt/paddock/agent/<slot>/paddockd`." with: "reports step 3 once as `device.tamper_protected_file_changed` with
+  `file` `/opt/paddock/agent/<slot>/paddockd`. Step 2 is usually not reported, because the agent stages the release
+  again and the supervisor's result moves the baseline; it is reported with `file` `/opt/paddock/agent/current` only
+  when the re-staged release is refused." The rest of the paragraph stays.
+- **L1 (real dpkg lock):** see T11.
+- **L5:** see R12.
+
+### R12 System gates and the harness hand edits
+
+1. New helper in `test/system/integrity.go`:
+
+   ```go
+   // WaitIntegrityPass waits until checked_at in the device's integrity.json changed twice after the call, so that
+   // one whole pass started after the call (ADR 0056).
+   func (d *Device) WaitIntegrityPass(t *testing.T)
+   ```
+
+   It reads `checked_at` with `sudo grep -o '"checked_at":"[^"]*"' /var/lib/paddock/state/integrity.json`; timeout
+   `3 × drift interval + 2 min`.
+2. Every "no tamper" assertion (S4 in `agent_test.go`, A1 in `encrypt_test.go`) MUST call `WaitIntegrityPass` and
+   then `Checkin` before it reads events.
+3. **Harness hand edits** (`SetDriftInterval`, `pinTestKey`, `forgeBundle`, the uninstall gate's `agent.yml` edit)
+   are genuine writes outside Paddock and stay reported; the harness MUST NOT suppress or re-baseline them. Binding
+   scoping rule for every gate: a "no tamper" assertion takes its `seen` set after the last hand edit of a C object
+   followed by `WaitIntegrityPass` and `Checkin`, and filters by path prefix; an exact-count assertion filters by
+   `file`. `SetDriftInterval` gets a doc comment that it raises one `/etc/paddock/agent.yml` event once the first
+   integrity pass ran.
+
+### R13 Documents
+
+- `docs/compliance/residual-risks.md`, RR-148: add, in this order:
+  - **Short-lived changes:** a change that is made and reverted within one drift interval (at least 300 s) is not
+    seen — for example a binary swapped, its service restarted, and the file restored while the process keeps running
+    from the deleted inode; or a drop-in placed in a search path the file scan does not read
+    (`/usr/lib/systemd/system/<unit>.d`, `/usr/local/lib/systemd/system`, `service.d/`, prefix directories,
+    `system.control/`), activated by `daemon-reload` and a restart, and removed again.
+  - **Windows:** a slot that holds the release the agent staged is not judged until its result (bounded by
+    `FlowBound`); `disk-setup.json` is not judged while the conversion worker runs, and an edit made then is accepted
+    at its sync; an edit between a Paddock write and a deferred re-sync (R7.1) is accepted; within an update result,
+    `current` may point at the other slot's genuine binary (R11 L3).
+  - **Suspension:** while a cause of R3 is active, changes are not reported individually; the suspension itself is
+    reported after its bound (`check_suspended`). A change reverted before the suspension ends is not seen. With an
+    unwritable baseline, an agent restart restarts the bound.
+  - Replace "Treat a `Warn` … as a possible tamper event" in the last column by also naming: "Investigate every
+    `device.tamper_protected_file_changed` with `reason` `check_suspended` (runbook: agent releases, 'When the
+    integrity check is suspended')."
+- `docs/operations/agent-releases.md`: the L4 wording (R11), and a new subsection "When the integrity check is
+  suspended" after "An update that waits for the active agent": what the event means, the table of R3 (`file` →
+  likely cause → what to check as root), and that the finding is resolved after the cause is removed and one drift
+  pass ran.
+- `docs/architecture.md` §11.5: one sentence after the integrity check's description: "A check that cannot run for
+  longer than a fixed bound reports its suspension with the same code and `reason` `check_suspended`."
+- `changelog.d/PDK-1122a.security.md`: append one sentence: "If the check cannot run for longer than a fixed bound,
+  for example because a state file blocks it, the device reports that with the same code and `reason`
+  `check_suspended`, naming the blocking file."
+- ADR 0056: amendment of the same date (written with this amendment).
+
+### R14 A baseline reset is reported (main §150; amends C9 "one `Warn` and no event")
+
+Corrupting or deleting `integrity.json` makes the agent rebuild the baseline by trust on first use, and with it a
+replaced binary would become the new baseline. A reset is therefore reported once per episode with the existing code
+`device.tamper_protected_file_changed`, `file` `/var/lib/paddock/state/integrity.json` and the new `reason` value
+`baseline_reset` (constant `protocol.TamperReasonBaselineReset = "baseline_reset"`).
+
+1. **Reset kinds.**
+   - `corrupt`: `load` finds a regular `integrity.json` that does not parse as JSON (C9: rename to
+     `integrity.json.corrupt`, start an empty baseline). Any loader detects it: `Check` and every writer
+     (`SyncFiles`, `SyncFileIfChanged`, `RecordStaged`, `UpdateResult`, `RecordSupervisorPre`, `SupervisorResult`).
+   - `missing`: a `Check` pass on a device whose baseline was **established** finds no `current` in `Expected` — the
+     file was deleted, or a writer recreated it without the slots. Established means the agent state holds
+     `IntegrityEstablishedAt` (new field in `agent/internal/state/state.go`:
+     `IntegrityEstablishedAt *time.Time \`json:"integrity_established_at,omitempty"\``). `Check` returns
+     `established bool`: true after a successful save of a baseline whose `Expected` holds
+     `/opt/paddock/agent/current`; `tickIntegrity` then sets the field once and calls `saveState`. A fresh
+     installation and a re-enrollment after an uninstall (which removes `/var/lib/paddock`) are not established and
+     initialize silently, as before.
+2. **Persistence of the episode.** The loader that detects `corrupt` sets `Baseline.Reset = &Reset{Kind: "corrupt",
+   At: now}` (`json:"reset,omitempty"`; `Reset{Kind string \`json:"kind"\`; At time.Time \`json:"at"\`}`) in the
+   rebuilt baseline, so the reset survives a writer that runs before the next pass. `Check` sets `Kind: "missing"` the
+   same way. Every writer keeps an existing `Reset` unchanged.
+3. **Report.** A `Check` pass that loads a baseline with `Reset != nil` initializes the objects by trust on first use
+   (as before), emits `{file: "/var/lib/paddock/state/integrity.json", reason: "baseline_reset"}` once and clears
+   `Reset` in the same save. The `Warn` of C9 stays.
+4. **One per episode.** The episode ends with the first successful save of that `Check` pass (a valid record). A new
+   corruption or deletion after that is a new episode and reports again. If the save fails, or `integrity.json`
+   cannot be renamed and stays corrupt, the `Checker` keeps the dedup in memory (`resetReported`, set when the event
+   is emitted, cleared after a successful save without `Reset`), so later passes of the same process do not repeat
+   it; an agent restart while the file stays corrupt and unwritable reports once more (RR-148, like R4.4).
+5. **Not covered:** the re-initialization of the slots after an update result without a matching staged release
+   (C4) stays a `Warn` without an event, because a rollback to an agent older than PDK-1122a causes it on a regular
+   flow. RR-148 keeps naming it.
+6. **Audit contract.** The `Description` of R5 MUST instead read exactly: "A device found a protected file changed
+   that the agent does not restore itself, e.g. its PAM configuration or one of Paddock's own components (actor: the
+   device). reason check_suspended: the agent could not check its own components for longer than a fixed bound, and
+   file names the path that blocks the check. reason baseline_reset: the agent's baseline of its own components was
+   corrupt or missing and was recorded anew, and file names the baseline file." Additive again: a second value of
+   the existing param.
+7. **RR-148:** move "corrupt `integrity.json` to force a re-initialization" from "none is detected" to the mitigation:
+   "a corrupt or deleted baseline is reported as `baseline_reset`; the binary that becomes the new baseline is not
+   judged against the old one". The runbook subsection of R13 gets one row for `baseline_reset`: check the slots
+   against the published release hashes (PDK-1122b) and the packages with `dpkg --verify`.
+8. **Residual: baseline and agent state reset together (main §150 follow-up, no R15).** `IntegrityEstablishedAt`
+   lives in the agent's local `state.json`, which root can edit. Root who removes that field (or deletes `state.json`
+   and re-creates its enrollment fields) together with `integrity.json` makes the device look like a first
+   installation, and no `baseline_reset` is sent. A server-side anchor was weighed and rejected: the device sends no
+   signal of a completed integrity pass today, so the server could only learn of one through a new event, a new
+   report field or a new `reason` value on a regular pass, which is a protocol or audit-contract change; a heuristic
+   on existing data (agent version, event history) cannot tell a reset from an upgrade of a pre-PDK-1122a agent. Any
+   device-side anchor is editable by root (RR-01). RR-148 MUST name this case exactly as: "root resets the integrity
+   baseline and the agent state together: the device looks freshly installed and no `baseline_reset` is sent; a
+   replaced agent binary is still caught by the Fleet policy `paddock_agent_binary_known` (PDK-1122b), a stopped agent
+   by the mutual watch (PDK-1122c), and a silenced fleetd by PDK-1122d."
+
+### Files
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `agent/internal/integrity/integrity.go` | change | R1 order, snapshot, `Pass.Interval`, `Defer`, `Emit(file, reason)` |
+| `agent/internal/integrity/baseline.go` | change | R2, R6, R7.1, R8, R10, R11 (`LastStaged`, `current` rule, `load` error) |
+| `agent/internal/integrity/packages.go` | change | R1 split, R3 causes, R9 |
+| `agent/internal/integrity/suspend.go` | new | R3 table and bounds, R4 tracker |
+| `agent/internal/agent/integrity.go` | change | `Pass.Interval`, guarded sync, `Defer`, `integrityRetry` |
+| `agent/internal/agent/encrypt.go` | change | R8 at the four sites |
+| `agent/internal/agent/updates.go` | change | R7.2/R7.3 in `reportUpdate` and `handleUpdate` |
+| `agent/internal/agent/supervisor.go` | change | R10 capture before `Launch`, `SupervisorResult` before the event |
+| `agent/internal/agent/agent.go` | change | `Emit` mapping with `Reason` |
+| `agent/internal/state/state.go` | change | R14 `IntegrityEstablishedAt` |
+| `pkg/protocol/types.go` | change | R5 field, constants of R5 and R14 |
+| `server/internal/domain/audit/codes.go` | change | R5 description only |
+| `docs/compliance/audit-codes.md` | regenerate | `make gen` |
+| tests: `agent/internal/integrity/*_test.go`, `agent/internal/agent/integrity_test.go`, `test/system/{integrity.go,agent_test.go,encrypt_test.go,device.go}` | change | T1–T14, R12 |
+| `docs/compliance/residual-risks.md`, `docs/operations/agent-releases.md`, `docs/architecture.md`, `changelog.d/PDK-1122a.security.md` | change | R13 |
+
+MUST NOT be touched: `agent/internal/supervisor/`, `agent/cmd/paddock-supervisor/`, `agent/internal/revoke/`,
+`agent/cmd/paddock-revoke/`, `agent/internal/supervisorpkg/` (all files), `agent/internal/update/`, the OpenAPI
+files, migrations, any other server file, `docs/adr/` (beyond the ADR 0056 amendment already written).
+
+### Tests (each regression test MUST fail on `9b285ad3` and pass with its fix; the implementer verifies the failure
+by running it against the unfixed code, or by `go test -overlay` with the fix reverted, and records it in the result
+document)
+
+- **T1 (H1)** `agent` package: hand-edit `disk-setup.json` after the baseline recorded it, send a refused
+  `encrypt-abort` request (unknown conversion ID) and a refused `encrypt_disk_abort` command; the next pass reports
+  the file exactly once.
+- **T2 (R8 guard)** a `Prepare` and a `RunCleanup` that do not write leave a prior hand edit reported; a `Prepare`
+  that writes raises no event.
+- **T3 (M4 FIFO)** `integrity`: a FIFO at `/etc/paddock/trust.json` and at an `md5sums` path: `Check` returns within
+  5 s (test deadline), the FIFO is observed as `!type:p` and reported once; the `md5sums` FIFO activates
+  `package:<name>`.
+- **T4 (M4 swap)** `hasher` gets an unexported test hook field `afterLstat func(path string)` (nil in production):
+  the hook swaps a malicious regular file for the genuine one after the `Lstat`; the cached fingerprint MUST be the
+  one of the file that was read, and a second pass with the malicious file back MUST report it.
+- **T5 (B1)** a fake `System` whose `Systemctl` blocks until released; while `Check` blocks there, `SyncFiles` from
+  another goroutine MUST succeed within `LockWait`; the sync happens after the peek, so after release the pass
+  is dropped as `baseline_raced` and emits nothing; the next pass emits nothing for the synced file.
+- **T6 (B2)** hold `integrity.lock` from a second open file description during `reportUpdate`: no update event, no
+  `ReportedUpdateAt`; after release, the next tick emits the event once; then a second update (`v3`) produces no
+  tamper event. Plus: lock held past `StateBound` (injected clock) → the event is sent with one `Warn`.
+- **T7 (R7.1)** `SyncFiles` fails (lock held) after `Prepare` wrote the file: no event in the following passes; the
+  deferred path is cleared after the first successful save.
+- **T8 (M3)** planted stale marker of version `X` and a replaced `/usr/sbin/paddock-supervisor`: after the synthesized
+  `install_failed`, no exception is recorded and the next pass reports the binary once. Regular rollback (capture,
+  dpkg rewrites `md5sums`, restore by copy, `rolled_back`): no event. Chain: rollback of v2, then capture for v3 and
+  rollback of v3: no event.
+- **T9 (R3/R4 bounds)** per cause class, with an injected clock and `Pass.Interval = 5 min`: no event at
+  `bound − 1 interval`, exactly one at the first pass `≥ bound`, none in later passes, a new one after the cause ended
+  and came back; `request.json` present across a 12 h gap between two passes and gone at the third pass → no event;
+  restart (new `Checker`, persisted state) continues the count; `integrity.json` made unwritable (read-only
+  directory) → one event `{file: /var/lib/paddock/state/integrity.json, reason: check_suspended}` after 15 min.
+  Covered causes at minimum: `lock`, `baseline_read`, `baseline_write`, `update_request`, `probation`,
+  `update_result` (unparsable), `supervisor_marker`, `staged:<slot>`, `conversion`, `dpkg_lock`, `unit:<unit>`.
+- **T10 (regular flows)** a normal update (request, 10 min probation, result), a 2 h conversion and a 2 h dpkg run
+  raise no event.
+- **T11 (L1)** the production `DpkgBusy` of `integrity.New`: a child process (the test binary re-executed with
+  `-test.run=TestHelperHoldDpkgLock` and an env variable) holds `F_SETLK` on `<root>/var/lib/dpkg/lock`; the
+  package check is skipped. Same for `lock-frontend`.
+- **T12 (L2)** `integrity.json` unreadable with `EISDIR` (a directory): the pass is skipped, the file is not renamed or
+  overwritten, `baseline_read` is active.
+- **T13 (L3)** `rollback_failed` then `rolled_back` for the same version: no `Warn` "update result without a release",
+  no event; crash replay (same result processed twice): no event.
+- **T14 (R9)** `splitQuoted` table test: plain, quoted with space, escaped quote, two elements, unterminated → error;
+  `checkUnits` with a quoted drop-in reports `file` with the space intact.
+- **T15 (R14)** `integrity` and `agent` packages, each case failing on `9b285ad3` (which emits nothing on a reset):
+  - corrupt `integrity.json` on an established device → exactly one event `{file:
+    /var/lib/paddock/state/integrity.json, reason: baseline_reset}`; five later passes → no further event;
+  - after that valid record, corrupt it again → a second event (new episode);
+  - corrupt it, then `SyncFiles` runs before the next pass → the next pass still emits the one event;
+  - corrupt it with the state directory read-only (rename and save fail) → one event across five passes of the same
+    `Checker`;
+  - delete `integrity.json` on an established device → one event; a writer recreates it without the slots before
+    the pass → one event;
+  - fresh device (no `IntegrityEstablishedAt`) without `integrity.json` → no event, and `IntegrityEstablishedAt` is
+    set after the first pass that recorded `current`;
+  - C4 result without a staged release → no event (unchanged).
+- System gates: R12 (no new VM gate).
+
+### Stop conditions
+
+Stop and report to the lead, without working around it, when:
+
+1. A fix needs a line in `agent/internal/supervisor/`, `agent/cmd/paddock-supervisor/` or
+   `agent/internal/supervisorpkg/`.
+2. Main does not approve R5 (the `reason` value). Fallback then: drop the `reason` field and `codes.go` change,
+   emit the suspension with `file` only; everything else stays.
+3. `systemctl show` on the VMs prints `DropInPaths` in a format `splitQuoted` does not parse, or the VMs ship
+   distribution-wide drop-ins in `DropInPaths`.
+4. A system gate reports a `check_suspended` event during a regular flow.
+5. Net production lines of PDK-1122a exceed 1450.
+
+### Size
+
+Implemented on `9b285ad3`: 948 net production lines (952 added, 4 removed; Go files outside tests and
+`test/system`). This round adds about: R1 +60, R2 +30, R3/R4 (`suspend.go` and the call sites) +110, R6 +5,
+R7 +40, R8 +25, R9 +25, R10 +35 (net, `SupervisorRolledBack` replaced), R11 +10, R5 +2, R14 +45 (added under §150)
+→ **about +385, about 1335 net production lines in total**, well past the ~900 that §148 names. Tests: about +750. This is reported to main for
+transparency; it is not a stop below 1450 (stop condition 5).
+
+### Approvals needed
+
+All three were granted by main under §150 (2026-11-16), together with the order to add R14.
+
+
+- **Main:** R5, the new value `check_suspended` of the param `reason` on the released code
+  `device.tamper_protected_file_changed`, with the description text change (additive audit-contract change).
+- **Main:** the size (about 1290 net production lines).
+- **Main (default chosen, no stop):** R7.2 lets an unwritable baseline delay staging, supervisor upgrades and update
+  results by up to 15 minutes before they proceed with a `Warn`.
+
+### R15 Round 2 (main and user decision §152): close the gaps in code
+
+Input: Review 2 (F1–F3, S1) and External Review 2 (E1–E6, N1, N2) of `70db3ecb`. All items below are code fixes. Where
+R15 differs from R3, R4, R7 or R13, R15 wins.
+
+1. **F1: writers return read errors.**
+   - `UpdateResult` returns the wrapped error of `h.slots` instead of `nil`.
+   - `observeSupervisor` returns the first hash error, so `RecordSupervisorPre` and `SupervisorResult` fail.
+   - `SyncFiles` applies every file it could hash and then returns an error naming the files it could not hash.
+   - The callers already apply R7.1 (`Defer` the failed paths) and R7.2 (`integrityRetry`).
+   - `SyncFileIfChanged` reports `changed = true` together with such an error.
+2. **E1 / N1: one episode per blocked object, not per cause.** The episode key of R4 becomes the **object** of this
+   closed table. `file` is the path of the first active blocker, in the order of the column.
+
+   | Object key | Blockers in order (each with its R3 `file`) | Bound |
+   | --- | --- | --- |
+   | `baseline` | `lock`, `baseline_read`, `baseline_write`, `baseline_raced` | `StateBound` 15 min |
+   | `slots` | `update_request`, `probation`, `update_result`, `staged:<path>`, read error of a slot or `current` | `FlowBound` 6 h |
+   | `package:<name>`, one per package of C5 | for `paddock-supervisor` only: `supervisor_marker`, `supervisor_result`; then for every package: `dpkg_lock`, the `package:<name>` errors of R3, a hash error of one of its files | `FlowBound` |
+   | `file:<path>`, one per agent-written file and `/usr/bin/paddockd` | `conversion` (`disk-setup.json` only), then its read error | `FlowBound` |
+   | `unit:<unit>`, one per unit of C6 | `systemctl show` failed or did not parse, a hash error of a foreign unit file | `FlowBound` |
+
+   An object is blocked in a pass when at least one of its blockers is active. Its episode accumulates while it is
+   blocked, whichever blocker is active, and ends only as described in point 4. Changing between blockers therefore
+   never restarts the bound.
+3. **E2 / N2: the suspension state lives in the agent state, not in `integrity.json`.**
+   - New type and field in `agent/internal/state/state.go`:
+     - `IntegritySuspension{File string; Observed int64 (json "observed_s"); Last time.Time; Reported bool}`;
+     - `State.IntegritySuspended map[string]IntegritySuspension` (`json:"integrity_suspended,omitempty"`).
+   - In `agent/internal/integrity`, `Suspension` becomes an alias of `state.IntegritySuspension`.
+   - The field `Baseline.Suspended` is removed. An old file that still holds it parses, because the unknown key is
+     ignored.
+   - `Checker` takes the map from `Pass.Suspended` at its first `Check` of the process. `Check` returns
+     `Result{Established bool; Suspended map[string]state.IntegritySuspension; SuspendedChanged bool}`.
+   - `tickIntegrity` stores `Suspended` in `a.st` and calls `saveState` when `SuspendedChanged` is true.
+   - A held lock or an unwritable `integrity.json` therefore no longer stops the bound from advancing, and an agent
+     restart continues it. `adopt` and `persisted` are deleted.
+   - Root who edits `state.json` resets the bounds. This is the same residual as R14.8, and RR-148 names it there.
+4. **F2 / S1: one `track` call per pass.**
+   - `Check` collects the active blockers of the pass (from `observe`, from `classify`, and the state blocker at
+     which the pass ended) and calls `track` once.
+   - An episode ends only in a pass that classified and saved, and in which its object had no active blocker.
+   - A pass that ended at `lock`, `baseline_read`, `baseline_write` or `baseline_raced` ends no episode and starts
+     only `baseline`. Every other existing episode continues to accumulate, because in that pass no object was
+     judged.
+5. **E3: the check has its own ticker, a cap and a pass at start.**
+   - New constant `integrity.MaxInterval = 1 * time.Hour` and function
+     `func Interval(drift time.Duration) time.Duration` returning `min(drift, MaxInterval)`.
+   - `Agent.loop` gets its own ticker, `integrityTick`, with `integrity.Interval(a.d.Config.DriftInterval)`, and a
+     one-shot timer of 0 so that a pass runs at loop start. `tickIntegrity` moves from the `drift.C` case to these two
+     cases.
+   - When the cap applies, the agent logs one `Warn` at start, with the configured and the used interval.
+   - `Pass.Interval` is the used interval. The gap cap of R4.2 is therefore at most 2 h, and `FlowBound` needs at
+     least three passes.
+   - `drift_interval_s` itself and its validation do not change.
+6. **E5 and N3: the staged guard applies only to a changed value.**
+   - A slot is skipped only when `v != Expected[slot] && v == Staged.SHA256`.
+   - `current` is skipped only when `v != Expected[current]` and the slot it points to holds `Staged.SHA256`.
+   - An unchanged value is judged normally, so a stale `Staged` creates no blocker.
+7. **E6: `peekGeneration` returns 0 when the content does not unmarshal into `Baseline`.** A corrupt file that still
+   carries a `generation` is therefore rebuilt and reported as `baseline_reset` (R14), not dropped as raced.
+8. **E4, F3 and the merged finding: runbook** (`docs/operations/agent-releases.md`, "When the integrity check is
+   suspended").
+   - Row for `/var/lib/dpkg/lock-frontend` and `/var/lib/dpkg/lock`: "Likely an apt or dpkg prompt left open in a
+     terminal (users have administrator rights), or a long package run; finish or cancel it."
+   - Closing sentence: "Close the tamper finding by hand once the cause is removed and an integrity pass ran without
+     a new report."
+   - Add: "A suspension of a path the check also judges (a slot, `current`, an agent-written file) counts on the same
+     tamper finding as a change of that path; the audit event's `reason` tells them apart."
+9. **Bound wording, binding for RR-148, the ADR 0056 amendment, the runbook and R3.** Each of these texts MUST say:
+   - the bound holds **per blocked object**, in observed time while the agent runs;
+   - a gap between passes counts at most twice the check's interval, and that interval is at most 1 h;
+   - a pass runs at every agent start;
+   - the bound survives agent restarts and an unwritable or locked baseline;
+   - root who edits the agent state resets it (R14.8).
+
+   Remove every claim that "a restart restarts the bound" for suspensions. The R14.4 sentence about `baseline_reset`
+   after a restart stays, because its dedup is still memory-only.
+
+   In R3, the dpkg row's "longest regular duration" becomes "one apt run; a prompt left open holds it indefinitely
+   and is reported after 6 h (expected, runbook)".
+
+   I write the ADR text in the same commit as this item. The implementer changes RR-148, the runbook and the
+   architecture sentence of R13 where they contradict this.
+
+**Regression tests.** Each MUST fail on `70db3ecb`, and the result document records the failing run.
+- **T16 (E1):**
+  - trojan in slot B, `probation.json` and `request.json` planted alternately every 5 h over 3 days (injected
+    clock, interval 5 min): exactly one `check_suspended` for object `slots` once the observed time reaches 6 h;
+  - the same with `dpkg_lock` alternating with a FIFO at `md5sums`, for `package:paddock-agent`;
+  - the same with `supervisor_marker` alternating with an unparsable `supervisor-upgrade-result.json`, for
+    `package:paddock-supervisor`.
+- **T17 (E2):**
+  - `integrity.lock` held by a second open file description, `probation.json` planted, and a new `Checker` every
+    10 min, seeded from the previous `Result.Suspended`: `baseline` reports after 15 min and `slots` after 6 h;
+  - an agent-level test that `IntegritySuspended` is saved to and loaded from `state.json`.
+- **T18 (E3):**
+  - `Interval(365 * 24 * time.Hour)` is 1 h, and the agent logs the clamp `Warn`;
+  - an agent test with `DriftInterval` of 1 h sees a pass before any tick, so it ran at start.
+- **T19 (E5):** `Staged` equals the hash already in the inactive slot, and staging keeps failing for 7 h: no event.
+- **T20 (E6):** `{"generation":7,"expected":1}` with the state directory read-only: exactly one `baseline_reset`,
+  and no `baseline_raced`.
+- **T21 (F1):** one test per hook, each with a file made unreadable for exactly one call (`chmod 000` as non-root;
+  skip as root):
+  - `UpdateResult`: no event, `ReportedUpdateAt` unchanged, the next tick processes the result, and no
+    `check_suspended` follows;
+  - `RecordSupervisorPre` / `SupervisorResult`: a regular rollback raises no tamper event;
+  - `SyncFiles`: the path is deferred, and no event follows.
+- **F2:** covered by T17, where `staged:` blockers survive a lock-held pass.
+
+**Size.** F1 +6, E3 +15, E6 +2, E5 ±0, E1/N1 (object table replaces cause keys) −5, E2/N2 (state type and `Result`
++18, `adopt`/`persisted`/`Baseline.Suspended` −30) −12, S1/F2 −10 → **about −4 net, flat**. The total stays about
+1335, and the stop stays at 1450.
+
+**Stop conditions (in addition to the earlier ones).**
+1. Moving the suspension state into `state.json` collides with another writer of the agent state outside the loop
+   goroutine.
+2. The pass at loop start raises an event on a regular boot in a VM gate.
+
+The remaining simplifications (S2–S9, N4, N5) are the alpha.12 stub PDK-1122g. They are not part of this round.

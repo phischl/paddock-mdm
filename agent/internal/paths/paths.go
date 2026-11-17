@@ -37,6 +37,13 @@ func (l Layout) UpdateResult() string { return l.Join("/var/lib/paddock/state/up
 // Probation is the supervisor's record of a running probation.
 func (l Layout) Probation() string { return l.Join("/var/lib/paddock/state/probation.json") }
 
+// Integrity is the integrity baseline of Paddock's own device components (ADR 0056, plan M5a amendment 2026-11-16,
+// C3).
+func (l Layout) Integrity() string { return l.Join("/var/lib/paddock/state/integrity.json") }
+
+// IntegrityLock serializes every read-modify-write of Integrity, also across processes (`paddockd enroll`).
+func (l Layout) IntegrityLock() string { return l.Join("/var/lib/paddock/state/integrity.lock") }
+
 // Spool is the event spool.
 func (l Layout) Spool() string { return l.Join("/var/lib/paddock/spool/events.jsonl") }
 

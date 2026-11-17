@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
@@ -70,6 +71,10 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 		slog.WarnContext(ctx, "staging the supervisor package failed; retrying at the next check-in", "version", ref.Version, "error", err)
 		return
 	}
+	// The rollback exception needs the files as they are before the upgrade (plan M5a R10).
+	if a.integrityRetry("supervisor-pre:"+ref.Version, integrity.RecordSupervisorPre(a.d.Layout, runtime.GOARCH, ref.Version)) {
+		return
+	}
 	// Before Launch, which writes the new marker first: a sighting of the replaced one would count the new marker as
 	// stale while systemd-run starts the helper (PDK-479, review 1 m1).
 	a.markerSeen.reset()
@@ -110,6 +115,12 @@ func (a *Agent) reportSupervisorUpgrade() {
 	}
 	if r.Outcome == supervisorpkg.OutcomeDeferred {
 		a.deferSupervisor(r)
+		return
+	}
+	// Before the event: after a rollback the helper copied the previous binary and unit back, so dpkg's md5sums
+	// describe the failed version (ADR 0056, plan M5a R10).
+	if a.integrityRetry("supervisor-result:"+r.At.Format(time.RFC3339Nano),
+		integrity.SupervisorResult(a.d.Layout, runtime.GOARCH, r.Version, r.Outcome)) {
 		return
 	}
 	slog.Info("supervisor upgrade finished", "version", r.Version, "from_version", r.FromVersion, "outcome", r.Outcome)
