@@ -69,7 +69,9 @@ enrollment tokens, permission profiles, Authentik users), so the VMs never share
 the whole organization shares is coordinated through the VMs' `vmGroup` (`parallel.go`):
 
 - `Together` runs a step once for all VMs when each of them reached it: the stack outage of S3 (`make down`,
-  `make up`, with `BACKUP=1` when the running stack uses the backup overlay and `BACKUP` is not set), the releases of S4, S-UP1, S-UP2 and S-UP3 (a release
+  `make up`, with `BACKUP=1` when the running stack uses the backup overlay and `BACKUP` is not set; `make up` takes
+  `PADDOCK_VALKEY_MEM_LIMIT` from the environment, so a dev stack that carries load data must export the limit it runs
+  with, e.g. `2g`, or Valkey runs out of memory while it reloads its data), the releases of S4, S-UP1, S-UP2 and S-UP3 (a release
   with `--halt-running` halts every other rollout, so the VMs share one), the update policy of S-UP1 and S-UP3, the
   login history of LH1, the watched units of N12 and the stopped worker of LA1. A VM whose gate ended early (a failure) is no longer waited for.
   `Share` and `Shared` hand each VM's input to the step, such as the rollout buckets that S-UP1's first wave must
