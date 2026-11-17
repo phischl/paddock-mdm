@@ -314,7 +314,10 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	if len(changed) > 0 {
 		l.Events.emit(protocol.EventLoginApplied, protocol.LoginApplied{Changed: changed})
 	}
-	if err := l.sessions(ctx, s, st.local, wasDenied, s.Suspended && !wasSuspended); err != nil {
+	// A suspension counts as applied only once himmelblau.conf denies everyone: while its write fails, every pass would
+	// otherwise terminate the sessions and report the suspension again.
+	suspended := s.Suspended && !wasSuspended && suspendedConf(l.read(HimmelblauConf))
+	if err := l.sessions(ctx, s, st.local, wasDenied, suspended); err != nil {
 		return l.fail(r.ID, protocol.LoginStageSessions, err)
 	}
 	if aptErr != nil {

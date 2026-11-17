@@ -539,6 +539,63 @@ func TestLoginSuspensionTerminatesDirectorySessions(t *testing.T) {
 	}
 }
 
+// TestLoginSuspensionWaitsForTheConfiguration (PDK-1126): while the himmelblau.conf write fails, a suspension neither
+// terminates the sessions nor reports logins.suspension_applied, pass after pass; once the write succeeds it is applied
+// once. A lock in the same state still runs its session action once.
+func TestLoginSuspensionWaitsForTheConfiguration(t *testing.T) {
+	ctx := context.Background()
+	sys, l, events := loginFixture(t)
+	sys.Sessions = deviceSessions
+	l.Apply(ctx, loginResource(t, loginSpec()))
+	sys.TakeCalls()
+	takeEvents(events)
+
+	sys.FailWrite = reconcile.HimmelblauConf
+	s := loginSpec()
+	s.Suspended, s.Himmelblau.PamAllowGroups, s.LockedUsers = true, []string{}, []string{"dave@acme.test"}
+	r := loginResource(t, s)
+	for pass := range 3 {
+		if res := l.Apply(ctx, r); res.Status != reconcile.Error {
+			t.Fatalf("pass %d: apply %+v", pass, res)
+		}
+		var terminated, locked int
+		for _, c := range sys.TakeCalls() {
+			if strings.HasPrefix(c, "loginctl terminate-user") {
+				terminated++
+			}
+			if strings.HasPrefix(c, "loginctl lock-session") {
+				locked++
+			}
+		}
+		if terminated != 0 || (pass == 0) != (locked == 2) || (pass > 0 && locked != 0) {
+			t.Fatalf("pass %d: %d terminated, %d locked", pass, terminated, locked)
+		}
+		for _, e := range takeEvents(events) {
+			if e.typ == protocol.EventLoginsSuspensionApplied {
+				t.Fatalf("pass %d: suspension reported while himmelblau.conf is not written", pass)
+			}
+		}
+	}
+	sys.FailWrite = ""
+	l.Apply(ctx, r)
+	if calls := sys.TakeCalls(); !slices.Contains(calls, "loginctl terminate-user 923001122") {
+		t.Fatalf("suspension not applied after the write: %v", calls)
+	}
+	var applied int
+	for _, e := range takeEvents(events) {
+		if e.typ == protocol.EventLoginsSuspensionApplied {
+			applied++
+		}
+	}
+	if applied != 1 {
+		t.Fatalf("%d logins.suspension_applied, want 1", applied)
+	}
+	l.Apply(ctx, r)
+	if calls := sys.TakeCalls(); slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "loginctl") }) {
+		t.Fatalf("applied again: %v", calls)
+	}
+}
+
 func TestLoginAptFailureIsReportedOnceAndLocksStillApply(t *testing.T) {
 	ctx := context.Background()
 	sys, l, events := loginFixture(t)

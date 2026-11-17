@@ -330,8 +330,9 @@ create a system account; the uninstall helper purges the Himmelblau packages its
 **Addendum 2026-11-17 (PDK-1126).** Himmelblau 4.0.8's `himmelblaud.socket` stops with the daemon (`PartOf`) but keeps
 its socket file (`RemoveOnStop=no`), so during a hold `pam_himmelblau` prints "connection refused" to the standard
 output of every PAM caller; with the file missing, account and session checks (`sudo -u` or `sudo -n` without a
-password prompt) print nothing, while a password authentication still waits about 1 s and prints two Himmelblau
-messages and one "timed out waiting for himmelblaud socket" line, also for local users. The login reconciler therefore
+password prompt) print nothing, while a password authentication still waits about 1 s, shows two Himmelblau
+messages at the login prompt (PAM conversation) and prints one "timed out waiting for himmelblaud socket" line on
+standard output, also for local users. The login reconciler therefore
 manages the drop-in `/etc/systemd/system/himmelblaud.socket.d/90-paddock.conf` (`RemoveOnStop=yes`, nothing else), and
 the same drop-in for `himmelblaud-tasks.socket` and `himmelblaud-broker.socket`, like `himmelblau.conf`: written
 before the installation, rewritten on drift with a `daemon-reload` and reported as `login.applied` (`config`); a
