@@ -25,8 +25,16 @@ func (a *Agent) reportUpdate() {
 	}
 	// Before the event: once the result counts as processed, the next pass compares the slots again (ADR 0056). While
 	// it stays unprocessed the slots are not judged, so waiting for the baseline raises no false report (plan M5a R7).
-	if a.integrityRetry("update-result:"+r.At.Format(time.RFC3339Nano), integrity.UpdateResult(a.d.Layout, r.Version)) {
+	unstaged, err := integrity.UpdateResult(a.d.Layout, r.Version, r.Outcome)
+	if a.integrityRetry("update-result:"+r.At.Format(time.RFC3339Nano), err) {
 		return
+	}
+	// Once per result, like its own event: the baseline is kept, so the next pass reports what the slots hold
+	// (plan M5a R16).
+	if unstaged {
+		slog.Warn("update result without a release this agent staged; the agent slots keep their baseline", "version", r.Version)
+		a.event(protocol.EventTamperProtectedFileChanged, protocol.TamperProtectedFileChanged{
+			File: integrity.UpdateResultFile, Reason: protocol.TamperReasonUpdateResultUnstaged})
 	}
 	slog.Info("agent update finished", "version", r.Version, "from_version", r.FromVersion, "outcome", r.Outcome)
 	a.event(r.EventType(), map[string]string{"version": r.Version, "from_version": r.FromVersion, "outcome": r.Outcome})

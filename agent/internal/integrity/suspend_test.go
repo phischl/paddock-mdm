@@ -216,7 +216,7 @@ func TestRegularFlowsNotSuspended(t *testing.T) {
 	at := d.clock
 	writeResult(t, d, "2.0.0", "updated", at)
 	d.tick(p)
-	if err := UpdateResult(d.l, "2.0.0"); err != nil {
+	if _, err := UpdateResult(d.l, "2.0.0", "updated"); err != nil {
 		t.Fatal(err)
 	}
 	p.ReportedUpdateAt = &at

@@ -813,7 +813,9 @@ var registry = map[Code]Definition{
 		Description: "A device found a protected file changed that the agent does not restore itself, e.g. its PAM configuration or one " +
 			"of Paddock's own components (actor: the device). reason check_suspended: the agent could not check its own components " +
 			"for longer than a fixed bound, and file names the path that blocks the check. reason baseline_reset: the agent's " +
-			"baseline of its own components was corrupt or missing and was recorded anew, and file names the baseline file.",
+			"baseline of its own components was corrupt or missing and was recorded anew, and file names the baseline file. " +
+			"reason update_result_unstaged: an update result named no release the agent staged, the agent kept its baseline " +
+			"of its slots, and file names the update result.",
 		Params:   deviceEventParams,
 		Outcomes: []Outcome{OutcomeSuccess},
 	},

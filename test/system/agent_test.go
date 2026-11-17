@@ -78,6 +78,20 @@ func TestAgentGates(t *testing.T) {
 				t.Fatalf("the update gates reported %v", files)
 			}
 		})
+		// A rollout of S4 still running would offer its release again during S5, and the update result of that retry
+		// would fall into S5's window (PDK-1122j).
+		d.Together(t, "S4", "retract", func() string {
+			done := map[string]bool{}
+			for _, vs := range d.Shared(s4Releases) {
+				for _, v := range strings.Fields(vs) {
+					if !done[v] {
+						done[v] = true
+						retractRelease(t, v)
+					}
+				}
+			}
+			return ""
+		})
 		t.Run("S5 integrity of the agent slots", func(t *testing.T) { d.Bind(t); gateS5(t, d) })
 	})
 }
@@ -278,17 +292,23 @@ func gateS3(t *testing.T, d *Device) {
 	}
 }
 
+// s4Releases is the Share key of the releases of S4, which TestAgentGates retracts before S5. AfterAll still retracts
+// each one at the end, for a run that never reaches that step; an already halted release is left as it is.
+const s4Releases = "S4 releases"
+
 // release marks t as gate and releases a new version once every VM running in parallel arrived at it: a rollout
 // reaches every device.
 func release(t *testing.T, d *Device, gate string, minor int, label string, tags []string) string {
 	t.Helper()
 	d.Gate(t, gate)
-	return d.Together(t, gate, "release", func() string {
+	v := d.Together(t, gate, "release", func() string {
 		v := version(minor, label)
 		d.s.Release(t, v, tags)
 		d.AfterAll(t, func(t *testing.T) { retractRelease(t, v) })
 		return v
 	})
+	d.Share(s4Releases, d.Shared(s4Releases)[d.Name]+" "+v)
+	return v
 }
 
 // stage puts a release into the device's staging directory exactly as the agent stages a download, and signals the

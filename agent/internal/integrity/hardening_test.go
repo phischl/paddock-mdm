@@ -236,7 +236,7 @@ func TestRepeatedUpdateResult(t *testing.T) {
 	d.remove("/var/lib/paddock/state/probation.json")
 	writeResult(t, d, "2.0.0", "rollback_failed", at)
 	d.logs.reset()
-	if err := UpdateResult(d.l, "2.0.0"); err != nil {
+	if _, err := UpdateResult(d.l, "2.0.0", "rollback_failed"); err != nil {
 		t.Fatal(err)
 	}
 	d.quiet(2, Pass{ReportedUpdateAt: &at})
@@ -244,7 +244,7 @@ func TestRepeatedUpdateResult(t *testing.T) {
 	later := at.Add(time.Hour)
 	writeResult(t, d, "2.0.0", "rolled_back", later)
 	for range 2 {
-		if err := UpdateResult(d.l, "2.0.0"); err != nil {
+		if _, err := UpdateResult(d.l, "2.0.0", "rolled_back"); err != nil {
 			t.Fatal(err)
 		}
 	}

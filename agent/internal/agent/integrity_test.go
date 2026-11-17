@@ -164,6 +164,47 @@ func TestIntegrityAgentUpdate(t *testing.T) {
 	}
 }
 
+// TestIntegrityForgedUpdateResult (plan M5a R16): a request and a result for a release the agent never staged, written
+// together with a switch of current, raise update_result_unstaged once, and the next pass reports the slots.
+func TestIntegrityForgedUpdateResult(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	writeFile(t, filepath.Join(a.d.Layout.Slots(), "B", "paddockd"), "agent v0")
+	a = withIntegrity(t, a)
+	ticks(t, a, g, 1)
+	writeFile(t, a.d.Layout.UpdateRequest(), `{"version":"9.1.0"}`)
+	writeFile(t, filepath.Join(a.d.Layout.Slots(), "B", "paddockd"), "agent other")
+	replaceLink(t, "B", filepath.Join(a.d.Layout.Slots(), "current"))
+	if err := os.Remove(a.d.Layout.UpdateRequest()); err != nil {
+		t.Fatal(err)
+	}
+	res, _ := json.Marshal(update.Result{Version: "9.1.0", FromVersion: "1.0.0", Outcome: update.OutcomeSignatureInvalid,
+		At: time.Now().UTC()})
+	writeFile(t, a.d.Layout.UpdateResult(), string(res))
+	a.Cycle(context.Background())
+	if a.st.ReportedUpdateAt == nil {
+		t.Fatal("result not processed")
+	}
+	for range 3 {
+		a.tickIntegrity(context.Background())
+	}
+	var got []string
+	events := append(spooled(t, a), eventsOf(g, protocol.EventTamperProtectedFileChanged)...)
+	for _, e := range events {
+		if e.Type == protocol.EventTamperProtectedFileChanged {
+			d := eventData(t, e)
+			reason, _ := d["reason"].(string)
+			got = append(got, d["file"].(string)+" "+reason)
+		}
+	}
+	slices.Sort(got)
+	want := []string{"/opt/paddock/agent/B/paddockd ", "/opt/paddock/agent/current ",
+		integrity.UpdateResultFile + " " + protocol.TamperReasonUpdateResultUnstaged}
+	if !slices.Equal(got, want) {
+		t.Fatalf("reported %q, want %q", got, want)
+	}
+}
+
 func replaceLink(t *testing.T, target, path string) {
 	t.Helper()
 	_ = os.Remove(path + ".new")

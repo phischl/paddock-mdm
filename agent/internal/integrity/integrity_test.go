@@ -498,7 +498,7 @@ func TestRegularUpdateReportsNothing(t *testing.T) {
 	d.quiet(1, Pass{})
 	writeResult(t, d, "2.0.0", "updated", at)
 	d.quiet(1, Pass{})
-	if err := UpdateResult(d.l, "2.0.0"); err != nil {
+	if _, err := UpdateResult(d.l, "2.0.0", "updated"); err != nil {
 		t.Fatal(err)
 	}
 	d.quiet(3, Pass{ReportedUpdateAt: &at})
@@ -524,7 +524,7 @@ func TestRegularRollbacksReportNothing(t *testing.T) {
 			d.remove("/var/lib/paddock/state/probation.json")
 			writeResult(t, d, "2.0.0", tc.outcome, at)
 			d.quiet(1, Pass{})
-			if err := UpdateResult(d.l, "2.0.0"); err != nil {
+			if _, err := UpdateResult(d.l, "2.0.0", tc.outcome); err != nil {
 				t.Fatal(err)
 			}
 			d.quiet(3, Pass{ReportedUpdateAt: &at})
@@ -541,42 +541,82 @@ func TestRegularRollbacksReportNothing(t *testing.T) {
 		}
 		at := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
 		writeResult(t, d, "2.0.0", "signature_invalid", at)
-		if err := UpdateResult(d.l, "2.0.0"); err != nil {
+		if _, err := UpdateResult(d.l, "2.0.0", "signature_invalid"); err != nil {
 			t.Fatal(err)
 		}
 		d.quiet(3, Pass{ReportedUpdateAt: &at})
 	})
 }
 
-func TestResultWithoutStagedReinitializes(t *testing.T) {
+// TestResultWithoutStagedKeepsBaseline (plan M5a R16): a result without a release this agent staged keeps the
+// baseline and is returned as unstaged; the next pass reports what changed in the slots.
+func TestResultWithoutStagedKeepsBaseline(t *testing.T) {
 	d := newDevice(t)
 	d.quiet(1, Pass{})
 	if err := RecordStaged(d.l, "3.0.0", sha("another release")); err != nil {
 		t.Fatal(err)
 	}
-	// An older agent without this check staged the release and was rolled back to; the request, the probation and
-	// the unprocessed result each keep the slots out of the check.
-	d.write("/var/lib/paddock/staging/request.json", `{"version":"0.9.0"}`)
-	d.write(slotB, "agent v0")
-	d.quiet(1, Pass{})
-	d.write("/var/lib/paddock/state/probation.json", "{}")
+	d.write(slotA, "agent other")
 	d.link("B", current)
-	d.remove("/var/lib/paddock/staging/request.json")
-	d.quiet(1, Pass{})
 	at := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
-	writeResult(t, d, "0.9.0", "rolled_back", at)
-	d.remove("/var/lib/paddock/state/probation.json")
+	writeResult(t, d, "0.9.0", "signature_invalid", at)
 	d.quiet(1, Pass{})
-	d.logs.reset()
-	if err := UpdateResult(d.l, "0.9.0"); err != nil {
-		t.Fatal(err)
+	unstaged, err := UpdateResult(d.l, "0.9.0", "signature_invalid")
+	if err != nil || !unstaged {
+		t.Fatalf("unstaged %v, error %v", unstaged, err)
+	}
+	if ev := d.pass(Pass{ReportedUpdateAt: &at}); !slices.Equal(ev, []string{slotA, current}) {
+		t.Fatalf("reported %v", ev)
 	}
 	d.quiet(3, Pass{ReportedUpdateAt: &at})
-	if n := d.logs.count(slog.LevelWarn); n != 1 {
-		t.Fatalf("%d warnings, want 1", n)
-	}
-	if b := d.baseline(); b.Expected[current] != "B" || b.Expected[slotB] != sha("agent v0") {
+	if b := d.baseline(); b.Expected[current] != "A" || b.Expected[slotA] != sha("agent v1") {
 		t.Fatalf("baseline %v", b.Expected)
+	}
+}
+
+// TestFailedUpdateKeepsCurrent (plan M5a R16): an outcome other than updated or rollback_failed takes the slot with the
+// staged release, but current stays where it was; a switch to that slot is reported.
+func TestFailedUpdateKeepsCurrent(t *testing.T) {
+	for _, outcome := range []string{"self_test_failed", "rolled_back", "signature_invalid", "downgrade_refused"} {
+		t.Run(outcome, func(t *testing.T) {
+			d := newDevice(t)
+			d.quiet(1, Pass{})
+			at := stagedUpdate(t, d)
+			d.remove("/var/lib/paddock/state/probation.json")
+			writeResult(t, d, "2.0.0", outcome, at)
+			unstaged, err := UpdateResult(d.l, "2.0.0", outcome)
+			if err != nil || unstaged {
+				t.Fatalf("unstaged %v, error %v", unstaged, err)
+			}
+			d.changedOnce(current, Pass{ReportedUpdateAt: &at})
+			if b := d.baseline(); b.Expected[current] != "A" || b.Expected[slotB] != sha("agent v2") {
+				t.Fatalf("baseline %v", b.Expected)
+			}
+		})
+	}
+}
+
+// TestUpdateResultTakesOnlyTheStagedSlot (plan M5a R16): updated and rollback_failed move current only to a slot that
+// holds the staged release.
+func TestUpdateResultTakesOnlyTheStagedSlot(t *testing.T) {
+	for _, outcome := range []string{"updated", "rollback_failed"} {
+		t.Run(outcome, func(t *testing.T) {
+			d := newDevice(t)
+			d.quiet(1, Pass{})
+			at := stagedUpdate(t, d)
+			d.remove("/var/lib/paddock/state/probation.json")
+			d.write(slotB, "agent other")
+			writeResult(t, d, "2.0.0", outcome, at)
+			if _, err := UpdateResult(d.l, "2.0.0", outcome); err != nil {
+				t.Fatal(err)
+			}
+			if ev := d.pass(Pass{ReportedUpdateAt: &at}); !slices.Equal(ev, []string{slotB, current}) {
+				t.Fatalf("reported %v", ev)
+			}
+			if b := d.baseline(); b.Expected[current] != "A" {
+				t.Fatalf("baseline %v", b.Expected)
+			}
+		})
 	}
 }
 

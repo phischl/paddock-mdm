@@ -19,6 +19,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/agent/internal/update"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -269,18 +270,21 @@ func RecordStaged(l paths.Layout, version, sum string) error {
 	})
 }
 
-// UpdateResult moves the baseline of the slots and current for the supervisor's update result of version, before
-// its event is spooled; one rule covers every outcome (plan M5a C4, R11 L3). The staged release moves to LastStaged,
-// so that a later result of the same version (rolled_back after rollback_failed, or a replay after a crash) finds it.
-// A result without a matching staged release re-initializes the slots and current from what is observed, with one
-// Warn and no event.
-func UpdateResult(l paths.Layout, version string) error {
+// UpdateResultFile is the device path of the update result, the file param of an unstaged result (plan M5a R16).
+const UpdateResultFile = "/var/lib/paddock/state/update-result.json"
+
+// UpdateResult moves the baseline for the supervisor's update result of version with outcome, before its event is
+// spooled (plan M5a C4, R11 L3, R16). The staged release moves to LastStaged, so that a later result of the same
+// version (rolled_back after rollback_failed, or a replay after a crash) finds it. Only the slot holding the staged
+// release is taken; current moves only on updated or rollback_failed, and only to that slot. A result without a
+// matching staged release keeps the whole baseline and returns unstaged, so that the caller reports it.
+func UpdateResult(l paths.Layout, version, outcome string) (unstaged bool, err error) {
 	var h hasher
 	obs, err := h.slots(l)
 	if err != nil {
-		return fmt.Errorf("reading the agent slots for the update result: %w", err)
+		return false, fmt.Errorf("reading the agent slots for the update result: %w", err)
 	}
-	return newStore(l, nil).update(func(b *Baseline) bool {
+	err = newStore(l, nil).update(func(b *Baseline) bool {
 		staged := b.Staged
 		if staged == nil && b.LastStaged != nil && b.LastStaged.Version == version {
 			staged = b.LastStaged
@@ -290,22 +294,32 @@ func UpdateResult(l paths.Layout, version string) error {
 		}
 		b.Staged = nil
 		if staged == nil || staged.Version != version {
-			slog.Warn("update result without a release this agent staged; the agent slots are recorded anew", "version", version)
-			for p, v := range obs {
-				b.expect(p, v)
-			}
+			unstaged = true
 			return true
 		}
 		for _, slot := range []string{slotA, slotB} {
-			if v := obs[slot]; v == staged.SHA256 || v == b.Expected[slot] {
-				b.expect(slot, v)
+			if obs[slot] == staged.SHA256 {
+				b.expect(slot, obs[slot])
 			}
 		}
-		if sp := slotPath(obs[current]); sp != "" && obs[sp] != "" && b.Expected[sp] == obs[sp] {
-			b.expect(current, obs[current])
+		sp := slotPath(obs[current])
+		switch {
+		case sp == "":
+		case outcome == update.OutcomeUpdated || outcome == update.OutcomeRollbackFailed:
+			if obs[sp] == staged.SHA256 {
+				b.expect(current, obs[current])
+			}
+		case outcome == update.OutcomeRolledBack:
+			// Only the completed rollback after a rollback_failed of this release, which moved current to the staged
+			// slot: back to the other slot, unchanged since (plan M5a R11 L3).
+			if b.Expected[slotPath(b.Expected[current])] == staged.SHA256 && obs[sp] != staged.SHA256 &&
+				obs[sp] == b.Expected[sp] {
+				b.expect(current, obs[current])
+			}
 		}
 		return true
 	})
+	return unstaged, err
 }
 
 // supervisorObserved is a supervisor file as observed now with its md5sums entry ("" when it has none).
