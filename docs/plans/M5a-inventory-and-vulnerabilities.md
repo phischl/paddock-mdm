@@ -2666,3 +2666,15 @@ R15 differs from R3, R4, R7 or R13, R15 wins.
 2. The pass at loop start raises an event on a regular boot in a VM gate.
 
 The remaining simplifications (S2–S9, N4, N5) are the alpha.12 stub PDK-1122g. They are not part of this round.
+
+### R16 (PDK-1122j): update results keep the slot baseline
+
+Processing an update result no longer adopts what `current` points at or what the slots hold.
+- The agent moves `Expected[current]` only on outcome `updated` or `rollback_failed`, and only to the slot whose observed
+  hash equals the staged hash. Every other outcome keeps it, so the next quiescent pass reports a deviation.
+- A result without a release this agent staged keeps the whole baseline and emits `device.tamper_protected_file_changed`
+  (`TamperProtectedFileChanged`) with the new reason `update_result_unstaged` (`protocol.TamperReasonUpdateResultUnstaged`,
+  next to `check_suspended` and `baseline_reset`); `File` names the update result. The audit code description names the reason.
+- The system gate retracts the releases of S4 in a shared step before S5, so S5 starts from a known state.
+- Tests: a failed update with a simultaneous flip is reported; a result without a staged release with a slot change is
+  reported with the event; a regular update raises no event.
