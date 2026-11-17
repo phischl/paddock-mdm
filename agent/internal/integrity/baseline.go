@@ -76,6 +76,9 @@ type Baseline struct {
 	SupervisorPre *SupervisorPre    `json:"supervisor_pre,omitempty"`
 	Reported      map[string]string `json:"reported"`
 	Reset         *Reset            `json:"reset,omitempty"`
+	// RollbackPending: a rollback_failed of the staged release moved current to its slot; only the next update
+	// result may move current back (plan M5a R16).
+	RollbackPending bool `json:"rollback_pending,omitempty"`
 }
 
 // expect moves the baseline of path; its reported mark goes with it (plan M5a C8).
@@ -266,6 +269,7 @@ func RecordStaged(l paths.Layout, version, sum string) error {
 	return newStore(l, nil).update(func(b *Baseline) bool {
 		b.Staged = &Staged{Version: version, SHA256: strings.ToLower(sum)}
 		b.LastStaged = nil
+		b.RollbackPending = false
 		return true
 	})
 }
@@ -285,6 +289,8 @@ func UpdateResult(l paths.Layout, version, outcome string) (unstaged bool, err e
 		return false, fmt.Errorf("reading the agent slots for the update result: %w", err)
 	}
 	err = newStore(l, nil).update(func(b *Baseline) bool {
+		pending := b.RollbackPending
+		b.RollbackPending = false
 		staged := b.Staged
 		if staged == nil && b.LastStaged != nil && b.LastStaged.Version == version {
 			staged = b.LastStaged
@@ -308,11 +314,12 @@ func UpdateResult(l paths.Layout, version, outcome string) (unstaged bool, err e
 		case outcome == update.OutcomeUpdated || outcome == update.OutcomeRollbackFailed:
 			if obs[sp] == staged.SHA256 {
 				b.expect(current, obs[current])
+				b.RollbackPending = outcome == update.OutcomeRollbackFailed
 			}
 		case outcome == update.OutcomeRolledBack:
 			// Only the completed rollback after a rollback_failed of this release, which moved current to the staged
-			// slot: back to the other slot, unchanged since (plan M5a R11 L3).
-			if b.Expected[slotPath(b.Expected[current])] == staged.SHA256 && obs[sp] != staged.SHA256 &&
+			// slot: back to the other slot, unchanged since (plan M5a R11 L3, R16).
+			if pending && b.Expected[slotPath(b.Expected[current])] == staged.SHA256 && obs[sp] != staged.SHA256 &&
 				obs[sp] == b.Expected[sp] {
 				b.expect(current, obs[current])
 			}

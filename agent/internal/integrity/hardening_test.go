@@ -2,9 +2,11 @@ package integrity
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -254,6 +256,87 @@ func TestRepeatedUpdateResult(t *testing.T) {
 	}
 	if b := d.baseline(); b.Expected[current] != "A" {
 		t.Fatalf("current %q", b.Expected[current])
+	}
+}
+
+// TestRolledBackNeedsFailedRollback (plan M5a R16): only a rolled_back that follows a rollback_failed of the staged
+// release moves current back, and only to an unchanged slot; a replay changes nothing.
+func TestRolledBackNeedsFailedRollback(t *testing.T) {
+	setup := func(t *testing.T, outcome string) (*device, time.Time) {
+		d := newDevice(t)
+		d.quiet(1, Pass{})
+		at := stagedUpdate(t, d)
+		d.remove("/var/lib/paddock/state/probation.json")
+		writeResult(t, d, "2.0.0", outcome, at)
+		if _, err := UpdateResult(d.l, "2.0.0", outcome); err != nil {
+			t.Fatal(err)
+		}
+		d.quiet(1, Pass{ReportedUpdateAt: &at})
+		return d, at.Add(time.Hour)
+	}
+	rolledBack := func(t *testing.T, d *device, at time.Time) {
+		writeResult(t, d, "2.0.0", "rolled_back", at)
+		if _, err := UpdateResult(d.l, "2.0.0", "rolled_back"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("after updated", func(t *testing.T) {
+		d, later := setup(t, "updated")
+		d.link("A", current)
+		rolledBack(t, d, later)
+		d.changedOnce(current, Pass{ReportedUpdateAt: &later})
+	})
+	t.Run("after rollback_failed", func(t *testing.T) {
+		d, later := setup(t, "rollback_failed")
+		if !d.baseline().RollbackPending {
+			t.Fatal("rollback_failed left no pending rollback")
+		}
+		d.link("A", current)
+		rolledBack(t, d, later)
+		rolledBack(t, d, later)
+		d.quiet(3, Pass{ReportedUpdateAt: &later})
+		if b := d.baseline(); b.Expected[current] != "A" || b.RollbackPending {
+			t.Fatalf("current %q, pending %v", b.Expected[current], b.RollbackPending)
+		}
+	})
+	t.Run("changed slot", func(t *testing.T) {
+		d, later := setup(t, "rollback_failed")
+		d.write(slotA, "agent other")
+		d.link("A", current)
+		rolledBack(t, d, later)
+		if ev := d.pass(Pass{ReportedUpdateAt: &later}); !slices.Equal(ev, []string{slotA, current}) {
+			t.Fatalf("reported %v", ev)
+		}
+		if b := d.baseline(); b.Expected[current] != "B" {
+			t.Fatalf("current %q", b.Expected[current])
+		}
+	})
+}
+
+// TestBaselineReadableByOlderAgent (plan M5a R16): an agent without RollbackPending reads a baseline that holds it, as
+// after a downgrade.
+func TestBaselineReadableByOlderAgent(t *testing.T) {
+	d := newDevice(t)
+	d.quiet(1, Pass{})
+	at := stagedUpdate(t, d)
+	d.remove("/var/lib/paddock/state/probation.json")
+	writeResult(t, d, "2.0.0", "rollback_failed", at)
+	if _, err := UpdateResult(d.l, "2.0.0", "rollback_failed"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(d.l.Integrity())
+	if err != nil || !strings.Contains(string(raw), `"rollback_pending":true`) {
+		t.Fatalf("baseline %s: %v", raw, err)
+	}
+	// The fields of Baseline as of e024d60c that this check uses; Go's decoder skips the others.
+	var older struct {
+		Generation uint64            `json:"generation"`
+		Expected   map[string]string `json:"expected"`
+		Staged     *Staged           `json:"staged"`
+		LastStaged *Staged           `json:"last_staged"`
+	}
+	if err := json.Unmarshal(raw, &older); err != nil || older.Expected[current] != "B" || older.LastStaged == nil {
+		t.Fatalf("an older agent could not read the baseline: %v, %+v", err, older)
 	}
 }
 
