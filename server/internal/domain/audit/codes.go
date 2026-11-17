@@ -161,6 +161,8 @@ const (
 	// Inventory (plan M5a decisions 5 and 8): the mutual watch of agent and fleetd.
 	CodeDeviceTamperServiceStopped  Code = "device.tamper_service_stopped"
 	CodeDeviceTamperAgentNotRunning Code = "device.tamper_agent_not_running"
+	// Agent binary hash policy (plan M5a amendment 2026-11-16, ADR 0056 part A).
+	CodeDeviceTamperAgentBinaryChanged Code = "device.tamper_agent_binary_changed"
 	// Update management (plan M5b decisions 1–3 and 6).
 	CodeSettingsUpdatesChanged    Code = "settings.updates_changed"
 	CodePackageHoldCreated        Code = "package_hold.created"
@@ -808,9 +810,12 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperProtectedFileChanged: {
 		Code: CodeDeviceTamperProtectedFileChanged, Emitted: true,
-		Description: "A device found a protected file changed that the agent does not restore itself, e.g. its PAM configuration (actor: the device).",
-		Params:      deviceEventParams,
-		Outcomes:    []Outcome{OutcomeSuccess},
+		Description: "A device found a protected file changed that the agent does not restore itself, e.g. its PAM configuration or one " +
+			"of Paddock's own components (actor: the device). reason check_suspended: the agent could not check its own components " +
+			"for longer than a fixed bound, and file names the path that blocks the check. reason baseline_reset: the agent's " +
+			"baseline of its own components was corrupt or missing and was recorded anew, and file names the baseline file.",
+		Params:   deviceEventParams,
+		Outcomes: []Outcome{OutcomeSuccess},
 	},
 	CodeManagedFileCreated: {
 		Code: CodeManagedFileCreated, Emitted: true,
@@ -1286,10 +1291,17 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperAgentNotRunning: {
 		Code: CodeDeviceTamperAgentNotRunning, Emitted: true,
-		Description: "fleetd reports that the Paddock agent does not run on a device that has not checked in for 15 minutes: the agent was stopped or removed (actor: system; the inventory system's policy paddock_agent_running).",
-		Params:      []string{"policy", "last_contact_at"},
+		Description: "fleetd reports that the Paddock agent does not run on a device (actor: system; the inventory system's policy paddock_agent_running): either the device has not checked in for 15 minutes, or the policy failed in evaluations at least 15 minutes apart while the device may have kept checking in, so something other than the genuine agent may use the device's credentials. last_contact_at is the device's last check-in; failing_since is when the inventory system stored the first failing evaluation of this failure and evaluated_at its latest evaluation, both in the inventory system's clock; a last_contact_at later than failing_since means the device checked in while fleetd found no agent.",
+		Params:      []string{"policy", "last_contact_at", "failing_since", "evaluated_at"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it.",
+	},
+	CodeDeviceTamperAgentBinaryChanged: {
+		Code: CodeDeviceTamperAgentBinaryChanged, Emitted: true,
+		Description: "fleetd reports a running Paddock agent process whose executable matches no published agent release: the agent binary, the place it runs from, or the process the supervisor started was replaced or modified on the device (actor: system; the inventory system's policy paddock_agent_binary_known). evaluated_at is when the host last evaluated its policies; agent_version is the version the agent last reported, which a replaced agent may forge; known_hashes is the number of published hashes the policy accepts. A genuine older published release passes (RR-149).",
+		Params:      []string{"policy", "evaluated_at", "agent_version", "known_hashes"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per failure; the policy passing again ends it. No hash of the device's binary is recorded: the policy returns pass or fail only.",
 	},
 	CodeSettingsUpdatesChanged: {
 		Code: CodeSettingsUpdatesChanged, Emitted: true,

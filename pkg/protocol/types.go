@@ -665,9 +665,19 @@ type (
 	}
 	// TamperProtectedFileChanged: a protected file was changed outside Paddock: one the agent cannot restore itself
 	// (e.g. a PAM file), or one of fleetd's files, which it restores (plan M5a decision 5).
+	// Reason is empty for a change; ADR 0056 sets it when the check of Paddock's own components reports itself.
 	TamperProtectedFileChanged struct {
-		File string `json:"file"`
+		File   string `json:"file"`
+		Reason string `json:"reason,omitempty"`
 	}
+)
+
+// Reasons of TamperProtectedFileChanged sent by the check of Paddock's own components (ADR 0056; plan M5a R5, R14).
+const (
+	// TamperReasonCheckSuspended: the check could not run for longer than a fixed bound; File blocks it.
+	TamperReasonCheckSuspended = "check_suspended"
+	// TamperReasonBaselineReset: the baseline was corrupt or missing and was recorded anew; File is the baseline.
+	TamperReasonBaselineReset = "baseline_reset"
 )
 
 // Outcomes of login.nss_shield.

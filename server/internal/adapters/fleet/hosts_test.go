@@ -48,6 +48,9 @@ func TestHostInventory(t *testing.T) {
 	if inv.OSVersion != "Ubuntu 24.04.5 LTS" || inv.AgentVersion != "5.23.1" || inv.LastSeenAt == nil || len(inv.Software) != 3 {
 		t.Fatalf("inventory %+v", inv)
 	}
+	if want := time.Date(2026, 10, 7, 13, 18, 21, 0, time.UTC); inv.PolicyUpdatedAt == nil || !inv.PolicyUpdatedAt.Equal(want) {
+		t.Fatalf("policy evaluation time %v, want %v", inv.PolicyUpdatedAt, want)
+	}
 	apport := inv.Software[2]
 	if apport.Name != "apport" || apport.Source != "deb_packages" ||
 		!slices.Equal(apport.Vulnerabilities, []ports.Vulnerability{{CVE: "CVE-2022-28653"}}) {
@@ -63,6 +66,22 @@ func TestHostInventory(t *testing.T) {
 	}
 	if _, err := client(srv.URL).HostInventory(context.Background(), "../config"); err == nil {
 		t.Fatal("invalid host reference accepted")
+	}
+}
+
+// TestHostInventoryUnansweredPolicies (plan M5a amendment 2026-11-16, review round 1, A7): a policy Fleet lists
+// without a pass or fail answer, as after a query change, is reported as unanswered and not as a result.
+func TestHostInventoryUnansweredPolicies(t *testing.T) {
+	_, srv := newFake(t)
+	inv, err := client(srv.URL).HostInventory(context.Background(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(inv.UnansweredPolicies, []string{"paddock_agent_binary_known"}) {
+		t.Fatalf("unanswered policies %q", inv.UnansweredPolicies)
+	}
+	if !slices.Equal(inv.Policies, []ports.PolicyResult{{Key: "disk_encrypted", Passing: true}, {Key: "paddock_agent_running"}}) {
+		t.Fatalf("policies %+v", inv.Policies)
 	}
 }
 

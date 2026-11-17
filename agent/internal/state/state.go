@@ -45,6 +45,12 @@ type State struct {
 	// result already turned into an event.
 	FailedSupervisorVersion     string     `json:"failed_supervisor_version,omitempty"`
 	ReportedSupervisorUpgradeAt *time.Time `json:"reported_supervisor_upgrade_at,omitempty"`
+	// IntegrityEstablishedAt is when an integrity pass first saved a baseline with the agent slots; from then on a
+	// baseline without them is a reset that is reported (ADR 0056, plan M5a R14).
+	IntegrityEstablishedAt *time.Time `json:"integrity_established_at,omitempty"`
+	// IntegritySuspended holds the suspensions of the integrity check per blocked object, so that their bounds survive
+	// an agent restart and an unwritable baseline (plan M5a R15.3).
+	IntegritySuspended map[string]IntegritySuspension `json:"integrity_suspended,omitempty"`
 	// SupervisorRetry is the supervisor package version rolled back only because the server was unreachable, with
 	// its attempts and the earliest next attempt (design contract 8, ADR 0037 amendment 2026-10-18).
 	SupervisorRetry *SupervisorRetry `json:"supervisor_retry,omitempty"`
@@ -243,6 +249,17 @@ type CommandResult struct {
 	CommandID string          `json:"command_id"`
 	Status    string          `json:"status"`
 	Result    json.RawMessage `json:"result,omitempty"`
+}
+
+// IntegritySuspension is one blocked object of the integrity check (plan M5a R4, R15).
+type IntegritySuspension struct {
+	// File is the path of the first active blocker.
+	File string `json:"file"`
+	// Observed is the seconds the object was seen blocked.
+	Observed int64 `json:"observed_s"`
+	// Last is the time of the last pass that counted it.
+	Last     time.Time `json:"last"`
+	Reported bool      `json:"reported"`
 }
 
 // Load reads state.json; a missing file is the empty state.

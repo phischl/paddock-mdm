@@ -28,6 +28,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/health"
 	"github.com/phischl/paddock-mdm/agent/internal/identity"
+	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/localadmin"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
@@ -67,6 +68,8 @@ type Deps struct {
 	Events *reconcile.Events
 	// Sys is the device for the session tracking (plan M3b decision 11); nil disables it.
 	Sys reconcile.System
+	// Integrity checks Paddock's own device components each drift pass (ADR 0056); nil: not checked.
+	Integrity *integrity.Checker
 	// Accounts is the device for the managed local administrator (plan M4a decision 15); nil disables it.
 	Accounts localadmin.System
 	// LUKS runs the LUKS tools of the root volume (plan M4b decision 8); nil disables the luks reconciler.
@@ -138,6 +141,8 @@ type Agent struct {
 	policySkipped string
 	// supervisorSkipped is the last supervisor package version and reason not installed, logged once.
 	supervisorSkipped string
+	// integrityFailed is the first failure of the integrity bookkeeping per key (integrityRetry).
+	integrityFailed map[string]time.Time
 	// markerSeen is the first sighting of the current supervisor-upgrade.json (supervisorMarker).
 	markerSeen markerSeen
 	// conversionJobs feeds the conversion worker (plan M8e decision 12); conversionCalls carries its reads and changes
@@ -215,7 +220,7 @@ func Load(l paths.Layout) (Deps, error) {
 	software := &reconcile.Software{Sys: pkgSys, Events: events}
 	d := Deps{
 		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Events: events, Sys: sys, Accounts: sys, Inventory: inventory,
-		Software: software, Shield: shield,
+		Software: software, Shield: shield, Integrity: integrity.New(l, sys),
 		Applier: apply.New(pkgSys, managed, events).WithInventory(inventory).
 			WithWatch(&reconcile.Watch{Sys: sys, Events: events}).WithSoftware(software).WithNSSShield(shield),
 	}
@@ -292,6 +297,12 @@ func New(d Deps) (*Agent, error) {
 	}
 	if a.d.Events != nil {
 		a.d.Events.Emit = a.event
+	}
+	if a.d.Integrity != nil {
+		a.d.Integrity.Now = d.Now
+		a.d.Integrity.Emit = func(file, reason string) {
+			a.event(protocol.EventTamperProtectedFileChanged, protocol.TamperProtectedFileChanged{File: file, Reason: reason})
+		}
 	}
 	if a.d.Revoke == nil {
 		a.d.Revoke = func(ctx context.Context, envelope []byte) (string, error) {
@@ -408,6 +419,11 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 	defer localAdmin.Stop()
 	drift := time.NewTicker(a.d.Config.DriftInterval)
 	defer drift.Stop()
+	// The integrity check runs at start and on its own ticker, capped so that its bounds hold (plan M5a R15.5).
+	integrityStart := time.NewTimer(0)
+	defer integrityStart.Stop()
+	integrityTick := time.NewTicker(a.integrityInterval())
+	defer integrityTick.Stop()
 	sessionPoll := time.NewTicker(SessionPoll)
 	defer sessionPoll.Stop()
 	dms := time.NewTicker(DMSTick)
@@ -437,6 +453,10 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 			a.tickLUKS(ctx, true)
 			a.tickConversion(ctx)
 			a.reportUpdateRuns(ctx)
+		case <-integrityStart.C:
+			a.tickIntegrity(ctx)
+		case <-integrityTick.C:
+			a.tickIntegrity(ctx)
 		case d := <-a.installDone:
 			a.finishInstall(d)
 		case d := <-a.diagnosticsDone:

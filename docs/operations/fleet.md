@@ -71,7 +71,9 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
 `paddock-worker`:
 
 1. pushes Paddock's policies (`server/internal/inventory/policies/*.sql`: `paddock_agent_running`,
-   `disk_encrypted`) as global Fleet policies for Linux; they return pass or fail, never rows;
+   `disk_encrypted`, and `paddock_agent_binary_known`, which the worker builds from the SHA-256 of every published
+   agent artifact; ADR 0056) as global Fleet policies for Linux; they return pass or fail, never rows. Applying them is
+   idempotent, so a release published since the previous round reaches Fleet in this round;
 2. reads the hosts whose details, software or policy results changed since the previous round, and every host after a
    start, whenever Fleet's set of vulnerable software versions changed (Fleet matches vulnerabilities on its own
    schedule, about hourly, without marking hosts as changed) and every 12th round;
@@ -86,9 +88,27 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    Free disk space, uptime and network addresses are not copied. The device page shows the hardware facts in its
    identity panel, and the device search matches the serial number;
 5. reports, once per failure, `device.tamper_agent_not_running` for every active device whose `paddock_agent_running`
-   policy fails while it has not checked in for 15 minutes (fleetd's half of the mutual watch). The reported failure
+   policy fails while it has not checked in for 15 minutes, or fails in evaluations at least 15 minutes apart although
+   it keeps checking in — then something other than the genuine agent may check in with the device's credentials
+   (fleetd's half of the mutual watch). With the default policy interval of 10 minutes the second case is reported
+   within about 40 minutes. The agent must run from `/opt/paddock/agent/` as installed; a device whose `/opt` is a
+   symbolic link to another place fails `paddock_agent_running` and is reported. The reported failure
    stays on the attention page and on the device as *Agent not running* (kind `agent_not_running`) until the policy
-   passes again.
+   passes again. It also reports, once per failure, `device.tamper_agent_binary_changed` for every active device whose
+   `paddock_agent_binary_known` policy fails: a running agent process (named `paddockd`, running a file named
+   `paddockd` or a file below `/opt/paddock/agent/`, or started by `paddock-supervisor`) runs an executable that
+   matches no published release. Only an evaluation made at least 2 minutes after the worker applied the current hash set
+   counts, so a host that has not yet evaluated a newly published release is not reported; a round in which a release
+   was published skips these reports. The failure opens a tamper finding on the device. A genuine older published
+   release passes (RR-149). If no release is published, the policy always passes. A failure that Fleet resets after a
+   new definition stays reported until the host answers again, so a publish does not repeat the event. If the device
+   was repaired and a publish reset its passing result before the worker read it, a new tamper is reported only after
+   the policy has passed again. A host that evaluated a Paddock policy's current definition without an answer (the
+   query failed there) is counted in `paddock_inventory_policy_unanswered_hosts{policy}` each full round and logged
+   as a warning. A device
+   installed from packages whose `paddockd` is not a published release (a local build or a draft release) fails this
+   policy as soon as any release is published; publish that build or install a published release. The worker logs the
+   number of accepted hashes whenever it changes and warns above 1,000, because Fleet must accept the whole query.
 
 Fleet free reports CVEs without CVSS score, severity or fixed version (Fleet Premium only). Paddock adds Ubuntu's
 priority, the fixed version and the CVSS vector from Ubuntu's OSV data when it stores a host's findings

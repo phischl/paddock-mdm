@@ -20,6 +20,11 @@ import (
 // paddock_device_contact (migration 00049) uses the same 15 minutes as an SQL literal; change both together.
 const AgentSilence = 15 * time.Minute
 
+// AgentAbsence is how far apart two failing evaluations of the agent-running policy must be for a report while the
+// device keeps checking in (plan M5a decision 8 as amended 2026-11-16 b): a genuine agent is absent that long only
+// when it does not check in either. Independent of AgentSilence, which the contact state shares.
+const AgentAbsence = 15 * time.Minute
+
 // InventorySync stores the inventory system's data of mapped devices (plan M5a decisions 6 to 8).
 type InventorySync struct {
 	runner   *ActionRunner
@@ -63,6 +68,7 @@ func (s *InventorySync) StoreHost(ctx context.Context, device uuid.UUID, ref por
 			HardwareVendor: inv.Hardware.Vendor, HardwareModel: inv.Hardware.Model, HardwareSerial: inv.Hardware.Serial,
 			CpuBrand: inv.Hardware.CPUBrand, CpuCores: int32(min(inv.Hardware.CPUCores, math.MaxInt32)), //nolint:gosec // bounded
 			MemoryBytes: inv.Hardware.MemoryBytes, DiskTotalBytes: inv.Hardware.DiskTotalBytes,
+			PolicyUpdatedAt: inv.PolicyUpdatedAt,
 		}); err != nil {
 			return err
 		}
@@ -97,11 +103,16 @@ func (s *InventorySync) StoreHost(ctx context.Context, device uuid.UUID, ref por
 			keys = append(keys, p.Key)
 			if err := q.UpsertPolicyResult(ctx, pgstore.UpsertPolicyResultParams{
 				DeviceID: device, OrganizationID: org, PolicyKey: p.Key, Passing: p.Passing,
+				EvaluatedAt: inv.PolicyUpdatedAt,
 			}); err != nil {
 				return err
 			}
 		}
-		return q.DeleteMissingPolicyResults(ctx, pgstore.DeleteMissingPolicyResultsParams{DeviceID: device, Keys: keys})
+		// Not nil: a NULL array would keep every reported row.
+		unanswered := append([]string{}, inv.UnansweredPolicies...)
+		return q.DeleteMissingPolicyResults(ctx, pgstore.DeleteMissingPolicyResultsParams{
+			DeviceID: device, Keys: keys, Unanswered: unanswered,
+		})
 	})
 }
 
@@ -142,14 +153,17 @@ func flatten(software []ports.SoftwarePackage) (softwareColumns, findingColumns)
 }
 
 // ReportAgentNotRunning records device.tamper_agent_not_running for every active device of the organization in ctx
-// whose agent-running policy fails and whose last check-in is older than AgentSilence (the mutual watch, plan M5a
-// decision 8), once per failure: the event and the mark are one transaction. It returns the reported devices.
+// whose agent-running policy fails (the mutual watch, plan M5a decision 8 as amended 2026-11-16 b) and that either
+// has not checked in for AgentSilence, or whose policy failed in evaluations at least AgentAbsence apart in the
+// inventory system's clock although the device may keep checking in. It reports once per failure: the event and the
+// mark are one transaction. It returns the reported devices.
 func (s *InventorySync) ReportAgentNotRunning(ctx context.Context, now time.Time) ([]uuid.UUID, error) {
 	var rows []pgstore.ListAgentNotRunningRow
 	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
 		rows, err = q.ListAgentNotRunning(ctx, pgstore.ListAgentNotRunningParams{
 			PolicyKey: inventory.PolicyAgentRunning, Before: now.Add(-AgentSilence),
+			AbsentForS: AgentAbsence.Seconds(),
 		})
 		return err
 	})
@@ -161,6 +175,12 @@ func (s *InventorySync) ReportAgentNotRunning(ctx context.Context, now time.Time
 		params := map[string]any{"policy": inventory.PolicyAgentRunning}
 		if r.LastContactAt != nil {
 			params["last_contact_at"] = audit.Timestamp(*r.LastContactAt).Format(time.RFC3339Nano)
+		}
+		if r.FailingSince != nil {
+			params["failing_since"] = audit.Timestamp(*r.FailingSince).Format(time.RFC3339Nano)
+		}
+		if r.EvaluatedAt != nil {
+			params["evaluated_at"] = audit.Timestamp(*r.EvaluatedAt).Format(time.RFC3339Nano)
 		}
 		spec := ActionSpec{
 			Code: audit.CodeDeviceTamperAgentNotRunning, Target: &audit.Target{Type: "device", ID: r.DeviceID.String()},
@@ -177,6 +197,69 @@ func (s *InventorySync) ReportAgentNotRunning(ctx context.Context, now time.Time
 				return err
 			}
 			return UpsertTamperFinding(ctx, q, org, r.DeviceID, audit.CodeDeviceTamperAgentNotRunning, "", rec.ActionID(), now)
+		})
+		if err != nil {
+			return reported, err
+		}
+		reported = append(reported, r.DeviceID)
+	}
+	return reported, nil
+}
+
+// PublishedAgentHashes returns the SHA-256 of every artifact of every published agent release, all architectures:
+// the hash set of the agent binary policy (plan M5a amendment 2026-11-16, A2).
+func (s *InventorySync) PublishedAgentHashes(ctx context.Context) ([]string, error) {
+	var hashes []string
+	err := s.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		hashes, err = q.ListPublishedAgentHashes(ctx)
+		return err
+	})
+	return hashes, err
+}
+
+// ReportAgentBinaryUnknown records device.tamper_agent_binary_changed for every active device of the organization in
+// ctx whose agent binary policy fails and whose host evaluated its policies at or after evaluatedAfter (plan M5a
+// amendment 2026-11-16, A3), once per failure: the event, the mark and the tamper finding are one transaction. There
+// is no check-in silence rule, because a replaced agent keeps checking in. knownHashes is the size of the hash set the
+// policy accepts. It returns the reported devices.
+func (s *InventorySync) ReportAgentBinaryUnknown(ctx context.Context, evaluatedAfter time.Time, knownHashes int) ([]uuid.UUID, error) {
+	var rows []pgstore.ListAgentBinaryUnknownRow
+	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		rows, err = q.ListAgentBinaryUnknown(ctx, pgstore.ListAgentBinaryUnknownParams{
+			PolicyKey: inventory.PolicyAgentBinaryKnown, EvaluatedAfter: evaluatedAfter,
+		})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	var reported []uuid.UUID
+	for _, r := range rows {
+		params := map[string]any{
+			"policy":       inventory.PolicyAgentBinaryKnown,
+			"evaluated_at": audit.Timestamp(r.EvaluatedAt).Format(time.RFC3339Nano),
+			"known_hashes": knownHashes,
+		}
+		if r.AgentVersion != nil {
+			params["agent_version"] = *r.AgentVersion
+		}
+		spec := ActionSpec{
+			Code: audit.CodeDeviceTamperAgentBinaryChanged, Target: &audit.Target{Type: "device", ID: r.DeviceID.String()},
+			Params: params,
+		}
+		err := s.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+			if err := q.MarkAgentNotRunningReported(ctx, pgstore.MarkAgentNotRunningReportedParams{
+				DeviceID: r.DeviceID, PolicyKey: inventory.PolicyAgentBinaryKnown,
+			}); err != nil {
+				return err
+			}
+			org, err := orgOf(ctx)
+			if err != nil {
+				return err
+			}
+			return UpsertTamperFinding(ctx, q, org, r.DeviceID, audit.CodeDeviceTamperAgentBinaryChanged, "", rec.ActionID(), r.EvaluatedAt)
 		})
 		if err != nil {
 			return reported, err

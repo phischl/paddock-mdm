@@ -7,14 +7,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // FleetHost plays osquery of one host against Fleet's public device endpoints (fleet.<domain>): it enrolls with the
 // global enroll secret and answers Fleet's detail queries as an Ubuntu 24.04 host with the given deb packages; every
-// policy passes. The inventory gates and the portal end-to-end tests run without VMs this way; the VM gates
+// policy passes unless AgentBinarySHA256 makes the agent binary policy fail. The inventory gates and the portal end-to-end tests run without VMs this way; the VM gates
 // (test/system) run the real fleetd.
 type FleetHost struct {
 	HTTP     *http.Client
@@ -23,7 +25,15 @@ type FleetHost struct {
 	Packages [][2]string // name, version
 	// Hardware are the asset facts the host reports (plan M8d decision 6); nil reports none.
 	Hardware *FleetHardware
-	nodeKey  string
+	// AgentBinarySHA256 is the hash of the paddockd the host runs; "" passes every policy. When set, the agent binary
+	// policy (paddock_agent_binary_known) fails unless its query lists this hash, as osquery would answer it.
+	AgentBinarySHA256 string
+	// AgentNotRunning makes the agent-running policy (paddock_agent_running) fail, as osquery answers it while no
+	// genuine agent runs; every other policy is answered as before (plan M5a amendment 2026-11-16 b).
+	AgentNotRunning bool
+	nodeKey         string
+	mu              sync.Mutex
+	listedAt        map[string]time.Time
 }
 
 // FleetHardware are the asset facts of a simulated host as osquery reports them.
@@ -67,8 +77,8 @@ func osVersion() map[string]string {
 		"patch": "5", "build": "", "platform": "ubuntu", "platform_like": "debian", "codename": "noble", "arch": "x86_64"}
 }
 
-// Answer runs one round of distributed queries: detail queries get the host's facts and packages, policies pass,
-// everything else is answered empty. It reports how many queries Fleet sent.
+// Answer runs one round of distributed queries: detail queries get the host's facts and packages, policies pass (the
+// agent binary policy fails while it does not list AgentBinarySHA256, the agent-running policy while AgentNotRunning), everything else is answered empty. It reports how many queries Fleet sent.
 func (h *FleetHost) Answer(ctx context.Context) (int, error) {
 	var read struct {
 		Queries map[string]string `json:"queries"`
@@ -80,9 +90,10 @@ func (h *FleetHost) Answer(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	results, statuses := map[string]any{}, map[string]int{}
-	for name := range read.Queries {
+	for name, query := range read.Queries {
+		h.recordListed(query, time.Now())
 		statuses[name] = 0
-		results[name] = h.rows(name)
+		results[name] = h.rows(name, query)
 	}
 	err := h.post(ctx, "/api/v1/osquery/distributed/write",
 		map[string]any{"node_key": h.nodeKey, "queries": results, "statuses": statuses, "messages": map[string]string{}}, nil)
@@ -107,7 +118,44 @@ func (h *FleetHost) WaitAnswered(ctx context.Context) error {
 	}
 }
 
-func (h *FleetHost) rows(query string) []map[string]string {
+// agentBinaryPolicyMarker identifies the agent binary policy by its query (inventory.AgentBinaryPolicy); Fleet names
+// policy queries by their ID only.
+const agentBinaryPolicyMarker = "SELECT sha256 FROM hash WHERE path = '/proc/'"
+
+// agentRunningPolicyMarker identifies the agent-running policy by its query
+// (server/internal/inventory/policies/paddock_agent_running.sql).
+const agentRunningPolicyMarker = "FROM processes WHERE name = 'paddockd'"
+
+// listedHash is a hash in the agent binary policy's list.
+var listedHash = regexp.MustCompile(`'([0-9a-f]{64})'`)
+
+// recordListed notes at as the first time a received agent binary policy listed each of its hashes.
+func (h *FleetHost) recordListed(sql string, at time.Time) {
+	if !strings.Contains(sql, agentBinaryPolicyMarker) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, m := range listedHash.FindAllStringSubmatch(sql, -1) {
+		if _, ok := h.listedAt[m[1]]; !ok {
+			if h.listedAt == nil {
+				h.listedAt = map[string]time.Time{}
+			}
+			h.listedAt[m[1]] = at
+		}
+	}
+}
+
+// BinaryPolicyListedAt reports when Answer first received an agent binary policy that lists hash (plan M5a amendment
+// 2026-11-16, review round 1, A11): Fleet held a definition with the hash no later than then.
+func (h *FleetHost) BinaryPolicyListedAt(hash string) (time.Time, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	at, ok := h.listedAt[hash]
+	return at, ok
+}
+
+func (h *FleetHost) rows(query, sql string) []map[string]string {
 	switch {
 	case query == "fleet_detail_query_os_version":
 		return []map[string]string{osVersion()}
@@ -135,6 +183,11 @@ func (h *FleetHost) rows(query string) []map[string]string {
 				"extension_for": "", "release": "", "vendor": "", "arch": "", "installed_path": ""})
 		}
 		return rows
+	case strings.HasPrefix(query, "fleet_policy_query_") && h.AgentNotRunning && strings.Contains(sql, agentRunningPolicyMarker):
+		return []map[string]string{}
+	case strings.HasPrefix(query, "fleet_policy_query_") && h.AgentBinarySHA256 != "" &&
+		strings.Contains(sql, agentBinaryPolicyMarker) && !strings.Contains(sql, "'"+h.AgentBinarySHA256+"'"):
+		return []map[string]string{}
 	case strings.HasPrefix(query, "fleet_policy_query_"):
 		return []map[string]string{{"1": "1"}}
 	}

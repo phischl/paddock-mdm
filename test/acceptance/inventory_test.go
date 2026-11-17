@@ -1,9 +1,12 @@
 package acceptance
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -323,4 +326,340 @@ func TestInventoryF3SoftwareAndVulnerabilities(t *testing.T) {
 			expectStatus(t, call(t, alice, http.MethodGet, path+"?page=401&page_size=25", nil), http.StatusBadRequest, "page_out_of_range")
 		}
 	})
+}
+
+// agentBinaryCode is the audit code of the agent binary policy (plan M5a amendment 2026-11-16, A3).
+const agentBinaryCode = "device.tamper_agent_binary_changed"
+
+// publishAgentBinary publishes a release without rollout whose amd64 artifact is a fresh binary, and returns the
+// binary's SHA-256: from the next inventory round the agent binary policy accepts it.
+func publishAgentBinary(t *testing.T, root *env.Portal) string {
+	t.Helper()
+	v := gateVersion()
+	bin := []byte("agent binary policy gate " + v)
+	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases", map[string]string{"version": v}), http.StatusCreated, "")
+	expectStatus(t, uploadArtifact(t, root, v, bin, signBinary(t, bin, v)), http.StatusOK, "")
+	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/publish", nil), http.StatusOK, "")
+	sum := sha256.Sum256(bin)
+	return hex.EncodeToString(sum[:])
+}
+
+// TestInventoryAgentBinaryPolicy is the gate of plan M5a amendment 2026-11-16, part A (PDK-1122b): three simulated
+// hosts mapped to acme devices answer Fleet's policies as osquery would for the paddockd they run.
+//   - changed runs a binary of no published release: the org admin sees exactly one
+//     device.tamper_agent_binary_changed in the device's audit log and a tamper finding; further rounds add none.
+//   - genuine runs a published binary: every policy passes, no event.
+//   - updated switches to the binary of a release published during the gate (a regular update): its evaluations of
+//     the previous definition fail but predate the worker's apply, so no event; the new definition passes.
+//
+// After the second publish the gate waits until Fleet sent the new definition, every host evaluated it 2 minutes
+// later and two more sync rounds ran; then changed still has exactly one event and its result is still marked.
+func TestInventoryAgentBinaryPolicy(t *testing.T) {
+	root, alice := login(t, env.PlatformAdmin), login(t, env.Alice)
+	suffix := uniqueSuffix()
+	published := publishAgentBinary(t, root)
+	start := time.Now()
+	devices := map[string]*devicesim.Device{}
+	hosts := map[string]*devicesim.FleetHost{}
+	for _, name := range []string{"changed", "genuine", "updated"} {
+		hostname := "inv-bin-" + name + "-" + suffix
+		devices[name] = activeDevice(t, alice, "", hostname)
+		hosts[name] = enrollFleetHost(t, devices[name].HardwareUUID(), hostname, nil)
+		hosts[name].AgentBinarySHA256 = published
+	}
+	unknown := sha256.Sum256([]byte("a rebuilt paddockd " + suffix))
+	hosts["changed"].AgentBinarySHA256 = hex.EncodeToString(unknown[:])
+
+	answer := func() {
+		for _, h := range hosts {
+			if _, err := h.Answer(testContext(t, time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	events := func(device string) int {
+		all, err := alice.AuditEventsSince(testContext(t, time.Minute), agentBinaryCode, start.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, e := range all {
+			if e.Target != nil && e.Target.ID == device {
+				n++
+			}
+		}
+		return n
+	}
+	// The worker applies the policy at most one round (60 s on the development stack) after the publish; the host
+	// evaluates every 30 s; only evaluations 2 minutes after the apply count. Releases other gates publish restart that
+	// wait, hence the margin.
+	for deadline := time.Now().Add(10 * time.Minute); events(devices["changed"].DeviceID) == 0; time.Sleep(10 * time.Second) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no %s for the device with an unknown binary within 10 minutes", agentBinaryCode)
+		}
+		answer()
+	}
+	t.Logf("%s after %s", agentBinaryCode, time.Since(start).Round(time.Second))
+
+	// Phase 2 waits on observed conditions only (plan M5a amendment 2026-11-16, review round 1, A11). The publish
+	// makes Fleet reset every host's binary policy result; a worker round that reads the changed host before it answers
+	// again exercises A7, which this gate does not assert. A7's regression test is
+	// TestInventoryRoundAgentBinaryUnansweredAfterPublish.
+	newHash := publishAgentBinary(t, root)
+	hosts["updated"].AgentBinarySHA256 = newHash
+	db := ownerDB(t)
+	ids := []string{}
+	for _, d := range devices {
+		ids = append(ids, d.DeviceID)
+	}
+	deadline := time.Now().Add(10 * time.Minute)
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("not within 10 minutes of the second publish: %s", what)
+			}
+			answer()
+			time.Sleep(10 * time.Second)
+		}
+	}
+	var bound time.Time
+	waitFor("Fleet's agent binary policy lists the new release", func() bool {
+		var ok bool
+		bound, ok = hosts["updated"].BinaryPolicyListedAt(newHash)
+		return ok
+	})
+	waitFor("every gate host evaluated the new definition and updated passes it", func() bool {
+		var evaluated int
+		var passing bool
+		err := db.QueryRow(testContext(t, time.Minute), `SELECT
+			(SELECT count(*) FROM device_inventory_ref WHERE device_id::text = ANY($1::text[]) AND policy_updated_at >= $2),
+			coalesce((SELECT passing FROM inventory_policy_result WHERE device_id = $3 AND policy_key = 'paddock_agent_binary_known'), false)`,
+			ids, bound.Add(2*time.Minute), devices["updated"].DeviceID).Scan(&evaluated, &passing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return evaluated == len(ids) && passing
+	})
+	synced := func() map[string]time.Time {
+		rows, err := db.Query(testContext(t, time.Minute), "SELECT device_id::text, synced_at FROM device_inventory_ref WHERE device_id::text = ANY($1::text[])", ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]time.Time{}
+		for rows.Next() {
+			var id string
+			var at time.Time
+			if err := rows.Scan(&id, &at); err != nil {
+				t.Fatal(err)
+			}
+			out[id] = at
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	last, rounds := synced(), map[string]int{}
+	waitFor("two further sync rounds of every gate device", func() bool {
+		done := true
+		for id, at := range synced() {
+			if at.After(last[id]) {
+				last[id] = at
+				rounds[id]++
+			}
+			done = done && rounds[id] >= 2
+		}
+		return done && len(rounds) == len(ids)
+	})
+	for name, want := range map[string]int{"changed": 1, "genuine": 0, "updated": 0} {
+		if n := events(devices[name].DeviceID); n != want {
+			t.Errorf("%s: %d %s events, want %d", name, n, agentBinaryCode, want)
+		}
+	}
+	f := tamperFindingOf(t, alice, devices["changed"].DeviceID, 1)
+	if f.Code != agentBinaryCode || f.Subject != "" {
+		t.Errorf("tamper finding %+v", f)
+	}
+	for _, name := range []string{"genuine", "updated"} {
+		q := url.Values{"device_id": {devices[name].DeviceID}, "kind": {"tamper"}}
+		if got := listFindings(t, alice, q); len(got) != 0 {
+			t.Errorf("%s: tamper findings %+v", name, got)
+		}
+	}
+	var alerted bool
+	if err := db.QueryRow(testContext(t, time.Minute), `SELECT alerted_at IS NOT NULL FROM inventory_policy_result
+		WHERE device_id = $1 AND policy_key = 'paddock_agent_binary_known'`, devices["changed"].DeviceID).Scan(&alerted); err != nil || !alerted {
+		t.Errorf("changed: the binary policy result is not marked as reported (%v, %v)", alerted, err)
+	}
+}
+
+// agentNotRunningCode is the audit code of the mutual watch (plan M5a decision 8).
+const agentNotRunningCode = "device.tamper_agent_not_running"
+
+// TestInventoryAgentAbsentWhileCheckingIn is the gate of plan M5a amendment 2026-11-16 b (PDK-1122c, AC-C1, AC-C5):
+// three acme devices keep checking in while their simulated hosts answer Fleet.
+//   - impostor answers paddock_agent_running as failing throughout: once the failure spans 15 minutes of Fleet's
+//     evaluations, the org admin sees exactly one device.tamper_agent_not_running with last_contact_at later than
+//     failing_since, and a tamper finding.
+//   - restart fails briefly and passes again (an agent restart): failing_since is cleared, no event.
+//   - genuine passes every policy: no event.
+//
+// The 15 minutes are seeded by moving the start of impostor's failure back instead of waited for; the evaluation
+// count is proven by TestReportAgentNotRunningWhileCheckingIn. carol (globex) sees none of the events.
+func TestInventoryAgentAbsentWhileCheckingIn(t *testing.T) {
+	alice := login(t, env.Alice)
+	suffix := uniqueSuffix()
+	start := time.Now()
+	devices := map[string]*devicesim.Device{}
+	hosts := map[string]*devicesim.FleetHost{}
+	for _, name := range []string{"impostor", "restart", "genuine"} {
+		hostname := "inv-abs-" + name + "-" + suffix
+		devices[name] = activeDevice(t, alice, "", hostname)
+		hosts[name] = enrollFleetHost(t, devices[name].HardwareUUID(), hostname, nil)
+	}
+	hosts["impostor"].AgentNotRunning, hosts["restart"].AgentNotRunning = true, true
+	db := ownerDB(t)
+	// Steps 2 to 5 share one failure bound (plan M5a amendment 2026-11-16, review round 1, A11): the worker syncs every
+	// 60 s and Fleet asks for policies every 30 s on the development stack.
+	deadline := time.Now().Add(10 * time.Minute)
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for {
+			for _, d := range devices {
+				if _, _, err := d.Checkin(testContext(t, time.Minute)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, h := range hosts {
+				if _, err := h.Answer(testContext(t, time.Minute)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if cond() {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("not within 10 minutes: %s", what)
+			}
+			time.Sleep(10 * time.Second)
+		}
+	}
+	passingCleared := func(name string) bool {
+		var n int
+		if err := db.QueryRow(testContext(t, time.Minute), `SELECT count(*) FROM inventory_policy_result
+			WHERE device_id = $1 AND policy_key = 'paddock_agent_running' AND passing AND failing_since IS NULL`,
+			devices[name].DeviceID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	failingWithStart := func(name string) bool {
+		var n int
+		if err := db.QueryRow(testContext(t, time.Minute), `SELECT count(*) FROM inventory_policy_result
+			WHERE device_id = $1 AND policy_key = 'paddock_agent_running' AND NOT passing AND failing_since IS NOT NULL`,
+			devices[name].DeviceID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	waitFor("impostor and restart fail paddock_agent_running with failing_since", func() bool {
+		return failingWithStart("impostor") && failingWithStart("restart")
+	})
+	hosts["restart"].AgentNotRunning = false
+	waitFor("restart passes again with failing_since cleared", func() bool {
+		return passingCleared("restart")
+	})
+	if _, err := db.Exec(testContext(t, time.Minute), `UPDATE inventory_policy_result SET failing_since = failing_since - interval '16 minutes'
+		WHERE device_id = $1 AND policy_key = 'paddock_agent_running'`, devices["impostor"].DeviceID); err != nil {
+		t.Fatal(err)
+	}
+
+	eventsOf := func(p *env.Portal, device string) []env.AuditEvent {
+		all, err := p.AuditEventsSince(testContext(t, time.Minute), agentNotRunningCode, start.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []env.AuditEvent
+		for _, e := range all {
+			if e.Target != nil && e.Target.ID == device {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	waitFor("alice sees device.tamper_agent_not_running for impostor", func() bool {
+		return len(eventsOf(alice, devices["impostor"].DeviceID)) > 0
+	})
+	t.Logf("%s after %s", agentNotRunningCode, time.Since(start).Round(time.Second))
+	ev := eventsOf(alice, devices["impostor"].DeviceID)
+	if len(ev) != 1 {
+		t.Fatalf("impostor: %d events, want 1", len(ev))
+	}
+	stamp := func(key string) time.Time {
+		s, _ := ev[0].Params[key].(string)
+		at, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatalf("param %s %q: %v (params %v)", key, s, err, ev[0].Params)
+		}
+		return at
+	}
+	if contact, since := stamp("last_contact_at"), stamp("failing_since"); !contact.After(since) {
+		t.Errorf("last_contact_at %v is not later than failing_since %v", contact, since)
+	}
+	stamp("evaluated_at")
+
+	ids := []string{}
+	for _, d := range devices {
+		ids = append(ids, d.DeviceID)
+	}
+	synced := func() map[string]time.Time {
+		rows, err := db.Query(testContext(t, time.Minute), "SELECT device_id::text, synced_at FROM device_inventory_ref WHERE device_id::text = ANY($1::text[])", ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]time.Time{}
+		for rows.Next() {
+			var id string
+			var at time.Time
+			if err := rows.Scan(&id, &at); err != nil {
+				t.Fatal(err)
+			}
+			out[id] = at
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	last, rounds := synced(), map[string]int{}
+	waitFor("two further sync rounds of every gate device", func() bool {
+		done := true
+		for id, at := range synced() {
+			if at.After(last[id]) {
+				last[id] = at
+				rounds[id]++
+			}
+			done = done && rounds[id] >= 2
+		}
+		return done && len(rounds) == len(ids)
+	})
+	carol := login(t, env.Carol)
+	for name, want := range map[string]int{"impostor": 1, "restart": 0, "genuine": 0} {
+		if n := len(eventsOf(alice, devices[name].DeviceID)); n != want {
+			t.Errorf("%s: %d %s events, want %d", name, n, agentNotRunningCode, want)
+		}
+		if n := len(eventsOf(carol, devices[name].DeviceID)); n != 0 {
+			t.Errorf("carol sees %d %s events of the acme device %s", n, agentNotRunningCode, name)
+		}
+	}
+	if f := tamperFindingOf(t, alice, devices["impostor"].DeviceID, 1); f.Code != agentNotRunningCode {
+		t.Errorf("tamper finding %+v", f)
+	}
+	for _, name := range []string{"restart", "genuine"} {
+		q := url.Values{"device_id": {devices[name].DeviceID}, "kind": {"tamper"}}
+		if got := listFindings(t, alice, q); len(got) != 0 {
+			t.Errorf("%s: tamper findings %+v", name, got)
+		}
+	}
 }

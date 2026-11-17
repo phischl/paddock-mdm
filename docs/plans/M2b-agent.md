@@ -724,3 +724,15 @@ The binding fix:
     restart `current` is on `FromSlot`, and `rolled_back` is then reported.
   - A resumed `rollback_failed` log with a flip back that keeps failing writes its result again exactly once, with the
     recorded `at`, after the first failed retry.
+
+## Amendment 2026-11-16 (architect, PDK-1122) — the integrity baseline follows the update flow
+
+The agent keeps an integrity baseline of both slots and `current` (ADR 0056; rules in
+`docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16", part C). Only the agent changes for it,
+and the supervisor and its line budget stay unchanged. The baseline moves at two points:
+
+- `handleUpdate` records the staged `{version, sha256}` before `update.Stage`;
+- `reportUpdate` moves the baseline before it spools the result event.
+
+While the update is not quiescent (a request, `probation.json`, or an unprocessed `update-result.json`), slots and
+`current` are not checked. A regular update or rollback therefore never raises `device.tamper_protected_file_changed`.

@@ -6,15 +6,18 @@ SELECT hardware_uuid::text, device_id::uuid, organization_id::uuid FROM paddock_
 
 -- name: UpsertInventoryRef :exec
 INSERT INTO device_inventory_ref (device_id, organization_id, external_id, last_seen_at, os_version, fleetd_version, synced_at,
-                                  hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes)
+                                  hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes,
+                                  policy_updated_at)
 VALUES (@device_id, @organization_id, @external_id, sqlc.narg(last_seen_at), @os_version, @fleetd_version, now(),
-        @hardware_vendor, @hardware_model, @hardware_serial, @cpu_brand, @cpu_cores, @memory_bytes, @disk_total_bytes)
+        @hardware_vendor, @hardware_model, @hardware_serial, @cpu_brand, @cpu_cores, @memory_bytes, @disk_total_bytes,
+        sqlc.narg(policy_updated_at))
 ON CONFLICT (device_id) DO UPDATE
   SET external_id = EXCLUDED.external_id, last_seen_at = EXCLUDED.last_seen_at, os_version = EXCLUDED.os_version,
       fleetd_version = EXCLUDED.fleetd_version, synced_at = now(),
       hardware_vendor = EXCLUDED.hardware_vendor, hardware_model = EXCLUDED.hardware_model,
       hardware_serial = EXCLUDED.hardware_serial, cpu_brand = EXCLUDED.cpu_brand, cpu_cores = EXCLUDED.cpu_cores,
-      memory_bytes = EXCLUDED.memory_bytes, disk_total_bytes = EXCLUDED.disk_total_bytes;
+      memory_bytes = EXCLUDED.memory_bytes, disk_total_bytes = EXCLUDED.disk_total_bytes,
+      policy_updated_at = EXCLUDED.policy_updated_at;
 
 -- name: GetDeviceHardware :one
 SELECT hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes
@@ -52,27 +55,47 @@ WHERE f.device_id = @device_id
 
 -- updated_at is when the result last changed; a policy that passes again ends its mutual watch alert.
 -- name: UpsertPolicyResult :exec
-INSERT INTO inventory_policy_result (device_id, organization_id, policy_key, passing, updated_at)
-VALUES (@device_id, @organization_id, @policy_key, @passing, now())
+INSERT INTO inventory_policy_result (device_id, organization_id, policy_key, passing, updated_at, failing_since)
+VALUES (@device_id, @organization_id, @policy_key, @passing, now(),
+        CASE WHEN @passing::boolean THEN NULL ELSE sqlc.narg(evaluated_at)::timestamptz END)
 ON CONFLICT (device_id, policy_key) DO UPDATE
   SET passing = EXCLUDED.passing,
       updated_at = CASE WHEN inventory_policy_result.passing = EXCLUDED.passing THEN inventory_policy_result.updated_at ELSE now() END,
-      alerted_at = CASE WHEN EXCLUDED.passing THEN NULL ELSE inventory_policy_result.alerted_at END;
+      alerted_at = CASE WHEN EXCLUDED.passing THEN NULL ELSE inventory_policy_result.alerted_at END,
+      failing_since = CASE WHEN EXCLUDED.passing THEN NULL
+                           ELSE COALESCE(inventory_policy_result.failing_since, EXCLUDED.failing_since) END;
 
+-- A reported result whose policy the host has not answered since its query changed keeps its row and mark, so that the
+-- same failure is not reported again (plan M5a amendment 2026-11-16, review round 1, A7).
 -- name: DeleteMissingPolicyResults :exec
-DELETE FROM inventory_policy_result WHERE device_id = @device_id AND NOT (policy_key = ANY(@keys::text[]));
+DELETE FROM inventory_policy_result
+WHERE device_id = @device_id AND NOT (policy_key = ANY(@keys::text[]))
+  AND NOT (policy_key = ANY(@unanswered::text[]) AND alerted_at IS NOT NULL);
 
--- Active devices whose agent-running policy fails, not yet reported, and that have not checked in since before (plan
--- M5a decision 8).
+-- Active devices whose agent-running policy fails, not yet reported, and that either have not checked in since before
+-- or whose policy failed in evaluations at least absent_for_s apart (plan M5a decision 8 as amended 2026-11-16 b).
 -- name: ListAgentNotRunning :many
-SELECT r.device_id, s.last_contact_at
-FROM inventory_policy_result r JOIN device d ON d.id = r.device_id LEFT JOIN device_status s ON s.device_id = r.device_id
+SELECT r.device_id, s.last_contact_at, r.failing_since, i.policy_updated_at AS evaluated_at
+FROM inventory_policy_result r JOIN device d ON d.id = r.device_id
+     LEFT JOIN device_status s ON s.device_id = r.device_id
+     LEFT JOIN device_inventory_ref i ON i.device_id = r.device_id
 WHERE d.state = 'active' AND r.policy_key = @policy_key AND NOT r.passing AND r.alerted_at IS NULL
-  AND (s.last_contact_at IS NULL OR s.last_contact_at < @before::timestamptz)
+  AND (s.last_contact_at IS NULL OR s.last_contact_at < @before::timestamptz
+       OR i.policy_updated_at >= r.failing_since + make_interval(secs => @absent_for_s::double precision))
 ORDER BY r.device_id;
 
 -- name: MarkAgentNotRunningReported :exec
 UPDATE inventory_policy_result SET alerted_at = now() WHERE device_id = @device_id AND policy_key = @policy_key;
+
+-- Active devices whose agent binary policy fails, not yet reported, and whose host evaluated its policies at or after
+-- evaluated_after (plan M5a amendment 2026-11-16, A3): an older evaluation may predate the current definition.
+-- name: ListAgentBinaryUnknown :many
+SELECT r.device_id, i.policy_updated_at::timestamptz AS evaluated_at, s.agent_version
+FROM inventory_policy_result r JOIN device d ON d.id = r.device_id
+     JOIN device_inventory_ref i ON i.device_id = r.device_id LEFT JOIN device_status s ON s.device_id = r.device_id
+WHERE d.state = 'active' AND r.policy_key = @policy_key AND NOT r.passing AND r.alerted_at IS NULL
+  AND i.policy_updated_at >= @evaluated_after::timestamptz
+ORDER BY r.device_id;
 
 -- List queries of the admin API (plan M5a decision 9, ADR 0018); see device_group.sql.
 

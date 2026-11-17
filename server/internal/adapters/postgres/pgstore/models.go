@@ -522,20 +522,21 @@ type DeviceIdentityKey struct {
 }
 
 type DeviceInventoryRef struct {
-	DeviceID       uuid.UUID
-	OrganizationID uuid.UUID
-	ExternalID     string
-	LastSeenAt     *time.Time
-	OsVersion      string
-	FleetdVersion  string
-	SyncedAt       time.Time
-	HardwareVendor string
-	HardwareModel  string
-	HardwareSerial string
-	CpuBrand       string
-	CpuCores       int32
-	MemoryBytes    int64
-	DiskTotalBytes int64
+	DeviceID        uuid.UUID
+	OrganizationID  uuid.UUID
+	ExternalID      string
+	LastSeenAt      *time.Time
+	OsVersion       string
+	FleetdVersion   string
+	SyncedAt        time.Time
+	HardwareVendor  string
+	HardwareModel   string
+	HardwareSerial  string
+	CpuBrand        string
+	CpuCores        int32
+	MemoryBytes     int64
+	DiskTotalBytes  int64
+	PolicyUpdatedAt *time.Time
 }
 
 type DeviceLoginAssignment struct {
@@ -708,6 +709,7 @@ type InventoryPolicyResult struct {
 	Passing        bool
 	UpdatedAt      time.Time
 	AlertedAt      *time.Time
+	FailingSince   *time.Time
 }
 
 type IpAllowlistEntry struct {

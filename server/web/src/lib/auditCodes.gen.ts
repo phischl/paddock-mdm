@@ -111,6 +111,7 @@ export const auditCodes = [
   'device.sudo_user_unresolved',
   'device.supervisor_update_failed',
   'device.supervisor_updated',
+  'device.tamper_agent_binary_changed',
   'device.tamper_agent_not_running',
   'device.tamper_keyslot_changed',
   'device.tamper_local_admin_changed',

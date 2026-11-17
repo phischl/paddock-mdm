@@ -29,10 +29,16 @@ type HostInventory struct {
 	// AgentVersion is the version of the inventory agent (fleetd, else osquery).
 	AgentVersion string
 	LastSeenAt   *time.Time
-	Software     []SoftwarePackage
+	// PolicyUpdatedAt is when the host last evaluated its policies; nil when the inventory system reports none.
+	PolicyUpdatedAt *time.Time
+	Software        []SoftwarePackage
 	// Policies are the results of the policies the host has answered.
 	Policies []PolicyResult
-	Hardware HostHardware
+	// UnansweredPolicies are the keys of the policies the inventory system lists for the host without a pass or fail
+	// answer: not yet evaluated since the policy changed, or the query did not run (plan M5a amendment 2026-11-16,
+	// review round 1, A7).
+	UnansweredPolicies []string
+	Hardware           HostHardware
 }
 
 // HostHardware are the asset facts of a host (ADR 0037 decision 7): empty strings and zero values when the

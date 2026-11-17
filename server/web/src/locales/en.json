@@ -486,6 +486,7 @@
       "header_escrow_refused": "A LUKS header of {target} was not escrowed: the device already escrows 32 volumes",
       "tamper_service_stopped": "The device {target} found the service {unit} stopped",
       "tamper_agent_not_running": "fleetd reports that the Paddock agent does not run on {target}",
+      "tamper_agent_binary_changed": "fleetd reports an agent binary on {target} that matches no published release",
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
       "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
       "escrow_refused_destroyed": "A disk key of {target} was not escrowed: a Destroy of the device is issued",

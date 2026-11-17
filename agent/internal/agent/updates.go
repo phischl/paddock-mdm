@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/integrity"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -19,6 +21,11 @@ func (a *Agent) reportUpdate() {
 		return
 	}
 	if r == nil || (a.st.ReportedUpdateAt != nil && a.st.ReportedUpdateAt.Equal(r.At)) {
+		return
+	}
+	// Before the event: once the result counts as processed, the next pass compares the slots again (ADR 0056). While
+	// it stays unprocessed the slots are not judged, so waiting for the baseline raises no false report (plan M5a R7).
+	if a.integrityRetry("update-result:"+r.At.Format(time.RFC3339Nano), integrity.UpdateResult(a.d.Layout, r.Version)) {
 		return
 	}
 	slog.Info("agent update finished", "version", r.Version, "from_version", r.FromVersion, "outcome", r.Outcome)
@@ -97,6 +104,10 @@ func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
 	pid, err := a.d.Supervisor()
 	if err != nil {
 		slog.WarnContext(ctx, "agent update offered but not installable", "version", offer.Version, "error", err)
+		return
+	}
+	// Without the record the result re-initializes the slots instead of moving them (plan M5a R7.2).
+	if a.integrityRetry("staged:"+offer.Version, integrity.RecordStaged(a.d.Layout, offer.Version, offer.SHA256)) {
 		return
 	}
 	if err := update.Stage(ctx, a.d.Layout, a.d.Client, *offer); err != nil {

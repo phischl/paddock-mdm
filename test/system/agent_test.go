@@ -64,7 +64,21 @@ func TestAgentGates(t *testing.T) {
 		}
 		t.Run("S2 configuration idempotency", func(t *testing.T) { d.Bind(t); gateS2(t, d) })
 		t.Run("S3 agent outage", func(t *testing.T) { d.Bind(t); gateS3(t, d) })
-		t.Run("S4 agent update", func(t *testing.T) { d.Bind(t); gateS4(t, d) })
+		t.Run("S4 agent update", func(t *testing.T) {
+			d.Bind(t)
+			// The seen set follows the last hand edit of the harness and one whole pass (plan M5a R12).
+			d.WaitIntegrityPass(t)
+			d.Checkin()
+			seen := d.eventIDs(TamperFileChanged)
+			gateS4(t, d)
+			// Regular updates, rollbacks and refusals move the integrity baseline without a report (ADR 0056).
+			d.WaitIntegrityPass(t)
+			d.Checkin()
+			if files := d.tamperFiles(seen, "/opt/paddock/", "/usr/sbin/", "/etc/paddock/"); len(files) != 0 {
+				t.Fatalf("the update gates reported %v", files)
+			}
+		})
+		t.Run("S5 integrity of the agent slots", func(t *testing.T) { d.Bind(t); gateS5(t, d) })
 	})
 }
 
@@ -308,6 +322,34 @@ func releaseKey(t *testing.T, s *Stack) minisign.PrivateKey {
 		t.Fatal(err)
 	}
 	return k
+}
+
+// gateS5 (PDK-1122a, ADR 0056): a manual switch of current is reported once within three drift intervals (30 s in a
+// development build) and the next check-in; switching back reports nothing more.
+func gateS5(t *testing.T, d *Device) {
+	const file = "/opt/paddock/agent/current"
+	seen := d.eventIDs(TamperFileChanged)
+	slot := d.Slot()
+	other := map[string]string{"A": "B", "B": "A"}[slot]
+	if other == "" || d.Must("sudo test -x /opt/paddock/agent/"+other+"/paddockd && echo yes || echo no") != "yes" {
+		t.Fatalf("current %q, or slot %q has no agent", slot, other)
+	}
+	flip := func(to string) {
+		d.Must("sudo ln -sfn " + to + " /opt/paddock/agent/.c && sudo mv -T /opt/paddock/agent/.c /opt/paddock/agent/current")
+	}
+	flip(other)
+	isCurrent := func(p map[string]any) bool { return p["file"] == file }
+	d.waitNewEvent(t, TamperFileChanged, seen, 90*time.Second+65*time.Second, isCurrent)
+	flip(slot)
+	// The pass that sees current back on its baseline drops the mark of the reported change; it is the pass that
+	// would have reported switching back.
+	Until(t, d.Name+": integrity pass after switching back", 3*time.Minute, 5*time.Second, nil, func() bool {
+		return d.Must(`sudo grep -Eqs '"reported":\{[^}]*"`+file+`"' /var/lib/paddock/state/integrity.json && echo marked || echo clear`) == "clear"
+	})
+	d.Checkin()
+	if n := len(d.newEvents(TamperFileChanged, seen, isCurrent)); n != 1 {
+		t.Fatalf("%d %s events for %s, want exactly 1", n, TamperFileChanged, file)
+	}
 }
 
 // gateS4: a good release is installed and reported; a release that crashes in probation is rolled back; one that
