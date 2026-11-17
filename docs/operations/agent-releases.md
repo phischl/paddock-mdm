@@ -605,6 +605,8 @@ An update result that does not settle a release the agent staged itself (none wa
 reported with `reason` `update_result_unstaged` and `file` `/var/lib/paddock/state/update-result.json`: the agent kept
 its baseline of the slots, so the next integrity pass reports any change of the slots or of `current`. Check the slots
 as above and `journalctl -u paddock-supervisor`.
+A genuine `rollback_failed` followed by `rolled_back`, with a new release staged in between, also raises one
+`update_result_unstaged` event and one report of `current`: verify the device's slot state as above.
 
 ## Update policy
 
