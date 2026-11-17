@@ -31,6 +31,30 @@ func TestFleetHostAgentBinaryPolicy(t *testing.T) {
 	}
 }
 
+// TestFleetHostAgentNotRunning: with AgentNotRunning the agent-running policy fails; every other policy, including
+// the agent binary policy, is answered as before, and without it the agent-running policy passes.
+func TestFleetHostAgentNotRunning(t *testing.T) {
+	known := strings.Repeat("a", 64)
+	running := "SELECT 1 FROM processes WHERE name = 'paddockd' AND path LIKE '/opt/paddock/agent/%';"
+	binary := "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM processes p WHERE COALESCE((SELECT sha256 FROM hash WHERE " +
+		"path = '/proc/' || p.pid || '/exe'), '') NOT IN ('" + known + "'));"
+	for _, c := range []struct {
+		name, sql  string
+		notRunning bool
+		pass       bool
+	}{
+		{"agent running", running, false, true},
+		{"agent not running", running, true, false},
+		{"binary policy while not running", binary, true, true},
+		{"another policy while not running", "SELECT 1 FROM disk_encryption WHERE encrypted = 1;", true, true},
+	} {
+		h := &FleetHost{AgentBinarySHA256: known, AgentNotRunning: c.notRunning}
+		if got := len(h.rows("fleet_policy_query_3", c.sql)) == 1; got != c.pass {
+			t.Errorf("%s: pass %v, want %v", c.name, got, c.pass)
+		}
+	}
+}
+
 // TestFleetHostBinaryPolicyListedAt: a hash is noted the first time an agent binary policy lists it, never again and
 // never from another query.
 func TestFleetHostBinaryPolicyListedAt(t *testing.T) {

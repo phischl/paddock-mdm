@@ -28,9 +28,12 @@ type FleetHost struct {
 	// AgentBinarySHA256 is the hash of the paddockd the host runs; "" passes every policy. When set, the agent binary
 	// policy (paddock_agent_binary_known) fails unless its query lists this hash, as osquery would answer it.
 	AgentBinarySHA256 string
-	nodeKey           string
-	mu                sync.Mutex
-	listedAt          map[string]time.Time
+	// AgentNotRunning makes the agent-running policy (paddock_agent_running) fail, as osquery answers it while no
+	// genuine agent runs; every other policy is answered as before (plan M5a amendment 2026-11-16 b).
+	AgentNotRunning bool
+	nodeKey         string
+	mu              sync.Mutex
+	listedAt        map[string]time.Time
 }
 
 // FleetHardware are the asset facts of a simulated host as osquery reports them.
@@ -75,7 +78,7 @@ func osVersion() map[string]string {
 }
 
 // Answer runs one round of distributed queries: detail queries get the host's facts and packages, policies pass (the
-// agent binary policy fails while it does not list AgentBinarySHA256), everything else is answered empty. It reports how many queries Fleet sent.
+// agent binary policy fails while it does not list AgentBinarySHA256, the agent-running policy while AgentNotRunning), everything else is answered empty. It reports how many queries Fleet sent.
 func (h *FleetHost) Answer(ctx context.Context) (int, error) {
 	var read struct {
 		Queries map[string]string `json:"queries"`
@@ -118,6 +121,10 @@ func (h *FleetHost) WaitAnswered(ctx context.Context) error {
 // agentBinaryPolicyMarker identifies the agent binary policy by its query (inventory.AgentBinaryPolicy); Fleet names
 // policy queries by their ID only.
 const agentBinaryPolicyMarker = "SELECT sha256 FROM hash WHERE path = '/proc/'"
+
+// agentRunningPolicyMarker identifies the agent-running policy by its query
+// (server/internal/inventory/policies/paddock_agent_running.sql).
+const agentRunningPolicyMarker = "FROM processes WHERE name = 'paddockd'"
 
 // listedHash is a hash in the agent binary policy's list.
 var listedHash = regexp.MustCompile(`'([0-9a-f]{64})'`)
@@ -176,6 +183,8 @@ func (h *FleetHost) rows(query, sql string) []map[string]string {
 				"extension_for": "", "release": "", "vendor": "", "arch": "", "installed_path": ""})
 		}
 		return rows
+	case strings.HasPrefix(query, "fleet_policy_query_") && h.AgentNotRunning && strings.Contains(sql, agentRunningPolicyMarker):
+		return []map[string]string{}
 	case strings.HasPrefix(query, "fleet_policy_query_") && h.AgentBinarySHA256 != "" &&
 		strings.Contains(sql, agentBinaryPolicyMarker) && !strings.Contains(sql, "'"+h.AgentBinarySHA256+"'"):
 		return []map[string]string{}

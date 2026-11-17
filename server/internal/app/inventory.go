@@ -20,6 +20,11 @@ import (
 // paddock_device_contact (migration 00049) uses the same 15 minutes as an SQL literal; change both together.
 const AgentSilence = 15 * time.Minute
 
+// AgentAbsence is how far apart two failing evaluations of the agent-running policy must be for a report while the
+// device keeps checking in (plan M5a decision 8 as amended 2026-11-16 b): a genuine agent is absent that long only
+// when it does not check in either. Independent of AgentSilence, which the contact state shares.
+const AgentAbsence = 15 * time.Minute
+
 // InventorySync stores the inventory system's data of mapped devices (plan M5a decisions 6 to 8).
 type InventorySync struct {
 	runner   *ActionRunner
@@ -98,6 +103,7 @@ func (s *InventorySync) StoreHost(ctx context.Context, device uuid.UUID, ref por
 			keys = append(keys, p.Key)
 			if err := q.UpsertPolicyResult(ctx, pgstore.UpsertPolicyResultParams{
 				DeviceID: device, OrganizationID: org, PolicyKey: p.Key, Passing: p.Passing,
+				EvaluatedAt: inv.PolicyUpdatedAt,
 			}); err != nil {
 				return err
 			}
@@ -147,14 +153,17 @@ func flatten(software []ports.SoftwarePackage) (softwareColumns, findingColumns)
 }
 
 // ReportAgentNotRunning records device.tamper_agent_not_running for every active device of the organization in ctx
-// whose agent-running policy fails and whose last check-in is older than AgentSilence (the mutual watch, plan M5a
-// decision 8), once per failure: the event and the mark are one transaction. It returns the reported devices.
+// whose agent-running policy fails (the mutual watch, plan M5a decision 8 as amended 2026-11-16 b) and that either
+// has not checked in for AgentSilence, or whose policy failed in evaluations at least AgentAbsence apart in the
+// inventory system's clock although the device may keep checking in. It reports once per failure: the event and the
+// mark are one transaction. It returns the reported devices.
 func (s *InventorySync) ReportAgentNotRunning(ctx context.Context, now time.Time) ([]uuid.UUID, error) {
 	var rows []pgstore.ListAgentNotRunningRow
 	err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
 		rows, err = q.ListAgentNotRunning(ctx, pgstore.ListAgentNotRunningParams{
 			PolicyKey: inventory.PolicyAgentRunning, Before: now.Add(-AgentSilence),
+			AbsentForS: AgentAbsence.Seconds(),
 		})
 		return err
 	})
@@ -166,6 +175,12 @@ func (s *InventorySync) ReportAgentNotRunning(ctx context.Context, now time.Time
 		params := map[string]any{"policy": inventory.PolicyAgentRunning}
 		if r.LastContactAt != nil {
 			params["last_contact_at"] = audit.Timestamp(*r.LastContactAt).Format(time.RFC3339Nano)
+		}
+		if r.FailingSince != nil {
+			params["failing_since"] = audit.Timestamp(*r.FailingSince).Format(time.RFC3339Nano)
+		}
+		if r.EvaluatedAt != nil {
+			params["evaluated_at"] = audit.Timestamp(*r.EvaluatedAt).Format(time.RFC3339Nano)
 		}
 		spec := ActionSpec{
 			Code: audit.CodeDeviceTamperAgentNotRunning, Target: &audit.Target{Type: "device", ID: r.DeviceID.String()},

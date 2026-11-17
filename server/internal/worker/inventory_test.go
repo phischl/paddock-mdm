@@ -637,3 +637,46 @@ func TestInventoryRoundPolicyUnansweredMetric(t *testing.T) {
 		t.Fatalf("new hash: gauges %v and %v, %d warnings; want 0, 0 and still 1", g, b, n)
 	}
 }
+
+// TestInventoryRoundAgentAbsentWhileCheckingIn (plan M5a decision 8 as amended 2026-11-16 b): a host whose
+// agent-running policy fails in evaluations 10 minutes apart while its device keeps checking in is reported once, in
+// the round whose evaluation is at least 15 minutes after the first failing one; a pass ends the failure, and a new
+// failure in two evaluations 15 minutes apart is reported again.
+func TestInventoryRoundAgentAbsentWhileCheckingIn(t *testing.T) {
+	r := newBinaryRig(t, strings.Repeat("a", 64))
+	ctx := context.Background()
+	if _, err := r.f.super.Exec(ctx, "INSERT INTO device_status (device_id, organization_id, last_contact_at) VALUES ($1, $2, $3)",
+		r.dev, r.f.org, r.clock); err != nil {
+		t.Fatal(err)
+	}
+	reports := func() int {
+		var n int
+		if err := r.f.super.QueryRow(ctx, "SELECT count(*) FROM action WHERE code = 'device.tamper_agent_not_running' AND target ->> 'id' = $1",
+			r.dev.String()).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	start := r.clock
+	steps := []struct {
+		after   time.Duration
+		passing bool
+		want    int
+	}{
+		{0, false, 0}, {10 * time.Minute, false, 0}, {20 * time.Minute, false, 1}, {30 * time.Minute, false, 1},
+		{40 * time.Minute, true, 1}, {50 * time.Minute, false, 1}, {65 * time.Minute, false, 2},
+	}
+	for k, s := range steps {
+		r.clock = start.Add(s.after)
+		at := r.clock
+		if _, err := r.f.super.Exec(ctx, "UPDATE device_status SET last_contact_at = $2 WHERE device_id = $1", r.dev, r.clock.Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		r.src.results = []ports.PolicyResult{{Key: inventory.PolicyAgentRunning, Passing: s.passing}}
+		r.src.unanswered, r.src.evaluatedAt = nil, &at
+		r.round(t)
+		if n := reports(); n != s.want {
+			t.Fatalf("round %d (evaluation +%v, passing %v): %d events, want %d", k+1, s.after, s.passing, n, s.want)
+		}
+	}
+}

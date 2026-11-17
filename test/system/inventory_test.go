@@ -20,8 +20,10 @@ import (
 
 // TestInventoryGates runs the device gates of plan M5a on the VMs in parallel, each from a fresh base-installed: F1
 // (fleetd installed from Paddock's package store, enrolled into Fleet, mapped to the device), F4 (an old package
-// version shows its CVEs), F2 (mutual watch of agent and fleetd) and F5 (the agent binary policy, plan M5a amendment
-// 2026-11-16, A6). The fleetd package of this run (make fleetd-deb) is published once, as a release without rollout,
+// version shows its CVEs), F2 (mutual watch of agent and fleetd), F5 (the agent binary policy, plan M5a amendment
+// 2026-11-16, A6) and F6 (an impostor checks in while the genuine agent is stopped, amendment 2026-11-16 b). Over all
+// gates exactly two device.tamper_agent_not_running are recorded per VM, F2's and F6's: the restarts of orbit and the
+// supervisor in F1, F4 and F5 raise none. The fleetd package of this run (make fleetd-deb) is published once, as a release without rollout,
 // for both VMs; Install publishes the installed paddockd the same way, so the genuine agent passes F5's policy.
 func TestInventoryGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
@@ -33,8 +35,16 @@ func TestInventoryGates(t *testing.T) {
 			t.FailNow()
 		}
 		t.Run("F4 old package version", func(t *testing.T) { d.Bind(t); gateF4(t, d) })
-		t.Run("F2 mutual watch", func(t *testing.T) { d.Bind(t); gateF2(t, d) })
+		f2 := t.Run("F2 mutual watch", func(t *testing.T) { d.Bind(t); gateF2(t, d) })
 		t.Run("F5 agent binary policy", func(t *testing.T) { d.Bind(t); gateF5(t, d) })
+		f6 := t.Run("F6 agent absent while checking in", func(t *testing.T) { d.Bind(t); gateF6(t, d) })
+		// A failed F2 or F6 already fails the gate; their missing event would only repeat it as a count error.
+		if !f2 || !f6 {
+			return
+		}
+		if n := len(s.Events(t, agentNotRunningCode, d.ID)); n != 2 {
+			t.Errorf("%s: %d %s events over the inventory gates, want exactly 2 (F2 and F6)", d.Name, n, agentNotRunningCode)
+		}
 	})
 }
 
@@ -496,4 +506,80 @@ func fleetHostByUUID(t *testing.T, uuid string) (fleetHost, bool) {
 		}
 	}
 	return fleetHost{}, false
+}
+
+// agentNotRunningCode is the audit code of the mutual watch's policy paddock_agent_running.
+const agentNotRunningCode = "device.tamper_agent_not_running"
+
+// gateF6 is the mutual watch against an impostor (plan M5a amendment 2026-11-16 b, section 8): the genuine agent is
+// stopped and a copy of it runs under another name and unit, so it checks in with the device's credentials while
+// paddock_agent_running fails and paddock_agent_binary_known does not judge it. The org admin sees exactly one
+// device.tamper_agent_not_running with last_contact_at later than failing_since, and no agent binary event.
+func gateF6(t *testing.T, d *Device) {
+	const dir, unit = "/var/lib/paddock-f6", "pdk-f6-impostor"
+	query := func(sql string) string {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		out, err := paddockSQL(ctx, sql)
+		if err != nil {
+			t.Logf("%s: %v", d.Name, err)
+		}
+		return out
+	}
+	passing := fmt.Sprintf(`SELECT passing FROM inventory_policy_result WHERE device_id = '%s' AND policy_key = 'paddock_agent_running'`, d.ID)
+	Until(t, d.Name+": paddock_agent_running passes", 25*time.Minute, 15*time.Second, d.Checkin, func() bool { return query(passing) == "t" })
+	n0, binary0 := len(d.s.Events(t, agentNotRunningCode, d.ID)), len(d.s.Events(t, agentBinaryCode, d.ID))
+
+	restored := false
+	restore := func() {
+		d.MustRoot("{ systemctl stop " + unit + " || true; } && rm -rf " + dir + " && systemctl start paddock-supervisor")
+		restored = true
+	}
+	t.Cleanup(func() {
+		if !restored {
+			restore()
+		}
+	})
+	d.MustRoot("mkdir -p " + dir + " && cp /opt/paddock/agent/current/paddockd " + dir + "/" + unit +
+		" && systemctl stop paddock-supervisor && ! pgrep -x paddockd")
+	// Taken after the stop: a check-in by the genuine agent cannot count as the impostor's.
+	started := time.Now().UTC()
+	d.MustRoot("systemd-run --unit=" + unit + " --property=RuntimeDirectory=paddock " + dir + "/" + unit + " run")
+	contact := fmt.Sprintf(`SELECT count(*) FROM device_status WHERE device_id = '%s' AND last_contact_at > '%s'`, d.ID, started.Format(time.RFC3339Nano))
+	Until(t, d.Name+": the impostor checks in", 5*time.Minute, 15*time.Second, func() {
+		d.Must("sudo pkill -HUP -x " + unit + " || true")
+	}, func() bool { return query(contact) == "1" })
+	if d.Must("pgrep -x paddockd || true") != "" {
+		t.Fatalf("%s: a process named paddockd runs next to the impostor", d.Name)
+	}
+
+	stamp := func(p map[string]any, key string) (time.Time, bool) {
+		v, _ := p[key].(string)
+		at, err := time.Parse(time.RFC3339Nano, v)
+		return at, err == nil
+	}
+	d.WaitEvent(t, agentNotRunningCode, 30*time.Minute, func(p map[string]any) bool {
+		since, ok := stamp(p, "failing_since")
+		last, okLast := stamp(p, "last_contact_at")
+		return ok && okLast && last.After(since)
+	})
+	t.Logf("%s: impostor reported after %s", d.Name, time.Since(started).Round(time.Second))
+
+	evaluated := fmt.Sprintf(`SELECT coalesce(policy_updated_at::text, '') FROM device_inventory_ref WHERE device_id = '%s'`, d.ID)
+	last, further := query(evaluated), 0
+	Until(t, d.Name+": two further evaluations stored", 30*time.Minute, 15*time.Second, nil, func() bool {
+		if at := query(evaluated); at != "" && at != last {
+			last, further = at, further+1
+		}
+		return further >= 2
+	})
+	if n := len(d.s.Events(t, agentNotRunningCode, d.ID)); n != n0+1 {
+		t.Errorf("%s: %d %s events, want %d", d.Name, n, agentNotRunningCode, n0+1)
+	}
+	if n := len(d.s.Events(t, agentBinaryCode, d.ID)); n != binary0 {
+		t.Errorf("%s: %d %s events during F6, want still %d", d.Name, n, agentBinaryCode, binary0)
+	}
+
+	restore()
+	Until(t, d.Name+": paddock_agent_running passes again", 25*time.Minute, 15*time.Second, d.Checkin, func() bool { return query(passing) == "t" })
 }

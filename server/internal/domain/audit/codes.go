@@ -1288,8 +1288,8 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperAgentNotRunning: {
 		Code: CodeDeviceTamperAgentNotRunning, Emitted: true,
-		Description: "fleetd reports that the Paddock agent does not run on a device that has not checked in for 15 minutes: the agent was stopped or removed (actor: system; the inventory system's policy paddock_agent_running).",
-		Params:      []string{"policy", "last_contact_at"},
+		Description: "fleetd reports that the Paddock agent does not run on a device (actor: system; the inventory system's policy paddock_agent_running): either the device has not checked in for 15 minutes, or the policy failed in evaluations at least 15 minutes apart while the device may have kept checking in, so something other than the genuine agent may use the device's credentials. last_contact_at is the device's last check-in; failing_since is when the inventory system stored the first failing evaluation of this failure and evaluated_at its latest evaluation, both in the inventory system's clock; a last_contact_at later than failing_since means the device checked in while fleetd found no agent.",
+		Params:      []string{"policy", "last_contact_at", "failing_since", "evaluated_at"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it.",
 	},

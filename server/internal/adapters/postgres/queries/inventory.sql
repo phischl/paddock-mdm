@@ -55,12 +55,15 @@ WHERE f.device_id = @device_id
 
 -- updated_at is when the result last changed; a policy that passes again ends its mutual watch alert.
 -- name: UpsertPolicyResult :exec
-INSERT INTO inventory_policy_result (device_id, organization_id, policy_key, passing, updated_at)
-VALUES (@device_id, @organization_id, @policy_key, @passing, now())
+INSERT INTO inventory_policy_result (device_id, organization_id, policy_key, passing, updated_at, failing_since)
+VALUES (@device_id, @organization_id, @policy_key, @passing, now(),
+        CASE WHEN @passing::boolean THEN NULL ELSE sqlc.narg(evaluated_at)::timestamptz END)
 ON CONFLICT (device_id, policy_key) DO UPDATE
   SET passing = EXCLUDED.passing,
       updated_at = CASE WHEN inventory_policy_result.passing = EXCLUDED.passing THEN inventory_policy_result.updated_at ELSE now() END,
-      alerted_at = CASE WHEN EXCLUDED.passing THEN NULL ELSE inventory_policy_result.alerted_at END;
+      alerted_at = CASE WHEN EXCLUDED.passing THEN NULL ELSE inventory_policy_result.alerted_at END,
+      failing_since = CASE WHEN EXCLUDED.passing THEN NULL
+                           ELSE COALESCE(inventory_policy_result.failing_since, EXCLUDED.failing_since) END;
 
 -- A reported result whose policy the host has not answered since its query changed keeps its row and mark, so that the
 -- same failure is not reported again (plan M5a amendment 2026-11-16, review round 1, A7).
@@ -69,13 +72,16 @@ DELETE FROM inventory_policy_result
 WHERE device_id = @device_id AND NOT (policy_key = ANY(@keys::text[]))
   AND NOT (policy_key = ANY(@unanswered::text[]) AND alerted_at IS NOT NULL);
 
--- Active devices whose agent-running policy fails, not yet reported, and that have not checked in since before (plan
--- M5a decision 8).
+-- Active devices whose agent-running policy fails, not yet reported, and that either have not checked in since before
+-- or whose policy failed in evaluations at least absent_for_s apart (plan M5a decision 8 as amended 2026-11-16 b).
 -- name: ListAgentNotRunning :many
-SELECT r.device_id, s.last_contact_at
-FROM inventory_policy_result r JOIN device d ON d.id = r.device_id LEFT JOIN device_status s ON s.device_id = r.device_id
+SELECT r.device_id, s.last_contact_at, r.failing_since, i.policy_updated_at AS evaluated_at
+FROM inventory_policy_result r JOIN device d ON d.id = r.device_id
+     LEFT JOIN device_status s ON s.device_id = r.device_id
+     LEFT JOIN device_inventory_ref i ON i.device_id = r.device_id
 WHERE d.state = 'active' AND r.policy_key = @policy_key AND NOT r.passing AND r.alerted_at IS NULL
-  AND (s.last_contact_at IS NULL OR s.last_contact_at < @before::timestamptz)
+  AND (s.last_contact_at IS NULL OR s.last_contact_at < @before::timestamptz
+       OR i.policy_updated_at >= r.failing_since + make_interval(secs => @absent_for_s::double precision))
 ORDER BY r.device_id;
 
 -- name: MarkAgentNotRunningReported :exec

@@ -397,6 +397,166 @@ func TestReportAgentNotRunningKeepsMarkWhileUnanswered(t *testing.T) {
 	}
 }
 
+// agentRunning stores a host whose agent-running policy passes or fails and which evaluated its policies at evaluated
+// (nil: the inventory system reports no time).
+func (h inventoryHarness) agentRunning(t *testing.T, org, dev uuid.UUID, passing bool, evaluated *time.Time) {
+	t.Helper()
+	inv := ports.HostInventory{PolicyUpdatedAt: evaluated, Policies: []ports.PolicyResult{{Key: "paddock_agent_running", Passing: passing}}}
+	if err := h.sync.StoreHost(systemCtx(org), dev, "1", inv); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// failingSince reads the stored failing_since of the device's agent-running result.
+func (h inventoryHarness) failingSince(t *testing.T, dev uuid.UUID) *time.Time {
+	t.Helper()
+	var since *time.Time
+	if err := h.super.QueryRow(context.Background(), `SELECT failing_since FROM inventory_policy_result
+		WHERE device_id = $1 AND policy_key = 'paddock_agent_running'`, dev).Scan(&since); err != nil {
+		t.Fatal(err)
+	}
+	return since
+}
+
+// TestStoreHostFailingSince (plan M5a amendment 2026-11-16 b, D3): the first failing evaluation sets failing_since to
+// the host's evaluation time, later failing evaluations keep it, a pass clears it, a failure without evaluation time
+// leaves it unset, and a failing row without it (as before the migration) takes the time of its next failing sync.
+func TestStoreHostFailingSince(t *testing.T) {
+	h := newInventoryHarness(t)
+	org, dev := h.device(t, uuid.Nil, uuid.NewString(), "active")
+	_, legacy := h.device(t, org, uuid.NewString(), "active")
+	t0 := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	at := func(d time.Duration) *time.Time { v := t0.Add(d); return &v }
+	steps := []struct {
+		name    string
+		passing bool
+		eval    *time.Time
+		want    *time.Time
+	}{
+		{"first failure", false, at(0), at(0)},
+		{"failing again", false, at(10 * time.Minute), at(0)},
+		{"passing", true, at(20 * time.Minute), nil},
+		{"failing without time", false, nil, nil},
+		{"failing with time after a failure without", false, at(30 * time.Minute), at(30 * time.Minute)},
+	}
+	for _, s := range steps {
+		h.agentRunning(t, org, dev, s.passing, s.eval)
+		if got := h.failingSince(t, dev); !equalTime(got, s.want) {
+			t.Fatalf("%s: failing_since %v, want %v", s.name, got, s.want)
+		}
+	}
+	if _, err := h.super.Exec(context.Background(), `INSERT INTO inventory_policy_result (device_id, organization_id, policy_key, passing, updated_at)
+		VALUES ($1, $2, 'paddock_agent_running', false, now())`, legacy, org); err != nil {
+		t.Fatal(err)
+	}
+	h.agentRunning(t, org, legacy, false, at(40*time.Minute))
+	if got := h.failingSince(t, legacy); !equalTime(got, at(40*time.Minute)) {
+		t.Fatalf("a failing row without failing_since: %v after a failing sync, want %v", got, at(40*time.Minute))
+	}
+}
+
+func equalTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+// TestReportAgentNotRunningWhileCheckingIn (plan M5a decision 8 as amended 2026-11-16 b, D2): a device that keeps
+// checking in is reported once its agent-running policy failed in evaluations at least 15 minutes apart in the
+// inventory system's clock, with failing_since and evaluated_at; one evaluation, evaluations less than 15 minutes
+// apart, a pass in between, unknown evaluation times, a retired device and another organization's device are not.
+func TestReportAgentNotRunningWhileCheckingIn(t *testing.T) {
+	h := newInventoryHarness(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	t0 := now.Add(-2 * time.Hour).Truncate(time.Microsecond)
+	at := func(d time.Duration) *time.Time { v := t0.Add(d); return &v }
+	org, impostor := h.device(t, uuid.Nil, uuid.NewString(), "active")
+	_, oneEval := h.device(t, org, uuid.NewString(), "active")
+	_, short := h.device(t, org, uuid.NewString(), "active")
+	_, restart := h.device(t, org, uuid.NewString(), "active")
+	_, noTime := h.device(t, org, uuid.NewString(), "active")
+	_, retired := h.device(t, org, uuid.NewString(), "retired")
+	other, foreign := h.device(t, uuid.Nil, uuid.NewString(), "active")
+	contact := now.Add(-2 * time.Minute).Truncate(time.Microsecond)
+	for dev, o := range map[uuid.UUID]uuid.UUID{impostor: org, oneEval: org, short: org, restart: org, noTime: org, retired: org, foreign: other} {
+		if _, err := h.super.Exec(ctx, "INSERT INTO device_status (device_id, organization_id, last_contact_at) VALUES ($1, $2, $3)", dev, o, contact); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, d := range []struct {
+		org uuid.UUID
+		dev uuid.UUID
+	}{{org, impostor}, {org, retired}, {other, foreign}} {
+		h.agentRunning(t, d.org, d.dev, false, at(0))
+		h.agentRunning(t, d.org, d.dev, false, at(15*time.Minute))
+	}
+	h.agentRunning(t, org, oneEval, false, at(0))
+	h.agentRunning(t, org, short, false, at(0))
+	h.agentRunning(t, org, short, false, at(15*time.Minute-time.Second))
+	h.agentRunning(t, org, restart, false, at(0))
+	h.agentRunning(t, org, restart, true, at(10*time.Minute))
+	h.agentRunning(t, org, restart, false, at(20*time.Minute))
+	h.agentRunning(t, org, restart, false, at(30*time.Minute))
+	h.agentRunning(t, org, noTime, false, nil)
+	h.agentRunning(t, org, noTime, false, nil)
+
+	events := func(dev uuid.UUID) int {
+		return h.count(t, "SELECT count(*) FROM action WHERE code = 'device.tamper_agent_not_running' AND target ->> 'id' = $1", dev.String())
+	}
+	for i, want := range [][]uuid.UUID{{impostor}, nil} {
+		got, err := h.sync.ReportAgentNotRunning(systemCtx(org), now)
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("call %d: reported %v, %v; want %v", i+1, got, err, want)
+		}
+		if events(impostor) != 1 {
+			t.Fatalf("impostor: %d events, want 1", events(impostor))
+		}
+	}
+	for name, dev := range map[string]uuid.UUID{"oneEval": oneEval, "short": short, "restart": restart, "noTime": noTime, "retired": retired, "foreign": foreign} {
+		if n := events(dev); n != 0 {
+			t.Fatalf("%s: %d events, want 0", name, n)
+		}
+	}
+	var raw []byte
+	var eventID uuid.UUID
+	if err := h.super.QueryRow(ctx, `SELECT id, params FROM action WHERE code = 'device.tamper_agent_not_running' AND target ->> 'id' = $1`,
+		impostor.String()).Scan(&eventID, &raw); err != nil {
+		t.Fatal(err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(raw, &params); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"policy": "paddock_agent_running", "last_contact_at": audit.Timestamp(contact).Format(time.RFC3339Nano),
+		"failing_since": audit.Timestamp(*at(0)).Format(time.RFC3339Nano), "evaluated_at": audit.Timestamp(*at(15 * time.Minute)).Format(time.RFC3339Nano)}
+	if !maps.Equal(params, want) {
+		t.Fatalf("params %v, want %v", params, want)
+	}
+	if n := h.count(t, `SELECT count(*) FROM finding WHERE device_id = $1 AND kind = 'tamper' AND code = 'device.tamper_agent_not_running'
+		AND last_event_id = $2 AND closed_at IS NULL`, impostor, eventID); n != 1 {
+		t.Fatalf("%d open tamper findings for the event", n)
+	}
+
+	h.agentRunning(t, org, short, false, at(15*time.Minute))
+	h.agentRunning(t, org, restart, false, at(35*time.Minute))
+	got, err := h.sync.ReportAgentNotRunning(systemCtx(org), now)
+	slices.SortFunc(got, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	wantDevs := []uuid.UUID{short, restart}
+	slices.SortFunc(wantDevs, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	if err != nil || !slices.Equal(got, wantDevs) {
+		t.Fatalf("after 15 minutes of failing evaluations: reported %v, %v; want %v", got, err, wantDevs)
+	}
+	if got, err := h.sync.ReportAgentNotRunning(systemCtx(other), now); err != nil || !slices.Equal(got, []uuid.UUID{foreign}) {
+		t.Fatalf("organization B in its own context: %v, %v", got, err)
+	}
+	if n := h.count(t, "SELECT count(*) FROM action WHERE code = 'device.tamper_agent_not_running' AND organization_id = $1 AND target ->> 'id' = $2",
+		org, foreign.String()); n != 0 {
+		t.Fatalf("organization B's device recorded %d times in organization A", n)
+	}
+}
+
 // TestPublishedAgentHashes (plan M5a amendment 2026-11-16, A2): the hash set holds every artifact of every published
 // release, all architectures, and no artifact of a draft.
 func TestPublishedAgentHashes(t *testing.T) {

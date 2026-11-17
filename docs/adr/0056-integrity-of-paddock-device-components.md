@@ -132,6 +132,87 @@ Consequences: the description of `device.tamper_agent_binary_changed` changes be
 params and MSGID alias unchanged). The policy query is longer by a constant; its size still grows with the number of
 published hashes, which the worker logs.
 
+## Amendment 2026-11-16 b (architect, PDK-1122c) — a check-in does not prove the genuine agent
+
+Status: **accepted** (`decisions-alpha11.md` §147, maintainer and main, 2026-11-16). Details, texts
+and tests: plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 b (architect, PDK-1122c)".
+
+**Context.** Item 3 of the previous amendment left a gap: a local root user stops the genuine agent and lets a
+foreign program under another name and unit check in with the device's credentials. `paddock_agent_binary_known` does
+not judge that program, and `paddock_agent_running` fails without a report, because plan M5a decision 8 reports only
+devices that have not checked in for 15 minutes.
+
+**Options.**
+
+1. **Prove the genuine agent in the check-in** (a challenge only the published binary answers, a process-identity
+   binding between osquery and the check-in, TPM attestation).
+   - Pro: would make the check-in itself trustworthy.
+   - Con: root holds the device key (file or TPM) and can run the genuine binary as an oracle or relay its signed
+     requests; Fleet policies are global and pass/fail, so no per-device binding reaches osquery; attestation shows
+     what ran since boot, not what signs now. Every variant costs a device API change and proves nothing against root.
+2. **Report the agent's absence from osquery evaluations regardless of check-ins (chosen).**
+   - Pro: no device API, agent or supervisor change; uses data the server already stores (Fleet's
+     `policy_updated_at`, migration 00161).
+   - Con: a decoy that keeps `paddock_agent_running` passing, or a stopped fleetd, defeats it.
+3. **Leave decision 8 and document the gap.** Cheapest; leaves the cheapest impersonation unreported.
+
+**Decision.** Option 2.
+
+1. A check-in is never treated as proof that the genuine agent runs. The device API (`api/openapi/device.yaml`
+   1.0.0) does not change; agents of every supported release keep working unchanged in both directions.
+2. Plan M5a decision 8 reports `device.tamper_agent_not_running` also when `paddock_agent_running` failed in two
+   evaluations at least 15 minutes apart (Fleet's clock) with no stored pass between them, whether or not the device
+   checks in. The silence rule stays. Report only (design contract 8).
+3. The existing code `device.tamper_agent_not_running` is reused; it gains the optional params `failing_since` and
+   `evaluated_at` and a new description (additive change of the audit event contract).
+4. RR-149 is rewritten: the gap of item 3 is closed for a foreign program while fleetd evaluates and no decoy runs;
+   a decoy and a stopped fleetd stay residual. Detecting a fleetd that falls silent while the device checks in is
+   proposed as PDK-1122d.
+
+**Consequences.**
+
+- Positive: the naive impersonation is reported within about 40 minutes at the default policy interval, with no
+  contract cost beyond one nullable column and two audit params.
+- Negative: a root user who also keeps a decoy `paddockd` running or stops fleetd is not reported (RR-149, RR-01).
+  A device whose `/opt` is a symbolic link elsewhere is reported (unsupported layout, documented).
+- Follow-up: PDK-1122c (implementation, after PDK-1122b), PDK-1122d (proposed, maintainer decision).
+
+## Amendment 2026-11-16 c (architect, PDK-1122d) — the server watches fleetd
+
+Status: **accepted** (`decisions-alpha11.md` §148, 2026-11-16). Details, texts and
+tests: plan `docs/plans/M5a-inventory-and-vulnerabilities.md`, "Amendment 2026-11-16 c (architect, PDK-1122d)".
+
+**Context.** After amendment b, a root user who replaces the agent and also stops fleetd is not reported: the impostor
+does not report the stopped `orbit.service`, and fleetd evaluates no policy. The maintainer put the fix into
+alpha.11 (§147) with a guard against alarm waves during inventory-system outages.
+
+**Options.**
+
+1. **Server-side watch of Fleet's contact times (chosen).** Each round, a device that keeps checking in while its
+   fleetd's last contact with Fleet is 15 min older than the newest contact of any host, for 15 more minutes, is
+   reported, if at least one and at least half of the live devices reach Fleet.
+   - Pro: no agent, device API or supervisor change; uses the host list the worker already reads every round.
+   - Con: blind on single-device installations and when most devices are cut off; a site that blocks only Fleet's
+     address is reported.
+2. **Per-organization quorum** (the maintainer's example). Weaker: one Fleet serves every organization, and an
+   organization with one device could never be judged.
+3. **Agent-reported fleetd state.** Useless here: the impostor reports what it wants.
+
+**Decision.** Option 1, report only, with the new registry code `device.tamper_fleetd_silent` (params
+`fleetd_seen_at`, `last_contact_at`, `silent_since`), a tamper finding and no attention kind. The state lives in the
+database (two columns on `device_inventory_ref`), so worker restarts change nothing. All freshness judgements use
+Fleet's clock relative to its newest contact, so a Fleet that stops recording contacts looks fresh, not silent.
+
+**Consequences.**
+
+- Positive: the "stopped fleetd" gap of RR-149 is closed while most devices reach Fleet; an operator sees an
+  installation-wide Fleet reachability problem as a suppression log line and gauge.
+- Negative: residuals stay in RR-149 (a decoy agent; a replaced or simulated osquery; single-device installations;
+  a root user controlling more than half of the live devices). One more additive code in the audit event contract.
+- A lasting suppression is itself an alert (`PaddockFleetSilenceWatchSuppressed`, critical, added in §148), so a
+  root user who controls more than half of the live devices stays unreported per device but not unnoticed.
+- Follow-up: PDK-1122d, after PDK-1122c; PDK-1122e (attention kind for the event, alpha.12).
+
 ## Amendment 2026-11-16 (architect, PDK-1122b review round 2)
 
 Details: plan M5a, "Addendum 2026-11-16 (architect, PDK-1122b review round 2)".
