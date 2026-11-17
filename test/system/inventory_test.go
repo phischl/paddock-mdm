@@ -244,7 +244,7 @@ func agentBinaryQuery(t *testing.T, d *Device, hash string) string {
 	t.Helper()
 	var query string
 	Until(t, d.Name+": Fleet's agent binary policy lists the installed paddockd", 5*time.Minute, 10*time.Second, nil, func() bool {
-		resp, err := fleetAPI(t, http.MethodGet, "/api/latest/fleet/global/policies", nil)
+		resp, err := fleetAPI(t, http.MethodGet, "/api/v1/fleet/global/policies", nil)
 		if err != nil {
 			t.Logf("fleet policies: %v", err)
 			return false
