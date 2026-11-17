@@ -2675,6 +2675,10 @@ Processing an update result no longer adopts what `current` points at or what th
 - A result without a release this agent staged keeps the whole baseline and emits `device.tamper_protected_file_changed`
   (`TamperProtectedFileChanged`) with the new reason `update_result_unstaged` (`protocol.TamperReasonUpdateResultUnstaged`,
   next to `check_suspended` and `baseline_reset`); `File` names the update result. The audit code description names the reason.
+- The completed rollback is the one exception for `current`. On outcome `rolled_back` the baseline moves `current` back only
+  when the baseline records that a `rollback_failed` of this staged release moved it to the staged slot (a persisted flag
+  `Baseline.RollbackPending`, set only in that branch and cleared by the next update result or `RecordStaged`), and only to
+  the other slot, and only if that slot is unchanged against the baseline. Without the flag `rolled_back` changes nothing.
 - The system gate retracts the releases of S4 in a shared step before S5, so S5 starts from a known state.
 - Tests: a failed update with a simultaneous flip is reported; a result without a staged release with a slot change is
   reported with the event; a regular update raises no event.
