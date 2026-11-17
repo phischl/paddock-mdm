@@ -498,7 +498,7 @@ func TestRegularUpdateReportsNothing(t *testing.T) {
 	d.quiet(1, Pass{})
 	writeResult(t, d, "2.0.0", "updated", at)
 	d.quiet(1, Pass{})
-	if _, err := UpdateResult(d.l, "2.0.0", "updated"); err != nil {
+	if _, err := UpdateResult(d.l, "2.0.0", "updated", at); err != nil {
 		t.Fatal(err)
 	}
 	d.quiet(3, Pass{ReportedUpdateAt: &at})
@@ -524,7 +524,7 @@ func TestRegularRollbacksReportNothing(t *testing.T) {
 			d.remove("/var/lib/paddock/state/probation.json")
 			writeResult(t, d, "2.0.0", tc.outcome, at)
 			d.quiet(1, Pass{})
-			if _, err := UpdateResult(d.l, "2.0.0", tc.outcome); err != nil {
+			if _, err := UpdateResult(d.l, "2.0.0", tc.outcome, at); err != nil {
 				t.Fatal(err)
 			}
 			d.quiet(3, Pass{ReportedUpdateAt: &at})
@@ -541,7 +541,7 @@ func TestRegularRollbacksReportNothing(t *testing.T) {
 		}
 		at := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
 		writeResult(t, d, "2.0.0", "signature_invalid", at)
-		if _, err := UpdateResult(d.l, "2.0.0", "signature_invalid"); err != nil {
+		if _, err := UpdateResult(d.l, "2.0.0", "signature_invalid", at); err != nil {
 			t.Fatal(err)
 		}
 		d.quiet(3, Pass{ReportedUpdateAt: &at})
@@ -561,7 +561,7 @@ func TestResultWithoutStagedKeepsBaseline(t *testing.T) {
 	at := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
 	writeResult(t, d, "0.9.0", "signature_invalid", at)
 	d.quiet(1, Pass{})
-	unstaged, err := UpdateResult(d.l, "0.9.0", "signature_invalid")
+	unstaged, err := UpdateResult(d.l, "0.9.0", "signature_invalid", at)
 	if err != nil || !unstaged {
 		t.Fatalf("unstaged %v, error %v", unstaged, err)
 	}
@@ -584,7 +584,7 @@ func TestFailedUpdateKeepsCurrent(t *testing.T) {
 			at := stagedUpdate(t, d)
 			d.remove("/var/lib/paddock/state/probation.json")
 			writeResult(t, d, "2.0.0", outcome, at)
-			unstaged, err := UpdateResult(d.l, "2.0.0", outcome)
+			unstaged, err := UpdateResult(d.l, "2.0.0", outcome, at)
 			if err != nil || unstaged {
 				t.Fatalf("unstaged %v, error %v", unstaged, err)
 			}
@@ -607,7 +607,7 @@ func TestUpdateResultTakesOnlyTheStagedSlot(t *testing.T) {
 			d.remove("/var/lib/paddock/state/probation.json")
 			d.write(slotB, "agent other")
 			writeResult(t, d, "2.0.0", outcome, at)
-			if _, err := UpdateResult(d.l, "2.0.0", outcome); err != nil {
+			if _, err := UpdateResult(d.l, "2.0.0", outcome, at); err != nil {
 				t.Fatal(err)
 			}
 			if ev := d.pass(Pass{ReportedUpdateAt: &at}); !slices.Equal(ev, []string{slotB, current}) {

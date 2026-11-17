@@ -238,7 +238,7 @@ func TestRepeatedUpdateResult(t *testing.T) {
 	d.remove("/var/lib/paddock/state/probation.json")
 	writeResult(t, d, "2.0.0", "rollback_failed", at)
 	d.logs.reset()
-	if _, err := UpdateResult(d.l, "2.0.0", "rollback_failed"); err != nil {
+	if _, err := UpdateResult(d.l, "2.0.0", "rollback_failed", at); err != nil {
 		t.Fatal(err)
 	}
 	d.quiet(2, Pass{ReportedUpdateAt: &at})
@@ -246,7 +246,7 @@ func TestRepeatedUpdateResult(t *testing.T) {
 	later := at.Add(time.Hour)
 	writeResult(t, d, "2.0.0", "rolled_back", later)
 	for range 2 {
-		if _, err := UpdateResult(d.l, "2.0.0", "rolled_back"); err != nil {
+		if _, err := UpdateResult(d.l, "2.0.0", "rolled_back", later); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -259,85 +259,183 @@ func TestRepeatedUpdateResult(t *testing.T) {
 	}
 }
 
-// TestRolledBackNeedsFailedRollback (plan M5a R16): only a rolled_back that follows a rollback_failed of the staged
-// release moves current back, and only to an unchanged slot; a replay changes nothing.
-func TestRolledBackNeedsFailedRollback(t *testing.T) {
-	setup := func(t *testing.T, outcome string) (*device, time.Time) {
-		d := newDevice(t)
-		d.quiet(1, Pass{})
-		at := stagedUpdate(t, d)
-		d.remove("/var/lib/paddock/state/probation.json")
-		writeResult(t, d, "2.0.0", outcome, at)
-		if _, err := UpdateResult(d.l, "2.0.0", outcome); err != nil {
-			t.Fatal(err)
-		}
-		d.quiet(1, Pass{ReportedUpdateAt: &at})
-		return d, at.Add(time.Hour)
+// settle writes the update result of 2.0.0 and processes it as the agent does; it returns unstaged.
+func settle(t *testing.T, d *device, outcome string, at time.Time) bool {
+	t.Helper()
+	writeResult(t, d, "2.0.0", outcome, at)
+	unstaged, err := UpdateResult(d.l, "2.0.0", outcome, at)
+	if err != nil {
+		t.Fatal(err)
 	}
-	rolledBack := func(t *testing.T, d *device, at time.Time) {
-		writeResult(t, d, "2.0.0", "rolled_back", at)
-		if _, err := UpdateResult(d.l, "2.0.0", "rolled_back"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Run("after updated", func(t *testing.T) {
-		d, later := setup(t, "updated")
-		d.link("A", current)
-		rolledBack(t, d, later)
-		d.changedOnce(current, Pass{ReportedUpdateAt: &later})
-	})
-	t.Run("after rollback_failed", func(t *testing.T) {
-		d, later := setup(t, "rollback_failed")
-		if !d.baseline().RollbackPending {
-			t.Fatal("rollback_failed left no pending rollback")
-		}
-		d.link("A", current)
-		rolledBack(t, d, later)
-		rolledBack(t, d, later)
-		d.quiet(3, Pass{ReportedUpdateAt: &later})
-		if b := d.baseline(); b.Expected[current] != "A" || b.RollbackPending {
-			t.Fatalf("current %q, pending %v", b.Expected[current], b.RollbackPending)
-		}
-	})
-	t.Run("changed slot", func(t *testing.T) {
-		d, later := setup(t, "rollback_failed")
-		d.write(slotA, "agent other")
-		d.link("A", current)
-		rolledBack(t, d, later)
-		if ev := d.pass(Pass{ReportedUpdateAt: &later}); !slices.Equal(ev, []string{slotA, current}) {
-			t.Fatalf("reported %v", ev)
-		}
-		if b := d.baseline(); b.Expected[current] != "B" {
-			t.Fatalf("current %q", b.Expected[current])
-		}
-	})
+	return unstaged
 }
 
-// TestBaselineReadableByOlderAgent (plan M5a R16): an agent without RollbackPending reads a baseline that holds it, as
-// after a downgrade.
-func TestBaselineReadableByOlderAgent(t *testing.T) {
+// settled stages 2.0.0 into slot B, leaves current on slot and settles the release with outcome.
+func settled(t *testing.T, d *device, slot, outcome string) time.Time {
+	t.Helper()
+	d.quiet(1, Pass{})
+	at := stagedUpdate(t, d)
+	d.link(slot, current)
+	d.remove("/var/lib/paddock/state/probation.json")
+	if settle(t, d, outcome, at) {
+		t.Fatalf("%s of the staged release is unstaged", outcome)
+	}
+	d.quiet(1, Pass{ReportedUpdateAt: &at})
+	return at
+}
+
+// TestSettledReleaseMovesNothing (plan M5a R16): a later result of a release that already settled is unstaged and
+// moves nothing, so a switch of current made with it is reported.
+func TestSettledReleaseMovesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		first, slot string
+		forged      []string
+		to          string
+	}{
+		{"updated", "B", []string{"rollback_failed", "rolled_back"}, "A"},
+		{"rolled_back", "A", []string{"updated"}, "B"},
+		{"self_test_failed", "A", []string{"rollback_failed"}, "B"},
+	} {
+		t.Run(tc.first+" then "+strings.Join(tc.forged, ", "), func(t *testing.T) {
+			d := newDevice(t)
+			at := settled(t, d, tc.slot, tc.first)
+			for i, outcome := range tc.forged {
+				if i == len(tc.forged)-1 {
+					d.link(tc.to, current)
+				}
+				at = at.Add(time.Hour)
+				if !settle(t, d, outcome, at) {
+					t.Fatalf("%s after %s is not unstaged", outcome, tc.first)
+				}
+			}
+			d.changedOnce(current, Pass{ReportedUpdateAt: &at})
+		})
+	}
+}
+
+// TestUpdateResultToggle (plan M5a R16): rollback_failed, rolled_back and updated of one release repeated with
+// switches of current report every round after the first; the baseline never moves silently.
+func TestUpdateResultToggle(t *testing.T) {
 	d := newDevice(t)
 	d.quiet(1, Pass{})
 	at := stagedUpdate(t, d)
 	d.remove("/var/lib/paddock/state/probation.json")
-	writeResult(t, d, "2.0.0", "rollback_failed", at)
-	if _, err := UpdateResult(d.l, "2.0.0", "rollback_failed"); err != nil {
-		t.Fatal(err)
+	for round := range 3 {
+		var unstaged []bool
+		step := func(slot, outcome string) {
+			d.link(slot, current)
+			at = at.Add(time.Minute)
+			unstaged = append(unstaged, settle(t, d, outcome, at))
+		}
+		step("B", "rollback_failed")
+		step("A", "rolled_back")
+		if ev := d.pass(Pass{ReportedUpdateAt: &at}); len(ev) != 0 {
+			t.Fatalf("round %d: reported %v on the expected slot", round, ev)
+		}
+		step("B", "updated")
+		want := []bool{round > 0, round > 0, true}
+		if !slices.Equal(unstaged, want) {
+			t.Fatalf("round %d: unstaged %v, want %v", round, unstaged, want)
+		}
+		if ev := d.pass(Pass{ReportedUpdateAt: &at}); !slices.Equal(ev, []string{current}) {
+			t.Fatalf("round %d: reported %v", round, ev)
+		}
+		if b := d.baseline(); b.Expected[current] != "A" {
+			t.Fatalf("round %d: current %q", round, b.Expected[current])
+		}
 	}
-	raw, err := os.ReadFile(d.l.Integrity())
-	if err != nil || !strings.Contains(string(raw), `"rollback_pending":true`) {
-		t.Fatalf("baseline %s: %v", raw, err)
+}
+
+// TestRolledBackChangedSlot (plan M5a R16): the completed rollback does not move current to a changed slot.
+func TestRolledBackChangedSlot(t *testing.T) {
+	d := newDevice(t)
+	at := settled(t, d, "B", "rollback_failed")
+	d.write(slotA, "agent other")
+	d.link("A", current)
+	later := at.Add(time.Hour)
+	if settle(t, d, "rolled_back", later) {
+		t.Fatal("the completed rollback is unstaged")
 	}
-	// The fields of Baseline as of e024d60c that this check uses; Go's decoder skips the others.
-	var older struct {
-		Generation uint64            `json:"generation"`
-		Expected   map[string]string `json:"expected"`
-		Staged     *Staged           `json:"staged"`
-		LastStaged *Staged           `json:"last_staged"`
+	if ev := d.pass(Pass{ReportedUpdateAt: &later}); !slices.Equal(ev, []string{slotA, current}) {
+		t.Fatalf("reported %v", ev)
 	}
-	if err := json.Unmarshal(raw, &older); err != nil || older.Expected[current] != "B" || older.LastStaged == nil {
-		t.Fatalf("an older agent could not read the baseline: %v, %+v", err, older)
+	if b := d.baseline(); b.Expected[current] != "B" || b.LastResult.RollbackPending {
+		t.Fatalf("current %q, last result %+v", b.Expected[current], b.LastResult)
 	}
+}
+
+// TestUpdateResultReplay (plan M5a R16): the same result again, as after a crash before the agent state was saved,
+// changes nothing; the same result with another at is unstaged.
+func TestUpdateResultReplay(t *testing.T) {
+	d := newDevice(t)
+	at := settled(t, d, "B", "updated")
+	if settle(t, d, "updated", at) {
+		t.Fatal("the replay is unstaged")
+	}
+	later := at.Add(time.Hour)
+	if !settle(t, d, "updated", later) {
+		t.Fatal("a result with another at is not unstaged")
+	}
+	d.quiet(3, Pass{ReportedUpdateAt: &later})
+}
+
+// TestFirstResultWithoutRecord (plan M5a R16): the first update result on a device without a record of the slots, as
+// after an update from a release without the check, raises nothing.
+func TestFirstResultWithoutRecord(t *testing.T) {
+	d := newDevice(t)
+	d.write(slotB, "agent v2")
+	d.link("B", current)
+	at := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	if settle(t, d, "updated", at) {
+		t.Fatal("unstaged without a record")
+	}
+	d.quiet(3, Pass{ReportedUpdateAt: &at})
+}
+
+// TestBaselineCompatibility (plan M5a R16): an agent of PDK-1122a reads a baseline with LastResult, and this agent reads
+// one of PDK-1122a with LastStaged and the flag of a40549bd, which it ignores.
+func TestBaselineCompatibility(t *testing.T) {
+	t.Run("older agent", func(t *testing.T) {
+		d := newDevice(t)
+		settled(t, d, "B", "rollback_failed")
+		raw, err := os.ReadFile(d.l.Integrity())
+		if err != nil || !strings.Contains(string(raw), `"last_result":{`) {
+			t.Fatalf("baseline %s: %v", raw, err)
+		}
+		// The fields of Baseline as of PDK-1122a; Go's decoder skips the others.
+		var older struct {
+			Generation uint64            `json:"generation"`
+			Expected   map[string]string `json:"expected"`
+			Staged     *Staged           `json:"staged"`
+			LastStaged *Staged           `json:"last_staged"`
+			Reported   map[string]string `json:"reported"`
+		}
+		if err := json.Unmarshal(raw, &older); err != nil || older.Expected[current] != "B" || older.LastStaged != nil {
+			t.Fatalf("an older agent could not read the baseline: %v, %+v", err, older)
+		}
+	})
+	t.Run("older baseline", func(t *testing.T) {
+		d := newDevice(t)
+		d.quiet(1, Pass{})
+		raw, err := os.ReadFile(d.l.Integrity())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b map[string]any
+		if err := json.Unmarshal(raw, &b); err != nil {
+			t.Fatal(err)
+		}
+		b["last_staged"] = map[string]string{"version": "2.0.0", "sha256": sha("agent v2")}
+		b["rollback_pending"] = true
+		raw, _ = json.Marshal(b)
+		if err := os.WriteFile(d.l.Integrity(), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		d.quiet(2, Pass{})
+		if !settle(t, d, "rolled_back", time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)) {
+			t.Fatal("a result for the old LastStaged is not unstaged")
+		}
+	})
 }
 
 // TestSplitQuoted (plan M5a R9, T14).

@@ -43,6 +43,16 @@ type Staged struct {
 	SHA256  string `json:"sha256"`
 }
 
+// AppliedResult is the update result that last settled a staged release (plan M5a R16). RollbackPending marks a
+// rollback_failed, after which one rolled_back of the same version may still move current back.
+type AppliedResult struct {
+	Version         string    `json:"version"`
+	SHA256          string    `json:"sha256"`
+	At              time.Time `json:"at"`
+	Outcome         string    `json:"outcome"`
+	RollbackPending bool      `json:"rollback_pending,omitempty"`
+}
+
 // Exception is a supervisor file the upgrade helper copied back after a rollback: it is expected while the md5sums
 // entry is still MD5 and the file's SHA-256 is still SHA256 (plan M5a C5).
 type Exception struct {
@@ -71,14 +81,11 @@ type Baseline struct {
 	CheckedAt     time.Time         `json:"checked_at"`
 	Expected      map[string]string `json:"expected"`
 	Staged        *Staged           `json:"staged,omitempty"`
-	LastStaged    *Staged           `json:"last_staged,omitempty"`
+	LastResult    *AppliedResult    `json:"last_result,omitempty"`
 	Exceptions    []Exception       `json:"supervisor_exceptions,omitempty"`
 	SupervisorPre *SupervisorPre    `json:"supervisor_pre,omitempty"`
 	Reported      map[string]string `json:"reported"`
 	Reset         *Reset            `json:"reset,omitempty"`
-	// RollbackPending: a rollback_failed of the staged release moved current to its slot; only the next update
-	// result may move current back (plan M5a R16).
-	RollbackPending bool `json:"rollback_pending,omitempty"`
 }
 
 // expect moves the baseline of path; its reported mark goes with it (plan M5a C8).
@@ -268,8 +275,7 @@ func SyncFileIfChanged(l paths.Layout, full string, before Fingerprint) (changed
 func RecordStaged(l paths.Layout, version, sum string) error {
 	return newStore(l, nil).update(func(b *Baseline) bool {
 		b.Staged = &Staged{Version: version, SHA256: strings.ToLower(sum)}
-		b.LastStaged = nil
-		b.RollbackPending = false
+		b.LastResult = nil
 		return true
 	})
 }
@@ -277,52 +283,48 @@ func RecordStaged(l paths.Layout, version, sum string) error {
 // UpdateResultFile is the device path of the update result, the file param of an unstaged result (plan M5a R16).
 const UpdateResultFile = "/var/lib/paddock/state/update-result.json"
 
-// UpdateResult moves the baseline for the supervisor's update result of version with outcome, before its event is
-// spooled (plan M5a C4, R11 L3, R16). The staged release moves to LastStaged, so that a later result of the same
-// version (rolled_back after rollback_failed, or a replay after a crash) finds it. Only the slot holding the staged
-// release is taken; current moves only on updated or rollback_failed, and only to that slot. A result without a
-// matching staged release keeps the whole baseline and returns unstaged, so that the caller reports it.
-func UpdateResult(l paths.Layout, version, outcome string) (unstaged bool, err error) {
+// UpdateResult moves the baseline for the supervisor's update result of version with outcome at at, before its event
+// is spooled. Each staged release settles once, and only a result that matches it moves the baseline (plan M5a C4,
+// R11 L3, R16); unstaged is true for any other result, which keeps the baseline, so that the caller reports it.
+func UpdateResult(l paths.Layout, version, outcome string, at time.Time) (unstaged bool, err error) {
 	var h hasher
 	obs, err := h.slots(l)
 	if err != nil {
 		return false, fmt.Errorf("reading the agent slots for the update result: %w", err)
 	}
 	err = newStore(l, nil).update(func(b *Baseline) bool {
-		pending := b.RollbackPending
-		b.RollbackPending = false
-		staged := b.Staged
-		if staged == nil && b.LastStaged != nil && b.LastStaged.Version == version {
-			staged = b.LastStaged
-		}
-		if b.Staged != nil {
-			b.LastStaged = b.Staged
-		}
-		b.Staged = nil
-		if staged == nil || staged.Version != version {
-			unstaged = true
-			return true
-		}
-		for _, slot := range []string{slotA, slotB} {
-			if obs[slot] == staged.SHA256 {
-				b.expect(slot, obs[slot])
-			}
-		}
+		last := b.LastResult
+		_, recorded := b.Expected[current]
 		sp := slotPath(obs[current])
 		switch {
-		case sp == "":
-		case outcome == update.OutcomeUpdated || outcome == update.OutcomeRollbackFailed:
-			if obs[sp] == staged.SHA256 {
-				b.expect(current, obs[current])
-				b.RollbackPending = outcome == update.OutcomeRollbackFailed
+		case !recorded:
+			// An agent without the check staged the release; on an established device the next pass reports the
+			// missing record as baseline_reset (R14).
+			return false
+		case last != nil && last.Version == version && last.Outcome == outcome && last.At.Equal(at):
+			return false
+		case b.Staged != nil && b.Staged.Version == version:
+			staged := b.Staged
+			for _, slot := range []string{slotA, slotB} {
+				if obs[slot] == staged.SHA256 {
+					b.expect(slot, obs[slot])
+				}
 			}
-		case outcome == update.OutcomeRolledBack:
-			// Only the completed rollback after a rollback_failed of this release, which moved current to the staged
-			// slot: back to the other slot, unchanged since (plan M5a R11 L3, R16).
-			if pending && b.Expected[slotPath(b.Expected[current])] == staged.SHA256 && obs[sp] != staged.SHA256 &&
-				obs[sp] == b.Expected[sp] {
+			if (outcome == update.OutcomeUpdated || outcome == update.OutcomeRollbackFailed) && sp != "" &&
+				obs[sp] == staged.SHA256 {
 				b.expect(current, obs[current])
 			}
+			b.Staged = nil
+			b.LastResult = &AppliedResult{Version: version, SHA256: staged.SHA256, At: at, Outcome: outcome,
+				RollbackPending: outcome == update.OutcomeRollbackFailed}
+		case outcome == update.OutcomeRolledBack && last != nil && last.RollbackPending && last.Version == version:
+			if sp != "" && obs[sp] != last.SHA256 && obs[sp] == b.Expected[sp] {
+				b.expect(current, obs[current])
+			}
+			b.LastResult = &AppliedResult{Version: version, SHA256: last.SHA256, At: at, Outcome: outcome}
+		default:
+			unstaged = true
+			return false
 		}
 		return true
 	})

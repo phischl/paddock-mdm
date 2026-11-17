@@ -601,9 +601,10 @@ A baseline that was corrupt or missing is reported the same way with `reason` `b
 moment became the baseline. Check the agent slots against the published release hashes (PDK-1122b) and the packages
 with `dpkg --verify paddock-agent paddock-supervisor paddock-revoke paddock-self-service fleet-osquery`.
 
-An update result for a release the agent did not stage itself is reported with `reason` `update_result_unstaged` and
-`file` `/var/lib/paddock/state/update-result.json`: the agent kept its baseline of the slots, so the next integrity pass
-reports any change of the slots or of `current`. Check the slots as above and `journalctl -u paddock-supervisor`.
+An update result that does not settle a release the agent staged itself (none was staged, or it settled already) is
+reported with `reason` `update_result_unstaged` and `file` `/var/lib/paddock/state/update-result.json`: the agent kept
+its baseline of the slots, so the next integrity pass reports any change of the slots or of `current`. Check the slots
+as above and `journalctl -u paddock-supervisor`.
 
 ## Update policy
 
