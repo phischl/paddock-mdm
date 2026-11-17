@@ -30,7 +30,14 @@ const (
 	himmelblauSource  = "/etc/apt/sources.list.d/paddock-himmelblau.list"
 	commonAuth        = "/etc/pam.d/common-auth"
 	commonAccount     = "/etc/pam.d/common-account"
+	// HimmelblaudSocketDropIn makes systemd remove /run/himmelblaud/socket whenever himmelblaud.socket stops
+	// (PDK-1126). Himmelblau 4.0.8's socket unit keeps the node, and the socket stops with the daemon (PartOf), e.g.
+	// during the shield's hold around package transactions (PDK-983): pam_himmelblau then writes "connection refused"
+	// to the stdout of every PAM caller, while a missing node fails silently.
+	HimmelblaudSocketDropIn = "/etc/systemd/system/himmelblaud.socket.d/90-paddock.conf"
 )
+
+var himmelblaudSocketDropIn = []byte("# Managed by Paddock. Do not edit: local changes are reverted.\n[Socket]\nRemoveOnStop=yes\n")
 
 // The PAM lines the pam-auth-update profile paddock-deny of the paddock-agent package produces (plan M3b decision
 // 9); the agent verifies them and never edits PAM files.
@@ -171,7 +178,7 @@ func (l *Login) Plan(ctx context.Context, r bundle.Resource) ([]string, error) {
 	if !l.installed(s.Himmelblau.PackageVersion) {
 		changes = append(changes, "package")
 	}
-	if !l.fileIs(HimmelblauConf, st.wantConf) {
+	if !l.fileIs(HimmelblauConf, st.wantConf) || !l.fileIs(HimmelblaudSocketDropIn, himmelblaudSocketDropIn) {
 		changes = append(changes, "config")
 	}
 	if !l.fileIs(DenyList, st.wantDeny) {
@@ -278,6 +285,15 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 		}
 		changed = append(changed, "config")
 		l.restartPending.Store(true)
+	}
+	if aptErr == nil {
+		written, err := l.ensureSocketDropIn(ctx)
+		if err != nil {
+			return l.fail(r.ID, protocol.LoginStageConfig, err)
+		}
+		if written && !slices.Contains(changed, "config") {
+			changed = append(changed, "config")
+		}
 	}
 	if aptErr == nil && l.restartPending.Load() {
 		if err := l.restartAfterHolds(ctx); err != nil {
@@ -424,6 +440,9 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 		}
 		confWritten = true
 	}
+	if _, err := l.ensureSocketDropIn(ctx); err != nil {
+		return false, confWritten, fmt.Errorf("%w: %w", errConfig, err)
+	}
 	err = l.install(ctx, version)
 	switch {
 	case err == nil:
@@ -444,6 +463,19 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 		return false, confWritten, errors.Join(err, l.Sys.Remove(HimmelblauConf))
 	}
 	return false, confWritten, err
+}
+
+// ensureSocketDropIn writes HimmelblaudSocketDropIn when it differs and reloads systemd, so that the next stop of
+// himmelblaud.socket removes its node. It goes with the configuration, before the packages start the units; a failed
+// installation leaves it, inert without the unit.
+func (l *Login) ensureSocketDropIn(ctx context.Context) (bool, error) {
+	if l.fileIs(HimmelblaudSocketDropIn, himmelblaudSocketDropIn) {
+		return false, nil
+	}
+	if err := l.Sys.WriteFileAtomic(HimmelblaudSocketDropIn, himmelblaudSocketDropIn, 0o644, 0, 0); err != nil {
+		return false, err
+	}
+	return true, run(ctx, l.Sys, []string{"systemctl daemon-reload"})
 }
 
 func (l *Login) now() time.Time {

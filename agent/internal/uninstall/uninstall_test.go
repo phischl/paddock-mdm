@@ -6,13 +6,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -544,4 +547,107 @@ func TestPurgeWaitsForDpkgLock(t *testing.T) {
 	if removals != 2 {
 		t.Fatalf("%d purge removals, want the Himmelblau and the Paddock packages: %v", removals, w.calls)
 	}
+}
+
+// nsswitchUbuntu is Ubuntu's /etc/nsswitch.conf after nss-himmelblau's postinst appended its source.
+const nsswitchUbuntu = "# /etc/nsswitch.conf\n\npasswd:         files systemd sss himmelblau\ngroup:          files systemd sss himmelblau\n" +
+	"shadow:         files systemd sss himmelblau\ngshadow:        files systemd\n\nhosts:          files mdns4_minimal [NOTFOUND=return] dns\n" +
+	"initgroups:     files himmelblau\n"
+
+// TestResetRemovesHimmelblauLeftovers (PDK-1126): the purge leaves the himmelblau NSS sources, the stale socket nodes
+// and Paddock's socket drop-in; the himmelblau step removes the exact token from the lines the postinst wrote, keeps
+// the file's mode and owner, removes the drop-in and the socket directory and reloads systemd. The drop-in directory
+// goes only when empty.
+func TestResetRemovesHimmelblauLeftovers(t *testing.T) {
+	w := newWorld(t)
+	w.write("/etc/nsswitch.conf", nsswitchUbuntu)
+	if err := os.Chmod(filepath.Join(w.root, "/etc/nsswitch.conf"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	w.write(reconcile.HimmelblaudSocketDropIn, "[Socket]\nRemoveOnStop=yes\n")
+	for _, s := range []string{"socket", "broker_sock", "task_sock"} {
+		w.write("/run/himmelblaud/"+s, "")
+	}
+	if got := w.helper().himmelblau(context.Background()); got != stepDone {
+		t.Fatalf("step %s", got)
+	}
+	want := strings.ReplaceAll(nsswitchUbuntu, " himmelblau\n", "\n")
+	if got := w.read("/etc/nsswitch.conf"); got != want {
+		t.Fatalf("nsswitch.conf\n%s\nwant\n%s", got, want)
+	}
+	info, err := os.Stat(filepath.Join(w.root, "/etc/nsswitch.conf"))
+	if err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("nsswitch.conf mode %v %v", info, err)
+	}
+	if st := info.Sys().(*syscall.Stat_t); int(st.Uid) != os.Getuid() || int(st.Gid) != os.Getgid() {
+		t.Fatalf("owner %d:%d", st.Uid, st.Gid)
+	}
+	for _, gone := range []string{reconcile.HimmelblaudSocketDropIn, filepath.Dir(reconcile.HimmelblaudSocketDropIn), "/run/himmelblaud"} {
+		if w.exists(gone) {
+			t.Fatalf("%s left", gone)
+		}
+	}
+	if i := slices.Index(w.calls, "systemctl daemon-reload"); i < 0 || i < slices.IndexFunc(w.calls, func(c string) bool {
+		return strings.HasPrefix(c, "apt-get remove --purge")
+	}) {
+		t.Fatalf("no daemon-reload after the purge: %v", w.calls)
+	}
+
+	// An administrator's own drop-in keeps its directory.
+	w = newWorld(t)
+	w.write(reconcile.HimmelblaudSocketDropIn, "x")
+	w.write("/etc/systemd/system/himmelblaud.socket.d/50-local.conf", "y")
+	if got := w.helper().himmelblau(context.Background()); got != stepDone || w.exists(reconcile.HimmelblaudSocketDropIn) ||
+		!w.exists("/etc/systemd/system/himmelblaud.socket.d/50-local.conf") {
+		t.Fatalf("step %s with a local drop-in", got)
+	}
+}
+
+// TestResetLeavesEditedNSSLines (PDK-1126): only the exact trailing token of a database line as the postinst writes it
+// goes. A line an administrator edited — the source elsewhere, with an action or a comment, as the only source, indented, a
+// similar name, another database, trailing blanks — stays and is logged; a file without the source is not rewritten.
+func TestResetLeavesEditedNSSLines(t *testing.T) {
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	edited := "passwd: files himmelblau systemd\ngroup: files himmelblau [NOTFOUND=return]\nshadow: files himmelblau # Entra\n" +
+		"initgroups: himmelblau\n  passwd: files himmelblau\nhosts: files himmelblau\nnetgroup: nis himmelblau\n" +
+		"passwd: files himmelblau  \ngroup: files himmelblau2\ngroup: files himmelblau himmelblau\n"
+	for _, content := range []string{edited, "passwd: files systemd\ngroup: files systemd\n"} {
+		w := newWorld(t)
+		w.write("/etc/nsswitch.conf", content)
+		path := filepath.Join(w.root, "/etc/nsswitch.conf")
+		before, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := w.helper().himmelblau(context.Background()); got != stepDone {
+			t.Fatalf("step %s", got)
+		}
+		after, err := os.Stat(path)
+		if err != nil || w.read("/etc/nsswitch.conf") != content || !os.SameFile(before, after) {
+			t.Fatalf("nsswitch.conf rewritten:\n%s", w.read("/etc/nsswitch.conf"))
+		}
+	}
+	for _, line := range []string{"line=1", "line=2", "line=3", "line=4", "line=5", "line=8", "line=10"} {
+		if !strings.Contains(logs.String(), "names himmelblau; left as it is") || !strings.Contains(logs.String(), line+"\n") {
+			t.Errorf("no log for %s:\n%s", line, logs.String())
+		}
+	}
+	for _, line := range []string{"line=6", "line=7", "line=9"} {
+		if strings.Contains(logs.String(), line+"\n") {
+			t.Errorf("logged %s, which is no himmelblau database line:\n%s", line, logs.String())
+		}
+	}
+}
+
+func (w *world) read(file string) string {
+	w.t.Helper()
+	data, err := os.ReadFile(filepath.Join(w.root, file))
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return string(data)
 }

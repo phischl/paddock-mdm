@@ -14,6 +14,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/policy"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -117,6 +118,8 @@ func TestLoginInstallsAndConfigures(t *testing.T) {
 	want := []string{
 		// The configuration precedes the packages, whose installation starts himmelblaud (plan M4b.1 step 6).
 		"write /etc/himmelblau/himmelblau.conf",
+		// The socket drop-in is in place before the packages start the socket unit (PDK-1126).
+		"write " + reconcile.HimmelblaudSocketDropIn, "systemctl daemon-reload",
 		"write /etc/apt/keyrings/himmelblau.gpg", "write /etc/apt/sources.list.d/paddock-himmelblau.list", "apt-get update",
 		"apt-get install himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config",
 		"write /etc/paddock/login-deny", "write /etc/himmelblau/himmelblau.conf",
@@ -191,6 +194,62 @@ func TestLoginInstallsAndConfigures(t *testing.T) {
 		if got := string(sys.Files["/etc/himmelblau/himmelblau.conf"].Data); got != wantConf {
 			t.Fatalf("himmelblau.conf after the apply\n%s", got)
 		}
+	}
+}
+
+const wantSocketDropIn = "# Managed by Paddock. Do not edit: local changes are reverted.\n[Socket]\nRemoveOnStop=yes\n"
+
+// TestLoginManagesTheSocketDropIn (PDK-1126): the drop-in that makes systemd remove /run/himmelblaud/socket when the
+// socket unit stops is written root:root 0644 with the configuration; a missing, edited or loosened drop-in is drift,
+// rewritten with a daemon-reload and without a daemon restart; an intact one is left alone.
+func TestLoginManagesTheSocketDropIn(t *testing.T) {
+	ctx := context.Background()
+	sys, l, events := loginFixture(t)
+	r := loginResource(t, loginSpec())
+	if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
+		t.Fatalf("apply %+v", res)
+	}
+	if f := sys.Files[reconcile.HimmelblaudSocketDropIn]; f == nil || string(f.Data) != wantSocketDropIn || f.Mode != 0o644 || f.UID != 0 || f.GID != 0 {
+		t.Fatalf("drop-in %+v", f)
+	}
+	sys.TakeCalls()
+	takeEvents(events)
+	for name, damage := range map[string]func(f *fakesys.File){
+		"removed": nil,
+		"edited":  func(f *fakesys.File) { f.Data = []byte("[Socket]\nRemoveOnStop=no\n") },
+		"mode":    func(f *fakesys.File) { f.Mode = 0o666 },
+	} {
+		if damage == nil {
+			delete(sys.Files, reconcile.HimmelblaudSocketDropIn)
+		} else {
+			damage(sys.Files[reconcile.HimmelblaudSocketDropIn])
+		}
+		if changes, err := l.Plan(ctx, r); err != nil || !slices.Equal(changes, []string{"config"}) {
+			t.Fatalf("%s: plan %v %v", name, changes, err)
+		}
+		if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
+			t.Fatalf("%s: apply %+v", name, res)
+		}
+		if calls := sys.TakeCalls(); !slices.Equal(calls, []string{"write " + reconcile.HimmelblaudSocketDropIn, "systemctl daemon-reload"}) {
+			t.Fatalf("%s: calls %q", name, calls)
+		}
+		if f := sys.Files[reconcile.HimmelblaudSocketDropIn]; string(f.Data) != wantSocketDropIn || f.Mode != 0o644 {
+			t.Fatalf("%s: drop-in %+v", name, f)
+		}
+		if got := takeEvents(events); !slices.Equal(got, []event{{protocol.EventLoginApplied, `{"changed":["config"]}`}}) {
+			t.Fatalf("%s: events %v", name, got)
+		}
+		if changes, err := l.Plan(ctx, r); err != nil || len(changes) != 0 {
+			t.Fatalf("%s: plan after the apply %v %v", name, changes, err)
+		}
+	}
+
+}
+
+// The policy denies the drop-in to managed files (protected area 4), so an operator's resource cannot override it.
+func TestSocketDropInIsDenied(t *testing.T) {
+	if err := policy.ValidatePath(reconcile.HimmelblaudSocketDropIn); !errors.Is(err, policy.ErrPathNotAllowed) {
+		t.Fatalf("ValidatePath = %v", err)
 	}
 }
 
