@@ -321,10 +321,12 @@ func (h *Helper) himmelblau(ctx context.Context) string {
 			errs = append(errs, err.Error())
 		}
 	}
-	if err := h.remove(reconcile.HimmelblaudSocketDropIn); err != nil {
-		errs = append(errs, err.Error())
+	for _, p := range reconcile.HimmelblauSocketDropIns {
+		if err := h.remove(p); err != nil {
+			errs = append(errs, err.Error())
+		}
+		_ = os.Remove(h.path(filepath.Dir(p))) // only when empty: an administrator's drop-ins stay
 	}
-	_ = os.Remove(h.path(filepath.Dir(reconcile.HimmelblaudSocketDropIn))) // only when empty: an administrator's drop-ins stay
 	if err := h.run(ctx, "systemctl", "daemon-reload"); err != nil {
 		errs = append(errs, err.Error())
 	}

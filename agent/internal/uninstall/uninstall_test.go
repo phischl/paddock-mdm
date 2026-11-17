@@ -564,7 +564,9 @@ func TestResetRemovesHimmelblauLeftovers(t *testing.T) {
 	if err := os.Chmod(filepath.Join(w.root, "/etc/nsswitch.conf"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	w.write(reconcile.HimmelblaudSocketDropIn, "[Socket]\nRemoveOnStop=yes\n")
+	for _, p := range reconcile.HimmelblauSocketDropIns {
+		w.write(p, "[Socket]\nRemoveOnStop=yes\n")
+	}
 	for _, s := range []string{"socket", "broker_sock", "task_sock"} {
 		w.write("/run/himmelblaud/"+s, "")
 	}
@@ -582,7 +584,11 @@ func TestResetRemovesHimmelblauLeftovers(t *testing.T) {
 	if st := info.Sys().(*syscall.Stat_t); int(st.Uid) != os.Getuid() || int(st.Gid) != os.Getgid() {
 		t.Fatalf("owner %d:%d", st.Uid, st.Gid)
 	}
-	for _, gone := range []string{reconcile.HimmelblaudSocketDropIn, filepath.Dir(reconcile.HimmelblaudSocketDropIn), "/run/himmelblaud"} {
+	gone := []string{"/run/himmelblaud", "/etc/systemd/system/himmelblaud-tasks.socket.d", "/etc/systemd/system/himmelblaud-broker.socket.d"}
+	for _, p := range reconcile.HimmelblauSocketDropIns {
+		gone = append(gone, p, filepath.Dir(p))
+	}
+	for _, gone := range gone {
 		if w.exists(gone) {
 			t.Fatalf("%s left", gone)
 		}

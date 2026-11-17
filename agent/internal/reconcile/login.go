@@ -37,6 +37,12 @@ const (
 	HimmelblaudSocketDropIn = "/etc/systemd/system/himmelblaud.socket.d/90-paddock.conf"
 )
 
+// HimmelblauSocketDropIns are HimmelblaudSocketDropIn and the same drop-in for the daemon's other two socket units,
+// which stop with it and keep task_sock and broker_sock the same way. Only RemoveOnStop is set: every other setting
+// stays Himmelblau's.
+var HimmelblauSocketDropIns = []string{HimmelblaudSocketDropIn, "/etc/systemd/system/himmelblaud-tasks.socket.d/90-paddock.conf",
+	"/etc/systemd/system/himmelblaud-broker.socket.d/90-paddock.conf"}
+
 var himmelblaudSocketDropIn = []byte("# Managed by Paddock. Do not edit: local changes are reverted.\n[Socket]\nRemoveOnStop=yes\n")
 
 // The PAM lines the pam-auth-update profile paddock-deny of the paddock-agent package produces (plan M3b decision
@@ -178,7 +184,7 @@ func (l *Login) Plan(ctx context.Context, r bundle.Resource) ([]string, error) {
 	if !l.installed(s.Himmelblau.PackageVersion) {
 		changes = append(changes, "package")
 	}
-	if !l.fileIs(HimmelblauConf, st.wantConf) || !l.fileIs(HimmelblaudSocketDropIn, himmelblaudSocketDropIn) {
+	if !l.fileIs(HimmelblauConf, st.wantConf) || !l.socketDropInsAre() {
 		changes = append(changes, "config")
 	}
 	if !l.fileIs(DenyList, st.wantDeny) {
@@ -465,17 +471,28 @@ func (l *Login) installPackages(ctx context.Context, version string, conf []byte
 	return false, confWritten, err
 }
 
-// ensureSocketDropIn writes HimmelblaudSocketDropIn when it differs and reloads systemd, so that the next stop of
-// himmelblaud.socket removes its node. It goes with the configuration, before the packages start the units; a failed
+// ensureSocketDropIn writes the HimmelblauSocketDropIns that differ and reloads systemd, so that the next stop of the
+// socket units removes their nodes. It goes with the configuration, before the packages start the units; a failed
 // installation leaves it, inert without the unit.
 func (l *Login) ensureSocketDropIn(ctx context.Context) (bool, error) {
-	if l.fileIs(HimmelblaudSocketDropIn, himmelblaudSocketDropIn) {
+	written := false
+	for _, p := range HimmelblauSocketDropIns {
+		if l.fileIs(p, himmelblaudSocketDropIn) {
+			continue
+		}
+		if err := l.Sys.WriteFileAtomic(p, himmelblaudSocketDropIn, 0o644, 0, 0); err != nil {
+			return written, err
+		}
+		written = true
+	}
+	if !written {
 		return false, nil
 	}
-	if err := l.Sys.WriteFileAtomic(HimmelblaudSocketDropIn, himmelblaudSocketDropIn, 0o644, 0, 0); err != nil {
-		return false, err
-	}
 	return true, run(ctx, l.Sys, []string{"systemctl daemon-reload"})
+}
+
+func (l *Login) socketDropInsAre() bool {
+	return !slices.ContainsFunc(HimmelblauSocketDropIns, func(p string) bool { return !l.fileIs(p, himmelblaudSocketDropIn) })
 }
 
 func (l *Login) now() time.Time {

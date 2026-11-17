@@ -330,8 +330,9 @@ create a system account; the uninstall helper purges the Himmelblau packages its
 **Addendum 2026-11-17 (PDK-1126).** Himmelblau 4.0.8's `himmelblaud.socket` stops with the daemon (`PartOf`) but
 keeps its socket file (`RemoveOnStop=no`), so during a hold `pam_himmelblau` prints "connection refused" to the
 standard output of every PAM caller; a missing file stays silent. The login reconciler therefore manages the drop-in
-`/etc/systemd/system/himmelblaud.socket.d/90-paddock.conf` (`RemoveOnStop=yes`) like `himmelblau.conf`: written
-before the installation, rewritten on drift with a `daemon-reload`. The `reset` removal takes it out again together
+`/etc/systemd/system/himmelblaud.socket.d/90-paddock.conf` (`RemoveOnStop=yes`, nothing else), and the same
+drop-in for `himmelblaud-tasks.socket` and `himmelblaud-broker.socket`, like `himmelblau.conf`: written before the
+installation, rewritten on drift with a `daemon-reload` and reported as `login.applied` (`config`). The `reset` removal takes it out again together
 with the socket files and the `himmelblau` sources nss-himmelblau's postinst appended to `/etc/nsswitch.conf`. The
 PAM wait of about 1 s per authentication during a hold is recorded in RR-133.
 
