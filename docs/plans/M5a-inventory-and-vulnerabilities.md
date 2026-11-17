@@ -2666,3 +2666,52 @@ R15 differs from R3, R4, R7 or R13, R15 wins.
 2. The pass at loop start raises an event on a regular boot in a VM gate.
 
 The remaining simplifications (S2–S9, N4, N5) are the alpha.12 stub PDK-1122g. They are not part of this round.
+
+### R16 (PDK-1122j): update results keep the slot baseline
+
+Processing an update result no longer adopts what `current` points at or what the slots hold. Each release this agent
+staged settles at most once, and only a result that matches it can move the baseline.
+
+**Persisted state (`integrity.json`).** `Staged` (version, sha256) stays as is. `LastStaged` and `RollbackPending` are
+replaced by one record `LastResult *AppliedResult` with the fields `version` (string), `sha256` (string, the staged hash),
+`at` (time, the `at` of the result), `outcome` (string) and `rollback_pending` (bool, `omitempty`). All fields are
+`omitempty` additions to the baseline, so an older agent still reads it.
+
+**Signature.** `integrity.UpdateResult(l paths.Layout, version, outcome string, at time.Time) (unstaged bool, err error)`.
+The rules apply in this order; the first that matches decides.
+1. No record of the slots (`Expected[current]` absent): nothing changes, `unstaged` is false, no event. This covers a
+   device whose agent never recorded a staged release (update from a release without the check). On an established
+   device the next pass reports the missing record as `baseline_reset` (R14), so this is not silent.
+2. Replay: `LastResult` has the same `version`, `outcome` and `at`: nothing changes, `unstaged` is false. This is the
+   repeat after a crash between the baseline and the state file.
+3. Staged: `Staged` is set and its version equals `version`. The slot whose observed hash equals the staged hash is
+   taken. `current` moves only on `updated` or `rollback_failed`, and only to that slot. `Staged` is cleared and
+   `LastResult` is set with `rollback_pending` true only for `rollback_failed`; any earlier `LastResult` is replaced.
+4. Completed rollback: `outcome` is `rolled_back`, `LastResult.rollback_pending` is true and `LastResult.version` equals
+   `version`. `current` moves to the other slot only if that slot is unchanged against the baseline and the observed
+   `current` slot is not the staged slot. `LastResult` is replaced with this result and `rollback_pending` false.
+5. Anything else is unstaged: the whole baseline is kept, `Staged` and `LastResult` stay unchanged, `unstaged` is true.
+   The caller emits `device.tamper_protected_file_changed` (`TamperProtectedFileChanged`) once per result `at`, with
+   reason `update_result_unstaged` (`protocol.TamperReasonUpdateResultUnstaged`, next to `check_suspended` and
+   `baseline_reset`) and `File` `integrity.UpdateResultFile`. The audit code description names the reason.
+
+Every other outcome keeps `Expected[current]`, so the next quiescent pass reports a deviation. A result for a settled
+release (second `updated`, `rollback_failed` or `rolled_back` with a new `at`) is unstaged. `RecordStaged` clears
+`LastResult`. Residual, accepted: while a release is staged and not yet settled, one result for it can take effect, and
+after a genuine `rollback_failed` one `rolled_back` can move `current` once to the other slot's genuine binary (R11 L3).
+RR-148 states both and does not claim that rewritten results go undetected beyond what this rule detects. The comment at
+`agent/internal/agent/updates.go:117` is updated to this rule.
+
+**Gate.** The system gate retracts the releases of S4 in a shared step before S5 and then waits for two conditions, polling
+with the existing helpers and without a fixed sleep: first a check-in of each VM carries no offer (the offer stays cached
+for up to one rollout round of 60 s), then the device is quiet (no `request.json`, no `probation.json`, the last update
+result processed) before S5 flips.
+
+**Tests** (each fails without its rule; the first three fail on `a40549bd`).
+- `updated` then a forged `rollback_failed`, a flip of `current` and a forged `rolled_back`: reported.
+- `rolled_back`, a flip and a forged `updated`: reported. `self_test_failed`, a flip and a forged `rollback_failed`: reported.
+- Repeating `rollback_failed`, `rolled_back` and `updated` for one version in several rounds (toggle): every round after
+  the first reports, and no baseline move is silent.
+- A genuine `rollback_failed` then `rolled_back` and a regular `updated`: no event.
+- A first result without any baseline record (update from a release without the check): no event.
+- A replay with the same `at`: no event; the same result with a different `at` after settlement: the event.

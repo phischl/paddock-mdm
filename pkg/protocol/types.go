@@ -672,12 +672,16 @@ type (
 	}
 )
 
-// Reasons of TamperProtectedFileChanged sent by the check of Paddock's own components (ADR 0056; plan M5a R5, R14).
+// Reasons of TamperProtectedFileChanged sent by the check of Paddock's own components (ADR 0056; plan M5a R5, R14,
+// R16).
 const (
 	// TamperReasonCheckSuspended: the check could not run for longer than a fixed bound; File blocks it.
 	TamperReasonCheckSuspended = "check_suspended"
 	// TamperReasonBaselineReset: the baseline was corrupt or missing and was recorded anew; File is the baseline.
 	TamperReasonBaselineReset = "baseline_reset"
+	// TamperReasonUpdateResultUnstaged: an update result named no release the agent staged; the baseline of the agent
+	// slots was kept, and File is the update result (plan M5a R16).
+	TamperReasonUpdateResultUnstaged = "update_result_unstaged"
 )
 
 // Outcomes of login.nss_shield.
