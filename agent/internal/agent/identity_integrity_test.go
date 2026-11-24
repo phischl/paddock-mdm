@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -299,8 +300,20 @@ func TestIdentityRollbackAndUpdateAgain(t *testing.T) {
 	g.OfferBundle(testgw.SignedBundleOffer(t, loginBundle(t, 2, true, "erin@acme.test")))
 	a.Cycle(ctx)
 	identityEvents(t, a, g)
+	before, err := os.ReadFile(a.d.Layout.Integrity())
+	if err != nil {
+		t.Fatal(err)
+	}
 	a = restarted(t, a, sys, true)
-	ticks(t, a, g, 1)
+	// New also serves `paddockd plan`, which changes nothing.
+	if after, _ := os.ReadFile(a.d.Layout.Integrity()); !bytes.Equal(after, before) {
+		t.Fatal("New changed the integrity baseline")
+	}
+	runUntilFirstPass(t, a, g)
+	if files := tampered(t, a, g); len(files) != 0 {
+		t.Fatalf("first pass after the update again: tamper %v", files)
+	}
+	identityEvents(t, a, g)
 	sys.write(t, reconcile.DenyList, "")
 	a.tickIntegrity(ctx)
 	a.drift(ctx)
@@ -388,5 +401,25 @@ func TestIdentityReportOnlyDeletedDropIn(t *testing.T) {
 	ticks(t, a, g, 2)
 	if _, err := os.Stat(filepath.Join(sys.root, reconcile.HimmelblaudSocketDropIn)); !os.IsNotExist(err) {
 		t.Fatalf("the drop-in came back: %v", err)
+	}
+}
+
+// runUntilFirstPass runs the agent until it checked in and ran its first integrity pass.
+func runUntilFirstPass(t *testing.T, a *Agent, g *testgw.Gateway) {
+	t.Helper()
+	start, checked := checkins(g), func() time.Time {
+		var b integrity.Baseline
+		data, _ := os.ReadFile(a.d.Layout.Integrity())
+		_ = json.Unmarshal(data, &b)
+		return b.CheckedAt
+	}
+	at := checked()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	waitFor(t, func() bool { return checkins(g) > start && checked().After(at) })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
 	}
 }

@@ -2753,8 +2753,9 @@ as F2 says, and the restore or removal after a failed installation, which calls 
 rebuilt baseline makes the next `Expect` record again.
 
 **F4 Wiring.** `reconcile.FileGuard` (`Expect`, `BeforeWrite`, `Written`) is implemented by `integrity.Checker`.
-`apply.Applier.WithFileGuard`, `SetPrevious` and `ConfirmPrevious` pass it on to the login reconciler, and
-`agent.New` wires all three. The
+`apply.Applier.WithFileGuard`, `SetPrevious` and `ConfirmPrevious` pass it on to the login reconciler. `agent.New`
+wires the guard and `SetPrevious`; the agent's run calls `ConfirmPrevious` before its first pass, because `agent.New`
+also serves `paddockd plan`, which changes nothing. The
 reconciler does not import the integrity package, and `baseline.go` is unchanged.
 
 **F5 Residuals (RR-148).**
@@ -2772,6 +2773,11 @@ reconciler does not import the integrity package, and `baseline.go` is unchanged
 - The drop-ins are judged only after Paddock's first write.
 - On a device that never enforced a bundle, an absent `login-deny` is not a change.
 - A Paddock-written file stays judged after the login resource leaves the bundle, until Paddock removes it.
+- After a rollback to an older agent that wrote a new lock, a change outside Paddock that sets the deny list back to
+  the content recorded before the rollback, made before the update again, is corrected without an event. This needs
+  root; no regular flow leads there.
+- A change that already equals the next content Paddock applies, for example a lock removed just before the
+  administrator unlocks that user, is recorded without an event. The window is at most one check interval.
 - A later release that changes a render and is installed directly over an agent without this check can raise one
   event per changed file.
 - Report-only mode records nothing until the device enforces a bundle.

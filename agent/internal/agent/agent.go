@@ -347,7 +347,6 @@ func New(d Deps) (*Agent, error) {
 	a.refreshHealth()
 	a.loadCurrent()
 	a.d.Applier.SetPrevious(a.current)
-	a.d.Applier.ConfirmPrevious()
 	return a, nil
 }
 
@@ -362,6 +361,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	// reported first, so that himmelblaud runs again even if the safety timer has not fired yet (decisions §45).
 	a.d.Shield.Recover(ctx)
 	a.reportInterruptedInstalls()
+	// Before the first integrity pass, and here and not in New for the same reason (plan M5a amendment 2026-11-17 f).
+	a.d.Applier.ConfirmPrevious()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Registered before wg.Wait, so it runs after the diagnostics worker is joined and nothing sends any more.

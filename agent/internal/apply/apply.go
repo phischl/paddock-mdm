@@ -123,7 +123,7 @@ func (a *Applier) SetPrevious(b *bundle.Bundle) {
 }
 
 // ConfirmPrevious lets the login reconciler confirm the files that hold the previously enforced renders; the agent
-// calls it at start, after SetPrevious and before the first integrity pass.
+// calls it when it starts to run, after SetPrevious and before the first integrity pass.
 func (a *Applier) ConfirmPrevious() { a.login.ConfirmPrevious() }
 
 // New creates an applier for sys; managed is the record of files Paddock wrote, events receives the device events
