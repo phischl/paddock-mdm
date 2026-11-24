@@ -165,6 +165,8 @@ const (
 	CodeDeviceTamperAgentBinaryChanged Code = "device.tamper_agent_binary_changed"
 	// CodeDeviceTamperFleetHostClaimed: another inventory host claims a device, or its host was enrolled again (ADR 0057).
 	CodeDeviceTamperFleetHostClaimed Code = "device.tamper_fleet_host_claimed"
+	// CodeDeviceTamperInventoryRejected: the inventory round could not take over a device's inventory (PDK-1122k).
+	CodeDeviceTamperInventoryRejected Code = "device.tamper_inventory_rejected"
 	// CodeDeviceInventoryHostRemoved: a host the device no longer speaks from was removed from the inventory system (ADR 0057).
 	CodeDeviceInventoryHostRemoved Code = "device.inventory_host_removed"
 	// Update management (plan M5b decisions 1–3 and 6).
@@ -1308,6 +1310,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"policy", "evaluated_at", "agent_version", "known_hashes"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it. No hash of the device's binary is recorded: the policy returns pass or fail only.",
+	},
+	CodeDeviceTamperInventoryRejected: {
+		Code: CodeDeviceTamperInventoryRejected, Emitted: true,
+		Description: "The inventory round could not take over the inventory of a device and skipped it (actor: system). reason fetch_refused: Fleet no longer knows the host that speaks for the device, or refused it; reason store_refused: Paddock refused the host's inventory data. fleet_host is the inventory system's ID of the host that speaks for the device. Until the device's inventory is stored again, its software, vulnerabilities and the agent reports derived from the inventory system rest on its last stored inventory.",
+		Params:      []string{"reason", "fleet_host"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per episode; the episode ends when the device's inventory is stored again.",
 	},
 	CodeDeviceInventoryHostRemoved: {
 		Code: CodeDeviceInventoryHostRemoved, Emitted: true,

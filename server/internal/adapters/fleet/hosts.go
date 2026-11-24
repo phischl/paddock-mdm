@@ -98,10 +98,11 @@ func (c *Client) ListHostsChangedSince(ctx context.Context, since time.Time, cur
 	}
 	var res ports.HostPage
 	for _, h := range out.Hosts {
-		if h.UUID == "" {
+		hw := text(h.UUID)
+		if hw == "" {
 			continue
 		}
-		seen := ports.HostSeen{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: h.UUID, EnrolledAt: h.LastEnrolledAt}
+		seen := ports.HostSeen{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: hw, EnrolledAt: h.LastEnrolledAt}
 		if h.SeenTime != nil {
 			seen.SeenAt = *h.SeenTime
 		}
@@ -109,7 +110,7 @@ func (c *Client) ListHostsChangedSince(ctx context.Context, since time.Time, cur
 		if h.changedAt().Before(since) {
 			continue
 		}
-		res.Hosts = append(res.Hosts, ports.InventoryHost{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: h.UUID, ChangedAt: h.changedAt()})
+		res.Hosts = append(res.Hosts, ports.InventoryHost{Ref: ports.HostRef(strconv.Itoa(h.ID)), HardwareUUID: hw, ChangedAt: h.changedAt()})
 	}
 	if len(out.Hosts) == hostsPerPage {
 		res.Next = strconv.Itoa(page + 1)
@@ -118,7 +119,8 @@ func (c *Client) ListHostsChangedSince(ctx context.Context, since time.Time, cur
 }
 
 // HostInventory implements ports.Inventory with one request: Fleet's host detail carries the software with its
-// vulnerabilities and the policy results.
+// vulnerabilities and the policy results. A host Fleet no longer knows (a 404 with Fleet's own error body) is
+// problem.NotFound; other failures are classified like DeleteHost's. Every string is cleaned by text (PDK-1122k).
 func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.HostInventory, error) {
 	id, err := strconv.Atoi(string(ref))
 	if err != nil {
@@ -127,17 +129,22 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	var out struct {
 		Host host `json:"host"`
 	}
-	if err := c.do(ctx, "GET", "/api/latest/fleet/hosts/"+strconv.Itoa(id), nil, &out); err != nil {
-		return ports.HostInventory{}, fmt.Errorf("get fleet host %d: %w", id, err)
+	err = c.do(ctx, "GET", "/api/latest/fleet/hosts/"+strconv.Itoa(id), nil, &out)
+	st := (*errStatus)(nil)
+	switch {
+	case errors.As(err, &st) && st.code == http.StatusNotFound && isFleetErrorBody(st.body):
+		return ports.HostInventory{}, fmt.Errorf("%w: get fleet host %d: %w", problem.NotFound, id, err)
+	case err != nil:
+		return ports.HostInventory{}, hostError(err, fmt.Sprintf("get fleet host %d", id))
 	}
 	h := out.Host
-	inv := ports.HostInventory{OSVersion: h.OSVersion, AgentVersion: h.OsqueryVersion, LastSeenAt: h.SeenTime}
+	inv := ports.HostInventory{OSVersion: text(h.OSVersion), AgentVersion: text(h.OsqueryVersion), LastSeenAt: h.SeenTime}
 	if !h.PolicyUpdatedAt.IsZero() {
 		at := h.PolicyUpdatedAt
 		inv.PolicyUpdatedAt = &at
 	}
 	if h.OrbitVersion != nil && *h.OrbitVersion != "" {
-		inv.AgentVersion = *h.OrbitVersion
+		inv.AgentVersion = text(*h.OrbitVersion)
 	}
 	inv.Hardware = ports.HostHardware{
 		Vendor: hardwareText(h.HardwareVendor), Model: hardwareText(h.HardwareModel), Serial: hardwareText(h.HardwareSerial),
@@ -145,11 +152,12 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 		DiskTotalBytes: int64(math.Round(max(h.GigsTotalDiskSpace, 0) * 1e9)),
 	}
 	for _, s := range h.Software {
-		p := ports.SoftwarePackage{Name: s.Name, Version: s.Version, Source: s.Source}
+		p := ports.SoftwarePackage{Name: keyText(s.Name, maxKeyRunes), Version: keyText(s.Version, maxKeyRunes),
+			Source: keyText(s.Source, maxSourceRunes)}
 		for _, v := range s.Vulnerabilities {
-			vuln := ports.Vulnerability{CVE: v.CVE, CVSSScore: v.CVSSScore}
+			vuln := ports.Vulnerability{CVE: keyText(v.CVE, maxSourceRunes), CVSSScore: v.CVSSScore}
 			if v.ResolvedInVersion != nil {
-				vuln.FixedVersion = *v.ResolvedInVersion
+				vuln.FixedVersion = keyText(*v.ResolvedInVersion, maxKeyRunes)
 			}
 			p.Vulnerabilities = append(p.Vulnerabilities, vuln)
 		}
@@ -157,9 +165,9 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	}
 	for _, p := range h.Policies {
 		if p.Response == "pass" || p.Response == "fail" {
-			inv.Policies = append(inv.Policies, ports.PolicyResult{Key: p.Name, Passing: p.Response == "pass"})
+			inv.Policies = append(inv.Policies, ports.PolicyResult{Key: keyText(p.Name, maxKeyRunes), Passing: p.Response == "pass"})
 		} else {
-			inv.UnansweredPolicies = append(inv.UnansweredPolicies, p.Name)
+			inv.UnansweredPolicies = append(inv.UnansweredPolicies, keyText(p.Name, maxKeyRunes))
 		}
 	}
 	return inv, nil
@@ -230,7 +238,7 @@ func (c *Client) ResolveDeviceToken(ctx context.Context, token string) (ports.Ho
 	ue := (*url.Error)(nil)
 	switch {
 	case err == nil && out.Host != nil && out.Host.ID > 0:
-		return ports.HostRef(strconv.Itoa(out.Host.ID)), strings.ToLower(out.Host.UUID), nil
+		return ports.HostRef(strconv.Itoa(out.Host.ID)), strings.ToLower(text(out.Host.UUID)), nil
 	case err == nil:
 		return "", "", fmt.Errorf("%w: resolve a fleet device token: the answer has no host", problem.UpstreamUnavailable)
 	case errors.As(err, &st) && (st.code == http.StatusUnauthorized || st.code == http.StatusNotFound):
@@ -290,13 +298,30 @@ func isFleetErrorBody(body string) bool {
 // maxHardwareRunes bounds every hardware string Paddock stores (plan M8d decision 6).
 const maxHardwareRunes = 128
 
-func hardwareText(s string) string {
-	s = strings.TrimSpace(s)
-	if utf8.RuneCountInString(s) <= maxHardwareRunes {
+func hardwareText(s string) string { return keyText(strings.TrimSpace(text(s)), maxHardwareRunes) }
+
+// maxKeyRunes and maxSourceRunes bound the software, vulnerability and policy strings Paddock stores to the widths of
+// Fleet's own columns (255 for names and versions, 64 for sources): they are parts of btree keys, and PostgreSQL
+// refuses a key over about 2.7 kB, which would fail the host's store (PDK-1122k). At these widths a key stays below
+// that even with 4-byte runes.
+const (
+	maxKeyRunes    = 255
+	maxSourceRunes = 64
+)
+
+// keyText is text cut to at most n runes.
+func keyText(s string, n int) string {
+	s = text(s)
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return string([]rune(s)[:maxHardwareRunes])
+	return string([]rune(s)[:n])
 }
+
+// text removes the NUL bytes PostgreSQL refuses in text from a string a host reported: Fleet's JSON may carry them,
+// and one host's refused value must not fail the inventory round (PDK-1122k). Decoding JSON already replaces invalid
+// UTF-8, so NUL is the only byte left that PostgreSQL refuses.
+func text(s string) string { return strings.ReplaceAll(s, "\x00", "") }
 
 // VulnerabilityState implements ports.Inventory: a digest of Fleet's vulnerable software versions and their CVEs.
 func (c *Client) VulnerabilityState(ctx context.Context) (string, error) {

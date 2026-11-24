@@ -336,3 +336,9 @@ of these files, it checks the file against the baseline. A change found there or
 `device.tamper_protected_file_changed` once, and the login reconciler still corrects the file
 (`device.login_applied`). A missing `login-deny` after an enforced bundle is a change, because its absence unlocks
 every locked user. The remaining gaps are listed in RR-148.
+
+## Amendment 2026-11-24 g (architect, PDK-1122k) — the inventory round reports a refused host
+The inventory round skips a device's host when Fleet refuses it or Postgres refuses its data after sanitising. Paddock
+records `device.tamper_inventory_rejected` once per episode, with the params `reason` (`fetch_refused` or
+`store_refused`) and `fleet_host`, the device's own Fleet host, and no error text. A successful store ends the episode.
+The code opens or counts a tamper finding in the device's own organisation.

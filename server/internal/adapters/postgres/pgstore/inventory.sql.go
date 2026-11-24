@@ -710,6 +710,35 @@ func (q *Queries) InventoryLeftHosts(ctx context.Context) ([]InventoryLeftHostsR
 	return items, nil
 }
 
+const inventoryRejectionDue = `-- name: InventoryRejectionDue :one
+SELECT NOT EXISTS (
+  SELECT 1 FROM finding f
+  WHERE f.device_id = d.id AND f.kind = 'tamper' AND f.code = $1
+    AND f.last_seen_at >= COALESCE((SELECT r.synced_at FROM device_inventory_ref r WHERE r.device_id = d.id), '-infinity')
+)::boolean AS due, now()::timestamptz AS seen_at
+FROM device d WHERE d.id = $2
+`
+
+type InventoryRejectionDueParams struct {
+	Code     string
+	DeviceID uuid.UUID
+}
+
+type InventoryRejectionDueRow struct {
+	Due    *bool
+	SeenAt time.Time
+}
+
+// Whether a skipped inventory store of the device starts a new episode: no tamper finding of the code was seen since
+// the device's inventory was last stored (PDK-1122k). No row for a device outside the organization. seen_at is the
+// database's time for the finding: last_seen_at and synced_at must come from the same clock.
+func (q *Queries) InventoryRejectionDue(ctx context.Context, arg InventoryRejectionDueParams) (InventoryRejectionDueRow, error) {
+	row := q.db.QueryRow(ctx, inventoryRejectionDue, arg.Code, arg.DeviceID)
+	var i InventoryRejectionDueRow
+	err := row.Scan(&i.Due, &i.SeenAt)
+	return i, err
+}
+
 const listAgentBinaryUnknown = `-- name: ListAgentBinaryUnknown :many
 SELECT r.device_id, i.policy_updated_at::timestamptz AS evaluated_at, s.agent_version
 FROM inventory_policy_result r JOIN device d ON d.id = r.device_id
